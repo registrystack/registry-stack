@@ -294,6 +294,12 @@ jobs:
       - name: Validate external integration evidence packet
         run: python3 release/scripts/integration-e2-runner.py validate
 
+      - name: Test Relay OIDC smoke
+        run: python3 -m unittest release/scripts/test_relay_oidc_smoke.py
+
+      - name: Validate Relay OIDC smoke assets
+        run: python3 release/scripts/relay-oidc-smoke.py validate
+
       - name: Gate inventory
         run: python3 release/scripts/check-gates-inventory.py
 

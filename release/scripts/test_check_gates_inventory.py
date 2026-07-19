@@ -78,6 +78,22 @@ class GateInventoryTest(unittest.TestCase):
             self.module.missing_gates(text),
         )
 
+    def test_missing_relay_oidc_smoke_tests_are_reported(self) -> None:
+        text = self.workflow.replace(
+            "python3 -m unittest release/scripts/test_relay_oidc_smoke.py",
+            "python3 release/scripts/relay-oidc-smoke.py plan",
+        )
+        self.assertIn("Relay OIDC smoke tests", self.module.missing_gates(text))
+
+    def test_missing_relay_oidc_offline_validation_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: python3 release/scripts/relay-oidc-smoke.py validate",
+            "run: python3 release/scripts/relay-oidc-smoke.py skip-validation",
+        )
+        self.assertIn(
+            "Relay OIDC smoke offline validation", self.module.missing_gates(text)
+        )
+
     def test_missing_stable_surface_gate_is_reported(self) -> None:
         text = self.workflow.replace(
             "run: python3 release/scripts/check-stable-surface-compatibility.py",

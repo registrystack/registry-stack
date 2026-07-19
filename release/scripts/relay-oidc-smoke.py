@@ -53,6 +53,19 @@ REQUIRED_CHECKS = (
 )
 
 
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep release assertions on the exact loopback origin they target."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
+        return None
+
+
+NO_REDIRECT_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}), NoRedirectHandler()
+)
+
+
 class SmokeError(RuntimeError):
     """A bounded, user-actionable runner failure."""
 
@@ -458,12 +471,17 @@ def http_json(
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with NO_REDIRECT_OPENER.open(request, timeout=15) as response:
             status = response.status
             body = response.read(MAX_HTTP_BODY + 1)
     except urllib.error.HTTPError as exc:
         status = exc.code
-        body = exc.read(MAX_HTTP_BODY + 1)
+        try:
+            body = exc.read(MAX_HTTP_BODY + 1)
+        finally:
+            exc.close()
+        if 300 <= status < 400:
+            raise SmokeError("Relay endpoint returned a redirect") from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise SmokeError("Relay request transport failed") from None
     if len(body) > MAX_HTTP_BODY:
@@ -514,9 +532,13 @@ def wait_for_relay(
     last_error = ""
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(f"{base_url}/healthz", timeout=3) as response:
+            with NO_REDIRECT_OPENER.open(f"{base_url}/healthz", timeout=3) as response:
                 if response.status == 200:
                     return
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            exc.close()
+            last_error = f"HTTP {status}"
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             last_error = (
                 str(exc.reason) if isinstance(exc, urllib.error.URLError) else str(exc)

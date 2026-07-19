@@ -31,6 +31,19 @@ MAX_RESPONSE_BYTES = 1_048_576
 ROLE_KEY = "registry-smoke-reader"
 
 
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Prevent credentials from being forwarded to a redirect target."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
+        return None
+
+
+NO_REDIRECT_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}), NoRedirectHandler()
+)
+
+
 class HelperError(RuntimeError):
     """A bounded diagnostic safe to show without redaction."""
 
@@ -81,18 +94,22 @@ def request(
 
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with NO_REDIRECT_OPENER.open(req, timeout=15) as response:
             status = response.status
             body = read_bounded(response)
     except urllib.error.HTTPError as exc:
         # Discard response bodies. Zitadel create responses can contain secrets,
         # and diagnostics do not need their unbounded or provider-controlled text.
-        exc.read(MAX_RESPONSE_BYTES + 1)
-        if exc.code in accepted_statuses:
+        status = exc.code
+        try:
+            exc.read(MAX_RESPONSE_BYTES + 1)
+        finally:
+            exc.close()
+        if 300 <= status < 400:
+            raise HelperError(f"Zitadel API redirect refused for {method}") from None
+        if status in accepted_statuses:
             return {}
-        raise HelperError(
-            f"Zitadel API returned HTTP {exc.code} for {method}"
-        ) from None
+        raise HelperError(f"Zitadel API returned HTTP {status} for {method}") from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise HelperError(f"Zitadel API transport failed for {method}") from None
 

@@ -7,9 +7,11 @@ checkout and does not depend on a hosted environment or Solmara Lab.
 
 The topology uses digest-pinned Zitadel, PostgreSQL, and Python images. The
 runner accepts Relay only as the exact image reference
-`ghcr.io/registrystack/registry-relay@sha256:<digest>`. The candidate source
-commit and release identifier are also mandatory, so an output cannot be
-mistaken for evidence about a different candidate.
+`ghcr.io/registrystack/registry-relay@sha256:<digest>`. The operator-supplied
+candidate source commit and release identifier are mandatory and recorded for
+later comparison with the release manifest. The runner does not derive or
+cryptographically verify either identifier from the image. A maintainer must
+perform that manifest binding before treating a report as release evidence.
 
 ## Evidence boundary
 
@@ -22,9 +24,20 @@ candidate manifest and review it before it can become release evidence.
 The report contains identifiers, configuration and topology digests, bounded
 diagnostics, and assertion results. It never contains the bootstrap PAT, client
 secret, access token, database password, audit hash secret, or Zitadel master
-key. Runtime secrets live only in a mode `0700` temporary directory, secret
-files use mode `0600`, and the runner removes the exact Compose project,
-volumes, and temporary directory even after a failed assertion. A canary scan
+key. Runtime secrets are not confined to files while the smoke is running. The
+database password, audit hash secret, and secret canary exist ephemerally in
+isolated container environment metadata, and the Zitadel master key exists in
+its container command metadata. A Docker daemon administrator can inspect that
+metadata during the run. The bootstrap PAT lives in a project-scoped named
+volume. The generated client secret and access token are stored only in mode
+`0600` files under the runner's mode `0700` private runtime directory, which is
+bind-mounted into the helper; the helper necessarily also handles them in
+process memory and request headers.
+
+The HTTP clients bypass environment proxies and never follow redirects, so the
+bootstrap PAT, client credentials, and Relay bearer remain on their exact local
+origin. The runner removes the exact Compose project, its named volumes, and
+the private runtime directory even after a failed assertion. A canary scan
 rejects secret material in subprocess output and the report.
 
 Do not commit a raw or unreviewed run directory. Do not describe a development

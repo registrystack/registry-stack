@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib.util
 import json
 import sys
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import TestCase, main
 from unittest.mock import patch
@@ -51,6 +54,61 @@ class PlainTextResponse:
 
     def read(self, _limit: int) -> bytes:
         return b"ok"
+
+
+class RecordingHttpServer(ThreadingHTTPServer):
+    redirect_target: str | None = None
+    authorization_headers: list[str | None]
+
+
+class RecordingHandler(BaseHTTPRequestHandler):
+    server: RecordingHttpServer
+
+    def record_and_respond(self) -> None:
+        self.server.authorization_headers.append(self.headers.get("Authorization"))
+        content_length = int(self.headers.get("Content-Length", "0"))
+        if content_length:
+            self.rfile.read(content_length)
+        if self.server.redirect_target:
+            self.send_response(302)
+            self.send_header("Location", self.server.redirect_target)
+        else:
+            self.send_response(204)
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        self.record_and_respond()
+
+    def do_POST(self) -> None:
+        self.record_and_respond()
+
+    def log_message(self, _format: str, *_args) -> None:
+        return
+
+
+@contextlib.contextmanager
+def cross_origin_redirect():
+    target = RecordingHttpServer(("127.0.0.1", 0), RecordingHandler)
+    target.authorization_headers = []
+    source = RecordingHttpServer(("127.0.0.1", 0), RecordingHandler)
+    source.authorization_headers = []
+    source.redirect_target = f"http://127.0.0.1:{target.server_port}/redirect-target"
+    source_url = f"http://127.0.0.1:{source.server_port}/start"
+    threads = [
+        threading.Thread(target=server.serve_forever, daemon=True)
+        for server in (target, source)
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        yield source_url, source, target
+    finally:
+        source.shutdown()
+        target.shutdown()
+        source.server_close()
+        target.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
 
 
 def encode_json(value: dict[str, object]) -> str:
@@ -207,14 +265,24 @@ class RelayOidcSmokeTest(TestCase):
 
         guard = self.runner.SensitiveGuard("secret-canary-value")
         with patch.object(
-            self.runner.urllib.request,
-            "urlopen",
+            self.runner.NO_REDIRECT_OPENER,
+            "open",
             side_effect=[ConnectionResetError("restart"), HealthyResponse()],
         ):
             with patch.object(self.runner.time, "sleep"):
                 self.runner.wait_for_relay(
                     "http://127.0.0.1:19191", {}, "project", guard
                 )
+
+    def test_relay_bearer_is_not_forwarded_across_redirect(self) -> None:
+        bearer = "synthetic-bearer-secret"
+        guard = self.runner.SensitiveGuard(bearer)
+        with cross_origin_redirect() as (source_url, source, target):
+            with self.assertRaisesRegex(self.runner.SmokeError, "returned a redirect"):
+                self.runner.http_json(source_url, bearer, guard)
+
+        self.assertEqual([f"Bearer {bearer}"], source.authorization_headers)
+        self.assertEqual([], target.authorization_headers)
 
     def test_safe_report_allowlist_and_canary_scan(self) -> None:
         guard = self.runner.SensitiveGuard("secret-canary-value")
@@ -267,11 +335,18 @@ class RelayOidcSmokeTest(TestCase):
         self.assertIn('f"{MANAGEMENT_URL}/projects/_search"', helper)
         self.assertNotIn('"Host":', helper)
 
+    def test_readme_states_binding_and_ephemeral_secret_boundaries(self) -> None:
+        readme = (self.runner.CONFIG_DIR / "README.md").read_text(encoding="utf-8")
+        self.assertIn("does not derive or\ncryptographically verify", readme)
+        self.assertIn("container environment metadata", readme)
+        self.assertIn("container command metadata", readme)
+        self.assertIn("never follow redirects", readme)
+
     def test_helper_accepts_plain_text_health_response_only_when_requested(
         self,
     ) -> None:
         with patch.object(
-            self.helper.urllib.request, "urlopen", return_value=PlainTextResponse()
+            self.helper.NO_REDIRECT_OPENER, "open", return_value=PlainTextResponse()
         ):
             self.assertEqual(
                 {},
@@ -281,6 +356,31 @@ class RelayOidcSmokeTest(TestCase):
             )
             with self.assertRaisesRegex(self.helper.HelperError, "malformed JSON"):
                 self.helper.request("GET", "http://localhost:8080/management/v1")
+
+    def test_helper_bootstrap_pat_is_not_forwarded_across_redirect(self) -> None:
+        pat = "synthetic-bootstrap-pat"
+        with cross_origin_redirect() as (source_url, source, target):
+            with self.assertRaisesRegex(self.helper.HelperError, "redirect refused"):
+                self.helper.request("GET", source_url, bearer=pat)
+
+        self.assertEqual([f"Bearer {pat}"], source.authorization_headers)
+        self.assertEqual([], target.authorization_headers)
+
+    def test_helper_client_credentials_are_not_forwarded_across_redirect(self) -> None:
+        client_id = "synthetic-client"
+        client_secret = "synthetic-client-secret"
+        encoded = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        with cross_origin_redirect() as (source_url, source, target):
+            with self.assertRaisesRegex(self.helper.HelperError, "redirect refused"):
+                self.helper.request(
+                    "POST",
+                    source_url,
+                    form_body={"grant_type": "client_credentials"},
+                    basic_auth=(client_id, client_secret),
+                )
+
+        self.assertEqual([f"Basic {encoded}"], source.authorization_headers)
+        self.assertEqual([], target.authorization_headers)
 
     def test_helper_writes_runtime_secrets_for_the_invoking_host_user(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

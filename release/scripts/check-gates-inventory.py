@@ -41,6 +41,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "External integration evidence packet",
         "run: python3 release/scripts/integration-e2-runner.py validate",
     ),
+    (
+        "Relay OIDC smoke tests",
+        "run: python3 -m unittest release/scripts/test_relay_oidc_smoke.py",
+    ),
+    (
+        "Relay OIDC smoke offline validation",
+        "run: python3 release/scripts/relay-oidc-smoke.py validate",
+    ),
     ("Release manifest validation", "release/scripts/registry-release validate"),
     ("Release docset validation", "release/scripts/registry-release validate-docsets"),
     ("Release import audit", "release/scripts/registry-release audit"),
