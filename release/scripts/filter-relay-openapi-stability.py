@@ -61,7 +61,17 @@ def unstable_aggregate_selectors(roster_value: Any) -> tuple[set[str], set[str]]
     """Read selectors only from authoritative included-unstable roster entries."""
     tokens: set[str] = set()
     media_types: set[str] = set()
-    for entry_id, entry in index_roster(roster_value).items():
+    roster = index_roster(roster_value)
+    stable_tokens = {
+        entry_id.removesuffix("-aggregate-output")
+        for entry_id, entry in roster.items()
+        if entry.get("category") == "aggregate_output"
+        and entry.get("stability_tier") == "stable"
+        and entry.get("canonical_release") is True
+        and entry.get("openapi_policy") == "included"
+        and entry_id.endswith("-aggregate-output")
+    }
+    for entry_id, entry in roster.items():
         if entry.get("openapi_policy") != "included_unstable":
             continue
         if (
@@ -97,6 +107,18 @@ def unstable_aggregate_selectors(roster_value: Any) -> tuple[set[str], set[str]]
             )
         tokens.update(entry_tokens)
         media_types.update(entry_media_types)
+    token_collisions = stable_tokens & tokens
+    media_type_collisions = {
+        media_type
+        for media_type in media_types
+        if media_type.partition(";")[0].partition("/")[2] in stable_tokens
+    }
+    if token_collisions or media_type_collisions:
+        collisions = sorted(token_collisions | media_type_collisions)
+        raise RosterError(
+            "included-unstable selectors overlap a stable aggregate representation: "
+            + ", ".join(collisions)
+        )
     return tokens, media_types
 
 

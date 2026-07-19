@@ -48,7 +48,7 @@ class RelayOpenapiStabilityFilterTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
         self.roster = [
-            roster_entry("json-output", stability="stable", policy="included"),
+            roster_entry("json-aggregate-output", stability="stable", policy="included"),
             roster_entry(
                 "csv-output",
                 stability="experimental",
@@ -178,6 +178,27 @@ class RelayOpenapiStabilityFilterTest(unittest.TestCase):
         ]
         with self.assertRaisesRegex(self.module.RosterError, "exact OpenAPI selectors"):
             self.module.filter_openapi(self.document, invalid)
+
+    def test_unstable_selectors_cannot_overlap_stable_aggregate_representation(self) -> None:
+        for token, media_type in (
+            ("json", "application/vnd.example"),
+            ("other", "application/json"),
+        ):
+            with self.subTest(token=token, media_type=media_type):
+                roster = [
+                    roster_entry(
+                        "json-aggregate-output", stability="stable", policy="included"
+                    ),
+                    roster_entry(
+                        "bad-experimental-output",
+                        stability="experimental",
+                        policy="included_unstable",
+                        token=token,
+                        media_type=media_type,
+                    ),
+                ]
+                with self.assertRaisesRegex(self.module.RosterError, "overlap a stable"):
+                    self.module.filter_openapi(self.document, roster)
 
 
 if __name__ == "__main__":
