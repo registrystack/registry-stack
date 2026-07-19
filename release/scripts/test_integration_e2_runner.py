@@ -5,6 +5,9 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
+import shlex
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -49,7 +52,10 @@ class IntegrationE2RunnerTest(unittest.TestCase):
         binary_name = f"registryctl-{self.tag}-linux-amd64"
         lock_name = f"registryctl-{self.tag}-image-lock.json"
         capsule_name = f"registry-stack-{self.tag}-release-capsule.json"
-        (candidate / binary_name).write_bytes(b"candidate-registryctl")
+        (candidate / binary_name).write_text(
+            "#!/bin/sh\nprintf 'registryctl 1.0.0\\n'\n",
+            encoding="utf-8",
+        )
         lock = {
             "schema_version": "registryctl.release_image_lock.v1",
             "release_tag": self.tag,
@@ -307,7 +313,8 @@ class IntegrationE2RunnerTest(unittest.TestCase):
         candidate = self.make_candidate()
         events = []
 
-        def authenticate(_directory, _tag):
+        def authenticate(directory, _tag):
+            self.assertNotEqual(candidate, directory)
             events.append("authenticated")
 
         def execute(*_args, **_kwargs):
@@ -326,8 +333,10 @@ class IntegrationE2RunnerTest(unittest.TestCase):
     def test_authenticity_failure_prevents_candidate_binary_execution(self) -> None:
         candidate = self.make_candidate()
         events = []
+        snapshots = []
 
-        def reject_authenticity(_directory, _tag):
+        def reject_authenticity(directory, _tag):
+            snapshots.append(directory)
             events.append("authenticity-rejected")
             raise self.module.RunnerError("invalid signature fixture")
 
@@ -343,13 +352,16 @@ class IntegrationE2RunnerTest(unittest.TestCase):
                 binary_runner=execute,
             )
         self.assertEqual(["authenticity-rejected"], events)
+        self.assertEqual(1, len(snapshots))
+        self.assertFalse(snapshots[0].exists())
 
     def test_subject_change_during_authenticity_prevents_binary_execution(self) -> None:
         candidate = self.make_candidate()
-        binary = candidate / f"registryctl-{self.tag}-linux-amd64"
         events = []
 
-        def mutate_during_authenticity(_directory, _tag):
+        def mutate_during_authenticity(directory, _tag):
+            binary = directory / f"registryctl-{self.tag}-linux-amd64"
+            binary.chmod(0o700)
             binary.write_bytes(b"changed-after-passive-checks")
             events.append("mutated")
 
@@ -365,6 +377,40 @@ class IntegrationE2RunnerTest(unittest.TestCase):
                 binary_runner=execute,
             )
         self.assertEqual(["mutated"], events)
+
+    def test_original_binary_replacement_after_final_hash_never_executes(self) -> None:
+        candidate = self.make_candidate()
+        original_binary = candidate / f"registryctl-{self.tag}-linux-amd64"
+        replacement_marker = self.root / "replacement-executed"
+        snapshots = []
+
+        def authenticate(directory, _tag):
+            snapshots.append(directory)
+            self.assertEqual(0o500, stat.S_IMODE(directory.stat().st_mode))
+            self.assertEqual(os.geteuid(), directory.stat().st_uid)
+            for asset in directory.iterdir():
+                self.assertEqual(0, asset.stat().st_mode & 0o222)
+
+        def replace_original_then_execute(command, **kwargs):
+            self.assertNotEqual(original_binary, Path(command[0]))
+            original_binary.write_text(
+                "#!/bin/sh\n"
+                f": > {shlex.quote(str(replacement_marker))}\n"
+                "printf 'registryctl 1.0.0\\n'\n",
+                encoding="utf-8",
+            )
+            original_binary.chmod(0o700)
+            return subprocess.run(command, **kwargs)
+
+        self.module.verify_candidate_assets(
+            candidate,
+            self.tag,
+            authenticate=authenticate,
+            binary_runner=replace_original_then_execute,
+        )
+        self.assertFalse(replacement_marker.exists())
+        self.assertEqual(1, len(snapshots))
+        self.assertFalse(snapshots[0].exists())
 
     def test_late_passive_binding_failure_prevents_binary_execution(self) -> None:
         candidate = self.make_candidate()

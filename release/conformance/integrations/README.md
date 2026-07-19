@@ -66,11 +66,16 @@ the profile limits:
 1. Download the candidate assets listed in `release/VERIFY.md` into a fresh,
    dedicated directory.
 2. Use the public runner to validate checksums, signatures, provenance,
-   capsule lineage, image locks, and digest files. The runner executes the
-   candidate binary for its self-reported version only after every passive and
-   authenticity check passes.
-3. Initialize the profile's starter with the verified candidate
-   `registryctl` binary.
+   capsule lineage, image locks, and digest files. The runner copies the exact
+   closed asset set through no-follow file descriptors into a fresh owner-only
+   temporary snapshot. It makes every snapshot file non-writable, verifies
+   and authenticates only snapshot files, then executes only the snapshot
+   binary for its self-reported version. It removes the snapshot after success
+   or failure. The source-directory binary is never executed.
+3. Have the approved operator wrapper create its own authenticated,
+   non-writable snapshot and initialize the profile's starter only from that
+   snapshot. A completed candidate-only validation does not make the mutable
+   source directory safe for later execution.
 4. Apply only the reviewed authored changes listed in the selected profile.
    Do not edit generated YAML.
 5. Run the offline project `test`, `check`, and `build` commands. Inspect the
@@ -136,6 +141,12 @@ result, an unknown public field, a public-result canary match, inconsistent
 timestamps or durations, a passed case without the required recorded
 source-contact classification, over-time recorded teardown, and a `passed`
 status paired with failed recorded teardown.
+
+Candidate validation always uses a disposable private snapshot. Replacing a
+file in the supplied candidate directory during or after validation cannot
+change the executable path used for the version check. The runner removes the
+snapshot in its cleanup path and never returns the snapshot path as an
+operator artifact.
 
 The public runner receives neither the generated project nor restricted raw
 evidence. It validates the closed flags, hashes, timings, and classifications

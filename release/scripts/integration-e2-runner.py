@@ -13,13 +13,16 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import re
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -628,6 +631,109 @@ def verify_file_sbom(path: Path, subject_name: str, subject_sha256: str) -> None
     )
 
 
+def require_candidate_directory(path: Path) -> None:
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise RunnerError(
+            f"candidate asset directory is unavailable: {path}: {exc}"
+        ) from exc
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise RunnerError(
+            "candidate asset directory must be a real, non-symlink directory"
+        )
+
+
+@contextmanager
+def candidate_asset_snapshot(asset_dir: Path, tag: str) -> Iterator[Path]:
+    """Copy the closed candidate set through no-follow descriptors and remove it."""
+    require_candidate_directory(asset_dir)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory_flag is None:
+        raise RunnerError("candidate snapshotting requires O_NOFOLLOW and O_DIRECTORY")
+    directory_fd = None
+    try:
+        directory_fd = os.open(
+            asset_dir,
+            os.O_RDONLY | os.O_CLOEXEC | no_follow | directory_flag,
+        )
+        required = required_asset_names(tag)
+        actual = set(os.listdir(directory_fd))
+        missing = required - actual
+        unknown = actual - required
+        if missing or unknown:
+            details = []
+            if missing:
+                details.append("missing " + ", ".join(sorted(missing)))
+            if unknown:
+                details.append("unexpected " + ", ".join(sorted(unknown)))
+            raise RunnerError(
+                "candidate asset set is not closed: " + "; ".join(details)
+            )
+
+        with tempfile.TemporaryDirectory(
+            prefix="registry-integration-e2-candidate-"
+        ) as temporary:
+            snapshot = Path(temporary)
+            snapshot.chmod(0o700)
+            binary_name = f"registryctl-{tag}-linux-amd64"
+            for name in sorted(required):
+                source_fd = None
+                destination_fd = None
+                try:
+                    source_fd = os.open(
+                        name,
+                        os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | no_follow,
+                        dir_fd=directory_fd,
+                    )
+                    source_info = os.fstat(source_fd)
+                    if not stat.S_ISREG(source_info.st_mode):
+                        raise RunnerError(
+                            f"candidate asset must be a regular, non-symlink file: {name}"
+                        )
+                    if (
+                        source_info.st_size <= 0
+                        or source_info.st_size > MAX_ASSET_BYTES
+                    ):
+                        raise RunnerError(
+                            f"candidate asset size for {name} must be between 1 and {MAX_ASSET_BYTES} bytes"
+                        )
+                    destination = snapshot / name
+                    destination_fd = os.open(
+                        destination,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | no_follow,
+                        0o600,
+                    )
+                    with os.fdopen(source_fd, "rb") as source_handle:
+                        source_fd = None
+                        with os.fdopen(destination_fd, "wb") as destination_handle:
+                            destination_fd = None
+                            shutil.copyfileobj(source_handle, destination_handle)
+                    if destination.stat().st_size != source_info.st_size:
+                        raise RunnerError(
+                            f"candidate asset changed while snapshotting: {name}"
+                        )
+                    destination.chmod(0o500 if name == binary_name else 0o400)
+                finally:
+                    if source_fd is not None:
+                        os.close(source_fd)
+                    if destination_fd is not None:
+                        os.close(destination_fd)
+            snapshot.chmod(0o500)
+            try:
+                yield snapshot
+            finally:
+                snapshot.chmod(0o700)
+    except OSError as exc:
+        raise RunnerError(
+            f"could not create private candidate snapshot: {exc}"
+        ) from exc
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
 def verify_candidate_assets(
     asset_dir: Path,
     tag: str,
@@ -638,16 +744,26 @@ def verify_candidate_assets(
     tag_match = TAG.fullmatch(tag)
     if tag_match is None:
         raise RunnerError("candidate tag must be a stable vMAJOR.MINOR.PATCH tag")
-    try:
-        asset_dir_info = asset_dir.lstat()
-    except OSError as exc:
-        raise RunnerError(
-            f"candidate asset directory is unavailable: {asset_dir}: {exc}"
-        ) from exc
-    if stat.S_ISLNK(asset_dir_info.st_mode) or not stat.S_ISDIR(asset_dir_info.st_mode):
-        raise RunnerError(
-            "candidate asset directory must be a real, non-symlink directory"
+    with candidate_asset_snapshot(asset_dir, tag) as snapshot:
+        return verify_candidate_snapshot(
+            snapshot,
+            tag,
+            authenticate=authenticate,
+            binary_runner=binary_runner,
         )
+
+
+def verify_candidate_snapshot(
+    asset_dir: Path,
+    tag: str,
+    *,
+    authenticate: Callable[[Path, str], None],
+    binary_runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> dict[str, str]:
+    tag_match = TAG.fullmatch(tag)
+    if tag_match is None:
+        raise RunnerError("candidate tag must be a stable vMAJOR.MINOR.PATCH tag")
+    require_candidate_directory(asset_dir)
     required = required_asset_names(tag)
     actual = {path.name for path in asset_dir.iterdir()}
     missing = required - actual
@@ -1093,8 +1209,8 @@ def plan_document(profile: dict[str, Any]) -> dict[str, Any]:
         "prerequisites": profile["prerequisites"],
         "limits": profile["limits"],
         "stages": [
-            "Verify the closed candidate asset set, checksums, signatures, provenance, source lineage, and digest locks.",
-            "Initialize the pinned starter with that candidate registryctl binary.",
+            "Copy the closed candidate assets without following symlinks, then verify and version-check only the private non-writable snapshot.",
+            "Have the operator wrapper create its own authenticated non-writable snapshot and initialize the pinned starter only from that snapshot.",
             "Apply only the profile's reviewed authored inputs; never edit generated YAML.",
             "Run the offline project test, check, build, and generated-file hash review.",
             "Deploy one digest-pinned Relay, Notary, and PostgreSQL set per authority within the approved run timeout.",
