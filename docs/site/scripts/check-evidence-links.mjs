@@ -114,11 +114,12 @@ function readEvidenceUrls(dataDir) {
   return urls;
 }
 
-function gitObjectExists(repoRoot, object) {
+function gitObjectExists(repoRoot, object, gitCommand) {
   return (
-    spawnSync('git', ['cat-file', '-e', object], {
+    spawnSync(gitCommand, ['cat-file', '-e', object], {
       cwd: repoRoot,
       encoding: 'utf8',
+      env: { ...process.env, GIT_NO_LAZY_FETCH: '1' },
       stdio: 'pipe',
     }).status === 0
   );
@@ -147,7 +148,7 @@ function validRepositoryPath(parts) {
   );
 }
 
-function checkRepositoryEvidence(repoRoot, rawUrl) {
+function checkRepositoryEvidence(repoRoot, rawUrl, gitCommand) {
   let url;
   try {
     url = new URL(rawUrl);
@@ -187,11 +188,11 @@ function checkRepositoryEvidence(repoRoot, rawUrl) {
     return `uses ${ref}, but evidence refs must be semver tags or full 40-character commits`;
   }
 
-  if (!gitObjectExists(repoRoot, `${commitish}^{commit}`)) {
+  if (!gitObjectExists(repoRoot, `${commitish}^{commit}`, gitCommand)) {
     return `references missing Git commit or tag ${ref}`;
   }
   const path = repositoryPath.join('/');
-  if (!gitObjectExists(repoRoot, `${commitish}^{commit}:${path}`)) {
+  if (!gitObjectExists(repoRoot, `${commitish}^{commit}:${path}`, gitCommand)) {
     return `references missing path ${path} at ${ref}`;
   }
   return undefined;
@@ -220,15 +221,19 @@ function currentDocsCandidates(rawUrl) {
   ];
 }
 
-function checkCurrentDocsEvidence(repoRoot, sourceRef, rawUrl) {
+function checkCurrentDocsEvidence(repoRoot, sourceRef, rawUrl, gitCommand) {
   const candidates = currentDocsCandidates(rawUrl);
   if (candidates.length === 0) {
     return 'contains an invalid current-docs route';
   }
-  if (!gitObjectExists(repoRoot, `${sourceRef}^{commit}`)) {
+  if (!gitObjectExists(repoRoot, `${sourceRef}^{commit}`, gitCommand)) {
     return `cannot resolve release source ${sourceRef}`;
   }
-  if (!candidates.some((path) => gitObjectExists(repoRoot, `${sourceRef}^{commit}:${path}`))) {
+  if (
+    !candidates.some((path) =>
+      gitObjectExists(repoRoot, `${sourceRef}^{commit}:${path}`, gitCommand),
+    )
+  ) {
     return `does not resolve to a documentation page at release source ${sourceRef}`;
   }
   return undefined;
@@ -238,6 +243,7 @@ export function checkEvidenceLinks({
   repoRoot = resolve(scriptDir, '../../..'),
   dataDir = resolve(scriptDir, '../src/data'),
   sourceRef = 'HEAD',
+  gitCommand = 'git',
 } = {}) {
   const errors = [];
   let evidence;
@@ -249,8 +255,8 @@ export function checkEvidenceLinks({
 
   for (const item of evidence) {
     const error = item.url.startsWith('/')
-      ? checkCurrentDocsEvidence(repoRoot, sourceRef, item.url)
-      : checkRepositoryEvidence(repoRoot, item.url);
+      ? checkCurrentDocsEvidence(repoRoot, sourceRef, item.url, gitCommand)
+      : checkRepositoryEvidence(repoRoot, item.url, gitCommand);
     if (error) {
       errors.push(`${item.location}: ${item.url}: ${error}`);
     }

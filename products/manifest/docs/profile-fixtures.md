@@ -48,7 +48,7 @@ If you have installed the binary directly, replace that prefix with `registry-ma
 
 By default the `validate-profiles` subcommand expects a `profiles/` directory path as its
 argument.
-In the repository root, the directory is `profiles/`.
+Relative to the Manifest product directory, the directory is `profiles/`.
 
 List the available profiles:
 

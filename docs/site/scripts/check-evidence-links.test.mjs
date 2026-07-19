@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -158,6 +165,51 @@ test('rejects generated evidence data that is stale', (t) => {
   const result = checkEvidenceLinks({ repoRoot: root, dataDir, sourceRef: commit });
   assert.equal(result.checked, 0);
   assert.match(result.errors[0], /run npm run generate/);
+});
+
+test('disables lazy fetching for every Git object lookup and fails closed', (t) => {
+  const { root, commit } = createRepository(t);
+  const dataDir = writeEvidenceData(root, {
+    contractUrls: [
+      `https://github.com/registrystack/registry-stack/blob/${commit}/source/missing.md`,
+    ],
+  });
+  const wrapper = resolve(root, 'controlled-git.mjs');
+  const log = resolve(root, 'controlled-git.log');
+  writeFileSync(
+    wrapper,
+    `#!${process.execPath}
+import { appendFileSync } from 'node:fs';
+
+const object = process.argv.at(-1);
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({
+  noLazyFetch: process.env.GIT_NO_LAZY_FETCH,
+  object,
+}) + '\\n');
+if (process.env.GIT_NO_LAZY_FETCH !== '1') {
+  appendFileSync(${JSON.stringify(log)}, 'lazy-fetch-attempted\\n');
+  process.exit(0);
+}
+process.exit(object.includes(':') ? 1 : 0);
+`,
+  );
+  chmodSync(wrapper, 0o755);
+
+  const result = checkEvidenceLinks({
+    repoRoot: root,
+    dataDir,
+    sourceRef: commit,
+    gitCommand: wrapper,
+  });
+  assert.equal(result.checked, 1);
+  assert.match(result.errors[0], /references missing path/);
+  const invocations = readFileSync(log, 'utf8').trim().split('\n');
+  assert.equal(invocations.length, 2);
+  assert.equal(invocations.some((line) => line === 'lazy-fetch-attempted'), false);
+  assert.deepEqual(
+    invocations.map((line) => JSON.parse(line).noLazyFetch),
+    ['1', '1'],
+  );
 });
 
 test('extracts only policy-owned YAML fields', () => {
