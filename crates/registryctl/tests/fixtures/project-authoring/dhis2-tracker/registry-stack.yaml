@@ -2,20 +2,18 @@ version: 1
 starter:
   id: dhis2-tracker
   release: 0.12.0
-  content_digest: sha256:4cba0beae68665bfc0bd4362d136b49dbf9ac592d0f5fa7951ed6958e95a8d41
+  content_digest: sha256:61f0b547a5189c93295df8045895321d5496e3bbc950e592f375d026fe84017d
 registry: { id: fictional-health-registry }
 integrations:
   health-record: { file: integrations/health-record/integration.yaml }
 services:
-  health-verification:
+  child-health-evidence:
     kind: evidence
     version: 1
-    purpose: programme-enrollment-verification
+    purpose: child-health-evidence-verification
     legal_basis: public-service-delivery
     consent: not_required
     access: { scopes: ["evidence:health:read"] }
-    variables:
-      as_of_date: { from: request.variables.as_of_date, type: date }
     consultations:
       health:
         integration: health-record
@@ -23,55 +21,13 @@ services:
           tracked_entity: request.target.identifiers.dhis2_tracked_entity
           include_inactive: request.target.attributes.include_inactive
     claims:
-      tracked-entity-first-name: { output: health.first_name, disclosure: value }
-      tracked-entity-last-name: { output: health.last_name, disclosure: value }
-      child-program-active:
-        cel: >-
-          health.child_program_active != null
-            ? health.matched && health.child_program_active
-            : false
-        disclosure: predicate
-      child-age-band:
-        cel: >-
-          health.matched && health.date_of_birth != null
-            ? (date.age_on(health.date_of_birth, as_of_date) < 5
-                ? "0-4"
-                : (date.age_on(health.date_of_birth, as_of_date) < 18 ? "5-17" : "18+"))
-            : null
-        disclosure: value
-      programme-code: { output: health.programme_code, disclosure: value }
-      reconciliation-reference: { output: health.reconciliation_reference, disclosure: redacted }
-      maternal-postnatal-care-active:
-        cel: >-
-          health.maternal_postnatal_active != null
-            ? health.matched && health.maternal_postnatal_active
-            : false
-        disclosure: predicate
-      child-health-visit-recorded:
-        cel: >-
-          health.child_health_visit_recorded != null
-            ? health.matched && health.child_health_visit_recorded
-            : false
-        disclosure: predicate
-      tb-program-active:
-        cel: >-
-          health.tb_program_active != null
-            ? health.matched && health.tb_program_active
-            : false
-        disclosure: predicate
+      programme-enrollment-active: { output: health.programme_enrollment_active, disclosure: predicate }
+      bcg-birth-dose-recorded: { output: health.bcg_birth_dose_recorded, disclosure: predicate }
+      opv-birth-dose-recorded: { output: health.opv_birth_dose_recorded, disclosure: predicate }
+      measles-dose-recorded: { output: health.measles_dose_recorded, disclosure: predicate }
     credential_profiles:
-      health-status:
+      child-health-evidence:
         format: dc+sd-jwt
-        type: https://credentials.invalid/health-status/v1
+        type: https://credentials.invalid/child-health-evidence/v1
         validity: 10m
-        claims: [maternal-postnatal-care-active, child-health-visit-recorded, tb-program-active]
-      child-program:
-        format: dc+sd-jwt
-        type: https://credentials.invalid/child-program/v1
-        validity: 10m
-        claims: [tracked-entity-first-name, tracked-entity-last-name, child-program-active, child-age-band]
-      programme-participation:
-        format: dc+sd-jwt
-        type: https://credentials.invalid/programme-participation/v1
-        validity: 10m
-        claims: [programme-code, reconciliation-reference, child-program-active]
+        claims: [programme-enrollment-active, bcg-birth-dose-recorded, opv-birth-dose-recorded, measles-dose-recorded]

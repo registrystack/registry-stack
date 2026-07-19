@@ -1,4 +1,4 @@
-name: complete-child-health-evidence
+name: partial-child-health-evidence
 classification: synthetic
 input: { tracked_entity: A0000000001, include_inactive: true }
 interactions:
@@ -14,21 +14,19 @@ interactions:
         trackedEntity: A0000000001
         enrollments:
           - program: DEMO_CHILD_PROGRAM_UID
-            status: ACTIVE
+            status: CANCELLED
             events:
-              - { programStage: DEMO_BCG_BIRTH_STAGE_UID, status: COMPLETED }
-              - { programStage: DEMO_OPV_BIRTH_STAGE_UID, status: COMPLETED }
+              - { programStage: DEMO_BCG_BIRTH_STAGE_UID, status: SKIPPED }
               - { programStage: DEMO_MEASLES_STAGE_UID, status: COMPLETED }
-        ignored_upstream_field: safe-extra-field
 expect:
   outcome: match
   outputs:
-    programme_enrollment_active: true
-    bcg_birth_dose_recorded: true
-    opv_birth_dose_recorded: true
+    programme_enrollment_active: false
+    bcg_birth_dose_recorded: false
+    opv_birth_dose_recorded: null
     measles_dose_recorded: true
   claims:
-    programme-enrollment-active: true
-    bcg-birth-dose-recorded: true
-    opv-birth-dose-recorded: true
+    programme-enrollment-active: false
+    bcg-birth-dose-recorded: false
+    opv-birth-dose-recorded: null
     measles-dose-recorded: true

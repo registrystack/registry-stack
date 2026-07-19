@@ -1,49 +1,34 @@
-name: complete-health-match
+name: complete-child-health-evidence
 classification: synthetic
 input: { tracked_entity: A0000000001, include_inactive: true }
-variables: { as_of_date: 2026-01-01 }
 interactions:
   - expect:
       method: GET
       path: /api/tracker/trackedEntities/A0000000001
       query:
-        fields: trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]
+        fields: trackedEntity,enrollments[program,status,events[programStage,status]]
         includeDeleted: true
     respond:
       status: 200
       body:
         trackedEntity: A0000000001
-        attributes:
-          - { attribute: DEMO_FIRST_NAME_ATTRIBUTE_UID, value: Nia }
-          - { attribute: DEMO_LAST_NAME_ATTRIBUTE_UID, value: Example }
-          - { attribute: DEMO_BIRTH_DATE_ATTRIBUTE_UID, value: 2017-06-15 }
-          - { attribute: DEMO_RECONCILIATION_ATTRIBUTE_UID, value: REF-0001 }
         enrollments:
           - program: DEMO_CHILD_PROGRAM_UID
             status: ACTIVE
-            events: [{ programStage: DEMO_CHILD_VISIT_STAGE_UID, status: COMPLETED }]
-          - { program: DEMO_MATERNAL_PROGRAM_UID, status: ACTIVE, events: [] }
-          - { program: DEMO_TB_PROGRAM_UID, status: CANCELLED, events: [] }
+            events:
+              - { programStage: DEMO_BCG_BIRTH_STAGE_UID, status: COMPLETED }
+              - { programStage: DEMO_OPV_BIRTH_STAGE_UID, status: COMPLETED }
+              - { programStage: DEMO_MEASLES_STAGE_UID, status: COMPLETED }
         ignored_upstream_field: safe-extra-field
 expect:
   outcome: match
   outputs:
-    first_name: Nia
-    last_name: Example
-    date_of_birth: 2017-06-15
-    child_program_active: true
-    programme_code: DEMO_CHILD_PROGRAM
-    reconciliation_reference: REF-0001
-    maternal_postnatal_active: true
-    child_health_visit_recorded: true
-    tb_program_active: false
+    programme_enrollment_active: true
+    bcg_birth_dose_recorded: true
+    opv_birth_dose_recorded: true
+    measles_dose_recorded: true
   claims:
-    tracked-entity-first-name: Nia
-    tracked-entity-last-name: Example
-    child-program-active: true
-    child-age-band: 5-17
-    programme-code: DEMO_CHILD_PROGRAM
-    reconciliation-reference: redacted
-    maternal-postnatal-care-active: true
-    child-health-visit-recorded: true
-    tb-program-active: false
+    programme-enrollment-active: true
+    bcg-birth-dose-recorded: true
+    opv-birth-dose-recorded: true
+    measles-dose-recorded: true

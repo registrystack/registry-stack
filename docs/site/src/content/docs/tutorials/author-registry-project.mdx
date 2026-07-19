@@ -208,6 +208,30 @@ An attribute is caller-supplied context. Mapping an attribute does not authentic
 turn the value into an identifier.
 Registryctl rejects any other target path before generating Relay or Notary configuration.
 
+## Apply the evidence-claim design test
+
+Keep three policy categories separate while you author the project. The integration and
+environment define Relay source access and adaptation policy. The evidence service defines Notary
+evidence authorization and disclosure policy. The consuming programme keeps its eligibility,
+prioritization, workflow, and action policy outside the project.
+
+Test every proposed claim before adding it:
+
+1. Does the claim state one atomic evidence fact or value, rather than a programme decision?
+2. Does the claim define what `true`, `false`, `null`, `no_match`, `ambiguous`, and source failure
+   mean without turning missing evidence into a negative fact?
+3. Can another authorized programme reuse the evidence without importing the first programme's
+   eligibility, ranking, workflow, or action rules?
+
+If any answer is no, narrow or rename the claim and keep the consuming decision downstream.
+For example, prefer `programme-enrollment-active` or `measles-dose-recorded` to
+`outreach-required` or `benefits-eligible`. A Common Expression Language (CEL) rule may derive a
+precise evidence predicate from typed outputs, but it is not a general-purpose eligibility engine.
+
+A claim may attest a decision that an authoritative source already made. In that exception, the
+claim id and description must identify it as a source-owned decision and the integration must
+preserve the source's exact meaning. Notary does not recompute the decision.
+
 ## Add another integration
 
 An existing project can add another protocol view over the same logical source without starting a
@@ -221,7 +245,8 @@ second project or copying generated product configuration. Use a stable integrat
    `registry-stack.yaml`.
 3. Under the consuming evidence service, add a consultation with
    `integration: benefit-record` and bind every integration input to one typed request path. Add
-   claims that select or derive from that consultation's declared outputs.
+   atomic evidence claims that select or derive from that consultation's declared outputs. Keep
+   consuming programme decisions outside the evidence service.
 4. Add `integrations.benefit-record.source` to `environments/local.yaml` with its
    non-production origin, credential reference, and generation. Do not put credential values in
    the project files.

@@ -14,9 +14,9 @@ standards_referenced:
 
 An institution that runs a civil registry, a social-protection database, or a health
 registry already holds the records it needs.
-Registry Stack lets it **answer questions about those records** (*is this person alive? is
-this household eligible?*) and return a result another system can trust, while the records
-themselves are **read where they already live, never written back, and not copied into a
+Registry Stack lets it **answer evidence questions about those records** (*is this person alive?
+is this programme enrollment active?*) and return a result another system can trust, while the
+records themselves are **read where they already live, never written back, and not copied into a
 central exchange**.
 This page explains what that means in practice: what stays inside the institution's
 boundary, what crosses it, and (equally important) what the design does and does not
@@ -24,13 +24,14 @@ guarantee.
 
 ## A question goes in, an answer comes out
 
-The combined Relay and Notary mental model is one sentence: **a scoped question crosses into the
-institution, Relay reads the record in place, and Notary returns a computed answer.**
+The combined Relay and Notary mental model is one sentence: **a scoped evidence question crosses
+into the institution, Relay reads and normalizes the source, Notary returns a governed evidence
+answer, and the consuming programme decides what to do.**
 
 A Notary caller never sends the value it is asking about and never receives the
 underlying record as the answer.
-It sends the id of a *claim* (a single, pre-modelled question) and only the typed target,
-requester, or variable inputs that the claim admits.
+It sends the id of an *evidence claim* (an atomic, precisely defined evidence statement) and only
+the typed target, requester, or variable inputs that the claim admits.
 It receives one of a few narrow shapes of answer: a yes/no, a single value, a
 machine-readable evaluation result, or a credential the subject can carry in a wallet.
 The source row that the answer was computed from stays behind.
@@ -50,10 +51,10 @@ flowchart LR
         notary -. records .-> audit
         key -. signs .-> notary
     end
-    caller["Caller / verifier"]
+    caller["Consuming programme / verifier"]
     holder(["Subject / wallet"])
     caller == "request: claim id + subject inputs + scope" ==> notary
-    notary == "answer: yes/no · value · evaluation result" ==> caller
+    notary == "evidence: yes/no · value · evaluation result" ==> caller
     notary == "issued credential" ==> holder
     caller == "scoped record read" ==> relay
     relay == "authorized source records" ==> caller
@@ -73,6 +74,12 @@ Relay consultation and returns a shaped answer; it is the only component that ev
 applies disclosure policy, and issues credentials.
 Notary is the strongest minimization surface.
 Relay record reads are scoped and audited, not open data.
+
+The policy boundary remains separate across the two products and their consumers. Relay owns
+source access and adaptation policy. Notary owns evidence authorization and disclosure policy.
+The consuming programme owns eligibility, prioritization, workflow, and action policy.
+Purpose-bound authorization can restrict an evidence request without changing which component owns
+the programme decision.
 
 ## What stays home
 
@@ -101,7 +108,7 @@ governed, audited read bounded by the caller's per-dataset row scope and the dat
 configured filters and limits.
 Registry Notary returns the answer a rule computes from typed consultation outputs rather than the
 source row; keeping that answer narrow is a modelling discipline, because a well-modelled claim
-returns one decision or one extracted value.
+returns one reusable evidence statement or one extracted value.
 A Notary answer takes one of a few shapes:
 
 - A yes/no: only the true/false satisfaction of the modelled rule.
@@ -148,9 +155,12 @@ By default, a record that does not resolve collapses to a single not-available r
 rather than a `false`, which hides the reason matching failed. An authorized caller can
 still distinguish a resolved record from a not-available response, so use this pattern for
 minimization, not for hiding whether a requested subject matched.
-To check eligibility without exposing an income figure, derive the decision with an
-expression rule and disclose the eligibility boolean as a `predicate`; the income value
-stays home.
+To report whether a source records a vaccination dose, derive that evidence predicate from the
+declared typed source output. The consuming programme can combine the result with other evidence
+and its own case state to decide whether outreach or follow-up is required.
+Registry Notary can attest an eligibility or other decision already made by an authoritative
+source only when the claim name and description identify the fact as a source-owned decision.
+Notary does not recompute that decision.
 
 ## Why the answer is not the record
 
@@ -211,6 +221,14 @@ Security material:
 - Matching is only as strict as the Relay integration contract: Relay returns `match`,
   `no_match`, or `ambiguous` under the compiled selector and output rules. Notary does not
   replace that result with direct source matching or choose between ambiguous records.
+- Missing evidence is not a negative fact: A matched source value of `false`, a matched `null`
+  value, `no_match`, `ambiguous`, and source failure have different reviewed meanings. Claim rules
+  must not collapse `null`, unavailable evidence, or failures to `false`. An explicitly named
+  existence predicate can map `matched == false` to `false` when its reviewed meaning is exactly
+  whether one admissible match exists; ambiguity and failure remain unavailable.
+- Notary is not a programme decision engine: Notary returns governed evidence. The consuming
+  programme owns eligibility, prioritization, workflow, and action unless Notary is attesting a
+  decision explicitly owned by the authoritative source.
 - This is not zero-knowledge: A `predicate` answer is a policy-enforced boolean computed
   inside the service; SD-JWT selective disclosure is digest omission. Neither is a
   zero-knowledge proof.

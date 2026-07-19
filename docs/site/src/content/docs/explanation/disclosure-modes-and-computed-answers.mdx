@@ -16,15 +16,17 @@ still answering questions about the subjects in it.
 The short answer is that a caller asks a question and receives a *computed answer*, not the record.
 This page explains how that works, what each kind of answer does and does not reveal, and where
 the privacy claim has edges.
-You will see one product term used throughout: a **claim**, which is a single pre-modelled
-question (one decision or one extracted value), such as "is this person registered?" or "what is
-this person's registration date?".
-A claim is deliberately narrow: a claim that tried to return a whole record would over-collect and
-be hard to authorize, which is exactly the outcome this design avoids.
+You will see one product term used throughout: an **evidence claim**, which is one atomic,
+precisely defined evidence statement or extracted value, such as "is this person registered?" or
+"what is this person's registration date?".
+A claim is deliberately narrow and reusable. A claim that returned a whole record would
+over-collect, and a claim that embedded one programme's eligibility or action rules could not be
+reused as neutral evidence.
 
 ## How Registry Notary controls what leaves the service
 
-Registry Notary is the component that evaluates a claim and decides what the caller receives back.
+Registry Notary is the component that evaluates an evidence claim and enforces what the caller
+receives back.
 It controls the answer through three **disclosure modes**: `value`, `predicate`, and `redacted`.
 There are exactly three.
 `value` is not always all-or-nothing, though: when a claim returns an object, `value` mode can
@@ -49,17 +51,33 @@ inputs.
 The caller does not supply the evaluated value, and cannot inject one.
 
 The evaluation runs as a pipeline: Relay returns a closed typed consultation result when the claim
-is registry-backed, a rule computes the configured condition, a disclosure mode shapes what leaves
-the service, and a response format carries the result.
+is registry-backed, a rule evaluates the configured evidence statement, a disclosure mode shapes
+what leaves the service, and a response format carries the result.
 Because Notary computes the answer from the closed Relay result or permitted self-attestation, it
 can return that computed answer rather than handing back a source record.
 
 The rule that does the computing is one of three kinds.
 An **exists** rule checks whether the pinned consultation produced one admissible match.
 An **extract** rule reads a declared typed output.
-A **cel** rule derives a value from typed outputs, request variables, or earlier claim results
-through a hardened expression.
+A **`cel`** rule derives an evidence value from typed outputs, request variables, or earlier claim
+results through a hardened expression.
 Each kind produces an answer about the subject without that answer being a copy of the source row.
+
+## Evidence is not a programme decision
+
+Registry Relay source-access and adaptation policy controls how an authoritative source is read
+and normalized. Registry Notary evidence policy controls which evidence statement is evaluated,
+who can request it, and how much can be disclosed. The consuming programme separately owns
+eligibility, prioritization, workflow, and action policy.
+
+A Common Expression Language (CEL) rule can derive an evidence predicate, such as whether the
+source records an active programme enrollment or a measles dose. It is not a general-purpose
+programme eligibility engine. The consuming programme can combine those evidence claims with its
+own thresholds, priorities, and case state to decide whether outreach or follow-up is required.
+
+Registry Notary can also attest a decision that an authoritative source already owns. The claim
+name and description must say that it is a source-owned decision. Notary does not recompute that
+decision or present the source's decision policy as Notary policy.
 
 ## The three disclosure modes
 
@@ -87,9 +105,8 @@ A question of whether someone has a registered record is modelled as an `exists`
 matching record returns `evidence.not_available` (collapsed to a single public reason by default)
 rather than `false`; absence is surfaced as no-evidence, not as a negative result.
 Either way the source row never leaves the service.
-A question about an eligibility threshold without exposing the figure behind it is modelled as a
-`cel` rule whose eligibility boolean is disclosed as `predicate`; the underlying value stays
-inside the service.
+A source fact such as whether a recorded vaccination dose is present can be modelled as a boolean
+evidence predicate without returning the underlying health record.
 
 A `redacted` result goes further: it carries neither the source value nor the satisfaction
 outcome.
@@ -98,6 +115,25 @@ The standard result body reports no `satisfied` value, and the CCCEV JSON-LD ren
 `cccev:isConformantTo`.
 
 `predicate` still discloses a true-or-false fact; `redacted` does not.
+
+## Preserve negative, unknown, and unavailable evidence
+
+Claim authors must keep these source meanings distinct:
+
+- `true` means the reviewed source contract positively establishes the evidence statement.
+- `false` means the reviewed source contract positively establishes its negative.
+- `null` means a subject matched but the declared source value is unknown, absent, or not recorded.
+- `no_match` means the exact selector did not resolve a subject.
+- `ambiguous` means the selector resolved more than one admissible subject.
+- A source failure means the source could not provide a reliable result.
+
+A claim rule must not silently coerce `null`, `no_match`, `ambiguous`, or source failure to
+`false`. Missing evidence is not a negative fact. An explicitly named existence predicate is the
+narrow exception: a reviewed rule can map `matched == false` to `false` only when the claim means
+that one admissible match exists. This exception does not make other claims negative, and ambiguity
+or source failure never becomes `false`. A public disclosure policy can collapse matching failures
+to `evidence.not_available`, but the reviewed source outcome and audit provenance remain distinct
+from an explicit negative source value.
 
 ## How disclosure policy is configured per claim
 

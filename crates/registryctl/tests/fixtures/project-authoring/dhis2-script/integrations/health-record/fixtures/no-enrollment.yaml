@@ -1,4 +1,4 @@
-name: health-no-match
+name: no-child-program-enrollment
 classification: synthetic
 input: { tracked_entity: A0000000001, include_inactive: true }
 interactions:
@@ -8,10 +8,19 @@ interactions:
       query:
         fields: trackedEntity,enrollments[program,status,events[programStage,status]]
         includeDeleted: true
-    respond: { status: 404, body: {} }
+    respond:
+      status: 200
+      body:
+        trackedEntity: A0000000001
+        enrollments:
+          - { program: DEMO_OTHER_PROGRAM_UID, status: ACTIVE, events: [] }
 expect:
-  outcome: no_match
-  outputs: {}
+  outcome: match
+  outputs:
+    programme_enrollment_active: null
+    bcg_birth_dose_recorded: null
+    opv_birth_dose_recorded: null
+    measles_dose_recorded: null
   claims:
     programme-enrollment-active: null
     bcg-birth-dose-recorded: null
