@@ -10,10 +10,14 @@ consultations. This applies to `POST /v1/credentials` and
 The OID4VCI surface also changes to issuer-initiated pre-authorized code only.
 Remove integrations that call the former credential-offer or public nonce
 routes, or that treat an identity-provider authorization code as a wallet
-grant. Start the browser journey at `GET /oid4vci/offer/start`, import the offer
+grant. The corresponding Rust `oid4vci_credential_offer` and `oid4vci_nonce`,
+Node.js `oid4vciCredentialOffer` and `oid4vciNonce`, and Python
+`oid4vci_credential_offer` and `oid4vci_nonce` client helpers are also removed.
+Start the browser journey at `GET /oid4vci/offer/start`, import the offer
 rendered after the callback, redeem its pre-authorized code at
 `POST /oid4vci/token`, and use the proof nonce from that token response. The
-credential response no longer returns a next nonce.
+issuer metadata no longer contains `nonce_endpoint`, and the credential
+response no longer returns a next nonce.
 
 ## Configuration changes
 

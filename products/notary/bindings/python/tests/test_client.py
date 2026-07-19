@@ -466,29 +466,23 @@ class RegistryNotaryClientTests(unittest.TestCase):
         recorder = _Recorder(
             responses=[
                 (200, {"credential_issuer": "https://issuer.example"}, None),
-                (200, {"credential_issuer": "https://issuer.example", "credentials": []}, None),
-                (200, {"c_nonce": "nonce-secret"}, None),
-                (200, {"format": "vc+sd-jwt", "credential": "credential-secret"}, None),
+                (200, {"format": "dc+sd-jwt", "credential": "credential-secret"}, None),
                 (200, b"response.jws.compact", {"content-type": "application/jwt"}),
             ]
         )
         with Server(recorder) as base_url:
             client = RegistryNotaryClient(base_url=base_url)
             metadata = client.oid4vci_issuer_metadata()
-            offer = client.oid4vci_credential_offer("config one")
-            nonce = client.oid4vci_nonce()
             credential = client.oid4vci_credential({"proof": {"jwt": "holder-proof-secret"}})
             jws = client.federation_evaluate_jws("request.jws.compact")
 
         self.assertEqual(metadata["credential_issuer"], "https://issuer.example")
-        self.assertEqual(offer["credentials"], [])
-        self.assertEqual(nonce["c_nonce"], "nonce-secret")
         self.assertEqual(credential["credential"], "credential-secret")
         self.assertEqual(jws, "response.jws.compact")
-        self.assertEqual(recorder.requests[1]["path"], "/oid4vci/credential-offer?credential_configuration_id=config%20one")
-        self.assertEqual(recorder.requests[3]["body"], {"proof": {"jwt": "holder-proof-secret"}})
-        self.assertEqual(recorder.requests[4]["body"], "request.jws.compact")
-        self.assertEqual(recorder.requests[4]["headers"]["Content-Type"], "application/jwt")
+        self.assertEqual(recorder.requests[1]["path"], "/oid4vci/credential")
+        self.assertEqual(recorder.requests[1]["body"], {"proof": {"jwt": "holder-proof-secret"}})
+        self.assertEqual(recorder.requests[2]["body"], "request.jws.compact")
+        self.assertEqual(recorder.requests[2]["headers"]["Content-Type"], "application/jwt")
 
     def test_openspp_contract_routes_versioned_refs_retries_jwks_and_problem_codes(self) -> None:
         retry_policy = RetryPolicy(

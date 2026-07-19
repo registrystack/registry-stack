@@ -73,9 +73,9 @@ For a full explanation of how the levels interact and the downgrade strategies, 
 
 Notary issues SD-JWT VC credentials:
 
-- Token type `dc+sd-jwt`, signing algorithm EdDSA (Ed25519).
-- The issuer key is sourced from an environment variable (an OKP Ed25519 JWK); the public key is
-  published at `GET /.well-known/evidence/jwks.json`.
+- Token type `dc+sd-jwt`, with issuer signing configured as EdDSA (Ed25519) or ES256 (P-256).
+- The issuer key comes from the configured signing provider; its public JWK is published at
+  `GET /.well-known/evidence/jwks.json`.
 - Individual claim fields are wrapped in SD-JWT disclosures with SHA-256 digests for selective
   disclosure.
 

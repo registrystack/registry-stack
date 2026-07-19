@@ -31,7 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - BREAKING: the Registry Notary 1.0 wallet facade now supports only
   issuer-initiated pre-authorized code backed by a stored registry transaction.
   `GET /oid4vci/credential-offer` and `POST /oid4vci/nonce` are removed, and
-  credential responses no longer expose `c_nonce` or `c_nonce_expires_in`.
+  issuer metadata no longer advertises `nonce_endpoint`. Credential responses
+  no longer expose `c_nonce` or `c_nonce_expires_in`.
+  The Rust, Node.js, and Python client helpers for those removed routes are
+  removed as well.
   Start at `GET /oid4vci/offer/start`, complete the identity-provider callback,
   redeem the rendered offer at `POST /oid4vci/token`, and use that token
   response's transaction-bound proof nonce. The identity provider's

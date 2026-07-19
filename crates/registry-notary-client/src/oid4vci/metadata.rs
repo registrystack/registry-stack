@@ -2,6 +2,5 @@
 //! OpenID4VCI metadata re-exports.
 
 pub use registry_platform_oid4vci::{
-    CredentialIssuerMetadata, CredentialOffer, CredentialRequest, CredentialResponse, NonceRequest,
-    NonceResponse,
+    CredentialIssuerMetadata, CredentialOffer, CredentialRequest, CredentialResponse,
 };

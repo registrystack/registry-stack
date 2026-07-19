@@ -74,6 +74,7 @@ from pathlib import Path
 expected = {
     "GET /oid4vci/credential-offer api path removed without deprecation",
     "POST /oid4vci/nonce api path removed without deprecation",
+    "GET /.well-known/openid-credential-issuer removed the optional property 'nonce_endpoint' from the response with the '200' status",
     "POST /oid4vci/credential removed the optional property 'c_nonce' from the response with the '200' status",
     "POST /oid4vci/credential removed the optional property 'c_nonce_expires_in' from the response with the '200' status",
 }
@@ -92,11 +93,22 @@ if allowed != expected:
         f"Notary OpenAPI 1.0 allowlist is not exact; missing={missing}, extra={extra}"
     )
 
-raw_diff = raw_path.read_text(encoding="utf-8")
-stale = sorted(line for line in allowed if line not in raw_diff)
-if stale:
+observed = set()
+for raw_line in raw_path.read_text(encoding="utf-8").splitlines():
+    marker = "in API "
+    if marker not in raw_line:
+        continue
+    change = raw_line.split(marker, 1)[1]
+    if " [" in change:
+        change = change.rsplit(" [", 1)[0]
+    observed.add(change.strip().removesuffix(".").rstrip())
+
+if observed != allowed:
+    missing = sorted(allowed - observed)
+    extra = sorted(observed - allowed)
     raise SystemExit(
-        "Notary OpenAPI 1.0 allowlist contains stale entries: " + "; ".join(stale)
+        f"Notary OpenAPI 1.0 raw diff is not exactly allowlisted; "
+        f"missing={missing}, extra={extra}"
     )
 PY
 

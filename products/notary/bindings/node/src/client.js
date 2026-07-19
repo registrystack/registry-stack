@@ -335,40 +335,6 @@ export class RegistryNotaryClient {
   }
 
   /**
-   * @param {string | undefined} credentialConfigurationId
-   * @param {{ requestId?: string, signal?: AbortSignal }} [options]
-   * @returns {Promise<unknown>}
-   */
-  async oid4vciCredentialOffer(credentialConfigurationId = undefined, options = {}) {
-    const path =
-      credentialConfigurationId === undefined
-        ? "/oid4vci/credential-offer"
-        : `/oid4vci/credential-offer?credential_configuration_id=${encodeURIComponent(credentialConfigurationId)}`;
-    return await this.getJson(path, {
-      accept: "application/json",
-      requestId: options.requestId,
-      signal: options.signal,
-      errorKind: "oid4vci",
-    });
-  }
-
-  /**
-   * @param {Record<string, unknown> | undefined} request
-   * @param {{ requestId?: string, traceparent?: string, signal?: AbortSignal }} [options]
-   * @returns {Promise<unknown>}
-   */
-  async oid4vciNonce(request = undefined, options = {}) {
-    return await this.requestJson("/oid4vci/nonce", request ?? { credential_configuration_id: null }, {
-      accept: "application/json",
-      requestId: options.requestId,
-      traceparent: options.traceparent,
-      signal: options.signal,
-      retryKind: "post_no_retry",
-      errorKind: "oid4vci",
-    });
-  }
-
-  /**
    * @param {Record<string, unknown>} request
    * @param {{ requestId?: string, traceparent?: string, signal?: AbortSignal }} [options]
    * @returns {Promise<unknown>}

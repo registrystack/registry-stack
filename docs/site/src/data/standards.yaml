@@ -270,9 +270,10 @@
     Registry Platform owns reusable SD-JWT VC issuance and holder-proof helpers.
     Registry Notary owns the claim-to-credential workflow and service routes that
     use them. The profile is constrained: `application/dc+sd-jwt` credentials,
-    EdDSA over Ed25519, `did:jwk` holder binding. Pre-rename format aliases such
-    as `application/vc+sd-jwt` are rejected in operator configuration. Full
-    SD-JWT VC conformance is not claimed.
+    issuer signing with EdDSA over Ed25519 or ES256 over P-256, and EdDSA
+    `did:jwk` holder binding. Pre-rename format aliases such as
+    `application/vc+sd-jwt` are rejected in operator configuration. Full SD-JWT
+    VC conformance is not claimed.
 - id: verifiable-credentials
   name: Verifiable Credentials Data Model
   standards_body: W3C

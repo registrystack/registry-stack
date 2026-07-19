@@ -386,49 +386,6 @@ impl RegistryNotaryClient {
     }
 
     #[cfg(feature = "oid4vci")]
-    /// Fetch an OpenID4VCI credential offer.
-    pub async fn oid4vci_credential_offer(
-        &self,
-        credential_configuration_id: Option<&str>,
-        options: RequestOptions,
-    ) -> Result<NotaryResponse<registry_platform_oid4vci::CredentialOffer>, NotaryClientError> {
-        self.reject_idempotency(&options)?;
-        let path = credential_configuration_id.map_or_else(
-            || "/oid4vci/credential-offer".to_string(),
-            |id| {
-                format!(
-                    "/oid4vci/credential-offer?credential_configuration_id={}",
-                    encode_query_value(id)
-                )
-            },
-        );
-        self.get_json(&path, options, LIMIT_DISCOVERY, ErrorKind::Oid4vci)
-            .await
-    }
-
-    #[cfg(feature = "oid4vci")]
-    /// Request an OpenID4VCI nonce.
-    pub async fn oid4vci_nonce(
-        &self,
-        request: Option<registry_platform_oid4vci::NonceRequest>,
-        options: RequestOptions,
-    ) -> Result<NotaryResponse<registry_platform_oid4vci::NonceResponse>, NotaryClientError> {
-        self.reject_idempotency(&options)?;
-        let body = request.unwrap_or(registry_platform_oid4vci::NonceRequest {
-            credential_configuration_id: None,
-        });
-        self.post_json(
-            "/oid4vci/nonce",
-            &body,
-            options,
-            LIMIT_OPERATION,
-            RouteRetry::PostNoRetry,
-            ErrorKind::Oid4vci,
-        )
-        .await
-    }
-
-    #[cfg(feature = "oid4vci")]
     /// Submit an OpenID4VCI credential request.
     ///
     /// The caller is responsible for holder-key custody and proof JWT creation.
@@ -1203,11 +1160,6 @@ fn encode_path_segment(segment: &str) -> String {
             _ => format!("%{byte:02X}").chars().collect(),
         })
         .collect()
-}
-
-#[cfg_attr(not(feature = "oid4vci"), allow(dead_code))]
-fn encode_query_value(value: &str) -> String {
-    encode_path_segment(value).replace("%20", "+")
 }
 
 /// Fluent builder for one high-level evaluation request.

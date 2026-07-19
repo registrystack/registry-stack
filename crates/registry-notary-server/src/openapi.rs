@@ -2890,7 +2890,6 @@ fn credential_issuer_metadata_schema() -> Value {
             "credential_issuer": { "type": "string", "format": "uri" },
             "credential_endpoint": { "type": "string", "format": "uri" },
             "token_endpoint": { "type": "string", "format": "uri" },
-            "nonce_endpoint": { "type": "string", "format": "uri" },
             "authorization_servers": { "type": "array", "items": { "type": "string", "format": "uri" } },
             "display": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
             "credential_configurations_supported": {
@@ -4205,6 +4204,12 @@ mod tests {
         assert_eq!(
             doc["components"]["schemas"]["CredentialIssuerMetadata"]["type"],
             json!("object")
+        );
+        assert!(
+            doc["components"]["schemas"]["CredentialIssuerMetadata"]["properties"]
+                .get("nonce_endpoint")
+                .is_none(),
+            "the 1.0 issuer metadata schema must not advertise a public nonce endpoint"
         );
         assert_eq!(
             doc["components"]["schemas"]["CredentialRequest"]["type"],
