@@ -10,7 +10,8 @@ the selected images by digest.
 
 The Registry Notary image is built with CEL and PKCS#11 compiled in. Runtime
 use remains config-gated, and the image is covered by the CEL worker-protocol
-smoke, SBOM, and Grype critical-vulnerability gate.
+smoke, SBOM, and Grype gate for every fixable finding plus every unreviewed High
+or Critical finding.
 
 ## Container runtime policy
 
@@ -40,6 +41,15 @@ do not change. Repeatability is established by two clean builds with the same
 new builder digest and lockfiles, comparing `dist/image-bin/SHA256SUMS`; hashes
 from the retired builder are not the expected comparison.
 
+The Debian 13 migration check on July 19, 2026 scanned a structural Notary
+image with the pinned final base and placeholder binaries. It found the
+non-fixable Debian 13 `libc6` findings CVE-2026-5450 (Critical), CVE-2026-5928
+(High), and CVE-2026-5435 (High). No risk dispositions are recorded for these
+findings, so a candidate that still reports them remains blocked. This
+structural scan only supports removal of the retired Debian 12 exception. The
+scan of the exact pushed image, including the real Notary and CEL worker
+binaries, supersedes it for release decisions.
+
 PKCS#11 support remains compiled in but config-gated. A vendor module and any
 vendor-owned shared-library dependencies remain deployment inputs, not image
 layers. Mount them read-only at operator-owned absolute paths and set the
@@ -66,13 +76,15 @@ Reviewed advisory ratchets live in `security/advisory-baseline.json`. The
 initial blocking gates are:
 
 - `zizmor` findings with severity `high` or above.
-- Grype image findings with severity `critical` or above.
+- Grype image findings with a known fix, regardless of severity.
+- Grype image findings with severity `high` or above when they do not have a
+  current reviewed disposition.
 
-Every reviewed entry must include a fingerprint, owner, reason, review date,
-and expiration date. New unreviewed findings at or above the threshold fail CI.
-Expired reviewed entries fail CI while the finding is still active. Stale
-reviewed entries are reported so the baseline can shrink after the underlying
-issue is fixed.
+Fixable findings cannot be dispositioned. Every reviewed non-fixable High or
+Critical finding must include a fingerprint, matching rule and severity, owner,
+reason, review date, and expiration date. Future-dated or expired entries fail
+CI while the finding is still active. Stale reviewed entries are reported so
+the baseline can shrink after the underlying issue is fixed.
 
 The unauthenticated endpoint allowlist lives in
 `security/auth-none-allowlist.yml`. Additions require maintainer review through

@@ -9,8 +9,9 @@
     },
     {
       "tool": "grype",
-      "minimum_severity": "critical",
-      "action": "block_unreviewed"
+      "minimum_severity": "high",
+      "action": "block_unreviewed",
+      "block_fixable": true
     }
   ],
   "reviewed_findings": []

@@ -41,8 +41,9 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
                 },
                 {
                     "tool": "grype",
-                    "minimum_severity": "critical",
+                    "minimum_severity": "high",
                     "action": "block_unreviewed",
+                    "block_fixable": True,
                 },
             ],
             "reviewed_findings": reviewed or [],
@@ -87,6 +88,21 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
         base.update(overrides)
         return base
 
+    def grype_report(self, severity="High", fix=None):
+        vulnerability = {"id": "CVE-2026-0001", "severity": severity}
+        if fix is not None:
+            vulnerability["fix"] = fix
+        return {
+            "matches": [{
+                "vulnerability": vulnerability,
+                "artifact": {
+                    "name": "openssl",
+                    "version": "3.0.0",
+                    "type": "deb",
+                },
+            }]
+        }
+
     def test_unreviewed_zizmor_high_fails(self):
         self.write_baseline()
         baseline = self.module.load_baseline(self.baseline_path)
@@ -117,7 +133,13 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
 
     def test_expired_review_fails_even_when_fingerprint_matches(self):
         finding = self.module.normalize_zizmor(self.zizmor_report())[0]
-        self.write_baseline([self.review(finding, expires_at="2026-06-01")])
+        self.write_baseline([
+            self.review(
+                finding,
+                reviewed_at="2026-05-01",
+                expires_at="2026-06-01",
+            )
+        ])
         baseline = self.module.load_baseline(self.baseline_path)
         self.assertEqual(
             self.module.check_findings(
@@ -132,7 +154,13 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
     def test_expired_stale_review_does_not_block(self):
         stale_finding = self.module.normalize_zizmor(self.zizmor_report())[0]
         active_finding = self.module.normalize_zizmor(self.zizmor_report(severity="Medium"))[0]
-        self.write_baseline([self.review(stale_finding, expires_at="2026-06-01")])
+        self.write_baseline([
+            self.review(
+                stale_finding,
+                reviewed_at="2026-05-01",
+                expires_at="2026-06-01",
+            )
+        ])
         baseline = self.module.load_baseline(self.baseline_path)
         self.assertEqual(
             self.module.check_findings(
@@ -246,6 +274,103 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
             ),
             1,
         )
+
+    def test_grype_high_non_fixable_passes_with_current_review(self):
+        finding = self.module.normalize_grype(
+            self.grype_report(), "registry-relay-image"
+        )[0]
+        self.write_baseline([self.review(finding)])
+        baseline = self.module.load_baseline(self.baseline_path)
+        self.assertEqual(
+            self.module.check_findings(
+                "grype",
+                [finding],
+                baseline,
+                self.module.parse_date("2026-06-02", "today"),
+                "registry-relay-image",
+            ),
+            0,
+        )
+
+    def test_grype_fixable_low_fails_regardless_of_severity(self):
+        self.write_baseline()
+        baseline = self.module.load_baseline(self.baseline_path)
+        finding = self.module.normalize_grype(
+            self.grype_report("Low", {"versions": ["3.0.1"], "state": "fixed"}),
+            "registry-relay-image",
+        )[0]
+        self.assertTrue(finding.fixable)
+        self.assertEqual(
+            self.module.check_findings(
+                "grype",
+                [finding],
+                baseline,
+                self.module.parse_date("2026-06-02", "today"),
+                "registry-relay-image",
+            ),
+            1,
+        )
+
+    def test_grype_fixable_finding_cannot_be_dispositioned(self):
+        finding = self.module.normalize_grype(
+            self.grype_report("Medium", {"versions": ["3.0.1"]}),
+            "registry-relay-image",
+        )[0]
+        self.write_baseline([self.review(finding)])
+        baseline = self.module.load_baseline(self.baseline_path)
+        self.assertEqual(
+            self.module.check_findings(
+                "grype",
+                [finding],
+                baseline,
+                self.module.parse_date("2026-06-02", "today"),
+                "registry-relay-image",
+            ),
+            1,
+        )
+
+    def test_grype_rejects_malformed_fix_metadata(self):
+        with self.assertRaises(SystemExit):
+            self.module.normalize_grype(
+                self.grype_report("Low", {"versions": "3.0.1"}),
+                "registry-relay-image",
+            )
+
+    def test_future_dated_review_fails(self):
+        finding = self.module.normalize_grype(
+            self.grype_report(), "registry-relay-image"
+        )[0]
+        self.write_baseline([self.review(finding, reviewed_at="2026-06-03")])
+        baseline = self.module.load_baseline(self.baseline_path)
+        self.assertEqual(
+            self.module.check_findings(
+                "grype",
+                [finding],
+                baseline,
+                self.module.parse_date("2026-06-02", "today"),
+                "registry-relay-image",
+            ),
+            1,
+        )
+
+    def test_review_metadata_must_match_current_finding(self):
+        finding = self.module.normalize_grype(
+            self.grype_report(), "registry-relay-image"
+        )[0]
+        for field, value in (("rule_id", "CVE-OLD"), ("severity", "critical")):
+            with self.subTest(field=field):
+                self.write_baseline([self.review(finding, **{field: value})])
+                baseline = self.module.load_baseline(self.baseline_path)
+                self.assertEqual(
+                    self.module.check_findings(
+                        "grype",
+                        [finding],
+                        baseline,
+                        self.module.parse_date("2026-06-02", "today"),
+                        "registry-relay-image",
+                    ),
+                    1,
+                )
 
     def test_grype_unknown_severity_is_below_initial_threshold(self):
         self.write_baseline()
