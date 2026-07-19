@@ -8,7 +8,7 @@ use super::{
 };
 
 #[tokio::test]
-pub(super) async fn oid4vci_metadata_offer_and_nonce_are_public() {
+pub(super) async fn oid4vci_metadata_is_public_but_legacy_offer_and_nonce_are_not() {
     set_audit_secret();
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
@@ -36,94 +36,38 @@ pub(super) async fn oid4vci_metadata_offer_and_nonce_are_public() {
     let metadata_text = metadata_body.to_string();
     assert!(!metadata_text.contains("source_connections"));
 
-    let offer = server.get("/oid4vci/credential-offer").await;
-    offer.assert_status_ok();
-    let offer_body: Value = offer.json();
-    assert_eq!(
-        offer_body["credential_configuration_ids"][0],
-        json!("person_is_alive_sd_jwt")
-    );
-    let filtered_offer = server
-        .get("/oid4vci/credential-offer?credential_configuration_id=person_is_alive_sd_jwt")
-        .await;
-    filtered_offer.assert_status_ok();
-    let filtered_offer_body: Value = filtered_offer.json();
-    assert_eq!(
-        filtered_offer_body["credential_configuration_ids"],
-        json!(["person_is_alive_sd_jwt"])
-    );
-    let unknown_offer = server
-        .get("/oid4vci/credential-offer?credential_configuration_id=unknown")
-        .await;
-    unknown_offer.assert_status(StatusCode::BAD_REQUEST);
-    let unknown_offer_body: Value = unknown_offer.json();
-    assert_eq!(unknown_offer_body["error"], json!("invalid_request"));
-
-    let nonce = server.post("/oid4vci/nonce").json(&json!({})).await;
-    nonce.assert_status_ok();
-    let nonce_body: Value = nonce.json();
-    assert!(nonce_body["c_nonce"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty()));
-    assert_eq!(nonce_body["c_nonce_expires_in"], json!(300));
-
-    let bad_nonce = server
-        .post("/oid4vci/nonce")
-        .json(&json!({"subject": "person-2"}))
-        .await;
-    bad_nonce.assert_status(StatusCode::BAD_REQUEST);
-    let bad_nonce_body: Value = bad_nonce.json();
-    assert_eq!(bad_nonce_body["error"], json!("invalid_request"));
-
-    idp.stop().await;
-}
-
-#[tokio::test]
-pub(super) async fn oid4vci_nonce_is_rate_limited_before_reservation() {
-    set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
-
-    let idp = MockIdp::start().await;
-    let tmp = TempDir::new().expect("tempdir");
-    let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = subject_access_oid4vci_config(
-        "http://127.0.0.1:1",
-        audit_path.to_str().expect("audit path is UTF-8"),
-        &idp.issuer(),
-        &idp.jwks_uri(),
-    );
-    config
-        .subject_access
-        .rate_limits
-        .invalid_token_per_client_address_per_minute = 2;
-    let app = standalone_router(config)
+    server
+        .get("/oid4vci/credential-offer")
         .await
-        .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
-
+        .assert_status(StatusCode::UNAUTHORIZED);
     server
         .post("/oid4vci/nonce")
-        .add_header("x-forwarded-for", "203.0.113.10")
         .json(&json!({}))
         .await
-        .assert_status_ok();
+        .assert_status(StatusCode::UNAUTHORIZED);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "subject_access",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    server
+        .get("/oid4vci/credential-offer")
+        .add_header("authorization", format!("Bearer {token}"))
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
     server
         .post("/oid4vci/nonce")
-        .add_header("x-forwarded-for", "203.0.113.11")
+        .add_header("authorization", format!("Bearer {token}"))
         .json(&json!({}))
         .await
-        .assert_status_ok();
-
-    let limited = server
-        .post("/oid4vci/nonce")
-        .add_header("x-forwarded-for", "203.0.113.12")
-        .json(&json!({}))
-        .await;
-    limited.assert_status(StatusCode::TOO_MANY_REQUESTS);
-    assert_eq!(
-        limited.json::<Value>()["error"],
-        json!("temporarily_unavailable")
-    );
+        .assert_status(StatusCode::NOT_FOUND);
 
     idp.stop().await;
 }
@@ -237,9 +181,8 @@ pub(super) async fn oid4vci_type_metadata_normalizes_forwarded_scheme_and_host_c
     config.oid4vci.credential_issuer = "https://issuer.example.test".to_string();
     config.oid4vci.credential_endpoint =
         "https://issuer.example.test/oid4vci/credential".to_string();
-    config.oid4vci.offer_endpoint =
-        "https://issuer.example.test/oid4vci/credential-offer".to_string();
-    config.oid4vci.nonce_endpoint = Some("https://issuer.example.test/oid4vci/nonce".to_string());
+    config.oid4vci.offer_endpoint.clear();
+    config.oid4vci.nonce_endpoint = None;
     config
         .evidence
         .credential_profiles
@@ -350,9 +293,8 @@ pub(super) async fn oid4vci_type_metadata_supports_path_prefixed_issuer_behind_s
     config.oid4vci.credential_issuer = "http://127.0.0.1:4325/notary".to_string();
     config.oid4vci.credential_endpoint =
         "http://127.0.0.1:4325/notary/oid4vci/credential".to_string();
-    config.oid4vci.offer_endpoint =
-        "http://127.0.0.1:4325/notary/oid4vci/credential-offer".to_string();
-    config.oid4vci.nonce_endpoint = Some("http://127.0.0.1:4325/notary/oid4vci/nonce".to_string());
+    config.oid4vci.offer_endpoint.clear();
+    config.oid4vci.nonce_endpoint = None;
     config
         .evidence
         .credential_profiles
@@ -409,6 +351,7 @@ pub(super) async fn oid4vci_type_metadata_is_not_served_when_oid4vci_is_disabled
         &idp.jwks_uri(),
     );
     config.oid4vci.enabled = false;
+    config.oid4vci.pre_authorized_code = Default::default();
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
@@ -554,6 +497,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_is_not_served_when_oid4vci_
         &idp.jwks_uri(),
     );
     config.oid4vci.enabled = false;
+    config.oid4vci.pre_authorized_code = Default::default();
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
@@ -700,12 +644,12 @@ pub(super) async fn public_probe_routes_remain_public_except_metrics() {
     server
         .get("/oid4vci/credential-offer")
         .await
-        .assert_status_ok();
+        .assert_status(StatusCode::UNAUTHORIZED);
     server
         .post("/oid4vci/nonce")
         .json(&json!({}))
         .await
-        .assert_status_ok();
+        .assert_status(StatusCode::UNAUTHORIZED);
     server
         .get("/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
         .await
@@ -1115,13 +1059,16 @@ pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = subject_access_oid4vci_config(
+    let mut config = subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
     );
     enable_shared_admin_listener(&mut config);
     enable_credential_status(&mut config);
@@ -1151,41 +1098,24 @@ pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
         json!("credential_status.not_found")
     );
 
-    let nonce = server
-        .post("/oid4vci/nonce")
-        .json(&json!({"credential_configuration_id": "person_is_alive_sd_jwt"}))
-        .await;
-    nonce.assert_status_ok();
-    let nonce_body: Value = nonce.json();
-    let nonce = nonce_body["c_nonce"]
+    let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+    let token = redeem_token(&server, &code, &pin).await;
+    token.assert_status_ok();
+    let token_body: Value = token.json();
+    let access_token = token_body["access_token"]
+        .as_str()
+        .expect("access token is returned")
+        .to_string();
+    let nonce = token_body["c_nonce"]
         .as_str()
         .expect("nonce is returned")
         .to_string();
     let proof = sign_oid4vci_proof("http://127.0.0.1:4325", &nonce);
     let now = OffsetDateTime::now_utc().unix_timestamp();
-    let token = idp.mint_token(json!({
-        "sub": "citizen-subject",
-        "aud": "registry-notary-citizen",
-        "azp": "citizen-portal",
-        "scope": "subject_access person-is-alive",
-        "national_id": "person-1",
-        "authorization_details": [{
-            "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
-            "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
-            "legal_basis_ref": "wallet-compat-context",
-            "consent_ref": "wallet-compat-consent",
-            "jurisdiction": "ZZ",
-            "assurance_level": "substantial"
-        }],
-        "auth_time": now,
-        "iat": now,
-        "exp": now + 300,
-        "nbf": now,
-    }));
 
     let response = server
         .post("/oid4vci/credential")
-        .add_header("authorization", format!("Bearer {token}"))
+        .add_header("authorization", format!("Bearer {access_token}"))
         .json(&json!({
             "format": "dc+sd-jwt",
             "credential_configuration_id": "person_is_alive_sd_jwt",
@@ -1233,9 +1163,7 @@ pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
             }
         })
     );
-    assert!(body["c_nonce"]
-        .as_str()
-        .is_some_and(|value| !value.is_empty()));
+    assert!(body.get("c_nonce").is_none());
 
     let status = server
         .get(&format!("/v1/credentials/{credential_id}/status"))
@@ -1376,13 +1304,16 @@ pub(super) async fn oid4vci_field_projection_issues_separate_disclosures() {
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = subject_access_oid4vci_config(
+    let mut config = subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
     );
     enable_oid4vci_field_projection(&mut config);
     let app = standalone_router(config)
@@ -1411,32 +1342,23 @@ pub(super) async fn oid4vci_field_projection_issues_separate_disclosures() {
     );
     assert_eq!(metadata_body["claims"][1]["mandatory"], json!(true));
 
-    let nonce = server
-        .post("/oid4vci/nonce")
-        .json(&json!({"credential_configuration_id": "person_is_alive_sd_jwt"}))
-        .await;
-    nonce.assert_status_ok();
-    let nonce = nonce.json::<Value>()["c_nonce"]
+    let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+    let token = redeem_token(&server, &code, &pin).await;
+    token.assert_status_ok();
+    let token_body: Value = token.json();
+    let access_token = token_body["access_token"]
+        .as_str()
+        .expect("access token is returned")
+        .to_string();
+    let nonce = token_body["c_nonce"]
         .as_str()
         .expect("nonce is returned")
         .to_string();
     let proof = sign_oid4vci_proof("http://127.0.0.1:4325", &nonce);
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    let token = idp.mint_token(json!({
-        "sub": "citizen-subject",
-        "aud": "registry-notary-citizen",
-        "azp": "citizen-portal",
-        "scope": "subject_access person-is-alive",
-        "national_id": "person-1",
-        "auth_time": now,
-        "iat": now,
-        "exp": now + 300,
-        "nbf": now,
-    }));
 
     let response = server
         .post("/oid4vci/credential")
-        .add_header("authorization", format!("Bearer {token}"))
+        .add_header("authorization", format!("Bearer {access_token}"))
         .json(&json!({
             "format": "dc+sd-jwt",
             "credential_configuration_id": "person_is_alive_sd_jwt",
@@ -1478,78 +1400,6 @@ pub(super) async fn oid4vci_field_projection_issues_separate_disclosures() {
 }
 
 #[tokio::test]
-#[cfg(feature = "registry-notary-cel")]
-pub(super) async fn oid4vci_credential_route_rejects_replayed_nonce() {
-    set_audit_secret();
-    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
-
-    let idp = MockIdp::start().await;
-    let tmp = TempDir::new().expect("tempdir");
-    let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = subject_access_oid4vci_config(
-        "http://127.0.0.1:1",
-        audit_path.to_str().expect("audit path is UTF-8"),
-        &idp.issuer(),
-        &idp.jwks_uri(),
-    );
-    config.subject_access.allowed_operations.issue_credential = true;
-    let app = standalone_router(config)
-        .await
-        .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
-
-    let nonce = server
-        .post("/oid4vci/nonce")
-        .json(&json!({"credential_configuration_id": "person_is_alive_sd_jwt"}))
-        .await;
-    nonce.assert_status_ok();
-    let nonce_body: Value = nonce.json();
-    let nonce = nonce_body["c_nonce"]
-        .as_str()
-        .expect("nonce is returned")
-        .to_string();
-    let proof = sign_oid4vci_proof("http://127.0.0.1:4325", &nonce);
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    let token = idp.mint_token(json!({
-        "sub": "citizen-subject",
-        "aud": "registry-notary-citizen",
-        "azp": "citizen-portal",
-        "scope": "subject_access person-is-alive",
-        "national_id": "person-1",
-        "auth_time": now,
-        "iat": now,
-        "exp": now + 300,
-        "nbf": now,
-    }));
-    let credential_request = json!({
-        "format": "dc+sd-jwt",
-        "credential_configuration_id": "person_is_alive_sd_jwt",
-        "proof": {
-            "proof_type": "jwt",
-            "jwt": proof
-        }
-    });
-
-    let first = server
-        .post("/oid4vci/credential")
-        .add_header("authorization", format!("Bearer {token}"))
-        .json(&credential_request)
-        .await;
-    first.assert_status_ok();
-
-    let replay = server
-        .post("/oid4vci/credential")
-        .add_header("authorization", format!("Bearer {token}"))
-        .json(&credential_request)
-        .await;
-    replay.assert_status(StatusCode::BAD_REQUEST);
-    let body: Value = replay.json();
-    assert_eq!(body["error"], json!("invalid_proof"));
-
-    idp.stop().await;
-}
-
-#[tokio::test]
 pub(super) async fn oid4vci_malformed_proof_is_rejected_before_oidc_auth() {
     set_audit_secret();
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -1586,7 +1436,8 @@ pub(super) async fn oid4vci_malformed_proof_is_rejected_before_oidc_auth() {
         .oidc
         .as_mut()
         .expect("oidc config exists")
-        .userinfo_endpoint = Some(userinfo_endpoint);
+        .userinfo_endpoint = Some(userinfo_endpoint.clone());
+    config.oid4vci.pre_authorized_code.esignet.userinfo_url = userinfo_endpoint;
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");

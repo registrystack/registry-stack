@@ -938,7 +938,7 @@ pub(super) async fn preauth_signed_required_policy_and_lockout_survive_optional_
 }
 
 #[tokio::test]
-pub(super) async fn preauth_signed_optional_policy_survives_required_runtime_config() {
+pub(super) async fn preauth_forged_optional_code_without_reserved_transaction_is_rejected() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -962,9 +962,9 @@ pub(super) async fn preauth_signed_optional_policy_survives_required_runtime_con
     payload["tx_code_required"] = json!(false);
     let signed_optional_code = sign_test_preauthorized_code(payload);
 
-    redeem_token_without_pin(&server, &signed_optional_code)
-        .await
-        .assert_status_ok();
+    let response = redeem_token_without_pin(&server, &signed_optional_code).await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(response.json::<Value>()["error"], json!("invalid_grant"));
     idp.stop().await;
 }
 
@@ -1153,6 +1153,7 @@ pub(super) async fn preauth_disabled_exposes_no_wallet_issuance_grant() {
         &idp.jwks_uri(),
     );
     config.oid4vci.enabled = false;
+    config.oid4vci.pre_authorized_code = Default::default();
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
@@ -1176,11 +1177,11 @@ pub(super) async fn preauth_disabled_exposes_no_wallet_issuance_grant() {
     server
         .get("/oid4vci/credential-offer")
         .await
-        .assert_status(StatusCode::NOT_FOUND);
+        .assert_status(StatusCode::UNAUTHORIZED);
     server
         .post("/oid4vci/nonce")
         .await
-        .assert_status(StatusCode::NOT_FOUND);
+        .assert_status(StatusCode::UNAUTHORIZED);
 
     // Disabling the only supported issuance grant disables issuer metadata.
     let metadata = server.get("/.well-known/openid-credential-issuer").await;
@@ -1581,8 +1582,8 @@ pub(super) async fn preauth_notary_access_token_with_empty_authorization_details
         }))
         .await;
 
-    credential.assert_status(StatusCode::UNAUTHORIZED);
-    assert_eq!(credential.json::<Value>()["error"], json!("invalid_token"));
+    credential.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(credential.json::<Value>()["error"], json!("access_denied"));
     idp.stop().await;
 }
 
@@ -1669,6 +1670,92 @@ pub(super) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
         retry.json::<Value>(),
         credential_body,
         "an exact retry receives the verbatim cached credential response"
+    );
+    idp.stop().await;
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+pub(super) async fn preauth_cached_retry_cannot_escape_failed_credential_audit() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let audit_backup_path = tmp.path().join("audit.backup.jsonl");
+    let app = standalone_router(preauth_test_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp,
+        &token_upstream,
+    ))
+    .await
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+    let token = redeem_token(&server, &code, &pin).await;
+    token.assert_status_ok();
+    let token_body: Value = token.json();
+    let access_token = token_body["access_token"]
+        .as_str()
+        .expect("access token issued")
+        .to_string();
+    let nonce = token_body["c_nonce"]
+        .as_str()
+        .expect("transaction nonce issued");
+    let credential_request = json!({
+        "format": "dc+sd-jwt",
+        "credential_configuration_id": "person_is_alive_sd_jwt",
+        "proof": {
+            "proof_type": "jwt",
+            "jwt": sign_oid4vci_proof(NOTARY_ISSUER, nonce),
+        }
+    });
+
+    // Preserve the valid retained chain, but temporarily replace its active
+    // path with a directory so the first credential-issued append fails.
+    std::fs::rename(&audit_path, &audit_backup_path).expect("audit file moves aside");
+    std::fs::create_dir(&audit_path).expect("audit path becomes unwritable");
+    let failed = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {access_token}"))
+        .json(&credential_request)
+        .await;
+    failed.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(failed.json::<Value>()["code"], json!("audit.write_failed"));
+
+    std::fs::remove_dir(&audit_path).expect("temporary audit directory is removed");
+    std::fs::rename(&audit_backup_path, &audit_path).expect("audit chain is restored");
+    let recovered = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {access_token}"))
+        .json(&credential_request)
+        .await;
+    recovered.assert_status_ok();
+    let recovered_body: Value = recovered.json();
+    let exact_retry = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {access_token}"))
+        .json(&credential_request)
+        .await;
+    exact_retry.assert_status_ok();
+    assert_eq!(
+        exact_retry.json::<Value>(),
+        recovered_body,
+        "recovery and later exact retries use the one cached signature"
+    );
+    let issued_audits = audit_envelopes(&audit_path)
+        .into_iter()
+        .filter(|envelope| {
+            envelope.record["path"] == json!("/oid4vci/credential")
+                && envelope.record["decision"] == json!("credential_issued")
+                && envelope.record["status"] == json!(200)
+        })
+        .count();
+    assert_eq!(
+        issued_audits, 2,
+        "each released cached response must pass credential-issued audit emission"
     );
     idp.stop().await;
 }

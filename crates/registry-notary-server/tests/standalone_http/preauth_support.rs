@@ -3,11 +3,6 @@
 use super::federation::subject_access_oid4vci_config;
 use super::support::*;
 
-// Dedicated access-token signing key, distinct from the credential key
-// (TEST_ISSUER_JWK). Config validation rejects reusing a credential key.
-pub(super) const TEST_ACCESS_TOKEN_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"8jFBgUJxaaQimd4NjzxhvPYyNbcOnnZsqOntZbpP3Xk","x":"XvW-aWwJCWSYoYudTB9OZqNHURKElnnyGNa6DQNjzZk","alg":"EdDSA"}"#;
-// eSignet RP client signing key (signs the private_key_jwt client assertion).
-pub(super) const TEST_ESIGNET_RP_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"EOLPz23yGd5Ju5e-PYybLE-YyvjgXLhGzS6XgmszzXs","x":"3v5jZ5rAf7KGvcC3zuKh6-ujgtA0ABa4jqmAWXq-S_c","alg":"EdDSA"}"#;
 // Test-only 2048-bit RSA private JWK (kty=RSA, alg=RS256) for the eSignet RP
 // client when the lab registers the Notary's RP client with an RSA key.
 // Generated once with openssl and converted to a JWK; not a production key.
@@ -23,25 +18,6 @@ pub(super) fn set_preauth_env() {
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
     std::env::set_var("TEST_ACCESS_TOKEN_JWK", TEST_ACCESS_TOKEN_JWK);
     std::env::set_var("TEST_ESIGNET_RP_JWK", TEST_ESIGNET_RP_JWK);
-}
-
-pub(super) fn local_jwk_signing_key(private_jwk_env: &str, kid: &str) -> SigningKeyConfig {
-    SigningKeyConfig {
-        provider: SigningKeyProviderConfig::LocalJwkEnv,
-        alg: SD_JWT_VC_SIGNING_ALG.to_string(),
-        kid: kid.to_string(),
-        status: SigningKeyStatus::Active,
-        publish_until_unix_seconds: None,
-        private_jwk_env: private_jwk_env.to_string(),
-        public_jwk_env: String::new(),
-        module_path: String::new(),
-        token_label: String::new(),
-        pin_env: String::new(),
-        key_label: String::new(),
-        key_id_hex: String::new(),
-        path: String::new(),
-        password_env: String::new(),
-    }
 }
 
 /// A pre-auth-enabled config. eSignet `issuer`/`jwks_uri` point at the MockIdp;
@@ -75,19 +51,6 @@ pub(super) fn subject_access_preauth_config(
         .invalid_token_per_client_address_per_minute = 50;
     // The Notary RP client id must be an accepted citizen client + audience so a
     // Notary-minted token classifies as subject-access.
-    config
-        .subject_access
-        .citizen_clients
-        .allowed_client_ids
-        .push(ESIGNET_RP_CLIENT_ID.to_string());
-    config
-        .oid4vci
-        .accepted_token_audiences
-        .push(NOTARY_AUDIENCE.to_string());
-    if let Some(oidc) = config.auth.oidc.as_mut() {
-        oidc.allowed_clients.push(ESIGNET_RP_CLIENT_ID.to_string());
-    }
-
     // Dedicated access-token signing key.
     config.evidence.signing_keys.insert(
         "access-token-key".to_string(),

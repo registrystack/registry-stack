@@ -257,6 +257,82 @@ impl PreAuthRuntime {
         }))
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_api_tests(access_token_typ: &str) -> Self {
+        let signer = Arc::new(
+            LocalJwkSigner::new(
+                PrivateJwk::parse(
+                    &json!({
+                        "kty": "OKP",
+                        "crv": "Ed25519",
+                        "d": "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw",
+                        "x": "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc",
+                        "alg": "EdDSA",
+                        "kid": "did:web:notary.example#access"
+                    })
+                    .to_string(),
+                )
+                .expect("test access-token JWK parses"),
+            )
+            .expect("test access-token signer builds"),
+        );
+        let public_jwk = signer.public_jwk();
+        let fetch_url_policy = FetchUrlPolicy::strict();
+        let esignet_issuer = "https://id.example.gov".to_string();
+        let esignet_client_id = "citizen-portal".to_string();
+        let esignet_id_token_verifier = Arc::new(TokenVerifier::new(
+            esignet_token_verifier_config(&esignet_issuer, &esignet_client_id),
+            Arc::new(JwksFetcher::new_with_fetch_url_policy(
+                "https://id.example.gov/jwks".to_string(),
+                JwksFetcherConfig::defaults(),
+                fetch_url_policy.clone(),
+            )),
+        ));
+        let state_plane = Arc::new(
+            NotaryStatePlaneHandle::from_config(
+                &registry_notary_core::StateConfig {
+                    storage: registry_notary_core::STATE_STORAGE_IN_MEMORY.to_string(),
+                    ..registry_notary_core::StateConfig::default()
+                },
+                true,
+            )
+            .expect("test in-memory state plane builds"),
+        );
+
+        Self {
+            access_token_signer: signer.clone(),
+            access_token_verification_keys: vec![AccessTokenVerificationKey {
+                public_jwk,
+                publish_until_unix_seconds: None,
+            }],
+            notary_issuer: "http://127.0.0.1:4325".to_string(),
+            notary_audiences: vec!["registry-notary-citizen".to_string()],
+            access_token_typ: access_token_typ.to_string(),
+            pre_authorized_code_ttl_seconds: 300,
+            access_token_ttl_seconds: 300,
+            tx_code_required: true,
+            tx_code_length: 6,
+            esignet_client_id,
+            esignet_client_signer: signer,
+            esignet_authorize_url: "https://id.example.gov/authorize".to_string(),
+            esignet_token_url: "https://id.example.gov/token".to_string(),
+            esignet_redirect_uri: "http://127.0.0.1:4325/oid4vci/offer/callback".to_string(),
+            esignet_scopes: vec!["openid".to_string()],
+            esignet_issuer,
+            esignet_userinfo_url: None,
+            subject_binding_claim_source: SubjectAccessClaimSource::AccessToken,
+            subject_binding_claim: "https://id.example.gov/claims/national_id".to_string(),
+            esignet_id_token_verifier,
+            fetch_url_policy,
+            login_state_ttl_seconds: 300,
+            preauthorization_state: Arc::new(
+                crate::preauth_state::PreauthorizationState::from_state_plane(state_plane)
+                    .expect("test preauthorization state builds"),
+            ),
+            audit: AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new())),
+        }
+    }
+
     /// Emit a hashed pre-auth audit event. Returns an error if emission fails so
     /// callers fail closed rather than silently dropping the audit trail.
     pub(crate) async fn emit_audit(&self, event: &EvidenceAuditEvent) -> Result<(), AuditError> {

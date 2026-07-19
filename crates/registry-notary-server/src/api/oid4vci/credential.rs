@@ -143,10 +143,41 @@ pub(in crate::api) async fn oid4vci_credential(
         .await
     {
         Ok(CredentialMaterialization::Cached(response)) => {
+            let transaction = match preauth
+                .preauthorization_state()
+                .transaction(transaction_id)
+                .await
+            {
+                Ok(Some(transaction)) => transaction,
+                _ => return oid4vci_error_response(Oid4vciWireError::ServerError),
+            };
+            let evaluation = match state
+                .store
+                .get(
+                    &transaction.evaluation_id,
+                    &transaction.evaluation_client_id,
+                )
+                .await
+            {
+                Ok(Some(evaluation)) => evaluation,
+                _ => return oid4vci_error_response(Oid4vciWireError::ServerError),
+            };
+            let response = match oid4vci_credential_response_with_audit(
+                &state,
+                evidence,
+                configuration_id,
+                configuration,
+                &transaction,
+                &evaluation,
+                response,
+            ) {
+                Ok(response) => response,
+                Err(error) => return oid4vci_error_response(error),
+            };
             state
                 .metrics
                 .record_credential("openid4vci", "retry_cached");
-            return Json(response).into_response();
+            return response;
         }
         Ok(CredentialMaterialization::Acquired(transaction)) => transaction,
         Ok(CredentialMaterialization::Busy) => {
@@ -195,15 +226,36 @@ pub(in crate::api) async fn oid4vci_credential(
             .await;
         return oid4vci_error_response(Oid4vciWireError::ServerError);
     }
-    let profile = match evidence
+    let response = match oid4vci_credential_response_with_audit(
+        &state,
+        evidence,
+        configuration_id,
+        configuration,
+        &transaction,
+        &evaluation,
+        response_body,
+    ) {
+        Ok(response) => response,
+        Err(error) => return oid4vci_error_response(error),
+    };
+    state.metrics.record_credential("openid4vci", "issued");
+    response
+}
+
+pub(in crate::api) fn oid4vci_credential_response_with_audit(
+    state: &RegistryNotaryApiState,
+    evidence: &EvidenceConfig,
+    configuration_id: &str,
+    configuration: &Oid4vciCredentialConfigurationConfig,
+    transaction: &IssuanceTransaction,
+    evaluation: &registry_notary_core::StoredEvaluation,
+    response_body: Value,
+) -> Result<Response, Oid4vciWireError> {
+    let profile = evidence
         .credential_profiles
         .get(&configuration.credential_profile)
-    {
-        Some(profile) => profile,
-        None => return oid4vci_error_response(Oid4vciWireError::ServerError),
-    };
+        .ok_or(Oid4vciWireError::ServerError)?;
     let mut response = Json(response_body).into_response();
-    state.metrics.record_credential("openid4vci", "issued");
     if attach_subject_access_credential_audit(
         &mut response,
         &state.subject_access_rate_keys,
@@ -225,9 +277,9 @@ pub(in crate::api) async fn oid4vci_credential(
     )
     .is_err()
     {
-        return oid4vci_error_response(Oid4vciWireError::ServerError);
+        return Err(Oid4vciWireError::ServerError);
     }
-    response
+    Ok(response)
 }
 
 pub(in crate::api) async fn materialize_oid4vci_transaction(

@@ -310,8 +310,6 @@
             "authorization_servers": ["http://localhost:8088/v1/esignet"],
             "accepted_token_audiences": ["http://127.0.0.1:4325"],
             "credential_endpoint": "http://127.0.0.1:4325/oid4vci/credential",
-            "offer_endpoint": "http://127.0.0.1:4325/oid4vci/credential-offer",
-            "nonce_endpoint": "http://127.0.0.1:4325/oid4vci/nonce",
             "nonce": { "enabled": true, "ttl_seconds": 300 },
             "display": [{
                 "name": "Civil Registry Notary",
@@ -552,6 +550,96 @@
         principal
     }
 
+    fn oid4vci_test_preauth_runtime(access_token_typ: &str) -> Arc<PreAuthRuntime> {
+        Arc::new(PreAuthRuntime::for_api_tests(access_token_typ))
+    }
+
+    fn oid4vci_test_audit_hasher() -> AuditKeyHasher {
+        const ENV: &str = "TEST_OID4VCI_AUDIT_HASH_SECRET";
+        std::env::set_var(ENV, "0123456789abcdef0123456789abcdef");
+        AuditKeyHasher::from_env(ENV).expect("OID4VCI test audit hasher loads")
+    }
+
+    struct Oid4vciTestTransaction {
+        principal: EvidencePrincipal,
+        transaction: IssuanceTransaction,
+        nonce_scope: ReplayScope,
+        nonce_key: ReplayKey,
+    }
+
+    async fn reserve_registry_backed_oid4vci_test_transaction(
+        state: &RegistryNotaryApiState,
+        preauth: &PreAuthRuntime,
+        configuration_id: &str,
+        nonce: &str,
+    ) -> Oid4vciTestTransaction {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let transaction_id = ulid::Ulid::new().to_string();
+        let bound_subject = BoundSubject {
+            subject: "citizen-subject".to_string(),
+            subject_binding_claim: SUBJECT_BINDING_CLAIM.to_string(),
+            subject_binding_value: "NAT-123".to_string(),
+            client_id: "citizen-portal".to_string(),
+            scopes: vec!["subject_access".to_string()],
+            acr: Some("urn:example:loa:substantial".to_string()),
+            auth_time: Some(now),
+        };
+        let transaction = prepare_registry_backed_issuance_transaction(
+            state,
+            preauth,
+            &bound_subject,
+            configuration_id,
+            &transaction_id,
+        )
+        .await
+        .expect("registry-backed issuance transaction prepares");
+        preauth
+            .preauthorization_state()
+            .reserve_issuance_transaction(
+                &transaction_id,
+                transaction.clone(),
+                OffsetDateTime::now_utc() + time::Duration::minutes(10),
+            )
+            .await
+            .expect("issuance transaction reserves");
+        assert!(preauth
+            .preauthorization_state()
+            .bind_transaction_nonce(&transaction_id, &transaction.commitment, nonce.to_string())
+            .await
+            .expect("transaction nonce binds"));
+        let (nonce_scope, nonce_key) =
+            reserve_oid4vci_test_nonce(state, configuration_id, nonce).await;
+
+        let mut principal = oid4vci_authorized_principal(
+            &state.evidence,
+            &state.subject_access,
+            &state.oid4vci,
+            configuration_id,
+            &["subject_access", state.oid4vci.credential_configurations[configuration_id].scope.as_str()],
+        );
+        let claims = principal
+            .verified_claims
+            .as_mut()
+            .expect("test principal has claims");
+        claims.issuer = bounded(preauth.notary_issuer());
+        claims.audiences = preauth
+            .notary_audiences()
+            .iter()
+            .map(|audience| bounded(audience))
+            .collect();
+        claims.token_type = Some(bounded(preauth.access_token_typ()));
+        claims.credential_configuration_id = Some(bounded(configuration_id));
+        claims.issuance_transaction_id = Some(bounded(&transaction_id));
+        claims.issuance_transaction_commitment = Some(bounded(&transaction.commitment));
+
+        Oid4vciTestTransaction {
+            principal,
+            transaction,
+            nonce_scope,
+            nonce_key,
+        }
+    }
+
     async fn reserve_oid4vci_test_nonce(
         state: &RegistryNotaryApiState,
         configuration_id: &str,
@@ -709,29 +797,6 @@
             registry_notary_core::sd_jwt::EvidenceIssuer::from_signing_provider(Arc::new(
                 CountingSigningProvider::new(Arc::clone(&self.sign_count)),
             ))
-        }
-    }
-
-    #[cfg(feature = "registry-notary-cel")]
-    struct StaticIssuerResolver;
-
-    #[cfg(feature = "registry-notary-cel")]
-    impl EvidenceIssuerResolver for StaticIssuerResolver {
-        fn issuer(
-            &self,
-            _profile_id: &str,
-        ) -> Result<registry_notary_core::sd_jwt::EvidenceIssuer, EvidenceError> {
-            registry_notary_core::sd_jwt::EvidenceIssuer::from_jwk_str(
-                &json!({
-                    "kty": "OKP",
-                    "crv": "Ed25519",
-                    "d": ISSUER_PRIV_D_B64,
-                    "x": ISSUER_PUB_X_B64,
-                    "alg": "EdDSA"
-                })
-                .to_string(),
-                "did:web:issuer.example#key-1".to_string(),
-            )
         }
     }
 
