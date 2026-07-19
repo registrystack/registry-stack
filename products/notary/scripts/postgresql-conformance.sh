@@ -665,8 +665,15 @@ wait "${curl_pid_a}" || fail "first concurrent batch request failed"
 wait "${curl_pid_b}" || fail "second concurrent batch request failed"
 
 batch_id="$(jq --exit-status --raw-output '.batch_id | select(type == "string" and length > 0)' "${work_dir}/response-a1.json")"
-[[ "$(jq --raw-output '.summary.succeeded' "${work_dir}/response-a1.json")" == "1" ]] \
-  || fail "the concurrent batch did not produce one successful evaluation"
+if [[ "$(jq --raw-output '.summary.succeeded' "${work_dir}/response-a1.json")" != "1" ]]; then
+  jq --compact-output \
+    '{summary, items: [.items[] | {input_index, status, error_codes: [.errors[].code]}]}' \
+    "${work_dir}/response-a1.json" >&2 || true
+  jq --compact-output \
+    '{summary, items: [.items[] | {input_index, status, error_codes: [.errors[].code]}]}' \
+    "${work_dir}/response-a2.json" >&2 || true
+  fail "the concurrent batch did not produce one successful evaluation"
+fi
 evaluation_id="$(jq --exit-status --raw-output '.items[0].evaluation_id | select(type == "string" and length > 0)' "${work_dir}/response-a1.json")"
 [[ "$(jq --raw-output '.batch_id' "${work_dir}/response-a2.json")" == "${batch_id}" ]] \
   || fail "concurrent instances did not observe one batch owner"
