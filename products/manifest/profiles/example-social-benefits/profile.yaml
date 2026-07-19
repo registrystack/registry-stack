@@ -9,7 +9,7 @@ profile:
 supported_input_artifacts:
   - kind: metadata_manifest
     media_type: application/yaml
-    description: Registry Metadata portable metadata manifest with fictional benefits and person schema concept references.
+    description: Registry Manifest portable metadata manifest with fictional benefits and person schema concept references.
 required_concepts:
   - name: household identifier
     iri: benefits:Group.identifier
