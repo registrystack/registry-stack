@@ -188,7 +188,7 @@ jobs:
                 -p registry-manifest-cli \
                 -p registry-relay \
                 -p registry-notary \
-                --features registry-relay/spdci-api-standards,registry-relay/standards-cel-mapping,registry-relay/ogcapi-edr,registry-notary/registry-notary-cel
+                --features registry-notary/registry-notary-cel
               cp target/release/registry-notary dist/image-bin/registry-notary
               cargo build --release --locked \
                 -p registry-notary \
