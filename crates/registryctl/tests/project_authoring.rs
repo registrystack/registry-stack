@@ -4308,7 +4308,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "d15890b0c4e693d7ef1f2a03f5ca1c0451fcab6dcb0241a2464dacf935d69e7f",
+        "2a85af0238a9a3606e34bc66cad4d5e21b93832809ee2fd2c0101f1bcfffc76b",
         "project inputs must match the cross-machine golden digest"
     );
 }
@@ -5123,6 +5123,10 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
         Some("OID4VCI_ACCESS_TOKEN_JWK")
     );
     assert_eq!(
+        notary["evidence"]["signing_keys"]["project-issuer"]["alg"].as_str(),
+        Some("EdDSA")
+    );
+    assert_eq!(
         notary["evidence"]["signing_keys"]["oid4vci-esignet-client"]["alg"].as_str(),
         Some("RS256")
     );
@@ -5181,6 +5185,10 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
         Some("https://notary.example.invalid/oid4vci/offer/callback")
     );
     assert_eq!(
+        notary["oid4vci"]["pre_authorized_code"]["tx_code"]["required"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
         notary["oid4vci"]["credential_configurations"]
             ["household-eligibility.household-eligibility"]["vct"]
             .as_str(),
@@ -5212,6 +5220,50 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     assert!(notary.get("oid4vci").is_none());
     assert!(notary.get("subject_access").is_none());
     assert!(notary.get("self_attestation").is_none());
+}
+
+#[test]
+fn authored_oid4vci_walt_profile_is_explicit_and_keeps_the_bearer_window_bounded() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let project_path = project.join("registry-stack.yaml");
+    let mut document = read_yaml(&project_path);
+    document["services"]["household-eligibility"]["credential_profiles"]["household-eligibility"]
+        ["claims"] =
+        serde_yaml::from_str("[household-record-exists]").expect("single registry-backed claim");
+    write_yaml(&project_path, &document);
+    author_oid4vci_binding(
+        &project,
+        "household-eligibility",
+        "household-eligibility",
+        "household_reference",
+    );
+    merge_environment_yaml(
+        &project.join("environments/local.yaml"),
+        "issuance:\n  algorithm: ES256\noid4vci:\n  tx_code:\n    required: false\n",
+    );
+
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("explicit Walt-compatible binding builds");
+    let output = PathBuf::from(build.output.expect("build output"));
+    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
+    assert_eq!(
+        notary["evidence"]["signing_keys"]["project-issuer"]["alg"].as_str(),
+        Some("ES256")
+    );
+    assert_eq!(
+        notary["oid4vci"]["pre_authorized_code"]["tx_code"]["required"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        notary["oid4vci"]["pre_authorized_code"]["pre_authorized_code_ttl_seconds"].as_u64(),
+        Some(300)
+    );
 }
 
 #[test]

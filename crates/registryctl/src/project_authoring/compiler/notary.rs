@@ -210,7 +210,7 @@ fn generated_notary_config(
             json!({
                 "provider": "local_jwk_env",
                 "private_jwk_env": issuance.signing_key.secret,
-                "alg": "EdDSA",
+                "alg": issuance.algorithm.as_str(),
                 "kid": issuance.signing_kid,
                 "status": "active",
             }),
@@ -457,7 +457,11 @@ fn add_oid4vci_config(
         "proof": { "max_age_seconds": 300, "max_clock_skew_seconds": 30 },
         "pre_authorized_code": {
             "enabled": true,
-            "tx_code": { "required": true, "input_mode": "numeric", "length": 6 },
+            "tx_code": {
+                "required": binding.tx_code.required,
+                "input_mode": "numeric",
+                "length": 6,
+            },
             "esignet": {
                 "client_id": binding.client.id,
                 "client_signing_key_id": "oid4vci-esignet-client",

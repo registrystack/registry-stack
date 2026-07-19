@@ -278,6 +278,7 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
             },
             signing_kid: "offline-fixture-key".to_string(),
             generation: 1,
+            algorithm: IssuanceSigningAlgorithm::default(),
         }),
         callers: if requires_notary {
             callers
