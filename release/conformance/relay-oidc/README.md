@@ -75,10 +75,13 @@ Python 3.11 or later is required. Validate the checked-in topology and render a
 candidate-bound plan without Docker or network access:
 
 ```bash
+RELAY_IMAGE='ghcr.io/registrystack/registry-relay@sha256:'\
+'<64-lowercase-hex>'
+
 release/scripts/relay-oidc-smoke.py validate
 
 release/scripts/relay-oidc-smoke.py plan \
-  --relay-image 'ghcr.io/registrystack/registry-relay@sha256:<64-lowercase-hex>' \
+  --relay-image "$RELAY_IMAGE" \
   --candidate-source-ref '<40-lowercase-hex-commit>' \
   --release-id '1.0.0-rc.1'
 ```
@@ -91,8 +94,11 @@ Docker with Docker Compose is required. The Relay image must already be
 published by digest:
 
 ```bash
+RELAY_IMAGE='ghcr.io/registrystack/registry-relay@sha256:'\
+'<64-lowercase-hex>'
+
 release/scripts/relay-oidc-smoke.py run \
-  --relay-image 'ghcr.io/registrystack/registry-relay@sha256:<64-lowercase-hex>' \
+  --relay-image "$RELAY_IMAGE" \
   --candidate-source-ref '<40-lowercase-hex-commit>' \
   --release-id '1.0.0-rc.1'
 ```
