@@ -57,6 +57,47 @@ impl ActivatedRelayConsultations for FixedRelayConsultation {
 }
 
 #[derive(Debug, Default)]
+struct MixedCompletionRelay {
+    calls: AtomicU64,
+}
+
+#[async_trait::async_trait]
+impl ActivatedRelayConsultations for MixedCompletionRelay {
+    async fn check_ready(&self) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    fn validate(
+        &self,
+        _key: &ConsultationGroupKeyV1,
+    ) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    async fn execute(
+        &self,
+        key: &ConsultationGroupKeyV1,
+    ) -> Result<RuntimeRelayConsultationResult, crate::relay_client::RelayClientError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let target = key
+            .canonical_inputs()
+            .get("tracked_entity")
+            .map(|value| value.as_str())
+            .ok_or(crate::relay_client::RelayClientError::InvalidRequest)?;
+        if target == "person-2" {
+            return Err(crate::relay_client::RelayClientError::TransportUnavailable);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        RuntimeRelayConsultationResult::new(
+            Ulid::from_parts(2, 2),
+            RuntimeRelayOutcome::Match,
+            Some(status_match_data()?),
+            OffsetDateTime::UNIX_EPOCH,
+        )
+    }
+}
+
+#[derive(Debug, Default)]
 struct UniqueRelayConsultation {
     calls: AtomicU64,
 }
@@ -1615,6 +1656,164 @@ async fn registry_batch_requires_outer_key_before_relay_work() {
 }
 
 #[tokio::test]
+async fn registry_batch_hard_ceiling_rejects_before_quota_idempotency_relay_or_state() {
+    let mut claim = registry_claim(
+        "enrollment-status",
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
+        },
+        "string",
+    );
+    enable_registry_batch(&mut claim);
+    // Bypass the config loader deliberately. The runtime ceiling must still be
+    // authoritative if an EvidenceConfig is assembled directly in-process.
+    claim.operations.batch_evaluate.max_subjects =
+        registry_notary_core::MAX_BATCH_EVALUATION_MEMBERS_V1 + 1;
+    let disabled_claim = registry_claim(
+        "disabled-status",
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
+        },
+        "string",
+    );
+    let mut evidence = (*test_evidence(vec![claim, disabled_claim])).clone();
+    evidence.allowed_purposes = vec!["test".to_string()];
+    evidence.inline_batch_limit = registry_notary_core::MAX_BATCH_EVALUATION_MEMBERS_V1 + 1;
+    let evidence = Arc::new(evidence);
+    let activated = Arc::new(FixedRelayConsultation {
+        calls: AtomicU64::new(0),
+        outcome: RuntimeRelayOutcome::Match,
+    });
+    let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+    let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+    let store = EvidenceStore::default();
+    let mut principal = machine_principal();
+    principal.scopes = vec!["registry:evidence".to_string()];
+    let quota = crate::MachineQuotaLimiter::new(registry_notary_core::MachineQuotaConfig {
+        enabled: true,
+        subjects_per_minute: 1,
+    });
+    let mut request = registry_batch_request(vec![ClaimRef::from("enrollment-status")]);
+    request.items = vec![
+        request.items[0].clone();
+        registry_notary_core::MAX_BATCH_EVALUATION_MEMBERS_V1 + 1
+    ];
+
+    for claim in ["missing-claim", "disabled-status"] {
+        let mut invalid_claim_request = request.clone();
+        invalid_claim_request.claims = vec![ClaimRef::from(claim)];
+        let error = runtime
+            .batch_evaluate(
+                Arc::clone(&evidence),
+                &store,
+                &principal,
+                invalid_claim_request,
+                BatchEvaluateOptions::default(),
+            )
+            .await
+            .expect_err("the hard ceiling precedes claim lookup and operation checks");
+        assert!(matches!(error, EvidenceError::BatchTooLarge));
+    }
+
+    let error_without_key = runtime
+        .batch_evaluate(
+            Arc::clone(&evidence),
+            &store,
+            &principal,
+            request.clone(),
+            BatchEvaluateOptions {
+                owner_quota: Some((&quota, request.items.len() as u32)),
+                ..BatchEvaluateOptions::default()
+            },
+        )
+        .await
+        .expect_err("the size rejection precedes registry idempotency-key validation");
+    assert!(matches!(error_without_key, EvidenceError::BatchTooLarge));
+
+    let error = runtime
+        .batch_evaluate(
+            Arc::clone(&evidence),
+            &store,
+            &principal,
+            request.clone(),
+            BatchEvaluateOptions {
+                idempotency_key: Some("hard-ceiling-key"),
+                owner_quota: Some((&quota, request.items.len() as u32)),
+                ..BatchEvaluateOptions::default()
+            },
+        )
+        .await
+        .expect_err("the platform ceiling cannot be raised by runtime config");
+
+    assert!(matches!(error, EvidenceError::BatchTooLarge));
+    assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
+
+    request.items.truncate(1);
+    let response = runtime
+        .batch_evaluate(
+            evidence,
+            &store,
+            &principal,
+            request,
+            BatchEvaluateOptions {
+                idempotency_key: Some("hard-ceiling-key"),
+                owner_quota: Some((&quota, 1)),
+                ..BatchEvaluateOptions::default()
+            },
+        )
+        .await
+        .expect("rejection neither consumes quota nor binds the idempotency key");
+
+    assert!(matches!(response.items[0].status, BatchItemStatus::Succeeded));
+    assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn registry_batch_effective_limit_uses_the_lowest_operator_override() {
+    for (inline_limit, claim_limit) in [(2, 4), (4, 2)] {
+        let mut claim = registry_claim(
+            "enrollment-status",
+            RuleConfig::ConsultationOutput {
+                consultation: "enrollment".to_string(),
+                output: "registration_status".to_string(),
+            },
+            "string",
+        );
+        enable_registry_batch(&mut claim);
+        claim.operations.batch_evaluate.max_subjects = claim_limit;
+        let mut evidence = (*test_evidence(vec![claim])).clone();
+        evidence.allowed_purposes = vec!["test".to_string()];
+        evidence.inline_batch_limit = inline_limit;
+        let activated = Arc::new(FixedRelayConsultation {
+            calls: AtomicU64::new(0),
+            outcome: RuntimeRelayOutcome::Match,
+        });
+        let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+        let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+        let mut principal = machine_principal();
+        principal.scopes = vec!["registry:evidence".to_string()];
+        let mut request = registry_batch_request(vec![ClaimRef::from("enrollment-status")]);
+        request.items.push(request.items[0].clone());
+
+        let error = runtime
+            .batch_evaluate(
+                Arc::new(evidence),
+                &EvidenceStore::default(),
+                &principal,
+                request,
+                BatchEvaluateOptions::default(),
+            )
+            .await
+            .expect_err("the lowest configured limit rejects three members");
+
+        assert!(matches!(error, EvidenceError::BatchTooLarge));
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
 async fn registry_batch_preflights_every_item_before_first_relay_call() {
     let mut claim = registry_claim(
         "enrollment-status",
@@ -1655,6 +1854,133 @@ async fn registry_batch_preflights_every_item_before_first_relay_call() {
 
     assert!(matches!(error, EvidenceError::InvalidRequest));
     assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn registry_batch_rejects_more_than_256_aggregate_groups_before_dispatch() {
+    let mut claims = Vec::new();
+    let mut claim_refs = Vec::new();
+    for index in 0..16 {
+        let claim_id = format!("grouped-claim-{index}");
+        let mut claim = registry_claim(
+            &claim_id,
+            RuleConfig::ConsultationOutput {
+                consultation: "enrollment".to_string(),
+                output: "registration_status".to_string(),
+            },
+            "string",
+        );
+        enable_registry_batch(&mut claim);
+        claim.operations.batch_evaluate.max_subjects = 17;
+        let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+            panic!("claim is registry backed")
+        };
+        consultations
+            .get_mut("enrollment")
+            .expect("consultation exists")
+            .profile
+            .id = format!("test.batch.profile-{index}");
+        claim_refs.push(ClaimRef::from(claim_id.as_str()));
+        claims.push(claim);
+    }
+    let mut evidence = (*test_evidence(claims)).clone();
+    evidence.allowed_purposes = vec!["test".to_string()];
+    evidence.inline_batch_limit = 17;
+    let activated = Arc::new(FixedRelayConsultation {
+        calls: AtomicU64::new(0),
+        outcome: RuntimeRelayOutcome::Match,
+    });
+    let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+    let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+    let mut principal = machine_principal();
+    principal.scopes = vec!["registry:evidence".to_string()];
+    let mut request = registry_batch_request(claim_refs);
+    request.items = vec![request.items[0].clone(); 17];
+
+    let error = runtime
+        .batch_evaluate(
+            Arc::new(evidence),
+            &EvidenceStore::default(),
+            &principal,
+            request,
+            BatchEvaluateOptions {
+                idempotency_key: Some("too-many-aggregate-groups"),
+                ..BatchEvaluateOptions::default()
+            },
+        )
+        .await
+        .expect_err("17 items with 16 groups each exceed the aggregate bound");
+
+    assert!(matches!(error, EvidenceError::ConsultationInvalidRequest));
+    assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn registry_batch_returns_ordered_mixed_member_outcomes_after_admission() {
+    let mut claim = registry_claim(
+        "enrollment-status",
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
+        },
+        "string",
+    );
+    enable_registry_batch(&mut claim);
+    let mut evidence = (*test_evidence(vec![claim])).clone();
+    evidence.allowed_purposes = vec!["test".to_string()];
+    evidence.inline_batch_limit = 4;
+    let activated = Arc::new(MixedCompletionRelay::default());
+    let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+    let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+    let mut principal = machine_principal();
+    principal.scopes = vec!["registry:evidence".to_string()];
+    let mut request = registry_batch_request(vec![ClaimRef::from("enrollment-status")]);
+    request.items[1] = registry_notary_core::BatchEvaluateItemRequest::from(
+        registry_notary_core::BatchSubjectRequest {
+            id: "person-2".to_string(),
+            id_type: None,
+            purpose: None,
+        },
+    );
+
+    let response = runtime
+        .batch_evaluate(
+            Arc::new(evidence),
+            &EvidenceStore::default(),
+            &principal,
+            request,
+            BatchEvaluateOptions {
+                idempotency_key: Some("mixed-completion-key"),
+                ..BatchEvaluateOptions::default()
+            },
+        )
+        .await
+        .expect("admitted member failures stay in the ordered response");
+
+    assert_eq!(activated.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(response.summary.succeeded, 1);
+    assert_eq!(response.summary.failed, 1);
+    assert_eq!(response.items[0].input_index, 0);
+    assert!(matches!(
+        response.items[0].status,
+        BatchItemStatus::Succeeded
+    ));
+    assert_eq!(response.items[1].input_index, 1);
+    assert!(matches!(
+        response.items[1].status,
+        BatchItemStatus::Failed
+    ));
+    assert_eq!(response.items[1].errors.len(), 1);
+    assert_eq!(response.items[1].errors[0].code, "evidence.not_available");
+    assert!(response.items[1].claim_results.is_empty());
+    assert_eq!(
+        response.items[1].runtime_audit.relay_forwarded_count,
+        1
+    );
+    assert!(response.items[1]
+        .runtime_audit
+        .relay_consultation_ids
+        .is_empty());
 }
 
 #[tokio::test]
@@ -1856,6 +2182,17 @@ async fn registry_batch_coalesces_within_items_never_across_duplicates_and_repla
         .items
         .iter()
         .all(|item| matches!(item.status, BatchItemStatus::Succeeded)));
+    assert!(first.items.iter().all(|item| {
+        item.runtime_audit.relay_forwarded_count == 1
+            && item.runtime_audit.relay_consultation_ids.len() == 1
+    }));
+    let public_response = serde_json::to_string(&first).expect("batch response serializes");
+    assert!(!public_response.contains("runtime_audit"));
+    assert!(!first.items[0]
+        .runtime_audit
+        .relay_consultation_ids
+        .iter()
+        .any(|id| public_response.contains(id)));
     assert_ne!(first.items[0].evaluation_id, first.items[1].evaluation_id);
     for item in &first.items {
         let evaluation_id = item
@@ -1921,6 +2258,10 @@ async fn registry_batch_coalesces_within_items_never_across_duplicates_and_repla
         .await
         .expect("the exact outer-key replay returns the stored response");
     assert_eq!(replay.batch_id, first.batch_id);
+    assert!(replay.items.iter().all(|item| {
+        item.runtime_audit.relay_forwarded_count == 0
+            && item.runtime_audit.relay_consultation_ids.is_empty()
+    }));
     assert_eq!(
         activated
             .child_identities

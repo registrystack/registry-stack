@@ -923,6 +923,7 @@ pub struct BatchOperationConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default = "default_inline_batch_limit")]
+    #[schemars(range(min = 1, max = 100))]
     pub max_subjects: usize,
 }
 

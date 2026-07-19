@@ -4,6 +4,56 @@ use super::*;
 use super::{auth::*, credentials::*, infrastructure::*, issuance::*, preauth::*};
 
 #[test]
+pub(super) fn batch_limits_accept_only_lower_or_equal_platform_overrides() {
+    let mut config = valid_subject_access_config();
+    config.evidence.inline_batch_limit = MAX_BATCH_EVALUATION_MEMBERS_V1;
+    config.evidence.claims[0]
+        .operations
+        .batch_evaluate
+        .max_subjects = MAX_BATCH_EVALUATION_MEMBERS_V1;
+    config
+        .validate()
+        .expect("the hard platform ceiling is a valid operator value");
+
+    config.evidence.inline_batch_limit = 17;
+    config.evidence.claims[0]
+        .operations
+        .batch_evaluate
+        .max_subjects = 9;
+    config
+        .validate()
+        .expect("operators may lower either batch limit");
+}
+
+#[test]
+pub(super) fn batch_limits_reject_zero_and_values_above_the_platform_ceiling() {
+    for invalid in [0, MAX_BATCH_EVALUATION_MEMBERS_V1 + 1] {
+        let mut config = valid_subject_access_config();
+        config.evidence.inline_batch_limit = invalid;
+        let error = config
+            .validate()
+            .expect_err("the global batch override must stay within the platform range");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidBatchConfig { .. }
+        ));
+
+        let mut config = valid_subject_access_config();
+        config.evidence.claims[0]
+            .operations
+            .batch_evaluate
+            .max_subjects = invalid;
+        let error = config
+            .validate()
+            .expect_err("the claim batch override must stay within the platform range");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidBatchConfig { .. }
+        ));
+    }
+}
+
+#[test]
 pub(super) fn gate_input_defaults_are_low_risk_for_minimal_config() {
     let config = minimal_config();
     let input = config.gate_input();

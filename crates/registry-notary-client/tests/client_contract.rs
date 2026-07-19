@@ -18,7 +18,9 @@ use registry_notary_client::{
     CredentialIssueResponse, NotaryClientBuildError, NotaryClientError, NotaryResponse,
     RegistryNotaryClient, RequestOptions, RetryPolicy,
 };
-use registry_notary_core::{BatchEvaluateResponse, BatchStatus, FORMAT_CLAIM_RESULT_JSON};
+use registry_notary_core::{
+    BatchEvaluateResponse, BatchStatus, FORMAT_CLAIM_RESULT_JSON, MAX_BATCH_EVALUATION_MEMBERS_V1,
+};
 use secrecy::SecretString;
 use serde_json::json;
 use tokio::net::TcpListener;
@@ -640,6 +642,58 @@ async fn raw_batch_preserves_body_only_purpose() {
         .expect("batch evaluate succeeds");
 
     assert_eq!(response.body.batch_id, "batch-1");
+}
+
+#[tokio::test]
+async fn typed_batch_rejects_platform_ceiling_plus_one_before_transport() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = Router::new()
+        .route(
+            "/v1/batch-evaluations",
+            post(|State(calls): State<Arc<AtomicUsize>>| async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                body_purpose_batch_handler(
+                    HeaderMap::new(),
+                    Bytes::from_static(br#"{"purpose":"body-purpose"}"#),
+                )
+                .await
+            }),
+        )
+        .with_state(Arc::clone(&calls));
+    let base = spawn(app).await;
+    let client = RegistryNotaryClient::builder(base)
+        .bearer_token("bearer-secret")
+        .build()
+        .expect("client builds");
+    let item = registry_notary_core::BatchEvaluateItemRequest::from(
+        registry_notary_core::BatchSubjectRequest {
+            id: "subject-1".to_string(),
+            id_type: None,
+            purpose: None,
+        },
+    );
+    let error = client
+        .batch_evaluate_request(
+            registry_notary_core::BatchEvaluateRequest {
+                items: vec![item; MAX_BATCH_EVALUATION_MEMBERS_V1 + 1],
+                claims: vec![registry_notary_core::ClaimRef::new("claim-a")],
+                disclosure: None,
+                format: None,
+                purpose: Some("body-purpose".to_string()),
+            },
+            RequestOptions::default(),
+        )
+        .await
+        .expect_err("the typed client rejects the hard ceiling plus one");
+
+    assert!(matches!(
+        error,
+        NotaryClientError::Build(NotaryClientBuildError::BatchTooLarge {
+            actual,
+            maximum: MAX_BATCH_EVALUATION_MEMBERS_V1,
+        }) if actual == MAX_BATCH_EVALUATION_MEMBERS_V1 + 1
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

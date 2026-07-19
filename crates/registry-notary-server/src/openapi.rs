@@ -606,7 +606,7 @@ fn build_openapi_document() -> Value {
                         "401": { "description": "Missing or invalid credential" },
                         "403": { "description": "Not authorized for requested claim, purpose, disclosure, or format" },
                         "406": { "description": "Requested format is not acceptable" },
-                        "413": { "description": "Request body or batch is too large" },
+                        "413": { "description": "Request body is too large" },
                         "429": { "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded" },
                         "503": { "description": "Required Relay consultation or operational dependency is unavailable" }
                     }
@@ -679,7 +679,7 @@ fn build_openapi_document() -> Value {
                         "403": { "description": "Not authorized for requested claim, purpose, disclosure, or format" },
                         "406": { "description": "Requested format is not acceptable" },
                         "409": { "description": "Idempotency key conflicts with another request body" },
-                        "413": { "description": "Request body or batch is too large" },
+                        "413": { "description": "The request exceeds the hard 100-member ceiling or a lower configured batch limit. Rejection occurs before quota, idempotency, Relay, source, or retained-state side effects." },
                         "429": { "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded" },
                         "503": { "description": "Required Relay consultation or operational dependency is unavailable" }
                     }
@@ -1716,6 +1716,19 @@ fn add_response_examples(document: &mut Value) {
         "post",
         &["406", "409", "413", "429", "503"],
     );
+    set_problem_response(
+        document,
+        "/v1/batch-evaluations",
+        "post",
+        "413",
+        "Batch too large",
+        problem_example(
+            413,
+            "batch.too_large",
+            "Batch too large",
+            "the batch exceeds the platform or configured member limit",
+        ),
+    );
     set_json_response(
         document,
         "/v1/evaluations/{evaluation_id}/render",
@@ -1937,6 +1950,8 @@ fn batch_evaluate_request_schema() -> Value {
         "properties": {
             "items": {
                 "type": "array",
+                "minItems": 1,
+                "maxItems": registry_notary_core::MAX_BATCH_EVALUATION_MEMBERS_V1,
                 "items": { "$ref": "#/components/schemas/BatchEvaluateItemRequest" }
             },
             "claims": {
@@ -3920,10 +3935,20 @@ mod tests {
             "/admin/v1/config/verify",
             "/admin/v1/config/dry-run",
             "/admin/v1/config/apply",
+            "/v1/batch-credentials",
+            "/v1/credentials/batch",
+            "/oid4vci/batch-credential",
+            "/oid4vci/batch-credentials",
         ] {
             assert!(
                 !paths.contains_key(route),
-                "removed admin config route is still documented: {route}"
+                "unsupported or removed route is documented: {route}"
+            );
+        }
+        for route in paths.keys().filter(|route| route.contains("batch")) {
+            assert_eq!(
+                route, "/v1/batch-evaluations",
+                "Notary must not expose Relay, credential, or OID4VCI batch routes"
             );
         }
     }
@@ -4256,6 +4281,16 @@ mod tests {
         let batch_request = &doc["components"]["schemas"]["BatchEvaluateRequest"]["properties"];
         assert!(batch_request.get("subjects").is_none());
         assert!(batch_request.get("items").is_some());
+        assert_eq!(batch_request["items"]["minItems"], json!(1));
+        assert_eq!(
+            batch_request["items"]["maxItems"],
+            json!(registry_notary_core::MAX_BATCH_EVALUATION_MEMBERS_V1)
+        );
+        assert_eq!(
+            doc["paths"]["/v1/batch-evaluations"]["post"]["responses"]["413"]["content"]
+                ["application/problem+json"]["example"]["code"],
+            json!("batch.too_large")
+        );
     }
 
     #[test]

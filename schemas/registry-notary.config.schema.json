@@ -77,7 +77,8 @@
         "max_subjects": {
           "default": 100,
           "format": "uint",
-          "minimum": 0,
+          "maximum": 100,
+          "minimum": 1,
           "type": "integer"
         }
       },
@@ -1014,7 +1015,8 @@
         "inline_batch_limit": {
           "default": 100,
           "format": "uint",
-          "minimum": 0,
+          "maximum": 100,
+          "minimum": 1,
           "type": "integer"
         },
         "machine_quota": {

@@ -40,6 +40,9 @@ pub(crate) fn validate_batch_subject_limit(
     if request.claims.is_empty() || request.items.is_empty() {
         return Err(EvidenceError::InvalidRequest);
     }
+    if request.items.len() > registry_notary_core::MAX_BATCH_EVALUATION_MEMBERS_V1 {
+        return Err(EvidenceError::BatchTooLarge);
+    }
     let claim_versions = requested_claim_versions(&request.claims)?;
     let max_subjects = max_batch_subjects(config, &request.claims, &claim_versions)?;
     if request.items.len() > max_subjects {

@@ -145,6 +145,8 @@
             "items": {
               "$ref": "#/components/schemas/BatchEvaluateItemRequest"
             },
+            "maxItems": 100,
+            "minItems": 1,
             "type": "array"
           },
           "purpose": {
@@ -3780,19 +3782,19 @@
             "content": {
               "application/problem+json": {
                 "example": {
-                  "code": "request.too_large",
-                  "detail": "the request body or batch is too large",
+                  "code": "batch.too_large",
+                  "detail": "the batch exceeds the platform or configured member limit",
                   "request_id": "01J00000000000000000000000",
                   "status": 413,
-                  "title": "Request too large",
-                  "type": "https://id.registrystack.org/problems/registry-notary/request/too_large"
+                  "title": "Batch too large",
+                  "type": "https://id.registrystack.org/problems/registry-notary/batch/too_large"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             },
-            "description": "Request body or batch is too large"
+            "description": "The request exceeds the hard 100-member ceiling or a lower configured batch limit. Rejection occurs before quota, idempotency, Relay, source, or retained-state side effects."
           },
           "429": {
             "content": {
@@ -4525,7 +4527,7 @@
                 }
               }
             },
-            "description": "Request body or batch is too large"
+            "description": "Request body is too large"
           },
           "429": {
             "content": {

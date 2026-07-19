@@ -1214,6 +1214,29 @@ pub struct BatchItemResponse {
     pub status: BatchItemStatus,
     pub claim_results: Vec<BatchClaimResultView>,
     pub errors: Vec<BatchItemError>,
+    /// Request-local consultation evidence for restricted audit assembly.
+    /// This is never serialized into the public response or durable state.
+    #[doc(hidden)]
+    #[serde(skip)]
+    pub runtime_audit: BatchItemRuntimeAudit,
+}
+
+/// Request-local, value-free consultation evidence for a batch member.
+#[doc(hidden)]
+#[derive(Clone, Default)]
+pub struct BatchItemRuntimeAudit {
+    pub relay_forwarded_count: u64,
+    pub relay_consultation_ids: Vec<String>,
+}
+
+impl std::fmt::Debug for BatchItemRuntimeAudit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BatchItemRuntimeAudit")
+            .field("relay_forwarded_count", &self.relay_forwarded_count)
+            .field("relay_consultation_ids", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1901,9 +1924,19 @@ pub struct ConfigAuditEvent {
     pub local_approval_rate_limit_identity: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct EvidenceBatchItemAuditEvent {
     pub input_index: usize,
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(default)]
+    pub relay_consultation_count: u64,
+    #[serde(default)]
+    pub forwarded: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relay_consultation_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1912,6 +1945,20 @@ pub struct EvidenceBatchItemAuditEvent {
     pub requester_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_ref_hash: Option<Hashed<EvidenceEntityReference>>,
+}
+
+impl std::fmt::Debug for EvidenceBatchItemAuditEvent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EvidenceBatchItemAuditEvent")
+            .field("input_index", &self.input_index)
+            .field("outcome", &self.outcome)
+            .field("error_code", &self.error_code)
+            .field("relay_consultation_count", &self.relay_consultation_count)
+            .field("forwarded", &self.forwarded)
+            .field("relay_consultation_ids", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(test)]
@@ -2492,6 +2539,11 @@ mod tests {
             redacted_fields: None,
             batch_items: Some(vec![EvidenceBatchItemAuditEvent {
                 input_index: 0,
+                outcome: "failed".to_string(),
+                error_code: Some("evidence.not_available".to_string()),
+                relay_consultation_count: 1,
+                forwarded: true,
+                relay_consultation_ids: vec!["01JRELAYBATCHSENSITIVE".to_string()],
                 target_type: Some("person".to_string()),
                 target_ref_hash: Some(Hashed::from_hash("hmac-sha256:batch-target")),
                 requester_type: Some("person".to_string()),
@@ -2507,6 +2559,7 @@ mod tests {
         );
         let debug = format!("{event:?}");
         assert!(!debug.contains("01JRELAYCORRELATIONSENSITIVE"));
+        assert!(!debug.contains("01JRELAYBATCHSENSITIVE"));
         assert!(debug.contains("relay_consultation_ids: \"[REDACTED]\""));
         assert_eq!(value["access_mode"], json!("subject_bound"));
         assert_eq!(

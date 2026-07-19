@@ -97,7 +97,7 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
         EvidenceError::PolicyDenied { .. } => "the configured policy denied the evidence request",
         EvidenceError::ProfileUnsupported => "the requested profile is not supported",
         EvidenceError::EvidenceNotAvailable => "the evidence is not available",
-        EvidenceError::BatchTooLarge => "the batch exceeds the configured inline limit",
+        EvidenceError::BatchTooLarge => "the batch exceeds the platform or configured member limit",
         EvidenceError::EvaluationNotFound => "the evaluation id is unknown or expired",
         EvidenceError::EvaluationBindingMismatch => {
             "the request exceeds the original evaluation binding"

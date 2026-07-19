@@ -15,6 +15,11 @@ pub use limits::*;
 pub use relay::*;
 pub use signing::*;
 
+/// Hard 1.0 platform ceiling for synchronous batch evaluation members.
+///
+/// Operator settings may reduce this value, but never raise it.
+pub const MAX_BATCH_EVALUATION_MEMBERS_V1: usize = 100;
+
 /// Registry Notary configuration. Disabled by default so existing
 /// Registry Relay deployments load unchanged.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -33,6 +38,7 @@ pub struct EvidenceConfig {
     #[serde(default = "default_formats_url")]
     pub formats_url: String,
     #[serde(default = "default_inline_batch_limit")]
+    #[schemars(range(min = 1, max = 100))]
     pub inline_batch_limit: usize,
     #[serde(default = "default_max_credential_validity_seconds")]
     pub max_credential_validity_seconds: u64,
@@ -67,6 +73,28 @@ pub(in crate::config) const fn default_max_credential_validity_seconds() -> u64 
 }
 
 impl EvidenceConfig {
+    pub(in crate::config) fn validate_batch_limits(&self) -> Result<(), EvidenceConfigError> {
+        if !(1..=MAX_BATCH_EVALUATION_MEMBERS_V1).contains(&self.inline_batch_limit) {
+            return Err(EvidenceConfigError::InvalidBatchConfig {
+                reason: format!(
+                    "evidence.inline_batch_limit must be between 1 and {MAX_BATCH_EVALUATION_MEMBERS_V1}"
+                ),
+            });
+        }
+        for claim in &self.claims {
+            let max_subjects = claim.operations.batch_evaluate.max_subjects;
+            if !(1..=MAX_BATCH_EVALUATION_MEMBERS_V1).contains(&max_subjects) {
+                return Err(EvidenceConfigError::InvalidBatchConfig {
+                    reason: format!(
+                        "claim '{}' operations.batch_evaluate.max_subjects must be between 1 and {MAX_BATCH_EVALUATION_MEMBERS_V1}",
+                        claim.id
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub(in crate::config) fn validate_signing_keys(&self) -> Result<(), EvidenceConfigError> {
         let mut published_kids = HashSet::new();
         for (key_id, key) in &self.signing_keys {
@@ -163,5 +191,5 @@ pub(in crate::config) fn default_formats_url() -> String {
 }
 
 pub(in crate::config) const fn default_inline_batch_limit() -> usize {
-    100
+    MAX_BATCH_EVALUATION_MEMBERS_V1
 }

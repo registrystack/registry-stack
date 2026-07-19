@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use registry_notary_core::{
     BatchEvaluateRequest, ClaimRef, CredentialIssueRequest, EvaluateRequest, EvidenceEntity,
     EvidenceIdentifier, EvidenceOnBehalfOf, EvidenceRelationship, RenderEvaluationRequest,
-    RenderRequest, RequestVariables, FORMAT_CLAIM_RESULT_JSON,
+    RenderRequest, RequestVariables, FORMAT_CLAIM_RESULT_JSON, MAX_BATCH_EVALUATION_MEMBERS_V1,
 };
 use registry_platform_httputil::read_bounded;
 use reqwest::{Method, StatusCode, Url};
@@ -534,13 +534,21 @@ impl RegistryNotaryClient {
     /// Submit a raw typed [`BatchEvaluateRequest`].
     ///
     /// Batch evaluation is the only POST route where the client allows
-    /// `Idempotency-Key`; retries require that key.
+    /// `Idempotency-Key`; retries require that key. Requests above the hard
+    /// 100-member platform ceiling fail locally before transport.
     pub async fn batch_evaluate_request(
         &self,
         mut request: BatchEvaluateRequest,
         options: RequestOptions,
     ) -> Result<NotaryResponse<registry_notary_core::BatchEvaluateResponse>, NotaryClientError>
     {
+        if request.items.len() > MAX_BATCH_EVALUATION_MEMBERS_V1 {
+            return Err(NotaryClientBuildError::BatchTooLarge {
+                actual: request.items.len(),
+                maximum: MAX_BATCH_EVALUATION_MEMBERS_V1,
+            }
+            .into());
+        }
         let mut options = self.prepare_purpose(options, request.purpose.as_deref())?;
         options.accept = options
             .accept

@@ -368,7 +368,8 @@ pub(super) fn max_batch_subjects(
     claims: &[ClaimRef],
     claim_versions: &ClaimVersionSelections,
 ) -> Result<usize, EvidenceError> {
-    let mut max = config.inline_batch_limit;
+    let mut max =
+        registry_notary_core::MAX_BATCH_EVALUATION_MEMBERS_V1.min(config.inline_batch_limit);
     for claim_id in claims {
         let claim = find_claim_for_selection(config, claim_id, claim_versions)?;
         if !claim.operations.batch_evaluate.enabled {

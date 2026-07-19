@@ -154,6 +154,7 @@ impl StandaloneRegistryNotaryConfig {
         }
         self.evidence.concurrency.validate()?;
         self.evidence.machine_quota.validate()?;
+        self.evidence.validate_batch_limits()?;
         if let Some(relay) = &self.evidence.relay {
             relay.validate()?;
             if !self
