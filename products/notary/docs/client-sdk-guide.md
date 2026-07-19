@@ -864,13 +864,15 @@ let updated = client
 
 ### OID4VCI
 
-The client wraps endpoints only. It does not generate holder proofs or manage
-holder keys.
+The client wraps issuer metadata and the credential endpoint. It does not start
+the browser login, redeem a pre-authorized code, generate holder proofs, or
+manage holder keys. Start the issuer-initiated journey at
+`/oid4vci/offer/start` and let the wallet redeem the rendered offer. Call the
+credential helper only after the wallet has a Notary access token and the
+transaction-bound proof nonce returned by the token response.
 
 ```python
 metadata = client.oid4vci_issuer_metadata()
-offer = client.oid4vci_credential_offer("person_is_alive_sd_jwt")
-nonce = client.oid4vci_nonce()
 credential = client.oid4vci_credential({
     "credential_configuration_id": "person_is_alive_sd_jwt",
     "proof": {"proof_type": "jwt", "jwt": "eyJ..."},
@@ -879,8 +881,6 @@ credential = client.oid4vci_credential({
 
 ```js
 const metadata = await client.oid4vciIssuerMetadata();
-const offer = await client.oid4vciCredentialOffer("person_is_alive_sd_jwt");
-const nonce = await client.oid4vciNonce();
 const credential = await client.oid4vciCredential({
   credential_configuration_id: "person_is_alive_sd_jwt",
   proof: { proof_type: "jwt", jwt: "eyJ..." },
@@ -900,10 +900,6 @@ registry-notary-client = {
 ```rust
 let metadata = client
     .oid4vci_issuer_metadata(RequestOptions::default())
-    .await?;
-
-let offer = client
-    .oid4vci_credential_offer(Some("person_is_alive_sd_jwt"), RequestOptions::default())
     .await?;
 ```
 
@@ -1174,8 +1170,6 @@ const key = await client.getJwk("key-1");
 const status = await client.credentialStatus("credential-1");
 
 const metadata = await client.oid4vciIssuerMetadata();
-const offer = await client.oid4vciCredentialOffer("person_is_alive_sd_jwt");
-const nonce = await client.oid4vciNonce();
 
 const responseJws = await client.federationEvaluateJws("eyJ...");
 ```

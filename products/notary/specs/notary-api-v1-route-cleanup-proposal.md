@@ -72,8 +72,8 @@ operational:
 | `GET /.well-known/evidence-service` | keep | Discovery convention. |
 | `GET /.well-known/evidence/jwks.json` | keep | JWKS discovery convention. |
 | `GET /.well-known/openid-credential-issuer` | keep | OID4VCI metadata convention. |
-| `GET /oid4vci/credential-offer` | keep | OID4VCI wallet-facing endpoint. |
-| `POST /oid4vci/nonce` | keep | OID4VCI wallet-facing endpoint. |
+| `GET /oid4vci/credential-offer` | removed for 1.0 | Superseded by issuer-initiated offers rendered after the authenticated callback. |
+| `POST /oid4vci/nonce` | removed for 1.0 | Proof nonces are transaction-bound and returned by the token response. |
 | `POST /oid4vci/credential` | keep | OID4VCI wallet-facing endpoint. |
 
 ### Versioned Application API

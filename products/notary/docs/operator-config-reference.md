@@ -38,6 +38,21 @@ the default is 30 seconds. These controls compose with the 1 MiB inbound body,
 64 KiB per-Relay-result, and 256 consultation-group limits. They do not replace
 the 100-member ceiling.
 
+## OID4VCI 1.0 profile
+
+Enabled OID4VCI configuration requires
+`oid4vci.pre_authorized_code.enabled: true`. The only wallet-facing grant is
+issuer-initiated pre-authorized code. `oid4vci.nonce.enabled` controls the
+transaction-bound proof nonce returned by the token response; it does not mount
+a public nonce route. `oid4vci.nonce_endpoint` must be omitted, and
+`oid4vci.offer_endpoint` has no route effect in the 1.0 profile.
+
+`oid4vci.pre_authorized_code.tx_code.required` defaults to `true`. An explicit
+`false` setting, including the Walt compatibility profile, requires
+`pre_authorized_code_ttl_seconds` of no more than 300. The no-PIN offer is
+single-use bearer credential material until redemption and must remain covered
+by rate limits and disclosure controls.
+
 {/* registry-notary-config-key-paths:start */}
 ```text
 audit
@@ -692,9 +707,10 @@ SHA-256 execution binding cross-binds each claim pin, execution, and exact claim
 provenance. Missing, duplicated,
 extra, legacy, or modified provenance is denied before signer, credential-id,
 or status side effects. Direct issuance checks before holder-proof replay
-mutation. OID4VCI rejects a source-free credential configuration before nonce
-consumption, preserves the existing nonce-before-evaluation ordering, and
-checks stored provenance before signer access. Delegated self-attestation is
+mutation. OID4VCI rejects a source-free credential configuration, creates and
+evaluates the registry transaction before rendering an offer, consumes the
+transaction-bound proof nonce at the credential endpoint, and checks stored
+provenance before signer access. Delegated self-attestation is
 evaluation-only; delegated relationship and claim credential-profile bindings
 are rejected at configuration load.
 

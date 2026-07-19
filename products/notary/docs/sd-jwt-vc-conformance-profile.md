@@ -3,8 +3,8 @@
 > **Page type:** Standards conformance · **Product:** Registry Notary · **Layer:** credential · **Audience:** integrator
 
 Registry Notary issues one constrained SD-JWT VC credential format
-(`application/dc+sd-jwt`, EdDSA over Ed25519, `did:jwk` holder binding); it
-does not claim full SD-JWT VC or OpenID4VCI conformance. This page documents
+(`application/dc+sd-jwt`, EdDSA or ES256 issuer signing, and EdDSA `did:jwk`
+holder proof for OID4VCI); it does not claim full SD-JWT VC or OpenID4VCI conformance. This page documents
 that credential contract and names adjacent ecosystem features that are not
 yet part of the product surface.
 
@@ -28,13 +28,13 @@ wire media type `application/dc+sd-jwt`.
 Issued credentials use a compact issuer-signed JWT as the first component of
 the SD-JWT value. The protected header has these Registry Notary invariants:
 
-- `alg` is `EdDSA`.
+- `alg` is the credential profile's configured `EdDSA` or `ES256` algorithm.
 - `typ` is `dc+sd-jwt`.
 - `kid` is the `kid` on the credential profile's configured signing key.
 
-Only Ed25519 EdDSA signing keys are supported. Local JWK keys are supported for
-development and tests; PKCS#11 keys are available behind the optional server
-feature.
+Ed25519 keys are used with EdDSA and P-256 keys are used with ES256. Local JWK
+keys are supported for development and tests; supported production signing
+providers are documented separately.
 
 Signing key configuration examples are documented in
 [signing-key-provider.md](signing-key-provider.md).
@@ -136,6 +136,12 @@ Type Metadata convention, a consumer dereferences an HTTPS `vct` by inserting
   semantic bindings, the claim metadata also includes the Notary extension
   `registry_notary_semantics`; this labels the claim with external terms such as
   PublicSchema URIs but does not change the Notary claim-result payload shape.
+
+The top-level `status` claim is reserved and cannot be projected as a
+selectively disclosable value. A client verifier of a status-bearing credential
+retrieves the signed status token only from its configured exact HTTPS trusted
+origin and fails closed when the status is missing, malformed, untrusted,
+unavailable, suspended, revoked, expired, or otherwise invalid.
 - **CORS.** Browser-based wallets from configured self-attestation wallet origins
   receive CORS headers on the `/.well-known/vct/...` metadata surface.
 
@@ -180,7 +186,9 @@ The following features are out of scope for the current profile:
 - external status-list or revocation-list profiles;
 - mDoc/mDL;
 - CWT proof binding;
-- full OpenID4VCI issuer behavior.
+- full OpenID4VCI issuer behavior, wallet-facing authorization code, a public
+  nonce endpoint, response next nonce, ES256 holder proof, EUDI, HAIP, PAR,
+  DPoP, or wallet attestation.
 
 These features require separate compatibility, lifecycle, and security design
 before implementation.

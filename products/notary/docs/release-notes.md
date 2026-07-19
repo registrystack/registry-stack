@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- BREAKING: The 1.0 wallet facade supports only issuer-initiated
+  pre-authorized code backed by a stored registry transaction. The former
+  credential-offer and public nonce routes are removed, and the credential
+  response has no next nonce. Start with `/oid4vci/offer/start`, complete the
+  identity-provider callback, redeem the rendered offer at `/oid4vci/token`,
+  and use its transaction-bound proof nonce. The identity provider's
+  authorization code is never a wallet grant.
+- OID4VCI source tests now cover complete issuance and client verification for
+  EdDSA and ES256 issuer keys with an EdDSA `did:jwk` holder. Metadata
+  advertises the exact configured issuer algorithm and only the supported
+  holder profile.
+- `tx_code` remains enabled by default. A no-PIN wallet profile must opt out
+  explicitly and use a pre-authorized-code TTL no longer than 300 seconds. The
+  offer is bearer credential material until its single use, so operators must
+  prevent disclosure and retain redemption rate limits.
+- Source-free claims remain evaluation-only. OID4VCI issuance reloads the
+  registry transaction and exact Relay-backed evaluation provenance before
+  signer access.
+- Status-bearing credentials are verified fail closed from the configured
+  exact HTTPS status origin. The reserved top-level status claim cannot be
+  selectively disclosable.
+- External wallet, verifier, OIDF, EUDI, or HAIP evidence remains
+  candidate-only until recorded against a frozen release artifact.
+
 ## 0.11.0
 
 - BREAKING: Direct and OID4VCI credential issuance now require a fresh,

@@ -40,7 +40,7 @@ scenario patterns](notary-scenario-patterns.md).
 | --- | --- |
 | Source registry | Operational system of record. It is not exposed directly to consumers |
 | Registry Relay | Read-only gateway and metadata publisher for source registry data |
-| Registry Notary | Evaluates Relay-backed or source-free claims, signs results, issues credentials only from exact Relay-backed evaluation provenance, enforces evidence policy, and emits audit |
+| Registry Notary | Evaluates Relay-backed or source-free claims, signs results, issues credentials only from exact Relay-backed evaluation provenance, enforces evidence policy, and emits audit. Source-free results cannot authorize issuance |
 | Registry Manifest | Public metadata and discovery artifact for capabilities, profiles, and evidence offerings |
 | Registry Platform | Shared crypto, HTTP, OIDC, SD-JWT, DID/JWK, replay, and audit primitives |
 | Service portal or case system | Starts a service workflow and consumes evidence or decisions |
@@ -67,10 +67,18 @@ scenario patterns](notary-scenario-patterns.md).
 | 13 | Health worker presents professional credential for service eligibility | User-presented proof | Planned | No proof profiles or issuer trust policy ship yet; you cannot accept a presented professional credential for this eligibility check |
 | 14 | Parent or guardian requests a service for a child or dependent | Delegated self-attestation plus proof | Supported | Evaluation and rendering require the configured Relay-backed relationship proof; delegated credential issuance is intentionally unavailable in 1.0 |
 | 15 | Household or group representative requests a service | Representation plus proof | Planned | No collective subject model or representative authority policy ships yet; you cannot let a household or group representative request this service |
-| 16 | Civil Notary issues date-of-birth or alive credential | Credential issuance | Supported | Requires a fresh compiler-pinned Relay-backed evaluation; local wallet ceremony is still demo-grade |
-| 17 | Agriculture Notary issues voucher eligibility credential | Credential issuance | Supported | Requires a fresh compiler-pinned Relay-backed evaluation; local wallet ceremony is still demo-grade |
+| 16 | Civil Notary issues date-of-birth or alive credential | Credential issuance | Supported | Full EdDSA and ES256 source-tested pre-authorized flow exists; external wallet evidence remains candidate-only |
+| 17 | Agriculture Notary issues voucher eligibility credential | Credential issuance | Supported | Full EdDSA and ES256 source-tested pre-authorized flow exists; external wallet evidence remains candidate-only |
 | 18 | Shared Eligibility Notary issues combined-support credential | Credential issuance plus composition | Partial | Relay-backed credential issuance exists, but peer-result composition is missing |
 | 19 | Consuming service helps holder obtain credential from remote Notary | Federated credential issuance | Planned | No holder-binding ceremony, nonce ownership, or relay rules ship yet; you cannot help a holder obtain a credential from a remote Notary through this service |
 | 20 | Replay and emergency peer/key denial | Governance | Supported | Active-active deployments require the typed Notary-owned PostgreSQL state schema |
 | 21 | Auditor verifies minimized decision evidence | Governance | Partial | Signed results and audit exist, checkpoints are planned |
 | 22 | Peer audit checkpoint monitoring | Governance | Planned | No checkpoint publisher, Merkle builder, or peer monitor ships yet; you cannot independently verify peer audit checkpoints |
+
+Each Relay authority uses one Notary authority, with Notary-owned PostgreSQL
+correctness state for production and multi-instance deployment. Wallet-facing
+issuance supports only issuer-initiated pre-authorized code, EdDSA `did:jwk`
+holder proof, and EdDSA or ES256 issuer signing. This matrix makes no EUDI,
+HAIP, PAR, DPoP, wallet-attestation, ES256-holder, or external wallet/verifier
+conformance claim. Those claims require frozen candidate artifacts and recorded
+external evidence.
