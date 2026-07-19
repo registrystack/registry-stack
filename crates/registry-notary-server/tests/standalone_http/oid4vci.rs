@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#[cfg(feature = "registry-notary-cel")]
 use super::preauth_support::*;
 use super::support::*;
 #[allow(unused_imports)]

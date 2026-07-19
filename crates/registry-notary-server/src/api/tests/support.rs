@@ -562,6 +562,7 @@
 
     struct Oid4vciTestTransaction {
         principal: EvidencePrincipal,
+        #[cfg(feature = "registry-notary-cel")]
         transaction: IssuanceTransaction,
         nonce_scope: ReplayScope,
         nonce_key: ReplayKey,
@@ -634,6 +635,7 @@
 
         Oid4vciTestTransaction {
             principal,
+            #[cfg(feature = "registry-notary-cel")]
             transaction,
             nonce_scope,
             nonce_key,
