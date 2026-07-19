@@ -298,63 +298,63 @@ fn strict_nested_objects_and_tagged_variants_match_runtime_deserialization() {
 }
 
 #[test]
-fn authorization_details_are_closed_at_every_policy_level() {
+fn authorization_details_preserve_extension_compatibility_at_every_policy_level() {
     let schema = document();
     let valid = with_authorization_details(example_config());
-    assert_valid(&schema, &valid, "strict authorization-details config");
-    assert_runtime_deserializes(&valid, "strict authorization-details config");
+    assert_valid(&schema, &valid, "authorization-details config");
+    assert_runtime_deserializes(&valid, "authorization-details config");
 
     let mut root_unknown = valid.clone();
     root_unknown["auth"]["api_keys"][0]["authorization_details"]["unexpected"] = json!(true);
-    assert_invalid(
+    assert_valid(
         &schema,
         &root_unknown,
-        "unknown authorization-details field",
+        "future authorization-details metadata",
     );
-    assert_runtime_rejects(&root_unknown, "unknown authorization-details field");
+    assert_runtime_deserializes(&root_unknown, "future authorization-details metadata");
 
     let mut subject_unknown = valid.clone();
     subject_unknown["auth"]["api_keys"][0]["authorization_details"]["subject"]["unexpected"] =
         json!(true);
-    assert_invalid(
+    assert_valid(
         &schema,
         &subject_unknown,
-        "unknown authorization subject field",
+        "future authorization subject metadata",
     );
-    assert_runtime_rejects(&subject_unknown, "unknown authorization subject field");
+    assert_runtime_deserializes(&subject_unknown, "future authorization subject metadata");
 
     let mut target_unknown = valid.clone();
     target_unknown["auth"]["api_keys"][0]["authorization_details"]["target"]["unexpected"] =
         json!(true);
-    assert_invalid(
+    assert_valid(
         &schema,
         &target_unknown,
-        "unknown authorization target field",
+        "future authorization target metadata",
     );
-    assert_runtime_rejects(&target_unknown, "unknown authorization target field");
+    assert_runtime_deserializes(&target_unknown, "future authorization target metadata");
 
     let mut relationship_unknown = valid.clone();
     relationship_unknown["auth"]["api_keys"][0]["authorization_details"]["relationship"]
         ["unexpected"] = json!(true);
-    assert_invalid(
+    assert_valid(
         &schema,
         &relationship_unknown,
-        "unknown authorization relationship field",
+        "future authorization relationship metadata",
     );
-    assert_runtime_rejects(
+    assert_runtime_deserializes(
         &relationship_unknown,
-        "unknown authorization relationship field",
+        "future authorization relationship metadata",
     );
 
     let mut context_unknown = valid;
     context_unknown["auth"]["api_keys"][0]["authorization_details"]["assisted_access_context"]
         ["unexpected"] = json!(true);
-    assert_invalid(
+    assert_valid(
         &schema,
         &context_unknown,
-        "unknown assisted-access context field",
+        "future assisted-access context metadata",
     );
-    assert_runtime_rejects(&context_unknown, "unknown assisted-access context field");
+    assert_runtime_deserializes(&context_unknown, "future assisted-access context metadata");
 }
 
 #[test]

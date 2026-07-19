@@ -1638,8 +1638,12 @@ const fn subject_access_access_mode() -> AccessMode {
     AccessMode::SubjectBound
 }
 
+/// Versioned authorization fields shared by static configuration and token/OIDC JSON.
+///
+/// Unknown metadata is intentionally ignored for forward-compatible interoperability.
+/// Authorization decisions consume only the modeled fields and must never infer authority
+/// from an unrecognized extension.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceAuthorizationDetails {
     #[serde(rename = "type")]
     pub detail_type: String,
@@ -1677,28 +1681,24 @@ pub struct EvidenceAuthorizationDetails {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceAuthorizationSubject {
     pub binding_claim: String,
     pub id_type: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceAuthorizationTarget {
     pub id_type: String,
     pub id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceAuthorizationRelationship {
     pub relationship_type: String,
     pub proof_claim: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct EvidenceAssistedAccessContext {
     pub channel: String,
 }

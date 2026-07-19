@@ -567,9 +567,11 @@ subject_access.token_policy.required_acr_values[]
 | `oid4vci` | Wallet-facing issuance facade |
 | `federation` | Static-peer delegated evaluation |
 
-Unknown fields are rejected. Use the generated configuration from Registry
-Stack project authoring as the source of truth rather than maintaining a
-second handwritten example.
+Unknown configuration fields are rejected except forward-compatible metadata
+inside `authorization_details`, as described under Authentication and
+delegation. Use the generated configuration from Registry Stack project
+authoring as the source of truth rather than maintaining a second handwritten
+example.
 
 ## Environment expansion
 
@@ -646,10 +648,14 @@ together fails before either credential is authenticated. Static bearer tokens
 cannot be configured alongside OIDC because both use the `Authorization:
 Bearer` transport.
 
-`authorization_details` is a closed authorization-policy object, including its
-subject, target, relationship, and assisted-access nested objects. Unknown
-fields are rejected at load time so a misspelled or unreviewed policy input
-cannot silently weaken caller binding.
+`authorization_details` is a versioned interoperability object shared by
+static configuration and token or OIDC JSON. Known authorization fields,
+including subject, target, relationship, assisted access, and exact claim
+references, are enforced by the authorization checks. Future metadata fields
+at those object levels are accepted and ignored so an additive producer does
+not break an older Notary. Unrecognized metadata never grants authority.
+`ClaimRef` objects remain closed because an extra field there could conceal a
+misspelled claim or version selector.
 
 Citizen and wallet flows use the self-attestation subject-binding policy.
 Delegated access must bind requester, target, relationship, purpose, and
