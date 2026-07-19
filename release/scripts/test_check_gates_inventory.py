@@ -95,6 +95,13 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("Stable error registry path filter", self.module.missing_gates(text))
 
+    def test_missing_relay_support_roster_path_filter_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "docs/site/src/data/relay-support.yaml|docs/site/src/data/generated/relay-support.json)",
+            "docs/site/src/data/removed-relay-support.yaml)",
+        )
+        self.assertIn("Relay support roster path filter", self.module.missing_gates(text))
+
     def test_missing_registryctl_tutorial_path_filter_is_reported(self) -> None:
         text = self.workflow.replace(
             "registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}",

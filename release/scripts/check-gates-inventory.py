@@ -78,6 +78,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Stable error registry path filter",
         "docs/site/src/content/docs/reference/errors.mdx)",
     ),
+    (
+        "Relay support roster path filter",
+        "docs/site/src/data/relay-support.yaml|docs/site/src/data/generated/relay-support.json)",
+    ),
     ("Docs dependency install", "run: npm ci"),
     ("Docs tests", "run: npm test"),
     ("Docs build check", "run: npm run check"),
