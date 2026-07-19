@@ -42,6 +42,13 @@ class GateInventoryTest(unittest.TestCase):
             "Registryctl tutorial source execution", self.module.missing_gates(text)
         )
 
+    def test_missing_manifest_profile_validation_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "cargo run --locked -p registry-manifest-cli -- validate-profiles profiles",
+            "cargo run --locked -p registry-manifest-cli -- skip-profile-validation",
+        )
+        self.assertIn("Manifest profile validation", self.module.missing_gates(text))
+
     def test_missing_release_docset_validation_is_reported(self) -> None:
         text = self.workflow.replace(
             "release/scripts/registry-release validate-docsets",

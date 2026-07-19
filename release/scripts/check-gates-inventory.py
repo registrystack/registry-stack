@@ -12,6 +12,10 @@ CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Cargo metadata", "run: cargo metadata --locked --format-version 1"),
+    (
+        "Manifest profile validation",
+        "run: cargo run --locked -p registry-manifest-cli -- validate-profiles profiles",
+    ),
     ("Format", "run: cargo fmt --check"),
     ("Workspace check", "run: cargo check --locked --workspace --all-targets"),
     ("Clippy", "run: cargo clippy --workspace --all-targets -- -D warnings"),

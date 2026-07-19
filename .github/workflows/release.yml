@@ -102,6 +102,17 @@ jobs:
             echo "manifest=${manifest}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Set up evidence checker runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22.12.0
+
+      - name: Verify documentation evidence links
+        working-directory: docs/site
+        run: >-
+          npm run check:evidence-links --
+          --source-ref "${{ steps.release.outputs.tag_target }}"
+
       - name: Verify lock-bearing release version
         run: |
           release/scripts/registry-release verify-registryctl-image-lock-release-version \

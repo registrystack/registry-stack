@@ -409,9 +409,9 @@
     - bounded FHIR R4 search-set parsing helper
   evidence_docs:
     - label: Registry Stack FHIR project-authoring fixture
-      url: https://github.com/registrystack/registry-stack/tree/2dfcf2dd/crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active
+      url: https://github.com/registrystack/registry-stack/tree/2dfcf2ddf22e2c0fa4bf5fd84eb06b8736057605/crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active
     - label: Registry Relay protocol helper
-      url: https://github.com/registrystack/registry-stack/tree/066bd89e/crates/registry-relay/src/source_plan
+      url: https://github.com/registrystack/registry-stack/tree/066bd89ea3e4f1ce0bba5d0e696374199d275b73/crates/registry-relay/src/source_plan
   last_checked: 2026-07-09
   notes: Registry Relay exposes a bounded FHIR R4 search-set parser to product-neutral Rhai scripts. Project code owns profile-specific matching and projections. Source product and version metadata do not enable the helper, and Registry Stack does not claim to implement a FHIR server or broad FHIR conformance.
 - id: govstack-digital-registries
@@ -449,7 +449,7 @@
     - technical alignment positioning
   evidence_docs:
     - label: DPI safeguards alignment page
-      url: https://docs.registrystack.org/explanation/dpi-safeguards-alignment/
+      url: /explanation/dpi-safeguards-alignment/
   last_checked: 2026-06-15
   notes: >-
     The framework is a governance instrument, not a technical specification, so
@@ -474,7 +474,7 @@
     - label: Registry Relay README
       url: https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/README.md
     - label: Registry Stack OpenCRVS project-authoring fixture
-      url: https://github.com/registrystack/registry-stack/tree/2dfcf2dd/crates/registryctl/tests/fixtures/project-authoring/opencrvs
+      url: https://github.com/registrystack/registry-stack/tree/2dfcf2ddf22e2c0fa4bf5fd84eb06b8736057605/crates/registryctl/tests/fixtures/project-authoring/opencrvs
   last_checked: 2026-07-19
   notes: Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. The adapter and standards-CEL mapping are experimental, feature-frozen, and outside the 1.0 compatibility promise. A Registry Stack project can also compile a reviewed DCI source journey into a Relay consultation. Registry Notary consumes the consultation result and does not connect to DCI sources directly.
 - id: oid4vci
@@ -501,7 +501,7 @@
     - label: Registry Platform OID4VCI crate
       url: https://github.com/registrystack/registry-stack/tree/v0.11.0/crates/registry-platform-oid4vci
     - label: Registry Notary wallet facade specification
-      url: https://github.com/registrystack/registry-stack/blob/main/products/notary/specs/openid4vci-wallet-facade-spec.md
+      url: https://github.com/registrystack/registry-stack/blob/37ce044567f05f8b3088b54f5bd4dbf389fd2ddb/products/notary/specs/openid4vci-wallet-facade-spec.md
   last_checked: 2026-07-19
   notes: >-
     Registry Notary exposes a registry-backed, issuer-initiated

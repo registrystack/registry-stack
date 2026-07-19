@@ -1,6 +1,8 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, join, normalize, relative } from 'node:path';
 
+import { extractEvidenceUrlsFromYaml } from './check-evidence-links.mjs';
+
 const distDir = 'dist';
 const attrPattern = /\s(?:href|src)=["']([^"']+)["']/g;
 const idPattern = /\sid=["']([^"']+)["']/g;
@@ -75,9 +77,22 @@ function targetPath(url) {
   return join(distDir, path);
 }
 
+async function currentEvidencePaths() {
+  const paths = new Set();
+  const dataDir = join('src', 'data');
+  for (const kind of ['contracts', 'standards']) {
+    const source = await readFile(join(dataDir, `${kind}.yaml`), 'utf8');
+    for (const url of extractEvidenceUrlsFromYaml(source, kind)) {
+      if (url.startsWith('/')) paths.add(splitUrl(url)[0]);
+    }
+  }
+  return paths;
+}
+
 const errors = [];
 let checked = 0;
 const idsByFile = new Map();
+const evidencePaths = await currentEvidencePaths();
 
 for (const file of await htmlFiles(distDir)) {
   const html = await readFile(file, 'utf8');
@@ -96,6 +111,7 @@ for (const file of await htmlFiles(distDir)) {
       raw.startsWith('/') &&
       raw !== '/' &&
       !raw.startsWith(root) &&
+      !evidencePaths.has(splitUrl(raw)[0]) &&
       !isExternal(raw)
     ) {
       errors.push(`${relative('.', file)} links outside its archive: ${raw}`);

@@ -569,11 +569,11 @@
     "evidence_docs": [
       {
         "label": "Registry Stack FHIR project-authoring fixture",
-        "url": "https://github.com/registrystack/registry-stack/tree/2dfcf2dd/crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active"
+        "url": "https://github.com/registrystack/registry-stack/tree/2dfcf2ddf22e2c0fa4bf5fd84eb06b8736057605/crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active"
       },
       {
         "label": "Registry Relay protocol helper",
-        "url": "https://github.com/registrystack/registry-stack/tree/066bd89e/crates/registry-relay/src/source_plan"
+        "url": "https://github.com/registrystack/registry-stack/tree/066bd89ea3e4f1ce0bba5d0e696374199d275b73/crates/registry-relay/src/source_plan"
       }
     ],
     "last_checked": "2026-07-09",
@@ -625,7 +625,7 @@
     "evidence_docs": [
       {
         "label": "DPI safeguards alignment page",
-        "url": "https://docs.registrystack.org/explanation/dpi-safeguards-alignment/"
+        "url": "/explanation/dpi-safeguards-alignment/"
       }
     ],
     "last_checked": "2026-06-15",
@@ -654,7 +654,7 @@
       },
       {
         "label": "Registry Stack OpenCRVS project-authoring fixture",
-        "url": "https://github.com/registrystack/registry-stack/tree/2dfcf2dd/crates/registryctl/tests/fixtures/project-authoring/opencrvs"
+        "url": "https://github.com/registrystack/registry-stack/tree/2dfcf2ddf22e2c0fa4bf5fd84eb06b8736057605/crates/registryctl/tests/fixtures/project-authoring/opencrvs"
       }
     ],
     "last_checked": "2026-07-19",
@@ -692,7 +692,7 @@
       },
       {
         "label": "Registry Notary wallet facade specification",
-        "url": "https://github.com/registrystack/registry-stack/blob/main/products/notary/specs/openid4vci-wallet-facade-spec.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/37ce044567f05f8b3088b54f5bd4dbf389fd2ddb/products/notary/specs/openid4vci-wallet-facade-spec.md"
       }
     ],
     "last_checked": "2026-07-19",

@@ -157,6 +157,10 @@ jobs:
       - name: Cargo metadata
         run: cargo metadata --locked --format-version 1 >/tmp/registry-stack-cargo-metadata.json
 
+      - name: Validate Manifest profiles
+        working-directory: products/manifest
+        run: cargo run --locked -p registry-manifest-cli -- validate-profiles profiles
+
       - name: Gate inventory
         run: python3 release/scripts/check-gates-inventory.py
 
