@@ -67,35 +67,7 @@ async fn generate_fixtures() {
     let issuer = SdJwtIssuer::from_jwk(issuer_jwk.clone()).expect("issuer builds");
     let holder_did = did_jwk_from_public_jwk(&holder_jwk.public()).expect("holder did encodes");
 
-    // Write the public issuer JWKS so the harness can load it without
-    // embedding raw key material.
-    let public_jwk = serde_json::to_value(issuer_jwk.public()).expect("public jwk serialises");
-    let es256_public_jwk =
-        serde_json::to_value(es256_issuer_jwk.public()).expect("ES256 public jwk serialises");
-    let jwks = json!({ "keys": [public_jwk, es256_public_jwk] });
-    write_fixture(
-        &fixture_dir,
-        "issuer-jwks.json",
-        &serde_json::to_string_pretty(&jwks).expect("jwks serialises"),
-    );
-
-    // Write fixture metadata so the harness knows constants without embedding
-    // them as Rust literals.
-    let meta = json!({
-        "issuer": ISSUER,
-        "vct": VCT,
-        "iat": IAT,
-        "exp": EXP,
-        "holder_did": holder_did,
-        "key_id": "did:web:fixture.test#key-1",
-        "es256_key_id": "did:web:fixture.test#p256-key-1",
-        "note": "All key material in this directory is synthetic test-only material. Do not use outside tests."
-    });
-    write_fixture(
-        &fixture_dir,
-        "meta.json",
-        &serde_json::to_string_pretty(&meta).expect("meta serialises"),
-    );
+    write_algorithm_public_metadata(&fixture_dir, &issuer_jwk, &es256_issuer_jwk, &holder_jwk);
 
     // 1. Valid credential (positive fixture).
     let valid = issue(
@@ -225,8 +197,11 @@ async fn generate_algorithm_fixtures() {
     let es256_issuer_jwk = PrivateJwk::parse(ES256_ISSUER_JWK).expect("ES256 issuer jwk parses");
     let es256_issuer =
         SdJwtIssuer::from_jwk(es256_issuer_jwk.clone()).expect("ES256 issuer builds");
+    let issuer_jwk = PrivateJwk::parse(ISSUER_JWK).expect("EdDSA issuer jwk parses");
     let holder_jwk = PrivateJwk::parse(HOLDER_JWK).expect("holder jwk parses");
     let holder_did = did_jwk_from_public_jwk(&holder_jwk.public()).expect("holder did encodes");
+
+    write_algorithm_public_metadata(&fixture_dir, &issuer_jwk, &es256_issuer_jwk, &holder_jwk);
 
     // These private keys are synthetic test material already embedded in this
     // generator. Publishing them as fixtures lets the transaction harness
@@ -464,6 +439,44 @@ fn oid4vci_proof_jwt(key: &PrivateJwk, alg: &str, holder_did: &str) -> String {
     let signing_input = format!("{header}.{payload}");
     let signature = sign(signing_input.as_bytes(), key).expect("proof signs");
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+}
+
+fn write_algorithm_public_metadata(
+    fixture_dir: &std::path::Path,
+    issuer_jwk: &PrivateJwk,
+    es256_issuer_jwk: &PrivateJwk,
+    holder_jwk: &PrivateJwk,
+) {
+    // Write the public issuer JWKS so the harness can load it without
+    // embedding raw key material.
+    let public_jwk = serde_json::to_value(issuer_jwk.public()).expect("public jwk serialises");
+    let es256_public_jwk =
+        serde_json::to_value(es256_issuer_jwk.public()).expect("ES256 public jwk serialises");
+    let jwks = json!({ "keys": [public_jwk, es256_public_jwk] });
+    write_fixture(
+        fixture_dir,
+        "issuer-jwks.json",
+        &serde_json::to_string_pretty(&jwks).expect("jwks serialises"),
+    );
+
+    // Write fixture metadata so the harness knows constants without embedding
+    // them as Rust literals.
+    let holder_did = did_jwk_from_public_jwk(&holder_jwk.public()).expect("holder did encodes");
+    let meta = json!({
+        "issuer": ISSUER,
+        "vct": VCT,
+        "iat": IAT,
+        "exp": EXP,
+        "holder_did": holder_did,
+        "key_id": "did:web:fixture.test#key-1",
+        "es256_key_id": "did:web:fixture.test#p256-key-1",
+        "note": "All key material in this directory is synthetic test-only material. Do not use outside tests."
+    });
+    write_fixture(
+        fixture_dir,
+        "meta.json",
+        &serde_json::to_string_pretty(&meta).expect("meta serialises"),
+    );
 }
 
 fn write_fixture(dir: &std::path::Path, name: &str, content: &str) {

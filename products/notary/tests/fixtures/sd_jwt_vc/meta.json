@@ -1,6 +1,6 @@
 {
-  "exp": 1705280400,
   "es256_key_id": "did:web:fixture.test#p256-key-1",
+  "exp": 1705280400,
   "holder_did": "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6InB2NGVfaFhIQkxOMjdyY3M2VkRGVjFFRDBUaVU4TTN4eTl2c3VXRkVzZWMifQ",
   "iat": 1705276800,
   "issuer": "did:web:fixture.test",
