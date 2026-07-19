@@ -191,11 +191,13 @@ pub(in crate::api) async fn oid4vci_credential(
         &state,
         evidence,
         &principal,
-        &validated_proof,
-        configuration_id,
-        configuration,
-        &transaction,
-        nonce,
+        Oid4vciTransactionMaterialization {
+            validated_proof: &validated_proof,
+            configuration_id,
+            configuration,
+            transaction: &transaction,
+            nonce,
+        },
     )
     .await;
     let (response_body, evaluation) = match materialized {
@@ -282,16 +284,27 @@ pub(in crate::api) fn oid4vci_credential_response_with_audit(
     Ok(response)
 }
 
-pub(in crate::api) async fn materialize_oid4vci_transaction(
+struct Oid4vciTransactionMaterialization<'a> {
+    validated_proof: &'a ValidatedProof,
+    configuration_id: &'a str,
+    configuration: &'a Oid4vciCredentialConfigurationConfig,
+    transaction: &'a IssuanceTransaction,
+    nonce: &'a str,
+}
+
+async fn materialize_oid4vci_transaction(
     state: &RegistryNotaryApiState,
     evidence: &EvidenceConfig,
     principal: &EvidencePrincipal,
-    validated_proof: &ValidatedProof,
-    configuration_id: &str,
-    configuration: &Oid4vciCredentialConfigurationConfig,
-    transaction: &IssuanceTransaction,
-    nonce: &str,
+    materialization: Oid4vciTransactionMaterialization<'_>,
 ) -> Result<(Value, registry_notary_core::StoredEvaluation), Oid4vciWireError> {
+    let Oid4vciTransactionMaterialization {
+        validated_proof,
+        configuration_id,
+        configuration,
+        transaction,
+        nonce,
+    } = materialization;
     let key = state
         .subject_access_rate_keys
         .oid4vci_nonce(&state.oid4vci.credential_issuer, configuration_id, nonce)
