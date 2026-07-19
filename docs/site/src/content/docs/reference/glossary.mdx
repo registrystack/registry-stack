@@ -172,7 +172,7 @@ Product names are always in English, including on future translated pages.
   <dd>Open Geospatial Consortium API specification for Environmental Data Retrieval. Registry Relay exposes profiled area queries over configured spatial aggregates behind the `ogcapi-edr` feature flag.</dd>
 
   <dt id="oid4vci">OID4VCI</dt>
-  <dd>OpenID for Verifiable Credential Issuance. The protocol a wallet uses to obtain a credential from an issuer. Registry Notary emits an OID4VCI issuance flow: a credential offer, issuer metadata at `/.well-known/openid-credential-issuer`, a nonce, and a holder proof. The surface is a profiled subset of OID4VCI Draft 13 advertising the `dc+sd-jwt` format; full issuer conformance is not asserted (`openid4vci.support: not_full_issuer`).</dd>
+  <dd>OpenID for Verifiable Credential Issuance. Registry Notary implements a profiled registry-backed issuer subset using `dc+sd-jwt`, issuer-initiated pre-authorized code, a transaction-bound proof nonce returned by the token response, and EdDSA `did:jwk` holder proof. It has no wallet-facing authorization-code grant or public nonce endpoint. Full issuer, EUDI, HAIP, PAR, DPoP, wallet-attestation, and external-wallet conformance are not asserted (`openid4vci.support: not_full_issuer`).</dd>
 
   <dt>PROV-O</dt>
   <dd>W3C Provenance Ontology. Currently listed as design influence (`inspired_by`). Provenance-shaped concepts appear in audit fields and the claim provenance struct, but no PROV-O vocabulary terms are emitted as JSON-LD at reviewed commits.</dd>
@@ -256,7 +256,7 @@ Product names are always in English, including on future translated pages.
   <dd>Commitment that every exchange the stack mediates is authorized, scoped, and audited. Concretely: authentication by API key or OIDC; scope-checked routes; per-claim disclosure control (value, predicate, or redacted); no source-registry data mutation through Relay; audit envelopes for every request that touches person-level data.</dd>
 
   <dt id="sd-jwt-vc">SD-JWT VC</dt>
-  <dd>Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Notary issues SD-JWT VC credentials signed with EdDSA. Media type: `application/dc+sd-jwt`.</dd>
+  <dd>Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Notary issues registry-backed SD-JWT VC credentials signed with EdDSA or ES256 and binds OID4VCI credentials to an EdDSA `did:jwk` holder. Media type: `application/dc+sd-jwt`.</dd>
 
   <dt>self-attestation</dt>
   <dd>Registry Notary access pattern where an authenticated OIDC principal is the protected requester for configured claim evaluation. In direct self-attestation, the subject is the authenticated requester. In delegated self-attestation, the requester acts for a configured dependent target only when the relationship proof passes. Source-free and delegated claims cannot be issued as credentials; subject access can authorize a credential only for a non-delegated registry-backed claim.</dd>

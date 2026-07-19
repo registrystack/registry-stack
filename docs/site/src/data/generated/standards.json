@@ -665,21 +665,21 @@
     "name": "OpenID for Verifiable Credential Issuance",
     "standards_body": "OpenID Foundation",
     "official_url": "https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html",
-    "version_or_profile": "OID4VCI Draft 13, profiled issuer subset (SD-JWT VC `dc+sd-jwt` format; advertised as `openid4vci.support: not_full_issuer`)",
+    "version_or_profile": "Profiled issuer subset using `dc+sd-jwt`, issuer-initiated pre-authorized code, and `openid4vci.support: not_full_issuer`",
     "status": "used",
     "claim_level": "emits",
     "adoption_mode": "profiled",
     "used_by": [
       "registry-notary",
-      "registry-platform",
-      "solmara-lab"
+      "registry-platform"
     ],
     "surfaces": [
-      "credential offer endpoint",
-      "nonce endpoint",
+      "issuer-initiated offer start and authenticated callback",
+      "pre-authorized token endpoint with transaction-bound proof nonce",
       "credential issuance endpoint",
+      "SD-JWT VC Type Metadata",
       "issuer metadata at `/.well-known/openid-credential-issuer`",
-      "wallet-facing citizen self-attestation flow"
+      "registry-backed holder-wallet issuance"
     ],
     "evidence_docs": [
       {
@@ -691,16 +691,12 @@
         "url": "https://github.com/registrystack/registry-stack/tree/v0.11.0/crates/registry-platform-oid4vci"
       },
       {
-        "label": "Historical Registry Lab citizen OID4VCI smoke script",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/lab/scripts/smoke-citizen-oid4vci.sh"
-      },
-      {
-        "label": "Solmara Lab hosted OID4VCI smoke",
-        "url": "https://github.com/registrystack/solmara-lab/blob/00cd51a2be4a405ef75d337ddcede0f9de134b1f/scripts/smoke-hosted.py"
+        "label": "Registry Notary wallet facade specification",
+        "url": "https://github.com/registrystack/registry-stack/blob/main/products/notary/specs/openid4vci-wallet-facade-spec.md"
       }
     ],
-    "last_checked": "2026-06-13",
-    "notes": "Registry Notary exposes the OID4VCI credential offer, nonce, credential, and issuer-metadata routes as a profiled subset of OID4VCI Draft 13. The historical v0.9.0 Registry Lab issuer metadata advertised `format: dc+sd-jwt` for the citizen credential configuration. Registry Platform owns the underlying primitives in the `registry-platform-oid4vci` crate. The historical Registry Lab exercised the flow through the `just citizen-oid4vci-*` recipes at v0.9.0. Solmara Lab carries a `just hosted-smoke` harness for issuer metadata, credential offer, nonce, authorization redirect, and unauthenticated denial paths. Beta-13 hosted evidence remains pending until the lab is repinned to published v0.11.0 digests and that harness passes. Full OID4VCI issuer conformance is not asserted: the server advertises itself as `openid4vci.support: not_full_issuer`, and the surfaces emit the protocol shape validated by the checked smoke paths."
+    "last_checked": "2026-07-19",
+    "notes": "Registry Notary exposes a registry-backed, issuer-initiated pre-authorized code flow. The identity provider's authorization code is an internal Notary input and not a wallet grant. Metadata advertises `dc+sd-jwt`, EdDSA `did:jwk` holder proof, and the configured EdDSA or ES256 issuer algorithm. Transaction code is required by default; an explicit no-PIN profile has a maximum 300-second bearer-offer window. Source-free claims cannot authorize issuance. The profile makes no claim for a public nonce endpoint, response next nonce, wallet-facing authorization code, ES256 holder proof, EUDI, HAIP, PAR, DPoP, or wallet attestation. Source tests cover the full issuance and client-verification journey. External wallet, verifier, and OpenID conformance evidence remains candidate-only until captured from a frozen release artifact."
   },
   {
     "id": "w3c-did",

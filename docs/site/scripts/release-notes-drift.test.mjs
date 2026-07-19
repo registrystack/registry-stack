@@ -108,7 +108,7 @@ test('registryctl changelog tracks the latest stack release', () => {
   );
 });
 
-test('a hosted-held release does not claim completed current Solmara smoke evidence', () => {
+test('a hosted-held release keeps external OID4VCI evidence candidate-only', () => {
   const manifest = latestStackManifest();
   const hostedHeld = manifest.warnings?.some(
     (warning) => warning.code === 'hosted-publication-held',
@@ -122,9 +122,12 @@ test('a hosted-held release does not claim completed current Solmara smoke evide
     readRepoFile('docs/site/src/data/standards.yaml'),
   ].join('\n');
 
-  assert.doesNotMatch(publicEvidenceData, /Solmara Lab checks the (?:current )?hosted/);
+  assert.doesNotMatch(
+    publicEvidenceData,
+    /Solmara Lab[^\n]*(?:checks|passes|conformance evidence)/,
+  );
   assert.match(
     publicEvidenceData,
-    /hosted evidence remains pending until the lab is[\s\S]*repinned to published v[0-9]+[.][0-9]+[.][0-9]+ digests/,
+    /External wallet[\s\S]*candidate-only[\s\S]*frozen (?:artifact|release artifact)/,
   );
 });

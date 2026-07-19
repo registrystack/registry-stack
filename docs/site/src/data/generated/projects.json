@@ -7,7 +7,7 @@
     "role": "Shared Rust workspace for security and operational primitives consumed by Registry Relay, Registry Notary, and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.",
     "owns": [
       "Shared auth, OIDC, JWKS fetching, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives.",
-      "OID4VCI credential offer, nonce, credential request, and issuer metadata primitives via the `registry-platform-oid4vci` crate.",
+      "OID4VCI pre-authorized offer, token request, credential request, issuer metadata, and replay-bound holder-proof primitives via the `registry-platform-oid4vci` crate.",
       "Cross-service crate APIs that must behave consistently in Relay, Notary, and future registry services.",
       "Shared Rust hygiene templates and supported integration-test fixtures."
     ],
@@ -106,12 +106,14 @@
       "Registry Notary API routes.",
       "Static-peer delegated evaluation at `/federation/v1/evaluations`.",
       "Credential issuance workflow, exact Relay execution provenance verification, and claim-to-credential mapping.",
-      "OID4VCI Draft 13 credential offer flow (credential-offer, nonce, credential endpoints) and the `/.well-known/openid-credential-issuer` metadata endpoint.",
+      "Profiled OID4VCI issuer-initiated pre-authorized flow, transaction-bound holder proof, Type Metadata, credential endpoint, and issuer metadata.",
       "Compiler-pinned Registry Relay consultation contracts for registry-backed claims.",
       "Source-free and self-attested claim evaluation."
     ],
     "does_not_own": [
       "Registry source access, credentials, protocol adaptation, or Registry Relay runtime internals.",
+      "Source-free, delegated, or registry-backed evaluation-only credential issuance.",
+      "Wallet-facing authorization-code, EUDI, HAIP, PAR, DPoP, wallet-attestation, or ES256-holder profiles.",
       "Portable metadata renderers owned by Registry Manifest.",
       "Shared security and operational primitives owned by Registry Platform.",
       "Open federation, dynamic trust-chain discovery, shared replay storage, or federated credential issuance.",

@@ -40,12 +40,12 @@
     "name": "Registry Notary OID4VCI surface",
     "owner": "registry-notary",
     "status": "current-source",
-    "surface": "OID4VCI offer start and callback (`/oid4vci/offer/start`, `/oid4vci/offer/callback`), credential offer (`GET /oid4vci/credential-offer`), nonce (`POST /oid4vci/nonce`), token (`POST /oid4vci/token`), credential request (`POST /oid4vci/credential`), VCT credential and metadata routes (`/credentials/{vct_path}`, `/.well-known/vct/{vct_path}`), and issuer metadata (`GET /.well-known/openid-credential-issuer`). Primitives sourced from the `registry-platform-oid4vci` crate.",
+    "surface": "OID4VCI issuer metadata, Type Metadata, offer start and authenticated callback, pre-authorized token redemption, and registry-backed credential issuance. The wallet-facing grant is issuer-initiated pre-authorized code. Primitives are sourced from the `registry-platform-oid4vci` crate.",
     "source_of_truth": {
       "label": "Registry Notary OID4VCI routes",
       "url": "https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-notary-server/src/api.rs"
     },
-    "consumer_note": "OID4VCI flow advertising `dc+sd-jwt` credential format. Credential configurations accept non-delegated registry-backed claims only and issuance verifies the exact dependency-closure Relay execution provenance before signing. Solmara Lab carries a `just hosted-smoke` harness for issuer metadata, credential offer, nonce, authorization redirect, and unauthenticated denial paths. Beta-13 hosted evidence remains pending until the lab is repinned to published v0.11.0 digests and that harness passes. Full OID4VCI Draft 13 `vc+sd-jwt` wallet conformance is not asserted at this version."
+    "consumer_note": "Registry Notary advertises `dc+sd-jwt`, EdDSA `did:jwk` holder proof, and the configured EdDSA or ES256 issuer algorithm. Credential configurations accept non-delegated registry-backed claims only, and issuance verifies the stored transaction plus exact dependency-closure Relay execution provenance before signing. Transaction code is required by default. An explicit no-PIN profile has a maximum 300-second bearer-offer window. There is no wallet-facing authorization-code grant, public nonce route, response next nonce, source-free issuance, ES256 holder proof, PAR, DPoP, wallet attestation, EUDI, or HAIP claim. External wallet and verifier evidence is candidate-only until recorded against a frozen artifact."
   },
   {
     "id": "registry-notary.federated-evaluation",

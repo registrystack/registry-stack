@@ -61,6 +61,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.6.0 | 2026-07-13 | draft | Replaced direct Notary source connectors and sidecars with compiler-pinned Relay consultations and Registry Stack project authoring terms. |
 | 0.6.1 | 2026-07-14 | draft | Added the complete Registry Stack project-authoring vocabulary and clarified compiler-derived credential membership. |
 | 0.7.0 | 2026-07-16 | draft | Defined the formal stack as four products and classified Solmara Lab as a separate adopter demo. |
+| 0.8.0 | 2026-07-19 | draft | Defined the registry-backed, issuer-initiated OID4VCI profile and its algorithm, transaction-code, and non-conformance boundaries. |
 
 ## 1. Products
 
@@ -94,13 +95,13 @@ The registry stack comprises four formal products. Product names are Title Case.
 
 **signed response credentials**: Removed Registry Relay feature that attached a W3C Verifiable Credentials Data Model (VCDM) 2.0 VC-JWT signed credential to entity record and aggregate responses. Registry Relay no longer accepts the legacy `provenance` configuration key, no longer serves `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`, and no longer returns `application/vc+jwt`. Use Registry Notary for credential issuance.
 
-**SD-JWT VC**: Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Notary issues SD-JWT VC credentials signed with EdDSA. Media type: `application/dc+sd-jwt`.
+**SD-JWT VC**: Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Notary issues registry-backed SD-JWT VC credentials signed with EdDSA or ES256. OID4VCI holder proof remains EdDSA with `did:jwk` binding. Media type: `application/dc+sd-jwt`.
 
-**OID4VCI**: OpenID for Verifiable Credential Issuance. The protocol a wallet uses to obtain a credential from an issuer. Registry Notary implements an OID4VCI issuance flow: a credential offer, issuer metadata at `/.well-known/openid-credential-issuer`, a nonce endpoint, and a holder proof. The surface is a profiled subset of OID4VCI Draft 13 advertising the `dc+sd-jwt` format; full issuer conformance is not asserted (`openid4vci.support: not_full_issuer`).
+**OID4VCI**: OpenID for Verifiable Credential Issuance. Registry Notary implements a profiled registry-backed issuer subset with `dc+sd-jwt`, an issuer-initiated pre-authorized code, a transaction-bound proof nonce returned by the token response, and EdDSA `did:jwk` holder proof. The identity provider's authorization code is an internal Notary input, not a wallet grant. The profile has no public nonce endpoint, response next nonce, source-free issuance, ES256 holder proof, EUDI, HAIP, PAR, DPoP, or wallet-attestation claim. Full issuer and external-wallet conformance are not asserted (`openid4vci.support: not_full_issuer`).
 
 **DID**: Decentralized Identifier. W3C DID Core 1.0. Registry Relay no longer publishes a DID document. Registry Notary parses `did:jwk` values for credential subjects.
 
-**eSignet**: Open-source identity and authentication service (part of MOSIP). Registry Notary can use eSignet as the authorization server for subject-bound evaluation and registry-backed credential flows. Not a Registry Stack product term; included here because it appears in Solmara Lab documentation.
+**eSignet**: Open-source identity and authentication service (part of MOSIP). Registry Notary can use eSignet for the internal browser authentication leg of a registry-backed pre-authorized credential transaction. Its authorization code is consumed by Notary and is not a wallet grant. Not a Registry Stack product term.
 
 ## 3. Metadata and standards terms
 
