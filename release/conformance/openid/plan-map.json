@@ -81,8 +81,8 @@
   "non_oidf_surfaces": [
     {
       "surface": "Registry Relay OIDC bearer validation",
-      "evidence": "A pinned release-topology smoke with auth.mode set to oidc is still required by issue #205.",
-      "reason": "The OIDF suite does not publish a generic resource-server conformance plan for a Relay-style protected API. The release topology must separately verify discovery, signature, audience, token type, and scope mapping."
+      "evidence": "The release-owned candidate-neutral Relay and Zitadel smoke is directly runnable against a published Relay image digest. Its live output requires candidate binding and maintainer review before it becomes release evidence.",
+      "reason": "The OIDF suite does not publish a generic resource-server conformance plan for a Relay-style protected API. The separate release topology verifies discovery, signature, audience, token type, and native Zitadel role-object scope mapping."
     },
     {
       "surface": "Third-party OpenID Providers used by demonstration topologies",

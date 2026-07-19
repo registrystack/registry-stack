@@ -1,0 +1,88 @@
+# SPDX-License-Identifier: Apache-2.0
+deployment:
+  profile: local
+
+server:
+  bind: 0.0.0.0:18080
+  cache_dir: /var/lib/registry-relay/cache
+
+catalog:
+  title: Registry Relay OIDC release smoke
+  base_url: $base_url
+  publisher: Registry Stack release verification
+  participant_id: did:web:relay-oidc-smoke.registry.invalid
+
+vocabularies: {}
+
+auth:
+  mode: oidc
+  failure_throttle:
+    enabled: false
+  oidc:
+    issuer: http://localhost:8080
+    audiences:
+      - $audience
+    discovery_url: http://localhost:8080/.well-known/openid-configuration
+    allow_dev_insecure_fetch_urls: true
+    allowed_algorithms:
+      - RS256
+    jwks_cache_ttl: 10m
+    leeway: 60s
+    scope_claim: $scope_claim
+    scope_map:
+      "registry-smoke-reader": "smoke_registry:metadata"
+    scope_object_required_keys:
+      - $required_org
+    allowed_clients:
+      - $allowed_client
+    allowed_token_types:
+      - $allowed_token_type
+
+audit:
+  sink: stdout
+  format: jsonl
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+
+datasets:
+  - id: smoke_registry
+    title: Synthetic release smoke registry
+    description: Non-sensitive fixture used only for release verification.
+    owner: Registry Stack release verification
+    sensitivity: public
+    access_rights: restricted
+    update_frequency: monthly
+    defaults:
+      refresh:
+        mode: manual
+    tables:
+      - id: people_table
+        materialization: snapshot
+        source:
+          type: file
+          path: /fixtures/records.csv
+        primary_key: person_id
+        schema:
+          strict: true
+          fields:
+            - name: person_id
+              type: string
+              nullable: false
+            - name: display_name
+              type: string
+              nullable: false
+    entities:
+      - name: person
+        title: Synthetic person
+        description: Synthetic record for the OIDC release smoke.
+        table: people_table
+        fields:
+          - name: id
+            from: person_id
+          - name: display_name
+        access:
+          metadata_scope: smoke_registry:metadata
+          aggregate_scope: smoke_registry:aggregate
+          read_scope: smoke_registry:rows
+        api:
+          default_limit: 10
+          max_limit: 10

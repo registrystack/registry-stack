@@ -27,8 +27,10 @@ themselves:
 - The upstream full-plan shape currently selects DPoP. Registry Notary 1.0 does
   not support or claim DPoP, wallet attestation, PAR, EUDI, HAIP, an
   authorization-code wallet grant, or ES256 holder proof.
-- Registry Relay needs a separate pinned-topology smoke with `auth.mode: oidc`.
-  The OIDF suite has no generic resource-server plan for that surface.
+- Registry Relay uses the separate
+  [candidate-neutral Relay and Zitadel smoke](../relay-oidc/README.md) with
+  `auth.mode: oidc`. The OIDF suite has no generic resource-server plan for
+  that surface.
 
 Development and historical demo runs are not release evidence. A reviewed
 result becomes evidence only when it records the candidate image digest, suite
@@ -53,7 +55,9 @@ not be reported as product support.
 
 The map also records why Relay OIDC bearer validation and third-party OpenID
 Providers are outside the available OIDF plan set. That exclusion is not a
-substitute for exercising Relay's OIDC path.
+substitute for exercising Relay's OIDC path. The release-owned Relay smoke is
+directly runnable against a published image digest, but its output remains
+unreviewed until a maintainer binds it to the release candidate.
 
 ## Prerequisites
 
@@ -82,6 +86,10 @@ REGISTRY_OPENID_CONFORMANCE_ISSUER_URL="https://issuer.example.test" \
   release/scripts/openid-conformance-runner.py run \
   notary-oid4vci-issuer-metadata
 ```
+
+Candidate-only scenarios are directly runnable. `--allow-blocked` is reserved
+for deliberate investigation of scenarios whose status is explicitly blocked;
+it does not turn their output into release evidence.
 
 Set `REGISTRY_OPENID_CONFORMANCE_AUTHORIZATION_SERVER` when the authorization
 server differs from the issuer. Set

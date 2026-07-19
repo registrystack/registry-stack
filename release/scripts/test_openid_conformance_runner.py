@@ -452,6 +452,29 @@ class OpenIdConformanceRunnerTest(TestCase):
         ):
             self.runner.cmd_run(args)
 
+    def test_candidate_only_metadata_scenario_runs_without_blocked_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self.runner.parse_args(
+                [
+                    "run",
+                    "notary-oid4vci-issuer-metadata",
+                    "--issuer-url",
+                    "https://issuer.example.test",
+                    "--output-dir",
+                    tmp,
+                    "--suite-dir",
+                    str(Path(tmp) / "suite"),
+                    "--no-prepare",
+                    "--dry-run",
+                ]
+            )
+            with patch("builtins.print") as printed:
+                self.assertEqual(0, self.runner.cmd_run(args))
+            invocation = json.loads(printed.call_args.args[0])
+            self.assertIn(
+                "oid4vci-1_0-issuer-metadata-test", " ".join(invocation["command"])
+            )
+
 
 if __name__ == "__main__":
     main()

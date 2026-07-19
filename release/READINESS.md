@@ -46,8 +46,11 @@ write.
       deployment topology (#205). Must not depend on the retired monorepo lab,
       which was replaced by the standalone
       [Solmara Lab](https://github.com/registrystack/solmara-lab) (#224).
-      The release-owned [harness and plan mapping](conformance/openid/README.md)
-      no longer depend on either lab. Its
+      The release-owned [OIDF harness and plan mapping](conformance/openid/README.md)
+      and [Relay OIDC smoke](conformance/relay-oidc/README.md) no longer depend
+      on either lab. The Relay smoke is source-ready and directly runnable
+      against a digest-pinned published candidate, but no reviewed 1.0
+      candidate result exists yet. The OIDF harness's
       [initial report](conformance/openid/initial-report.md) preserves the
       historical hosted-lab failures but does not yet prove a pinned release
       topology.
