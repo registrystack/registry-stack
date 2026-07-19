@@ -16,7 +16,7 @@ services:
         aggregate: people:aggregate
         evidence_verification: people:evidence_verification
       purposes: [case-management]
-      projection: [person_id, registration_status, eligible]
+      projection: [person_id, registration_status, residency_confirmed]
       pagination: { default_limit: 50, max_limit: 100 }
       filters: { person_id: [eq] }
       required_principal_filters: [person_id]
@@ -34,14 +34,14 @@ services:
         input: { person_id: request.target.identifiers.population_person_id }
     claims:
       population-record-exists: { cel: person.matched, disclosure: predicate }
-      benefits-status: { output: person.registration_status, disclosure: value }
-      benefits-eligible: { output: person.eligible, disclosure: predicate }
+      population-registration-status: { output: person.registration_status, disclosure: value }
+      residency-confirmed: { output: person.residency_confirmed, disclosure: predicate }
     credential_profiles:
-      benefits-status:
+      population-evidence:
         format: dc+sd-jwt
-        type: https://credentials.invalid/benefits-status/v1
+        type: https://credentials.invalid/population-evidence/v1
         validity: 10m
-        claims: [population-record-exists, benefits-status, benefits-eligible]
+        claims: [population-record-exists, population-registration-status, residency-confirmed]
   emergency-assistance:
     kind: evidence
     version: 1

@@ -43,5 +43,7 @@ every selected claim. It never connects directly to a registry source.
 
 Registry source adaptation belongs to Relay and Registry Stack project
 authoring. Rhai is Relay's reviewed `script` capability and CEL is Notary's
-claim policy language. Product and version metadata never selects either
-runtime.
+evidence-claim policy language. Product and version metadata never selects
+either runtime. The consuming programme owns eligibility, prioritization,
+workflow, and action policy; CEL is not a general-purpose programme decision
+engine.

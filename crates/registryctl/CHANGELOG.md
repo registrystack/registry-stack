@@ -16,6 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   operations, and trust-anchor operations. Add `--format json` for versioned
   machine-readable reports. Artifact and protocol streams keep their existing
   formats.
+- The DHIS2 Tracker starter now keeps Relay normalization, reusable child-health
+  evidence claims, and consuming programme actions separate. Its offline
+  fixtures preserve positive, negative, unknown, no-match, and source-failure
+  semantics. Snapshot and custom-system goldens now model reusable evidence
+  instead of computing programme eligibility in Registry Notary.
 - Registryctl now uses the workspace-pinned `serde_norway` YAML parser and
   serializer, consistent with the supported configuration boundary used by
   Relay and Notary.

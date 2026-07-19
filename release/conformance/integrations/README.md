@@ -26,9 +26,15 @@ the exact pinned DCI adapter, core, and Farajaland tuple before the live run.
 The current starter's synthetic route is not evidence that the real operation
 is compatible.
 
-For DHIS2, the instance owner must attest every metadata UID used by the
-authored adapter. The `DEMO_*` values in the starter are examples and cannot
-appear in a live evidence project.
+For DHIS2, the instance owner must attest the child programme and BCG, OPV,
+and measles programme-stage UIDs used by the authored adapter. The `DEMO_*`
+values in the starter are examples and cannot appear in a live evidence
+project.
+
+The DHIS2 starter's offline fixtures are the deterministic acceptance path for
+claim semantics and failure behavior. Record live public-demo or operator-owned
+compatibility only through this release evidence flow. Public demo uptime,
+credentials, and mutable records are not offline acceptance dependencies.
 
 Do not simulate either prerequisite. Do not convert fixture output, a dry run,
 or application-only logs into candidate evidence.

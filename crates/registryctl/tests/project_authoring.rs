@@ -481,7 +481,7 @@ fn project_check_collects_separate_integration_and_fixture_yaml_errors() {
         "version: [\n",
     )
     .expect("invalid integration writes");
-    let fixture_path = project.join("integrations/eligibility/fixtures/eligible.yaml");
+    let fixture_path = project.join("integrations/eligibility/fixtures/source-approved.yaml");
     let mut fixture = std::fs::read_to_string(&fixture_path).expect("fixture reads");
     fixture.push_str("unknown_authoring_field: true\n");
     std::fs::write(&fixture_path, fixture).expect("unknown fixture field writes");
@@ -506,7 +506,7 @@ fn project_check_collects_separate_integration_and_fixture_yaml_errors() {
     let fixture = report
         .diagnostics
         .iter()
-        .find(|diagnostic| diagnostic.file.ends_with("fixtures/eligible.yaml"))
+        .find(|diagnostic| diagnostic.file.ends_with("fixtures/source-approved.yaml"))
         .expect("fixture unknown-field diagnostic");
     assert_eq!(fixture.code, "registryctl.authoring.yaml.unknown_field");
     assert!(fixture.line.is_some());
@@ -521,7 +521,7 @@ fn project_check_collects_separate_integration_and_fixture_yaml_errors() {
 fn project_check_single_error_report_is_concise_and_typed() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
-    let fixture = project.join("integrations/eligibility/fixtures/eligible.yaml");
+    let fixture = project.join("integrations/eligibility/fixtures/source-approved.yaml");
     std::fs::write(&fixture, "name: [\n").expect("invalid fixture writes");
     let report = authoring_diagnostics(&project);
     assert_eq!(report.diagnostics.len(), 1, "{report:#?}");
@@ -540,7 +540,7 @@ fn project_check_cli_renders_the_same_typed_diagnostic_in_human_and_json() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     std::fs::write(
-        project.join("integrations/eligibility/fixtures/eligible.yaml"),
+        project.join("integrations/eligibility/fixtures/source-approved.yaml"),
         "name: [\n",
     )
     .expect("invalid fixture writes");
@@ -605,7 +605,7 @@ fn project_check_cli_rejects_an_unselected_environment_symlink_with_typed_output
     symlink(&target, project.join("environments/zzz.yaml"))
         .expect("unselected environment symlink creates");
 
-    let fixture_path = project.join("integrations/eligibility/fixtures/eligible.yaml");
+    let fixture_path = project.join("integrations/eligibility/fixtures/source-approved.yaml");
     let mut fixture = read_yaml(&fixture_path);
     fixture["expect"]["outputs"]["approved"] = serde_norway::Value::Bool(false);
     write_yaml(&fixture_path, &fixture);
@@ -682,7 +682,7 @@ fn project_check_cli_reports_malformed_root_before_unselected_environment_bounda
     )
     .expect("malformed referenced integration writes");
     std::fs::write(
-        project.join("integrations/eligibility/fixtures/eligible.yaml"),
+        project.join("integrations/eligibility/fixtures/source-approved.yaml"),
         format!("{FIXTURE_MARKER}: [\n"),
     )
     .expect("malformed fixture writes");
@@ -1329,6 +1329,133 @@ fn approved_opencrvs_and_dhis2_claim_sets_execute_offline() {
 }
 
 #[test]
+fn dhis2_child_health_evidence_journey_preserves_distinct_results() {
+    let project = golden("dhis2-tracker");
+    let report = test_registry_project(&ProjectTestOptions {
+        project_directory: project.clone(),
+        environment: None,
+        live: false,
+    })
+    .expect("DHIS2 child-health evidence journey passes offline");
+    assert_eq!(report.status, "passed");
+
+    let expected_outputs = [
+        "bcg_birth_dose_recorded",
+        "measles_dose_recorded",
+        "opv_birth_dose_recorded",
+        "programme_enrollment_active",
+    ]
+    .map(String::from);
+    let expected_claims = [
+        "bcg-birth-dose-recorded",
+        "measles-dose-recorded",
+        "opv-birth-dose-recorded",
+        "programme-enrollment-active",
+    ]
+    .map(String::from);
+
+    for fixture_name in [
+        "complete-child-health-evidence",
+        "partial-child-health-evidence",
+        "no-child-program-enrollment",
+    ] {
+        let fixture = report
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.fixture == fixture_name)
+            .unwrap_or_else(|| panic!("missing {fixture_name}"));
+        assert_eq!(fixture.outcome.as_deref(), Some("match"));
+        assert_eq!(fixture.outputs, expected_outputs);
+        assert_eq!(fixture.claims, expected_claims);
+        assert!(fixture.passed, "{fixture:#?}");
+    }
+
+    let no_match = report
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.fixture == "health-no-match")
+        .expect("no-match fixture report");
+    assert_eq!(no_match.outcome.as_deref(), Some("no_match"));
+    assert!(no_match.outputs.is_empty());
+    assert_eq!(no_match.claims, expected_claims);
+    assert!(no_match.passed, "{no_match:#?}");
+
+    for (fixture_name, expected_error) in [
+        ("health-source-rejected", "source.status_rejected"),
+        ("health-subject-mismatch", "failure.subject_mismatch"),
+    ] {
+        let fixture = report
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.fixture == fixture_name)
+            .unwrap_or_else(|| panic!("missing {fixture_name}"));
+        assert_eq!(fixture.expected_error.as_deref(), Some(expected_error));
+        assert_eq!(fixture.source_access, Some(true));
+        assert!(fixture.outputs.is_empty());
+        assert!(fixture.claims.is_empty());
+        assert!(fixture.passed, "{fixture:#?}");
+    }
+
+    let malformed = report
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.fixture.ends_with("::derived/malformed_decode"))
+        .expect("derived malformed-source fixture report");
+    assert_eq!(
+        malformed.expected_error.as_deref(),
+        Some("source.response_malformed")
+    );
+    assert_eq!(malformed.source_access, Some(true));
+    assert!(malformed.passed, "{malformed:#?}");
+
+    let fixtures = project.join("integrations/health-record/fixtures");
+    let complete = read_yaml(&fixtures.join("match.yaml"));
+    assert!(complete["expect"]["claims"]
+        .as_mapping()
+        .expect("complete claim expectations")
+        .values()
+        .all(|value| value.as_bool() == Some(true)));
+
+    let partial = read_yaml(&fixtures.join("partial.yaml"));
+    assert_eq!(
+        partial["expect"]["claims"]["programme-enrollment-active"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        partial["expect"]["claims"]["bcg-birth-dose-recorded"].as_bool(),
+        Some(false)
+    );
+    assert!(partial["expect"]["claims"]["opv-birth-dose-recorded"].is_null());
+    assert_eq!(
+        partial["expect"]["claims"]["measles-dose-recorded"].as_bool(),
+        Some(true)
+    );
+
+    let no_enrollment = read_yaml(&fixtures.join("no-enrollment.yaml"));
+    assert!(no_enrollment["expect"]["outputs"]
+        .as_mapping()
+        .expect("no-enrollment output expectations")
+        .values()
+        .all(serde_norway::Value::is_null));
+    assert!(no_enrollment["expect"]["claims"]
+        .as_mapping()
+        .expect("no-enrollment claim expectations")
+        .values()
+        .all(serde_norway::Value::is_null));
+
+    let no_match = read_yaml(&fixtures.join("no-match.yaml"));
+    assert!(no_match["expect"]["claims"]
+        .as_mapping()
+        .expect("no-match claim expectations")
+        .values()
+        .all(serde_norway::Value::is_null));
+
+    let authored = read_yaml(&project.join("registry-stack.yaml"));
+    assert!(!yaml_contains_string(&authored, "eligible"));
+    assert!(!yaml_contains_string(&authored, "outreach"));
+}
+
+#[test]
 fn successful_negative_fixtures_report_the_closed_denial_assertion() {
     let report = test_registry_project(&ProjectTestOptions {
         project_directory: golden("custom-system"),
@@ -1371,8 +1498,8 @@ fn successful_negative_fixtures_report_the_closed_denial_assertion() {
     let successful = report
         .fixtures
         .iter()
-        .find(|fixture| fixture.fixture == "eligible-household")
-        .expect("eligible fixture report");
+        .find(|fixture| fixture.fixture == "source-approved-household")
+        .expect("source-approved fixture report");
     assert_eq!(successful.expected_error, None);
     assert_eq!(successful.source_access, None);
 }
@@ -1380,7 +1507,11 @@ fn successful_negative_fixtures_report_the_closed_denial_assertion() {
 #[test]
 fn exact_sources_report_reviewable_ambiguity_not_applicable_evidence() {
     for (project, integration, fixture) in [
-        ("dhis2-tracker", "health-record", "complete-health-match"),
+        (
+            "dhis2-tracker",
+            "health-record",
+            "complete-child-health-evidence",
+        ),
         ("openspp-exact", "individual", "social-registry-match"),
         ("snapshot-exact", "person-snapshot", "snapshot-match"),
     ] {
@@ -1419,7 +1550,7 @@ fn exact_sources_report_reviewable_ambiguity_not_applicable_evidence() {
 #[test]
 fn response_contracts_without_comparable_identifiers_report_subject_mismatch_evidence() {
     for (project, integration, fixture) in [
-        ("custom-system", "eligibility", "eligible-household"),
+        ("custom-system", "eligibility", "source-approved-household"),
         ("openspp-exact", "individual", "social-registry-match"),
         ("snapshot-exact", "person-snapshot", "snapshot-match"),
     ] {
@@ -1571,8 +1702,8 @@ fn subject_mismatch_not_applicable_rejects_comparable_output_contract() {
     let project = copy_project("snapshot-exact", temporary.path());
     replace_in_file(
         &project.join("integrations/person-snapshot/integration.yaml"),
-        "outputs: [registration_status, eligible]",
-        "outputs: [person_id, registration_status, eligible]",
+        "outputs: [registration_status, residency_confirmed]",
+        "outputs: [person_id, registration_status, residency_confirmed]",
     );
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
@@ -1931,18 +2062,7 @@ fn production_cel_worker_evaluates_project_date_policy() {
         .block_on(worker.evaluate(
             "health.exists && health.date_of_birth != null\n  ? date.age_on(health.date_of_birth, as_of_date)\n  : null",
             serde_json::json!({
-                "health": {
-                    "exists": true,
-                    "first_name": "Nia",
-                    "last_name": "Example",
-                    "date_of_birth": "2017-06-15",
-                    "child_program_active": true,
-                    "programme_code": "CHILD",
-                    "reconciliation_reference": "REF-0001",
-                    "maternal_postnatal_active": true,
-                    "child_health_visit_recorded": true,
-                    "tb_program_active": false
-                },
+                "health": { "exists": true, "date_of_birth": "2017-06-15" },
                 "as_of_date": "2026-01-01"
             }),
         ))
@@ -2905,7 +3025,7 @@ fn pre_freeze_fact_authoring_keys_are_rejected_without_aliases() {
 
     let fixture_root = tempfile::tempdir().expect("fixture-key temporary directory");
     let fixture = copy_project("custom-system", fixture_root.path());
-    let fixture_path = fixture.join("integrations/eligibility/fixtures/eligible.yaml");
+    let fixture_path = fixture.join("integrations/eligibility/fixtures/source-approved.yaml");
     replace_in_file(&fixture_path, "  outputs:", "  facts:");
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: fixture,
@@ -3007,7 +3127,7 @@ fn authored_unknown_fields_and_traversal_fail_closed() {
 fn fixture_failure_reports_safe_validation_error_without_input_value() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
-    let fixture_path = project.join("integrations/eligibility/fixtures/eligible.yaml");
+    let fixture_path = project.join("integrations/eligibility/fixtures/source-approved.yaml");
     replace_in_file(&fixture_path, "HH-AB12CD34", "invalid-reference");
 
     let error = test_registry_project(&ProjectTestOptions {
@@ -3022,7 +3142,7 @@ fn fixture_failure_reports_safe_validation_error_without_input_value() {
         "{diagnostic}"
     );
     assert!(
-        diagnostic.contains("integrations/eligibility/fixtures/eligible.yaml"),
+        diagnostic.contains("integrations/eligibility/fixtures/source-approved.yaml"),
         "{diagnostic}"
     );
     assert!(
@@ -4106,7 +4226,7 @@ fn dci_exact_and_and_full_date_inputs_fail_closed_before_source_access() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     extend_exact_selector(&project, "custom-system", 4);
-    let fixture = project.join("integrations/eligibility/fixtures/eligible.yaml");
+    let fixture = project.join("integrations/eligibility/fixtures/source-approved.yaml");
     replace_in_file(&fixture, "2017-06-15", "2017-02-31");
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
@@ -4119,7 +4239,7 @@ fn dci_exact_and_and_full_date_inputs_fail_closed_before_source_access() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     extend_exact_selector(&project, "custom-system", 3);
-    let fixture = project.join("integrations/eligibility/fixtures/eligible.yaml");
+    let fixture = project.join("integrations/eligibility/fixtures/source-approved.yaml");
     let mut document = read_yaml(&fixture);
     document["input"]
         .as_mapping_mut()
@@ -4256,7 +4376,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
         .pointer("/services/household-eligibility/consultations")
         .is_some());
     assert!(explanation
-        .pointer("/services/household-eligibility/claims/household-eligible/cel")
+        .pointer("/services/household-eligibility/claims/source-household-approval-decision/cel",)
         .and_then(serde_json::Value::as_str)
         .is_some());
     assert!(explanation
@@ -4308,7 +4428,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "a2b871f191e463b9948fb79607a2f7a1c271aa2120d92b181d8ab99e7bc2a8c2",
+        "89101253ac7f2cdaaf06a502dd82ccd192c63617c2ae58889068f9ea36106eba",
         "project inputs must match the cross-machine golden digest"
     );
 }
@@ -4436,7 +4556,7 @@ fn generated_snapshot_contracts_activate_through_notary_at_the_authoring_bound()
             .evidence
             .claims
             .iter()
-            .find(|claim| claim.id == "benefits-status")
+            .find(|claim| claim.id == "population-registration-status")
             .expect("registry-backed snapshot claim");
         let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
             panic!("snapshot claim remains registry-backed");
@@ -4478,10 +4598,10 @@ fn script_only_change_moves_the_relay_closure_without_forking_the_public_contrac
     let first = build_registry_project(&options).expect("initial Script project builds");
     let first_output = PathBuf::from(first.output.expect("initial build output"));
     let contract_relative =
-        "private/relay/config/artifacts/consultation-contracts/health-verification-health.json";
+        "private/relay/config/artifacts/consultation-contracts/child-health-evidence-health.json";
     let pack_relative = "private/relay/config/artifacts/integration-packs/health-record.json";
     let binding_relative =
-        "private/relay/config/artifacts/private-bindings/health-verification-health.json";
+        "private/relay/config/artifacts/private-bindings/child-health-evidence-health.json";
     let first_contract =
         std::fs::read(first_output.join(contract_relative)).expect("initial contract reads");
     let first_pack =
@@ -4498,7 +4618,7 @@ fn script_only_change_moves_the_relay_closure_without_forking_the_public_contrac
         .evidence
         .claims
         .iter()
-        .find(|claim| claim.id == "tracked-entity-first-name")
+        .find(|claim| claim.id == "programme-enrollment-active")
         .expect("registry-backed Script claim");
     let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
         panic!("Script claim remains registry-backed");
@@ -4541,7 +4661,7 @@ fn script_only_change_moves_the_relay_closure_without_forking_the_public_contrac
         .evidence
         .claims
         .iter()
-        .find(|claim| claim.id == "tracked-entity-first-name")
+        .find(|claim| claim.id == "programme-enrollment-active")
         .expect("changed Script claim");
     let ClaimEvidenceMode::RegistryBacked {
         consultations: second_consultations,
@@ -5549,7 +5669,7 @@ registry_type: civil-registry
 record_type: person
 identifiers: { person_id: person_id }
 expression_fields: { registration_status: registration_status }
-response_fields: { eligible: eligible }
+response_fields: { residency_confirmed: residency_confirmed }
 "#,
         )
         .expect("SP DCI mapping");
@@ -6199,8 +6319,8 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     let authored = std::fs::read_to_string(&project_file)
         .expect("project reads")
         .replace(
-            "household.approved != null ? household.matched && household.approved : false",
-            "household.approved != null ? household.matched && household.approved == true : false",
+            "household.matched && household.approved != null ? household.approved : null",
+            "household.matched && household.approved != null ? household.approved == true : null",
         );
     std::fs::write(&project_file, authored).expect("claim-only edit writes");
     let changed = check_registry_project(&ProjectCheckOptions {
@@ -6798,12 +6918,12 @@ fn remove_custom_cel_claim(project: &Path) {
         .as_mapping_mut()
         .expect("custom claims")
         .remove(serde_norway::Value::String(
-            "household-eligible".to_string(),
+            "source-household-approval-decision".to_string(),
         ));
     service["credential_profiles"]["household-eligibility"]["claims"]
         .as_sequence_mut()
         .expect("custom credential claims")
-        .retain(|claim| claim.as_str() != Some("household-eligible"));
+        .retain(|claim| claim.as_str() != Some("source-household-approval-decision"));
     write_yaml(&project_path, &document);
     for fixture in std::fs::read_dir(project.join("integrations/eligibility/fixtures"))
         .expect("custom fixture directory")
@@ -6817,7 +6937,7 @@ fn remove_custom_cel_claim(project: &Path) {
             .and_then(serde_norway::Value::as_mapping_mut);
         if let Some(claims) = claims {
             claims.remove(serde_norway::Value::String(
-                "household-eligible".to_string(),
+                "source-household-approval-decision".to_string(),
             ));
         }
         write_yaml(&path, &document);

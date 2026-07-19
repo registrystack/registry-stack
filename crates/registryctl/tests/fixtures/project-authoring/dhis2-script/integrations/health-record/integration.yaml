@@ -26,19 +26,14 @@ capability:
     file: adapter.rhai
 
 outputs:
-  first_name: { type: [string, "null"], maxLength: 80 }
-  last_name: { type: [string, "null"], maxLength: 80 }
-  date_of_birth: { type: [string, "null"], format: date, maxLength: 10 }
-  child_program_active: { type: boolean }
-  programme_code: { type: [string, "null"], maxLength: 32 }
-  reconciliation_reference: { type: [string, "null"], maxLength: 64 }
-  maternal_postnatal_active: { type: boolean }
-  child_health_visit_recorded: { type: boolean }
-  tb_program_active: { type: boolean }
+  programme_enrollment_active: { type: [boolean, "null"] }
+  bcg_birth_dose_recorded: { type: [boolean, "null"] }
+  opv_birth_dose_recorded: { type: [boolean, "null"] }
+  measles_dose_recorded: { type: [boolean, "null"] }
 
 not_applicable:
   ambiguity:
     rationale: The tracked-entity identifier is resolved by the exact singleton trackedEntities resource endpoint, so a collection cannot be returned.
-    request_fixture: complete-health-match
+    request_fixture: complete-child-health-evidence
 
 limits: { calls: 1, source_bytes: 64KiB, request_bytes: 4KiB, deadline: 8s }

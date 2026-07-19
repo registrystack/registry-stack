@@ -19,7 +19,7 @@
         "method": "GET",
         "path": "/api/tracker/trackedEntities/{uid}",
         "selector": "exact tracked entity UID",
-        "field_projection": "trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]",
+        "field_projection": "trackedEntity,enrollments[program,status,events[programStage,status]]",
         "max_calls": 1
       }
     ]
@@ -39,13 +39,9 @@
     { "env": "DHIS2_USERNAME", "classification": "secret", "purpose": "Basic authentication username" },
     { "env": "DHIS2_PASSWORD", "classification": "secret", "purpose": "Basic authentication password" },
     { "env": "DHIS2_CHILD_PROGRAM_UID", "classification": "restricted", "purpose": "child programme metadata" },
-    { "env": "DHIS2_MATERNAL_PROGRAM_UID", "classification": "restricted", "purpose": "maternal programme metadata" },
-    { "env": "DHIS2_TB_PROGRAM_UID", "classification": "restricted", "purpose": "tuberculosis programme metadata" },
-    { "env": "DHIS2_CHILD_VISIT_STAGE_UID", "classification": "restricted", "purpose": "child visit stage metadata" },
-    { "env": "DHIS2_FIRST_NAME_ATTRIBUTE_UID", "classification": "restricted", "purpose": "first-name attribute metadata" },
-    { "env": "DHIS2_LAST_NAME_ATTRIBUTE_UID", "classification": "restricted", "purpose": "last-name attribute metadata" },
-    { "env": "DHIS2_BIRTH_DATE_ATTRIBUTE_UID", "classification": "restricted", "purpose": "birth-date attribute metadata" },
-    { "env": "DHIS2_RECONCILIATION_ATTRIBUTE_UID", "classification": "restricted", "purpose": "reconciliation attribute metadata" },
+    { "env": "DHIS2_BCG_BIRTH_STAGE_UID", "classification": "restricted", "purpose": "BCG birth-dose stage metadata" },
+    { "env": "DHIS2_OPV_BIRTH_STAGE_UID", "classification": "restricted", "purpose": "OPV birth-dose stage metadata" },
+    { "env": "DHIS2_MEASLES_STAGE_UID", "classification": "restricted", "purpose": "measles-dose stage metadata" },
     { "env": "DHIS2_MATCH_TRACKED_ENTITY", "classification": "subject", "purpose": "match selector" },
     { "env": "DHIS2_NO_MATCH_TRACKED_ENTITY", "classification": "subject", "purpose": "no-match selector" },
     { "env": "DHIS2_MISMATCH_TRACKED_ENTITY", "classification": "subject", "purpose": "selector-mismatch selector" },

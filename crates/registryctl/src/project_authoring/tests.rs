@@ -782,11 +782,14 @@ outputs:
             &loaded,
             &json!({
                 "purpose": "household-support-screening",
-                "claims": ["household-category", "household-eligible"],
+                "claims": ["household-category", "source-household-approval-decision"],
             }),
         )
         .expect("claims from both same-purpose services are valid");
-        assert_eq!(claims, ["household-category", "household-eligible"]);
+        assert_eq!(
+            claims,
+            ["household-category", "source-household-approval-decision"]
+        );
     }
 
     #[test]

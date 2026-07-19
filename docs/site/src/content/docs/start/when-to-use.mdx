@@ -39,8 +39,9 @@ These docs cover the two products you build against directly:
 
 - Registry Relay exposes existing source data (a file, extract, database, or legacy system) through
   protected, scoped, read-only HTTP routes, without giving callers database access.
-- Registry Notary evaluates configured claims and returns a status, predicate, selected value, or
-  signed credential, instead of the full source record.
+- Registry Notary evaluates configured evidence claims and returns a status, predicate, selected
+  value, or signed credential, instead of the full source record. A consuming programme uses that
+  evidence under its own eligibility and action policy.
 
 {/* SVG diagram. Essential labels are restated in the bullets above and the sentence below. */}
 <figure>
@@ -92,6 +93,11 @@ Registry Stack deliberately leaves these to other systems:
 - It does not solve foundational identity, deduplication, legal authority, semantic governance, or
   institutional approval by itself. It makes those boundaries explicit so they can be reviewed
   before data moves.
+- Registry Notary is not an eligibility, prioritization, workflow, or action engine. It evaluates
+  atomic, reusable evidence statements under evidence authorization and disclosure policy. The
+  consuming programme combines that evidence with its own decision rules. Notary can attest a
+  decision already made by an authoritative source only when the claim identifies the decision as
+  source-owned.
 - Registry Relay does not mutate source registry data: provisioning, inserts, updates, and write-back
   are out of scope for its consultation API.
 - Registry Relay is not an open-data portal: it publishes restricted consultation APIs for

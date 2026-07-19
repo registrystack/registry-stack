@@ -146,13 +146,9 @@ EXPECTED_PROFILE_BINDINGS = {
             "DHIS2_USERNAME",
             "DHIS2_PASSWORD",
             "DHIS2_CHILD_PROGRAM_UID",
-            "DHIS2_MATERNAL_PROGRAM_UID",
-            "DHIS2_TB_PROGRAM_UID",
-            "DHIS2_CHILD_VISIT_STAGE_UID",
-            "DHIS2_FIRST_NAME_ATTRIBUTE_UID",
-            "DHIS2_LAST_NAME_ATTRIBUTE_UID",
-            "DHIS2_BIRTH_DATE_ATTRIBUTE_UID",
-            "DHIS2_RECONCILIATION_ATTRIBUTE_UID",
+            "DHIS2_BCG_BIRTH_STAGE_UID",
+            "DHIS2_OPV_BIRTH_STAGE_UID",
+            "DHIS2_MEASLES_STAGE_UID",
             "DHIS2_MATCH_TRACKED_ENTITY",
             "DHIS2_NO_MATCH_TRACKED_ENTITY",
             "DHIS2_MISMATCH_TRACKED_ENTITY",
@@ -353,7 +349,7 @@ def validate_profile(value: Any, label: str) -> None:
     if (
         profile["profile_id"].startswith("dhis2")
         and data_operation.get("field_projection")
-        != "trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]"
+        != "trackedEntity,enrollments[program,status,events[programStage,status]]"
     ):
         raise RunnerError(f"{label} does not use the reviewed DHIS2 field projection")
 

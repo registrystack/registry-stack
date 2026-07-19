@@ -18,3 +18,11 @@ from this `registryctl` build for VS Code and Zed.
 
 Add a records service only when the project intentionally publishes the entity
 through Relay's governed records API.
+
+Relay normalizes the source fields as `registration_status` and
+`residency_confirmed`. Notary exposes the reusable
+`population-registration-status` and `residency-confirmed` evidence claims.
+The consuming programme, not this project, combines that evidence with its own
+eligibility, prioritization, payment, or workflow rules. A no-match keeps both
+evidence values unknown rather than silently converting missing evidence to a
+negative fact.
