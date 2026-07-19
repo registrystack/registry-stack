@@ -96,6 +96,11 @@ def validate_release(value: Any, label: str, *, template: bool) -> None:
         label,
         {"version", "source_commit", "relay_image_digest", "notary_image_digest"},
     )
+
+
+def version_order(value: str) -> tuple[tuple[int, int, int], bool]:
+    core, separator, _prerelease = value.removeprefix("v").partition("-")
+    return tuple(int(part) for part in core.split(".")), not bool(separator)
     bounded_string(release["version"], f"{label}.version", VERSION, template=template)
     bounded_string(release["source_commit"], f"{label}.source_commit", COMMIT, template=template)
     bounded_string(
@@ -299,6 +304,10 @@ def validate_record(data: Any, *, allow_template: bool, root: Path = ROOT) -> No
     bounded_string(record["recorded_at"], "recorded_at", TIMESTAMP, template=template)
     validate_release(record["source_release"], "source_release", template=template)
     validate_release(record["target_release"], "target_release", template=template)
+    if not template and version_order(record["target_release"]["version"]) <= version_order(
+        record["source_release"]["version"]
+    ):
+        raise ExerciseError("target_release.version must be newer than source_release.version")
     bounded_string(
         record["target_release_manifest_sha256"],
         "target_release_manifest_sha256",

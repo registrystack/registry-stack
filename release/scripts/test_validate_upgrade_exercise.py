@@ -47,6 +47,8 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                 return "redacted-evidence"
             if "AT>" in value:
                 return "2026-07-19T12:00:00Z"
+            if value == "<SOURCE_VERSION>":
+                return "v0.11.0"
             if "VERSION>" in value or "RELEASE_TAG>" in value:
                 return "v1.0.0"
             if "COMMIT>" in value:
@@ -74,6 +76,12 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
 
     def test_complete_candidate_record_is_valid(self) -> None:
         self.module.validate_record(self.candidate(), allow_template=False)
+
+    def test_candidate_must_be_a_forward_version_upgrade(self) -> None:
+        record = self.candidate()
+        record["source_release"]["version"] = record["target_release"]["version"]
+        with self.assertRaisesRegex(self.module.ExerciseError, "must be newer"):
+            self.module.validate_record(record, allow_template=False)
 
     def test_unknown_field_is_rejected_to_prevent_raw_evidence(self) -> None:
         record = self.candidate()
