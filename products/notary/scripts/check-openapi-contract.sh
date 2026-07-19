@@ -9,6 +9,8 @@ BASE_REF="${1:-${OPENAPI_CONTRACT_BASE_REF:-}}"
 WORK_DIR="target/openapi-contract"
 GENERATED="$WORK_DIR/generated.openapi.json"
 BASELINE="$WORK_DIR/base.openapi.json"
+RAW_BREAKING_DIFF="$WORK_DIR/breaking.singleline.txt"
+BREAKING_IGNORE="openapi/oasdiff-1.0-err-ignore.txt"
 
 mkdir -p "$WORK_DIR"
 
@@ -60,4 +62,44 @@ if ! git cat-file -e "$BASE_REF:$SPEC_PATH_FROM_ROOT" 2>/dev/null; then
 fi
 
 git show "$BASE_REF:$SPEC_PATH_FROM_ROOT" > "$BASELINE"
-oasdiff breaking --fail-on ERR "$BASELINE" "$GENERATED"
+
+# Keep the one-time 1.0 exception exact and self-expiring. An added allowlist
+# line fails this check, and an accepted line that disappears from the raw diff
+# also fails so the exception cannot silently survive a baseline advance.
+oasdiff breaking --format singleline "$BASELINE" "$GENERATED" > "$RAW_BREAKING_DIFF"
+python3 - "$BREAKING_IGNORE" "$RAW_BREAKING_DIFF" <<'PY'
+import sys
+from pathlib import Path
+
+expected = {
+    "GET /oid4vci/credential-offer api path removed without deprecation",
+    "POST /oid4vci/nonce api path removed without deprecation",
+    "POST /oid4vci/credential removed the optional property 'c_nonce' from the response with the '200' status",
+    "POST /oid4vci/credential removed the optional property 'c_nonce_expires_in' from the response with the '200' status",
+}
+
+ignore_path = Path(sys.argv[1])
+raw_path = Path(sys.argv[2])
+allowed = {
+    line.strip()
+    for line in ignore_path.read_text(encoding="utf-8").splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+}
+if allowed != expected:
+    missing = sorted(expected - allowed)
+    extra = sorted(allowed - expected)
+    raise SystemExit(
+        f"Notary OpenAPI 1.0 allowlist is not exact; missing={missing}, extra={extra}"
+    )
+
+raw_diff = raw_path.read_text(encoding="utf-8")
+stale = sorted(line for line in allowed if line not in raw_diff)
+if stale:
+    raise SystemExit(
+        "Notary OpenAPI 1.0 allowlist contains stale entries: " + "; ".join(stale)
+    )
+PY
+
+oasdiff breaking --fail-on ERR --err-ignore "$BREAKING_IGNORE" \
+    --warn-ignore "$BREAKING_IGNORE" \
+    "$BASELINE" "$GENERATED"
