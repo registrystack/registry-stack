@@ -241,6 +241,9 @@
   canonical_release: false
   cargo_features: []
   openapi_policy: included_unstable
+  openapi_selectors:
+    format_tokens: [sdmx-json]
+    media_types: [application/vnd.sdmx.data+json;version=2.1]
   decision_date: "2026-07-19"
   decision_reference: https://github.com/registrystack/registry-stack/issues/305
   evidence: crates/registry-relay/tests/aggregates_entity.rs
@@ -254,6 +257,9 @@
   canonical_release: false
   cargo_features: []
   openapi_policy: included_unstable
+  openapi_selectors:
+    format_tokens: [csv]
+    media_types: [text/csv]
   decision_date: "2026-07-19"
   decision_reference: https://github.com/registrystack/registry-stack/issues/305
   evidence: crates/registry-relay/tests/aggregates_entity.rs

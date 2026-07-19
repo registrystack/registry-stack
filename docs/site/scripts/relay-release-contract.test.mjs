@@ -87,6 +87,30 @@ test('generated Relay roster is byte-for-byte current', async () => {
   assert.equal(generated, `${JSON.stringify(source, null, 2)}\n`);
 });
 
+test('included unstable OpenAPI formats publish machine-readable selectors', async () => {
+  const roster = await loadRoster();
+  const includedUnstable = roster.filter((entry) => entry.openapi_policy === 'included_unstable');
+  assert.deepEqual(
+    new Map(includedUnstable.map((entry) => [entry.id, entry.openapi_selectors])),
+    new Map([
+      [
+        'sdmx-json-aggregate-output',
+        {
+          format_tokens: ['sdmx-json'],
+          media_types: ['application/vnd.sdmx.data+json;version=2.1'],
+        },
+      ],
+      [
+        'csv-aggregate-output',
+        { format_tokens: ['csv'], media_types: ['text/csv'] },
+      ],
+    ]),
+  );
+  for (const entry of includedUnstable) {
+    assert.equal(entry.category, 'aggregate_output', `${entry.id} selector category`);
+  }
+});
+
 test('canonical Relay release, local image, and OpenAPI use the same feature set', async () => {
   const roster = await loadRoster();
   const canonicalFeatures = new Set(

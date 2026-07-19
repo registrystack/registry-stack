@@ -74,6 +74,22 @@ async function loadYaml(name) {
       if (!Array.isArray(item.cargo_features)) {
         throw new Error(`relay-support.yaml entry ${index + 1} cargo_features must be a list`);
       }
+      if (item.openapi_policy === 'included_unstable') {
+        const selectors = item.openapi_selectors;
+        if (
+          selectors === null ||
+          typeof selectors !== 'object' ||
+          !Array.isArray(selectors.format_tokens) ||
+          selectors.format_tokens.length === 0 ||
+          !Array.isArray(selectors.media_types) ||
+          selectors.media_types.length === 0
+        ) {
+          throw new Error(
+            `relay-support.yaml entry ${index + 1} included_unstable surfaces require non-empty ` +
+              'openapi_selectors.format_tokens and openapi_selectors.media_types lists',
+          );
+        }
+      }
     }
   }
   return parsed;
