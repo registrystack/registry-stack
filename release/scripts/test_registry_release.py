@@ -96,6 +96,51 @@ class RegistryReleaseTest(unittest.TestCase):
             text = (ROOT / dockerfile).read_text(encoding="utf-8")
             self.assertIn("dist/image-bin", text)
 
+    def test_release_cargo_cache_is_scoped_to_builder_image(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        binaries_job = workflow[
+            workflow.index("\n  binaries:") : workflow.index("\n  registryctl-extra-binaries:")
+        ]
+
+        fingerprint_step = binaries_job.index("Fingerprint release builder")
+        cache_step = binaries_job.index("Restore Cargo release cache")
+        self.assertLess(fingerprint_step, cache_step)
+        self.assertIn(
+            "printf '%s' \"${RELEASE_BUILDER_IMAGE}\" | sha256sum",
+            binaries_job,
+        )
+        builder_fingerprint = "${{ steps.release-builder.outputs.fingerprint }}"
+        self.assertEqual(2, binaries_job.count(builder_fingerprint))
+        self.assertNotIn(
+            "registry-stack-release-cargo-${{ runner.os }}-rust-1.95.0-",
+            binaries_job,
+        )
+
+    def test_release_image_scans_are_policy_enforced_and_preserved(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        images_job = workflow[
+            workflow.index("\n  images:") : workflow.index("\n  github-release:")
+        ]
+
+        scan_step = images_job.index("Build, push, and scan images")
+        enforcement_step = images_job.index("Enforce release image scan policy")
+        upload_step = images_job.index("Upload image evidence")
+        self.assertLess(scan_step, enforcement_step)
+        self.assertLess(enforcement_step, upload_step)
+        self.assertIn(
+            "grype dist/grype/registry-notary.grype.json \\\n"
+            "            --subject registry-notary-image",
+            images_job,
+        )
+        self.assertIn(
+            "grype dist/grype/registry-relay.grype.json \\\n"
+            "            --subject registry-relay-image",
+            images_job,
+        )
+        self.assertIn("exit \"${status}\"", images_job)
+        self.assertIn("if: ${{ always() }}", images_job[upload_step:])
+        self.assertIn("dist/grype/*", images_job[upload_step:])
+
     def test_release_packaging_excludes_retired_notary_source_sidecar(self) -> None:
         retired_names = (
             "registry-notary-source-adapter-sidecar",

@@ -148,6 +148,14 @@ jobs:
             exit 1
           fi
 
+      - name: Fingerprint release builder
+        id: release-builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          fingerprint="$(printf '%s' "${RELEASE_BUILDER_IMAGE}" | sha256sum | awk '{print $1}')"
+          printf 'fingerprint=%s\n' "${fingerprint}" >> "${GITHUB_OUTPUT}"
+
       - name: Restore Cargo release cache
         uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8
         with:
@@ -155,9 +163,9 @@ jobs:
             .cargo-home/registry
             .cargo-home/git
             target
-          key: registry-stack-release-cargo-${{ runner.os }}-rust-1.95.0-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          key: registry-stack-release-cargo-${{ runner.os }}-${{ steps.release-builder.outputs.fingerprint }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: |
-            registry-stack-release-cargo-${{ runner.os }}-rust-1.95.0-
+            registry-stack-release-cargo-${{ runner.os }}-${{ steps.release-builder.outputs.fingerprint }}-
 
       - name: Build binaries
         shell: bash
@@ -404,7 +412,21 @@ jobs:
               --sha256 "${digest}"
           done < <(find dist/image-bin -maxdepth 1 -type f -print0 | sort -z)
 
+      - name: Enforce release image scan policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=0
+          python3 products/notary/scripts/check_advisory_baselines.py \
+            grype dist/grype/registry-notary.grype.json \
+            --subject registry-notary-image || status=1
+          python3 crates/registry-relay/scripts/check_advisory_baselines.py \
+            grype dist/grype/registry-relay.grype.json \
+            --subject registry-relay-image || status=1
+          exit "${status}"
+
       - name: Upload image evidence
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: registry-stack-image-evidence
