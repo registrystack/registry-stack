@@ -265,6 +265,65 @@ fn starter_init_json_is_versioned_and_contains_only_init_facts() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn json_init_rejects_non_utf8_destinations_before_all_dispatches() {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let temporary = TempDir::new().expect("temporary directory");
+    for (name, before, after, needs_image_lock) in [
+        (
+            "starter",
+            &["init", "--from", "http", "--project-dir"][..],
+            &["--format", "json"][..],
+            false,
+        ),
+        (
+            "relay",
+            &["init", "relay"][..],
+            &["--format", "json"][..],
+            true,
+        ),
+        (
+            "spreadsheet-api",
+            &["init", "spreadsheet-api"][..],
+            &["--format", "json"][..],
+            true,
+        ),
+    ] {
+        let mut leaf = format!("{name}-").into_bytes();
+        leaf.push(0xff);
+        let destination = temporary.path().join(std::ffi::OsString::from_vec(leaf));
+        let missing_image_lock = temporary.path().join(format!("{name}-missing-lock.json"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_registryctl"));
+        command
+            .args(before)
+            .arg(&destination)
+            .args(after)
+            .env("REGISTRYCTL_NO_UPDATE_CHECK", "1");
+        if needs_image_lock {
+            // Missing on purpose: the UTF-8 preflight must run before image-lock loading.
+            command.env("REGISTRYCTL_IMAGE_LOCK", &missing_image_lock);
+        }
+        let output = command.output().expect("registryctl runs");
+
+        assert!(
+            !output.status.success(),
+            "{name} init unexpectedly succeeded"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("init --format json requires a UTF-8 destination path"),
+            "{name} stderr was: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !destination.exists(),
+            "{name} JSON destination validation must happen before initialization"
+        );
+    }
+}
+
 #[test]
 fn relay_init_defaults_to_the_same_human_result_structure() {
     let temporary = TempDir::new().expect("temporary directory");

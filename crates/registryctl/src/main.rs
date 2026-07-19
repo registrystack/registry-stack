@@ -37,6 +37,17 @@ fn main() -> Result<()> {
             format,
             command,
         } => {
+            let destination = match (&from, command.as_deref()) {
+                (Some(_), None) => Some(project_dir.as_path()),
+                (None, Some(InitCommand::Relay { dir, .. }))
+                | (None, Some(InitCommand::SpreadsheetApi { dir, .. })) => Some(dir.as_path()),
+                _ => None,
+            };
+            if format == OutputFormat::Json
+                && destination.is_some_and(|destination| destination.to_str().is_none())
+            {
+                anyhow::bail!("init --format json requires a UTF-8 destination path; no project files were written");
+            }
             let report = match (from, command) {
                 (Some(starter), None) => registryctl::init_registry_project(&ProjectInitOptions {
                     starter,

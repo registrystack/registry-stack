@@ -59,7 +59,9 @@ registryctl build --project-dir registry-project --environment local
 Initialization copies the five schemas embedded in `registryctl`, configures project-relative VS
 Code and Zed schema mappings, and reports the generated editor manifest. The explicit
 `authoring editor` command verifies the setup and safely refreshes an unchanged generated bundle
-after an upgrade.
+after an upgrade. Starter initialization validates the starter and editor setup in private staging
+before publishing project files, so editor failure leaves the destination untouched. JSON init
+requires a UTF-8 destination, validated before an initializer runs or writes project files.
 
 The authoring contract accepts one to eight exact selector inputs and up to
 sixteen typed inputs in total. Canonical selectors have a fixed 4096-byte

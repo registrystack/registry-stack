@@ -12,6 +12,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   serializer, consistent with the supported configuration boundary used by
   Relay and Notary.
 
+### Fixed
+
+- `registryctl init` now stages starter editor setup before publication and
+  rejects non-UTF-8 JSON destinations before invoking an initializer, avoiding
+  partial projects on either failure path.
+
 ## [0.11.0] - 2026-07-18
 
 ### Added
