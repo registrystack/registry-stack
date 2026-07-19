@@ -1950,7 +1950,6 @@ fn batch_evaluate_request_schema() -> Value {
         "properties": {
             "items": {
                 "type": "array",
-                "minItems": 1,
                 "maxItems": registry_notary_core::MAX_BATCH_EVALUATION_MEMBERS_V1,
                 "items": { "$ref": "#/components/schemas/BatchEvaluateItemRequest" }
             },
@@ -4281,7 +4280,7 @@ mod tests {
         let batch_request = &doc["components"]["schemas"]["BatchEvaluateRequest"]["properties"];
         assert!(batch_request.get("subjects").is_none());
         assert!(batch_request.get("items").is_some());
-        assert_eq!(batch_request["items"]["minItems"], json!(1));
+        assert!(batch_request["items"].get("minItems").is_none());
         assert_eq!(
             batch_request["items"]["maxItems"],
             json!(registry_notary_core::MAX_BATCH_EVALUATION_MEMBERS_V1)

@@ -146,7 +146,6 @@
               "$ref": "#/components/schemas/BatchEvaluateItemRequest"
             },
             "maxItems": 100,
-            "minItems": 1,
             "type": "array"
           },
           "purpose": {
