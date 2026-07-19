@@ -1,0 +1,286 @@
+- id: openapi-publication
+  name: OpenAPI 3.x publication
+  category: standard
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: included
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/openapi/registry-relay.openapi.json
+  notes: The pinned default document is the canonical public API contract.
+- id: rfc9457-problem-contract
+  name: RFC 9457 problem contract
+  category: standard
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: included
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/error_taxonomy.rs
+  notes: Stable error codes accompany the RFC 9457 response shape.
+- id: rfc9727-api-catalog
+  name: RFC 9727 API catalog
+  category: standard
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: included
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/e2e_health.rs
+  notes: The well-known API catalog is compiled into the canonical release.
+- id: dcat-metadata
+  name: DCAT and DCAT-AP metadata
+  category: portable_metadata
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: included
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/catalog_entity.rs
+  notes: Link-free metadata artifacts are part of the portable metadata family.
+- id: bregdcat-ap-metadata
+  name: BRegDCAT-AP metadata
+  category: portable_metadata
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: included
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/catalog_entity.rs
+  notes: The support promise is limited to the profiled artifact described by the standards register.
+- id: json-ld-metadata
+  name: JSON-LD metadata
+  category: portable_metadata
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: included
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/catalog_entity.rs
+  notes: The promise covers the emitted metadata artifacts, not broad RDF conformance.
+- id: shacl-metadata
+  name: SHACL metadata
+  category: portable_metadata
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: included
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/catalog_entity.rs
+  notes: The promise covers the generated shapes and routes asserted by Relay tests.
+- id: json-schema-metadata
+  name: JSON Schema metadata
+  category: portable_metadata
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: included
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/catalog_entity.rs
+  notes: Draft 2020-12 entity schema publication is part of the canonical release.
+- id: odrl-metadata
+  name: ODRL policy metadata
+  category: portable_metadata
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: included
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/catalog_entity.rs
+  notes: Published ODRL metadata remains bounded by Relay's documented enforcement subset.
+- id: link-free-ogc-records-metadata
+  name: Link-free OGC Records metadata artifacts
+  category: portable_metadata
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: included
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/catalog_entity.rs
+  notes: These metadata artifacts do not enable the live OGC API Records adapter.
+- id: csv-source-input
+  name: CSV source input
+  category: source_decoder
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: not_applicable
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/format_csv.rs
+  notes: CSV is a source decoder, not an aggregate output commitment.
+- id: xlsx-source-input
+  name: XLSX source input
+  category: source_decoder
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: not_applicable
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/format_xlsx.rs
+  notes: First-party maintained onboarding is the accepted 1.0 support evidence.
+- id: json-aggregate-output
+  name: JSON aggregate output
+  category: aggregate_output
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: []
+  openapi_policy: included
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/aggregates_entity.rs
+  notes: JSON is the stable aggregate representation in the 1.0 compatibility promise.
+- id: live-ogc-api-records
+  name: Live OGC API Records adapter
+  category: adapter
+  stability_tier: experimental
+  support_owner: none
+  feature_frozen: true
+  canonical_release: false
+  cargo_features: [ogcapi-records]
+  openapi_policy: excluded
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/ogc_records_api.rs
+  notes: Source and all-feature tests remain, but the adapter is outside the 1.0 compatibility promise.
+- id: ogc-api-features
+  name: OGC API Features
+  category: adapter
+  stability_tier: experimental
+  support_owner: none
+  feature_frozen: true
+  canonical_release: false
+  cargo_features: [ogcapi-features]
+  openapi_policy: excluded
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/ogc_api.rs
+  notes: Source and all-feature tests remain, but the adapter is outside the 1.0 compatibility promise.
+- id: ogc-api-edr
+  name: OGC API Environmental Data Retrieval
+  category: adapter
+  stability_tier: experimental
+  support_owner: none
+  feature_frozen: true
+  canonical_release: false
+  cargo_features: [ogcapi-edr]
+  openapi_policy: excluded
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/ogc_edr_api.rs
+  notes: Source and all-feature tests remain, but the adapter is outside the 1.0 compatibility promise.
+- id: sp-dci-sync
+  name: SP DCI sync routes
+  category: adapter
+  stability_tier: experimental
+  support_owner: none
+  feature_frozen: true
+  canonical_release: false
+  cargo_features: [spdci-api-standards]
+  openapi_policy: excluded
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/spdci_api_standards.rs
+  notes: Source and all-feature security tests remain, but the adapter is outside the 1.0 compatibility promise.
+- id: standards-cel-mapping
+  name: Standards-CEL mapping
+  category: adapter
+  stability_tier: experimental
+  support_owner: none
+  feature_frozen: true
+  canonical_release: false
+  cargo_features: [standards-cel-mapping]
+  openapi_policy: not_applicable
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/spdci_config_validation.rs
+  notes: Source and all-feature tests remain, but the mapping is outside the 1.0 compatibility promise.
+- id: sdmx-json-aggregate-output
+  name: SDMX-JSON aggregate output
+  category: aggregate_output
+  stability_tier: experimental
+  support_owner: none
+  feature_frozen: true
+  canonical_release: false
+  cargo_features: []
+  openapi_policy: included_unstable
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/aggregates_entity.rs
+  notes: This non-gated representation remains shipped but unstable and feature-frozen.
+- id: csv-aggregate-output
+  name: CSV aggregate output
+  category: aggregate_output
+  stability_tier: experimental
+  support_owner: none
+  feature_frozen: true
+  canonical_release: false
+  cargo_features: []
+  openapi_policy: included_unstable
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/aggregates_entity.rs
+  notes: This non-gated representation remains shipped but unstable and feature-frozen.
+- id: attribute-release
+  name: Attribute release
+  category: adapter
+  stability_tier: experimental
+  support_owner: none
+  feature_frozen: true
+  canonical_release: false
+  cargo_features: [attribute-release]
+  openapi_policy: excluded
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/attribute_release_api.rs
+  notes: Source and all-feature tests remain, but the adapter is outside the 1.0 compatibility promise.
+- id: parquet-source-input
+  name: Parquet source input
+  category: source_decoder
+  stability_tier: experimental
+  support_owner: none
+  feature_frozen: true
+  canonical_release: false
+  cargo_features: []
+  openapi_policy: not_applicable
+  decision_date: "2026-07-19"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  evidence: crates/registry-relay/tests/format_parquet.rs
+  notes: This non-gated decoder remains shipped but unstable and feature-frozen.

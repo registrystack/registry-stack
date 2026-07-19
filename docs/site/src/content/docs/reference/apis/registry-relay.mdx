@@ -6,7 +6,7 @@ owner: registry-relay
 source_repos:
   - registry-relay
   - registry-platform
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-07-19"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -41,6 +41,11 @@ consultation APIs. Callers read configured entities, schemas, declared aggregate
 policy metadata, and evidence-offering descriptors. Relay never widens a caller's reach at request
 time: the routes, datasets, and scopes a gateway exposes are fixed by its configuration.
 
+CSV, XLSX, and Parquet are source decoders. Aggregate output supports JSON, CSV, and
+SDMX-JSON. CSV and XLSX input plus JSON aggregate output are stable for 1.0. Parquet input,
+CSV aggregate output, and SDMX-JSON aggregate output remain shipped but experimental and
+feature-frozen.
+
 ## Authentication
 
 A Relay instance runs exactly one auth mode (API key or OIDC/OAuth2), configured under `auth`.
@@ -58,9 +63,14 @@ For setup steps, scope strings, and credential configuration, see
   baseline OpenAPI component because not every entity requires purpose capture. At runtime,
   `api.require_purpose_header: true` on an entity or aggregate source makes the header mandatory for
   that operation. Calls that omit it are rejected with `400 auth.purpose_required`.
-- **Feature-gated surfaces.** OGC API Features, Records, and EDR adapters, and SP-DCI sync routes
-  only mount when the gateway is built and configured with the matching Cargo feature.
-  Relay does not issue response credentials or host issuer DID documents.
+- **Feature-gated surfaces.** The live OGC API Features, Records, and EDR adapters, SP DCI sync
+  routes, standards-CEL mapping, and attribute release are experimental and feature-frozen.
+  They are outside the 1.0 compatibility promise and excluded from the canonical release binary.
+  Their source and all-feature tests remain available. Relay does not issue response credentials
+  or host issuer DID documents.
+- **Link-free Records metadata.** Stable link-free OGC Records bodies under
+  `/metadata/ogc/records` are portable metadata. They are separate from the experimental live
+  adapter under `/ogc/v1/records`.
 - **Admin routes.** Reload and metrics routes are mounted on a separate, optional admin listener,
   require `registry_relay:admin` for reload/config mutation, `registry_relay:metrics_read` for
   metrics, and `registry_relay:ops_read` for operational posture reads. They do not appear in the

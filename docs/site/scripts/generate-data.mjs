@@ -24,6 +24,21 @@ const required = {
     'last_checked',
     'notes',
   ],
+  'relay-support': [
+    'id',
+    'name',
+    'category',
+    'stability_tier',
+    'support_owner',
+    'feature_frozen',
+    'canonical_release',
+    'cargo_features',
+    'openapi_policy',
+    'decision_date',
+    'decision_reference',
+    'evidence',
+    'notes',
+  ],
   'openapi-sources': ['id', 'name', 'owner', 'source', 'artifact', 'status', 'reference_path'],
 };
 
@@ -44,6 +59,21 @@ async function loadYaml(name) {
     }
     if (name === 'standards' && 'evidence_gap' in item && typeof item.evidence_gap !== 'boolean') {
       throw new Error(`standards.yaml entry ${index + 1} evidence_gap must be true or false`);
+    }
+    if (name === 'relay-support') {
+      if (!['stable', 'experimental'].includes(item.stability_tier)) {
+        throw new Error(
+          `relay-support.yaml entry ${index + 1} has invalid stability_tier ${item.stability_tier}`,
+        );
+      }
+      if (typeof item.feature_frozen !== 'boolean' || typeof item.canonical_release !== 'boolean') {
+        throw new Error(
+          `relay-support.yaml entry ${index + 1} feature_frozen and canonical_release must be booleans`,
+        );
+      }
+      if (!Array.isArray(item.cargo_features)) {
+        throw new Error(`relay-support.yaml entry ${index + 1} cargo_features must be a list`);
+      }
     }
   }
   return parsed;

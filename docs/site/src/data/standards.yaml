@@ -85,8 +85,8 @@
       url: https://github.com/registrystack/registry-stack/blob/v0.11.0/products/manifest/README.md
     - label: Registry Relay OGC records API tests
       url: https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/tests/ogc_records_api.rs
-  last_checked: 2026-06-13
-  notes: Relay exposes records routes behind the ogcapi-records feature (route output asserted by the OGC records API tests), and Manifest renders and publishes static OGC Records item collections.
+  last_checked: 2026-07-19
+  notes: The link-free Records metadata artifacts are stable for 1.0. The live Relay adapter behind ogcapi-records is a separate experimental, feature-frozen surface outside the 1.0 compatibility promise. Manifest renders and publishes static OGC Records item collections.
 - id: ogc-api-features
   name: OGC API Features
   standards_body: Open Geospatial Consortium
@@ -105,8 +105,8 @@
       url: https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/README.md
     - label: Registry Relay OGC Features API tests
       url: https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/tests/ogc_api.rs
-  last_checked: 2026-06-20
-  notes: Relay exposes OGC API Features routes behind the ogcapi-features feature. The claim is scoped to the profiled route output tested in Registry Relay, not full OGC conformance.
+  last_checked: 2026-07-19
+  notes: Relay exposes OGC API Features routes behind the ogcapi-features feature. The adapter is experimental, feature-frozen, and outside the 1.0 compatibility promise. The claim is scoped to the profiled route output tested in Registry Relay, not full OGC conformance.
 - id: ogc-api-edr
   name: OGC API Environmental Data Retrieval
   standards_body: Open Geospatial Consortium
@@ -123,8 +123,8 @@
   evidence_docs:
     - label: Registry Relay OGC EDR API tests
       url: https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/tests/ogc_edr_api.rs
-  last_checked: 2026-06-20
-  notes: Relay exposes OGC API EDR area routes behind the ogcapi-edr feature for configured spatial aggregates. The claim is scoped to the tested adapter surface, not full OGC conformance.
+  last_checked: 2026-07-19
+  notes: Relay exposes OGC API EDR area routes behind the ogcapi-edr feature for configured spatial aggregates. The adapter is experimental, feature-frozen, and outside the 1.0 compatibility promise. The claim is scoped to the tested adapter surface, not full OGC conformance.
 - id: openapi
   name: OpenAPI
   standards_body: OpenAPI Initiative
@@ -148,7 +148,7 @@
       url: https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/openapi/registry-relay.openapi.json
     - label: Registry Notary generated OpenAPI document (pinned)
       url: https://github.com/registrystack/registry-stack/blob/v0.11.0/products/notary/openapi/registry-notary.openapi.json
-  last_checked: 2026-06-13
+  last_checked: 2026-07-19
   notes: Relay and Notary generate OpenAPI; the pinned generated documents are cited directly. These docs publish the same pinned artifacts as native API reference pages.
 - id: shacl
   name: SHACL
@@ -364,7 +364,7 @@
       url: https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/docs/client-integration.md
     - label: Registry Relay aggregates tests (schema-validated SDMX-JSON output)
       url: https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/tests/aggregates_entity.rs
-  last_checked: 2026-06-13
+  last_checked: 2026-07-19
   notes: >-
     Relay serves configured aggregates as SDMX-JSON 2.1 data messages via
     content negotiation (application/vnd.sdmx.data+json;version=2.1) or
@@ -373,7 +373,8 @@
     unit, multiplier, decimals, and completeness metadata; measure definition
     URIs are not mapped; the message sender is fixed. Conformance evidence is
     the Relay test suite validating output against the published SDMX-JSON
-    data-message schema.
+    data-message schema. This aggregate representation remains shipped but is
+    experimental, feature-frozen, and outside the 1.0 compatibility promise.
 - id: prov-o
   name: PROV-O
   standards_body: W3C
@@ -473,8 +474,8 @@
       url: https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/README.md
     - label: Registry Stack OpenCRVS project-authoring fixture
       url: https://github.com/registrystack/registry-stack/tree/2dfcf2dd/crates/registryctl/tests/fixtures/project-authoring/opencrvs
-  last_checked: 2026-05-23
-  notes: Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. A Registry Stack project can also compile a reviewed DCI source journey into a Relay consultation. Registry Notary consumes the consultation result and does not connect to DCI sources directly.
+  last_checked: 2026-07-19
+  notes: Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. The adapter and standards-CEL mapping are experimental, feature-frozen, and outside the 1.0 compatibility promise. A Registry Stack project can also compile a reviewed DCI source journey into a Relay consultation. Registry Notary consumes the consultation result and does not connect to DCI sources directly.
 - id: oid4vci
   name: OpenID for Verifiable Credential Issuance
   standards_body: OpenID Foundation
