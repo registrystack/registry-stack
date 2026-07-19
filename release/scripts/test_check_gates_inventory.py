@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import tomllib
 import unittest
 from pathlib import Path
@@ -141,6 +142,27 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_root_secret_scan_does_not_keep_pre_monorepo_fuzz_paths(self) -> None:
         self.assertFalse(any(path.startswith("^fuzz/") for path in self.gitleaks_paths))
+
+    def test_root_secret_scan_excludes_only_named_generated_ignored_trees(self) -> None:
+        generated_trees = (
+            (
+                r"^docs/site/\.repo-docs-cache/",
+                "docs/site/.repo-docs-cache/generated.txt",
+            ),
+            (
+                r"^editors/vscode/\.vscode-test/",
+                "editors/vscode/.vscode-test/generated.txt",
+            ),
+        )
+        for allowlist_path, generated_probe in generated_trees:
+            with self.subTest(generated_probe=generated_probe):
+                self.assertIn(allowlist_path, self.gitleaks_paths)
+                ignored = subprocess.run(
+                    ["git", "check-ignore", "--quiet", generated_probe],
+                    cwd=ROOT,
+                    check=False,
+                )
+                self.assertEqual(0, ignored.returncode)
 
     def test_missing_platform_fuzz_bound_is_reported(self) -> None:
         text = self.workflow.replace("-max_total_time=60", "-runs=0")

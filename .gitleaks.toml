@@ -6,6 +6,14 @@ description = "Ignore generated Rust build output."
 paths = ["(^|/)target/"]
 
 [[allowlists]]
+description = "Ignore the generated, gitignored docs repository cache."
+paths = ["^docs/site/\\.repo-docs-cache/"]
+
+[[allowlists]]
+description = "Ignore the generated, gitignored VS Code test installation."
+paths = ["^editors/vscode/\\.vscode-test/"]
+
+[[allowlists]]
 description = "Allow synthetic JWT fixtures used only by the platform fuzz harnesses."
 paths = [
   "^products/platform/fuzz/corpus/oid4vci_request_and_proof/credential_request\\.json$",
