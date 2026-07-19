@@ -79,6 +79,7 @@ const PROJECT_SCHEMA_VERSION: &str = "registryctl/v1";
 const CONFIG_BUNDLE_SIGNATURE_SCHEMA: &str = "registry.platform.config_bundle_signatures.v1";
 const CONFIG_TRUST_ANCHOR_SCHEMA: &str = "registry.platform.config_trust_anchor.v1";
 const INIT_REPORT_SCHEMA_VERSION: &str = "registryctl.init.v1";
+const ADD_NOTARY_REPORT_SCHEMA_VERSION: &str = "registryctl.add_notary.v1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -388,6 +389,7 @@ pub struct AnchorReport {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum DoctorFormat {
+    Human,
     Json,
 }
 
@@ -1405,11 +1407,122 @@ pub fn doctor_project(
     format: DoctorFormat,
     deployment_profile: Option<DeploymentProfile>,
 ) -> Result<()> {
-    let report = run_doctor_report_with_path(project_dir, format, deployment_profile, None)?;
-    let json =
-        serde_json::to_string_pretty(&report).context("failed to render doctor report JSON")?;
-    println!("{json}");
+    let report = run_doctor_report_with_path(project_dir, deployment_profile, None)?;
+    match format {
+        DoctorFormat::Human => println!("{}", render_doctor_report(&report)),
+        DoctorFormat::Json => {
+            let json = serde_json::to_string_pretty(&report)
+                .context("failed to render doctor report JSON")?;
+            println!("{json}");
+        }
+    }
     ensure_doctor_report_ok(&report)
+}
+
+fn render_doctor_report(report: &DoctorReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = format!("Registry Stack doctor: {}", report.status.as_str());
+    let _ = write!(
+        output,
+        "\nProject: {}\nProfile: {}",
+        human_line_value(&report.project.path),
+        human_line_value(&report.project.profile)
+    );
+    for product in &report.products {
+        let _ = write!(
+            output,
+            "\n{}: {} ({} errors, {} warnings)",
+            human_line_value(&product.product),
+            product.status.as_str(),
+            product.report.summary.error_count,
+            product.report.summary.warning_count
+        );
+        if let Some(path) = &product.report.source.path {
+            let _ = write!(output, "\n  Config: {}", human_line_value(path));
+        }
+        if !product.report.required_env.is_empty() {
+            let present = product
+                .report
+                .required_env
+                .iter()
+                .filter(|entry| entry.status.as_str() == "present")
+                .count();
+            let missing = product
+                .report
+                .required_env
+                .iter()
+                .filter(|entry| entry.status.as_str() == "missing")
+                .count();
+            let not_checked = product.report.required_env.len() - present - missing;
+            let _ = write!(
+                output,
+                "\n  Required environment: {present} present, {missing} missing, {not_checked} not checked"
+            );
+        }
+        if !product.report.context_constraints.is_empty() {
+            let _ = write!(
+                output,
+                "\n  Context constraints: {}",
+                product.report.context_constraints.len()
+            );
+        }
+        if let Some(shipping) = &product.report.audit_shipping {
+            let _ = write!(
+                output,
+                "\n  Audit shipping: sink={}, target={}, health={}",
+                human_line_value(&shipping.sink_type),
+                human_line_value(&shipping.shipping_target),
+                shipping
+                    .shipping_health
+                    .as_deref()
+                    .map_or("not observed".to_string(), human_line_value)
+            );
+        }
+        for diagnostic in &product.report.diagnostics {
+            let _ = write!(
+                output,
+                "\n  [{}] {}: {}",
+                diagnostic.severity.as_str(),
+                human_line_value(&diagnostic.code),
+                human_line_value(&diagnostic.message)
+            );
+            if let Some(path) = &diagnostic.path {
+                let _ = write!(output, " ({})", human_line_value(path));
+            }
+        }
+    }
+    if !report.cross_product_diagnostics.is_empty() {
+        output.push_str("\nCross-product diagnostics:");
+        for diagnostic in &report.cross_product_diagnostics {
+            let _ = write!(
+                output,
+                "\n  [{}] {}: {}",
+                diagnostic.severity.as_str(),
+                human_line_value(&diagnostic.code),
+                human_line_value(&diagnostic.message)
+            );
+        }
+    }
+    output
+}
+
+fn human_line_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() => {
+                use std::fmt::Write as _;
+                write!(escaped, "\\u{:04x}", character as u32)
+                    .expect("writing to a String cannot fail");
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 struct ProductDoctorInvocation {
@@ -1422,13 +1535,9 @@ struct ProductDoctorInvocation {
 
 fn run_doctor_report_with_path(
     project_dir: &Path,
-    format: DoctorFormat,
     deployment_profile: Option<DeploymentProfile>,
     path: Option<&Path>,
 ) -> Result<DoctorReport> {
-    match format {
-        DoctorFormat::Json => {}
-    }
     let project = Project::load(project_dir)?;
     let secrets_path = project_dir.join(&project.local.secrets_env);
     let secrets = LocalEnv::load(&secrets_path)?;
@@ -1649,7 +1758,7 @@ fn run_product_doctor(
                 "registryctl.product_doctor.binary_missing",
                 DiagnosticSeverity::Error,
                 format!(
-                    "Install {} and ensure it is on PATH, then rerun `registryctl doctor --format json`.",
+                    "Install {} and ensure it is on PATH, then rerun `registryctl doctor`.",
                     invocation.binary
                 ),
                 generated_at,
@@ -1819,10 +1928,11 @@ impl SecretRedactor {
 
 #[derive(Debug, Serialize)]
 pub struct AddNotaryReport {
-    status: &'static str,
-    project: String,
-    notary_url: &'static str,
-    claim_file: &'static str,
+    pub schema_version: &'static str,
+    pub status: &'static str,
+    pub project: String,
+    pub notary_url: &'static str,
+    pub claim_file: &'static str,
 }
 
 /// Adds the local tutorial Notary journey to a generated spreadsheet project.
@@ -1949,6 +2059,7 @@ pub fn add_notary_to_project(
     }
 
     Ok(AddNotaryReport {
+        schema_version: ADD_NOTARY_REPORT_SCHEMA_VERSION,
         status: "added",
         project: project.project.name,
         notary_url: NOTARY_BASE_URL,
@@ -4503,8 +4614,8 @@ mod tests {
         );
 
         let readme = fs::read_to_string(project.join("README.md")).unwrap();
-        assert!(readme.contains("registryctl doctor --profile local --format json"));
-        assert!(readme.contains("redacts local secret values"));
+        assert!(readme.contains("registryctl doctor --profile local"));
+        assert!(readme.contains("redacts local secret"));
         assert!(readme.contains("Back up that file before upgrades"));
         assert!(readme.contains("Notary evaluation state is in memory"));
         assert!(readme.contains("may contain cached source rows"));
@@ -5327,14 +5438,19 @@ mod tests {
             ),
         );
 
-        let report =
-            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
-                .unwrap();
+        let report = run_doctor_report_with_path(&project_dir, None, Some(&fake_bin)).unwrap();
 
         assert_eq!(report.status, ReportStatus::Ok);
         assert_eq!(report.products.len(), 1);
         assert_eq!(report.products[0].product, "registry-relay");
         assert_eq!(report.products[0].status, ReportStatus::Ok);
+        let human = render_doctor_report(&report);
+        assert!(human.starts_with("Registry Stack doctor: ok\n"), "{human}");
+        assert!(human.contains("Profile: project"), "{human}");
+        assert!(
+            human.contains("registry-relay: ok (0 errors, 0 warnings)"),
+            "{human}"
+        );
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["project"]["profile"], "project");
         let args = fs::read_to_string(temp.path().join("relay.args")).unwrap();
@@ -5375,7 +5491,6 @@ mod tests {
 
         let report = run_doctor_report_with_path(
             &project_dir,
-            DoctorFormat::Json,
             Some(DeploymentProfile::Local),
             Some(&fake_bin),
         )
@@ -5405,9 +5520,7 @@ mod tests {
         let empty_path = temp.path().join("empty-path");
         fs::create_dir_all(&empty_path).unwrap();
 
-        let report =
-            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&empty_path))
-                .unwrap();
+        let report = run_doctor_report_with_path(&project_dir, None, Some(&empty_path)).unwrap();
 
         assert_eq!(report.status, ReportStatus::Error);
         assert_eq!(report.products[0].status, ReportStatus::NotRun);
@@ -5445,9 +5558,7 @@ mod tests {
             &format!("{secret_prints}exit 17\n"),
         );
 
-        let report =
-            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
-                .unwrap();
+        let report = run_doctor_report_with_path(&project_dir, None, Some(&fake_bin)).unwrap();
         let json = serde_json::to_string(&report).unwrap();
 
         assert_eq!(report.status, ReportStatus::Error);
@@ -5528,9 +5639,7 @@ mod tests {
             ),
         );
 
-        let report =
-            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
-                .unwrap();
+        let report = run_doctor_report_with_path(&project_dir, None, Some(&fake_bin)).unwrap();
         let json = serde_json::to_value(&report).unwrap();
 
         assert_eq!(report.status, ReportStatus::Error);
@@ -5582,9 +5691,7 @@ mod tests {
             ),
         );
 
-        let report =
-            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
-                .unwrap();
+        let report = run_doctor_report_with_path(&project_dir, None, Some(&fake_bin)).unwrap();
         let json = serde_json::to_value(&report).unwrap();
 
         let shipping = &json["products"][0]["report"]["audit_shipping"];
@@ -5610,9 +5717,7 @@ mod tests {
             ),
         );
 
-        let report =
-            run_doctor_report_with_path(&project_dir, DoctorFormat::Json, None, Some(&fake_bin))
-                .unwrap();
+        let report = run_doctor_report_with_path(&project_dir, None, Some(&fake_bin)).unwrap();
         let json = serde_json::to_value(&report).unwrap();
 
         assert_eq!(
@@ -5632,6 +5737,14 @@ mod tests {
         assert!(
             validation_errors.is_empty(),
             "registryctl doctor report must satisfy its schema: {validation_errors:?}"
+        );
+    }
+
+    #[test]
+    fn doctor_human_values_cannot_inject_terminal_lines() {
+        assert_eq!(
+            human_line_value("line\nreturn\r tab\t escape\u{1b}"),
+            "line\\nreturn\\r tab\\t escape\\u001b"
         );
     }
 

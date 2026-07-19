@@ -83,6 +83,7 @@ pub struct ProjectBuildOptions {
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectCommandReport {
+    pub schema_version: &'static str,
     pub status: &'static str,
     pub project: String,
     pub environment: Option<String>,
@@ -99,6 +100,7 @@ pub struct ProjectCommandReport {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectAuthoringDiagnostics {
+    pub schema_version: &'static str,
     pub status: &'static str,
     pub diagnostics: Vec<ProjectAuthoringDiagnostic>,
 }

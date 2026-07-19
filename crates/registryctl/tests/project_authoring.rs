@@ -576,6 +576,7 @@ fn project_check_cli_renders_the_same_typed_diagnostic_in_human_and_json() {
     let human = String::from_utf8(human.stdout).expect("human output is UTF-8");
     let json: serde_json::Value =
         serde_json::from_slice(&json.stdout).expect("JSON output is typed diagnostics");
+    assert_eq!(json["schema_version"], "registryctl.project_diagnostics.v1");
     let diagnostics = json["diagnostics"]
         .as_array()
         .expect("diagnostics is an array");

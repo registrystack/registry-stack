@@ -19,22 +19,22 @@ Then create and start your first secured spreadsheet API:
 ```sh
 registryctl init relay my-first-api --sample benefits
 cd my-first-api
-registryctl doctor --profile local --format json
+registryctl doctor --profile local
 registryctl start
 registryctl smoke
 ```
 
-Initialization prints the created project, notable artifacts, and next commands. Add
-`--format json` to either `init relay` or `init --from` for the versioned
-`registryctl.init.v1` machine-readable report.
+Interactive report commands print concise human-readable results. Add `--format json` when
+another program needs a versioned report. Artifact and protocol commands, including authoring
+schemas, editor metadata, the language server, and logs, retain their native output formats.
 
 The generated project contains a local Registry Relay configuration, sample
 XLSX workbook, Compose file, project manifest, local demo credentials, and an
 optional Bruno API collection.
 
-Run `registryctl doctor --format json` before starting a generated stack or
-after editing config. It calls the product-owned validators, redacts local
-secret values, and returns a machine-readable report for troubleshooting.
+Run `registryctl doctor` before starting a generated stack or after editing config. It calls the
+product-owned validators and redacts local secret values. Add `--format json` when another program
+needs the versioned diagnostic report.
 
 For the full walkthroughs, use the Registry Docs tutorials:
 
@@ -136,10 +136,10 @@ operation and requires the lock for that registryctl version.
 
 ## Update checks
 
-`registryctl` checks GitHub releases at most once per day for normal
-human-facing commands and prints an upgrade notice to stderr when a newer
-release is available. It skips the automatic check in CI and while running
-`registryctl doctor` so JSON output stays quiet.
+`registryctl` checks GitHub releases at most once per day for normal human-facing commands and
+prints an upgrade notice to stderr when a newer release is available. It skips the automatic check
+in CI and while running `registryctl doctor`, so doctor diagnostics are not accompanied by an
+update notice.
 
 Run an explicit check at any time:
 

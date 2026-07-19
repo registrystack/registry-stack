@@ -109,6 +109,7 @@ pub struct ProjectEditorSetupOptions {
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectEditorSetupReport {
+    pub schema_version: &'static str,
     pub status: &'static str,
     pub project_directory: String,
     pub files: Vec<String>,
@@ -233,6 +234,7 @@ pub fn setup_registry_project_editor(
     publish_project_editor_files(&root, &files, &states)?;
 
     Ok(ProjectEditorSetupReport {
+        schema_version: PROJECT_EDITOR_REPORT_SCHEMA_VERSION,
         status: "configured",
         project_directory: root.display().to_string(),
         files: files

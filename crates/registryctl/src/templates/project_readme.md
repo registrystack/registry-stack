@@ -53,7 +53,7 @@ grant the identity scope only to a role permitted to read those fields.
 ```sh
 registryctl open
 sed -n '1,520p' relay/config.yaml
-registryctl doctor --profile local --format json
+registryctl doctor --profile local
 ```
 
 The generated local demo credentials live in `secrets/local.env`. They are for
@@ -79,8 +79,8 @@ Before exposing this project through a reverse proxy, IAM, and front rate
 limiter, follow
 https://docs.registrystack.org/operate/single-node-compose-behind-proxy/.
 
-Run `registryctl doctor --format json` after config edits. It calls the Relay
-validator and redacts local secret values in the report. Then run
+Run `registryctl doctor` after config edits. It calls the Relay validator and redacts local secret
+values in the report. Add `--format json` for automation. Then run
 `registryctl restart` so the running containers pick up the edited config; a
 plain `start` leaves running containers unchanged.
 

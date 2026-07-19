@@ -42,9 +42,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- `registryctl init --from` and `registryctl init relay` now print concise human-readable results
-  with tailored next commands. Both forms accept `--format json` for the versioned
-  `registryctl.init.v1` machine-readable report.
+- Interactive report commands now print concise human-readable results by default. This covers
+  project initialization, Notary add-on setup, offline tests, checks, editor setup, builds,
+  doctor validation, Config Bundle operations, and trust-anchor operations. Add `--format json`
+  for versioned machine-readable reports. Artifact and protocol streams keep their existing
+  formats.
 
 ### Removed
 

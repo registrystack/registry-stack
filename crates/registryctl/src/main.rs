@@ -4,10 +4,11 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use registryctl::{
-    BundleSignOptions, DeploymentProfile, DoctorFormat, InitProjectKind, InitReport, InitSource,
+    AddNotaryReport, AnchorReport, BundleInspectReport, BundleSignOptions, BundleSignReport,
+    BundleVerifyReport, DeploymentProfile, DoctorFormat, InitProjectKind, InitReport, InitSource,
     ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
-    ProjectInitOptions, ProjectSchemaKind, ProjectStarter, ProjectTestOptions,
-    ProjectTestSelection, Sample,
+    ProjectEditorSetupReport, ProjectInitOptions, ProjectSchemaKind, ProjectStarter,
+    ProjectTestOptions, ProjectTestSelection, Sample,
 };
 
 fn main() -> Result<()> {
@@ -61,13 +62,12 @@ fn main() -> Result<()> {
                 OutputFormat::Json => print_json(&report)?,
             }
         }
-        Commands::Add { command } => match command {
+        Commands::Add { format, command } => match command {
             AddCommand::Notary => {
                 let image_lock = registryctl::load_registryctl_image_lock()?;
-                print_json(&registryctl::add_notary_to_project(
-                    &std::env::current_dir()?,
-                    &image_lock,
-                )?)?;
+                let report =
+                    registryctl::add_notary_to_project(&std::env::current_dir()?, &image_lock)?;
+                print_formatted_report(format, &report, render_add_notary_report)?;
             }
         },
         Commands::Test {
@@ -78,8 +78,12 @@ fn main() -> Result<()> {
             fixture,
             trace,
             watch,
+            format,
         } => {
             if watch {
+                if format == OutputFormat::Json {
+                    anyhow::bail!("test --watch supports only human output");
+                }
                 return watch_project_tests(
                     ProjectTestOptions {
                         project_directory: project_dir,
@@ -93,7 +97,7 @@ fn main() -> Result<()> {
                     },
                 );
             }
-            print_json(&registryctl::test_registry_project_selected(
+            let report = registryctl::test_registry_project_selected(
                 &ProjectTestOptions {
                     project_directory: project_dir,
                     environment,
@@ -104,7 +108,8 @@ fn main() -> Result<()> {
                     fixture,
                     trace,
                 },
-            )?)?
+            )?;
+            print_formatted_report(format, &report, |report| render_test_report(report, trace))?;
         }
         Commands::Check {
             project_dir,
@@ -158,11 +163,16 @@ fn main() -> Result<()> {
                 ),
             },
             AuthoringCommand::Schema { kind } => print!("{}", kind.document()),
-            AuthoringCommand::Editor { project_dir } => print_json(
-                &registryctl::setup_registry_project_editor(&ProjectEditorSetupOptions {
-                    project_directory: project_dir,
-                })?,
-            )?,
+            AuthoringCommand::Editor {
+                project_dir,
+                format,
+            } => {
+                let report =
+                    registryctl::setup_registry_project_editor(&ProjectEditorSetupOptions {
+                        project_directory: project_dir,
+                    })?;
+                print_formatted_report(format, &report, render_editor_setup_report)?;
+            }
             AuthoringCommand::LanguageServer => {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -175,14 +185,16 @@ fn main() -> Result<()> {
             environment,
             against,
             anchor,
-        } => print_json(&registryctl::build_registry_project(
-            &ProjectBuildOptions {
+            format,
+        } => {
+            let report = registryctl::build_registry_project(&ProjectBuildOptions {
                 project_directory: project_dir,
                 environment,
                 against,
                 anchor,
-            },
-        )?)?,
+            })?;
+            print_formatted_report(format, &report, render_build_report)?;
+        }
         Commands::Start => registryctl::start_project(&std::env::current_dir()?)?,
         Commands::Stop => registryctl::stop_project(&std::env::current_dir()?)?,
         Commands::Restart => registryctl::restart_project(&std::env::current_dir()?)?,
@@ -193,18 +205,17 @@ fn main() -> Result<()> {
             registryctl::doctor_project(&std::env::current_dir()?, format, profile)?
         }
         Commands::Logs => registryctl::logs_project(&std::env::current_dir()?)?,
-        Commands::Bundle { command } => match command {
+        Commands::Bundle { format, command } => match command {
             BundleCommand::Inspect { bundle_dir } => {
-                print_json(&registryctl::inspect_config_bundle(&bundle_dir)?)?;
+                let report = registryctl::inspect_config_bundle(&bundle_dir)?;
+                print_formatted_report(format, &report, render_bundle_inspect_report)?;
             }
             BundleCommand::Verify {
                 bundle_dir,
                 anchor_path,
             } => {
-                print_json(&registryctl::verify_config_bundle_cli(
-                    &bundle_dir,
-                    &anchor_path,
-                )?)?;
+                let report = registryctl::verify_config_bundle_cli(&bundle_dir, &anchor_path)?;
+                print_formatted_report(format, &report, render_bundle_verify_report)?;
             }
             BundleCommand::Sign {
                 input,
@@ -217,7 +228,7 @@ fn main() -> Result<()> {
                 bundle_id,
                 out,
             } => {
-                print_json(&registryctl::sign_config_bundle(BundleSignOptions {
+                let report = registryctl::sign_config_bundle(BundleSignOptions {
                     input,
                     key,
                     product,
@@ -227,10 +238,11 @@ fn main() -> Result<()> {
                     sequence,
                     bundle_id,
                     out,
-                })?)?;
+                })?;
+                print_formatted_report(format, &report, render_bundle_sign_report)?;
             }
         },
-        Commands::Anchor { command } => match command {
+        Commands::Anchor { format, command } => match command {
             AnchorCommand::Init {
                 anchor_path,
                 product,
@@ -238,27 +250,33 @@ fn main() -> Result<()> {
                 stream_id,
                 instance_id,
             } => {
-                print_json(&registryctl::init_config_anchor(
+                let report = registryctl::init_config_anchor(
                     &anchor_path,
                     product,
                     environment,
                     stream_id,
                     instance_id,
-                )?)?;
+                )?;
+                print_formatted_report(format, &report, |report| {
+                    render_anchor_report(report, "Initialized")
+                })?;
             }
             AnchorCommand::AddKey {
                 anchor_path,
                 jwk_path,
                 disabled,
             } => {
-                print_json(&registryctl::add_config_anchor_key(
-                    &anchor_path,
-                    &jwk_path,
-                    !disabled,
-                )?)?;
+                let report =
+                    registryctl::add_config_anchor_key(&anchor_path, &jwk_path, !disabled)?;
+                print_formatted_report(format, &report, |report| {
+                    render_anchor_report(report, "Updated")
+                })?;
             }
             AnchorCommand::RemoveKey { anchor_path, kid } => {
-                print_json(&registryctl::remove_config_anchor_key(&anchor_path, &kid)?)?;
+                let report = registryctl::remove_config_anchor_key(&anchor_path, &kid)?;
+                print_formatted_report(format, &report, |report| {
+                    render_anchor_report(report, "Updated")
+                })?;
             }
         },
         Commands::Bruno { command } => match command {
@@ -359,6 +377,248 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
     Ok(())
 }
 
+fn print_formatted_report<T: serde::Serialize>(
+    format: OutputFormat,
+    report: &T,
+    render_human: impl FnOnce(&T) -> Result<String>,
+) -> Result<()> {
+    match format {
+        OutputFormat::Human => println!("{}", render_human(report)?),
+        OutputFormat::Json => print_json(report)?,
+    }
+    Ok(())
+}
+
+fn render_add_notary_report(report: &AddNotaryReport) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(output, "Added Registry Notary to {:?}.", report.project)?;
+    writeln!(
+        output,
+        "  Claim: {}",
+        human_path(std::path::Path::new(report.claim_file))
+    )?;
+    writeln!(
+        output,
+        "  Notary API after start: {}",
+        human_line(report.notary_url)
+    )?;
+    writeln!(output, "\nNext:")?;
+    writeln!(output, "  registryctl start")?;
+    Ok(output.trim_end().to_string())
+}
+
+fn render_test_report(report: &ProjectCommandReport, trace: bool) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = render_test_summary(report);
+    if trace {
+        for fixture in &report.fixtures {
+            write!(
+                output,
+                "\n  {} {}.{}",
+                if fixture.passed { "PASS" } else { "FAIL" },
+                human_line(&fixture.integration),
+                human_line(&fixture.fixture)
+            )?;
+            for (label, values) in [
+                ("inputs", &fixture.inputs),
+                ("calls", &fixture.calls),
+                ("outputs", &fixture.outputs),
+                ("claims", &fixture.claims),
+            ] {
+                if !values.is_empty() {
+                    write!(output, "\n    {label}: {}", human_list(values))?;
+                }
+            }
+            if let Some(outcome) = &fixture.outcome {
+                write!(output, "\n    outcome: {}", human_line(outcome))?;
+            }
+            if let Some(expected_error) = &fixture.expected_error {
+                write!(
+                    output,
+                    "\n    expected error: {}",
+                    human_line(expected_error)
+                )?;
+            }
+            if let Some(source_access) = fixture.source_access {
+                write!(output, "\n    source access: {source_access}")?;
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn render_build_report(report: &ProjectCommandReport) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let passed = report
+        .fixtures
+        .iter()
+        .filter(|fixture| fixture.passed)
+        .count();
+    let mut output = String::new();
+    writeln!(output, "Built Registry Stack project {:?}.", report.project)?;
+    writeln!(
+        output,
+        "  Environment: {}",
+        report
+            .environment
+            .as_deref()
+            .map_or_else(|| "none".to_string(), human_line)
+    )?;
+    if let Some(path) = &report.output {
+        writeln!(
+            output,
+            "  Output: {}",
+            human_path(std::path::Path::new(path))
+        )?;
+    }
+    writeln!(
+        output,
+        "  Fixtures: {passed}/{} passed",
+        report.fixtures.len()
+    )?;
+    writeln!(output, "  Baseline: {}", human_line(report.baseline))?;
+    writeln!(
+        output,
+        "  Semantic changes: {}",
+        if report.semantic_changes.is_empty() {
+            if report.baseline == "initial_without_baseline" {
+                "not compared (initial review)".to_string()
+            } else {
+                "none".to_string()
+            }
+        } else {
+            report
+                .semantic_changes
+                .iter()
+                .map(|change| human_line(change.dimension))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    )?;
+    Ok(output.trim_end().to_string())
+}
+
+fn render_editor_setup_report(report: &ProjectEditorSetupReport) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "Configured Registry Stack editor support for {}.",
+        human_path(std::path::Path::new(&report.project_directory))
+    )?;
+    writeln!(output, "  Generated files: {}", report.files.len())?;
+    for file in &report.files {
+        let path = std::path::Path::new(&report.project_directory).join(file);
+        writeln!(output, "    {}", human_path(&path))?;
+    }
+    Ok(output.trim_end().to_string())
+}
+
+fn render_bundle_inspect_report(report: &BundleInspectReport) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let manifest = &report.manifest;
+    let mut output = String::new();
+    writeln!(output, "Config Bundle {:?}.", manifest.bundle_id)?;
+    writeln!(output, "  Product: {}", human_line(&manifest.product))?;
+    writeln!(
+        output,
+        "  Environment: {}",
+        human_line(&manifest.environment)
+    )?;
+    writeln!(output, "  Stream: {}", human_line(&manifest.stream_id))?;
+    if let Some(instance_id) = &manifest.instance_id {
+        writeln!(output, "  Instance: {}", human_line(instance_id))?;
+    }
+    writeln!(output, "  Sequence: {}", manifest.sequence)?;
+    writeln!(
+        output,
+        "  Config hash: {}",
+        human_line(&manifest.config_hash)
+    )?;
+    writeln!(output, "  Files: {}", manifest.files.len())?;
+    writeln!(output, "  Signatures: {}", report.signature_count)?;
+    if !report.signature_kids.is_empty() {
+        writeln!(output, "  Signers: {}", human_list(&report.signature_kids))?;
+    }
+    Ok(output.trim_end().to_string())
+}
+
+fn render_bundle_verify_report(report: &BundleVerifyReport) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(output, "Verified Config Bundle {:?}.", report.bundle_id)?;
+    writeln!(output, "  Product: {}", human_line(&report.product))?;
+    writeln!(output, "  Environment: {}", human_line(&report.environment))?;
+    writeln!(output, "  Stream: {}", human_line(&report.stream_id))?;
+    if let Some(instance_id) = &report.instance_id {
+        writeln!(output, "  Instance: {}", human_line(instance_id))?;
+    }
+    writeln!(output, "  Sequence: {}", report.sequence)?;
+    writeln!(output, "  Config: {}", human_path(&report.config_path))?;
+    writeln!(output, "  Config hash: {}", human_line(&report.config_hash))?;
+    writeln!(output, "  Signers: {}", human_list(&report.signer_kids))?;
+    Ok(output.trim_end().to_string())
+}
+
+fn render_bundle_sign_report(report: &BundleSignReport) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "Signed Config Bundle at {}.",
+        human_path(&report.bundle_dir)
+    )?;
+    writeln!(output, "  Manifest: {}", human_path(&report.manifest_path))?;
+    writeln!(
+        output,
+        "  Signature: {}",
+        human_path(&report.signature_path)
+    )?;
+    writeln!(
+        output,
+        "  Config: {}",
+        human_path(std::path::Path::new(&report.config_path))
+    )?;
+    writeln!(output, "  Config hash: {}", human_line(&report.config_hash))?;
+    writeln!(
+        output,
+        "  Signer: {} ({})",
+        human_line(&report.kid),
+        human_line(&report.alg)
+    )?;
+    writeln!(output, "  Signatures: {}", report.signature_count)?;
+    Ok(output.trim_end().to_string())
+}
+
+fn render_anchor_report(report: &AnchorReport, action: &str) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "{action} Config Bundle trust anchor at {}.",
+        human_path(&report.anchor_path)
+    )?;
+    writeln!(output, "  Product: {}", human_line(&report.product))?;
+    writeln!(output, "  Environment: {}", human_line(&report.environment))?;
+    writeln!(output, "  Stream: {}", human_line(&report.stream_id))?;
+    writeln!(output, "  Instance: {}", human_line(&report.instance_id))?;
+    writeln!(
+        output,
+        "  Signers: {} enabled, {} total",
+        report.enabled_signer_count, report.signer_count
+    )?;
+    Ok(output.trim_end().to_string())
+}
+
 fn render_init_report(report: &InitReport) -> Result<String> {
     use std::fmt::Write as _;
 
@@ -401,7 +661,7 @@ fn render_init_report(report: &InitReport) -> Result<String> {
             writeln!(output, "  registryctl test --project-dir .")?;
         }
         InitProjectKind::RelaySpreadsheetApi => {
-            writeln!(output, "  registryctl doctor --profile local --format json")?;
+            writeln!(output, "  registryctl doctor --profile local")?;
             writeln!(output, "  registryctl start")?;
         }
     }
@@ -437,6 +697,36 @@ fn human_path(path: &std::path::Path) -> String {
             }
         }
         format!("$'{escaped}'")
+    }
+}
+
+fn human_line(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() => {
+                use std::fmt::Write as _;
+                write!(escaped, "\\u{:04x}", character as u32)
+                    .expect("writing to a String cannot fail");
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn human_list(values: &[String]) -> String {
+    if values.is_empty() {
+        "none".to_string()
+    } else {
+        values
+            .iter()
+            .map(|value| human_line(value))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -801,6 +1091,9 @@ enum AuthoringCommand {
         /// Project workspace root containing registry-stack.yaml.
         #[arg(long, default_value = ".")]
         project_dir: PathBuf,
+        /// Human-readable result, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
     },
     /// Run cross-file Registry Stack navigation over the Language Server Protocol.
     LanguageServer,
@@ -838,6 +1131,9 @@ enum Commands {
     },
     /// Add another local Registry Stack product to the current project.
     Add {
+        /// Human-readable result, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human", global = true)]
+        format: OutputFormat,
         #[command(subcommand)]
         command: AddCommand,
     },
@@ -864,6 +1160,9 @@ enum Commands {
         /// Rerun the selected offline scope when authored files change.
         #[arg(long, conflicts_with_all = ["live", "trace"])]
         watch: bool,
+        /// Human-readable result, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
     },
     /// Validate and explain generated Relay and Notary configuration.
     Check {
@@ -905,6 +1204,9 @@ enum Commands {
         /// Trust anchor for --against.
         #[arg(long)]
         anchor: Option<PathBuf>,
+        /// Human-readable result, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
     },
     /// Start the local Registry Stack project.
     Start,
@@ -918,24 +1220,30 @@ enum Commands {
     Open,
     /// Run built-in local smoke checks.
     Smoke,
-    /// Run product doctor validation and print a JSON report.
+    /// Run product doctor validation.
     Doctor {
         /// Deployment profile override to pass through to product doctor commands.
         #[arg(long, value_enum)]
         profile: Option<DeploymentProfile>,
         /// Output format.
-        #[arg(long, value_enum, default_value_t = DoctorFormat::Json)]
+        #[arg(long, value_enum, default_value_t = DoctorFormat::Human)]
         format: DoctorFormat,
     },
     /// Stream Compose logs for the local project.
     Logs,
     /// Work with Registry Config Bundle directories.
     Bundle {
+        /// Human-readable result, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human", global = true)]
+        format: OutputFormat,
         #[command(subcommand)]
         command: BundleCommand,
     },
     /// Work with Registry Config Bundle trust anchors.
     Anchor {
+        /// Human-readable result, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human", global = true)]
+        format: OutputFormat,
         #[command(subcommand)]
         command: AnchorCommand,
     },
@@ -1033,6 +1341,7 @@ mod tests {
                 fixture: None,
                 trace: false,
                 watch: false,
+                format: OutputFormat::Human,
             } if project_dir == std::path::Path::new("registry-project") && environment == "staging"
         ));
 
@@ -1058,6 +1367,7 @@ mod tests {
                 fixture: Some(fixture),
                 trace: false,
                 watch: true,
+                format: OutputFormat::Human,
             } if project_dir == std::path::Path::new("registry-project")
                 && integration == "person-record"
                 && fixture == "active-person"
@@ -1177,14 +1487,20 @@ mod tests {
         assert!(matches!(
             editor.command,
             Commands::Authoring {
-                command: AuthoringCommand::Editor { project_dir }
+                command: AuthoringCommand::Editor {
+                    project_dir,
+                    format: OutputFormat::Human
+                }
             } if project_dir == std::path::Path::new("registry-project")
         ));
         let default_editor = Cli::try_parse_from(["registryctl", "authoring", "editor"]).unwrap();
         assert!(matches!(
             default_editor.command,
             Commands::Authoring {
-                command: AuthoringCommand::Editor { project_dir }
+                command: AuthoringCommand::Editor {
+                    project_dir,
+                    format: OutputFormat::Human
+                }
             } if project_dir == std::path::Path::new(".")
         ));
 
@@ -1213,6 +1529,7 @@ mod tests {
                 environment,
                 against: None,
                 anchor: None,
+                format: OutputFormat::Human,
             } if project_dir == std::path::Path::new("registry-project") && environment == "staging"
         ));
     }
@@ -1309,6 +1626,98 @@ mod tests {
             "Notary authority: 1 source-free evaluation service, 0 compiler-pinned Relay-backed services"
         ));
         assert!(notary_rendered.contains("Relay source authority: not applicable"));
+    }
+
+    #[test]
+    fn human_bundle_and_anchor_reports_surface_operator_decisions() {
+        let manifest = registry_platform_config::ConfigBundleManifest {
+            schema: "registry.platform.config_bundle.v1".to_string(),
+            product: "registry-notary".to_string(),
+            environment: "production".to_string(),
+            stream_id: "civil-registry".to_string(),
+            instance_id: Some("notary-011".to_string()),
+            bundle_id: "rollout-3".to_string(),
+            sequence: 42,
+            previous_config_hash: None,
+            config_hash: "sha256:config".to_string(),
+            files: vec![registry_platform_config::ConfigBundleFile {
+                path: "config/notary.yaml".to_string(),
+                sha256: "sha256:file".to_string(),
+            }],
+            created_at: "2026-07-19T00:00:00Z".to_string(),
+        };
+        let inspect = render_bundle_inspect_report(&BundleInspectReport {
+            schema_version: "registryctl.config_bundle.inspect.v1".to_string(),
+            manifest,
+            signature_count: 1,
+            signature_kids: vec!["signer-1".to_string()],
+        })
+        .expect("inspect report renders");
+        for expected in [
+            "Config Bundle \"rollout-3\".",
+            "Product: registry-notary",
+            "Sequence: 42",
+            "Signatures: 1",
+            "Signers: signer-1",
+        ] {
+            assert!(inspect.contains(expected), "missing {expected}: {inspect}");
+        }
+
+        let verify = render_bundle_verify_report(&BundleVerifyReport {
+            schema_version: "registryctl.config_bundle.verify.v1".to_string(),
+            product: "registry-notary".to_string(),
+            environment: "production".to_string(),
+            stream_id: "civil-registry".to_string(),
+            instance_id: Some("notary-011".to_string()),
+            bundle_id: "rollout-3".to_string(),
+            sequence: 42,
+            config_path: PathBuf::from("bundle/config/notary.yaml"),
+            config_hash: "sha256:config".to_string(),
+            signer_kids: vec!["signer-1".to_string()],
+        })
+        .expect("verify report renders");
+        assert!(verify.starts_with("Verified Config Bundle \"rollout-3\"."));
+        assert!(verify.contains("Config: bundle/config/notary.yaml"));
+
+        let sign = render_bundle_sign_report(&BundleSignReport {
+            schema_version: "registryctl.config_bundle.sign.v1".to_string(),
+            bundle_dir: PathBuf::from("bundle"),
+            manifest_path: PathBuf::from("bundle/manifest.json"),
+            signature_path: PathBuf::from("bundle/manifest.sig.json"),
+            config_path: "config/notary.yaml".to_string(),
+            config_hash: "sha256:config".to_string(),
+            kid: "signer-1".to_string(),
+            alg: "EdDSA".to_string(),
+            signature_count: 1,
+        })
+        .expect("sign report renders");
+        assert!(sign.starts_with("Signed Config Bundle at bundle."));
+        assert!(sign.contains("Signer: signer-1 (EdDSA)"));
+
+        let anchor = render_anchor_report(
+            &AnchorReport {
+                schema_version: "registryctl.config_anchor.v1".to_string(),
+                anchor_path: PathBuf::from("trust-anchor.json"),
+                product: "registry-notary".to_string(),
+                environment: "production".to_string(),
+                stream_id: "civil-registry".to_string(),
+                instance_id: "notary-011".to_string(),
+                signer_count: 2,
+                enabled_signer_count: 1,
+            },
+            "Updated",
+        )
+        .expect("anchor report renders");
+        assert!(anchor.starts_with("Updated Config Bundle trust anchor at trust-anchor.json."));
+        assert!(anchor.contains("Signers: 1 enabled, 2 total"));
+    }
+
+    #[test]
+    fn human_report_values_cannot_inject_terminal_lines() {
+        assert_eq!(
+            human_line("line\nreturn\r tab\t escape\u{1b}"),
+            "line\\nreturn\\r tab\\t escape\\u001b"
+        );
     }
 
     #[test]
@@ -1483,6 +1892,15 @@ mod tests {
 
     #[test]
     fn doctor_cli_accepts_profile_and_json_format() {
+        let default = Cli::try_parse_from(["registryctl", "doctor"]).unwrap();
+        assert!(matches!(
+            default.command,
+            Commands::Doctor {
+                format: DoctorFormat::Human,
+                profile: None
+            }
+        ));
+
         let cli = Cli::try_parse_from([
             "registryctl",
             "doctor",
@@ -1521,6 +1939,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Add {
+                format: OutputFormat::Human,
                 command: AddCommand::Notary
             }
         ));
@@ -1561,10 +1980,29 @@ mod tests {
         assert!(matches!(
             inspect.command,
             Commands::Bundle {
+                format: OutputFormat::Human,
                 command: BundleCommand::Inspect { .. }
             }
         ));
         assert!(!inspect.command.should_check_for_updates());
+
+        let json_inspect = Cli::try_parse_from([
+            "registryctl",
+            "bundle",
+            "inspect",
+            "--bundle-dir",
+            "bundle",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            json_inspect.command,
+            Commands::Bundle {
+                format: OutputFormat::Json,
+                command: BundleCommand::Inspect { .. }
+            }
+        ));
 
         let verify = Cli::try_parse_from([
             "registryctl",
@@ -1579,6 +2017,7 @@ mod tests {
         assert!(matches!(
             verify.command,
             Commands::Bundle {
+                format: OutputFormat::Human,
                 command: BundleCommand::Verify { .. }
             }
         ));
@@ -1608,6 +2047,7 @@ mod tests {
         assert!(matches!(
             sign.command,
             Commands::Bundle {
+                format: OutputFormat::Human,
                 command: BundleCommand::Sign { .. }
             }
         ));
@@ -1634,10 +2074,37 @@ mod tests {
         assert!(matches!(
             init.command,
             Commands::Anchor {
+                format: OutputFormat::Human,
                 command: AnchorCommand::Init { .. }
             }
         ));
         assert!(!init.command.should_check_for_updates());
+
+        let json_init = Cli::try_parse_from([
+            "registryctl",
+            "anchor",
+            "init",
+            "--anchor-path",
+            "trust_anchor.json",
+            "--product",
+            "registry-notary",
+            "--environment",
+            "production",
+            "--stream-id",
+            "civil-registry",
+            "--instance-id",
+            "notary-011",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            json_init.command,
+            Commands::Anchor {
+                format: OutputFormat::Json,
+                command: AnchorCommand::Init { .. }
+            }
+        ));
 
         let add = Cli::try_parse_from([
             "registryctl",
@@ -1653,6 +2120,7 @@ mod tests {
         assert!(matches!(
             add.command,
             Commands::Anchor {
+                format: OutputFormat::Human,
                 command: AnchorCommand::AddKey { disabled: true, .. }
             }
         ));
@@ -1670,6 +2138,7 @@ mod tests {
         assert!(matches!(
             remove.command,
             Commands::Anchor {
+                format: OutputFormat::Human,
                 command: AnchorCommand::RemoveKey { .. }
             }
         ));

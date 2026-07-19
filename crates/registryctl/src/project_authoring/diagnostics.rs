@@ -1143,6 +1143,7 @@ fn finalized_diagnostics(
         });
     }
     ProjectAuthoringDiagnostics {
+        schema_version: PROJECT_DIAGNOSTICS_SCHEMA_VERSION,
         status: "invalid",
         diagnostics,
     }

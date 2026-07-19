@@ -106,6 +106,7 @@ pub fn test_registry_project_selected(
         reports.push(execute_governed_live_test(&loaded)?);
     }
     Ok(ProjectCommandReport {
+        schema_version: PROJECT_COMMAND_REPORT_SCHEMA_VERSION,
         status: "passed",
         project: loaded.project.registry.id.clone(),
         environment: loaded.environment_name.clone(),
@@ -737,6 +738,7 @@ pub fn check_registry_project(options: &ProjectCheckOptions) -> Result<ProjectCo
     let fixtures = execute_all_fixtures(&loaded, &compiled, None, None, false)?;
     require_passing_fixtures(&fixtures)?;
     Ok(ProjectCommandReport {
+        schema_version: PROJECT_COMMAND_REPORT_SCHEMA_VERSION,
         status: "valid",
         project: loaded.project.registry.id.clone(),
         environment: loaded.environment_name.clone(),
@@ -799,6 +801,7 @@ fn build_registry_project_inner(
         .join(options.environment.as_str());
     write_compiled_project(&loaded.root, &output, &compiled, runtime_identity)?;
     Ok(ProjectCommandReport {
+        schema_version: PROJECT_COMMAND_REPORT_SCHEMA_VERSION,
         status: "built",
         project: loaded.project.registry.id.clone(),
         environment: loaded.environment_name.clone(),
