@@ -88,6 +88,9 @@ jobs:
                 Cargo.toml|Cargo.lock|deny.toml|rust-toolchain*|crates/*|products/*)
                   rust=true
                   ;;
+                docs/site/src/data/relay-support.yaml|docs/site/src/data/generated/relay-support.json)
+                  rust=true
+                  ;;
               esac
               case "${path}" in
                 release/*)
