@@ -1,0 +1,44 @@
+{
+  "credential_configurations": {
+    "fixture_eddsa": {
+      "credential_signing_alg_values_supported": [
+        "EdDSA"
+      ],
+      "cryptographic_binding_methods_supported": [
+        "did:jwk"
+      ],
+      "fixture": "valid-holder-bound.sd-jwt",
+      "private_jwk_fixture": "issuer-eddsa-private.test.jwk.json",
+      "proof_signing_alg_values_supported": [
+        "EdDSA"
+      ]
+    },
+    "fixture_es256": {
+      "credential_signing_alg_values_supported": [
+        "ES256"
+      ],
+      "cryptographic_binding_methods_supported": [
+        "did:jwk"
+      ],
+      "fixture": "valid-es256.sd-jwt",
+      "private_jwk_fixture": "issuer-es256-private.test.jwk.json",
+      "proof_signing_alg_values_supported": [
+        "EdDSA"
+      ]
+    }
+  },
+  "holder_proof": {
+    "cryptographic_binding_methods_supported": [
+      "did:jwk"
+    ],
+    "fixture": "holder-proof-eddsa.jwt",
+    "private_jwk_fixture": "holder-eddsa-private.test.jwk.json",
+    "signing_alg_values_supported": [
+      "EdDSA"
+    ],
+    "unsupported_fixture": "holder-proof-es256-unsupported.jwt"
+  },
+  "note": "All key and token material is synthetic test-only material. Do not use outside tests.",
+  "proof_audience": "https://fixture.test/oid4vci",
+  "proof_nonce": "fixture-transaction-nonce"
+}

@@ -3,6 +3,7 @@
 //!
 //! Run with:
 //!   cargo run -p xtask -- gen-sd-jwt-vc-fixtures
+//!   cargo run -p xtask -- gen-oid4vci-algorithm-fixtures
 //!
 //! Writes synthetic fixtures to tests/fixtures/sd_jwt_vc/.
 //! Keys and timestamps are fixed so the JWTs are reproducible, but
@@ -26,6 +27,7 @@ use serde_json::{json, Value};
 // are fully reproducible without a random source at generation time. These keys
 // are test-only material and carry no trust outside of the fixture set.
 const ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:fixture.test#key-1"}"#;
+const ES256_ISSUER_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"did:web:fixture.test#p256-key-1"}"#;
 const HOLDER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","alg":"EdDSA","kid":"did:web:fixture.test#holder-key-1"}"#;
 
 const ISSUER: &str = "did:web:fixture.test";
@@ -34,6 +36,8 @@ const VCT: &str = "https://fixture.test/credentials/registry-witness/v1";
 // harness can override the verifier clock to match.
 const IAT: i64 = 1_705_276_800;
 const EXP: i64 = 1_705_276_800 + 3600;
+const PROOF_AUDIENCE: &str = "https://fixture.test/oid4vci";
+const PROOF_NONCE: &str = "fixture-transaction-nonce";
 
 #[tokio::main]
 async fn main() {
@@ -41,8 +45,12 @@ async fn main() {
     let cmd = args.get(1).map(String::as_str).unwrap_or("");
     match cmd {
         "gen-sd-jwt-vc-fixtures" => generate_fixtures().await,
+        "gen-oid4vci-algorithm-fixtures" => generate_algorithm_fixtures().await,
         _ => {
-            eprintln!("usage: cargo run -p xtask -- gen-sd-jwt-vc-fixtures");
+            eprintln!(
+                "usage: cargo run -p xtask -- \
+                 <gen-sd-jwt-vc-fixtures|gen-oid4vci-algorithm-fixtures>"
+            );
             std::process::exit(1);
         }
     }
@@ -54,6 +62,7 @@ async fn generate_fixtures() {
     std::fs::create_dir_all(&fixture_dir).expect("fixture dir created");
 
     let issuer_jwk = PrivateJwk::parse(ISSUER_JWK).expect("issuer jwk parses");
+    let es256_issuer_jwk = PrivateJwk::parse(ES256_ISSUER_JWK).expect("ES256 issuer jwk parses");
     let holder_jwk = PrivateJwk::parse(HOLDER_JWK).expect("holder jwk parses");
     let issuer = SdJwtIssuer::from_jwk(issuer_jwk.clone()).expect("issuer builds");
     let holder_did = did_jwk_from_public_jwk(&holder_jwk.public()).expect("holder did encodes");
@@ -61,7 +70,9 @@ async fn generate_fixtures() {
     // Write the public issuer JWKS so the harness can load it without
     // embedding raw key material.
     let public_jwk = serde_json::to_value(issuer_jwk.public()).expect("public jwk serialises");
-    let jwks = json!({ "keys": [public_jwk] });
+    let es256_public_jwk =
+        serde_json::to_value(es256_issuer_jwk.public()).expect("ES256 public jwk serialises");
+    let jwks = json!({ "keys": [public_jwk, es256_public_jwk] });
     write_fixture(
         &fixture_dir,
         "issuer-jwks.json",
@@ -77,6 +88,7 @@ async fn generate_fixtures() {
         "exp": EXP,
         "holder_did": holder_did,
         "key_id": "did:web:fixture.test#key-1",
+        "es256_key_id": "did:web:fixture.test#p256-key-1",
         "note": "All key material in this directory is synthetic test-only material. Do not use outside tests."
     });
     write_fixture(
@@ -199,7 +211,111 @@ async fn generate_fixtures() {
     );
     write_fixture(&fixture_dir, "holder-proof-mismatch.sd-jwt", &bad_kb);
 
+    generate_algorithm_fixtures().await;
     println!("fixtures written to {}", fixture_dir.display());
+}
+
+/// Generate only the deterministic fixtures for the narrowed Registry Stack
+/// 1.0 algorithm profile. Keeping this command separate avoids rewriting the
+/// older disclosure fixtures, whose random salts are intentionally not stable.
+async fn generate_algorithm_fixtures() {
+    let fixture_dir = workspace_root().join("tests/fixtures/sd_jwt_vc");
+    std::fs::create_dir_all(&fixture_dir).expect("fixture dir created");
+
+    let es256_issuer_jwk = PrivateJwk::parse(ES256_ISSUER_JWK).expect("ES256 issuer jwk parses");
+    let es256_issuer =
+        SdJwtIssuer::from_jwk(es256_issuer_jwk.clone()).expect("ES256 issuer builds");
+    let holder_jwk = PrivateJwk::parse(HOLDER_JWK).expect("holder jwk parses");
+    let holder_did = did_jwk_from_public_jwk(&holder_jwk.public()).expect("holder did encodes");
+
+    // These private keys are synthetic test material already embedded in this
+    // generator. Publishing them as fixtures lets the transaction harness
+    // exercise the same exact key pairs without duplicating constants.
+    for (name, raw) in [
+        ("issuer-eddsa-private.test.jwk.json", ISSUER_JWK),
+        ("issuer-es256-private.test.jwk.json", ES256_ISSUER_JWK),
+        ("holder-eddsa-private.test.jwk.json", HOLDER_JWK),
+    ] {
+        let key: Value = serde_json::from_str(raw).expect("private fixture JWK parses as JSON");
+        write_fixture(
+            &fixture_dir,
+            name,
+            &serde_json::to_string_pretty(&key).expect("private fixture JWK serialises"),
+        );
+    }
+
+    // No selective disclosures are needed for this fixture. That keeps the
+    // compact credential byte-for-byte reproducible while still exercising
+    // issuer signing, cnf holder binding, and verifier algorithm dispatch.
+    let valid_es256 = issue(
+        &es256_issuer,
+        ISSUER,
+        IAT,
+        EXP,
+        Some((&holder_did, &holder_jwk)),
+        &[],
+        None,
+    )
+    .await;
+    write_fixture(&fixture_dir, "valid-es256.sd-jwt", &valid_es256);
+
+    let holder_proof = oid4vci_proof_jwt(&holder_jwk, "EdDSA", &holder_did);
+    write_fixture(&fixture_dir, "holder-proof-eddsa.jwt", &holder_proof);
+
+    let es256_holder_jwk =
+        PrivateJwk::parse(ES256_ISSUER_JWK).expect("ES256 holder fixture key parses");
+    // The platform intentionally refuses to construct an ES256 holder DID.
+    // Encode the synthetic public key directly so the negative fixture proves
+    // that the credential-endpoint validator rejects this out-of-profile proof.
+    let es256_holder_did = format!(
+        "did:jwk:{}",
+        URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&es256_holder_jwk.public())
+                .expect("ES256 holder public JWK serialises")
+        )
+    );
+    let unsupported_holder_proof = oid4vci_proof_jwt(&es256_holder_jwk, "ES256", &es256_holder_did);
+    write_fixture(
+        &fixture_dir,
+        "holder-proof-es256-unsupported.jwt",
+        &unsupported_holder_proof,
+    );
+
+    let profile = json!({
+        "credential_configurations": {
+            "fixture_eddsa": {
+                "credential_signing_alg_values_supported": ["EdDSA"],
+                "proof_signing_alg_values_supported": ["EdDSA"],
+                "cryptographic_binding_methods_supported": ["did:jwk"],
+                "fixture": "valid-holder-bound.sd-jwt",
+                "private_jwk_fixture": "issuer-eddsa-private.test.jwk.json"
+            },
+            "fixture_es256": {
+                "credential_signing_alg_values_supported": ["ES256"],
+                "proof_signing_alg_values_supported": ["EdDSA"],
+                "cryptographic_binding_methods_supported": ["did:jwk"],
+                "fixture": "valid-es256.sd-jwt",
+                "private_jwk_fixture": "issuer-es256-private.test.jwk.json"
+            }
+        },
+        "holder_proof": {
+            "signing_alg_values_supported": ["EdDSA"],
+            "cryptographic_binding_methods_supported": ["did:jwk"],
+            "fixture": "holder-proof-eddsa.jwt",
+            "private_jwk_fixture": "holder-eddsa-private.test.jwk.json",
+            "unsupported_fixture": "holder-proof-es256-unsupported.jwt"
+        },
+        "proof_audience": PROOF_AUDIENCE,
+        "proof_nonce": PROOF_NONCE,
+        "note": "All key and token material is synthetic test-only material. Do not use outside tests."
+    });
+    write_fixture(
+        &fixture_dir,
+        "algorithm-profile.json",
+        &serde_json::to_string_pretty(&profile).expect("algorithm profile serialises"),
+    );
+
+    println!("algorithm fixtures written to {}", fixture_dir.display());
 }
 
 async fn issue(
@@ -324,6 +440,29 @@ fn bad_key_binding_jwt(wrong_key: &PrivateJwk, iat: i64) -> String {
     let payload = URL_SAFE_NO_PAD.encode(payload_json.as_bytes());
     let signing_input = format!("{header}.{payload}");
     let signature = sign(signing_input.as_bytes(), wrong_key).expect("bad kb jwt signs");
+    format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+}
+
+fn oid4vci_proof_jwt(key: &PrivateJwk, alg: &str, holder_did: &str) -> String {
+    let header = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&json!({
+            "alg": alg,
+            "typ": "openid4vci-proof+jwt",
+            "kid": format!("{holder_did}#0")
+        }))
+        .expect("proof header serialises"),
+    );
+    let payload = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&json!({
+            "aud": PROOF_AUDIENCE,
+            "iat": IAT,
+            "exp": IAT + 300,
+            "nonce": PROOF_NONCE
+        }))
+        .expect("proof payload serialises"),
+    );
+    let signing_input = format!("{header}.{payload}");
+    let signature = sign(signing_input.as_bytes(), key).expect("proof signs");
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
 }
 

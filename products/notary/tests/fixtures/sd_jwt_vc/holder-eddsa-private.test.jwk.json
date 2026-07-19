@@ -1,0 +1,8 @@
+{
+  "alg": "EdDSA",
+  "crv": "Ed25519",
+  "d": "f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys",
+  "kid": "did:web:fixture.test#holder-key-1",
+  "kty": "OKP",
+  "x": "pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec"
+}
