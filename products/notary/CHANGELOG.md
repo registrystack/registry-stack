@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added the bounded batch evaluation v1 contract. Batch evaluation has an
+  immutable 100-member platform ceiling with lower-only global and per-claim
+  configuration, client and OpenAPI bounds, and pre-side-effect HTTP 413
+  rejection using `batch.too_large`.
 - Added the committed Draft 2020-12 Registry Notary runtime configuration
   schema at `schemas/registry-notary.config.schema.json`. `registry-notary
   schema`, `just config-schema-generate`, and the schema drift check all use

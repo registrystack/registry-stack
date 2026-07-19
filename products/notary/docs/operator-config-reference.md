@@ -18,6 +18,26 @@ runtime parsers that deserialize them, avoiding a narrower duplicate grammar.
 availability, filesystem and Relay access, deployment gates, and cross-field
 runtime validation.
 
+## Bounded batch settings
+
+The batch platform ceiling is 100 items and cannot be raised. Set
+`evidence.inline_batch_limit` to lower the service-wide limit, then use
+`evidence.claims[].operations.batch_evaluate.max_subjects` to lower it for an
+individual claim. Both fields accept only integers from 1 through 100. Notary
+rejects zero or values above 100 at configuration load.
+
+For a request, the effective limit is the lowest of 100, the global value, and
+the value of every selected claim. A request above that limit is rejected
+before quota, idempotency, Relay, source, or retained-state side effects.
+
+`evidence.concurrency.subjects` controls parallel member work and defaults to
+16. Relay concurrency is independently bounded by the Relay client and
+defaults to 8. Keep the outer `server.request_timeout` at least five seconds
+above the 25 second Relay operation deadline for registry-backed evaluation;
+the default is 30 seconds. These controls compose with the 1 MiB inbound body,
+64 KiB per-Relay-result, and 256 consultation-group limits. They do not replace
+the 100-member ceiling.
+
 {/* registry-notary-config-key-paths:start */}
 ```text
 audit

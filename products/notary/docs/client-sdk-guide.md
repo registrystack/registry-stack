@@ -578,6 +578,20 @@ supplied. `POST /v1/evaluations`, `POST /v1/evaluations/{evaluation_id}/render`,
 and `POST /v1/credentials` reject a request that carries `Idempotency-Key`
 with `400 Bad Request`; do not send that header outside batch evaluation.
 
+One request may contain at most 100 items, and the deployment or any selected
+claim may advertise a lower limit. The Rust typed client rejects more than 100
+items before transport. All clients surface a server-side lower-limit rejection
+as HTTP 413 with `batch.too_large`.
+
+For a high-volume workload, split targets into stable ordered slices of no more
+than 100, or smaller slices when member results are large. Assign one unique
+idempotency key to each slice and persist that key with the slice definition.
+Every retry after a timeout, cancellation, process restart, or lost response
+must send the identical slice with the same key. Do not reuse a key for the
+next slice. Items in the HTTP 200 response remain in request order and may be a
+mix of `succeeded` and `failed`; retrying a completed slice replays that result
+instead of dispatching its registry consultations again.
+
 ```python
 from registry_notary import RetryPolicy
 
