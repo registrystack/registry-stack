@@ -54,6 +54,26 @@ OPENAPI_HTTP_METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}
 # acceptable and is reviewed as a narrow exception.
 STATIC_OPENAPI_OPERATION_ALLOWLIST: dict[tuple[str, str], str] = {}
 
+# These protected record-read routes are part of Relay's stable core data plane.
+# Standards feature-roster changes must not reclassify them with optional adapters.
+CORE_STABLE_ROUTE_KEYS = {
+    (
+        "public",
+        "GET",
+        "/v1/datasets/{dataset_id}/entities/{entity}/records",
+    ),
+    (
+        "public",
+        "GET",
+        "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}",
+    ),
+    (
+        "public",
+        "GET",
+        "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}",
+    ),
+}
+
 
 def load_json(path: Path) -> object:
     try:
@@ -130,11 +150,7 @@ def validate_manifest() -> None:
         check_value(entry, "stability", STABILITY)
         check_value(entry, "data_classification", DATA)
         check_value(entry, "source", SOURCES)
-        if entry["feature"] is not None and entry["stability"] != "experimental":
-            fail(
-                f"{entry['path']} is feature-gated but has stability "
-                f"{entry['stability']}; the 1.0 optional surfaces are experimental"
-            )
+        validate_stability(entry)
         if entry["method"] not in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}:
             fail(f"{entry['path']} has invalid method {entry['method']}")
         if not isinstance(entry["scopes"], list):
@@ -181,6 +197,18 @@ def validate_manifest() -> None:
     if stale:
         fail(f"exposure-manifest.json contains endpoints missing from route-inventory.json: {stale}")
     validate_route_sources(inventory)
+
+
+def validate_stability(entry: dict) -> None:
+    if entry["feature"] is not None and entry["stability"] != "experimental":
+        fail(
+            f"{entry['path']} is feature-gated but has stability "
+            f"{entry['stability']}; the 1.0 optional surfaces are experimental"
+        )
+    if key(entry) in CORE_STABLE_ROUTE_KEYS and entry["stability"] != "stable":
+        fail(
+            f"{entry['path']} is a core protected record-read route and must remain stable"
+        )
 
 
 def check_value(entry: dict, field: str, allowed: set[str]) -> None:

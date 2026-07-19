@@ -104,6 +104,38 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         )
         self.module.validate_manifest()
 
+    def test_core_record_read_routes_must_remain_stable(self):
+        expected = {
+            (
+                "public",
+                "GET",
+                "/v1/datasets/{dataset_id}/entities/{entity}/records",
+            ),
+            (
+                "public",
+                "GET",
+                "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}",
+            ),
+            (
+                "public",
+                "GET",
+                "/v1/datasets/{dataset_id}/entities/{entity}/records/{id}/relationships/{relationship}",
+            ),
+        }
+        self.assertEqual(self.module.CORE_STABLE_ROUTE_KEYS, expected)
+
+        for listener, method, path in expected:
+            with self.subTest(path=path):
+                entry = self.entry(
+                    listener=listener,
+                    method=method,
+                    path=path,
+                    stability="experimental",
+                )
+                with self.assertRaises(SystemExit):
+                    self.module.validate_stability(entry)
+                self.module.validate_stability({**entry, "stability": "stable"})
+
     def test_missing_route_manifest_entry_fails(self):
         self.write_contracts(self.entry(path="/other"))
         with self.assertRaises(SystemExit):
