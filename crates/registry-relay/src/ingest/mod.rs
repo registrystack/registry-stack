@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use arc_swap::ArcSwap;
@@ -80,6 +81,10 @@ pub struct IngestPlan {
     cache_layout: Arc<CacheLayout>,
     df_ctx: Arc<SessionContext>,
     readiness: Arc<ArcSwap<ResourceReadiness>>,
+    /// Consecutive refresh or refresh-metadata failures while a last-good
+    /// table remains ready. This is separate from readiness so availability
+    /// does not hide refresh health.
+    consecutive_refresh_failures: AtomicU64,
     materializations: OnceLock<Arc<SnapshotMaterializationCoordinator>>,
     /// Serialises concurrent refresh attempts so they don't pile up.
     refresh_lock: Mutex<()>,
@@ -174,6 +179,7 @@ impl IngestPlan {
             cache_layout: Arc::new(CacheLayout::new(cache_root)),
             df_ctx,
             readiness: Arc::new(ArcSwap::from_pointee(ResourceReadiness::NotReady)),
+            consecutive_refresh_failures: AtomicU64::new(0),
             materializations: OnceLock::new(),
             refresh_lock: Mutex::new(()),
         }
@@ -195,32 +201,34 @@ impl IngestPlan {
 
     async fn refresh_unlocked(&self) -> Result<(), IngestError> {
         let prior = self.readiness.load_full();
-        if let Some(coordinator) = self.materializations.get() {
-            return self
-                .refresh_snapshot_exact(coordinator, prior.as_ref())
-                .await;
-        }
-        let result = match self.prepare_pipeline().await {
-            Ok(prepared) => {
-                let result = {
-                    let _publication_guard = publication_write_guard().await;
-                    self.commit_prepared(&prepared).await
-                };
-                if result.is_ok() {
-                    self.finalize_prepared(&prepared).await;
+        let result = if let Some(coordinator) = self.materializations.get() {
+            self.refresh_snapshot_exact(coordinator, prior.as_ref())
+                .await
+        } else {
+            match self.prepare_pipeline().await {
+                Ok(prepared) => {
+                    let result = {
+                        let _publication_guard = publication_write_guard().await;
+                        self.commit_prepared(&prepared).await
+                    };
+                    if result.is_ok() {
+                        self.finalize_prepared(&prepared).await;
+                    }
+                    result
                 }
-                result
+                Err(error) => Err(error),
             }
-            Err(error) => Err(error),
         };
         if let Err(ref e) = result {
             let code = ingest_error_code(e);
             // Preserve prior Ready state on refresh failure (W1-15).
-            if !matches!(prior.as_ref(), ResourceReadiness::Ready { .. }) {
+            if matches!(prior.as_ref(), ResourceReadiness::Ready { .. }) {
+                self.record_refresh_failure();
+            } else {
                 self.store_failed(code, prior.as_ref());
             }
-            // If we were already Ready, leave it unchanged so queries
-            // keep serving the last good data.
+            // If we were already Ready, keep the last-good table and its
+            // registration timestamp while surfacing the refresh failure.
         }
         result
     }
@@ -238,12 +246,7 @@ impl IngestPlan {
                 .await
                 .map_err(|_| IngestError::MaterializationFailed)?
             {
-                return self
-                    .reconcile_snapshot_exact(coordinator, active)
-                    .await
-                    .inspect_err(|error| {
-                        self.store_failed(ingest_error_code(error), prior);
-                    });
+                return self.reconcile_snapshot_exact(coordinator, active).await;
             }
         }
 
@@ -268,9 +271,6 @@ impl IngestPlan {
                         resource_id = %self.resource_id,
                     );
                 }
-                if !matches!(prior, ResourceReadiness::Ready { .. }) {
-                    self.store_failed(ingest_error_code(&error), prior);
-                }
                 return Err(error);
             }
         };
@@ -281,9 +281,6 @@ impl IngestPlan {
             Ok(pending) => pending,
             Err(_) => {
                 self.discard_prepared(&prepared).await;
-                if !matches!(prior, ResourceReadiness::Ready { .. }) {
-                    self.store_failed("ingest.materialization_failed", prior);
-                }
                 return Err(IngestError::MaterializationFailed);
             }
         };
@@ -299,9 +296,6 @@ impl IngestPlan {
             }
             Err(error) => {
                 self.discard_prepared(&prepared).await;
-                if !matches!(prior, ResourceReadiness::Ready { .. }) {
-                    self.store_failed(ingest_error_code(&error), prior);
-                }
                 Err(error)
             }
         }
@@ -373,12 +367,44 @@ impl IngestPlan {
     }
 
     fn store_failed(&self, code: &'static str, prior: &ResourceReadiness) {
+        self.consecutive_refresh_failures
+            .store(0, Ordering::Relaxed);
         let since = match prior {
             ResourceReadiness::Failed { since, .. } => *since,
             _ => OffsetDateTime::now_utc(),
         };
         self.readiness
             .store(Arc::new(ResourceReadiness::Failed { code, since }));
+    }
+
+    fn record_refresh_failure(&self) {
+        if matches!(self.readiness(), ResourceReadiness::Ready { .. }) {
+            let _ = self.consecutive_refresh_failures.fetch_update(
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |count| Some(count.saturating_add(1)),
+            );
+        }
+    }
+
+    pub(crate) fn record_unchanged_metadata_success(&self) {
+        if matches!(self.readiness(), ResourceReadiness::Ready { .. }) {
+            self.consecutive_refresh_failures
+                .store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn loaded_source_revision(&self) -> Option<String> {
+        match self.readiness() {
+            ResourceReadiness::Ready {
+                source_revision, ..
+            } => source_revision,
+            ResourceReadiness::NotReady | ResourceReadiness::Failed { .. } => None,
+        }
+    }
+
+    fn refresh_failure_count(&self) -> u64 {
+        self.consecutive_refresh_failures.load(Ordering::Relaxed)
     }
 
     /// Expose dataset_id for the refresh loop.
@@ -393,12 +419,17 @@ impl IngestPlan {
 
     /// Sample connector metadata for mtime-policy polling.
     pub(crate) async fn connector_metadata(&self) -> Result<ConnectorMetadata, ConnectorError> {
-        if self.materializations.get().is_some() {
-            return Err(ConnectorError::source_unreadable(
+        let result = if self.materializations.get().is_some() {
+            Err(ConnectorError::source_unreadable(
                 "snapshot-exact metadata polling requires an audited materialization attempt",
-            ));
+            ))
+        } else {
+            self.connector.metadata().await
+        };
+        if result.is_err() {
+            self.record_refresh_failure();
         }
-        self.connector.metadata().await
+        result
     }
 
     // ── Inner pipeline ────────────────────────────────────────────────────────
@@ -626,10 +657,13 @@ impl IngestPlan {
             IngestError::RegistrationFailed
         })?;
 
+        self.consecutive_refresh_failures
+            .store(0, Ordering::Relaxed);
         self.readiness.store(Arc::new(ResourceReadiness::Ready {
             ingest_ulid: prepared.readiness_ingest_ulid,
             schema: Arc::clone(&prepared.schema),
             registered_at: OffsetDateTime::now_utc(),
+            source_revision: prepared.source_revision.clone(),
         }));
 
         Ok(())
@@ -748,6 +782,10 @@ pub enum ResourceReadiness {
         ingest_ulid: Ulid,
         schema: SchemaRef,
         registered_at: OffsetDateTime,
+        /// Non-reversible digest of the connector token captured with this
+        /// loaded generation. Raw ETags and source timestamps are not retained
+        /// in this public, debug-printable state.
+        source_revision: Option<String>,
     },
     /// Last attempt failed. Carries the stable `ingest.*` code and the
     /// timestamp of the first failure (not the most recent).
@@ -786,6 +824,7 @@ struct PreparedReloadResource {
     resource_id: ResourceId,
     plan: Arc<IngestPlan>,
     prior_readiness: ResourceReadiness,
+    prior_refresh_failures: u64,
     prior_table: Option<TableSnapshot>,
     prepared: PreparedIngest,
 }
@@ -1079,13 +1118,16 @@ impl IngestRegistry {
                         resource_id: resource_id.clone(),
                         plan: Arc::clone(plan),
                         prior_readiness,
+                        prior_refresh_failures: plan.refresh_failure_count(),
                         prior_table: None,
                         prepared: prepared_ingest,
                     });
                 }
                 Err(error) => {
                     prepare_failed = true;
-                    if !matches!(prior_readiness, ResourceReadiness::Ready { .. }) {
+                    if matches!(prior_readiness, ResourceReadiness::Ready { .. }) {
+                        plan.record_refresh_failure();
+                    } else {
                         plan.store_failed(ingest_error_code(&error), &prior_readiness);
                     }
                     resources.insert(
@@ -1127,6 +1169,7 @@ impl IngestRegistry {
                     resource.prior_table = prior_table;
                 }
                 Err(error) => {
+                    resource.plan.record_refresh_failure();
                     resources.insert(
                         (resource.dataset_id.clone(), resource.resource_id.clone()),
                         ResourceReloadResult {
@@ -1156,7 +1199,9 @@ impl IngestRegistry {
         for (idx, resource) in prepared.iter().enumerate() {
             if let Err(error) = resource.plan.commit_prepared(&resource.prepared).await {
                 self.rollback_committed_reload(&prepared[..idx]).await;
-                if !matches!(resource.prior_readiness, ResourceReadiness::Ready { .. }) {
+                if matches!(resource.prior_readiness, ResourceReadiness::Ready { .. }) {
+                    resource.plan.record_refresh_failure();
+                } else {
                     resource
                         .plan
                         .store_failed(ingest_error_code(&error), &resource.prior_readiness);
@@ -1223,6 +1268,7 @@ impl IngestRegistry {
                         ReadyResource {
                             ingest_ulid,
                             registered_at,
+                            consecutive_refresh_failures: plan.refresh_failure_count(),
                         },
                     );
                 }
@@ -1258,6 +1304,10 @@ impl IngestRegistry {
                     resource
                         .plan
                         .restore_readiness(resource.prior_readiness.clone());
+                    resource
+                        .plan
+                        .consecutive_refresh_failures
+                        .store(resource.prior_refresh_failures, Ordering::Relaxed);
                 }
                 Err(error) => {
                     tracing::error!(
@@ -1307,6 +1357,9 @@ pub struct ReadyResource {
     /// registered with the session context. The `/ready` and aggregate
     /// handlers treat this as the resource's `as_of`.
     pub registered_at: OffsetDateTime,
+    /// Number of consecutive refresh or metadata-poll failures after this
+    /// last-good table was registered.
+    pub consecutive_refresh_failures: u64,
 }
 
 /// Aggregate readiness across every resource. The `/ready` handler
@@ -1354,14 +1407,16 @@ fn atomic_reload_failed_report(
 }
 
 fn restricted_source_revision(metadata: &crate::source::SourceMetadata) -> Option<String> {
-    if let Some(etag) = metadata.etag.as_deref() {
-        return Some(format!(
-            "sha256:{}",
-            encode_sha256(Sha256::digest(etag.as_bytes()).into())
-        ));
-    }
-    metadata.mtime.map(|mtime| {
-        let value = mtime.to_string();
+    let change_token = metadata
+        .etag
+        .as_deref()
+        .map(str::to_owned)
+        .or_else(|| metadata.mtime.map(|mtime| mtime.to_string()));
+    restricted_change_token_revision(change_token.as_deref())
+}
+
+pub(super) fn restricted_change_token_revision(change_token: Option<&str>) -> Option<String> {
+    change_token.map(|value| {
         format!(
             "sha256:{}",
             encode_sha256(Sha256::digest(value.as_bytes()).into())
@@ -1534,7 +1589,7 @@ fn refresh_policy_from_config(cfg: &RefreshConfig) -> RefreshPolicy {
 #[cfg(test)]
 mod tests {
     use std::pin::Pin;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use tempfile::TempDir;
     use tokio::sync::Notify;
@@ -1542,8 +1597,11 @@ mod tests {
 
     use super::*;
     use crate::config::{FieldConfig, FieldType};
+    use crate::format::csv::CsvFormat;
     use crate::format::{DecodedStream, FormatError, FormatFuture};
-    use crate::source::{OpenedSource, SourceDescriptor, SourceFuture, SourceMetadata};
+    use crate::source::{
+        OpenedSource, SourceDescriptor, SourceError, SourceFuture, SourceMetadata,
+    };
 
     fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
         serde_json::from_str(&format!(r#""{value}""#)).expect("id deserializes")
@@ -1573,6 +1631,68 @@ mod tests {
 
         fn metadata<'a>(&'a self) -> SourceFuture<'a, SourceMetadata> {
             Box::pin(async { Ok(SourceMetadata::default()) })
+        }
+    }
+
+    struct ToggleSource {
+        target: String,
+        open_count: AtomicUsize,
+        fail_open: AtomicBool,
+        fail_metadata: AtomicBool,
+    }
+
+    impl ToggleSource {
+        fn new(target: &str) -> Arc<Self> {
+            Arc::new(Self {
+                target: target.to_string(),
+                open_count: AtomicUsize::new(0),
+                fail_open: AtomicBool::new(false),
+                fail_metadata: AtomicBool::new(false),
+            })
+        }
+    }
+
+    impl Source for ToggleSource {
+        fn descriptor(&self) -> SourceDescriptor {
+            SourceDescriptor {
+                scheme: "test",
+                target: self.target.clone(),
+            }
+        }
+
+        fn open<'a>(&'a self) -> SourceFuture<'a, OpenedSource> {
+            Box::pin(async move {
+                self.open_count.fetch_add(1, Ordering::SeqCst);
+                if self.fail_open.load(Ordering::SeqCst) {
+                    return Err(SourceError::Unreadable(
+                        "synthetic open failure".to_string(),
+                    ));
+                }
+                let bytes = b"id\n1\n".to_vec();
+                Ok(OpenedSource {
+                    reader: Box::pin(std::io::Cursor::new(bytes.clone())),
+                    metadata: SourceMetadata {
+                        size_bytes: Some(bytes.len() as u64),
+                        etag: Some("revision-1".to_string()),
+                        ..SourceMetadata::default()
+                    },
+                })
+            })
+        }
+
+        fn metadata<'a>(&'a self) -> SourceFuture<'a, SourceMetadata> {
+            Box::pin(async move {
+                if self.fail_metadata.load(Ordering::SeqCst) {
+                    return Err(SourceError::Unreadable(
+                        "synthetic metadata failure".to_string(),
+                    ));
+                }
+                Ok(SourceMetadata {
+                    size_bytes: Some(5),
+                    etag: Some("revision-1".to_string()),
+                    ..SourceMetadata::default()
+                })
+            })
         }
     }
 
@@ -1609,6 +1729,22 @@ mod tests {
         }
     }
 
+    fn csv_schema_config() -> SchemaConfig {
+        SchemaConfig {
+            strict: false,
+            fields: vec![FieldConfig {
+                name: "c0".to_string(),
+                r#type: FieldType::String,
+                nullable: true,
+                sensitive: false,
+                concept_uri: None,
+                codelist: None,
+                unit: None,
+                language: None,
+            }],
+        }
+    }
+
     fn test_plan(format: Arc<dyn Format>) -> IngestPlan {
         let tmp = TempDir::new().expect("tempdir");
         IngestPlan::new(
@@ -1620,6 +1756,35 @@ mod tests {
             Arc::from(tmp.path()),
             Arc::new(SessionContext::new()),
         )
+    }
+
+    fn successful_plan(
+        dataset: &str,
+        resource: &str,
+        source: Arc<ToggleSource>,
+        cache_root: Arc<Path>,
+        df_ctx: Arc<SessionContext>,
+    ) -> Arc<IngestPlan> {
+        Arc::new(IngestPlan::new(
+            id(dataset),
+            id(resource),
+            source,
+            Arc::new(CsvFormat::new()),
+            csv_schema_config(),
+            cache_root,
+            df_ctx,
+        ))
+    }
+
+    fn readiness_details(plan: &IngestPlan) -> (Ulid, OffsetDateTime) {
+        match plan.readiness() {
+            ResourceReadiness::Ready {
+                ingest_ulid,
+                registered_at,
+                ..
+            } => (ingest_ulid, registered_at),
+            other => panic!("expected ready resource, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1641,6 +1806,195 @@ mod tests {
         };
 
         assert_eq!(first_since, second_since);
+    }
+
+    #[tokio::test]
+    async fn failed_manual_refresh_preserves_last_good_readiness_and_recovers() {
+        let tmp = TempDir::new().expect("tempdir");
+        let source = ToggleSource::new("resource");
+        let plan = successful_plan(
+            "dataset",
+            "resource",
+            Arc::clone(&source),
+            Arc::from(tmp.path()),
+            Arc::new(SessionContext::new()),
+        );
+        plan.initial_ingest()
+            .await
+            .expect("initial ingest succeeds");
+        let (initial_ulid, initial_registered_at) = readiness_details(&plan);
+
+        source.fail_open.store(true, Ordering::SeqCst);
+        plan.refresh().await.expect_err("refresh fails");
+        let (failed_refresh_ulid, failed_refresh_registered_at) = readiness_details(&plan);
+        assert_eq!(failed_refresh_ulid, initial_ulid);
+        assert_eq!(failed_refresh_registered_at, initial_registered_at);
+        assert_eq!(plan.refresh_failure_count(), 1);
+
+        let registry = IngestRegistry {
+            plans: BTreeMap::from([((id("dataset"), id("resource")), Arc::clone(&plan))]),
+        };
+        let snapshot = registry.snapshot();
+        assert!(snapshot.fully_ready(), "last-good data remains ready");
+        assert_eq!(
+            snapshot
+                .ready
+                .get(&(id("dataset"), id("resource")))
+                .expect("ready resource")
+                .consecutive_refresh_failures,
+            1
+        );
+
+        source.fail_open.store(false, Ordering::SeqCst);
+        plan.refresh().await.expect("refresh recovers");
+        let (recovered_ulid, _) = readiness_details(&plan);
+        assert_ne!(recovered_ulid, initial_ulid);
+        assert_eq!(plan.refresh_failure_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn mtime_first_poll_uses_loaded_token_and_recovers_health_without_reingest() {
+        let tmp = TempDir::new().expect("tempdir");
+        let source = ToggleSource::new("resource");
+        let plan = successful_plan(
+            "dataset",
+            "resource",
+            Arc::clone(&source),
+            Arc::from(tmp.path()),
+            Arc::new(SessionContext::new()),
+        );
+        plan.initial_ingest()
+            .await
+            .expect("initial ingest succeeds");
+        let (initial_ulid, initial_registered_at) = readiness_details(&plan);
+        let readiness_debug = format!("{:?}", plan.readiness());
+        assert!(
+            !readiness_debug.contains("revision-1"),
+            "raw connector tokens must not enter public readiness state"
+        );
+        assert!(
+            plan.loaded_source_revision()
+                .is_some_and(|revision| revision.starts_with("sha256:")),
+            "the loaded generation retains only a non-reversible token digest"
+        );
+
+        source.fail_metadata.store(true, Ordering::SeqCst);
+        plan.connector_metadata()
+            .await
+            .expect_err("metadata poll fails");
+        assert_eq!(plan.refresh_failure_count(), 1);
+
+        source.fail_metadata.store(false, Ordering::SeqCst);
+        let notified = Arc::new(Notify::new());
+        let shutdown = CancellationToken::new();
+        let publish = {
+            let notified = Arc::clone(&notified);
+            Arc::new(move || notified.notify_one())
+        };
+        let task = tokio::spawn(run_refresh_loop(
+            Arc::clone(&plan),
+            RefreshPolicy::Mtime {
+                interval: Duration::from_millis(1),
+            },
+            shutdown.clone(),
+            publish,
+            None,
+        ));
+        timeout(Duration::from_secs(1), notified.notified())
+            .await
+            .expect("unchanged first poll publishes readiness");
+        shutdown.cancel();
+        task.await.expect("mtime refresh loop joins");
+
+        assert_eq!(plan.refresh_failure_count(), 0);
+        assert_eq!(
+            source.open_count.load(Ordering::SeqCst),
+            1,
+            "the unchanged first poll must reuse the startup-loaded generation"
+        );
+        assert_eq!(
+            readiness_details(&plan),
+            (initial_ulid, initial_registered_at),
+            "an unchanged metadata poll must not advance the last data-load timestamp"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_failure_count_saturates() {
+        let tmp = TempDir::new().expect("tempdir");
+        let source = ToggleSource::new("resource");
+        let plan = successful_plan(
+            "dataset",
+            "resource",
+            source,
+            Arc::from(tmp.path()),
+            Arc::new(SessionContext::new()),
+        );
+        plan.initial_ingest()
+            .await
+            .expect("initial ingest succeeds");
+        plan.consecutive_refresh_failures
+            .store(u64::MAX, Ordering::Relaxed);
+        plan.record_refresh_failure();
+        assert_eq!(plan.refresh_failure_count(), u64::MAX);
+    }
+
+    #[tokio::test]
+    async fn atomic_reload_marks_only_the_resource_that_actually_failed() {
+        let tmp = TempDir::new().expect("tempdir");
+        let df_ctx = Arc::new(SessionContext::new());
+        let healthy_source = ToggleSource::new("healthy");
+        let failing_source = ToggleSource::new("failing");
+        let healthy = successful_plan(
+            "dataset",
+            "a_healthy",
+            Arc::clone(&healthy_source),
+            Arc::from(tmp.path()),
+            Arc::clone(&df_ctx),
+        );
+        let failing = successful_plan(
+            "dataset",
+            "b_failing",
+            Arc::clone(&failing_source),
+            Arc::from(tmp.path()),
+            df_ctx,
+        );
+        healthy
+            .initial_ingest()
+            .await
+            .expect("healthy initial ingest");
+        failing
+            .initial_ingest()
+            .await
+            .expect("failing initial ingest");
+        let registry = IngestRegistry {
+            plans: BTreeMap::from([
+                ((id("dataset"), id("a_healthy")), Arc::clone(&healthy)),
+                ((id("dataset"), id("b_failing")), Arc::clone(&failing)),
+            ]),
+        };
+
+        failing_source.fail_open.store(true, Ordering::SeqCst);
+        let report = registry.reload_all().await;
+        assert_eq!(report.succeeded, 0);
+        assert_eq!(
+            report.failed, 2,
+            "atomic reload reports the whole batch failed"
+        );
+        assert_eq!(
+            healthy.refresh_failure_count(),
+            0,
+            "prepared peer was skipped"
+        );
+        assert_eq!(
+            failing.refresh_failure_count(),
+            1,
+            "actual failure is marked"
+        );
+        assert!(
+            registry.snapshot().fully_ready(),
+            "both last-good tables remain ready"
+        );
     }
 
     #[tokio::test]

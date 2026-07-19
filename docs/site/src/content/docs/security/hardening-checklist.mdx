@@ -110,6 +110,11 @@ or the [Registry Notary operator configuration reference](../../products/registr
 - Keep the admin listener private. A publicly exposed admin surface trips
   `relay.admin.public_exposure` or `notary.admin.shared_exposure`, both `startup_fail` at
   `evidence_grade`.
+- Scrape Relay metrics from the private admin network with `registry_relay:metrics_read`. Alert when
+  `registry_relay_ingest_consecutive_refresh_failures` reaches `3`, or sooner when the deployment's
+  freshness service-level objective requires it. Relay deliberately keeps `/ready` at `200` while
+  a valid last-good table remains available. Refresh health shows source load failures; it does not
+  prove that business-domain data is current.
 - Set explicit `cors.allowed_origins`. The default CORS policy is deny by omission; add only the
   origins your integration actually needs.
 - Enable `server.trust_proxy` with an explicit `trusted_proxies` list only when a reverse proxy

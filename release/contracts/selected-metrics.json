@@ -71,6 +71,28 @@
       "source": "crates/registry-relay/src/observability.rs"
     },
     {
+      "product": "registry-relay",
+      "name": "registry_relay_ingest_consecutive_refresh_failures",
+      "type": "gauge",
+      "meaning": "Consecutive failed refresh attempts for a ready resource since its last successful data load or unchanged metadata poll.",
+      "labels": {
+        "dataset_id": "Configured dataset identifier; cardinality is bounded by configured resources.",
+        "resource_id": "Configured resource identifier; cardinality is bounded by configured resources."
+      },
+      "source": "crates/registry-relay/src/observability.rs"
+    },
+    {
+      "product": "registry-relay",
+      "name": "registry_relay_ingest_last_successful_refresh_timestamp_seconds",
+      "type": "gauge",
+      "meaning": "Unix timestamp of the last successful data load for a ready resource.",
+      "labels": {
+        "dataset_id": "Configured dataset identifier; cardinality is bounded by configured resources.",
+        "resource_id": "Configured resource identifier; cardinality is bounded by configured resources."
+      },
+      "source": "crates/registry-relay/src/observability.rs"
+    },
+    {
       "product": "registry-notary",
       "name": "registry_notary_http_requests_total",
       "type": "counter",

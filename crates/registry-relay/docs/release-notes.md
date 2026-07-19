@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Relay now surfaces per-resource last-good refresh health through protected
+  Prometheus gauges and restricted admin posture. Failed refreshes preserve a
+  valid last-good table and `/ready` remains healthy, while consecutive failure
+  counts and the last successful data-load timestamp support operator alerts.
 - The 1.0 support roster now treats OpenAPI 3.x and RFC 9457, RFC 9727 and the
   portable metadata family, CSV and XLSX source input, and JSON aggregate output
   as stable. Live OGC adapters, SP DCI routes, standards-CEL mapping, CSV and

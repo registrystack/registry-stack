@@ -287,6 +287,7 @@ async fn try_server_full(
         ReadyResource {
             ingest_ulid,
             registered_at: time::OffsetDateTime::now_utc(),
+            consecutive_refresh_failures: 0,
         },
     );
     let (_tx, readiness) = watch::channel(snapshot);

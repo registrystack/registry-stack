@@ -21,6 +21,10 @@ const notaryExamplePath = resolve(
   repositoryRoot,
   'crates/registry-platform-ops/examples/registry-notary.posture.valid.json',
 );
+const relayRestrictedFixturePath = resolve(
+  repositoryRoot,
+  'crates/registry-platform-ops/fixtures/posture/registry-relay.restricted-posture.valid.json',
+);
 
 function frontmatter(text) {
   const end = text.indexOf('\n---\n', 4);
@@ -42,6 +46,7 @@ test('RS-OP-POSTURE names the shipped Relay and Notary examples', () => {
   const page = readFileSync(specPath, 'utf8');
   const relayExample = JSON.parse(readFileSync(relayExamplePath, 'utf8'));
   const notaryExample = JSON.parse(readFileSync(notaryExamplePath, 'utf8'));
+  const relayRestricted = JSON.parse(readFileSync(relayRestrictedFixturePath, 'utf8'));
 
   assert.equal(relayExample.schema, 'registry.ops.posture.v1');
   assert.equal(relayExample.component, 'registry-relay');
@@ -49,9 +54,15 @@ test('RS-OP-POSTURE names the shipped Relay and Notary examples', () => {
   assert.equal(notaryExample.schema, 'registry.ops.posture.v1');
   assert.equal(notaryExample.component, 'registry-notary');
   assert.equal(notaryExample.tier, 'default');
+  assert.equal(relayRestricted.component, 'registry-relay');
+  assert.equal(relayRestricted.tier, 'restricted');
+  assert.equal(relayRestricted.relay.refresh_health[0].serving_last_good, true);
   assert.match(page, /registry-relay\.posture\.valid\.json/);
   assert.match(page, /registry-notary\.posture\.valid\.json/);
   assert.match(page, /restricted-posture\.valid\.json/);
+  assert.match(page, /registry-relay\.restricted-posture\.valid\.json/);
+  assert.match(page, /three consecutive failures/);
+  assert.match(page, /semantic or domain freshness/);
 });
 
 test('RS-OP-POSTURE records the closed v1 schema and new-identifier rule', () => {

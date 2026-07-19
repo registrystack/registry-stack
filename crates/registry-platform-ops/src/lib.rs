@@ -52,6 +52,9 @@ pub const DEFAULT_REDACTED_POSTURE_FIXTURE_V1: &str =
 pub const RESTRICTED_POSTURE_FIXTURE_V1: &str =
     include_str!("../fixtures/posture/restricted-posture.valid.json");
 
+pub const RELAY_RESTRICTED_POSTURE_FIXTURE_V1: &str =
+    include_str!("../fixtures/posture/registry-relay.restricted-posture.valid.json");
+
 /// JSON Schema for the audit off-host ack cursor: the local state file written
 /// by whatever ships audit events off-host and read by services to check
 /// shipping freshness.

@@ -322,7 +322,7 @@ async fn ready_returns_200_without_resource_readiness_state() {
 }
 
 #[tokio::test]
-async fn ready_returns_200_when_all_resources_registered() {
+async fn ready_returns_200_when_last_good_resources_have_refresh_failures() {
     let dataset: DatasetId = id("social_registry");
     let resource: ResourceId = id("beneficiaries");
     let mut snapshot = ReadinessSnapshot::default();
@@ -331,6 +331,7 @@ async fn ready_returns_200_when_all_resources_registered() {
         ReadyResource {
             ingest_ulid: Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap(),
             registered_at: time::OffsetDateTime::now_utc(),
+            consecutive_refresh_failures: 3,
         },
     );
 
