@@ -58,6 +58,26 @@ class GateInventoryTest(unittest.TestCase):
             "OpenID conformance runner tests", self.module.missing_gates(text)
         )
 
+    def test_missing_external_integration_runner_tests_are_reported(self) -> None:
+        text = self.workflow.replace(
+            "python3 -m unittest release/scripts/test_integration_e2_runner.py",
+            "python3 release/scripts/integration-e2-runner.py dry-run",
+        )
+        self.assertIn(
+            "External integration evidence runner tests",
+            self.module.missing_gates(text),
+        )
+
+    def test_missing_external_integration_packet_validation_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "python3 release/scripts/integration-e2-runner.py validate",
+            "python3 release/scripts/integration-e2-runner.py plan",
+        )
+        self.assertIn(
+            "External integration evidence packet",
+            self.module.missing_gates(text),
+        )
+
     def test_missing_stable_surface_gate_is_reported(self) -> None:
         text = self.workflow.replace(
             "run: python3 release/scripts/check-stable-surface-compatibility.py",

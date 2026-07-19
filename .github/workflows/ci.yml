@@ -288,6 +288,12 @@ jobs:
       - name: Test OpenID conformance runner
         run: python3 -m unittest release/scripts/test_openid_conformance_runner.py
 
+      - name: Test external integration evidence runner
+        run: python3 -m unittest release/scripts/test_integration_e2_runner.py
+
+      - name: Validate external integration evidence packet
+        run: python3 release/scripts/integration-e2-runner.py validate
+
       - name: Gate inventory
         run: python3 release/scripts/check-gates-inventory.py
 

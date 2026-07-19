@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/schemas/release/integration-e2-run-result-v1.json",
+  "title": "Registry Stack integration E2 public run result",
+  "description": "Closed, redaction-safe public evidence for one published-candidate OpenCRVS or DHIS2 integration run. Raw source evidence is intentionally excluded.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_kind",
+    "run_id",
+    "profile_id",
+    "support_status",
+    "status",
+    "started_at",
+    "completed_at",
+    "release",
+    "source",
+    "project",
+    "cases",
+    "redaction",
+    "teardown",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": { "const": "registry.release.integration_e2_run_result.v1" },
+    "record_kind": { "const": "candidate_evidence" },
+    "run_id": { "$ref": "#/$defs/slug" },
+    "profile_id": {
+      "enum": ["opencrvs-dci-v1.9", "dhis2-tracker-2.41.9"]
+    },
+    "support_status": {
+      "const": "Registry Stack-supported unofficial integration profile"
+    },
+    "status": { "enum": ["passed", "failed"] },
+    "started_at": { "$ref": "#/$defs/timestamp" },
+    "completed_at": { "$ref": "#/$defs/timestamp" },
+    "release": { "$ref": "#/$defs/release" },
+    "source": { "$ref": "#/$defs/source" },
+    "project": { "$ref": "#/$defs/project" },
+    "cases": {
+      "type": "array",
+      "minItems": 11,
+      "maxItems": 11,
+      "items": { "$ref": "#/$defs/case" }
+    },
+    "redaction": { "$ref": "#/$defs/redaction" },
+    "teardown": { "$ref": "#/$defs/teardown" },
+    "limitations": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "unofficial-integration-profile",
+          "single-pinned-product-version",
+          "single-reviewed-read-operation",
+          "non-production-instance",
+          "not-product-certification",
+          "not-general-country-system-conformance"
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "image": {
+      "type": "string",
+      "pattern": "^ghcr\\.io/registrystack/registry-(?:relay|notary)@sha256:[0-9a-f]{64}$"
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component", "version", "commit"],
+      "properties": {
+        "component": { "$ref": "#/$defs/slug" },
+        "version": { "type": "string", "pattern": "^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$" },
+        "commit": { "$ref": "#/$defs/commit" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tag",
+        "version",
+        "source_commit",
+        "registryctl_asset_sha256",
+        "image_lock_sha256",
+        "release_capsule_sha256",
+        "relay_image",
+        "notary_image",
+        "candidate_assets_verified",
+        "authenticity_verified"
+      ],
+      "properties": {
+        "tag": { "type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "source_commit": { "$ref": "#/$defs/commit" },
+        "registryctl_asset_sha256": { "$ref": "#/$defs/sha256" },
+        "image_lock_sha256": { "$ref": "#/$defs/sha256" },
+        "release_capsule_sha256": { "$ref": "#/$defs/sha256" },
+        "relay_image": { "$ref": "#/$defs/image" },
+        "notary_image": { "$ref": "#/$defs/image" },
+        "candidate_assets_verified": { "const": true },
+        "authenticity_verified": { "const": true }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product", "baseline", "operation_id", "method", "path", "owner_attestation_sha256"],
+      "properties": {
+        "product": { "enum": ["opencrvs", "dhis2-tracker"] },
+        "baseline": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/baseline" }
+        },
+        "operation_id": { "$ref": "#/$defs/slug" },
+        "method": { "enum": ["GET", "POST"] },
+        "path": {
+          "enum": ["/registry/sync/search", "/api/tracker/trackedEntities/{uid}"]
+        },
+        "owner_attestation_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "starter",
+        "starter_content_digest",
+        "authored_inputs_sha256",
+        "build_review_sha256",
+        "relay_closure_sha256",
+        "notary_closure_sha256",
+        "generated_files_unchanged"
+      ],
+      "properties": {
+        "starter": { "enum": ["opencrvs-dci", "dhis2-tracker"] },
+        "starter_content_digest": { "$ref": "#/$defs/sha256" },
+        "authored_inputs_sha256": { "$ref": "#/$defs/sha256" },
+        "build_review_sha256": { "$ref": "#/$defs/sha256" },
+        "relay_closure_sha256": { "$ref": "#/$defs/sha256" },
+        "notary_closure_sha256": { "$ref": "#/$defs/sha256" },
+        "generated_files_unchanged": { "const": true }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "outcome",
+        "started_at",
+        "completed_at",
+        "duration_ms",
+        "result_code",
+        "source_data_access",
+        "source_data_access_evidence_sha256",
+        "audit_correlation_sha256",
+        "evidence_sha256"
+      ],
+      "properties": {
+        "case_id": {
+          "enum": [
+            "authorized-match",
+            "authorized-no-match",
+            "ambiguity",
+            "invalid-selector",
+            "wrong-caller",
+            "missing-scope",
+            "wrong-purpose",
+            "stale-contract",
+            "subject-mismatch",
+            "source-authorization-failure",
+            "deadline-enforced"
+          ]
+        },
+        "outcome": { "enum": ["passed", "failed", "not_applicable"] },
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "duration_ms": { "type": "integer", "minimum": 0, "maximum": 1800000 },
+        "result_code": { "$ref": "#/$defs/slug" },
+        "source_data_access": {
+          "enum": ["not_contacted", "contacted_once", "not_applicable", "unknown"]
+        },
+        "source_data_access_evidence_sha256": { "$ref": "#/$defs/sha256" },
+        "audit_correlation_sha256": { "$ref": "#/$defs/sha256" },
+        "evidence_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "passed",
+        "scanned_artifacts",
+        "scanned_bytes",
+        "seeded_canaries",
+        "forbidden_values_found",
+        "restricted_raw_evidence_bytes",
+        "raw_evidence_retained_restricted",
+        "report_sha256"
+      ],
+      "properties": {
+        "passed": { "const": true },
+        "scanned_artifacts": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "scanned_bytes": { "type": "integer", "minimum": 1, "maximum": 67108864 },
+        "seeded_canaries": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "forbidden_values_found": { "const": 0 },
+        "restricted_raw_evidence_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "raw_evidence_retained_restricted": { "const": true },
+        "report_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "teardown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempted", "status", "duration_ms", "completed_at", "evidence_sha256"],
+      "properties": {
+        "attempted": { "const": true },
+        "status": { "enum": ["completed", "failed"] },
+        "duration_ms": { "type": "integer", "minimum": 0, "maximum": 300000 },
+        "completed_at": { "$ref": "#/$defs/timestamp" },
+        "evidence_sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

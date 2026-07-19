@@ -33,6 +33,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "OpenID conformance runner tests",
         "run: python3 -m unittest release/scripts/test_openid_conformance_runner.py",
     ),
+    (
+        "External integration evidence runner tests",
+        "run: python3 -m unittest release/scripts/test_integration_e2_runner.py",
+    ),
+    (
+        "External integration evidence packet",
+        "run: python3 release/scripts/integration-e2-runner.py validate",
+    ),
     ("Release manifest validation", "release/scripts/registry-release validate"),
     ("Release docset validation", "release/scripts/registry-release validate-docsets"),
     ("Release import audit", "release/scripts/registry-release audit"),

@@ -1,0 +1,104 @@
+{
+  "schema_version": "registry.release.integration_e2_profile.v1",
+  "profile_id": "opencrvs-dci-v1.9",
+  "support_status": "Registry Stack-supported unofficial integration profile",
+  "starter": "opencrvs-dci",
+  "source": {
+    "product": "opencrvs",
+    "baseline": [
+      {
+        "component": "dci-adapter",
+        "version": "v1.9.0-rc.1",
+        "commit": "5e31d1e381d4bd8c7c74112d714fd49d263c6df7"
+      },
+      {
+        "component": "core",
+        "version": "v1.9.5",
+        "commit": "7243ccb79eb84254420878ff5146c6e50f084554"
+      },
+      {
+        "component": "farajaland",
+        "version": "v1.9.5",
+        "commit": "3c1a5612d8d7bebddd43463682860b38ef14bcb4"
+      }
+    ],
+    "operations": [
+      {
+        "id": "oauth-token",
+        "role": "credential",
+        "method": "POST",
+        "path": "owner-attested",
+        "max_calls": 1
+      },
+      {
+        "id": "jwks",
+        "role": "verification",
+        "method": "GET",
+        "path": "owner-attested",
+        "max_calls": 1
+      },
+      {
+        "id": "signed-uin-search",
+        "role": "data",
+        "method": "POST",
+        "path": "/registry/sync/search",
+        "selector": "exact UIN",
+        "max_calls": 1
+      }
+    ]
+  },
+  "authored_contract": {
+    "integration_alias": "birth-record",
+    "generated_yaml_edits_allowed": false,
+    "reviewed_changes": [
+      "Replace the synthetic /dci/v1/birth/search path with /registry/sync/search only after the compatibility probe passes.",
+      "Bind the owner-attested OAuth, JWKS, sender, receiver, registry, and record identifiers through the reviewed project inputs.",
+      "Keep the signed DCI helper and exact UIN selector verification in the authored integration and Rhai adapter.",
+      "Keep source origins and all live values out of the checked-in profile and public result."
+    ]
+  },
+  "dynamic_inputs": [
+    { "env": "OPENCRVS_SOURCE_ORIGIN", "classification": "restricted", "purpose": "source origin" },
+    { "env": "OPENCRVS_OAUTH_ORIGIN", "classification": "restricted", "purpose": "OAuth origin" },
+    { "env": "OPENCRVS_OAUTH_PATH", "classification": "restricted", "purpose": "OAuth token path" },
+    { "env": "OPENCRVS_JWKS_ORIGIN", "classification": "restricted", "purpose": "JWKS origin" },
+    { "env": "OPENCRVS_JWKS_PATH", "classification": "restricted", "purpose": "JWKS path" },
+    { "env": "OPENCRVS_SENDER_ID", "classification": "restricted", "purpose": "DCI sender" },
+    { "env": "OPENCRVS_RECEIVER_ID", "classification": "restricted", "purpose": "DCI receiver" },
+    { "env": "OPENCRVS_CLIENT_ID", "classification": "secret", "purpose": "OAuth client id" },
+    { "env": "OPENCRVS_CLIENT_SECRET", "classification": "secret", "purpose": "OAuth client secret" },
+    { "env": "OPENCRVS_MATCH_UIN", "classification": "subject", "purpose": "match selector" },
+    { "env": "OPENCRVS_NO_MATCH_UIN", "classification": "subject", "purpose": "no-match selector" },
+    { "env": "OPENCRVS_AMBIGUOUS_UIN", "classification": "subject", "purpose": "ambiguity selector" },
+    { "env": "OPENCRVS_MISMATCH_UIN", "classification": "subject", "purpose": "selector-mismatch selector" },
+    { "env": "REGISTRY_INTEGRATION_E2_SOURCE_PROBE", "classification": "restricted", "purpose": "source-side audit probe path" },
+    { "env": "REGISTRY_INTEGRATION_E2_CANARY_FILE", "classification": "restricted", "purpose": "redaction canary file path" }
+  ],
+  "cases": [
+    { "id": "authorized-match", "expected_result_code": "match", "expected_source_data_access": "contacted_once" },
+    { "id": "authorized-no-match", "expected_result_code": "no-match", "expected_source_data_access": "contacted_once" },
+    { "id": "ambiguity", "expected_result_code": "ambiguous", "expected_source_data_access": "contacted_once" },
+    { "id": "invalid-selector", "expected_result_code": "invalid-selector", "expected_source_data_access": "not_contacted" },
+    { "id": "wrong-caller", "expected_result_code": "denied-wrong-caller", "expected_source_data_access": "not_contacted" },
+    { "id": "missing-scope", "expected_result_code": "denied-missing-scope", "expected_source_data_access": "not_contacted" },
+    { "id": "wrong-purpose", "expected_result_code": "denied-wrong-purpose", "expected_source_data_access": "not_contacted" },
+    { "id": "stale-contract", "expected_result_code": "denied-stale-contract", "expected_source_data_access": "not_contacted" },
+    { "id": "subject-mismatch", "expected_result_code": "subject-mismatch", "expected_source_data_access": "contacted_once" },
+    { "id": "source-authorization-failure", "expected_result_code": "source-authorization-failure", "expected_source_data_access": "not_contacted" },
+    { "id": "deadline-enforced", "expected_result_code": "deadline-exceeded", "expected_source_data_access": "contacted_once" }
+  ],
+  "prerequisites": [
+    "A frozen published Registry Stack 1.0 candidate with independently verified assets.",
+    "The /registry/sync/search compatibility probe passes against the exact owner-attested tuple.",
+    "An owner-approved non-production instance provides stable match, no-match, ambiguity, mismatch, authorization-failure, and delayed-response cases.",
+    "Source-side audit or request-counter access can prove whether /registry/sync/search was contacted for every case.",
+    "Restricted raw-evidence storage, retention, redaction review, and scoped teardown are approved."
+  ],
+  "limits": {
+    "case_timeout_seconds": 60,
+    "run_timeout_seconds": 1800,
+    "raw_evidence_bytes": 8388608,
+    "public_result_bytes": 1048576,
+    "teardown_timeout_seconds": 300
+  }
+}

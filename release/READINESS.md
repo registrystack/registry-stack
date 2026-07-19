@@ -52,6 +52,12 @@ write.
       historical hosted-lab failures but does not yet prove a pinned release
       topology.
 - [ ] Credentialing, OID4VCI, and status-list interop proof (#57).
+- [ ] OpenCRVS and DHIS2 project-authored integration proof (#72). The
+      [candidate-neutral source packet](conformance/integrations/README.md)
+      pins both unofficial profiles, closes the public result shape, and
+      validates published candidate assets. It is not live evidence; the
+      external compatibility, instance, source-side audit, and teardown
+      prerequisites remain required for each candidate run.
 
 ## 4. Adversarial verification
 
