@@ -5,9 +5,14 @@
 ## 0.12.2
 
 - Relay has no new product features relative to v0.12.1. This release fixes
-  forward from the incomplete v0.12.1 publication with a canonical
-  reproducible release-build path for the Relay binary, Rhai worker, and
-  runtime image.
+  forward from the incomplete v0.12.1 publication with separate Registryctl
+  and Relay release builds, verification of the shipped Relay feature set,
+  and pinned canonical build paths for reproducible Relay binaries, the Rhai
+  worker, and runtime-image root filesystem layers.
+- Relay's XLSX and phone-metadata XML dependency paths now resolve to
+  `quick-xml` 0.41 through maintained Calamine 0.36 and phonenumber 0.3.10
+  releases, removing the temporary RUSTSEC-2026-0194 and RUSTSEC-2026-0195
+  exceptions.
 
 ## 0.12.1
 
