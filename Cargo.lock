@@ -5192,7 +5192,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-config-report"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "jsonschema 0.46.6",
  "serde",
@@ -5201,7 +5201,7 @@ dependencies = [
 
 [[package]]
 name = "registry-language-server"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -5214,7 +5214,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-cli"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "registry-manifest-core",
  "serde",
@@ -5225,7 +5225,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "oxiri",
  "oxjsonld",
@@ -5240,7 +5240,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "axum",
  "axum-test",
@@ -5277,7 +5277,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-client"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -5305,7 +5305,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-core"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "base64",
  "humantime-serde",
@@ -5333,7 +5333,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-server"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5391,7 +5391,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-worker-harness"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "libc",
  "serde",
@@ -5403,7 +5403,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-audit"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "async-trait",
  "hmac 0.13.0",
@@ -5424,7 +5424,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "proptest",
  "serde",
@@ -5438,7 +5438,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-cache"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "async-trait",
  "sha2 0.11.0",
@@ -5449,7 +5449,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "ryu-js",
  "serde",
@@ -5459,7 +5459,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -5474,7 +5474,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5497,7 +5497,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httpsec"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "axum",
  "http",
@@ -5512,7 +5512,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "axum",
  "base64",
@@ -5539,7 +5539,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oid4vci"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -5554,7 +5554,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oidc"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "axum",
  "base64",
@@ -5570,7 +5570,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-ops"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "fs2",
  "jsonschema 0.46.6",
@@ -5587,14 +5587,14 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-pdp"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "registry-platform-replay"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "async-trait",
  "getrandom 0.4.3",
@@ -5606,7 +5606,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -5623,7 +5623,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-testing"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -5649,7 +5649,7 @@ dependencies = [
 
 [[package]]
 name = "registry-relay"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "arc-swap",
  "assert-json-diff",
@@ -5730,7 +5730,7 @@ dependencies = [
 
 [[package]]
 name = "registryctl"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "anyhow",
  "base64",

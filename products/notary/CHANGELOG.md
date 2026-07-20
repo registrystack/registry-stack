@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-07-20
+
+- No user-visible Notary changes. This release fixes forward from the
+  incomplete v0.12.1 publication with a canonical reproducible release-build
+  path for binaries and runtime images.
+
 ## [0.12.1] - 2026-07-20
 
 ### Security

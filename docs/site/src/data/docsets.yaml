@@ -9,17 +9,47 @@ docsets:
     description: Current RegistryStack monorepo documentation build.
     products:
       registry-stack:
-        version: v0.12.1
+        version: v0.12.2
         ref: HEAD
       registry-relay:
-        version: v0.12.1
+        version: v0.12.2
         ref: HEAD
       registry-notary:
-        version: v0.12.1
+        version: v0.12.2
         ref: HEAD
       registry-manifest:
-        version: v0.12.1
+        version: v0.12.2
         ref: HEAD
+  - id: v0.12.2
+    label: v0.12.2
+    path: /v/0.12.2/
+    status: archived
+    source: registry-stack-v0.12.2
+    repo_docs_source: monorepo
+    published_at: 2026-07-20
+    description: RegistryStack v0.12.2 beta-16 fix-forward documentation set.
+    products:
+      registry-stack:
+        version: v0.12.2
+        ref: 97bcf34ca1f27f05adf7ba42158fbd694ea62a83
+      registry-platform:
+        version: v0.12.2
+        ref: 97bcf34ca1f27f05adf7ba42158fbd694ea62a83
+      registry-manifest:
+        version: v0.12.2
+        ref: 97bcf34ca1f27f05adf7ba42158fbd694ea62a83
+      registry-notary:
+        version: v0.12.2
+        ref: 97bcf34ca1f27f05adf7ba42158fbd694ea62a83
+      registry-relay:
+        version: v0.12.2
+        ref: 97bcf34ca1f27f05adf7ba42158fbd694ea62a83
+      registry-registryctl:
+        version: v0.12.2
+        ref: 97bcf34ca1f27f05adf7ba42158fbd694ea62a83
+      crosswalk:
+        version: crosswalk-core-v0.2.0
+        ref: 1d44ec735fdc8a7c719264b339574371e8330337
   - id: v0.12.1
     label: v0.12.1
     path: /v/0.12.1/

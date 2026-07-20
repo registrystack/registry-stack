@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.12.2
+
+- Relay has no new product features relative to v0.12.1. This release fixes
+  forward from the incomplete v0.12.1 publication with a canonical
+  reproducible release-build path for the Relay binary, Rhai worker, and
+  runtime image.
+
 ## 0.12.1
 
 - Relay has no new product features relative to v0.12.0. The release reviews
