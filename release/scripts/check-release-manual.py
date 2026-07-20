@@ -9,7 +9,6 @@ import importlib.util
 import json
 import re
 import shlex
-import sys
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path

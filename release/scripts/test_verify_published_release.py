@@ -8,8 +8,8 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
-from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -819,7 +819,7 @@ class PublishedReleaseExternalBoundaryTest(unittest.TestCase):
                 "".join(f"{digest}  {name}\n" for name, digest in sorted(sums.items())),
                 encoding="utf-8",
             )
-            with mock.patch.dict(
+            with unittest.mock.patch.dict(
                 os.environ, {"DOCKER_AUTH_CONFIG": "secret"}, clear=False
             ):
                 verifier.verify_image_inputs()
@@ -883,7 +883,7 @@ class PublishedReleaseExternalBoundaryTest(unittest.TestCase):
             io = AnonymousIO()
             verifier = self.prepare_verifier(root, io)
             verifier.locked_images = locked
-            with mock.patch.dict(
+            with unittest.mock.patch.dict(
                 os.environ, {"DOCKER_AUTH_CONFIG": "secret"}, clear=False
             ):
                 verifier.verify_anonymous_images()
