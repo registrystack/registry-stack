@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.12.1
+
+- Relay has no new product features relative to v0.12.0. The release reviews
+  the three non-fixable Debian 13 `libc6` findings and binds that time-bounded
+  accepted risk to the ordered runtime root filesystem layer digest. Fixable,
+  expired, mismatched, and unreviewed findings fail the image advisory gate.
+
 ## 0.12.0
 
 - Relay now surfaces per-resource last-good refresh health through protected

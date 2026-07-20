@@ -58,16 +58,31 @@ Neither the service nor Rhai worker imports `ungetwc` or the affected deprecated
 DNS-printing functions. The libstdc++ object that imports `ungetwc` is not in
 either executable dependency closure.
 
+The implementation reviewed for the pre-tag `v0.12.1` candidate is protected-
+main revision `d6d2d167426ada77097c8d5606f100b1554aaadc`, which remains an ancestor
+of the release lineage. The versioned candidate was built with the release's
+pinned Linux/amd64 builder and scanned at exact Relay image digest
+`sha256:b1d93ce38ae70f27f2fd0b04bdd5deb5ab5f7772bd205188a64cff9dd6253168`.
+Grype 0.114.0 with valid database schema v6.1.9, built July 19, 2026, reported
+the same three non-fixable blocking-severity findings and no fixable finding.
+The reviewed root filesystem digest is
+`sha256:c399a0f9eb66fe583597398356893e92268c954ce905db8ca434e158b94743a8`.
+Direct inspection of the candidate service and Rhai worker confirmed that they
+do not import `ungetwc` or the affected DNS-printing functions and contain no
+`%mc` format string. The tagged release must reproduce this root filesystem
+digest and pass the same policy against its exact pushed digest.
+
 The matching accepted-risk entries expire on August 20, 2026. A Trixie fix,
 changed fingerprint, new scanf format or call path, new C++ or wide-character
 input path, or new DNS TSIG debugging or printing path requires earlier review.
-The accepted-risk entries record the evidence image digest and OCI source
-revision. Enforcement binds them to a digest of the ordered root filesystem
-layers, so a changed package or binary layer requires a new review while a
-review-only commit that changes the OCI revision label does not create a
-self-referential image digest. The next candidate must still produce an exact
-digest-bound scan; this review does not waive fixable findings or a changed
-package fingerprint.
+The accepted-risk entries record the evidence image digest and the reachable
+protected-main implementation revision inspected during review. The exact
+candidate OCI revision label is verified separately when the image is built.
+Enforcement binds the review to a digest of the ordered root filesystem layers,
+so a changed package or binary layer requires a new review while a review-only
+commit that changes the OCI revision label does not create a self-referential
+image digest. The next candidate must still produce an exact digest-bound scan;
+this review does not waive fixable findings or a changed package fingerprint.
 
 For each candidate, execute the image with a read-only root filesystem and only
 the documented cache, data, and audit mounts writable. Confirm that the Relay
