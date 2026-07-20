@@ -22,6 +22,11 @@ IMAGE_REF = "example.invalid/registry-relay@sha256:" + "a" * 64
 SOURCE = "https://github.com/registrystack/registry-stack"
 REVISION = "b" * 40
 VERSION = "v0.12.0"
+BUILDKIT_IMAGE = (
+    "moby/buildkit:v0.30.0@sha256:"
+    "0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f"
+)
+BUILDKIT_REPO_DIGEST = "moby/buildkit@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f"
 
 
 def load_module():
@@ -113,6 +118,63 @@ class ReleaseImageOciLabelsTest(unittest.TestCase):
         self.assertIn("imagetools inspect failed", stderr)
         self.assertIn("template evaluation failed", stderr)
 
+    def test_default_inspection_falls_back_from_index_to_linux_amd64_manifest(
+        self,
+    ) -> None:
+        application_digest = "sha256:" + "c" * 64
+        labels = {
+            "org.opencontainers.image.source": SOURCE,
+            "org.opencontainers.image.revision": REVISION,
+            "org.opencontainers.image.version": VERSION,
+        }
+        run = unittest.mock.Mock(
+            side_effect=[
+                subprocess.CompletedProcess(
+                    args=[],
+                    returncode=1,
+                    stdout="",
+                    stderr='template: :1: executing "" at <.Image.Config>: cannot evaluate field Config',
+                ),
+                subprocess.CompletedProcess(
+                    args=[],
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "manifests": [
+                                {
+                                    "digest": application_digest,
+                                    "platform": {
+                                        "os": "linux",
+                                        "architecture": "amd64",
+                                    },
+                                }
+                            ]
+                        }
+                    ),
+                    stderr="",
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=config_json(labels), stderr=""
+                ),
+            ]
+        )
+
+        with unittest.mock.patch.object(self.module.subprocess, "run", run):
+            config = self.module.inspect_image_config(
+                IMAGE_REF, self.module.DEFAULT_FORMAT_TEMPLATE
+            )
+
+        self.assertEqual(labels, config["Labels"])
+        self.assertEqual(3, run.call_count)
+        self.assertEqual(
+            ["docker", "buildx", "imagetools", "inspect", "--raw", IMAGE_REF],
+            run.call_args_list[1].args[0],
+        )
+        self.assertEqual(
+            f"example.invalid/registry-relay@{application_digest}",
+            run.call_args_list[2].args[0][-1],
+        )
+
     def test_invalid_json_is_rejected(self) -> None:
         result, _, stderr, _ = self.run_with_inspect(stdout="not json")
 
@@ -169,8 +231,116 @@ class ReleaseImageOciLabelsTest(unittest.TestCase):
         self.assertEqual("{{json .Image.config}}", run.call_args.args[0][5])
 
 
+class ReleaseImageBuildWrapperTest(unittest.TestCase):
+    def run_wrapper(
+        self,
+        *,
+        builder_inspect: str,
+        builder_containers: str,
+        builder_container_image: str,
+        buildkit_repo_digests: str = BUILDKIT_REPO_DIGEST,
+    ) -> subprocess.CompletedProcess[str]:
+        image_builder = ROOT / "release/scripts/build-release-image.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_bin = Path(temporary) / "bin"
+            fake_bin.mkdir()
+            fake_docker = fake_bin / "docker"
+            fake_docker.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "case \"${1:-} ${2:-}\" in\n"
+                "  'buildx version') echo 'github.com/docker/buildx v0.33.0 test' ;;\n"
+                "  'buildx inspect') printf '%s\\n' \"${BUILDER_INSPECT}\" ;;\n"
+                "  'ps --all') printf '%s\\n' \"${BUILDER_CONTAINERS}\" ;;\n"
+                "  'inspect --format') printf '%s\\n' \"${BUILDER_CONTAINER_IMAGE}\" ;;\n"
+                "  'image inspect') printf '%s\\n' \"${BUILDKIT_REPO_DIGESTS}\" ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_docker.chmod(0o755)
+            metadata = Path(temporary) / "metadata.json"
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
+                    "RELEASE_BUILDX_BUILDER": "release-builder",
+                    "BUILDER_INSPECT": builder_inspect,
+                    "BUILDER_CONTAINERS": builder_containers,
+                    "BUILDER_CONTAINER_IMAGE": builder_container_image,
+                    "BUILDKIT_REPO_DIGESTS": buildkit_repo_digests,
+                }
+            )
+            return subprocess.run(
+                [
+                    str(image_builder),
+                    "registry-relay",
+                    "example.invalid/registry-relay:test",
+                    SOURCE,
+                    REVISION,
+                    VERSION,
+                    str(metadata),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=environment,
+            )
+
+    def test_reused_builder_requires_pinned_standard_buildkit_container(self) -> None:
+        result = self.run_wrapper(
+            builder_inspect="Driver: docker-container\nBuildKit version: v0.30.0",
+            builder_containers="buildx_buildkit_release-builder0",
+            builder_container_image=BUILDKIT_IMAGE,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_reused_builder_rejects_non_container_driver(self) -> None:
+        result = self.run_wrapper(
+            builder_inspect="Driver: docker\nBuildKit version: v0.30.0",
+            builder_containers="buildx_buildkit_release-builder0",
+            builder_container_image=BUILDKIT_IMAGE,
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("must use the docker-container driver", result.stderr)
+
+    def test_reused_builder_rejects_unpinned_container_image(self) -> None:
+        result = self.run_wrapper(
+            builder_inspect="Driver: docker-container\nBuildKit version: v0.30.0",
+            builder_containers="buildx_buildkit_release-builder0",
+            builder_container_image="moby/buildkit:v0.30.0",
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("must use", result.stderr)
+        self.assertIn("must use", result.stderr)
+
+    def test_reused_builder_rejects_wrong_repo_digest(self) -> None:
+        result = self.run_wrapper(
+            builder_inspect="Driver: docker-container\nBuildKit version: v0.30.0",
+            builder_containers="buildx_buildkit_release-builder0",
+            builder_container_image=BUILDKIT_IMAGE,
+            buildkit_repo_digests="moby/buildkit@sha256:" + "0" * 64,
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("must resolve", result.stderr)
+
+    def test_reused_builder_rejects_nonstandard_container_shape(self) -> None:
+        result = self.run_wrapper(
+            builder_inspect="Driver: docker-container\nBuildKit version: v0.30.0",
+            builder_containers="buildx_buildkit_release-builder0\nbuildx_buildkit_release-builder1",
+            builder_container_image=BUILDKIT_IMAGE,
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("must have exactly one standard BuildKit container", result.stderr)
+
+
 class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
-    def test_smoke_builds_both_release_dockerfiles_without_publishing(self) -> None:
+    def test_smoke_builds_both_release_dockerfiles_via_ephemeral_registry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fake_bin = Path(temporary) / "bin"
             fake_bin.mkdir()
@@ -181,7 +351,23 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
                 "{ printf 'BEGIN\\n'; printf '%s\\n' \"$@\"; printf 'END\\n'; } "
-                '>> "${DOCKER_LOG}"\n',
+                '>> "${DOCKER_LOG}"\n'
+                "case \"$*\" in\n"
+                "  'buildx version') echo 'github.com/docker/buildx v0.33.0 test' ;;\n"
+                "  'buildx create '* )\n"
+                "    for ((argument = 1; argument <= $#; argument++)); do\n"
+                "      if [[ \"${!argument}\" == '--name' ]]; then\n"
+                "        next=$((argument + 1))\n"
+                "        printf 'buildx_buildkit_%s0\\n' \"${!next}\" > \"${DOCKER_STATE}\"\n"
+                "      fi\n"
+                "    done ;;\n"
+                "  'buildx inspect '* ) printf 'Driver: docker-container\\nBuildKit version: v0.30.0\\n' ;;\n"
+                "  'ps --all '* ) cat \"${DOCKER_STATE}\" ;;\n"
+                "  'inspect --format '* )\n"
+                "    echo 'moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f' ;;\n"
+                "  'image inspect '* ) echo 'moby/buildkit@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f' ;;\n"
+                "  'port '* ) echo '127.0.0.1:5000' ;;\n"
+                "esac\n",
                 encoding="utf-8",
             )
             fake_docker.chmod(0o755)
@@ -201,6 +387,7 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             environment = os.environ.copy()
             environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
             environment["DOCKER_LOG"] = str(docker_log)
+            environment["DOCKER_STATE"] = str(Path(temporary) / "docker-state")
             environment["CHECKER_LOG"] = str(checker_log)
 
             result = subprocess.run(
@@ -230,18 +417,39 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 self.assertIsNone(current)
                 return calls
 
+            build_calls = [
+                call for call in read_calls(docker_log) if call[:2] == ["buildx", "build"]
+            ]
+            self.assertEqual(6, len(build_calls))
             dockerfiles = []
-            for call in read_calls(docker_log):
+            published_builds = []
+            negative_builds = []
+            for call in build_calls:
                 self.assertEqual(["buildx", "build"], call[:2])
                 self.assertIn("--platform", call)
                 self.assertEqual("linux/amd64", call[call.index("--platform") + 1])
-                self.assertIn("--provenance=false", call)
-                self.assertNotIn("--push", call)
-                self.assertNotIn("--load", call)
                 output = call[call.index("--output") + 1]
-                self.assertTrue(output.startswith("type=oci,dest="), output)
-                self.assertTrue(output.endswith(",tar=false"), output)
+                if output.startswith("type=registry,"):
+                    published_builds.append(call)
+                    self.assertIn("--builder", call)
+                    self.assertIn("--no-cache", call)
+                    self.assertIn("--build-arg", call)
+                    self.assertEqual(
+                        "SOURCE_DATE_EPOCH=0", call[call.index("--build-arg") + 1]
+                    )
+                    self.assertEqual(
+                        "type=registry,push=true,rewrite-timestamp=true,compatibility-version=20,registry.insecure=true",
+                        output,
+                    )
+                else:
+                    negative_builds.append(call)
+                    self.assertIn("--provenance=false", call)
+                    self.assertTrue(output.startswith("type=oci,dest="), output)
+                    self.assertTrue(output.endswith(",tar=false"), output)
                 dockerfiles.append(call[call.index("--file") + 1])
+
+            self.assertEqual(4, len(published_builds))
+            self.assertEqual(2, len(negative_builds))
 
             self.assertEqual(
                 {
@@ -253,12 +461,12 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             inspected_layouts = {
                 call[1]
                 for call in read_calls(checker_log)
-                if len(call) > 1 and "/correct-" in call[1]
+                if len(call) > 1 and ":correct" in call[1]
             }
             self.assertEqual(
-                {"correct-registry-notary", "correct-registry-relay"},
+                {"registry-notary:correct", "registry-relay:correct"},
                 {
-                    Path(layout.removeprefix("oci-layout://")).name
+                    Path(layout).name
                     for layout in inspected_layouts
                 },
             )

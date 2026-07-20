@@ -46,6 +46,45 @@ def inspect_image_config(image_ref: str, format_template: str) -> dict[str, Any]
             f"{error}"
         ) from error
 
+    if (
+        result.returncode != 0
+        and format_template == DEFAULT_FORMAT_TEMPLATE
+        and ".Image.Config" in result.stderr
+    ):
+        raw_result = subprocess.run(
+            ["docker", "buildx", "imagetools", "inspect", "--raw", image_ref],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if raw_result.returncode == 0:
+            try:
+                index = json.loads(raw_result.stdout)
+                platform = next(
+                    descriptor
+                    for descriptor in index["manifests"]
+                    if descriptor.get("platform", {}).get("os") == "linux"
+                    and descriptor.get("platform", {}).get("architecture") == "amd64"
+                )
+                application_ref = f"{image_ref.split('@', 1)[0]}@{platform['digest']}"
+            except (KeyError, StopIteration, TypeError, json.JSONDecodeError):
+                application_ref = None
+            if application_ref is not None:
+                result = subprocess.run(
+                    [
+                        "docker",
+                        "buildx",
+                        "imagetools",
+                        "inspect",
+                        "--format",
+                        format_template,
+                        application_ref,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+
     if result.returncode != 0:
         detail = result.stderr.strip()
         suffix = f": {detail}" if detail else ""

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import stat
 import subprocess
 import sys
 import tempfile
@@ -86,28 +87,44 @@ class RegistryReleaseTest(unittest.TestCase):
 
     def test_release_image_packaging_uses_release_dockerfiles(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        recipe = (ROOT / "release/scripts/build-release-image.sh").read_text(
+            encoding="utf-8"
+        )
         release_dockerfiles = [
             "release/docker/Dockerfile.registry-notary",
             "release/docker/Dockerfile.registry-relay",
         ]
 
         for dockerfile in release_dockerfiles:
-            self.assertIn(dockerfile, workflow)
+            self.assertIn("release/docker/Dockerfile.${name}", recipe)
             text = (ROOT / dockerfile).read_text(encoding="utf-8")
             self.assertIn("dist/image-bin", text)
+        self.assertIn("release/scripts/build-release-image.sh", workflow)
 
     def test_release_images_publish_and_executably_verify_oci_labels(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         images_job = workflow[
             workflow.index("\n  images:") : workflow.index("\n  github-release:")
         ]
+        recipe = (ROOT / "release/scripts/build-release-image.sh").read_text(
+            encoding="utf-8"
+        )
 
         for label in (
-            '--label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}"',
-            '--label "org.opencontainers.image.revision=${{ needs.verify.outputs.tag_target }}"',
-            '--label "org.opencontainers.image.version=${{ needs.verify.outputs.version }}"',
+            '"org.opencontainers.image.source=${source_label}"',
+            '"org.opencontainers.image.revision=${revision_label}"',
+            '"org.opencontainers.image.version=${version_label}"',
         ):
-            self.assertEqual(1, images_job.count(label))
+            self.assertIn(label, recipe)
+        self.assertEqual(1, images_job.count("release/scripts/build-release-image.sh"))
+        self.assertNotIn("docker buildx build", images_job)
+        for smoke_only_environment in (
+            "RELEASE_IMAGE_CONTEXT",
+            "RELEASE_IMAGE_NO_CACHE",
+            "RELEASE_IMAGE_REGISTRY_INSECURE",
+            "RELEASE_BUILDKIT_NETWORK",
+        ):
+            self.assertNotIn(smoke_only_environment, images_job)
         checker = "python3 release/scripts/check-release-image-oci-labels.py"
         self.assertEqual(1, images_job.count(checker))
         self.assertLess(images_job.index('local digest_ref="'), images_job.index(checker))
@@ -129,12 +146,120 @@ class RegistryReleaseTest(unittest.TestCase):
             "printf '%s' \"${RELEASE_BUILDER_IMAGE}\" | sha256sum",
             binaries_job,
         )
+        self.assertIn(
+            "sha256sum release/scripts/build-release-binaries.sh",
+            binaries_job,
+        )
+        self.assertIn("recipe_fingerprint", binaries_job)
         builder_fingerprint = "${{ steps.release-builder.outputs.fingerprint }}"
+        recipe_fingerprint = "${{ steps.release-builder.outputs.recipe_fingerprint }}"
         self.assertGreaterEqual(binaries_job.count(builder_fingerprint), 2)
+        self.assertIn(recipe_fingerprint, binaries_job)
         self.assertNotIn(
             "registry-stack-release-cargo-${{ runner.os }}-rust-1.95.0-",
             binaries_job,
         )
+
+    def test_release_build_wrappers_are_executable_and_canonical(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        ci_workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        binaries_job = workflow[
+            workflow.index("\n  binaries:") : workflow.index("\n  registryctl-extra-binaries:")
+        ]
+        images_job = workflow[
+            workflow.index("\n  images:") : workflow.index("\n  github-release:")
+        ]
+        binary_recipe_path = ROOT / "release/scripts/build-release-binaries.sh"
+        image_recipe_path = ROOT / "release/scripts/build-release-image.sh"
+        binary_recipe = binary_recipe_path.read_text(encoding="utf-8")
+        image_recipe = image_recipe_path.read_text(encoding="utf-8")
+
+        self.assertTrue(binary_recipe_path.stat().st_mode & stat.S_IXUSR)
+        self.assertTrue(image_recipe_path.stat().st_mode & stat.S_IXUSR)
+        self.assertEqual(
+            1,
+            binaries_job.count(
+                'release/scripts/build-release-binaries.sh "${{ needs.verify.outputs.version }}"'
+            ),
+        )
+        self.assertNotIn("docker run --rm", binaries_job)
+        self.assertIn('"${repo_root}:/workspace"', binary_recipe)
+        self.assertIn('"${release_cargo_home}:/workspace/.cargo-home"', binary_recipe)
+        self.assertIn('"${release_target_dir}:/workspace/target"', binary_recipe)
+        self.assertIn('"${release_target_dir}/release/registryctl"', binary_recipe)
+        self.assertIn('"${release_target_dir}/release/registry-relay-rhai-worker"', binary_recipe)
+        host_packaging = binary_recipe.split('cd -- "${repo_root}"', 1)[1]
+        self.assertNotIn('cp target/release/', host_packaging)
+        self.assertIn("--env CARGO_HOME=/workspace/.cargo-home", binary_recipe)
+        self.assertIn("--env CARGO_TARGET_DIR=/workspace/target", binary_recipe)
+        self.assertIn("--env HOME=/workspace", binary_recipe)
+        self.assertIn("--platform linux/amd64", binary_recipe)
+        self.assertIn("--locked", binary_recipe)
+        self.assertIn("registry-notary/registry-notary-cel,registry-notary/pkcs11", binary_recipe)
+        self.assertIn("RELEASE_BUILDER_IMAGE must remain pinned", binary_recipe)
+        self.assertIn('"${RELEASE_BUILDER_IMAGE}" != "${default_builder_image}"', binary_recipe)
+
+        self.assertEqual(1, images_job.count("release/scripts/build-release-image.sh"))
+        self.assertNotIn("docker buildx build", images_job)
+        self.assertIn("registry-notary|registry-relay", image_recipe)
+        self.assertIn("SOURCE_DATE_EPOCH=${source_date_epoch}", image_recipe)
+        self.assertIn("source_date_epoch=0", image_recipe)
+        self.assertNotIn("${SOURCE_DATE_EPOCH", image_recipe)
+        self.assertNotIn("${RELEASE_BUILDKIT_IMAGE", image_recipe)
+        self.assertIn(
+            "type=registry,push=true,rewrite-timestamp=true,compatibility-version=20",
+            image_recipe,
+        )
+        self.assertIn("--metadata-file", image_recipe)
+        self.assertIn(
+            "moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f",
+            image_recipe,
+        )
+        self.assertIn("--driver docker-container", image_recipe)
+        self.assertIn("must use the docker-container driver", image_recipe)
+        self.assertIn("docker ps --all --format '{{.Names}}'", image_recipe)
+        self.assertIn("buildx_buildkit_${release_buildx_builder}0", image_recipe)
+        self.assertIn("docker inspect --format '{{.Config.Image}}'", image_recipe)
+        self.assertIn(
+            "default_buildkit_repo_digest=\"moby/buildkit@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f\"",
+            image_recipe,
+        )
+        self.assertIn("docker image inspect --format", image_recipe)
+        self.assertNotIn("--use", image_recipe)
+        self.assertIn("docker buildx version", image_recipe)
+        self.assertIn("v0\\.33\\.0", image_recipe)
+        self.assertIn("RELEASE_IMAGE_NO_CACHE", image_recipe)
+        self.assertIn("RELEASE_IMAGE_REGISTRY_INSECURE", image_recipe)
+        self.assertIn("RELEASE_IMAGE_CONTEXT", image_recipe)
+        self.assertIn("BuildKit( version:)?[[:space:]]+v0\\.30\\.0", image_recipe)
+        self.assertIn("version: v0.33.0", images_job)
+        self.assertIn(
+            "driver-opts: image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f",
+            images_job,
+        )
+        release_tool_job = ci_workflow[
+            ci_workflow.index("\n  release-tool:") : ci_workflow.index("\n  release-source-proof:")
+        ]
+        self.assertIn("version: v0.33.0", release_tool_job)
+        self.assertIn(
+            "driver-opts: image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f",
+            release_tool_job,
+        )
+        self.assertLess(
+            release_tool_job.index("name: Set up Docker Buildx"),
+            release_tool_job.index("name: Smoke release image OCI labels"),
+        )
+        for dockerfile in (
+            ROOT / "release/docker/Dockerfile.registry-notary",
+            ROOT / "release/docker/Dockerfile.registry-relay",
+        ):
+            self.assertTrue(
+                dockerfile.read_text(encoding="utf-8").startswith(
+                    "# syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e\n"
+                ),
+                dockerfile,
+            )
+        self.assertIn('rm -rf -- "${repo_root}/dist/bin" "${repo_root}/dist/image-bin"', binary_recipe)
 
     def test_release_records_cache_and_duration_telemetry(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -205,6 +330,9 @@ class RegistryReleaseTest(unittest.TestCase):
 
     def test_relay_packaging_includes_dedicated_rhai_worker(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
         worker = "registry-relay-rhai-worker"
 
         for dockerfile in (
@@ -216,10 +344,10 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertIn(f"/usr/local/bin/{worker}", text)
 
         self.assertIn(
-            f'"dist/bin/{worker}-${{{{ needs.verify.outputs.tag }}}}-linux-amd64"',
-            workflow,
+            f'"dist/bin/{worker}-${{tag}}-linux-amd64"',
+            binary_recipe,
         )
-        self.assertIn(f"dist/image-bin/{worker}", workflow)
+        self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
         release_dockerfile = (ROOT / "release/docker/Dockerfile.registry-relay").read_text(
             encoding="utf-8"
         )
@@ -227,10 +355,13 @@ class RegistryReleaseTest(unittest.TestCase):
             f"COPY --chmod=0755 dist/image-bin/{worker} /usr/local/bin/{worker}",
             release_dockerfile,
         )
-        self.assertRegex(workflow, rf"chmod 0755[^\n]*dist/image-bin/{worker}")
+        self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
 
     def test_notary_packaging_includes_dedicated_cel_worker(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        binary_recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
         worker = "registry-notary-cel-worker"
 
         product_dockerfile = (ROOT / "products/notary/Dockerfile").read_text(
@@ -239,13 +370,13 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn(worker, product_dockerfile)
 
         self.assertIn(
-            f'"dist/bin/{worker}-${{{{ needs.verify.outputs.tag }}}}-linux-amd64"',
-            workflow,
+            f'"dist/bin/{worker}-${{tag}}-linux-amd64"',
+            binary_recipe,
         )
-        self.assertIn(f"dist/image-bin/{worker}", workflow)
+        self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
         self.assertIn(
             f"--bin {worker}",
-            workflow,
+            binary_recipe,
         )
         release_dockerfile = (ROOT / "release/docker/Dockerfile.registry-notary").read_text(
             encoding="utf-8"
@@ -254,7 +385,7 @@ class RegistryReleaseTest(unittest.TestCase):
             f"COPY --chmod=0755 dist/image-bin/{worker} /usr/local/bin/{worker}",
             release_dockerfile,
         )
-        self.assertRegex(workflow, rf"chmod 0755[^\n]*dist/image-bin/{worker}")
+        self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
 
     def test_release_workflow_publishes_cross_platform_registryctl_binaries(self) -> None:
         # The hermetic linux/amd64 builder cannot produce macOS or arm64 binaries,
