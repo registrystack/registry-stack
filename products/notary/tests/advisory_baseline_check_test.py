@@ -19,6 +19,9 @@ def load_module():
 
 
 class AdvisoryBaselineCheckTest(unittest.TestCase):
+    TEST_IMAGE_DIGEST = "sha256:" + "a" * 64
+    TEST_REVISION = "b" * 40
+
     def setUp(self):
         self.module = load_module()
         self.tmp = tempfile.TemporaryDirectory()
@@ -85,14 +88,42 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
             "reviewed_at": "2026-06-02",
             "expires_at": "2026-09-01",
         }
+        if finding.tool == "grype":
+            base.update({
+                "evidence_image_digest": finding.image_digest,
+                "reviewed_rootfs_digest": finding.rootfs_digest,
+                "evidence_revision": finding.source_revision,
+            })
         base.update(overrides)
         return base
 
-    def grype_report(self, severity="High", fix=None):
+    def grype_report(
+        self,
+        severity="High",
+        fix=None,
+        image_digest=None,
+        layer_digest=None,
+        revision=None,
+    ):
+        image_digest = image_digest or self.TEST_IMAGE_DIGEST
+        layer_digest = layer_digest or "sha256:" + "e" * 64
+        revision = revision or self.TEST_REVISION
+        image_ref = f"registry.example/test@{image_digest}"
         vulnerability = {"id": "CVE-2026-0001", "severity": severity}
         if fix is not None:
             vulnerability["fix"] = fix
         return {
+            "source": {
+                "type": "image",
+                "target": {
+                    "userInput": image_ref,
+                    "repoDigests": [image_ref],
+                    "layers": [{"digest": layer_digest}],
+                    "labels": {
+                        "org.opencontainers.image.revision": revision,
+                    },
+                },
+            },
             "matches": [{
                 "vulnerability": vulnerability,
                 "artifact": {
@@ -254,16 +285,7 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
     def test_grype_critical_requires_review(self):
         self.write_baseline()
         baseline = self.module.load_baseline(self.baseline_path)
-        report = {
-            "matches": [{
-                "vulnerability": {"id": "CVE-2026-0001", "severity": "Critical"},
-                "artifact": {
-                    "name": "openssl",
-                    "version": "3.0.0",
-                    "type": "deb",
-                },
-            }]
-        }
+        report = self.grype_report("Critical")
         findings = self.module.normalize_grype(report, "registry-notary-image")
         self.assertEqual(
             self.module.check_findings(
@@ -291,6 +313,65 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
             ),
             0,
         )
+
+    def test_grype_review_is_bound_to_rootfs_content(self):
+        reviewed_finding = self.module.normalize_grype(
+            self.grype_report(), "registry-relay-image"
+        )[0]
+        changed_finding = self.module.normalize_grype(
+            self.grype_report(layer_digest="sha256:" + "c" * 64),
+            "registry-relay-image",
+        )[0]
+        self.assertEqual(reviewed_finding.fingerprint, changed_finding.fingerprint)
+        self.assertNotEqual(reviewed_finding.rootfs_digest, changed_finding.rootfs_digest)
+        self.write_baseline([self.review(reviewed_finding)])
+        baseline = self.module.load_baseline(self.baseline_path)
+        self.assertEqual(
+            self.module.check_findings(
+                "grype",
+                [changed_finding],
+                baseline,
+                self.module.parse_date("2026-06-02", "today"),
+                "registry-relay-image",
+            ),
+            1,
+        )
+
+    def test_grype_rootfs_review_allows_provenance_only_rebuild(self):
+        reviewed_finding = self.module.normalize_grype(
+            self.grype_report(), "registry-relay-image"
+        )[0]
+        rebuilt_finding = self.module.normalize_grype(
+            self.grype_report(
+                image_digest="sha256:" + "c" * 64,
+                revision="d" * 40,
+            ),
+            "registry-relay-image",
+        )[0]
+        self.assertEqual(reviewed_finding.rootfs_digest, rebuilt_finding.rootfs_digest)
+        self.write_baseline([self.review(reviewed_finding)])
+        baseline = self.module.load_baseline(self.baseline_path)
+        self.assertEqual(
+            self.module.check_findings(
+                "grype",
+                [rebuilt_finding],
+                baseline,
+                self.module.parse_date("2026-06-02", "today"),
+                "registry-relay-image",
+            ),
+            0,
+        )
+
+    def test_grype_report_requires_digest_and_revision_context(self):
+        for missing_path in ("source", "repoDigests", "layers", "labels"):
+            with self.subTest(missing_path=missing_path):
+                report = self.grype_report()
+                if missing_path == "source":
+                    report.pop("source")
+                else:
+                    report["source"]["target"].pop(missing_path)
+                with self.assertRaises(SystemExit):
+                    self.module.normalize_grype(report, "registry-relay-image")
 
     def test_grype_fixable_low_fails_regardless_of_severity(self):
         self.write_baseline()
@@ -375,16 +456,8 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
     def test_grype_unknown_severity_is_below_initial_threshold(self):
         self.write_baseline()
         baseline = self.module.load_baseline(self.baseline_path)
-        report = {
-            "matches": [{
-                "vulnerability": {"id": "CVE-2026-0002", "severity": "Unknown"},
-                "artifact": {
-                    "name": "openssl",
-                    "version": "3.0.0",
-                    "type": "deb",
-                },
-            }]
-        }
+        report = self.grype_report("Unknown")
+        report["matches"][0]["vulnerability"]["id"] = "CVE-2026-0002"
         findings = self.module.normalize_grype(report, "registry-notary-image")
         self.assertEqual(
             self.module.check_findings(
@@ -399,16 +472,8 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
     def test_grype_undefined_severity_is_below_initial_threshold(self):
         self.write_baseline()
         baseline = self.module.load_baseline(self.baseline_path)
-        report = {
-            "matches": [{
-                "vulnerability": {"id": "CVE-2026-0003", "severity": "Undefined"},
-                "artifact": {
-                    "name": "openssl",
-                    "version": "3.0.0",
-                    "type": "deb",
-                },
-            }]
-        }
+        report = self.grype_report("Undefined")
+        report["matches"][0]["vulnerability"]["id"] = "CVE-2026-0003"
         findings = self.module.normalize_grype(report, "registry-notary-image")
         self.assertEqual(
             self.module.check_findings(
@@ -428,6 +493,9 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
             severity="critical",
             location="unrelated-image",
             summary="CVE-2026-0004 in zlib1g 1.0",
+            image_digest=self.TEST_IMAGE_DIGEST,
+            rootfs_digest="sha256:" + "f" * 64,
+            source_revision=self.TEST_REVISION,
         )
         self.write_baseline([self.review(other_image_finding)])
         baseline = self.module.load_baseline(self.baseline_path)
@@ -474,6 +542,23 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
             ("reason", "   "),
         ):
             with self.subTest(field=field):
+                self.write_baseline([self.review(finding, **{field: value})])
+                with self.assertRaises(SystemExit):
+                    self.module.load_baseline(self.baseline_path)
+
+    def test_grype_review_requires_valid_image_context(self):
+        finding = self.module.normalize_grype(
+            self.grype_report(), "registry-relay-image"
+        )[0]
+        for field, value in (
+            ("evidence_image_digest", None),
+            ("evidence_image_digest", "sha256:short"),
+            ("reviewed_rootfs_digest", None),
+            ("reviewed_rootfs_digest", "sha256:short"),
+            ("evidence_revision", ""),
+            ("evidence_revision", "not-a-git-revision"),
+        ):
+            with self.subTest(field=field, value=value):
                 self.write_baseline([self.review(finding, **{field: value})])
                 with self.assertRaises(SystemExit):
                     self.module.load_baseline(self.baseline_path)

@@ -41,14 +41,29 @@ do not change. Repeatability is established by two clean builds with the same
 new builder digest and lockfiles, comparing `dist/image-bin/SHA256SUMS`; hashes
 from the retired builder are not the expected comparison.
 
-The Debian 13 migration check on July 19, 2026 scanned a structural Notary
-image with the pinned final base and placeholder binaries. It found the
-non-fixable Debian 13 `libc6` findings CVE-2026-5450 (Critical), CVE-2026-5928
-(High), and CVE-2026-5435 (High). No risk dispositions are recorded for these
-findings, so a candidate that still reports them remains blocked. This
-structural scan only supports removal of the retired Debian 12 exception. The
-scan of the exact pushed image, including the real Notary and CEL worker
-binaries, supersedes it for release decisions.
+The failed `v0.12.0` release workflow run `29714784416` scanned exact Notary
+image digest
+`sha256:6d33ff0103608eab186f91c96c5d296d4ffca905334a778fdd9f40b836807577`.
+It confirmed the non-fixable Debian 13 `libc6` findings CVE-2026-5450
+(Critical), CVE-2026-5928 (High), and CVE-2026-5435 (High). Debian classifies
+all three Trixie issues as minor and no-DSA. The exact service's two direct
+AWS-LC `sscanf` call sites use fixed `%lu` and `%lx` numeric formats. Neither
+the service nor its linked libcrypto contains the vulnerable `%mc` conversion.
+Neither the service nor CEL worker imports `ungetwc` or the affected deprecated
+DNS-printing functions. The libstdc++ object that imports `ungetwc` is not in
+either executable dependency closure.
+
+The matching accepted-risk entries expire on August 20, 2026. A Trixie fix,
+changed fingerprint, new scanf format or call path, new C++ or wide-character
+input path, or new DNS TSIG debugging or printing path requires earlier review.
+The accepted-risk entries record the evidence image digest and OCI source
+revision. Enforcement binds them to a digest of the ordered root filesystem
+layers, so a changed package or binary layer requires a new review while a
+review-only commit that changes the OCI revision label does not create a
+self-referential image digest. The next candidate must still produce an exact
+digest-bound scan; this review does not waive fixable findings or a changed
+package fingerprint. External PKCS#11 modules and their dependency closures
+remain deployment inputs and need their own review.
 
 PKCS#11 support remains compiled in but config-gated. A vendor module and any
 vendor-owned shared-library dependencies remain deployment inputs, not image
@@ -82,9 +97,11 @@ initial blocking gates are:
 
 Fixable findings cannot be dispositioned. Every reviewed non-fixable High or
 Critical finding must include a fingerprint, matching rule and severity, owner,
-reason, review date, and expiration date. Future-dated or expired entries fail
-CI while the finding is still active. Stale reviewed entries are reported so
-the baseline can shrink after the underlying issue is fixed.
+reason, review date, expiration date, evidence image digest and revision, and
+the root filesystem layer digest enforced by the checker. Future-dated,
+expired, or rootfs-mismatched entries fail CI while the finding is still active.
+Stale reviewed entries are reported so the baseline can shrink after the
+underlying issue is fixed.
 
 The unauthenticated endpoint allowlist lives in
 `security/auth-none-allowlist.yml`. Additions require maintainer review through
