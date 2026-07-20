@@ -15,6 +15,7 @@ use aws_lc_rs::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_replay::ReplayScope;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -22,16 +23,25 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use super::{NotaryPostgresStatePlaneError, NotaryPostgresStatePlaneRuntime};
 use crate::{
-    preauth_state::{LoginState, VerifiedTransactionCode},
+    preauth_state::{
+        CredentialMaterialization, IssuanceTransaction, LoginState, VerifiedTransactionCode,
+    },
     replay::{replay_identifier_hash, replay_scope_hash},
 };
 
 const KEY_BYTES: usize = 32;
 const LOGIN_RECORD_VERSION: u8 = 1;
+const ISSUANCE_RECORD_VERSION: u8 = 1;
 const KDF_CONTEXT: &[u8] = b"registry-notary/preauthorization/kdf/v1";
 const LOGIN_AAD_CONTEXT: &[u8] = b"registry-notary/preauthorization/login-aad/v1";
 const STATE_IDENTIFIER_CONTEXT: &[u8] = b"login-state";
 const PIN_VERIFIER_CONTEXT: &[u8] = b"transaction-code";
+const ISSUANCE_TRANSACTION_CONTEXT: &[u8] = b"oid4vci-issuance-transaction";
+const ISSUANCE_NONCE_CONTEXT: &[u8] = b"oid4vci-token-nonce";
+const ISSUANCE_HOLDER_CONTEXT: &[u8] = b"oid4vci-holder-thumbprint";
+const ISSUANCE_REQUEST_CONTEXT: &[u8] = b"oid4vci-credential-request";
+const ISSUANCE_RECORD_AAD_CONTEXT: &[u8] = b"registry-notary/oid4vci/transaction-aad/v1";
+const ISSUANCE_RESPONSE_AAD_CONTEXT: &[u8] = b"registry-notary/oid4vci/response-aad/v1";
 
 /// The configured environment variable name is retained, but its value is
 /// read only by [`PostgresSensitiveState::activate`].
@@ -240,6 +250,272 @@ impl PostgresSensitiveState {
         }))
     }
 
+    pub(crate) async fn reserve_issuance_transaction(
+        &self,
+        transaction_id: &str,
+        transaction: &IssuanceTransaction,
+        expires_at: OffsetDateTime,
+    ) -> Result<IssuanceReserveOutcome, SensitiveStateError> {
+        let expires_at = normalize_expiry(expires_at)?;
+        let transaction_hash = self
+            .keys
+            .identifier_hash(ISSUANCE_TRANSACTION_CONTEXT, transaction_id);
+        let aad = issuance_record_aad(
+            &transaction_hash,
+            &self.keys.key_id,
+            &transaction.credential_configuration_id,
+            &transaction.commitment,
+            expires_at,
+        )?;
+        let plaintext = EncryptedIssuanceTransaction {
+            version: ISSUANCE_RECORD_VERSION,
+            transaction,
+        };
+        let plaintext = serde_json::to_vec(&plaintext)
+            .map_err(|_| SensitiveStateError::CryptographyUnavailable)?;
+        let (nonce, ciphertext) = seal(&self.keys.aead, &aad, &plaintext)?;
+        let session = self.runtime.open_domain_session().await?;
+        let row = session
+            .run_operation(session.client().query_one(
+                "SELECT registry_notary_api.oid4vci_transaction_reserve_v1(\
+                     $1::bytea, $2::bytea, $3::text, $4::text, $5::bytea, $6::bytea, $7::timestamptz)",
+                &[
+                    &&transaction_hash[..],
+                    &&self.keys.key_id[..],
+                    &transaction.credential_configuration_id,
+                    &transaction.commitment,
+                    &nonce,
+                    &ciphertext,
+                    &expires_at,
+                ],
+            ))
+            .await?;
+        match row.get::<_, i16>(0) {
+            1 => Ok(IssuanceReserveOutcome::Reserved),
+            0 => Ok(IssuanceReserveOutcome::Duplicate),
+            -1 => Ok(IssuanceReserveOutcome::Capacity),
+            _ => Err(SensitiveStateError::InvalidStoredRecord),
+        }
+    }
+
+    pub(crate) async fn issuance_transaction(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Option<IssuanceTransaction>, SensitiveStateError> {
+        let transaction_hash = self
+            .keys
+            .identifier_hash(ISSUANCE_TRANSACTION_CONTEXT, transaction_id);
+        let session = self.runtime.open_domain_session().await?;
+        let row = session
+            .run_operation(session.client().query_opt(
+                "SELECT * FROM registry_notary_api.oid4vci_transaction_get_v1($1::bytea)",
+                &[&&transaction_hash[..]],
+            ))
+            .await?;
+        row.map(|row| self.decrypt_issuance_transaction(&transaction_hash, &row))
+            .transpose()
+    }
+
+    pub(crate) async fn bind_issuance_nonce(
+        &self,
+        transaction_id: &str,
+        commitment: &str,
+        nonce: &str,
+    ) -> Result<bool, SensitiveStateError> {
+        let transaction_hash = self
+            .keys
+            .identifier_hash(ISSUANCE_TRANSACTION_CONTEXT, transaction_id);
+        let nonce_hash = self.keys.identifier_hash(ISSUANCE_NONCE_CONTEXT, nonce);
+        let session = self.runtime.open_domain_session().await?;
+        let row = session
+            .run_operation(session.client().query_one(
+                "SELECT registry_notary_api.oid4vci_transaction_bind_nonce_v1(\
+                     $1::bytea, $2::text, $3::bytea)",
+                &[&&transaction_hash[..], &commitment, &&nonce_hash[..]],
+            ))
+            .await?;
+        Ok(row.try_get::<_, Option<bool>>(0).ok().flatten() == Some(true))
+    }
+
+    pub(crate) async fn begin_issuance_materialization(
+        &self,
+        transaction_id: &str,
+        commitment: &str,
+        configuration_id: &str,
+        nonce: &str,
+        holder_thumbprint: &str,
+        request_hash: &str,
+    ) -> Result<CredentialMaterialization, SensitiveStateError> {
+        let transaction_hash = self
+            .keys
+            .identifier_hash(ISSUANCE_TRANSACTION_CONTEXT, transaction_id);
+        let nonce_hash = self.keys.identifier_hash(ISSUANCE_NONCE_CONTEXT, nonce);
+        let holder_hash = self
+            .keys
+            .identifier_hash(ISSUANCE_HOLDER_CONTEXT, holder_thumbprint);
+        let request_hash = self
+            .keys
+            .identifier_hash(ISSUANCE_REQUEST_CONTEXT, request_hash);
+        let session = self.runtime.open_domain_session().await?;
+        let row = session
+            .run_operation(session.client().query_one(
+                "SELECT * FROM registry_notary_api.oid4vci_transaction_begin_v1(\
+                     $1::bytea, $2::text, $3::text, $4::bytea, $5::bytea, $6::bytea)",
+                &[
+                    &&transaction_hash[..],
+                    &commitment,
+                    &configuration_id,
+                    &&nonce_hash[..],
+                    &&holder_hash[..],
+                    &&request_hash[..],
+                ],
+            ))
+            .await?;
+        match row.get::<_, i16>("outcome") {
+            1 => self
+                .decrypt_issuance_transaction(&transaction_hash, &row)
+                .map(CredentialMaterialization::Acquired),
+            2 => {
+                let transaction = self.decrypt_issuance_transaction(&transaction_hash, &row)?;
+                let key_id: Vec<u8> = row.get("key_id");
+                let expires_at: OffsetDateTime = row.get("expires_at");
+                let response_nonce: Vec<u8> = row.get("response_aead_nonce");
+                let mut response_ciphertext: Vec<u8> = row.get("response_ciphertext");
+                let aad = issuance_response_aad(
+                    &transaction_hash,
+                    &key_id,
+                    &holder_hash,
+                    &request_hash,
+                    expires_at,
+                )?;
+                let plaintext = open(
+                    &self.keys.aead,
+                    &aad,
+                    &response_nonce,
+                    &mut response_ciphertext,
+                )?;
+                let response: Value = serde_json::from_slice(plaintext)
+                    .map_err(|_| SensitiveStateError::InvalidStoredRecord)?;
+                if transaction.transaction_id != transaction_id {
+                    return Err(SensitiveStateError::InvalidStoredRecord);
+                }
+                Ok(CredentialMaterialization::Cached(response))
+            }
+            0 => Ok(CredentialMaterialization::Busy),
+            -1 => Ok(CredentialMaterialization::Denied),
+            _ => Err(SensitiveStateError::InvalidStoredRecord),
+        }
+    }
+
+    pub(crate) async fn complete_issuance_materialization(
+        &self,
+        transaction_id: &str,
+        holder_thumbprint: &str,
+        request_hash: &str,
+        response: &Value,
+    ) -> Result<bool, SensitiveStateError> {
+        let transaction_hash = self
+            .keys
+            .identifier_hash(ISSUANCE_TRANSACTION_CONTEXT, transaction_id);
+        let holder_hash = self
+            .keys
+            .identifier_hash(ISSUANCE_HOLDER_CONTEXT, holder_thumbprint);
+        let request_hash = self
+            .keys
+            .identifier_hash(ISSUANCE_REQUEST_CONTEXT, request_hash);
+        let session = self.runtime.open_domain_session().await?;
+        let record = session
+            .run_operation(session.client().query_opt(
+                "SELECT * FROM registry_notary_api.oid4vci_transaction_get_v1($1::bytea)",
+                &[&&transaction_hash[..]],
+            ))
+            .await?
+            .ok_or(SensitiveStateError::InvalidStoredRecord)?;
+        let key_id: Vec<u8> = record.get("key_id");
+        if key_id.ct_eq(&self.keys.key_id).unwrap_u8() != 1 {
+            return Err(SensitiveStateError::InvalidStoredRecord);
+        }
+        let expires_at: OffsetDateTime = record.get("expires_at");
+        let aad = issuance_response_aad(
+            &transaction_hash,
+            &key_id,
+            &holder_hash,
+            &request_hash,
+            expires_at,
+        )?;
+        let plaintext = serde_json::to_vec(response)
+            .map_err(|_| SensitiveStateError::CryptographyUnavailable)?;
+        let (nonce, ciphertext) = seal(&self.keys.aead, &aad, &plaintext)?;
+        let row = session
+            .run_operation(session.client().query_one(
+                "SELECT registry_notary_api.oid4vci_transaction_complete_v1(\
+                     $1::bytea, $2::bytea, $3::bytea, $4::bytea, $5::bytea)",
+                &[
+                    &&transaction_hash[..],
+                    &&holder_hash[..],
+                    &&request_hash[..],
+                    &nonce,
+                    &ciphertext,
+                ],
+            ))
+            .await?;
+        Ok(row.try_get::<_, Option<bool>>(0).ok().flatten() == Some(true))
+    }
+
+    pub(crate) async fn fail_issuance_materialization(
+        &self,
+        transaction_id: &str,
+        holder_thumbprint: &str,
+    ) -> Result<(), SensitiveStateError> {
+        let transaction_hash = self
+            .keys
+            .identifier_hash(ISSUANCE_TRANSACTION_CONTEXT, transaction_id);
+        let holder_hash = self
+            .keys
+            .identifier_hash(ISSUANCE_HOLDER_CONTEXT, holder_thumbprint);
+        let session = self.runtime.open_domain_session().await?;
+        session
+            .run_operation(session.client().query_opt(
+                "SELECT registry_notary_api.oid4vci_transaction_fail_v1($1::bytea, $2::bytea)",
+                &[&&transaction_hash[..], &&holder_hash[..]],
+            ))
+            .await?;
+        Ok(())
+    }
+
+    fn decrypt_issuance_transaction(
+        &self,
+        transaction_hash: &[u8; KEY_BYTES],
+        row: &tokio_postgres::Row,
+    ) -> Result<IssuanceTransaction, SensitiveStateError> {
+        let key_id: Vec<u8> = row.get("key_id");
+        let configuration_id: String = row.get("credential_configuration_id");
+        let commitment: String = row.get("commitment");
+        let nonce: Vec<u8> = row.get("record_aead_nonce");
+        let mut ciphertext: Vec<u8> = row.get("record_ciphertext");
+        let expires_at: OffsetDateTime = row.get("expires_at");
+        if key_id.ct_eq(&self.keys.key_id).unwrap_u8() != 1 {
+            return Err(SensitiveStateError::InvalidStoredRecord);
+        }
+        let aad = issuance_record_aad(
+            transaction_hash,
+            &self.keys.key_id,
+            &configuration_id,
+            &commitment,
+            expires_at,
+        )?;
+        let plaintext = open(&self.keys.aead, &aad, &nonce, &mut ciphertext)?;
+        let decrypted: DecryptedIssuanceTransaction = serde_json::from_slice(plaintext)
+            .map_err(|_| SensitiveStateError::InvalidStoredRecord)?;
+        if decrypted.version != ISSUANCE_RECORD_VERSION
+            || decrypted.transaction.credential_configuration_id != configuration_id
+            || decrypted.transaction.commitment != commitment
+        {
+            return Err(SensitiveStateError::InvalidStoredRecord);
+        }
+        Ok(decrypted.transaction)
+    }
+
     pub(crate) async fn reserve_transaction_code(
         &self,
         jti: &str,
@@ -387,6 +663,13 @@ pub(crate) enum LoginReserveOutcome {
     Capacity,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IssuanceReserveOutcome {
+    Reserved,
+    Duplicate,
+    Capacity,
+}
+
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub(crate) struct SensitiveStateKeys {
     aead: [u8; KEY_BYTES],
@@ -450,6 +733,18 @@ struct DecryptedLoginState {
     nonce: String,
 }
 
+#[derive(Serialize)]
+struct EncryptedIssuanceTransaction<'a> {
+    version: u8,
+    transaction: &'a IssuanceTransaction,
+}
+
+#[derive(Deserialize)]
+struct DecryptedIssuanceTransaction {
+    version: u8,
+    transaction: IssuanceTransaction,
+}
+
 fn derive_key(master: &[u8; KEY_BYTES], label: &[u8]) -> [u8; KEY_BYTES] {
     hmac_framed(master, &[KDF_CONTEXT, label])
 }
@@ -491,6 +786,94 @@ fn login_aad(
     aad.extend_from_slice(&length.to_be_bytes());
     aad.extend_from_slice(configuration_id.as_bytes());
     Ok(aad)
+}
+
+fn issuance_record_aad(
+    transaction_hash: &[u8; KEY_BYTES],
+    key_id: &[u8],
+    configuration_id: &str,
+    commitment: &str,
+    expires_at: OffsetDateTime,
+) -> Result<Vec<u8>, SensitiveStateError> {
+    if key_id.len() != KEY_BYTES || !sha256_uri(commitment) {
+        return Err(SensitiveStateError::InvalidStoredRecord);
+    }
+    let mut aad = Vec::with_capacity(192 + configuration_id.len());
+    aad.extend_from_slice(ISSUANCE_RECORD_AAD_CONTEXT);
+    aad.push(ISSUANCE_RECORD_VERSION);
+    aad.extend_from_slice(transaction_hash);
+    aad.extend_from_slice(key_id);
+    aad.extend_from_slice(&expires_at.unix_timestamp().to_be_bytes());
+    append_aad_text(&mut aad, configuration_id)?;
+    append_aad_text(&mut aad, commitment)?;
+    Ok(aad)
+}
+
+fn sha256_uri(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    })
+}
+
+fn issuance_response_aad(
+    transaction_hash: &[u8; KEY_BYTES],
+    key_id: &[u8],
+    holder_hash: &[u8; KEY_BYTES],
+    request_hash: &[u8; KEY_BYTES],
+    expires_at: OffsetDateTime,
+) -> Result<Vec<u8>, SensitiveStateError> {
+    if key_id.len() != KEY_BYTES {
+        return Err(SensitiveStateError::InvalidStoredRecord);
+    }
+    let mut aad = Vec::with_capacity(160);
+    aad.extend_from_slice(ISSUANCE_RESPONSE_AAD_CONTEXT);
+    aad.push(ISSUANCE_RECORD_VERSION);
+    aad.extend_from_slice(transaction_hash);
+    aad.extend_from_slice(key_id);
+    aad.extend_from_slice(holder_hash);
+    aad.extend_from_slice(request_hash);
+    aad.extend_from_slice(&expires_at.unix_timestamp().to_be_bytes());
+    Ok(aad)
+}
+
+fn append_aad_text(aad: &mut Vec<u8>, value: &str) -> Result<(), SensitiveStateError> {
+    let length =
+        u32::try_from(value.len()).map_err(|_| SensitiveStateError::InvalidStoredRecord)?;
+    aad.extend_from_slice(&length.to_be_bytes());
+    aad.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn seal(
+    key_bytes: &[u8; KEY_BYTES],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), SensitiveStateError> {
+    let mut ciphertext = plaintext.to_vec();
+    let aead = RandomizedNonceKey::new(&AES_256_GCM, key_bytes)
+        .map_err(|_| SensitiveStateError::CryptographyUnavailable)?;
+    let nonce = aead
+        .seal_in_place_append_tag(Aad::from(aad), &mut ciphertext)
+        .map_err(|_| SensitiveStateError::CryptographyUnavailable)?;
+    Ok((nonce.as_ref().as_slice().to_vec(), ciphertext))
+}
+
+fn open<'a>(
+    key_bytes: &[u8; KEY_BYTES],
+    aad: &[u8],
+    nonce: &[u8],
+    ciphertext: &'a mut [u8],
+) -> Result<&'a [u8], SensitiveStateError> {
+    let nonce = Nonce::try_assume_unique_for_key(nonce)
+        .map_err(|_| SensitiveStateError::InvalidStoredRecord)?;
+    let aead = RandomizedNonceKey::new(&AES_256_GCM, key_bytes)
+        .map_err(|_| SensitiveStateError::CryptographyUnavailable)?;
+    aead.open_in_place(nonce, Aad::from(aad), ciphertext)
+        .map(|plaintext| &*plaintext)
+        .map_err(|_| SensitiveStateError::InvalidStoredRecord)
 }
 
 fn normalize_expiry(expires_at: OffsetDateTime) -> Result<OffsetDateTime, SensitiveStateError> {
@@ -558,6 +941,34 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn issuance_aad_requires_the_canonical_sha256_uri_commitment() {
+        let keys = test_keys(10);
+        let transaction_hash = keys.identifier_hash(ISSUANCE_TRANSACTION_CONTEXT, "transaction");
+        let expiry = OffsetDateTime::from_unix_timestamp(1_900_000_000).unwrap();
+        let commitment = format!("sha256:{}", "a".repeat(64));
+
+        assert!(issuance_record_aad(
+            &transaction_hash,
+            &keys.key_id,
+            "person",
+            &commitment,
+            expiry,
+        )
+        .is_ok());
+        for invalid in [
+            "a".repeat(64),
+            format!("sha256:{}", "A".repeat(64)),
+            format!("sha256:{}", "a".repeat(63)),
+        ] {
+            assert_eq!(
+                issuance_record_aad(&transaction_hash, &keys.key_id, "person", &invalid, expiry,)
+                    .unwrap_err(),
+                SensitiveStateError::InvalidStoredRecord
+            );
+        }
     }
 
     #[test]

@@ -910,6 +910,44 @@
         },
         "standards_adapters": {
           "$ref": "#/$defs/adapter_state_map"
+        },
+        "refresh_health": {
+          "description": "Restricted per-resource refresh health. Producers omit this field from the default tier.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/relay_refresh_health"
+          }
+        }
+      }
+    },
+    "relay_refresh_health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_id",
+        "resource_id",
+        "last_successful_refresh_at",
+        "consecutive_refresh_failures",
+        "serving_last_good"
+      ],
+      "properties": {
+        "dataset_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "resource_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "last_successful_refresh_at": {
+          "$ref": "#/$defs/rfc3339"
+        },
+        "consecutive_refresh_failures": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "serving_last_good": {
+          "type": "boolean"
         }
       }
     },

@@ -3,14 +3,14 @@
 
 use super::*;
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegistryNotaryCorsConfig {
     #[serde(default)]
     pub allowed_origins: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceAuthConfig {
     #[serde(default)]
@@ -32,7 +32,7 @@ pub struct EvidenceAuthConfig {
 /// pre-authorized-code flow) signed with a dedicated `signing_keys` entry that
 /// MUST be distinct from any credential-signing key. The minted token's
 /// `iss`/`aud`/`typ`/alg pin the second verifier's trust anchor.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AccessTokenSigningConfig {
     #[serde(default)]
@@ -91,10 +91,11 @@ pub(super) const fn default_access_token_ttl_seconds() -> u64 {
     300
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceCredentialConfig {
     pub id: String,
+    #[schemars(with = "schema::CredentialFingerprintSchema")]
     pub fingerprint: CredentialFingerprintRef,
     #[serde(default)]
     pub scopes: Vec<String>,
@@ -102,7 +103,7 @@ pub struct EvidenceCredentialConfig {
     pub authorization_details: Option<EvidenceAuthorizationDetails>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceOidcAuthConfig {
     pub issuer: String,
@@ -128,6 +129,7 @@ pub struct EvidenceOidcAuthConfig {
     #[serde(default = "default_oidc_principal_claim")]
     pub principal_claim: String,
     #[serde(default = "default_oidc_leeway", with = "humantime_serde")]
+    #[schemars(with = "schema::HumantimeDurationSchema")]
     pub leeway: Duration,
     #[serde(default)]
     pub allow_insecure_localhost: bool,

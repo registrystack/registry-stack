@@ -85,6 +85,10 @@ same URL returns a signed `application/statuslist+jwt` token when requested with
 `Accept: application/statuslist+jwt`, and retains the JSON lifecycle response
 for operational compatibility.
 
+`status` is a reserved top-level credential claim. It cannot be configured as a
+selectively disclosable OID4VCI projection, so a holder cannot remove the live
+status requirement while presenting the credential.
+
 ## Status values
 
 The public status response can report:
@@ -204,11 +208,13 @@ Make verifier policy explicit:
 - Accept status-free credentials only from profiles that are expected to be
   status-free.
 - For status-bearing credentials, fetch the `status.status_list.uri` with
-  `Accept: application/statuslist+jwt` and require the indexed status value to
-  be `0x00` (`VALID`).
-- Treat `0x01` (`INVALID`), `0x02` (`SUSPENDED`), missing status, malformed
-  status, or network failure according to the relying party's risk policy.
-  Fail closed for high-assurance flows.
+  `Accept: application/statuslist+jwt` only when its origin exactly matches the
+  verifier's configured trusted HTTPS status origin. Validate the signed token,
+  issuer, type, lifetime, index, and require the indexed value to be `0x00`
+  (`VALID`).
+- Fail closed on `0x01` (`INVALID`), `0x02` (`SUSPENDED`), missing status,
+  malformed status, an untrusted origin, or network failure. A status-bearing
+  credential is not valid when its live status cannot be verified.
 - Apply credential expiry even when status returns `valid`.
 
 Registry Notary does not currently publish aggregated status lists or external

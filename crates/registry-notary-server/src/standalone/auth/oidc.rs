@@ -178,6 +178,24 @@ pub(in super::super) fn bounded_verified_claims_from_oidc(
         audiences: bounded_audience(verified.claims.aud.as_ref()),
         client_id: verified_client(verified),
         token_type,
+        credential_configuration_id: verified
+            .claims
+            .extra
+            .get("credential_configuration_id")
+            .and_then(Value::as_str)
+            .and_then(verified_claim_value),
+        issuance_transaction_id: verified
+            .claims
+            .extra
+            .get("issuance_transaction_id")
+            .and_then(Value::as_str)
+            .and_then(verified_claim_value),
+        issuance_transaction_commitment: verified
+            .claims
+            .extra
+            .get("issuance_transaction_commitment")
+            .and_then(Value::as_str)
+            .and_then(verified_claim_value),
         scopes: bounded_scopes(&verified.scopes),
         subject: verified
             .claims

@@ -10,6 +10,11 @@ BASE_REF="${1:-${OPENAPI_CONTRACT_BASE_REF:-}}"
 WORK_DIR="target/openapi-contract"
 GENERATED="$WORK_DIR/generated.openapi.json"
 BASELINE="$WORK_DIR/base.openapi.json"
+FILTERED_BASELINE="$WORK_DIR/base.stable.openapi.json"
+FILTERED_CURRENT="$WORK_DIR/current.stable.openapi.json"
+ROSTER_PATH="../../docs/site/src/data/generated/relay-support.json"
+BASE_ROSTER="$WORK_DIR/base.relay-support.json"
+FILTER_SCRIPT="../../release/scripts/filter-relay-openapi-stability.py"
 
 mkdir -p "$WORK_DIR"
 
@@ -74,5 +79,30 @@ if ! git cat-file -e "$BASE_REF:$REFERENCE_CONFIG_FROM_ROOT" 2>/dev/null; then
 fi
 
 git show "$BASE_REF:$SPEC_PATH_FROM_ROOT" > "$BASELINE"
+
+if [[ -f "$ROSTER_PATH" ]]; then
+    roster_args=(--current-roster "$ROSTER_PATH")
+    ROSTER_PATH_FROM_ROOT="$(git ls-files --full-name -- "$ROSTER_PATH")"
+    if [[ -z "$ROSTER_PATH_FROM_ROOT" ]]; then
+        echo "Relay support roster is not tracked: '$ROSTER_PATH'" >&2
+        exit 1
+    fi
+    if git cat-file -e "$BASE_REF:$ROSTER_PATH_FROM_ROOT" 2>/dev/null; then
+        git show "$BASE_REF:$ROSTER_PATH_FROM_ROOT" > "$BASE_ROSTER"
+        roster_args+=(--base-roster "$BASE_ROSTER")
+    fi
+    python3 "$FILTER_SCRIPT" \
+        "${roster_args[@]}" \
+        --base-openapi "$BASELINE" \
+        --current-openapi "$SPEC_PATH" \
+        --filtered-base "$FILTERED_BASELINE" \
+        --filtered-current "$FILTERED_CURRENT"
+else
+    echo "Relay support roster not present; using bootstrap OpenAPI compatibility scope"
+    cp "$BASELINE" "$FILTERED_BASELINE"
+    cp "$SPEC_PATH" "$FILTERED_CURRENT"
+fi
+
 # Accepted one-time diffs live in the ignore file; see its header comment.
-oasdiff breaking --fail-on ERR --err-ignore openapi/oasdiff-err-ignore.txt "$BASELINE" "$SPEC_PATH"
+oasdiff breaking --fail-on ERR --err-ignore openapi/oasdiff-err-ignore.txt \
+    "$FILTERED_BASELINE" "$FILTERED_CURRENT"

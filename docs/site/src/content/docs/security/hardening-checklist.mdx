@@ -110,6 +110,11 @@ or the [Registry Notary operator configuration reference](../../products/registr
 - Keep the admin listener private. A publicly exposed admin surface trips
   `relay.admin.public_exposure` or `notary.admin.shared_exposure`, both `startup_fail` at
   `evidence_grade`.
+- Scrape Relay metrics from the private admin network with `registry_relay:metrics_read`. Alert when
+  `registry_relay_ingest_consecutive_refresh_failures` reaches `3`, or sooner when the deployment's
+  freshness service-level objective requires it. Relay deliberately keeps `/ready` at `200` while
+  a valid last-good table remains available. Refresh health shows source load failures; it does not
+  prove that business-domain data is current.
 - Set explicit `cors.allowed_origins`. The default CORS policy is deny by omission; add only the
   origins your integration actually needs.
 - Enable `server.trust_proxy` with an explicit `trusted_proxies` list only when a reverse proxy
@@ -138,7 +143,9 @@ or the [Registry Notary operator configuration reference](../../products/registr
   YAML file trips `relay.config.unsigned` / `notary.config.unsigned` and the process refuses to
   start.
 - Review `GET /admin/v1/posture` regularly. It reports the declared profile, active findings, and
-  active waivers, so the deployment's actual state is inspectable rather than asserted.
+  active waivers, so the deployment's actual state is inspectable rather than asserted. Read
+  [RS-OP-POSTURE](../../spec/rs-op-posture/) before building operational tooling around its
+  default or restricted tier.
 - Give every waiver a non-empty, non-secret reason and a mandatory expiry date. `startup_fail`
   gates are never waivable; a waiver naming one is rejected. Waiver reasons appear only in the
   restricted posture tier.
@@ -169,6 +176,8 @@ or the [Registry Notary operator configuration reference](../../products/registr
   expected for a deliberately unmet `startup_fail` gate).
 - Query `GET /admin/v1/posture` and read the `deployment` object: confirm the profile matches what
   you declared, and that no unwaived finding at or above your profile's threshold is outstanding.
+  Validate the response as [RS-OP-POSTURE](../../spec/rs-op-posture/) before an automated check
+  acts on it.
 - Send a request that should be audited and confirm a corresponding record lands in your configured
   sink, not only `stdout`.
 - Attempt an admin-listener request from outside the private network it is meant to be bound to,

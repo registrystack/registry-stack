@@ -171,8 +171,8 @@ def main() -> int:
     failures.extend(
         require_runtime(
             dockerfile,
-            "FROM gcr.io/distroless/cc-debian12:nonroot@sha256:",
-            "distroless nonroot runtime base",
+            "FROM gcr.io/distroless/cc-debian13:nonroot@sha256:",
+            "Distroless Debian 13 nonroot runtime base",
         )
     )
     failures.extend(
@@ -204,7 +204,7 @@ def main() -> int:
         )
     )
     for needle, detail in [
-        ("debian:bookworm-slim", "Debian slim runtime base"),
+        ("debian:trixie-slim", "Debian slim runtime base"),
         ("apt-get", "package manager in runtime"),
         ("groupadd", "runtime group creation"),
         ("useradd", "runtime user creation"),

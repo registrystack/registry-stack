@@ -19,11 +19,12 @@ oid4vci = ["dep:registry-platform-oid4vci"]
 federation = []
 json-facade = []
 test-support = []
-verifier = ["dep:base64", "dep:registry-platform-crypto", "dep:sha2"]
+verifier = ["dep:base64", "dep:flate2", "dep:registry-platform-crypto", "dep:sha2"]
 
 [dependencies]
 async-trait.workspace = true
 base64 = { workspace = true, optional = true }
+flate2 = { version = "1", optional = true }
 registry-notary-core.workspace = true
 registry-platform-crypto = { workspace = true, optional = true }
 registry-platform-httputil.workspace = true

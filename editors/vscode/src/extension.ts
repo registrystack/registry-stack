@@ -8,7 +8,6 @@ import {
   LanguageClient,
   LanguageClientOptions,
   ServerOptions,
-  TransportKind,
 } from 'vscode-languageclient/node';
 
 const clients = new Map<string, LanguageClient>();
@@ -68,20 +67,11 @@ async function startClient(
 ): Promise<void> {
   const key = folderKey(projectFolder);
   try {
-    const server = resolveServerCommand(projectFolder);
+    const server = resolveServerCommand(context, projectFolder);
     const serverOptions: ServerOptions = {
-      run: {
-        command: server.command,
-        args: server.args,
-        transport: TransportKind.stdio,
-        options: { cwd: projectFolder.uri.fsPath },
-      },
-      debug: {
-        command: server.command,
-        args: server.args,
-        transport: TransportKind.stdio,
-        options: { cwd: projectFolder.uri.fsPath },
-      },
+      command: server.command,
+      args: server.args,
+      options: { cwd: projectFolder.uri.fsPath },
     };
     const clientOptions: LanguageClientOptions = {
       documentSelector: [
@@ -144,7 +134,10 @@ function folderKey(folder: vscode.WorkspaceFolder): string {
   return folder.uri.toString();
 }
 
-function resolveServerCommand(projectFolder: vscode.WorkspaceFolder): {
+function resolveServerCommand(
+  context: vscode.ExtensionContext,
+  projectFolder: vscode.WorkspaceFolder,
+): {
   command: string;
   args: string[];
 } {
@@ -167,6 +160,13 @@ function resolveServerCommand(projectFolder: vscode.WorkspaceFolder): {
   const executable = process.platform === 'win32'
     ? 'registry-language-server.exe'
     : 'registry-language-server';
+  const packagedRegistryctl = findPackagedRegistryctl(context);
+  if (packagedRegistryctl !== undefined) {
+    return {
+      command: packagedRegistryctl,
+      args: ['authoring', 'language-server'],
+    };
+  }
   const standalone = findExecutableOnPath(executable);
   if (standalone !== undefined) {
     return { command: standalone, args: [] };
@@ -178,8 +178,21 @@ function resolveServerCommand(projectFolder: vscode.WorkspaceFolder): {
     return { command: registryctl, args: ['authoring', 'language-server'] };
   }
   throw new Error(
-    'No Registry Stack language server was found. Set registryStack.languageServer.path to an executable, add registry-language-server to PATH, or add a matching registryctl to PATH so it can run "registryctl authoring language-server".',
+    'No Registry Stack language server was found. Reinstall the integration with a matching registryctl, set registryStack.languageServer.path to an executable, add registry-language-server to PATH, or add a matching registryctl to PATH so it can run "registryctl authoring language-server".',
   );
+}
+
+function findPackagedRegistryctl(context: vscode.ExtensionContext): string | undefined {
+  const metadataPath = context.asAbsolutePath(path.join('dist', 'registryctl-path'));
+  try {
+    const candidate = fs.readFileSync(metadataPath, 'utf8').trim();
+    if (candidate !== '' && path.isAbsolute(candidate) && isExecutableFile(candidate)) {
+      return candidate;
+    }
+  } catch {
+    // Manual packages intentionally omit installer metadata and continue with PATH discovery.
+  }
+  return undefined;
 }
 
 function isExecutableFile(candidate: string): boolean {

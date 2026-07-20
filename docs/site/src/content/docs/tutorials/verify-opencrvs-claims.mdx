@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-06-26"
+last_reviewed: "2026-07-19"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -57,7 +57,7 @@ The result confirms the initialized project and next command:
 ```text
 Initialized Registry Stack project "fictional-civil-registry".
   Directory: opencrvs-project
-  Starter: opencrvs-dci (Registry Stack 0.11.0)
+  Starter: opencrvs-dci (Registry Stack 0.12.0)
   Starter content: matches bundled digest
   Editor support: VS Code and Zed (opencrvs-project/.registry-stack-editor/manifest.json)
 
@@ -84,10 +84,10 @@ Run every fixture without a network connection:
 registryctl test --project-dir opencrvs-project
 ```
 
-The JSON report contains:
+The human-readable report starts with:
 
 ```text
-"status": "passed"
+PASS: <passed>/<total> fixtures passed
 ```
 
 The match fixture proves the exact identifier and minimized birth-record outputs. The no-match and
@@ -138,10 +138,10 @@ registryctl build \
   --environment local
 ```
 
-The report contains `"status": "built"`. The output has separate Relay and Notary Config Bundle
-input directories under `.registry-stack/build/local/private/`. It contains secret references,
-not secret values. Package, sign, verify, and activate each product input through that product's
-Config Bundle workflow.
+The human-readable report starts with `Built Registry Stack project` and identifies the output
+directory. The output has separate Relay and Notary Config Bundle input directories under
+`.registry-stack/build/local/private/`. It contains secret references, not secret values. Package,
+sign, verify, and activate each product input through that product's Config Bundle workflow.
 
 ## Verify the boundary
 

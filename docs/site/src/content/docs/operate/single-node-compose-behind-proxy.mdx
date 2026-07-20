@@ -7,7 +7,7 @@ source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-09"
+last_reviewed: "2026-07-19"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -74,8 +74,8 @@ registryctl build \
   --environment <environment>
 ```
 
-The test and build JSON reports contain `"status": "passed"` and `"status": "built"`.
-The human-readable check report marks the project `valid`.
+The human-readable test report starts with `PASS`, the check report marks the project `valid`, and
+the build report identifies the generated output directory.
 Confirm the selected topology emits only the expected product inputs. A combined project emits
 separate Relay and Notary inputs with the same approval state. It does not emit a signed
 project-level root.

@@ -11,8 +11,8 @@
   "scenarios": [
     {
       "id": "notary-oid4vci-issuer-metadata",
-      "surface": "Registry Notary citizen OID4VCI issuer",
-      "status": "applicable",
+      "surface": "Registry Notary registry-backed OID4VCI issuer metadata",
+      "status": "candidate-only",
       "suite_plan": "oid4vci-1_0-issuer-test-plan",
       "suite_modules": [
         "oid4vci-1_0-issuer-metadata-test"
@@ -36,20 +36,22 @@
         "default_credential_configuration_id": "person_is_alive_sd_jwt"
       },
       "requires": [
-        "A Registry Notary release image pinned by digest and configured with checked-in, non-secret topology configuration.",
+        "A frozen Registry Notary release-candidate image pinned by digest and configured with checked-in, non-secret topology configuration.",
         "An issuer URL reachable from the OIDF conformance-suite server container that exactly matches the credential issuer metadata.",
-        "No bearer tokens, proof JWTs, issued credentials, or civil identifiers committed from generated results."
+        "A reviewed result export bound to the candidate image digest, suite commit, plan variants, and configuration digest.",
+        "No bearer tokens, proof JWTs, issued credentials, transaction codes, or civil identifiers committed from generated results."
       ],
       "notes": [
-        "This initial repeatable suite slice exercises OID4VCI issuer metadata without the suite callback ceremony.",
-        "Solmara Lab may provide the running topology, but reproducing the suite invocation does not require that repository.",
-        "The full OID4VCI issuer plan remains mapped below and must not be represented as passing until a credential-offer callback adapter exists."
+        "This repeatable suite slice exercises issuer metadata only and is not a wallet, verifier, or full issuer conformance claim.",
+        "The suite requires the sender_constrain=dpop plan selector, but the metadata-only module does not exercise DPoP and Registry Notary does not support or claim DPoP.",
+        "No external result is release evidence until it is captured from the frozen candidate artifact with the required immutable identifiers.",
+        "The full OID4VCI issuer plan remains blocked by the suite callback adapter and by suite profile requirements outside Registry Notary 1.0."
       ]
     },
     {
       "id": "notary-oid4vci-issuer-full",
-      "surface": "Registry Notary citizen OID4VCI issuer",
-      "status": "blocked-by-credential-offer-adapter",
+      "surface": "Registry Notary registry-backed OID4VCI issuer",
+      "status": "blocked-by-suite-profile-and-offer-adapter",
       "suite_plan": "oid4vci-1_0-issuer-test-plan",
       "suite_modules": [],
       "variants": {
@@ -65,21 +67,22 @@
       },
       "config_template": "registry-notary-oid4vci-issuer.template.json",
       "requires": [
-        "A pinned Registry Notary release topology with a suite-reachable issuer URL.",
-        "A bridge that sends or redirects a Notary credential offer to the suite's exposed /credential_offer endpoint.",
-        "A recorded policy decision on whether the first full run targets pre-authorized-code or authorization-code OID4VCI."
+        "A frozen Registry Notary release-candidate topology with a suite-reachable issuer URL.",
+        "A bridge that sends the issuer-initiated Notary pre-authorized offer to the suite's exposed /credential_offer endpoint.",
+        "A reviewed suite path that does not require DPoP, wallet attestation, PAR, an authorization-code wallet grant, ES256 holder proof, EUDI, or HAIP behavior outside Registry Notary 1.0."
       ],
       "notes": [
-        "The existing endpoint smoke flow pulls the Notary offer endpoint directly; the OIDF issuer plan waits for a callback into the suite.",
-        "Do not treat this blocked mapping as certification evidence."
+        "Registry Notary supports issuer-initiated pre-authorized code only. The identity provider's authorization code is internal to Notary and is not a wallet grant.",
+        "The checked-in sender_constrain=dpop variant is required by this upstream suite plan shape and does not represent Registry Notary DPoP support.",
+        "Do not treat this blocked mapping, a development topology, or historical wallet smoke output as certification evidence."
       ]
     }
   ],
   "non_oidf_surfaces": [
     {
       "surface": "Registry Relay OIDC bearer validation",
-      "evidence": "A pinned release-topology smoke with auth.mode set to oidc is still required by issue #205.",
-      "reason": "The OIDF suite does not publish a generic resource-server conformance plan for a Relay-style protected API. The release topology must separately verify discovery, signature, audience, token type, and scope mapping."
+      "evidence": "The release-owned candidate-neutral Relay and Zitadel smoke is directly runnable against a published Relay image digest. Its live output requires candidate binding and maintainer review before it becomes release evidence.",
+      "reason": "The OIDF suite does not publish a generic resource-server conformance plan for a Relay-style protected API. The separate release topology verifies discovery, signature, audience, token type, and native Zitadel role-object scope mapping."
     },
     {
       "surface": "Third-party OpenID Providers used by demonstration topologies",

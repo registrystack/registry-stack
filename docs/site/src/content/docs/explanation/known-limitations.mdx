@@ -90,8 +90,8 @@ For the rationale behind each of these, follow the linked specifications in each
 Registry Notary issues credentials, but the issuance surface is deliberately narrow.
 Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/).
 
-- One credential format, one binding method: Issued Registry Notary credentials are [SD-JWT
-  VC](../../reference/standards/) only.
+- One credential format, one OID4VCI holder profile: Issued Registry Notary credentials are
+  [SD-JWT VC](../../reference/standards/) only. Issuer signing supports EdDSA and ES256.
   Holder binding is a per-credential-profile setting that defaults to `mode: did` with `did:jwk`
   as the supported holder DID method.
   Direct issuance requires a holder DID by default; it verifies a fresh holder proof only when
@@ -99,17 +99,20 @@ Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/
   An operator can explicitly set `holder_binding.mode: none` for a bearer-style credential
   profile, in which case `registry-notary doctor` reports a warning and the issued credential is
   unbound.
-  The self-attestation (wallet) issuance path requires binding, so a credential issued down that
-  path is always `did:jwk`-bound with proof-of-possession.
+  The OID4VCI path requires EdDSA `did:jwk` binding. ES256 holder proof is not supported.
 - A profiled issuance subset, not a full issuer: The [OID4VCI](../../reference/standards/) surface
-  is a scoped self-attestation issuance profile (a profiled subset of Draft 13 using the
-  `dc+sd-jwt` format), not a full OID4VCI issuer and not a claim of general external-wallet
-  interoperability.
+  is a registry-backed issuer-initiated pre-authorized profile using the
+  `dc+sd-jwt` format, not a full OID4VCI issuer and not a claim of general
+  external-wallet interoperability. The identity provider's authorization code
+  is internal to Notary. There is no wallet-facing authorization-code grant,
+  public nonce endpoint, response next nonce, EUDI, HAIP, PAR, DPoP, or wallet
+  attestation profile.
   The capability-discovery document (`/.well-known/evidence-service`) declares
   `openid4vci.support: not_full_issuer` (announcing it is not a full issuer); this flag lives
   there rather than in the OID4VCI credential-issuer metadata.
-- Delegated self-attestation is evaluation-only: Both `/v1/credentials` and the OID4VCI
-  credential endpoint reject delegated evaluations in 1.0.
+- Source-free and delegated self-attestation are evaluation-only: Both
+  `/v1/credentials` and the OID4VCI credential endpoint reject source-free and
+  delegated evaluations in 1.0.
   Configuration load rejects delegated relationship `credential_profiles` and credential-profile
   bindings on delegated claims. Remove that capability to keep delegated evaluation, or issue a
   separately modeled registry-backed, non-delegated claim.
@@ -121,6 +124,11 @@ Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/
   There is no `/.well-known/jwt-vc-issuer` endpoint and no built-in data-subject erasure workflow.
   A rotated-out signing key may remain published for verification, which is not revocation.
   These are documented pilot limitations, recorded in `SECURITY.md`.
+- Status-bearing credentials fail closed: The top-level status claim is never
+  selectively disclosable. A client accepts a status-bearing credential only
+  after validating the signed status response from its exact configured HTTPS
+  trusted origin. Missing, invalid, unavailable, suspended, revoked, or expired
+  status denies the credential.
 - CCCEV output is a profiled shape, not conformant: [CCCEV](../../reference/standards/)-shaped
   output is a profiled subset and is not conformant to CCCEV 2.00.
   It is consumed by parsing the `@graph` for `cccev:Evidence` nodes.

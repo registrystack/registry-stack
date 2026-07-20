@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-12"
+last_reviewed: "2026-07-19"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -186,8 +186,8 @@ registryctl build \
   --environment <environment>
 ```
 
-The test and build JSON reports contain `"status": "passed"` and `"status": "built"`.
-The human-readable check report marks the project `valid`.
+The human-readable test report starts with `PASS`, the check report marks the project `valid`, and
+the build report identifies the generated output directory.
 Confirm that the explanation names one logical materialization and that no reviewable integration
 pack or consultation contract contains the provider path or physical column names.
 

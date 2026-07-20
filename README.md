@@ -26,6 +26,7 @@ release manifests, and docs.
 | Read the technical docs | [docs.registrystack.org](https://docs.registrystack.org/) |
 | Try it without installing anything | [Hosted Solmara Lab](https://solmara.registrystack.org/) |
 | Run the local demo topology | [Solmara Lab quick start](https://github.com/registrystack/solmara-lab#quick-start) |
+| Install VS Code or Zed integration | [Editor integrations](editors/README.md) |
 | Work on the monorepo | See [Development](#development) |
 | Review the public roadmap | [ROADMAP.md](ROADMAP.md) |
 | Review release evidence | See [Release And External Inputs](#release-and-external-inputs) |
@@ -71,6 +72,7 @@ flowchart LR
   material, scripts, performance harnesses, and fixtures that are not normal
   workspace crates.
 - `docs/site/`: the public Registry Stack docs site.
+- `editors/`: source-installed VS Code and Zed semantic navigation integrations.
 - `release/`: stack release manifests, schemas, import audit records, and public
   release and conformance tooling.
 - `external/`: notes for external inputs that intentionally stay outside this

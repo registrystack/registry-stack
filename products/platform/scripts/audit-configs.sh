@@ -3,21 +3,22 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/audit-configs.sh [--base DIR] [--format markdown|tsv|paths] [--check]
+Usage: products/platform/scripts/audit-configs.sh [--base DIR] [--format markdown|tsv|paths] [--check]
 
-Enumerates Registry Notary and Registry Relay config files that are likely to
-drift during the registry-platform v0.1.0 migration.
+Enumerates Registry Relay configuration surfaces governed alongside the
+shared platform crates in the Registry Stack monorepo.
 
 Defaults:
-  --base ..              parent directory containing registry-notary/relay
+  --base REPO_ROOT       detected from this script's location
   --format markdown      human-readable inventory table
 
 Flags:
-  --check                exit non-zero when no expected consumer roots exist
+  --check                exit non-zero when an expected config root is missing
 USAGE
 }
 
-base=".."
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+base="$(cd "${script_dir}/../../.." && pwd)"
 format="markdown"
 check=false
 
@@ -58,15 +59,15 @@ esac
 base="${base%/}"
 
 declare -a roots=(
-  "notary|demo config|registry-notary/demo/config"
-  "notary|perf config|registry-notary/perf/config"
-  "notary|server test fixtures|registry-notary/crates/registry-notary-server/tests"
-  "relay|operator examples|registry-relay/config"
-  "relay|demo config|registry-relay/demo/config"
-  "relay|config test fixtures|registry-relay/tests/fixtures/config"
+  "relay|operator examples|crates/registry-relay/config"
+  "relay|demo config|crates/registry-relay/demo/config"
+  "relay|performance config|crates/registry-relay/perf/config"
+  "relay|integration profiles|crates/registry-relay/profiles"
+  "relay|config test fixtures|crates/registry-relay/tests/fixtures/config"
 )
 
 found_root=false
+missing_roots=()
 rows=()
 
 notes_for_file() {
@@ -105,6 +106,7 @@ for root_spec in "${roots[@]}"; do
   abs_root="$base/$rel_root"
 
   if [[ ! -d "$abs_root" ]]; then
+    missing_roots+=("$rel_root")
     continue
   fi
 
@@ -123,9 +125,16 @@ for root_spec in "${roots[@]}"; do
   )
 done
 
-if [[ "$check" == true && "$found_root" == false ]]; then
-  echo "no registry-notary or registry-relay config roots found under $base" >&2
-  exit 1
+if [[ "$check" == true ]]; then
+  if [[ "$found_root" == false ]]; then
+    echo "no Registry Relay config roots found under $base" >&2
+    exit 1
+  fi
+  if [[ ${#missing_roots[@]} -gt 0 ]]; then
+    echo "expected monorepo config roots are missing under $base:" >&2
+    printf '  %s\n' "${missing_roots[@]}" >&2
+    exit 1
+  fi
 fi
 
 case "$format" in

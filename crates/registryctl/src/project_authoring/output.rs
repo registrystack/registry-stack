@@ -23,7 +23,7 @@ fn validate_generated_notary(compiled: &CompiledProject) -> Result<()> {
         .get(Path::new("config/notary.yaml"))
         .ok_or_else(|| anyhow!("generated Notary config is absent"))?;
     let notary: StandaloneRegistryNotaryConfig =
-        serde_yaml::from_slice(notary_config).context("generated Notary config did not parse")?;
+        serde_norway::from_slice(notary_config).context("generated Notary config did not parse")?;
     notary
         .validate()
         .context("generated Notary config failed the production validator")?;
@@ -35,7 +35,7 @@ fn validate_generated_relay(
     files: &BTreeMap<PathBuf, Box<[u8]>>,
 ) -> Result<()> {
     validate_generated_relay_activation(relay_config, files)?;
-    let config: Value = serde_yaml::from_slice(relay_config)
+    let config: Value = serde_norway::from_slice(relay_config)
         .context("generated Relay config did not parse as strict YAML")?;
     if config
         .pointer("/consultation/artifacts/public_contracts")
@@ -54,14 +54,14 @@ fn validate_generated_relay_activation(
     let validation_root = GeneratedValidationDirectory::create()?;
     write_file_map(&validation_root.path, files)?;
     let config_path = validation_root.path.join("config/relay.yaml");
-    let mut local_config: Value = serde_yaml::from_slice(relay_config)
+    let mut local_config: Value = serde_norway::from_slice(relay_config)
         .context("generated Relay config did not parse for activation validation")?;
     local_config["deployment"]["profile"] = Value::String("local".to_string());
     fs::remove_file(&config_path)
         .context("failed to stage generated Relay activation validation")?;
     write_private_file(
         &config_path,
-        serde_yaml::to_string(&local_config)?.as_bytes(),
+        serde_norway::to_string(&local_config)?.as_bytes(),
     )?;
     let mut loaded = registry_relay::config::load_with_metadata(&config_path)
         .map_err(|error| anyhow!("generated Relay config failed production loading: {error:?}"))?;
@@ -118,12 +118,12 @@ fn compile_generated_relay_fixture(
     relay_config: &[u8],
     files: &BTreeMap<PathBuf, Box<[u8]>>,
 ) -> Result<registry_relay::offline_fixture::OfflineRelayFixture> {
-    let runtime: registry_relay::config::Config = serde_yaml::from_slice(relay_config)
+    let runtime: registry_relay::config::Config = serde_norway::from_slice(relay_config)
         .context("generated Relay config did not parse with the production model")?;
     registry_relay::config::validate::run(&runtime).map_err(|error| {
         anyhow!("generated Relay config failed the production startup validator: {error:?}")
     })?;
-    let config: Value = serde_yaml::from_slice(relay_config)
+    let config: Value = serde_norway::from_slice(relay_config)
         .context("generated Relay config did not parse as strict YAML")?;
     let artifacts = config
         .pointer("/consultation/artifacts")
@@ -1227,7 +1227,7 @@ fn read_bounded_fixture_body(root: &Path, path: &Path, max_bytes: u64) -> Result
 }
 
 fn parse_yaml<T: for<'de> Deserialize<'de>>(bytes: &[u8], label: &str) -> Result<T> {
-    serde_yaml::from_slice(bytes).map_err(|error| {
+    serde_norway::from_slice(bytes).map_err(|error| {
         let location = error
             .location()
             .map(|location| format!(":{}:{}", location.line(), location.column()))

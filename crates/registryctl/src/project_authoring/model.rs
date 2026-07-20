@@ -83,6 +83,7 @@ pub struct ProjectBuildOptions {
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectCommandReport {
+    pub schema_version: &'static str,
     pub status: &'static str,
     pub project: String,
     pub environment: Option<String>,
@@ -99,6 +100,7 @@ pub struct ProjectCommandReport {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectAuthoringDiagnostics {
+    pub schema_version: &'static str,
     pub status: &'static str,
     pub diagnostics: Vec<ProjectAuthoringDiagnostic>,
 }
@@ -1415,7 +1417,27 @@ struct IssuanceBinding {
     issuer: String,
     signing_key: SecretReference,
     signing_kid: String,
+    #[serde(default)]
+    algorithm: IssuanceSigningAlgorithm,
     generation: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+enum IssuanceSigningAlgorithm {
+    #[default]
+    #[serde(rename = "EdDSA")]
+    EdDsa,
+    #[serde(rename = "ES256")]
+    Es256,
+}
+
+impl IssuanceSigningAlgorithm {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::EdDsa => "EdDSA",
+            Self::Es256 => "ES256",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1485,6 +1507,27 @@ struct Oid4vciBinding {
     subject: Oid4vciSubjectBinding,
     redirect_uri: String,
     allowed_wallet_origins: Vec<String>,
+    #[serde(default)]
+    tx_code: Oid4vciTxCodeBinding,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Oid4vciTxCodeBinding {
+    #[serde(default = "default_oid4vci_tx_code_required")]
+    required: bool,
+}
+
+impl Default for Oid4vciTxCodeBinding {
+    fn default() -> Self {
+        Self {
+            required: default_oid4vci_tx_code_required(),
+        }
+    }
+}
+
+const fn default_oid4vci_tx_code_required() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Serialize)]

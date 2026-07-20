@@ -365,6 +365,9 @@ pub(super) async fn batch_evaluate(
         &request.items,
     );
     let audit_request = request.clone();
+    if let Err(error) = validate_batch_subject_limit(evidence, &request) {
+        return evidence_error_response(error);
+    }
     let registry_backed_batch = match registry_backed_batch_requested(evidence, &request) {
         Ok(value) => value,
         Err(error) => return evidence_error_response(error),
@@ -373,9 +376,6 @@ pub(super) async fn batch_evaluate(
         && idempotency_key(&headers).is_none_or(|key| key.is_empty() || key.len() > 256)
     {
         return evidence_error_response(EvidenceError::ConsultationInvalidRequest);
-    }
-    if let Err(error) = validate_batch_subject_limit(evidence, &request) {
-        return evidence_error_response(error);
     }
     let batch_cost = u32::try_from(request.items.len()).unwrap_or(u32::MAX);
     let runtime = state.runtime();

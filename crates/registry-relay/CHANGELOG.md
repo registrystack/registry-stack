@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.12.0 - 2026-07-19
+
+- Align the 1.0 standards roster with the canonical no-optional-feature release
+  build. OpenAPI and problem contracts, portable metadata, CSV and XLSX input,
+  and JSON aggregate output are stable. Optional standards adapters and the
+  shipped non-gated Parquet, CSV aggregate, and SDMX-JSON surfaces are
+  experimental and feature-frozen, outside the 1.0 compatibility promise.
+- Surface protected per-resource last-good refresh health through Prometheus
+  metrics and restricted admin posture without failing readiness while a valid
+  last-good table remains available.
+- Move maintained Relay runtime images and the release image to Debian 13 and
+  enforce the matching image-base and vulnerability policy in release gates.
+
 ## 0.11.0 - 2026-07-18
 
 - Relay now publishes a reproducible, product-owned Draft 2020-12 schema for

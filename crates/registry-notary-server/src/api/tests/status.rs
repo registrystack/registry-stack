@@ -59,8 +59,13 @@ async fn credential_status_list_response_is_signed_status_list_jwt() {
     let payload = decode_jwt_payload(jwt);
     assert_eq!(header["typ"], json!("statuslist+jwt"));
     assert_eq!(header["kid"], json!("did:web:issuer.example#key-1"));
+    assert_eq!(payload["iss"], json!("did:web:issuer.example"));
     assert_eq!(
         payload["sub"],
+        json!("https://issuer.example/v1/credentials/credential-1/status")
+    );
+    assert_eq!(
+        payload["aud"],
         json!("https://issuer.example/v1/credentials/credential-1/status")
     );
     assert_eq!(payload["ttl"], json!(300));

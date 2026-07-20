@@ -104,6 +104,9 @@ fn subject_access_principal() -> EvidencePrincipal {
             audiences: vec![bounded("registry-notary-citizen")],
             client_id: Some(bounded("azp:citizen-portal")),
             token_type: Some(bounded("JWT")),
+            credential_configuration_id: None,
+            issuance_transaction_id: None,
+            issuance_transaction_commitment: None,
             scopes: vec![bounded("subject_access")],
             subject: Some(bounded(RAW_PRINCIPAL_ID)),
             subject_binding_claim: Some(

@@ -7,7 +7,11 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 
 suite('Registry Stack extension', () => {
-  test('starts a language server for every trusted Registry Stack workspace folder', async () => {
+  suiteTeardown(() => {
+    fs.rmSync(path.resolve(__dirname, '../../dist/registryctl-path'), { force: true });
+  });
+
+  test('uses the installed registryctl for every trusted Registry Stack workspace folder', async () => {
     assert.strictEqual(vscode.workspace.isTrusted, true);
     assert.strictEqual(vscode.workspace.workspaceFolders?.length, 2);
 

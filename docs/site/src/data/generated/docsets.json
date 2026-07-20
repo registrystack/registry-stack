@@ -11,20 +11,60 @@
       "description": "Current RegistryStack monorepo documentation build.",
       "products": {
         "registry-stack": {
-          "version": "v0.11.0",
+          "version": "v0.12.0",
           "ref": "HEAD"
         },
         "registry-relay": {
-          "version": "v0.11.0",
+          "version": "v0.12.0",
           "ref": "HEAD"
         },
         "registry-notary": {
-          "version": "v0.11.0",
+          "version": "v0.12.0",
           "ref": "HEAD"
         },
         "registry-manifest": {
-          "version": "v0.11.0",
+          "version": "v0.12.0",
           "ref": "HEAD"
+        }
+      }
+    },
+    {
+      "id": "v0.12.0",
+      "label": "v0.12.0",
+      "path": "/v/0.12.0/",
+      "status": "archived",
+      "source": "registry-stack-v0.12.0",
+      "repo_docs_source": "monorepo",
+      "published_at": "2026-07-19",
+      "description": "RegistryStack v0.12.0 beta-14 documentation set.",
+      "products": {
+        "registry-stack": {
+          "version": "v0.12.0",
+          "ref": "865921f0d8e874e3cefe548d000e8915c4abecbc"
+        },
+        "registry-platform": {
+          "version": "v0.12.0",
+          "ref": "865921f0d8e874e3cefe548d000e8915c4abecbc"
+        },
+        "registry-manifest": {
+          "version": "v0.12.0",
+          "ref": "865921f0d8e874e3cefe548d000e8915c4abecbc"
+        },
+        "registry-notary": {
+          "version": "v0.12.0",
+          "ref": "865921f0d8e874e3cefe548d000e8915c4abecbc"
+        },
+        "registry-relay": {
+          "version": "v0.12.0",
+          "ref": "865921f0d8e874e3cefe548d000e8915c4abecbc"
+        },
+        "registry-registryctl": {
+          "version": "v0.12.0",
+          "ref": "865921f0d8e874e3cefe548d000e8915c4abecbc"
+        },
+        "crosswalk": {
+          "version": "crosswalk-core-v0.2.0",
+          "ref": "1d44ec735fdc8a7c719264b339574371e8330337"
         }
       }
     },

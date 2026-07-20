@@ -1,47 +1,51 @@
 # registry-platform-oid4vci
 
-OID4VCI protocol constants, metadata structs, and proof validation helpers for
-registry services acting as credential issuers.
+OID4VCI protocol constants, metadata types, offer and token wire types, and
+holder-proof validation helpers for Registry Stack issuers.
 
-## What It Provides
+## What it provides
 
-- Protocol constants (`PROOF_JWT_TYPE`, `SD_JWT_VC_FORMAT`, `AUTHORIZATION_CODE_GRANT_TYPE`, etc.).
-- `CredentialIssuerMetadata` and `CredentialConfigurationMetadata` for
-  `.well-known/openid-credential-issuer` responses.
-- `CredentialConfigurationMetadata::sd_jwt_vc()` for constructing an SD-JWT VC
-  configuration entry matching the OID4VCI draft spec.
-- `CredentialOffer::authorization_code()` for constructing credential offer objects.
-- `validate_proof_jwt` for verifying a holder-bound proof JWT presented at the
-  credential endpoint. Validates structure, `typ`, signature, audience, nonce,
-  and time bounds. Returns a `ValidatedProof` carrying the holder JWK and
-  verified claims.
-- `ProofValidationPolicy::credential_endpoint` for configuring credential
-  endpoint validation without hand-filling policy fields.
-- `consume_validated_proof_nonce_once` for binding a validated proof nonce to a
-  required replay store consume operation.
-- Wire types for nonce, credential, and error responses.
+- `CredentialIssuerMetadata` and `CredentialConfigurationMetadata` for issuer
+  discovery.
+- `CredentialConfigurationMetadata::sd_jwt_vc()` for `dc+sd-jwt` metadata.
+- `CredentialOffer::pre_authorized_code()` and the pre-authorized token request
+  wire types.
+- `validate_proof_jwt` for validating structure, `typ`, signature, audience,
+  nonce, and time bounds.
+- `ProofValidationPolicy::credential_endpoint` for configuring proof checks.
+- `consume_validated_proof_nonce_once` for binding a validated proof to a
+  required replay-store consume operation.
+- Credential and protocol error response types.
 
-## Spec References
+The crate supplies protocol primitives. Registry Notary defines the public 1.0
+profile: registry-backed issuer-initiated pre-authorized code, `dc+sd-jwt`,
+EdDSA or ES256 issuer signing, and EdDSA `did:jwk` holder proof. It has no public
+nonce route and returns no next nonce from the credential endpoint.
 
-- [OpenID for Verifiable Credential Issuance (OID4VCI)](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html)
+## Specification reference
+
+- [OpenID for Verifiable Credential Issuance](https://openid.net/specs/openid-4-verifiable-credential-issuance-1_0.html)
 - Proof JWT type: `openid4vci-proof+jwt`
-- Grant type: `authorization_code`
+- Wallet grant:
+  `urn:ietf:params:oauth:grant-type:pre-authorized_code`
 - Credential format: `dc+sd-jwt`
 
-## Security Notes
+## Security notes
 
-- **Nonce replay is a caller responsibility.** `validate_proof_jwt` validates
-  that the nonce in the proof matches `policy.expected_nonce`, but it does not
-  track nonce usage across calls. Use `consume_validated_proof_nonce_once` with
-  a `registry-platform-replay` store to reject reused nonces after validation.
-- Proof JWTs must use EdDSA with `did:jwk` holder binding. RS\*/PS\*/ES\* keys
-  and `jku`/`x5u`/`x5c`/`crit` headers are rejected.
-- Proof audience is validated against `policy.audience` before any JWKS lookup.
+- Proof nonce consumption is a caller responsibility. `validate_proof_jwt`
+  checks the expected nonce but does not mutate replay state. Call
+  `consume_validated_proof_nonce_once` with a correctness-state replay store.
+- Registry Notary accepts only EdDSA proof JWTs with `did:jwk` holder binding.
+  ES256 holder keys and `jku`, `x5u`, `x5c`, or `crit` headers are rejected.
+- Proof audience is validated before issuer or holder key use.
+- A transaction code is required by default. If a caller deliberately builds a
+  bearer offer without one, its lifetime must be no more than 300 seconds and
+  redemption must remain single-use and rate limited.
 
 ## Testing
 
 ```sh
-cargo test -p registry-platform-oid4vci
+cargo test --locked -p registry-platform-oid4vci
 ```
 
 ## License

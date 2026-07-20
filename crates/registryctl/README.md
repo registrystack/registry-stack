@@ -5,7 +5,7 @@
 Install a pinned release without cloning this repo:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.11.0/crates/registryctl/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.12.0/crates/registryctl/install.sh | bash
 ```
 
 The quick installer verifies downloaded release assets against `SHA256SUMS`
@@ -19,22 +19,22 @@ Then create and start your first secured spreadsheet API:
 ```sh
 registryctl init relay my-first-api --sample benefits
 cd my-first-api
-registryctl doctor --profile local --format json
+registryctl doctor --profile local
 registryctl start
 registryctl smoke
 ```
 
-Initialization prints the created project, notable artifacts, and next commands. Add
-`--format json` to either `init relay` or `init --from` for the versioned
-`registryctl.init.v1` machine-readable report.
+Interactive report commands print concise human-readable results. Add `--format json` when
+another program needs a versioned report. Artifact and protocol commands, including authoring
+schemas, editor metadata, the language server, and logs, retain their native output formats.
 
 The generated project contains a local Registry Relay configuration, sample
 XLSX workbook, Compose file, project manifest, local demo credentials, and an
 optional Bruno API collection.
 
-Run `registryctl doctor --format json` before starting a generated stack or
-after editing config. It calls the product-owned validators, redacts local
-secret values, and returns a machine-readable report for troubleshooting.
+Run `registryctl doctor` before starting a generated stack or after editing config. It calls the
+product-owned validators and redacts local secret values. Add `--format json` when another program
+needs the versioned diagnostic report.
 
 For the full walkthroughs, use the Registry Docs tutorials:
 
@@ -59,7 +59,9 @@ registryctl build --project-dir registry-project --environment local
 Initialization copies the five schemas embedded in `registryctl`, configures project-relative VS
 Code and Zed schema mappings, and reports the generated editor manifest. The explicit
 `authoring editor` command verifies the setup and safely refreshes an unchanged generated bundle
-after an upgrade.
+after an upgrade. Starter initialization validates the starter and editor setup in private staging
+before publishing project files, so editor failure leaves the destination untouched. JSON init
+requires a UTF-8 destination, validated before an initializer runs or writes project files.
 
 The authoring contract accepts one to eight exact selector inputs and up to
 sixteen typed inputs in total. Canonical selectors have a fixed 4096-byte
@@ -97,7 +99,7 @@ workers need a platform-specific process limit. The Notary default remains
 128 MiB. The maximum 1 GiB value supports emulated local runtimes and is a
 per-worker data/address-space ceiling, not reserved memory.
 
-The installer defaults to `v0.11.0`. To install a different pinned release, set
+The installer defaults to `v0.12.0`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 
 ```sh
@@ -108,10 +110,10 @@ Fetch the installer from the same pinned tag selected by
 `REGISTRYCTL_VERSION`. An older installer does not know the asset contract of a
 newer release.
 
-Prebuilt binaries are published for the `v0.11.0` stack release on Linux x86_64,
+Prebuilt binaries are published for the `v0.12.0` stack release on Linux x86_64,
 Linux arm64, and macOS arm64. On other platforms, install from source with
-`cargo install --git https://github.com/registrystack/registry-stack --tag v0.11.0 registryctl --locked`.
-Intel macOS has no prebuilt binary for `v0.11.0`, so the installer stops after
+`cargo install --git https://github.com/registrystack/registry-stack --tag v0.12.0 registryctl --locked`.
+Intel macOS has no prebuilt binary for `v0.12.0`, so the installer stops after
 printing that Cargo command. It does not run the source build automatically.
 
 ## Release image lock (`v0.9.0` and later)
@@ -136,10 +138,10 @@ operation and requires the lock for that registryctl version.
 
 ## Update checks
 
-`registryctl` checks GitHub releases at most once per day for normal
-human-facing commands and prints an upgrade notice to stderr when a newer
-release is available. It skips the automatic check in CI and while running
-`registryctl doctor` so JSON output stays quiet.
+`registryctl` checks GitHub releases at most once per day for normal human-facing commands and
+prints an upgrade notice to stderr when a newer release is available. It skips the automatic check
+in CI and while running `registryctl doctor`, so doctor diagnostics are not accompanied by an
+update notice.
 
 Run an explicit check at any time:
 

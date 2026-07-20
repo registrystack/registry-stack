@@ -248,105 +248,11 @@ fn build_openapi_document() -> Value {
                     }
                 }
             },
-            "/oid4vci/credential-offer": {
-                "get": {
-                    "summary": "Create an OpenID4VCI credential offer",
-                    "operationId": "getOid4vciCredentialOffer",
-                    "description": "Returns an authorization-code credential offer. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
-                    "security": [],
-                    "parameters": [
-                        {
-                            "name": "credential_configuration_id",
-                            "in": "query",
-                            "required": false,
-                            "schema": { "type": "string" }
-                        }
-                    ],
-                    "responses": {
-                        "200": {
-                            "description": "Credential offer",
-                            "content": {
-                                "application/json": {
-                                    "schema": { "$ref": "#/components/schemas/CredentialOffer" }
-                                }
-                            }
-                        },
-                        "400": {
-                            "description": "Invalid credential offer request",
-                            "content": {
-                                "application/json": {
-                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
-                                }
-                            }
-                        },
-                        "404": { "description": "OpenID4VCI issuer is disabled" },
-                        "500": {
-                            "description": "OpenID4VCI issuer failed",
-                            "content": {
-                                "application/json": {
-                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            "/oid4vci/nonce": {
-                "post": {
-                    "summary": "Create an OpenID4VCI credential nonce",
-                    "operationId": "createOid4vciNonce",
-                    "description": "Returns a c_nonce for proof-of-possession. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
-                    "security": [],
-                    "requestBody": {
-                        "required": false,
-                        "content": {
-                            "application/json": {
-                                "schema": { "$ref": "#/components/schemas/NonceRequest" }
-                            }
-                        }
-                    },
-                    "responses": {
-                        "200": {
-                            "description": "Nonce response",
-                            "content": {
-                                "application/json": {
-                                    "schema": { "$ref": "#/components/schemas/NonceResponse" }
-                                }
-                            }
-                        },
-                        "400": {
-                            "description": "Invalid nonce request",
-                            "content": {
-                                "application/json": {
-                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
-                                }
-                            }
-                        },
-                        "404": { "description": "OpenID4VCI nonce endpoint is disabled" },
-                        "429": {
-                            "description": "Nonce store is rate limited",
-                            "content": {
-                                "application/json": {
-                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
-                                }
-                            }
-                        },
-                        "500": {
-                            "description": "OpenID4VCI issuer failed",
-                            "content": {
-                                "application/json": {
-                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
             "/oid4vci/credential": {
                 "post": {
                     "summary": "Issue a credential through OpenID4VCI",
                     "operationId": "issueOid4vciCredential",
-                    "description": "Issues a dc+sd-jwt credential for an authenticated direct subject-access principal only after a fresh non-delegated registry-backed evaluation records exact compiler pins and normalized unique Relay executions for every selected root's dependency closure. Source-free, delegated, and legacy evaluations are not issuable. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+                    "description": "Materializes at most one dc+sd-jwt credential from the immutable registry-backed evaluation transaction authorized before the issuer-initiated offer. The access token supplies the transaction nonce, holder proof must use EdDSA with did:jwk, and an exact retry returns the cached response without another Relay call or signature. Source-free, delegated, and legacy evaluations are not issuable. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
                     "security": [
                         { "bearerAuth": [] }
                     ],
@@ -450,7 +356,7 @@ fn build_openapi_document() -> Value {
                 "get": {
                     "summary": "Complete eSignet login and render a pre-authorized-code offer",
                     "operationId": "completeOid4vciOffer",
-                    "description": "Public and unauthenticated. Consumes the login state, exchanges the eSignet code with private_key_jwt, validates the id_token, and mints one single-use pre-authorized_code. When configured, the offer also includes one numeric tx_code (PIN) shown out-of-band from the QR. Returns 404 when the pre-authorized-code flow is disabled.",
+                    "description": "Public and unauthenticated. Consumes the login state, exchanges the eSignet code with private_key_jwt, validates the id_token, completes the exact registry-backed Relay evaluation, and only then mints one single-use pre-authorized_code bound to that immutable transaction. Denied, unavailable, malformed, source-free, or provenance-invalid evaluations produce no offer. When configured, the offer also includes one numeric tx_code (PIN) shown out-of-band from the QR. Returns 404 when the pre-authorized-code flow is disabled.",
                     "security": [],
                     "parameters": [
                         {
@@ -477,6 +383,14 @@ fn build_openapi_document() -> Value {
                         },
                         "400": {
                             "description": "Login state, eSignet code, or id_token is invalid",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
+                                }
+                            }
+                        },
+                        "403": {
+                            "description": "Registry-backed evaluation or issuance policy denied the transaction",
                             "content": {
                                 "application/json": {
                                     "schema": { "$ref": "#/components/schemas/Oid4vciError" }
@@ -606,7 +520,7 @@ fn build_openapi_document() -> Value {
                         "401": { "description": "Missing or invalid credential" },
                         "403": { "description": "Not authorized for requested claim, purpose, disclosure, or format" },
                         "406": { "description": "Requested format is not acceptable" },
-                        "413": { "description": "Request body or batch is too large" },
+                        "413": { "description": "Request body is too large" },
                         "429": { "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded" },
                         "503": { "description": "Required Relay consultation or operational dependency is unavailable" }
                     }
@@ -679,7 +593,7 @@ fn build_openapi_document() -> Value {
                         "403": { "description": "Not authorized for requested claim, purpose, disclosure, or format" },
                         "406": { "description": "Requested format is not acceptable" },
                         "409": { "description": "Idempotency key conflicts with another request body" },
-                        "413": { "description": "Request body or batch is too large" },
+                        "413": { "description": "The request exceeds the hard 100-member ceiling or a lower configured batch limit. Rejection occurs before quota, idempotency, Relay, source, or retained-state side effects." },
                         "429": { "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded" },
                         "503": { "description": "Required Relay consultation or operational dependency is unavailable" }
                     }
@@ -806,9 +720,6 @@ fn build_openapi_document() -> Value {
                 "CredentialIssuerMetadata": credential_issuer_metadata_schema(),
                 "CredentialConfigurationMetadata": credential_configuration_metadata_schema(),
                 "SdJwtVcTypeMetadata": sd_jwt_vc_type_metadata_schema(),
-                "CredentialOffer": credential_offer_schema(),
-                "NonceRequest": nonce_request_schema(),
-                "NonceResponse": nonce_response_schema(),
                 "CredentialRequest": credential_request_schema(),
                 "CredentialResponse": credential_response_schema(),
                 "TokenRequest": token_request_schema(),
@@ -1442,61 +1353,6 @@ fn add_response_examples(document: &mut Value) {
     );
     set_json_response(
         document,
-        "/oid4vci/credential-offer",
-        "get",
-        "200",
-        "Credential offer",
-        oid4vci_credential_offer_example(),
-    );
-    for (status, code, description) in [
-        ("400", "invalid_request", "credential request is invalid"),
-        ("500", "server_error", "credential issuer failed"),
-    ] {
-        set_oid4vci_error_response(
-            document,
-            "/oid4vci/credential-offer",
-            "get",
-            status,
-            if status == "400" {
-                "Invalid credential offer request"
-            } else {
-                "OpenID4VCI issuer failed"
-            },
-            oid4vci_error_example(code, description),
-        );
-    }
-    set_json_response(
-        document,
-        "/oid4vci/nonce",
-        "post",
-        "200",
-        "Nonce response",
-        oid4vci_nonce_example(),
-    );
-    for (status, code, description) in [
-        ("400", "invalid_request", "credential request is invalid"),
-        (
-            "429",
-            "temporarily_unavailable",
-            "credential request is rate limited",
-        ),
-        ("500", "server_error", "credential issuer failed"),
-    ] {
-        set_oid4vci_error_response(
-            document,
-            "/oid4vci/nonce",
-            "post",
-            status,
-            match status {
-                "400" => "Invalid nonce request",
-                "429" => "Nonce store is rate limited",
-                _ => "OpenID4VCI issuer failed",
-            },
-            oid4vci_error_example(code, description),
-        );
-    }
-    set_json_response(
-        document,
         "/oid4vci/credential",
         "post",
         "200",
@@ -1715,6 +1571,19 @@ fn add_response_examples(document: &mut Value) {
         "/v1/batch-evaluations",
         "post",
         &["406", "409", "413", "429", "503"],
+    );
+    set_problem_response(
+        document,
+        "/v1/batch-evaluations",
+        "post",
+        "413",
+        "Batch too large",
+        problem_example(
+            413,
+            "batch.too_large",
+            "Batch too large",
+            "the batch exceeds the platform or configured member limit",
+        ),
     );
     set_json_response(
         document,
@@ -1937,6 +1806,7 @@ fn batch_evaluate_request_schema() -> Value {
         "properties": {
             "items": {
                 "type": "array",
+                "maxItems": registry_notary_core::MAX_BATCH_EVALUATION_MEMBERS_V1,
                 "items": { "$ref": "#/components/schemas/BatchEvaluateItemRequest" }
             },
             "claims": {
@@ -3020,25 +2890,12 @@ fn credential_issuer_metadata_schema() -> Value {
             "credential_issuer": { "type": "string", "format": "uri" },
             "credential_endpoint": { "type": "string", "format": "uri" },
             "token_endpoint": { "type": "string", "format": "uri" },
-            "nonce_endpoint": { "type": "string", "format": "uri" },
             "authorization_servers": { "type": "array", "items": { "type": "string", "format": "uri" } },
             "display": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
             "credential_configurations_supported": {
                 "type": "object",
                 "additionalProperties": { "$ref": "#/components/schemas/CredentialConfigurationMetadata" }
             }
-        }
-    })
-}
-
-fn credential_offer_schema() -> Value {
-    json!({
-        "type": "object",
-        "required": ["credential_issuer", "credential_configuration_ids"],
-        "properties": {
-            "credential_issuer": { "type": "string", "format": "uri" },
-            "credential_configuration_ids": { "type": "array", "items": { "type": "string" } },
-            "grants": { "type": "object", "additionalProperties": true }
         }
     })
 }
@@ -3118,27 +2975,6 @@ fn sd_jwt_vc_type_metadata_schema() -> Value {
     })
 }
 
-fn nonce_request_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "credential_configuration_id": { "type": "string" }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn nonce_response_schema() -> Value {
-    json!({
-        "type": "object",
-        "required": ["c_nonce", "c_nonce_expires_in"],
-        "properties": {
-            "c_nonce": { "type": "string" },
-            "c_nonce_expires_in": { "type": "integer", "format": "uint64" }
-        }
-    })
-}
-
 fn credential_request_schema() -> Value {
     json!({
         "type": "object",
@@ -3194,9 +3030,7 @@ fn credential_response_schema() -> Value {
                 }
             },
             "credential_profile": { "type": "string" },
-            "format": { "type": "string" },
-            "c_nonce": { "type": "string" },
-            "c_nonce_expires_in": { "type": "integer", "format": "uint64" }
+            "format": { "type": "string" }
         }
     })
 }
@@ -3416,7 +3250,6 @@ fn oid4vci_issuer_metadata_example() -> Value {
     json!({
         "credential_issuer": "https://issuer.example.gov",
         "credential_endpoint": "https://issuer.example.gov/oid4vci/credential",
-        "nonce_endpoint": "https://issuer.example.gov/oid4vci/nonce",
         "authorization_servers": ["https://id.example.gov"],
         "display": [
             {
@@ -3484,32 +3317,10 @@ fn sd_jwt_vc_type_metadata_example() -> Value {
     })
 }
 
-fn oid4vci_credential_offer_example() -> Value {
-    json!({
-        "credential_issuer": "https://issuer.example.gov",
-        "credential_configuration_ids": ["person_is_alive_sd_jwt"],
-        "grants": {
-            "authorization_code": {
-                "issuer_state": "issuer-state",
-                "authorization_server": "https://id.example.gov"
-            }
-        }
-    })
-}
-
-fn oid4vci_nonce_example() -> Value {
-    json!({
-        "c_nonce": "b64url-nonce",
-        "c_nonce_expires_in": 300
-    })
-}
-
 fn oid4vci_credential_response_example() -> Value {
     json!({
         "credential": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRjK3NkLWp3dCJ9.payload.signature~disclosure~",
-        "format": "dc+sd-jwt",
-        "c_nonce": "next-b64url-nonce",
-        "c_nonce_expires_in": 300
+        "format": "dc+sd-jwt"
     })
 }
 
@@ -3897,8 +3708,6 @@ mod tests {
             "/.well-known/openid-credential-issuer",
             "/credentials/{vct_path}",
             "/.well-known/vct/{vct_path}",
-            "/oid4vci/credential-offer",
-            "/oid4vci/nonce",
             "/oid4vci/credential",
             "/oid4vci/offer/start",
             "/oid4vci/offer/callback",
@@ -3920,10 +3729,22 @@ mod tests {
             "/admin/v1/config/verify",
             "/admin/v1/config/dry-run",
             "/admin/v1/config/apply",
+            "/v1/batch-credentials",
+            "/v1/credentials/batch",
+            "/oid4vci/batch-credential",
+            "/oid4vci/batch-credentials",
+            "/oid4vci/credential-offer",
+            "/oid4vci/nonce",
         ] {
             assert!(
                 !paths.contains_key(route),
-                "removed admin config route is still documented: {route}"
+                "unsupported or removed route is documented: {route}"
+            );
+        }
+        for route in paths.keys().filter(|route| route.contains("batch")) {
+            assert_eq!(
+                route, "/v1/batch-evaluations",
+                "Notary must not expose Relay, credential, or OID4VCI batch routes"
             );
         }
     }
@@ -4040,14 +3861,6 @@ mod tests {
             json!([])
         );
         assert_eq!(
-            doc["paths"]["/oid4vci/credential-offer"]["get"]["security"],
-            json!([])
-        );
-        assert_eq!(
-            doc["paths"]["/oid4vci/nonce"]["post"]["security"],
-            json!([])
-        );
-        assert_eq!(
             doc["paths"]["/oid4vci/offer/start"]["get"]["security"],
             json!([])
         );
@@ -4155,8 +3968,6 @@ mod tests {
             ("/.well-known/openid-credential-issuer", "get", "200"),
             ("/credentials/{vct_path}", "get", "200"),
             ("/.well-known/vct/{vct_path}", "get", "200"),
-            ("/oid4vci/credential-offer", "get", "200"),
-            ("/oid4vci/nonce", "post", "200"),
             ("/oid4vci/credential", "post", "200"),
             ("/oid4vci/token", "post", "200"),
             ("/v1/claims", "get", "200"),
@@ -4256,6 +4067,16 @@ mod tests {
         let batch_request = &doc["components"]["schemas"]["BatchEvaluateRequest"]["properties"];
         assert!(batch_request.get("subjects").is_none());
         assert!(batch_request.get("items").is_some());
+        assert!(batch_request["items"].get("minItems").is_none());
+        assert_eq!(
+            batch_request["items"]["maxItems"],
+            json!(registry_notary_core::MAX_BATCH_EVALUATION_MEMBERS_V1)
+        );
+        assert_eq!(
+            doc["paths"]["/v1/batch-evaluations"]["post"]["responses"]["413"]["content"]
+                ["application/problem+json"]["example"]["code"],
+            json!("batch.too_large")
+        );
     }
 
     #[test]
@@ -4384,6 +4205,12 @@ mod tests {
             doc["components"]["schemas"]["CredentialIssuerMetadata"]["type"],
             json!("object")
         );
+        assert!(
+            doc["components"]["schemas"]["CredentialIssuerMetadata"]["properties"]
+                .get("nonce_endpoint")
+                .is_none(),
+            "the 1.0 issuer metadata schema must not advertise a public nonce endpoint"
+        );
         assert_eq!(
             doc["components"]["schemas"]["CredentialRequest"]["type"],
             json!("object")
@@ -4397,9 +4224,14 @@ mod tests {
                 ["application/json"]["schema"]["$ref"],
             json!("#/components/schemas/Oid4vciError")
         );
-        assert_eq!(
-            doc["paths"]["/oid4vci/credential"]["post"]["description"],
-            json!("Issues a dc+sd-jwt credential for an authenticated direct subject-access principal only after a fresh non-delegated registry-backed evaluation records exact compiler pins and normalized unique Relay executions for every selected root's dependency closure. Source-free, delegated, and legacy evaluations are not issuable. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.")
+        let credential_description = doc["paths"]["/oid4vci/credential"]["post"]["description"]
+            .as_str()
+            .expect("credential endpoint has a description");
+        assert!(
+            credential_description.contains("immutable registry-backed evaluation transaction")
+                && credential_description.contains("exact retry")
+                && credential_description.contains("without another Relay call or signature"),
+            "credential endpoint documents transaction-bound materialization and retry semantics"
         );
         assert_eq!(
             doc["components"]["schemas"]["TokenRequest"]["type"],

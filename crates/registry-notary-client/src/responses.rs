@@ -256,13 +256,6 @@ impl_safe_debug!(
 );
 
 #[cfg(feature = "oid4vci")]
-impl SafeDebug for registry_platform_oid4vci::NonceResponse {
-    fn fmt_debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("<redacted>")
-    }
-}
-
-#[cfg(feature = "oid4vci")]
 impl SafeDebug for registry_platform_oid4vci::CredentialResponse {
     fn fmt_debug(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("<redacted>")

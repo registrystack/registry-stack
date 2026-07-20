@@ -13,7 +13,8 @@ mod sensitive;
 pub use handle::attest_postgres_state_plane_runtime;
 pub(crate) use handle::NotaryStatePlaneHandle;
 pub(crate) use sensitive::{
-    LoginReserveOutcome, PostgresSensitiveState, SensitiveStateKeyConfig, SensitiveStateKeys,
+    IssuanceReserveOutcome, LoginReserveOutcome, PostgresSensitiveState, SensitiveStateKeyConfig,
+    SensitiveStateKeys,
 };
 
 pub use migration::{

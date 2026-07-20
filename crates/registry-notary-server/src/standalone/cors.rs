@@ -81,8 +81,6 @@ pub(super) fn is_subject_access_wallet_cors_path(path: &str) -> bool {
         "/.well-known/evidence-service"
             | "/.well-known/evidence/jwks.json"
             | "/.well-known/openid-credential-issuer"
-            | "/oid4vci/credential-offer"
-            | "/oid4vci/nonce"
             | "/oid4vci/credential"
             | "/v1/formats"
             | "/v1/evaluations"

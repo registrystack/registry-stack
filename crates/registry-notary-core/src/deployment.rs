@@ -11,6 +11,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// The set of deployment profiles an operator can declare.
@@ -18,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// Frozen at introduction; new profiles may be added but existing ones never
 /// change meaning. Deserialization is strict: an unknown profile string fails,
 /// which surfaces as a startup error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DeploymentProfile {
     Local,
@@ -42,7 +43,7 @@ impl DeploymentProfile {
 ///
 /// `startup_fail` and `readiness_fail` are hard gates and bind only on declared
 /// profiles. `finding_error` and `finding_warn` surface as posture findings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GateSeverity {
     StartupFail,
@@ -70,7 +71,7 @@ impl GateSeverity {
 }
 
 /// Status of a finding in posture output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DeploymentFindingStatus {
     Active,
@@ -91,7 +92,7 @@ impl DeploymentFindingStatus {
 /// An absent profile means an undeclared deployment, which refuses startup. The
 /// `multi_instance` flag is an operator declaration that the instance is one of
 /// several sharing the same workload; it is never inferred.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DeploymentConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,7 +117,7 @@ impl DeploymentConfig {
 /// observe directly. Each flag defaults to `false`, meaning "no evidence
 /// declared", which keeps the corresponding gate active until the operator
 /// asserts the control is in place out of band.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DeploymentEvidenceConfig {
     /// Operator asserts audit log events are shipped off-host (for example to
@@ -163,7 +164,7 @@ impl DeploymentEvidenceConfig {
 ///
 /// A waiver names exactly one finding id, a free-text reason, and a mandatory
 /// expiry date (`YYYY-MM-DD`). Reasons must not contain secrets.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DeploymentWaiverConfig {
     pub finding: String,

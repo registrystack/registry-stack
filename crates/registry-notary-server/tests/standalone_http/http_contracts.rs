@@ -594,6 +594,23 @@ pub(super) async fn openapi_json_handler_denies_without_runtime_state_by_default
 }
 
 #[tokio::test]
+pub(super) async fn public_router_exposes_no_batch_credential_or_oid4vci_route() {
+    let server = TestServer::new(registry_notary_server::api::public_router());
+
+    for route in [
+        "/v1/batch-credentials",
+        "/v1/credentials/batch",
+        "/oid4vci/batch-credential",
+        "/oid4vci/batch-credentials",
+    ] {
+        server
+            .post(route)
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
 pub(super) async fn standalone_server_serves_docs_shell_without_auth() {
     set_audit_secret();
     std::env::set_var(

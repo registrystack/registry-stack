@@ -72,7 +72,8 @@ disclosable field rather than the values, so the holder reveals only what they c
 Holder binding, which cryptographically ties a credential to a key the holder controls, is
 enabled by default with `did:jwk`; an operator can set `holder_binding.mode: none` only for an
 explicit bearer-style credential profile, and `registry-notary doctor` warns on that choice.
-The self-attestation (wallet) issuance path requires holder proof of possession.
+The registry-backed OID4VCI issuance path requires EdDSA `did:jwk` holder proof
+of possession. Source-free self-attestation remains evaluation-only.
 See [Evidence issuance, end to end](../explanation/evidence-issuance/) for the full credential
 lifecycle.
 

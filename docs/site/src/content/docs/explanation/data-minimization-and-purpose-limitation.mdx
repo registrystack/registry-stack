@@ -104,7 +104,7 @@ Selective disclosure here is at the claim (or configured-projection) level: by d
 becomes one disclosure carrying its whole value, so an object-valued claim is revealed as a unit
 unless an explicit projection splits it into separately-disclosable fields.
 Holder binding (tying the credential to a holder key with `did:jwk`) is enabled by default per
-profile, and the self-attestation (wallet) issuance path requires proof of possession; an operator
+profile, and the registry-backed OID4VCI issuance path requires EdDSA proof of possession; an operator
 can explicitly configure `holder_binding.mode: none` for a bearer-style credential profile.
 The direct claim or evaluation result is not a credential and is never holder-bound.
 One caveat for a reviewer: the issuance surface is a profiled, partial subset, not a full

@@ -1,0 +1,89 @@
+{
+  "schema": "registry.ops.posture.v1",
+  "observed_at": "2026-07-19T10:00:00Z",
+  "component": "registry-relay",
+  "tier": "restricted",
+  "instance": {
+    "id": "civil-relay-prod",
+    "environment": "production",
+    "owner": "Ministry of Interior",
+    "jurisdiction": "example-country",
+    "public_base_url": "https://civil-relay.example.gov"
+  },
+  "build": {
+    "package": "registry-relay",
+    "version": "0.1.0"
+  },
+  "runtime": {
+    "auth_mode": "oidc",
+    "admin_enabled": true,
+    "readiness": "ready"
+  },
+  "configuration": {
+    "source": "local_file",
+    "dynamic_reload_supported": false,
+    "last_config_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "last_bundle_id": null,
+    "last_bundle_sequence": null,
+    "last_bundle_signer_kids": [],
+    "last_apply_result": null,
+    "last_apply_at": null,
+    "restart_required": false
+  },
+  "deployment": {
+    "profile": "production",
+    "findings": []
+  },
+  "audit": {
+    "write_policy": "availability_first",
+    "redaction_mode": "redacted",
+    "hash_chain": "process_local",
+    "keyed_integrity": "hmac",
+    "sink_class": "file",
+    "retention_owner": "operator",
+    "checkpoints": "supported",
+    "anchoring": "none"
+  },
+  "standards_artifacts": {},
+  "posture": {
+    "warnings": [],
+    "findings": [],
+    "audit": {
+      "configured": true,
+      "sink_type": "file",
+      "shipping_target_configured": true,
+      "shipping_target": "declared_external",
+      "shipping_health": "ok",
+      "shipping_observed_at": "2026-07-19T09:59:00Z",
+      "checkpoint_status": "available",
+      "latest_tail_hash": null,
+      "latest_sequence": null,
+      "verified_at": null,
+      "verification_status": "not_supported"
+    }
+  },
+  "relay": {
+    "dataset_count": 1,
+    "entity_count": 1,
+    "aggregate_count": 0,
+    "evidence_offering_count": 0,
+    "metadata_manifest": {
+      "configured": false
+    },
+    "standards_adapters": {
+      "ogcapi_records": "disabled",
+      "ogcapi_features": "disabled",
+      "ogcapi_edr": "disabled",
+      "spdci": "disabled"
+    },
+    "refresh_health": [
+      {
+        "dataset_id": "civil_registry",
+        "resource_id": "persons",
+        "last_successful_refresh_at": "2026-07-19T09:45:00Z",
+        "consecutive_refresh_failures": 3,
+        "serving_last_good": true
+      }
+    ]
+  }
+}

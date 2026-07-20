@@ -22,7 +22,7 @@ env:
   CARGO_TERM_COLOR: always
   REGISTRY: ghcr.io
   IMAGE_NAMESPACE: registrystack
-  RELEASE_BUILDER_IMAGE: rust:1.95-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
+  RELEASE_BUILDER_IMAGE: rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3
   SYFT_VERSION: v1.45.1
   SYFT_LINUX_AMD64_SHA256: 20c84195e24927f50a3b2269946be51f4c4abc9d2f145fee7388b4199149f716
   GRYPE_VERSION: v0.114.0
@@ -102,6 +102,17 @@ jobs:
             echo "manifest=${manifest}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Set up evidence checker runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22.12.0
+
+      - name: Verify documentation evidence links
+        working-directory: docs/site
+        run: >-
+          npm run check:evidence-links --
+          --source-ref "${{ steps.release.outputs.tag_target }}"
+
       - name: Verify lock-bearing release version
         run: |
           release/scripts/registry-release verify-registryctl-image-lock-release-version \
@@ -121,6 +132,9 @@ jobs:
 
       - name: Release source model
         run: REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
+
+      - name: Verify Debian 13 image contract
+        run: release/scripts/check-debian13-images.py
 
   binaries:
     name: Build release binaries
@@ -145,6 +159,14 @@ jobs:
             exit 1
           fi
 
+      - name: Fingerprint release builder
+        id: release-builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          fingerprint="$(printf '%s' "${RELEASE_BUILDER_IMAGE}" | sha256sum | awk '{print $1}')"
+          printf 'fingerprint=%s\n' "${fingerprint}" >> "${GITHUB_OUTPUT}"
+
       - name: Restore Cargo release cache
         uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8
         with:
@@ -152,9 +174,9 @@ jobs:
             .cargo-home/registry
             .cargo-home/git
             target
-          key: registry-stack-release-cargo-${{ runner.os }}-rust-1.95.0-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          key: registry-stack-release-cargo-${{ runner.os }}-${{ steps.release-builder.outputs.fingerprint }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
           restore-keys: |
-            registry-stack-release-cargo-${{ runner.os }}-rust-1.95.0-
+            registry-stack-release-cargo-${{ runner.os }}-${{ steps.release-builder.outputs.fingerprint }}-
 
       - name: Build binaries
         shell: bash
@@ -177,7 +199,7 @@ jobs:
                 -p registry-manifest-cli \
                 -p registry-relay \
                 -p registry-notary \
-                --features registry-relay/spdci-api-standards,registry-relay/standards-cel-mapping,registry-relay/ogcapi-edr,registry-notary/registry-notary-cel
+                --features registry-notary/registry-notary-cel
               cp target/release/registry-notary dist/image-bin/registry-notary
               cargo build --release --locked \
                 -p registry-notary \
@@ -401,7 +423,21 @@ jobs:
               --sha256 "${digest}"
           done < <(find dist/image-bin -maxdepth 1 -type f -print0 | sort -z)
 
+      - name: Enforce release image scan policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=0
+          python3 products/notary/scripts/check_advisory_baselines.py \
+            grype dist/grype/registry-notary.grype.json \
+            --subject registry-notary-image || status=1
+          python3 crates/registry-relay/scripts/check_advisory_baselines.py \
+            grype dist/grype/registry-relay.grype.json \
+            --subject registry-relay-image || status=1
+          exit "${status}"
+
       - name: Upload image evidence
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: registry-stack-image-evidence

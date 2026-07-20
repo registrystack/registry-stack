@@ -279,25 +279,6 @@
       "service": "registry-notary",
       "listener": "public",
       "method": "GET",
-      "path": "/oid4vci/credential-offer",
-      "feature": null,
-      "audience": "external",
-      "auth": "none",
-      "scopes": [],
-      "rate_limit": null,
-      "audit": "not_applicable",
-      "openapi": true,
-      "stability": "beta",
-      "data_classification": "credential",
-      "notes": "Intentionally unauthenticated public route; auth/audit middleware bypass is exact-match allowlisted and route-local controls apply where relevant.",
-      "source": "manual",
-      "enforcement_tests": [],
-      "waiver": null
-    },
-    {
-      "service": "registry-notary",
-      "listener": "public",
-      "method": "GET",
       "path": "/oid4vci/offer/start",
       "feature": null,
       "audience": "external",
@@ -313,7 +294,7 @@
       "enforcement_tests": [
         "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_offer_start_redirects_to_esignet_and_mints_nothing",
         "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_offer_start_returns_429_when_login_state_store_is_full",
-        "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_disabled_returns_404_and_offer_is_authorization_code"
+        "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_disabled_exposes_no_wallet_issuance_grant"
       ],
       "waiver": null
     },
@@ -331,7 +312,7 @@
       "openapi": true,
       "stability": "beta",
       "data_classification": "secret-adjacent",
-      "notes": "Intentionally unauthenticated public OID4VCI pre-authorized-code callback route. Route-local state, nonce, IdP token exchange, subject binding, and hashed-only audit controls apply.",
+      "notes": "Intentionally unauthenticated public OID4VCI pre-authorized-code callback route. Route-local state, nonce, IdP token exchange, subject binding, and hashed-only audit controls apply. The exact registry-backed Relay evaluation and provenance checks must succeed before any offer is minted.",
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_callback_mints_pre_authorized_offer_with_tx_code",
@@ -367,28 +348,6 @@
       "service": "registry-notary",
       "listener": "public",
       "method": "POST",
-      "path": "/oid4vci/nonce",
-      "feature": null,
-      "audience": "external",
-      "auth": "none",
-      "scopes": [],
-      "rate_limit": "subject_access",
-      "audit": "not_applicable",
-      "openapi": true,
-      "stability": "beta",
-      "data_classification": "credential",
-      "notes": "Intentionally unauthenticated public route; auth/audit middleware bypass is exact-match allowlisted and route-local controls apply where relevant.",
-      "source": "manual",
-      "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/oid4vci.rs::oid4vci_metadata_offer_and_nonce_are_public",
-        "crates/registry-notary-server/tests/standalone_http/oid4vci.rs::oid4vci_nonce_is_rate_limited_before_reservation"
-      ],
-      "waiver": null
-    },
-    {
-      "service": "registry-notary",
-      "listener": "public",
-      "method": "POST",
       "path": "/oid4vci/credential",
       "feature": null,
       "audience": "external",
@@ -399,11 +358,11 @@
       "openapi": true,
       "stability": "beta",
       "data_classification": "credential",
-      "notes": "Protected OID4VCI credential endpoint. The proof precheck validates holder proof shape before bearer-token subject-bound auth, and issuance requires the selected credential configuration's exact scope.",
+      "notes": "Protected OID4VCI credential endpoint. The proof precheck requires an EdDSA did:jwk holder proof before bearer-token auth. Issuance is bound to the immutable registry-backed offer transaction, performs no Relay call, materializes at most one credential, and returns the encrypted cached response for an exact retry.",
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-server/tests/standalone_http/oid4vci.rs::oid4vci_malformed_proof_is_rejected_before_oidc_auth",
-        "crates/registry-notary-server/tests/standalone_http/oid4vci.rs::oid4vci_credential_route_issues_holder_bound_sd_jwt"
+        "crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder"
       ],
       "waiver": null
     },

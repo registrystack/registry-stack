@@ -52,7 +52,7 @@
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
-          "description": "Path to the registry-language-server executable. Relative paths resolve from the Registry Stack project root. When empty, the extension searches PATH, then runs `registryctl authoring language-server` from PATH."
+          "description": "Path to the registry-language-server executable. Relative paths resolve from the Registry Stack project root. When empty, the extension uses the installer-selected registryctl when available, then searches PATH for registry-language-server or registryctl."
         }
       }
     }

@@ -6,6 +6,14 @@
       "kid": "did:web:fixture.test#key-1",
       "kty": "OKP",
       "x": "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc"
+    },
+    {
+      "alg": "ES256",
+      "crv": "P-256",
+      "kid": "did:web:fixture.test#p256-key-1",
+      "kty": "EC",
+      "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+      "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"
     }
   ]
 }

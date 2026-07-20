@@ -132,7 +132,8 @@ checklist carry a one-line note.
 
 ### Container runtime policy
 
-- [ ] Production images use the `Dockerfile` (distroless `cc-debian12:nonroot`,
+- [ ] Production images use the `Dockerfile` (Distroless
+  `cc-debian13:nonroot`,
   UID/GID `65532:65532`). `Dockerfile.demo` is not used as production runtime
   evidence.
 - [ ] No shell, package manager, `curl`, or `wget` dependencies are present in
@@ -141,6 +142,10 @@ checklist carry a one-line note.
   by UID/GID `65532:65532`. See [Deployment model](#deployment-model).
 - [ ] TLS client behavior is verified after any base-image change by exercising
   an HTTPS OIDC JWKS/discovery path or a PostgreSQL TLS connection.
+- [ ] The container starts with a read-only root filesystem after writable
+  cache, data, and audit paths are mounted explicitly; both the Relay process
+  and `registry-relay-rhai-worker` execute as UID/GID `65532:65532`, and
+  readiness succeeds with the intended configuration and CA roots.
 
 ### Readiness gates
 
@@ -542,7 +547,15 @@ Refresh modes:
 - `interval`: reload unconditionally on the configured interval.
 - `manual`: reload only through an admin request.
 
-The original source file is never modified. On single-resource ingest failure, the service keeps serving the previously loaded table and marks readiness degraded when no prior generation is ready.
+The original source file is never modified. When a refresh fails after a successful ingest, Relay
+keeps serving the last-good table and `/ready` remains `200`. Relay records the failure against that
+resource without advancing the last successful data-load timestamp. A resource with no successful
+generation remains not ready.
+
+This refresh-health signal reports whether Relay can still poll and load a source. It does not
+establish semantic or domain freshness. A successful refresh can load source data whose business
+dates are old, while an unchanged `mtime` poll can prove that the source is reachable without
+proving that the source owner published data on time.
 
 Manual table reload:
 
@@ -573,6 +586,9 @@ curl -H "Authorization: Bearer $OPS_READ_API_KEY" \
 ```
 
 Use `?tier=restricted` only for trusted operations users who need the restricted projection. The default projection is redacted for broader operational sharing.
+The restricted Relay posture includes per-resource `relay.refresh_health` observations. Each entry
+reports the last successful data-load time, consecutive refresh failures, and whether Relay is
+serving last-good data. The default tier omits these resource identifiers and observations.
 
 The independent `registry_relay:admin` scope still protects reload operations:
 
@@ -656,6 +672,18 @@ The response is Prometheus-style `text/plain` suitable for scraping from the pri
 
 Metrics are intentionally bounded. Request metrics use low-cardinality labels such as method, route or endpoint class, and status, plus request-duration buckets. Readiness metrics are gauges derived from the ingest readiness snapshot. Metrics must not include raw query values, raw bearer tokens, request ids, API-key ids, key fingerprints, `Data-Purpose` values, or dataset row content.
 
+Relay exports these private per-resource refresh-health gauges on the same protected metrics route:
+
+```text
+registry_relay_ingest_consecutive_refresh_failures{dataset_id,resource_id}
+registry_relay_ingest_last_successful_refresh_timestamp_seconds{dataset_id,resource_id}
+```
+
+Alert when `registry_relay_ingest_consecutive_refresh_failures` reaches `3`. Use a lower threshold
+when the deployment's freshness service-level objective cannot tolerate three failed attempts. A
+successful data load resets the count and advances the timestamp. A successful unchanged `mtime`
+poll resets the count without advancing the timestamp.
+
 Recommended scrape posture:
 
 - Scrape only the admin listener from a private monitoring network.
@@ -663,6 +691,7 @@ Recommended scrape posture:
 - Treat `/metrics` as operational telemetry, not an audit record or per-request trace.
 - Use audit logs for security review and request-level accountability.
 - Alert on readiness gauges and elevated 5xx/error counters before routing traffic away.
+- Alert on three consecutive refresh failures by default, even while `/ready` remains `200`.
 
 ## Troubleshooting
 

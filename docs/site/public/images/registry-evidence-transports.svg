@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Evidence transports: four ways to consume a claim evaluation</title>
-  <desc>One claim model, four transports a caller can use. Direct API: a backend calls /v1/evaluations, optionally pairs with /v1/credentials to materialize an SD-JWT VC. OID4VCI offer: a wallet discovers the issuer via /.well-known and completes a nonce-bound credential flow at /oid4vci/credential. Receipt only: a backend takes the audit-stamped evaluation result and stores it; no credential is issued. Federated delegated evaluation: another Registry Notary posts a signed JWT to /federation/v1/evaluations and receives a signed JWT response.</desc>
+  <desc>One claim model, four transports a caller can use. Direct API: a backend calls /v1/evaluations, optionally pairs with /v1/credentials to materialize an SD-JWT VC. OID4VCI offer: a wallet discovers the issuer, redeems a pre-authorized offer, and presents a transaction-bound holder proof at /oid4vci/credential. Receipt only: a backend takes the audit-stamped evaluation result and stores it; no credential is issued. Federated delegated evaluation: another Registry Notary posts a signed JWT to /federation/v1/evaluations and receives a signed JWT response.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">FOUR TRANSPORTS · ONE CLAIM MODEL</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -36,7 +36,7 @@
 
     <text x="192" y="138">Wallet caller. Discovers</text>
     <text x="192" y="156">via /.well-known.</text>
-    <text x="192" y="174">Nonce-bound flow.</text>
+    <text x="192" y="174">Pre-authorized flow.</text>
 
     <text x="368" y="138">Backend caller. Stores</text>
     <text x="368" y="156">audit-stamped result.</text>

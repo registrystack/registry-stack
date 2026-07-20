@@ -1,11 +1,11 @@
 ---
 title: Security support window
 description: Which Registry Stack versions receive security fixes, how fixes are delivered, and what operators must do to stay covered.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-07-19"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -16,40 +16,44 @@ reach a deployment. It complements the
 [vulnerability reporting process](../report-a-vulnerability/), which covers how to report,
 what is in scope, and how reports are acknowledged.
 
-{/* TODO[review]: draft policy proposal for GH#203. The roll-forward posture on this page is the
-     recommendation; the alternative (backporting critical fixes to the previous minor line
-     for 90 days after a new minor ships) is a maintainer decision with real ongoing cost.
-     Pick one before status: current. */}
-
 ## Supported versions
 
 | Version line | Security fixes |
 | --- | --- |
-| Latest release line (highest released minor of the highest major) | All security fixes |
-| Earlier releases | None |
+| Latest minor of the current stable major | All security fixes |
+| Earlier minors of the current stable major | None; upgrade to the latest minor |
+| Earlier major | Until the successor stable major is released, as described under [Major-line end of life](#major-line-end-of-life) |
 
-Registry Stack's roll-forward model is a draft policy
-([GH#203](https://github.com/registrystack/registry-stack/issues/203)): security fixes land on `main` and ship in the next release of the latest line, with
-no long-term support branches and no backports to earlier minor lines.
+Registry Stack uses a roll-forward security model.
+Security fixes land on the current release line and ship in its latest minor or patch release.
+Registry Stack does not promise backports to an earlier minor.
 
 The rest of the lifecycle policy is designed to make rolling forward cheap:
 
-- Within a major line, upgrades are backward compatible per the draft
+- Within a major line, upgrades are backward compatible per the
   [compatibility promise](../../reference/api-stability/), so moving to
   the fixed release does not require migration work beyond reading the release notes.
 - Patch releases contain fixes only, so a security patch is a minimal, low-risk step.
-- The [upgrade procedure](../../operate/upgrade-and-rollback/) is documented and exercised,
-  including the revert path if a fixed release misbehaves in your environment.
+- The [upgrade procedure](../../operate/upgrade-and-rollback/) documents the upgrade and revert
+  boundary. Stable release acceptance requires the procedure to pass against the exact candidate.
 
 What this means for an institution: plan to apply patch releases of your deployed line
 promptly. A deployment pinned to an old minor does not receive fixes in place; the fix is
 always in a newer release.
 
+## Major-line end of life
+
+Registry Stack announces the end of support for a major line at least 90 days before the
+successor stable major is released.
+The announcement includes the exercised upgrade path.
+The old major remains supported until the successor stable major is released, then security
+maintenance moves to the successor's latest minor.
+
 ## How fixes are delivered
 
 - A security fix ships as a release with signed artifacts and provenance, verifiable as
   documented in
-  [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.11.0/SECURITY.md).
+  [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.12.0/SECURITY.md).
 - Release notes identify security-relevant changes. When a fix required tightening covered
   surface, the notes say so explicitly, per the security exception in the
   [deprecation policy](../../reference/deprecation-policy/).

@@ -1,0 +1,54 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Ignore generated Rust build output."
+paths = ["(^|/)target/"]
+
+[[allowlists]]
+description = "Ignore the generated, gitignored docs repository cache."
+paths = ["^docs/site/\\.repo-docs-cache/"]
+
+[[allowlists]]
+description = "Ignore the generated, gitignored VS Code test installation."
+paths = ["^editors/vscode/\\.vscode-test/"]
+
+[[allowlists]]
+description = "Allow synthetic JWT fixtures used only by the platform fuzz harnesses."
+paths = [
+  "^products/platform/fuzz/corpus/oid4vci_request_and_proof/credential_request\\.json$",
+  "^products/platform/fuzz/corpus/oid4vci_request_and_proof/valid-proof-jwt$",
+  "^products/platform/fuzz/corpus/sdjwt_holder_proof/holder_proof\\.jwt$",
+  "^products/platform/fuzz/corpus/sdjwt_holder_proof/valid-holder-proof-jwt$",
+]
+
+[[allowlists]]
+description = "Allow fixed identifiers and JWTs in the public Notary OpenAPI example."
+regexTarget = "match"
+regexes = [
+  '''credential:01HX7Y5F2WAJ7ZP0Q4M5K9E8NC''',
+  '''eyJhbGciOiJFZERTQSIsInR5cCI6ImRjK3NkLWp3dCIsImtpZCI6ImRpZDp3ZWI6YWdyaWN1bHR1cmUuZGVtby5leGFtcGxlLmdvdi''',
+]
+
+[[allowlists]]
+description = "Allow fixed non-secret values used by tests and configuration examples."
+regexTarget = "line"
+regexes = [
+  '''oid4vci_preauth_enabled:\s*self\.oid4vci\.enabled''',
+  '''std::env::set_var\(SECRET_ENV,\s*"0123456789abcdef0123456789abcdef"\)''',
+  '''let key = Pkcs1RsaPrivateKey''',
+  '''chain_key_epoch_id:\s*[a-z0-9-]+-chain-1''',
+  '''"dci_crvs_api":\s*"5e31d1e381d4bd8c7c74112d714fd49d263c6df7"''',
+]
+
+[[allowlists]]
+description = "Allow synthetic OpenCRVS response JWTs used by registryctl project-authoring tests."
+paths = [
+  "^crates/registryctl/tests/fixtures/project-authoring/opencrvs(?:-country-variant)?/integrations/birth-record/fixtures/bodies/(?:ambiguous|match|no-match)\\.json$",
+]
+
+[[allowlists]]
+description = "Allow synthetic Notary holder-proof fixtures generated from repository test keys."
+paths = [
+  "^products/notary/tests/fixtures/sd_jwt_vc/holder-proof-(?:eddsa|es256-unsupported|mismatch)\\.(?:jwt|sd-jwt)$",
+]

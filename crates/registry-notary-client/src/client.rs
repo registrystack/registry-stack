@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use registry_notary_core::{
     BatchEvaluateRequest, ClaimRef, CredentialIssueRequest, EvaluateRequest, EvidenceEntity,
     EvidenceIdentifier, EvidenceOnBehalfOf, EvidenceRelationship, RenderEvaluationRequest,
-    RenderRequest, RequestVariables, FORMAT_CLAIM_RESULT_JSON,
+    RenderRequest, RequestVariables, FORMAT_CLAIM_RESULT_JSON, MAX_BATCH_EVALUATION_MEMBERS_V1,
 };
 use registry_platform_httputil::read_bounded;
 use reqwest::{Method, StatusCode, Url};
@@ -304,28 +304,54 @@ impl RegistryNotaryClient {
     /// This method is opt-in. Transport methods continue to decode response
     /// bodies without performing verification. Verification reuses the
     /// `issuer_jwks` TTL cache, forces one `refresh_jwks` on `key.unknown`,
-    /// and never performs an unbounded refresh loop.
+    /// and never performs an unbounded refresh loop. A status-bearing
+    /// credential additionally requires [`crate::StatusListPolicy`] in the
+    /// options. Its signed status list is fetched through a DNS-pinned,
+    /// no-redirect, no-proxy, bounded HTTPS request and fails closed.
     pub async fn verify_sd_jwt_vc(
         &self,
         compact: &str,
         options: VerifyOptions,
     ) -> Result<VerifiedCredential, VerificationError> {
-        let jwks = self
+        let mut jwks = self
             .issuer_jwks(RequestOptions::default())
             .await
             .map_err(|_| VerificationError::jwks_unavailable())?
             .body;
-        match crate::verifier::verify_sd_jwt_vc(compact, &jwks, &options) {
+        let pending = match crate::verifier::verify_sd_jwt_vc_pending(compact, &jwks, &options) {
             Err(error) if error.is_unknown_key() => {
-                let refreshed = self
+                jwks = self
                     .refresh_jwks(RequestOptions::default())
                     .await
                     .map_err(|_| VerificationError::jwks_unavailable())?
                     .body;
-                crate::verifier::verify_sd_jwt_vc(compact, &refreshed, &options)
+                crate::verifier::verify_sd_jwt_vc_pending(compact, &jwks, &options)?
             }
-            result => result,
+            Err(error) => return Err(error),
+            Ok(pending) => pending,
+        };
+        if let Some(status) = &pending.status {
+            let status_token = crate::verifier::fetch_status_list_token(status, &options).await?;
+            match crate::verifier::verify_status_list_token(&status_token, status, &jwks, &options)
+            {
+                Err(error) if error.is_status_unknown_key() => {
+                    jwks = self
+                        .refresh_jwks(RequestOptions::default())
+                        .await
+                        .map_err(|_| VerificationError::jwks_unavailable())?
+                        .body;
+                    crate::verifier::verify_status_list_token(
+                        &status_token,
+                        status,
+                        &jwks,
+                        &options,
+                    )?;
+                }
+                Err(error) => return Err(error),
+                Ok(()) => {}
+            }
         }
+        Ok(pending.credential)
     }
 
     #[cfg(feature = "verifier")]
@@ -354,49 +380,6 @@ impl RegistryNotaryClient {
             "/.well-known/openid-credential-issuer",
             options,
             LIMIT_DISCOVERY,
-            ErrorKind::Oid4vci,
-        )
-        .await
-    }
-
-    #[cfg(feature = "oid4vci")]
-    /// Fetch an OpenID4VCI credential offer.
-    pub async fn oid4vci_credential_offer(
-        &self,
-        credential_configuration_id: Option<&str>,
-        options: RequestOptions,
-    ) -> Result<NotaryResponse<registry_platform_oid4vci::CredentialOffer>, NotaryClientError> {
-        self.reject_idempotency(&options)?;
-        let path = credential_configuration_id.map_or_else(
-            || "/oid4vci/credential-offer".to_string(),
-            |id| {
-                format!(
-                    "/oid4vci/credential-offer?credential_configuration_id={}",
-                    encode_query_value(id)
-                )
-            },
-        );
-        self.get_json(&path, options, LIMIT_DISCOVERY, ErrorKind::Oid4vci)
-            .await
-    }
-
-    #[cfg(feature = "oid4vci")]
-    /// Request an OpenID4VCI nonce.
-    pub async fn oid4vci_nonce(
-        &self,
-        request: Option<registry_platform_oid4vci::NonceRequest>,
-        options: RequestOptions,
-    ) -> Result<NotaryResponse<registry_platform_oid4vci::NonceResponse>, NotaryClientError> {
-        self.reject_idempotency(&options)?;
-        let body = request.unwrap_or(registry_platform_oid4vci::NonceRequest {
-            credential_configuration_id: None,
-        });
-        self.post_json(
-            "/oid4vci/nonce",
-            &body,
-            options,
-            LIMIT_OPERATION,
-            RouteRetry::PostNoRetry,
             ErrorKind::Oid4vci,
         )
         .await
@@ -534,13 +517,21 @@ impl RegistryNotaryClient {
     /// Submit a raw typed [`BatchEvaluateRequest`].
     ///
     /// Batch evaluation is the only POST route where the client allows
-    /// `Idempotency-Key`; retries require that key.
+    /// `Idempotency-Key`; retries require that key. Requests above the hard
+    /// 100-member platform ceiling fail locally before transport.
     pub async fn batch_evaluate_request(
         &self,
         mut request: BatchEvaluateRequest,
         options: RequestOptions,
     ) -> Result<NotaryResponse<registry_notary_core::BatchEvaluateResponse>, NotaryClientError>
     {
+        if request.items.len() > MAX_BATCH_EVALUATION_MEMBERS_V1 {
+            return Err(NotaryClientBuildError::BatchTooLarge {
+                actual: request.items.len(),
+                maximum: MAX_BATCH_EVALUATION_MEMBERS_V1,
+            }
+            .into());
+        }
         let mut options = self.prepare_purpose(options, request.purpose.as_deref())?;
         options.accept = options
             .accept
@@ -1169,11 +1160,6 @@ fn encode_path_segment(segment: &str) -> String {
             _ => format!("%{byte:02X}").chars().collect(),
         })
         .collect()
-}
-
-#[cfg_attr(not(feature = "oid4vci"), allow(dead_code))]
-fn encode_query_value(value: &str) -> String {
-    encode_path_segment(value).replace("%20", "+")
 }
 
 /// Fluent builder for one high-level evaluation request.

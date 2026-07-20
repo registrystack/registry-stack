@@ -168,8 +168,6 @@ export class RegistryNotaryClient {
   issueCredentialRequest(request: Record<string, unknown>, options?: RequestOptions): Promise<unknown>;
   credentialStatus(credentialId: string, options?: GetRequestOptions): Promise<unknown>;
   oid4vciIssuerMetadata(options?: GetRequestOptions): Promise<unknown>;
-  oid4vciCredentialOffer(credentialConfigurationId?: string, options?: GetRequestOptions): Promise<unknown>;
-  oid4vciNonce(request?: Record<string, unknown>, options?: RequestOptions): Promise<unknown>;
   oid4vciCredential(request: Record<string, unknown>, options?: RequestOptions): Promise<unknown>;
   federationEvaluateJws(compactJws: string, options?: RequestOptions): Promise<string>;
 }

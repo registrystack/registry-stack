@@ -7,7 +7,7 @@ pub const STATE_STORAGE_IN_MEMORY: &str = "in_memory";
 pub const STATE_STORAGE_POSTGRESQL: &str = "postgresql";
 pub const STATE_POSTGRESQL_MAX_CONNECTIONS: usize = 256;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StateConfig {
     #[serde(default = "default_state_storage")]
@@ -87,7 +87,7 @@ impl StateConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StatePostgresqlConfig {
     #[serde(default = "default_state_postgresql_url_env")]

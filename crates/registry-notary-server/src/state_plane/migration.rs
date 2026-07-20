@@ -33,14 +33,15 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1\0",
     "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2\0",
     "preauthorization-tx-code=verified-notary-issuer-stable-scope-jti-keyed-pin-verifier-peek-redeem-one-winner-expiry-live-key-attestation-v3\0",
+    "oid4vci-issuance-transaction=keyed-id-encrypted-immutable-record-sha256-uri-commitment-token-nonce-bind-holder-and-request-atomic-one-materialization-encrypted-response-terminal-failure-expiry-v2\0",
     "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2\0",
 );
 pub const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "c4d71ac9215da182779ec1305b2c1bc62bb249143e4b7d8c01eacc38f4e2cc10";
+    "f08bb0bc9b927b534ce736c640d43e3c7f898bd110616f92a60857c5fd1323fd";
 
 const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 0x4e4f_5441_5259_0001;
-const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 10;
-const EXPECTED_API_FUNCTION_COUNT_V1: i64 = 25;
+const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 11;
+const EXPECTED_API_FUNCTION_COUNT_V1: i64 = 31;
 
 /// The `NOLOGIN` role that owns the Notary schemas and fixed functions.
 #[derive(Clone, PartialEq, Eq)]
@@ -443,6 +444,12 @@ fn state_plane_acl_sql(runtime_role: &RuntimeDatabaseRole) -> String {
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_tx_code_peek_v1(bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_key_attest_v1(bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_redeem_v1(bytea, bytea, timestamptz, boolean, bytea) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_reserve_v1(bytea, bytea, text, text, bytea, bytea, timestamptz) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_get_v1(bytea) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_bind_nonce_v1(bytea, text, bytea) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_begin_v1(bytea, text, text, bytea, bytea, bytea) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_complete_v1(bytea, bytea, bytea, bytea, bytea) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_fail_v1(bytea, bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.retention_prune_v1(integer) TO {role};"
     )
 }
@@ -780,11 +787,11 @@ fn expected_catalog_definition_fingerprint(
 // These fingerprints are derived from the deterministic catalog projection
 // below and are pinned separately for every supported PostgreSQL major.
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG16_V1: &str =
-    "a4b2fe9ac6210ade086f9eab2909687c24227b3537188d448c6fa87f35c7171d";
+    "cf45576aced8a825cd2891800f2636ec1ca0dd0959b81f3a787cc0ed36ea09a5";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG17_V1: &str =
-    "a4b2fe9ac6210ade086f9eab2909687c24227b3537188d448c6fa87f35c7171d";
+    "cf45576aced8a825cd2891800f2636ec1ca0dd0959b81f3a787cc0ed36ea09a5";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG18_V1: &str =
-    "896946d10c4065ede59d1c0fb14b0c305c326e3e76f39bfd88290b15b2adad60";
+    "81760fbb2d3839783503774b3e6b436187c1969a154a331929d097e0e654eea2";
 
 const CATALOG_DEFINITION_QUERY_V1: &str = r#"
 SELECT COALESCE((
@@ -1063,6 +1070,52 @@ CREATE TABLE registry_notary_private.preauthorization_tx_code (
 );
 CREATE INDEX preauthorization_tx_code_expiry_idx
     ON registry_notary_private.preauthorization_tx_code (expires_at);
+
+CREATE TABLE registry_notary_private.oid4vci_issuance_transaction (
+    transaction_hash bytea PRIMARY KEY CHECK (pg_catalog.octet_length(transaction_hash) = 32),
+    key_id bytea NOT NULL CHECK (pg_catalog.octet_length(key_id) = 32),
+    credential_configuration_id text NOT NULL
+        CHECK (pg_catalog.length(credential_configuration_id) BETWEEN 1 AND 256),
+    commitment text NOT NULL CHECK (commitment ~ '^sha256:[0-9a-f]{64}$'),
+    record_aead_nonce bytea NOT NULL
+        CHECK (pg_catalog.octet_length(record_aead_nonce) BETWEEN 12 AND 24),
+    record_ciphertext bytea NOT NULL
+        CHECK (pg_catalog.octet_length(record_ciphertext) BETWEEN 17 AND 16384),
+    token_nonce_hash bytea CHECK (
+        token_nonce_hash IS NULL OR pg_catalog.octet_length(token_nonce_hash) = 32
+    ),
+    state text NOT NULL CHECK (state IN ('ready', 'issuing', 'completed', 'failed')),
+    holder_thumbprint_hash bytea CHECK (
+        holder_thumbprint_hash IS NULL OR pg_catalog.octet_length(holder_thumbprint_hash) = 32
+    ),
+    request_hash bytea CHECK (
+        request_hash IS NULL OR pg_catalog.octet_length(request_hash) = 32
+    ),
+    response_aead_nonce bytea CHECK (
+        response_aead_nonce IS NULL
+        OR pg_catalog.octet_length(response_aead_nonce) BETWEEN 12 AND 24
+    ),
+    response_ciphertext bytea CHECK (
+        response_ciphertext IS NULL
+        OR pg_catalog.octet_length(response_ciphertext) BETWEEN 17 AND 65536
+    ),
+    created_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
+    updated_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
+    expires_at timestamptz NOT NULL,
+    CHECK (expires_at > created_at),
+    CHECK (
+        (state = 'ready' AND holder_thumbprint_hash IS NULL AND request_hash IS NULL
+            AND response_aead_nonce IS NULL AND response_ciphertext IS NULL)
+        OR (state = 'issuing' AND holder_thumbprint_hash IS NOT NULL AND request_hash IS NOT NULL
+            AND response_aead_nonce IS NULL AND response_ciphertext IS NULL)
+        OR (state = 'completed' AND holder_thumbprint_hash IS NOT NULL AND request_hash IS NOT NULL
+            AND response_aead_nonce IS NOT NULL AND response_ciphertext IS NOT NULL)
+        OR (state = 'failed' AND holder_thumbprint_hash IS NOT NULL AND request_hash IS NOT NULL
+            AND response_aead_nonce IS NULL AND response_ciphertext IS NULL)
+    )
+);
+CREATE INDEX oid4vci_issuance_transaction_expiry_idx
+    ON registry_notary_private.oid4vci_issuance_transaction (expires_at);
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA registry_notary_private
     REVOKE ALL ON TABLES FROM PUBLIC;
@@ -1996,6 +2049,9 @@ BEGIN
         UNION ALL
         SELECT 1 FROM registry_notary_private.preauthorization_tx_code
          WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.oid4vci_issuance_transaction
+         WHERE expires_at > v_now AND key_id <> p_key_id
     ) THEN
         RAISE EXCEPTION USING ERRCODE = '55000',
             MESSAGE = 'sensitive-state key generation mismatch';
@@ -2078,6 +2134,9 @@ BEGIN
         UNION ALL
         SELECT 1 FROM registry_notary_private.preauthorization_tx_code
          WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.oid4vci_issuance_transaction
+         WHERE expires_at > v_now AND key_id <> p_key_id
     ) THEN
         RAISE EXCEPTION USING ERRCODE = '55000',
             MESSAGE = 'sensitive-state key generation mismatch';
@@ -2109,6 +2168,9 @@ AS $function$
              WHERE expires_at > pg_catalog.statement_timestamp() AND key_id <> p_key_id
             UNION ALL
             SELECT 1 FROM registry_notary_private.preauthorization_tx_code
+             WHERE expires_at > pg_catalog.statement_timestamp() AND key_id <> p_key_id
+            UNION ALL
+            SELECT 1 FROM registry_notary_private.oid4vci_issuance_transaction
              WHERE expires_at > pg_catalog.statement_timestamp() AND key_id <> p_key_id
        )
 $function$;
@@ -2188,6 +2250,225 @@ BEGIN
     END IF;
     RETURN TRUE;
 END
+$function$;
+
+CREATE FUNCTION registry_notary_api.oid4vci_transaction_reserve_v1(
+    p_transaction_hash bytea,
+    p_key_id bytea,
+    p_configuration_id text,
+    p_commitment text,
+    p_record_aead_nonce bytea,
+    p_record_ciphertext bytea,
+    p_expires_at timestamptz
+)
+RETURNS smallint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+DECLARE
+    v_now timestamptz := pg_catalog.clock_timestamp();
+    v_count bigint;
+BEGIN
+    IF pg_catalog.octet_length(p_transaction_hash) <> 32
+       OR pg_catalog.octet_length(p_key_id) <> 32
+       OR p_commitment !~ '^sha256:[0-9a-f]{64}$'
+       OR p_expires_at <= v_now THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid issuance transaction';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(5642808141211099137);
+    IF EXISTS (
+        SELECT 1 FROM registry_notary_private.preauthorization_login_state
+         WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.preauthorization_tx_code
+         WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.oid4vci_issuance_transaction
+         WHERE expires_at > v_now AND key_id <> p_key_id
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '55000',
+            MESSAGE = 'sensitive-state key generation mismatch';
+    END IF;
+    LOCK TABLE registry_notary_private.oid4vci_issuance_transaction
+        IN SHARE ROW EXCLUSIVE MODE;
+    DELETE FROM registry_notary_private.oid4vci_issuance_transaction
+     WHERE expires_at <= v_now;
+    IF EXISTS (
+        SELECT 1 FROM registry_notary_private.oid4vci_issuance_transaction
+         WHERE transaction_hash = p_transaction_hash
+    ) THEN
+        RETURN 0;
+    END IF;
+    SELECT pg_catalog.count(*) INTO v_count
+      FROM registry_notary_private.oid4vci_issuance_transaction;
+    IF v_count >= 4096 THEN
+        RETURN -1;
+    END IF;
+    INSERT INTO registry_notary_private.oid4vci_issuance_transaction (
+        transaction_hash, key_id, credential_configuration_id, commitment,
+        record_aead_nonce, record_ciphertext, state, created_at, updated_at, expires_at
+    ) VALUES (
+        p_transaction_hash, p_key_id, p_configuration_id, p_commitment,
+        p_record_aead_nonce, p_record_ciphertext, 'ready', v_now, v_now, p_expires_at
+    );
+    RETURN 1;
+END
+$function$;
+
+CREATE FUNCTION registry_notary_api.oid4vci_transaction_get_v1(p_transaction_hash bytea)
+RETURNS TABLE (
+    key_id bytea,
+    credential_configuration_id text,
+    commitment text,
+    record_aead_nonce bytea,
+    record_ciphertext bytea,
+    expires_at timestamptz
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+    SELECT stored.key_id, stored.credential_configuration_id, stored.commitment,
+           stored.record_aead_nonce, stored.record_ciphertext, stored.expires_at
+      FROM registry_notary_private.oid4vci_issuance_transaction AS stored
+     WHERE stored.transaction_hash = p_transaction_hash
+       AND stored.expires_at > pg_catalog.clock_timestamp()
+$function$;
+
+CREATE FUNCTION registry_notary_api.oid4vci_transaction_bind_nonce_v1(
+    p_transaction_hash bytea,
+    p_commitment text,
+    p_token_nonce_hash bytea
+)
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+    UPDATE registry_notary_private.oid4vci_issuance_transaction AS stored
+       SET token_nonce_hash = p_token_nonce_hash,
+           updated_at = pg_catalog.clock_timestamp()
+     WHERE stored.transaction_hash = p_transaction_hash
+       AND stored.commitment = p_commitment
+       AND stored.state = 'ready'
+       AND stored.token_nonce_hash IS NULL
+       AND stored.expires_at > pg_catalog.clock_timestamp()
+       AND pg_catalog.octet_length(p_token_nonce_hash) = 32
+    RETURNING TRUE
+$function$;
+
+CREATE FUNCTION registry_notary_api.oid4vci_transaction_begin_v1(
+    p_transaction_hash bytea,
+    p_commitment text,
+    p_configuration_id text,
+    p_token_nonce_hash bytea,
+    p_holder_thumbprint_hash bytea,
+    p_request_hash bytea
+)
+RETURNS TABLE (
+    outcome smallint,
+    key_id bytea,
+    credential_configuration_id text,
+    commitment text,
+    record_aead_nonce bytea,
+    record_ciphertext bytea,
+    response_aead_nonce bytea,
+    response_ciphertext bytea,
+    expires_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+DECLARE
+    v_stored registry_notary_private.oid4vci_issuance_transaction%ROWTYPE;
+BEGIN
+    IF pg_catalog.octet_length(p_token_nonce_hash) <> 32
+       OR pg_catalog.octet_length(p_holder_thumbprint_hash) <> 32
+       OR pg_catalog.octet_length(p_request_hash) <> 32 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid materialization binding';
+    END IF;
+    SELECT * INTO v_stored
+      FROM registry_notary_private.oid4vci_issuance_transaction
+     WHERE transaction_hash = p_transaction_hash
+     FOR UPDATE;
+    IF NOT FOUND OR v_stored.expires_at <= pg_catalog.clock_timestamp()
+       OR v_stored.commitment <> p_commitment
+       OR v_stored.credential_configuration_id <> p_configuration_id
+       OR v_stored.token_nonce_hash IS DISTINCT FROM p_token_nonce_hash THEN
+        RETURN QUERY SELECT -1::smallint, NULL::bytea, NULL::text, NULL::text,
+            NULL::bytea, NULL::bytea, NULL::bytea, NULL::bytea, NULL::timestamptz;
+        RETURN;
+    END IF;
+    IF v_stored.state = 'ready' THEN
+        UPDATE registry_notary_private.oid4vci_issuance_transaction
+           SET state = 'issuing', holder_thumbprint_hash = p_holder_thumbprint_hash,
+               request_hash = p_request_hash, updated_at = pg_catalog.clock_timestamp()
+         WHERE transaction_hash = p_transaction_hash;
+        RETURN QUERY SELECT 1::smallint, v_stored.key_id,
+            v_stored.credential_configuration_id, v_stored.commitment,
+            v_stored.record_aead_nonce, v_stored.record_ciphertext,
+            NULL::bytea, NULL::bytea, v_stored.expires_at;
+    ELSIF v_stored.state = 'issuing'
+       AND v_stored.holder_thumbprint_hash = p_holder_thumbprint_hash
+       AND v_stored.request_hash = p_request_hash THEN
+        RETURN QUERY SELECT 0::smallint, NULL::bytea, NULL::text, NULL::text,
+            NULL::bytea, NULL::bytea, NULL::bytea, NULL::bytea, NULL::timestamptz;
+    ELSIF v_stored.state = 'completed'
+       AND v_stored.holder_thumbprint_hash = p_holder_thumbprint_hash
+       AND v_stored.request_hash = p_request_hash THEN
+        RETURN QUERY SELECT 2::smallint, v_stored.key_id,
+            v_stored.credential_configuration_id, v_stored.commitment,
+            v_stored.record_aead_nonce, v_stored.record_ciphertext,
+            v_stored.response_aead_nonce, v_stored.response_ciphertext, v_stored.expires_at;
+    ELSE
+        RETURN QUERY SELECT -1::smallint, NULL::bytea, NULL::text, NULL::text,
+            NULL::bytea, NULL::bytea, NULL::bytea, NULL::bytea, NULL::timestamptz;
+    END IF;
+END
+$function$;
+
+CREATE FUNCTION registry_notary_api.oid4vci_transaction_complete_v1(
+    p_transaction_hash bytea,
+    p_holder_thumbprint_hash bytea,
+    p_request_hash bytea,
+    p_response_aead_nonce bytea,
+    p_response_ciphertext bytea
+)
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+    UPDATE registry_notary_private.oid4vci_issuance_transaction AS stored
+       SET state = 'completed', response_aead_nonce = p_response_aead_nonce,
+           response_ciphertext = p_response_ciphertext,
+           updated_at = pg_catalog.clock_timestamp()
+     WHERE stored.transaction_hash = p_transaction_hash
+       AND stored.state = 'issuing'
+       AND stored.holder_thumbprint_hash = p_holder_thumbprint_hash
+       AND stored.request_hash = p_request_hash
+       AND stored.expires_at > pg_catalog.clock_timestamp()
+    RETURNING TRUE
+$function$;
+
+CREATE FUNCTION registry_notary_api.oid4vci_transaction_fail_v1(
+    p_transaction_hash bytea,
+    p_holder_thumbprint_hash bytea
+)
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+    UPDATE registry_notary_private.oid4vci_issuance_transaction AS stored
+       SET state = 'failed', response_aead_nonce = NULL, response_ciphertext = NULL,
+           updated_at = pg_catalog.clock_timestamp()
+     WHERE stored.transaction_hash = p_transaction_hash
+       AND stored.state = 'issuing'
+       AND stored.holder_thumbprint_hash = p_holder_thumbprint_hash
+    RETURNING TRUE
 $function$;
 
 CREATE FUNCTION registry_notary_api.retention_prune_v1(p_batch_size integer)
@@ -2333,6 +2614,20 @@ BEGIN
     v_total := v_total + v_count;
     v_saturated := v_saturated OR v_count = p_batch_size;
 
+    WITH candidates AS (
+        SELECT transaction_hash
+          FROM registry_notary_private.oid4vci_issuance_transaction
+         WHERE expires_at <= v_now
+         ORDER BY expires_at, transaction_hash
+         LIMIT p_batch_size FOR UPDATE SKIP LOCKED
+    ), deleted AS (
+        DELETE FROM registry_notary_private.oid4vci_issuance_transaction AS stored
+         USING candidates WHERE stored.transaction_hash = candidates.transaction_hash
+        RETURNING 1
+    ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
+    v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
+
     RETURN QUERY SELECT v_total, v_saturated;
 END
 $function$;
@@ -2349,7 +2644,9 @@ mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use registry_notary_core::{StateConfig, StatePostgresqlConfig, STATE_STORAGE_POSTGRESQL};
 
-    use crate::preauth_state::{LoginState, PreauthorizationState};
+    use crate::preauth_state::{
+        CredentialMaterialization, IssuanceTransaction, LoginState, PreauthorizationState,
+    };
     use crate::state_plane::{
         attest_postgres_state_plane_runtime, LoginReserveOutcome, NotaryPostgresStatePlaneError,
         NotaryPostgresStatePlaneReadiness, NotaryPostgresStatePlaneRuntime, NotaryStatePlaneHandle,
@@ -2395,6 +2692,7 @@ mod tests {
             "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1",
             "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2",
             "preauthorization-tx-code=verified-notary-issuer-stable-scope-jti-keyed-pin-verifier-peek-redeem-one-winner-expiry-live-key-attestation-v3",
+            "oid4vci-issuance-transaction=keyed-id-encrypted-immutable-record-sha256-uri-commitment-token-nonce-bind-holder-and-request-atomic-one-materialization-encrypted-response-terminal-failure-expiry-v2",
             "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2",
         ] {
             assert!(
@@ -2450,6 +2748,7 @@ mod tests {
             "subject_access_quota",
             "preauthorization_login_state",
             "preauthorization_tx_code",
+            "oid4vci_issuance_transaction",
         ] {
             assert!(POSTGRES_STATE_PLANE_MIGRATION_V1.contains(table));
         }
@@ -4430,10 +4729,141 @@ mod tests {
                 .await?
         );
 
+        let transaction_id = "adapter-issuance-transaction";
+        let transaction = IssuanceTransaction {
+            transaction_id: transaction_id.to_string(),
+            evaluation_id: "adapter-evaluation".to_string(),
+            evaluation_client_id: "hmac-sha256:adapter-client".to_string(),
+            credential_configuration_id: "adapter-config".to_string(),
+            commitment: format!("sha256:{}", "c".repeat(64)),
+        };
+        preauthorization_state
+            .reserve_issuance_transaction(transaction_id, transaction.clone(), expires_at)
+            .await?;
+        assert_eq!(
+            preauthorization_state
+                .transaction(transaction_id)
+                .await?
+                .expect("encrypted transaction must round trip")
+                .evaluation_id,
+            transaction.evaluation_id.as_str()
+        );
+        assert!(
+            !preauthorization_state
+                .bind_transaction_nonce(
+                    transaction_id,
+                    &format!("sha256:{}", "d".repeat(64)),
+                    "adapter-token-nonce".to_string(),
+                )
+                .await?,
+            "a mismatched commitment must not bind the token nonce"
+        );
+        assert!(
+            preauthorization_state
+                .bind_transaction_nonce(
+                    transaction_id,
+                    &transaction.commitment,
+                    "adapter-token-nonce".to_string(),
+                )
+                .await?
+        );
+        let acquired = preauthorization_state
+            .begin_credential_materialization(
+                transaction_id,
+                &transaction.commitment,
+                &transaction.credential_configuration_id,
+                "adapter-token-nonce",
+                "adapter-holder-thumbprint",
+                "adapter-request-hash",
+            )
+            .await?;
+        assert!(matches!(acquired, CredentialMaterialization::Acquired(_)));
+        assert!(matches!(
+            preauthorization_state
+                .begin_credential_materialization(
+                    transaction_id,
+                    &transaction.commitment,
+                    &transaction.credential_configuration_id,
+                    "adapter-token-nonce",
+                    "adapter-holder-thumbprint",
+                    "adapter-request-hash",
+                )
+                .await?,
+            CredentialMaterialization::Busy
+        ));
+        assert!(matches!(
+            preauthorization_state
+                .begin_credential_materialization(
+                    transaction_id,
+                    &transaction.commitment,
+                    &transaction.credential_configuration_id,
+                    "adapter-token-nonce",
+                    "different-holder",
+                    "adapter-request-hash",
+                )
+                .await?,
+            CredentialMaterialization::Denied
+        ));
+        let cached_response = serde_json::json!({
+            "format": "dc+sd-jwt",
+            "credential": "adapter-signed-credential",
+        });
+        assert!(
+            preauthorization_state
+                .complete_credential_materialization(
+                    transaction_id,
+                    "adapter-holder-thumbprint",
+                    "adapter-request-hash",
+                    cached_response.clone(),
+                )
+                .await?
+        );
+        match preauthorization_state
+            .begin_credential_materialization(
+                transaction_id,
+                &transaction.commitment,
+                &transaction.credential_configuration_id,
+                "adapter-token-nonce",
+                "adapter-holder-thumbprint",
+                "adapter-request-hash",
+            )
+            .await?
+        {
+            CredentialMaterialization::Cached(response) => {
+                assert_eq!(response, cached_response);
+            }
+            _ => panic!("an exact PostgreSQL retry must return the cached response"),
+        }
+        let stored_transaction = admin
+            .query_one(
+                "SELECT record_ciphertext, response_ciphertext FROM \
+                 registry_notary_private.oid4vci_issuance_transaction",
+                &[],
+            )
+            .await?;
+        let record_ciphertext: Vec<u8> = stored_transaction.get("record_ciphertext");
+        let response_ciphertext: Vec<u8> = stored_transaction.get("response_ciphertext");
+        for secret in [
+            transaction.evaluation_id.as_bytes(),
+            transaction.evaluation_client_id.as_bytes(),
+            b"adapter-signed-credential".as_slice(),
+        ] {
+            assert!(
+                !record_ciphertext
+                    .windows(secret.len())
+                    .any(|window| window == secret)
+                    && !response_ciphertext
+                        .windows(secret.len())
+                        .any(|window| window == secret),
+                "issuance transaction plaintext must not be stored"
+            );
+        }
+
         admin
             .batch_execute(
                 "DELETE FROM registry_notary_private.preauthorization_login_state; \
-                 DELETE FROM registry_notary_private.preauthorization_tx_code;",
+                 DELETE FROM registry_notary_private.preauthorization_tx_code; \
+                 DELETE FROM registry_notary_private.oid4vci_issuance_transaction;",
             )
             .await?;
 
@@ -4483,7 +4913,8 @@ mod tests {
                           registry_notary_private.machine_quota,
                           registry_notary_private.subject_access_quota,
                           registry_notary_private.preauthorization_login_state,
-                          registry_notary_private.preauthorization_tx_code;
+                          registry_notary_private.preauthorization_tx_code,
+                          registry_notary_private.oid4vci_issuance_transaction;
                  INSERT INTO registry_notary_private.replay_identifier
                     (scope_hash, identifier_hash, created_at, expires_at)
                  SELECT decode(repeat('90', 32), 'hex'), decode(repeat(marker, 32), 'hex'),
@@ -4554,7 +4985,19 @@ mod tests {
                         decode(repeat('a7', 32), 'hex'), 6,
                         clock_timestamp() - interval '2 seconds', clock_timestamp() + lifetime
                    FROM (VALUES ('a8', interval '-1 second'),
-                                ('a9', interval '5 minutes')) AS rows(marker, lifetime);",
+                                ('a9', interval '5 minutes')) AS rows(marker, lifetime);
+                 INSERT INTO registry_notary_private.oid4vci_issuance_transaction
+                    (transaction_hash, key_id, credential_configuration_id, commitment,
+                     record_aead_nonce, record_ciphertext, state, created_at, updated_at,
+                     expires_at)
+                 SELECT decode(repeat(marker, 32), 'hex'), decode(repeat('b2', 32), 'hex'),
+                        'retention', 'sha256:' || repeat('c', 64),
+                        decode(repeat('b3', 12), 'hex'),
+                        decode(repeat('b4', 17), 'hex'), 'ready',
+                        clock_timestamp() - interval '2 seconds', clock_timestamp(),
+                        clock_timestamp() + lifetime
+                   FROM (VALUES ('b0', interval '-1 second'),
+                                ('b1', interval '5 minutes')) AS rows(marker, lifetime);",
             )
             .await?;
         let prune = runtime
@@ -4566,7 +5009,7 @@ mod tests {
             .await?;
         let pruned: i64 = prune.get("deleted_count");
         assert_eq!(
-            pruned, 9,
+            pruned, 10,
             "each typed state table must prune its expired row"
         );
         assert!(
@@ -4584,12 +5027,13 @@ mod tests {
                     (SELECT count(*) FROM registry_notary_private.machine_quota) +
                     (SELECT count(*) FROM registry_notary_private.subject_access_quota) +
                     (SELECT count(*) FROM registry_notary_private.preauthorization_login_state) +
-                    (SELECT count(*) FROM registry_notary_private.preauthorization_tx_code)",
+                    (SELECT count(*) FROM registry_notary_private.preauthorization_tx_code) +
+                    (SELECT count(*) FROM registry_notary_private.oid4vci_issuance_transaction)",
                 &[],
             )
             .await?
             .get(0);
-        assert_eq!(remaining, 9, "retention must preserve every live row");
+        assert_eq!(remaining, 10, "retention must preserve every live row");
 
         admin
             .batch_execute(

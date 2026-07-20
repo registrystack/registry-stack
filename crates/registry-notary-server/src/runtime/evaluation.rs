@@ -24,12 +24,19 @@ struct PreparedRegistryBatchItem {
     format: String,
     evaluation_id: String,
     relay_plan: Arc<RequestScopedRelayPlan>,
+    audit: Arc<EvaluationAuditCollector>,
     evaluation_capability: EvaluationCapability,
 }
 
 struct EvaluatedRegistryClaims {
     views: Vec<ClaimResultView>,
     issuance_provenance: Option<StoredIssuanceProvenance>,
+}
+
+fn clear_batch_runtime_audit(response: &mut BatchEvaluateResponse) {
+    for item in &mut response.items {
+        item.runtime_audit = Default::default();
+    }
 }
 
 pub(crate) fn registry_backed_batch_requested(
@@ -605,6 +612,14 @@ impl RegistryNotaryRuntime {
         if request.claims.is_empty() || request.items.is_empty() {
             return Err(EvidenceError::InvalidRequest);
         }
+        if request.items.len() > registry_notary_core::MAX_BATCH_EVALUATION_MEMBERS_V1 {
+            return Err(EvidenceError::BatchTooLarge);
+        }
+        let claim_versions = requested_claim_versions(&request.claims)?;
+        let max_subjects = max_batch_subjects(&evidence, &request.claims, &claim_versions)?;
+        if request.items.len() > max_subjects {
+            return Err(EvidenceError::BatchTooLarge);
+        }
         let registry_backed_batch = registry_backed_batch_requested(&evidence, &request)?;
         if registry_backed_batch
             && options
@@ -617,16 +632,11 @@ impl RegistryNotaryRuntime {
         let scoped_key = options
             .idempotency_key
             .map(|key| batch_idempotency_key(&principal.principal_id, key));
-        let claim_versions = requested_claim_versions(&request.claims)?;
         let evaluation_capability = evaluation_capability_for_principal(
             &self.subject_access_rate_keys,
             principal,
             &request_claim_ids,
         )?;
-        let max_subjects = max_batch_subjects(&evidence, &request.claims, &claim_versions)?;
-        if request.items.len() > max_subjects {
-            return Err(EvidenceError::BatchTooLarge);
-        }
         let batch_purpose =
             resolve_batch_default_purpose(options.header_purpose, request.purpose.as_deref())?;
         let subject_purposes =
@@ -701,7 +711,10 @@ impl RegistryNotaryRuntime {
                 )
                 .await?
             {
-                BatchIdempotencyReservation::Replay(response) => return Ok(response),
+                BatchIdempotencyReservation::Replay(mut response) => {
+                    clear_batch_runtime_audit(&mut response);
+                    return Ok(response);
+                }
                 BatchIdempotencyReservation::Owner(owner) => Some(owner),
             }
         } else {
@@ -851,6 +864,7 @@ impl RegistryNotaryRuntime {
                         status: BatchItemStatus::Succeeded,
                         claim_results,
                         errors: Vec::new(),
+                        runtime_audit: Default::default(),
                     });
                 }
                 Err(error) => {
@@ -873,6 +887,7 @@ impl RegistryNotaryRuntime {
                         status: BatchItemStatus::Failed,
                         claim_results: Vec::new(),
                         errors: vec![batch_item_error(&error)],
+                        runtime_audit: Default::default(),
                     });
                 }
             }
@@ -974,7 +989,7 @@ impl RegistryNotaryRuntime {
                 purpose,
                 evaluation_ulid,
                 self.activated_relay.as_ref(),
-                audit,
+                Arc::clone(&audit),
                 Some((outer_idempotency_key, input_index)),
                 &evaluation_capability,
             )?
@@ -1006,6 +1021,7 @@ impl RegistryNotaryRuntime {
                 format: format.clone(),
                 evaluation_id: evaluation_ulid.to_string(),
                 relay_plan,
+                audit,
                 evaluation_capability: evaluation_capability.clone(),
             });
         }
@@ -1019,7 +1035,10 @@ impl RegistryNotaryRuntime {
             )
             .await?
         {
-            BatchIdempotencyReservation::Replay(response) => return Ok(response),
+            BatchIdempotencyReservation::Replay(mut response) => {
+                clear_batch_runtime_audit(&mut response);
+                return Ok(response);
+            }
             BatchIdempotencyReservation::Owner(owner) => owner,
         };
         let quota_charged_by_reservation = idempotency_owner.quota_charged();
@@ -1051,6 +1070,7 @@ impl RegistryNotaryRuntime {
             let cel_concurrency = cel_concurrency.as_ref().map(Arc::clone);
             join_set.spawn(async move {
                 let input_index = item.input_index;
+                let audit = Arc::clone(&item.audit);
                 let _permit = permit_semaphore
                     .acquire_owned()
                     .await
@@ -1063,7 +1083,7 @@ impl RegistryNotaryRuntime {
                         cel_concurrency,
                     )
                     .await;
-                Ok::<_, EvidenceError>((input_index, result))
+                Ok::<_, EvidenceError>((input_index, result, audit.snapshot()))
             });
         }
 
@@ -1073,8 +1093,8 @@ impl RegistryNotaryRuntime {
         let mut failed = 0usize;
         let mut retained_evaluations = Vec::new();
         while let Some(joined) = join_set.join_next().await {
-            let (input_index, result) = match joined {
-                Ok(Ok(pair)) => pair,
+            let (input_index, result, runtime_audit) = match joined {
+                Ok(Ok(item_result)) => item_result,
                 Ok(Err(error)) => return Err(error),
                 Err(join_error) if join_error.is_panic() => {
                     tracing::error!(
@@ -1095,6 +1115,12 @@ impl RegistryNotaryRuntime {
                     entity_ref_view(&self.subject_access_rate_keys, "requester", requester)
                 })
                 .transpose()?;
+            let relay_forwarded_count = runtime_audit.relay_forwarded_count();
+            let (_, relay_consultation_ids) = runtime_audit.into_parts();
+            let runtime_audit = registry_notary_core::BatchItemRuntimeAudit {
+                relay_forwarded_count,
+                relay_consultation_ids,
+            };
             match result {
                 Ok(evaluated) => {
                     let results = evaluated.views;
@@ -1133,6 +1159,7 @@ impl RegistryNotaryRuntime {
                         status: BatchItemStatus::Succeeded,
                         claim_results,
                         errors: Vec::new(),
+                        runtime_audit,
                     });
                 }
                 Err(error) => {
@@ -1145,6 +1172,7 @@ impl RegistryNotaryRuntime {
                         status: BatchItemStatus::Failed,
                         claim_results: Vec::new(),
                         errors: vec![batch_item_error(&error)],
+                        runtime_audit,
                     });
                 }
             }

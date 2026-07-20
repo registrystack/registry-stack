@@ -559,14 +559,8 @@ test("OID4VCI and federation helpers use route-specific wire shapes", async () =
       if (String(url).endsWith("/.well-known/openid-credential-issuer")) {
         return jsonResponse({ credential_issuer: "https://issuer.example" });
       }
-      if (String(url).includes("/oid4vci/credential-offer")) {
-        return jsonResponse({ credential_issuer: "https://issuer.example", credentials: [] });
-      }
-      if (String(url).endsWith("/oid4vci/nonce")) {
-        return jsonResponse({ c_nonce: "nonce-secret" });
-      }
       if (String(url).endsWith("/oid4vci/credential")) {
-        return jsonResponse({ format: "vc+sd-jwt", credential: "credential-secret" });
+        return jsonResponse({ format: "dc+sd-jwt", credential: "credential-secret" });
       }
       return new Response("response.jws.compact", {
         status: 200,
@@ -576,23 +570,17 @@ test("OID4VCI and federation helpers use route-specific wire shapes", async () =
   });
 
   assert.deepEqual(await client.oid4vciIssuerMetadata(), { credential_issuer: "https://issuer.example" });
-  assert.deepEqual(await client.oid4vciCredentialOffer("config one"), {
-    credential_issuer: "https://issuer.example",
-    credentials: [],
-  });
-  assert.deepEqual(await client.oid4vciNonce(), { c_nonce: "nonce-secret" });
   assert.deepEqual(await client.oid4vciCredential({ proof: { jwt: "holder-proof-secret" } }), {
-    format: "vc+sd-jwt",
+    format: "dc+sd-jwt",
     credential: "credential-secret",
   });
   assert.equal(await client.federationEvaluateJws("request.jws.compact"), "response.jws.compact");
 
-  assert.equal(String(calls[1].url), "https://notary.example/oid4vci/credential-offer?credential_configuration_id=config%20one");
-  assert.deepEqual(JSON.parse(calls[2].init.body), { credential_configuration_id: null });
-  assert.deepEqual(JSON.parse(calls[3].init.body), { proof: { jwt: "holder-proof-secret" } });
-  assert.equal(calls[4].init.body, "request.jws.compact");
-  assert.equal(calls[4].init.headers.get("content-type"), "application/jwt");
-  assert.equal(calls[4].init.headers.get("accept"), "application/jwt");
+  assert.equal(String(calls[1].url), "https://notary.example/oid4vci/credential");
+  assert.deepEqual(JSON.parse(calls[1].init.body), { proof: { jwt: "holder-proof-secret" } });
+  assert.equal(calls[2].init.body, "request.jws.compact");
+  assert.equal(calls[2].init.headers.get("content-type"), "application/jwt");
+  assert.equal(calls[2].init.headers.get("accept"), "application/jwt");
 });
 
 test("OID4VCI errors redact descriptions and credential material", async () => {

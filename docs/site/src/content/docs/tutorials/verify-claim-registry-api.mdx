@@ -7,7 +7,7 @@ source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-17"
+last_reviewed: "2026-07-19"
 doc_type: tutorial
 locale: en
 standards_referenced: []
@@ -31,7 +31,7 @@ claim.
   outcome="A live registry-backed boolean claim, matched without a national identifier, with a meaningful policy edit exercised end to end."
   time="About 10 minutes after completing the first tutorial"
   level="Local single-node"
-  prerequisites={['The my-first-api project from the first tutorial', 'Matching Registry Stack v0.11.0 registryctl, release images, and image lock', 'A Docker Compose provider', 'curl']}
+  prerequisites={['The my-first-api project from the first tutorial', 'Matching Registry Stack v0.12.0 registryctl, release images, and image lock', 'A Docker Compose provider', 'curl']}
 />
 
 This tutorial uses synthetic data and local demo credentials. Do not use the generated keys or
@@ -39,7 +39,7 @@ database settings in production.
 
 :::note[Release status]
 This tutorial requires `registryctl`, immutable Relay and Notary images, and the image lock from
-the same Registry Stack `v0.11.0` release. Do not combine a source-built CLI with images or an
+the same Registry Stack `v0.12.0` release. Do not combine a source-built CLI with images or an
 image lock from another release.
 
 This is an evaluation-only local tutorial. It does not issue a credential or
@@ -54,16 +54,18 @@ From the `my-first-api` directory left by the first tutorial, add the local Nota
 registryctl add notary
 ```
 
-The command reports the authored claim file and local Notary URL:
+The command reports the authored claim file, local Notary URL, and next command:
 
-```json
-{
-  "status": "added",
-  "project": "my-first-api",
-  "notary_url": "http://127.0.0.1:4255",
-  "claim_file": "notary/project/registry-stack.yaml"
-}
+```text
+Added Registry Notary to "my-first-api".
+  Claim: notary/project/registry-stack.yaml
+  Notary API after start: http://127.0.0.1:4255
+
+Next:
+  registryctl start
 ```
+
+Add `--format json` when another program needs the versioned add-on report.
 
 The add-on creates an editable Registry Stack project under `notary/project/`. It also adds a
 private consultation Relay that reads the same workbook. Relay still owns registry access. Notary
@@ -390,7 +392,7 @@ answer.
 
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
-| `registryctl add notary` is unknown | The CLI predates Registry Stack v0.11.0 or does not match the installed release image lock. | Install `registryctl`, the immutable Relay and Notary images, and the image lock from the same Registry Stack v0.11.0 release. Do not substitute an ad hoc source build or a lock from another release. |
+| `registryctl add notary` is unknown | The CLI predates Registry Stack v0.11.0 or does not match the installed release image lock. | Install `registryctl`, the immutable Relay and Notary images, and the image lock from the same Registry Stack v0.12.0 release. Do not substitute an ad hoc source build or a lock from another release. |
 | `registryctl add notary` says the project already has a Notary add-on | The command has already completed for this project. | Continue with `registryctl start`; do not run the add command twice. |
 | Notary returns `401` | The evaluator key was not loaded or is from another generated project. | Source `secrets/local.env` again in the current shell. |
 | Notary returns `403` | The key lacks the evidence scope or the purpose does not match the authored service. | Use `TUTORIAL_EVALUATOR_RAW` and the tutorial purpose shown above. |

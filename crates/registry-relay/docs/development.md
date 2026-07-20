@@ -91,7 +91,7 @@ cargo test --test api_docs
 Portable metadata checks are separate from the Relay runtime:
 
 ```sh
-just metadata-validate profiles/example-civil-registration/fixtures/metadata.yaml
+just metadata-validate ../../products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml
 just metadata-validate-profiles
 cargo test --test demo_configs_load
 ```

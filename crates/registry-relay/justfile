@@ -72,26 +72,27 @@ validate-catalog-semic-local catalog profile="bregdcatap.2_1_0":
 
 # Validate one portable metadata manifest.
 # Usage: just metadata-validate
-#        just metadata-validate profiles/example-benefits-sync/fixtures/metadata.yaml
-metadata-validate manifest="profiles/example-civil-registration/fixtures/metadata.yaml":
+#        just metadata-validate ../../products/manifest/profiles/example-benefits-sync/fixtures/metadata.yaml
+metadata-validate manifest="../../products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml":
     manifest_path="$(pwd)/{{manifest}}"; scripts/run_registry_manifest_cli.sh validate "$manifest_path"
 
 # Validate all ecosystem profile descriptors and fixture manifests.
 metadata-validate-profiles:
-    profiles_path="$(pwd)/profiles"; scripts/run_registry_manifest_cli.sh validate-profiles "$profiles_path"
+    @copied_yaml="$(find "$(pwd)/profiles" -type f \( -name '*.yaml' -o -name '*.yml' \) -path "$(pwd)/profiles/example-*/*")" || exit 1; if [ -n "$copied_yaml" ]; then printf 'example profile YAML must be owned by products/manifest/profiles, not copied into Relay:\n%s\n' "$copied_yaml" >&2; exit 1; fi
+    profiles_path="$(pwd)/../../products/manifest/profiles"; scripts/run_registry_manifest_cli.sh validate-profiles "$profiles_path"
 
 # Render one static metadata artifact from a manifest.
 # Usage: just metadata-render
-#        just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml dcat target/metadata/dcat.jsonld
-#        just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml json-schema target/metadata/person.schema.json "--dataset vital-events --entity person"
-metadata-render manifest="profiles/example-civil-registration/fixtures/metadata.yaml" format="catalog" out="target/metadata/catalog.json" extra="":
+#        just metadata-render ../../products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml dcat target/metadata/dcat.jsonld
+#        just metadata-render ../../products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml json-schema target/metadata/person.schema.json "--dataset vital-events --entity person"
+metadata-render manifest="../../products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml" format="catalog" out="target/metadata/catalog.json" extra="":
     mkdir -p $(dirname {{out}})
     manifest_path="$(pwd)/{{manifest}}"; out_path="$(pwd)/{{out}}"; scripts/run_registry_manifest_cli.sh render "$manifest_path" --format {{format}} {{extra}} > "$out_path"
 
 # Publish a static metadata bundle with index, catalog, DCAT, SHACL, and schemas.
 # Usage: just metadata-publish
-#        just metadata-publish profiles/example-social-benefits/fixtures/metadata.yaml target/metadata/example-social-benefits
-metadata-publish manifest="profiles/example-civil-registration/fixtures/metadata.yaml" out="target/metadata/public":
+#        just metadata-publish ../../products/manifest/profiles/example-social-benefits/fixtures/metadata.yaml target/metadata/example-social-benefits
+metadata-publish manifest="../../products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml" out="target/metadata/public":
     manifest_path="$(pwd)/{{manifest}}"; out_path="$(pwd)/{{out}}"; scripts/run_registry_manifest_cli.sh publish "$manifest_path" --out "$out_path"
 
 # Check advisories only (alias for a quick security scan).

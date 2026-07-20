@@ -37,6 +37,9 @@ static SNAPSHOT_STARTER: include_dir::Dir<'_> = include_dir::include_dir!(
 
 const PROJECT_FILE: &str = "registry-stack.yaml";
 const BUILD_ROOT: &str = ".registry-stack/build";
+const PROJECT_COMMAND_REPORT_SCHEMA_VERSION: &str = "registryctl.project_command.v1";
+const PROJECT_DIAGNOSTICS_SCHEMA_VERSION: &str = "registryctl.project_diagnostics.v1";
+const PROJECT_EDITOR_REPORT_SCHEMA_VERSION: &str = "registryctl.project_editor.v1";
 const REVIEW_SCHEMA: &str = "registry.project.review.v1";
 const APPROVAL_STATE_SCHEMA: &str = "registry.project.approval-state.v1";
 const APPROVAL_REVIEW_PATH: &str = "approval/review.json";

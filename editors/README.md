@@ -1,10 +1,10 @@
 # Registry Stack editor integrations
 
-VS Code and Zed semantic navigation are source-installable developer previews for this beta.
-They are not marketplace extensions or release assets.
+Semantic navigation for VS Code and Zed is installable from a Registry Stack source release.
+The integrations are beta features and are not yet marketplace extensions or release assets.
 Use `registryctl init --from <starter>` and its generated editor schema setup as the stable beta
 path for YAML validation, completion, hover, and formatting.
-Install an editor preview only when you also want optional cross-file semantic navigation.
+Install the editor integration when you also want optional cross-file semantic navigation.
 
 The Registry Stack editor support is split into one reusable language server and thin editor
 launchers:
@@ -22,25 +22,50 @@ The language server watches Registry Stack YAML paths for changes made by genera
 other tools. An open editor buffer remains authoritative until it is closed, so a filesystem event
 cannot replace unsaved content.
 
-## Local end-to-end smoke test
+## Install
 
-Run the commands in this section from the repository root. They build both server entry points and
-create a disposable HTTP starter outside the checkout, so the diagnostic checks below cannot
-modify a tracked golden project.
+Project setup and editor installation are separate operations. `registryctl init` configures new
+projects automatically. For an existing project, refresh its version-matched schema settings with:
 
 ```console
-export REGISTRY_STACK_REPO="$(pwd)"
-export REGISTRY_STACK_SMOKE_ROOT="$(mktemp -d)"
-export REGISTRY_STACK_SMOKE_PROJECT="$REGISTRY_STACK_SMOKE_ROOT/project"
-cargo build --locked -p registry-language-server -p registryctl
-cargo run --locked -p registryctl -- init --from http --project-dir "$REGISTRY_STACK_SMOKE_PROJECT"
+registryctl authoring editor --project-dir /path/to/registry-stack-project
 ```
 
-Keep that terminal open so the three variables remain available. Then follow the editor-specific
+Install the `registryctl` version that matches this source checkout, then install an integration
+once from the repository root:
+
+```console
+./editors/install.sh vscode
+./editors/install.sh zed
+```
+
+The installer verifies the `registryctl` version and embedded language server without reading or
+changing a project. VS Code is packaged and installed into the active profile. Pass
+`--profile <existing-name>` to select another VS Code profile. The local VSIX records the verified
+`registryctl` path, so an already-running VS Code process does not need to inherit the installer's
+`PATH`. Zed is compiled, then requires the command-palette selection that its CLI cannot perform.
+
+The installer does not trust a project or approve a development extension. Those decisions stay
+with the user. Pass `--open <existing-directory>` only as a convenience to open a directory after
+installation. It does not configure that directory. Use `--help` for the complete interface.
+
+## Local end-to-end smoke test
+
+Run the commands in this section from the repository root. They create a disposable HTTP starter
+outside the checkout, so the diagnostic checks below cannot modify a tracked golden project.
+
+```console
+export REGISTRY_STACK_SMOKE_ROOT="$(mktemp -d)"
+export REGISTRY_STACK_SMOKE_PROJECT="$REGISTRY_STACK_SMOKE_ROOT/project"
+registryctl --version
+registryctl init --from http --project-dir "$REGISTRY_STACK_SMOKE_PROJECT"
+```
+
+Keep that terminal open so the two variables remain available. Then follow the editor-specific
 installation and launch instructions:
 
-- [VS Code developer preview](vscode/README.md#package-install-and-launch)
-- [Zed developer preview](zed/README.md#install-and-launch)
+- [VS Code](vscode/README.md#install-and-launch)
+- [Zed](zed/README.md#install-and-launch)
 
 ### Expected behavior
 
@@ -75,8 +100,10 @@ and are separate from diagnostics whose source is `registry-stack`.
 The same core behavior has non-GUI coverage:
 
 ```console
+bash editors/tests/install_test.sh
 cargo test --locked -p registry-language-server
 cargo test --locked -p registryctl --test language_server
+cargo build --locked -p registry-language-server
 cd editors/vscode && npm ci && npm test
 ```
 
@@ -87,3 +114,16 @@ it as `xvfb-run -a npm test`, matching CI.
 
 When finished, close the smoke project and remove the temporary directory shown by
 `$REGISTRY_STACK_SMOKE_ROOT` after checking that it is the directory created by `mktemp` above.
+
+## Develop the language server from source
+
+The installer deliberately uses the matching `registryctl` from `PATH`, which exercises the
+language server embedded in the installed release. To iterate on language-server source changes,
+build the standalone server and configure the editor to use it explicitly:
+
+```console
+cargo build --locked -p registry-language-server
+```
+
+Follow the editor-specific iteration instructions to point the editor at
+`target/debug/registry-language-server` and restart it.

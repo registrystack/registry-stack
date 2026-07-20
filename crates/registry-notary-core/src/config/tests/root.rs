@@ -4,6 +4,56 @@ use super::*;
 use super::{auth::*, credentials::*, infrastructure::*, issuance::*, preauth::*};
 
 #[test]
+pub(super) fn batch_limits_accept_only_lower_or_equal_platform_overrides() {
+    let mut config = valid_subject_access_config();
+    config.evidence.inline_batch_limit = MAX_BATCH_EVALUATION_MEMBERS_V1;
+    config.evidence.claims[0]
+        .operations
+        .batch_evaluate
+        .max_subjects = MAX_BATCH_EVALUATION_MEMBERS_V1;
+    config
+        .validate()
+        .expect("the hard platform ceiling is a valid operator value");
+
+    config.evidence.inline_batch_limit = 17;
+    config.evidence.claims[0]
+        .operations
+        .batch_evaluate
+        .max_subjects = 9;
+    config
+        .validate()
+        .expect("operators may lower either batch limit");
+}
+
+#[test]
+pub(super) fn batch_limits_reject_zero_and_values_above_the_platform_ceiling() {
+    for invalid in [0, MAX_BATCH_EVALUATION_MEMBERS_V1 + 1] {
+        let mut config = valid_subject_access_config();
+        config.evidence.inline_batch_limit = invalid;
+        let error = config
+            .validate()
+            .expect_err("the global batch override must stay within the platform range");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidBatchConfig { .. }
+        ));
+
+        let mut config = valid_subject_access_config();
+        config.evidence.claims[0]
+            .operations
+            .batch_evaluate
+            .max_subjects = invalid;
+        let error = config
+            .validate()
+            .expect_err("the claim batch override must stay within the platform range");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidBatchConfig { .. }
+        ));
+    }
+}
+
+#[test]
 pub(super) fn gate_input_defaults_are_low_risk_for_minimal_config() {
     let config = minimal_config();
     let input = config.gate_input();
@@ -818,6 +868,14 @@ token_file: /run/secrets/registry-notary-relay.jwt
 pub(super) fn valid_oid4vci_config() -> StandaloneRegistryNotaryConfig {
     let mut config = valid_subject_access_config();
     config
+        .subject_access
+        .rate_limits
+        .tx_code_attempts_per_code_per_minute = 5;
+    config
+        .evidence
+        .signing_keys
+        .insert("access-token-key".to_string(), second_signing_key());
+    config
         .evidence
         .credential_profiles
         .get_mut("civil_status_sd_jwt")
@@ -832,8 +890,6 @@ authorization_servers:
 accepted_token_audiences:
   - http://127.0.0.1:4325
 credential_endpoint: http://127.0.0.1:4325/oid4vci/credential
-offer_endpoint: http://127.0.0.1:4325/oid4vci/credential-offer
-nonce_endpoint: http://127.0.0.1:4325/oid4vci/nonce
 nonce:
   enabled: true
   ttl_seconds: 300
@@ -854,9 +910,40 @@ credential_configurations:
       - EdDSA
     cryptographic_binding_methods_supported:
       - did:jwk
+pre_authorized_code:
+  enabled: true
+  tx_code:
+    required: true
+    input_mode: numeric
+    length: 6
+  esignet:
+    client_id: registry-lab-live-client
+    client_signing_key_id: issuer-key
+    redirect_uri: http://127.0.0.1:4325/oid4vci/offer/callback
+    authorize_url: https://id.example.gov/authorize
+    token_url: https://id.example.gov/oauth/v2/token
+    issuer: https://id.example.gov
+    jwks_uri: https://id.example.gov/oauth/.well-known/jwks.json
+    scopes:
+      - openid
+  pre_authorized_code_ttl_seconds: 300
 "#,
     )
     .expect("oid4vci config is valid YAML");
+    config.auth.access_token_signing = serde_norway::from_str(
+        r#"
+enabled: true
+issuer: http://127.0.0.1:4325
+audiences:
+  - http://127.0.0.1:4325
+allowed_algorithms:
+  - EdDSA
+token_typ: registry-notary-access+jwt
+signing_key_id: access-token-key
+access_token_ttl_seconds: 300
+"#,
+    )
+    .expect("access-token signing config is valid YAML");
     config
 }
 

@@ -1,3 +1,7 @@
+> **Status: historical research note**
+>
+> This note records pre-monorepo research and is not current architecture or release evidence. Use the published documentation and pinned source links for current claims.
+
 # registry-lab — evidence packet
 
 Last reviewed: 2026-05-23

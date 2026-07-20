@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Registry Notary request, response, and view types.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::marker::PhantomData;
 
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -145,7 +147,7 @@ impl EvidenceAuthProfileId {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AccessMode {
     Unknown,
@@ -463,6 +465,12 @@ pub struct BoundedVerifiedClaims {
     pub client_id: Option<VerifiedClaimValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_type: Option<VerifiedClaimValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_configuration_id: Option<VerifiedClaimValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuance_transaction_id: Option<VerifiedClaimValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuance_transaction_commitment: Option<VerifiedClaimValue>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scopes: Vec<VerifiedClaimValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -490,6 +498,15 @@ impl fmt::Debug for BoundedVerifiedClaims {
             .field("audiences", &self.audiences)
             .field("client_id", &self.client_id)
             .field("token_type", &self.token_type)
+            .field(
+                "credential_configuration_id",
+                &self.credential_configuration_id,
+            )
+            .field("issuance_transaction_id", &"<redacted>")
+            .field(
+                "issuance_transaction_commitment",
+                &self.issuance_transaction_commitment,
+            )
             .field("scopes", &self.scopes)
             .field("subject", &self.subject.as_ref().map(|_| "<redacted>"))
             .field("subject_binding_claim", &self.subject_binding_claim)
@@ -520,6 +537,15 @@ impl BoundedVerifiedClaims {
             "iss" => Some(self.issuer.as_str()),
             "sub" => self.subject.as_ref().map(Bounded::as_str),
             "typ" | "token_type" => self.token_type.as_ref().map(Bounded::as_str),
+            "credential_configuration_id" => self
+                .credential_configuration_id
+                .as_ref()
+                .map(Bounded::as_str),
+            "issuance_transaction_id" => self.issuance_transaction_id.as_ref().map(Bounded::as_str),
+            "issuance_transaction_commitment" => self
+                .issuance_transaction_commitment
+                .as_ref()
+                .map(Bounded::as_str),
             "client_id" | "azp" => self.client_id.as_ref().map(Bounded::as_str),
             "acr" => self.acr.as_ref().map(Bounded::as_str),
             other => self
@@ -746,26 +772,26 @@ impl std::ops::Deref for ClaimRef {
     }
 }
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ClaimRefObject {
+    id: String,
+    #[serde(default)]
+    version: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum WireClaimRef {
+    Id(String),
+    Object(ClaimRefObject),
+}
+
 impl<'de> Deserialize<'de> for ClaimRef {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct ClaimRefObject {
-            id: String,
-            #[serde(default)]
-            version: Option<String>,
-        }
-
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum WireClaimRef {
-            Id(String),
-            Object(ClaimRefObject),
-        }
-
         match WireClaimRef::deserialize(deserializer)? {
             WireClaimRef::Id(id) => Ok(Self::new(id)),
             WireClaimRef::Object(object) => Ok(Self {
@@ -773,6 +799,16 @@ impl<'de> Deserialize<'de> for ClaimRef {
                 version: object.version,
             }),
         }
+    }
+}
+
+impl JsonSchema for ClaimRef {
+    fn schema_name() -> Cow<'static, str> {
+        "ClaimRef".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        generator.subschema_for::<WireClaimRef>()
     }
 }
 
@@ -1202,6 +1238,29 @@ pub struct BatchItemResponse {
     pub status: BatchItemStatus,
     pub claim_results: Vec<BatchClaimResultView>,
     pub errors: Vec<BatchItemError>,
+    /// Request-local consultation evidence for restricted audit assembly.
+    /// This is never serialized into the public response or durable state.
+    #[doc(hidden)]
+    #[serde(skip)]
+    pub runtime_audit: BatchItemRuntimeAudit,
+}
+
+/// Request-local, value-free consultation evidence for a batch member.
+#[doc(hidden)]
+#[derive(Clone, Default)]
+pub struct BatchItemRuntimeAudit {
+    pub relay_forwarded_count: u64,
+    pub relay_consultation_ids: Vec<String>,
+}
+
+impl std::fmt::Debug for BatchItemRuntimeAudit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BatchItemRuntimeAudit")
+            .field("relay_forwarded_count", &self.relay_forwarded_count)
+            .field("relay_consultation_ids", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1626,7 +1685,12 @@ const fn subject_access_access_mode() -> AccessMode {
     AccessMode::SubjectBound
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+/// Versioned authorization fields shared by static configuration and token/OIDC JSON.
+///
+/// Unknown metadata is intentionally ignored for forward-compatible interoperability.
+/// Authorization decisions consume only the modeled fields and must never infer authority
+/// from an unrecognized extension.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct EvidenceAuthorizationDetails {
     #[serde(rename = "type")]
     pub detail_type: String,
@@ -1663,25 +1727,25 @@ pub struct EvidenceAuthorizationDetails {
     pub assisted_access_context: Option<EvidenceAssistedAccessContext>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct EvidenceAuthorizationSubject {
     pub binding_claim: String,
     pub id_type: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct EvidenceAuthorizationTarget {
     pub id_type: String,
     pub id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct EvidenceAuthorizationRelationship {
     pub relationship_type: String,
     pub proof_claim: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct EvidenceAssistedAccessContext {
     pub channel: String,
 }
@@ -1884,9 +1948,19 @@ pub struct ConfigAuditEvent {
     pub local_approval_rate_limit_identity: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct EvidenceBatchItemAuditEvent {
     pub input_index: usize,
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(default)]
+    pub relay_consultation_count: u64,
+    #[serde(default)]
+    pub forwarded: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relay_consultation_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1895,6 +1969,20 @@ pub struct EvidenceBatchItemAuditEvent {
     pub requester_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_ref_hash: Option<Hashed<EvidenceEntityReference>>,
+}
+
+impl std::fmt::Debug for EvidenceBatchItemAuditEvent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EvidenceBatchItemAuditEvent")
+            .field("input_index", &self.input_index)
+            .field("outcome", &self.outcome)
+            .field("error_code", &self.error_code)
+            .field("relay_consultation_count", &self.relay_consultation_count)
+            .field("forwarded", &self.forwarded)
+            .field("relay_consultation_ids", &"[REDACTED]")
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(test)]
@@ -2367,6 +2455,9 @@ mod tests {
             audiences: vec![bounded("registry-notary-citizen")],
             client_id: Some(bounded("citizen-portal")),
             token_type: Some(bounded("JWT")),
+            credential_configuration_id: None,
+            issuance_transaction_id: None,
+            issuance_transaction_commitment: None,
             scopes: vec![bounded("subject_access")],
             subject: Some(bounded("login-subject")),
             subject_binding_claim: Some(bounded("https://id.example.gov/claims/national_id")),
@@ -2395,6 +2486,9 @@ mod tests {
                 audiences: vec![bounded("registry-notary-citizen")],
                 client_id: Some(bounded("citizen-portal")),
                 token_type: Some(bounded("JWT")),
+                credential_configuration_id: None,
+                issuance_transaction_id: None,
+                issuance_transaction_commitment: None,
                 scopes: vec![bounded("subject_access")],
                 subject: Some(bounded("login-subject")),
                 subject_binding_claim: Some(bounded("https://id.example.gov/claims/national_id")),
@@ -2475,6 +2569,11 @@ mod tests {
             redacted_fields: None,
             batch_items: Some(vec![EvidenceBatchItemAuditEvent {
                 input_index: 0,
+                outcome: "failed".to_string(),
+                error_code: Some("evidence.not_available".to_string()),
+                relay_consultation_count: 1,
+                forwarded: true,
+                relay_consultation_ids: vec!["01JRELAYBATCHSENSITIVE".to_string()],
                 target_type: Some("person".to_string()),
                 target_ref_hash: Some(Hashed::from_hash("hmac-sha256:batch-target")),
                 requester_type: Some("person".to_string()),
@@ -2490,6 +2589,7 @@ mod tests {
         );
         let debug = format!("{event:?}");
         assert!(!debug.contains("01JRELAYCORRELATIONSENSITIVE"));
+        assert!(!debug.contains("01JRELAYBATCHSENSITIVE"));
         assert!(debug.contains("relay_consultation_ids: \"[REDACTED]\""));
         assert_eq!(value["access_mode"], json!("subject_bound"));
         assert_eq!(

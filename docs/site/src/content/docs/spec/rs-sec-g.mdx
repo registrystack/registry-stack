@@ -1,6 +1,6 @@
 ---
 title: "RS-SEC-G: Registry family security model"
-description: "The cross-cutting security model for the registry stack: the shared security primitives, authentication and authorization, verification-key publication, the audit obligation, federation trust, and the operator boundary that the protocol specifications refine."
+description: "The cross-cutting security model for the registry stack: shared security primitives, authentication and authorization, verification-key publication, audit, federation trust, replay protection, and the operator boundary."
 status: draft
 owner: registry-docs
 source_repos:
@@ -24,7 +24,7 @@ audience:
   - specification editor
 ---
 
-This document defines the security model shared across the registry stack: where the security-critical primitives live, how a caller authenticates and is authorized, how a service publishes the keys a verifier needs, what every request that touches person-level data MUST record, how delegated evaluation is trusted, and where the operator's responsibility begins. It is the cross-cutting (general) security specification that the protocol specifications refine for their own surfaces.
+This document defines the security model shared across the registry stack: where the security-critical primitives live, how a caller authenticates and is authorized, how a service publishes the keys a verifier needs, what every request that touches person-level data MUST record, how delegated evaluation is trusted, how replay decisions remain authoritative, and where the operator's responsibility begins. It is the cross-cutting (general) security specification that the protocol specifications refine for their own surfaces.
 
 It refines the security-relevant invariants of [RS-ARC-G](../rs-arc-g/) Section 5 (specifically REQ-ARC-G-004 and REQ-ARC-G-005) one level of detail down, from architectural invariant to security model. Where this document and RS-ARC-G state the same constraint, RS-ARC-G is the general invariant and this document is its security-model form. The wire-level form of these constraints lives in [RS-PR-NOTARY](../rs-pr-notary/) and [RS-PR-RELAY](../rs-pr-relay/); where this document and a protocol specification state the same constraint, this document is the cross-cutting model and the protocol specification is its surface-specific form.
 
@@ -38,6 +38,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.1.1 | 2026-06-21 | draft | Clarified key custody, readiness, public error detail, and principal-scoped cache boundaries. |
 | 0.2.0 | 2026-07-07 | draft | Enumerated the full unauthenticated surface in REQ-SEC-G-006 and anchored the evidence section to the enforcing code. |
 | 0.3.0 | 2026-07-13 | draft | Assigned registry source access to Relay and restated Notary authorization and federation gates in terms of compiler-pinned Relay consultations. |
+| 0.4.0 | 2026-07-19 | draft | Defined the product-owned Relay and Notary replay-protection boundaries, retention references, failure posture, and stale-recovery invariant. |
 
 ## 1. Scope and references
 
@@ -49,15 +50,16 @@ This specification covers the security model that holds across the runtime servi
 - Verification-key publication and the public/private key boundary.
 - The audit obligation and its fail-closed posture.
 - Federation trust: static peers and verify-before-read.
+- Product-owned replay protection: authority, retention, transaction, failure, and recovery invariants.
 - The transport and error posture, and the outbound-call policy.
 - The operator boundary: what this model leaves to the deployment.
 
 This specification does not define:
 
-- **Exact configuration schemas, algorithms, and parameters.** Concrete signing algorithms and key sizes, token and cache windows, entropy floors, the precise security-header set, and the precise outbound allow and deny rules are configuration and operational detail, not contract data. For the configurable surface, see the [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/), the [Registry Notary signing-key reference](../../products/registry-notary/signing-key-provider/), and the [Registry Relay client integration](../../products/registry-relay/client-integration/) guide.
+- **Exact configuration schemas, algorithms, and parameters.** Concrete signing algorithms and key sizes, configurable token and cache windows, entropy floors, the precise security-header set, and the precise outbound allow and deny rules are configuration and operational detail, not contract data. Section 8 states the fixed Relay batch-child replay retention that is part of the product contract. For the configurable surface, see the [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/), the [Registry Notary signing-key reference](../../products/registry-notary/signing-key-provider/), and the [Registry Relay client integration](../../products/registry-relay/client-integration/) guide.
 - **Surface-specific protocol behavior.** How each service applies this model to its own routes, request shapes, and error codes belongs to [RS-PR-NOTARY](../rs-pr-notary/) and [RS-PR-RELAY](../rs-pr-relay/).
-- **Key custody and secret provisioning.** How private keys and credentials are stored, injected, and rotated in a deployment (environment, file, hardware module) is an operator responsibility, addressed in Section 9.
-- **Deeper service-internal security mechanisms.** The internal structure of credential fingerprints, the audit envelope, and the replay store, beyond the externally observable behavior stated here, is reserved for future deeper specifications.
+- **Key custody and secret provisioning.** How private keys and credentials are stored, injected, and rotated in a deployment (environment, file, hardware module) is an operator responsibility, addressed in Section 10.
+- **Deeper service-internal security mechanisms.** The internal structure of credential fingerprints, the audit envelope, and product replay tables beyond the authority, binding, retention, transaction, failure, and recovery behavior stated here is reserved for product specifications and operator guidance.
 
 For the components named here and their boundaries, see [RS-ARC-G](../rs-arc-g/) Section 3 and the [boundary map](../../map/boundaries-and-map/). For the narrative security context, see the [architecture overview](../../explanation/architecture/) and [Evidence issuance, end to end](../../explanation/evidence-issuance/).
 
@@ -113,9 +115,9 @@ A verifier needs the issuer's public key to check a credential, and it needs tha
 
 REQ-SEC-G-007: An issuer MUST sign with an asymmetric key and MUST publish only the public half through the issuer JWKS. Private key material MUST NOT be published and MUST NOT be required by a verifier. A key that is being rotated out MAY remain published for verification while credentials it signed are still within their validity, so a verifier can check previously issued artifacts across a rotation.
 
-The custody mechanism for the private key (environment, file, or hardware module) is a deployment choice, described in the [signing-key reference](../../products/registry-notary/signing-key-provider/) and out of scope here (Section 9).
+The custody mechanism for the private key (environment, file, or hardware module) is a deployment choice, described in the [signing-key reference](../../products/registry-notary/signing-key-provider/) and out of scope here (Section 10).
 
-Readiness, liveness, and protocol conformance checks show that a service has loaded configuration and can serve the expected protocol surface. They do not certify production-grade private-key custody. A deployment that uses software keys, local JWK files, or demo-generated keys can still be reachable and internally consistent; production custody, rotation, and approval of a key provider remain operator responsibilities under Section 9.
+Readiness, liveness, and protocol conformance checks show that a service has loaded configuration and can serve the expected protocol surface. They do not certify production-grade private-key custody. A deployment that uses software keys, local JWK files, or demo-generated keys can still be reachable and internally consistent; production custody, rotation, and approval of a key provider remain operator responsibilities under Section 10.
 
 ## 6. Audit
 
@@ -131,7 +133,42 @@ Delegated evaluation crosses a trust boundary between two services. The model ad
 
 REQ-SEC-G-010: Delegated evaluation MUST be static-peer only: peers are loaded from configuration at startup, and a request from an unconfigured peer MUST be rejected. Before any Relay consultation or claim evaluation, the serving service MUST verify the peer's identity and request signature, the request's freshness and single use, and its purpose, profile, and audience. This is the security-model form of REQ-ARC-G-009 and the cross-cutting form of REQ-PR-NOTARY-018 and REQ-PR-NOTARY-019. Dynamic trust-chain discovery, shared replay storage, and federated credential issuance are out of scope for this version and MUST NOT be implied by a conformance claim against this specification.
 
-## 8. Transport and outbound-call posture
+## 8. Replay-protection authority
+
+Replay protection is product correctness state, not a shared storage service.
+Registry Platform can supply replay vocabulary and mechanism-only helpers, but Registry Relay and
+Registry Notary define and persist their own replay decisions.
+The [retention and persistent-state reference](../../operate/retention-and-persistent-state/)
+defines the complete product retention inventory, and the
+[backup and restore procedure](../../operate/backup-and-restore/) defines the recovery steps.
+
+| Product | Protected execution or domain | Identity and request binding | Retention |
+| --- | --- | --- | --- |
+| Registry Relay | Batch-child idempotent consultation execution. | A high-entropy Notary child identity selects the replay row and binds the exact canonical request to the authenticated consultation workload. The same child and request can replay the terminal result; a different binding conflicts. | `15 minutes` from reservation or terminal publication. |
+| Registry Notary | Scoped, domain-separated protocol one-time and completion domains, including replay identifiers, nonce consumption, batch completion, and pre-authorized-code redemption. | Product-specific scope and identifier hashes bind each decision to its protocol authority and context. Typed Notary transactions enforce one-time use or immutable completion. | The product-specific absolute expiry or bounded retention for the domain, as listed in the retention reference. |
+
+REQ-SEC-G-014: A production or multi-instance deployment MUST keep replay correctness state in
+the PostgreSQL state owned by the product making the decision.
+Replicas of one product authority MUST share only that authority's product state so a retained
+decision survives restart and is observed across replicas.
+Separate federation authorities MUST NOT share replay state.
+Registry Relay and Registry Notary MUST NOT share replay tables, schemas, database roles,
+migrations, or correctness transactions, even when their databases run in one PostgreSQL
+cluster.
+An implementation MUST NOT turn these boundaries into a shared correctness-state abstraction.
+
+REQ-SEC-G-015: Each product MUST use its product-owned atomic reservation and completion
+operations for replay-sensitive work.
+A database-unavailable, read-only, timed-out, or transaction-uncertain result MUST fail closed:
+the product MUST NOT assume the identifier is absent, report replay-sensitive success, or admit
+traffic on state that it cannot attest.
+A potentially stale recovery point MUST remain offline until the product-specific recovery rules
+in the backup and restore procedure pass.
+Expiry alone MUST NOT be treated as repair for a Relay recovery point missing durable audit,
+quota, materialization, or keyring history, or for a Notary recovery point missing credential
+status.
+
+## 9. Transport and outbound-call posture
 
 Services present a consistent error surface and constrain the calls they make outward.
 
@@ -141,7 +178,7 @@ REQ-SEC-G-012: A runtime service SHOULD apply the Registry Platform HTTP-securit
 
 Problem details are a client-facing protocol surface, not an operator diagnostic channel. Stable problem codes and titles belong in responses; raw bearer tokens, private keys, source values, local filesystem paths, and unbounded internal error chains belong in protected operator logs. Principal-scoped responses, including scoped metadata and claim results, are not public cache entries: where a response varies by authenticated principal, scope, purpose, or authorization context, deployments use cache controls appropriate to that sensitivity, such as private or no-store semantics and `Vary: Authorization` where a response is cacheable.
 
-## 9. The operator boundary
+## 10. The operator boundary
 
 The security model ends where the deployment begins. The following are operator responsibilities, not behavior this specification defines: secret and key provisioning, key custody and the rotation schedule, audit retention and storage, tenant isolation, transport termination and certificate management, network rate limiting at the edge, deployment configuration, and incident response. Registry Platform and the runtime services provide the primitives; the operator provisions, configures, and operates them.
 
@@ -159,6 +196,8 @@ A registry stack deployment conforms to this specification when it:
 - publishes only public verification keys and keeps private material unpublished (REQ-SEC-G-007);
 - audits every request touching person-level data and can run audit fail-closed (REQ-SEC-G-008, REQ-SEC-G-009);
 - admits delegated evaluation only from verified static peers, fully checked before any Relay consultation or claim evaluation (REQ-SEC-G-010);
+- keeps replay decisions in separate product-owned PostgreSQL state, shares them only across replicas of the same authority, and preserves the product retention contract (REQ-SEC-G-014);
+- fails closed when replay correctness state is unavailable or uncertain and keeps potentially stale recovery points offline until product recovery rules pass (REQ-SEC-G-015);
 - reports errors as problem+json outside route-specific error envelopes, and applies the shared HTTP-security and outbound-policy primitives (REQ-SEC-G-011, REQ-SEC-G-012);
 - keeps secrets out of distributable artifacts and leaves provisioning to the operator (REQ-SEC-G-013).
 
@@ -168,13 +207,14 @@ Conformance to this specification does not imply conformance to any external sta
 
 This specification is `verified`: every requirement describes shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014.
 
-- The [boundary map](../../map/boundaries-and-map/) records that the security primitives (authentication, OIDC, audit envelopes, HTTP security, outbound HTTP policy, cryptography, SD-JWT VC helpers) are owned by Registry Platform and that secret provisioning, audit retention, tenant isolation, deployment configuration, and incident response are operator responsibilities, which Sections 2 and 9 make precise.
+- The [boundary map](../../map/boundaries-and-map/) records that the security primitives (authentication, OIDC, audit envelopes, HTTP security, outbound HTTP policy, cryptography, SD-JWT VC helpers) are owned by Registry Platform and that secret provisioning, audit retention, tenant isolation, deployment configuration, and incident response are operator responsibilities, which Sections 2 and 10 make precise.
 - The [Registry Notary API reference](../../reference/apis/registry-notary/) and [Registry Relay API reference](../../reference/apis/registry-relay/) describe the two authentication modes, the constant-time fingerprint comparison, the OIDC trust inputs, the per-dataset and per-claim scopes, and the unauthenticated probes that Sections 3 and 4 state normatively.
 - The [Registry Notary signing-key reference](../../products/registry-notary/signing-key-provider/) describes JWKS publication, the public/private key boundary, and rotation, which Section 5 states normatively.
 - [RS-PR-NOTARY](../rs-pr-notary/) and [RS-PR-RELAY](../rs-pr-relay/) carry the surface-level form of the authentication, authorization, key-publication, audit, federation, and error requirements this document generalizes.
 - [RS-ARC-G](../rs-arc-g/) Section 5 holds the architectural invariants (REQ-ARC-G-004, REQ-ARC-G-005) that Sections 2 and 6 refine.
+- The [retention and persistent-state reference](../../operate/retention-and-persistent-state/) and [backup and restore procedure](../../operate/backup-and-restore/) define the product-owned PostgreSQL retention and stale-recovery behavior that Section 8 states normatively.
 - The [standards register](../../reference/standards/) records the adoption mode for SD-JWT VC, OID4VCI, and the W3C DID method listed in `standards_referenced`.
-- The enforcing code is inspectable in the workspace: the constant-time fingerprint comparison in `crates/registry-platform-authcommon` (REQ-SEC-G-003); OIDC verification in `crates/registry-platform-oidc` (REQ-SEC-G-004); scope-before-source enforcement in `crates/registry-notary-server/src/runtime.rs` (`require_claim_access`) and the Registry Relay route handlers (REQ-SEC-G-005); the unauthenticated-surface allow-lists in Registry Relay's router assembly (`crates/registry-relay/src/server.rs`) and Registry Notary's auth-exemption check (`is_auth_exempt_path` in `crates/registry-notary-server/src/standalone.rs`) (REQ-SEC-G-006); the audit envelope in `crates/registry-platform-audit` and the services' fail-closed audit paths, exercised by tests such as Registry Notary's federation audit-write-failure test (REQ-SEC-G-008, REQ-SEC-G-009); and the secret-material rejection lists in `crates/registry-manifest-core` (REQ-SEC-G-013).
+- The enforcing code is inspectable in the workspace: the constant-time fingerprint comparison in `crates/registry-platform-authcommon` (REQ-SEC-G-003); OIDC verification in `crates/registry-platform-oidc` (REQ-SEC-G-004); scope-before-source enforcement in `crates/registry-notary-server/src/runtime.rs` (`require_claim_access`) and the Registry Relay route handlers (REQ-SEC-G-005); the unauthenticated-surface allow-lists in Registry Relay's router assembly (`crates/registry-relay/src/server.rs`) and Registry Notary's auth-exemption check (`is_auth_exempt_path` in `crates/registry-notary-server/src/standalone.rs`) (REQ-SEC-G-006); the audit envelope in `crates/registry-platform-audit` and the services' fail-closed audit paths, exercised by tests such as Registry Notary's federation audit-write-failure test (REQ-SEC-G-008, REQ-SEC-G-009); Relay's batch-child binding and PostgreSQL reservation functions in `crates/registry-relay/src/consultation` and `crates/registry-relay/src/state_plane`; Notary's typed PostgreSQL replay functions in `crates/registry-notary-server/src/state_plane` (REQ-SEC-G-014, REQ-SEC-G-015); and the secret-material rejection lists in `crates/registry-manifest-core` (REQ-SEC-G-013).
 
 ## Next
 

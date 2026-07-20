@@ -19,6 +19,7 @@ use registry_platform_oid4vci::{
     CREDENTIAL_SIGNING_ALG_EDDSA, CRYPTOGRAPHIC_BINDING_METHOD_DID_JWK,
     SD_JWT_VC_FORMAT as OID4VCI_SD_JWT_VC_FORMAT,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::deployment::DeploymentConfig;
@@ -38,6 +39,7 @@ mod federation;
 mod http;
 mod oid4vci;
 mod root;
+pub mod schema;
 mod state;
 mod subject_access;
 

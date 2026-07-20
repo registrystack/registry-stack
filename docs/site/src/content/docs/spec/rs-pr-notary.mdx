@@ -45,6 +45,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.1.4 | 2026-06-27 | draft | Clarified OIDC principal derivation, issuer-bound Notary transaction authorization details, and nonce expiry enforcement for OID4VCI holder proofs. |
 | 0.1.5 | 2026-07-07 | draft | Editorial: pointed the Relay-protocol reference at published RS-PR-RELAY and added explicit evidence citations for REQ-PR-NOTARY-034/035/036. |
 | 0.2.0 | 2026-07-13 | draft | Removed direct registry source connectors and sidecars. Registry-backed claims now consume compiler-pinned Relay consultations; Notary-only claims are source-free or self-attested. |
+| 0.3.0 | 2026-07-19 | draft | Restricted OID4VCI to registry-backed issuer-initiated pre-authorized code, and defined algorithm, transaction-code, status, topology, and unsupported-profile boundaries. |
 
 ## 1. Scope and references
 
@@ -159,13 +160,15 @@ Source-free claims are evaluation-only. Credential profiles, credential-capable
 subject-access allow-lists, and OID4VCI projections select only mutually bound
 `registry_backed` claims.
 
-REQ-PR-NOTARY-013: An issued credential MUST be an SD-JWT VC with media type and `typ` header `dc+sd-jwt`, signed with EdDSA (Ed25519). No W3C Verifiable Credentials Data Model JSON-LD envelope or namespace is present in the issued credential. This is the protocol-level form of REQ-ARC-G-008.
+REQ-PR-NOTARY-013: An issued credential MUST be an SD-JWT VC with media type and `typ` header `dc+sd-jwt`, signed with the credential profile's configured EdDSA (Ed25519) or ES256 (P-256) key. No W3C Verifiable Credentials Data Model JSON-LD envelope or namespace is present in the issued credential. This is the protocol-level form of REQ-ARC-G-008.
 
 REQ-PR-NOTARY-014: The signed credential body MUST carry the SHA-256 digest of each selectively disclosable field rather than the field value, so an unselected field stays hidden and a holder cannot present a disclosure that was not in the original credential.
 
 REQ-PR-NOTARY-015: A credential MUST bind its holder by naming the holder's public key as a `did:jwk` in the `cnf` claim. `did:jwk` is the only supported binding method. Presentation MUST require a fresh holder proof from that key, audience-bound to the verifier, so a credential without the matching private key is not presentable.
 
-The issuer signing key is sourced from configuration as an OKP Ed25519 JWK; its public half is the key published at `GET /.well-known/evidence/jwks.json`.
+The issuer signing key is sourced from configuration as an Ed25519 or P-256 JWK. Its public half is published at `GET /.well-known/evidence/jwks.json`.
+
+REQ-PR-NOTARY-038: A credential with a `status.status_list` claim MUST keep that top-level claim outside selective disclosure. A conforming client verifier MUST retrieve the signed status token only from the configured exact HTTPS trusted origin and MUST fail closed when status is missing, malformed, untrusted, unavailable, suspended, revoked, expired, or otherwise invalid.
 
 REQ-PR-NOTARY-037: Before direct or OID4VCI issuance, Registry Notary MUST
 reconstruct every selected root's executed registry-backed dependency closure.
@@ -184,8 +187,9 @@ but MUST appear once in the normalized execution set. Legacy, source-free,
 stale, or modified provenance MUST be denied before signer access, signing,
 credential identifiers, or status writes. Direct issuance MUST perform this
 check before holder-proof replay mutation. OID4VCI MUST reject a source-free
-credential configuration before nonce consumption, preserve nonce-before-
-evaluation ordering, and verify the newly stored evaluation before signer
+credential configuration, create and evaluate the registry transaction before
+rendering an offer, consume the transaction-bound proof nonce at the credential
+endpoint, and verify the stored transaction and evaluation before signer
 access. Existing stored evaluations without the private records MAY remain
 readable and renderable but MUST be re-evaluated before issuance.
 
@@ -197,7 +201,7 @@ execution binding is an unkeyed partial-mutation check, not an authenticity
 guarantee against an operator able to rewrite all committed fields and
 recompute it.
 
-Self-attestation is a constrained trust context, not a caller-provided claim value. It binds the authenticated citizen principal to configured claims, purposes, disclosures, formats, subject binding, assurance requirements, and token age limits before evaluation. Direct self-attestation additionally binds credential profiles before issuance; delegated self-attestation is evaluation-only.
+Self-attestation is a constrained trust context, not a caller-provided claim value. It binds the authenticated citizen principal to configured claims, purposes, disclosures, formats, subject binding, assurance requirements, and token age limits before evaluation. Direct subject access can authorize issuance only for a non-delegated registry-backed claim with a mutually bound credential profile. Source-free and delegated self-attestation remain evaluation-only.
 
 REQ-PR-NOTARY-026: For self-attestation flows, Registry Notary MUST derive the subject and assurance context from the authenticated principal and configured subject binding. It MUST NOT let the caller choose a different subject, claim, purpose, disclosure, format, or credential profile outside the self-attestation policy, and MUST audit self-attestation decisions without raw subject identifiers or bearer tokens.
 
@@ -220,23 +224,71 @@ REQ-PR-NOTARY-031: A delegated Relay capability MUST bind the requester subject 
 
 ## 8. OID4VCI issuance flow
 
-For a wallet caller rather than a backend, Registry Notary exposes a scoped OpenID for Verifiable Credential Issuance (OID4VCI) flow. The wallet learns the endpoints from the issuer metadata at `GET /.well-known/openid-credential-issuer`, obtains a credential offer, requests a nonce, signs a proof of possession with its `did:jwk` key, and posts the access token plus the proof to the credential endpoint. The flow uses self-attestation as its subject-access policy but issues only registry-backed claims with the provenance required by REQ-PR-NOTARY-037. It is not a general-purpose wallet interoperability claim.
+For a wallet caller, Registry Notary exposes a narrow OpenID for Verifiable
+Credential Issuance (OID4VCI) profile. A citizen first authenticates in a
+browser. Notary consumes the identity provider's authorization code, derives
+the configured subject binding, creates and evaluates a registry transaction,
+and then renders an issuer-initiated pre-authorized offer. The wallet redeems
+that offer at Notary and proves control of an EdDSA `did:jwk` holder key. The
+flow does not create a source-free credential trust surface.
 
-REQ-PR-NOTARY-016: The OID4VCI surface is a profiled subset of OID4VCI Draft 13 advertising the `dc+sd-jwt` format. Registry Notary MUST NOT advertise full OID4VCI issuer conformance; its capability-discovery document (`GET /.well-known/evidence-service`) declares `openid4vci.support: not_full_issuer`.
+REQ-PR-NOTARY-016: The OID4VCI surface MUST advertise `dc+sd-jwt`, EdDSA
+`did:jwk` holder proof, and the credential profile's exact EdDSA or ES256 issuer
+algorithm. Registry Notary MUST NOT advertise full issuer, EUDI, HAIP, PAR,
+DPoP, wallet-attestation, ES256-holder, or general external-wallet conformance.
+Its capability-discovery document MUST declare
+`openid4vci.support: not_full_issuer`.
 
-REQ-PR-NOTARY-017: The credential endpoint (`POST /oid4vci/credential`) MUST require a valid access token and a holder proof of possession.
-Registry Notary MUST NOT issue a credential without proof of possession.
-Where `oid4vci.nonce.enabled` is set (off by default), the proof MUST additionally be bound to a fresh issuer nonce.
-A nonce is fresh only when it is reserved for the credential issuer and configuration being requested, has not expired at consume time, and has not already been consumed.
-The offer MAY carry an authorization-code grant or a pre-authorized-code grant.
+REQ-PR-NOTARY-039: The only wallet-facing grant MUST be
+`urn:ietf:params:oauth:grant-type:pre-authorized_code`. The authorization code
+returned by the configured identity provider MUST remain an internal
+browser-to-Notary authentication input and MUST NOT be exposed or accepted as a
+wallet grant. Registry Notary MUST NOT expose the former public credential-offer
+or nonce routes, advertise a nonce endpoint, or return a next nonce from the
+credential endpoint.
 
-REQ-PR-NOTARY-027: OID4VCI credential issuance MUST be scoped to configured credential configurations and the authenticated self-attestation principal. The credential endpoint MUST evaluate the configured registry-backed claim under the self-attestation and source policies before issuance, MUST enforce the configured credential profile and REQ-PR-NOTARY-037 provenance boundary, and MUST NOT imply compatibility with arbitrary external wallets beyond the profiled endpoints and metadata this specification names.
+REQ-PR-NOTARY-027: Before rendering an offer, Registry Notary MUST validate the
+identity-provider response, derive the configured subject binding, create a
+transaction for the selected credential configuration, execute the exact
+compiler-pinned Relay consultation, and store the evaluation provenance. It
+MUST NOT render an offer for a source-free, delegated, failed, ambiguous,
+missing, or stale evaluation.
 
-REQ-PR-NOTARY-036: When an OID4VCI credential request uses a Notary-issued access token, Registry Notary MUST require transaction-scoped authorization details that match the selected credential configuration, action, service, claims, disclosure, format, purpose, subject binding, and direct self-attestation access mode.
-Missing, empty, or context-only authorization details MUST be denied before holder-proof nonce consumption.
-Registry Notary MUST identify Notary-issued access tokens by the configured Notary signing issuer and supported Notary token types, so externally issued OIDC access tokens can continue to use scope-based authorization where the configured flow permits it.
+REQ-PR-NOTARY-040: A pre-authorized offer MUST require a numeric `tx_code` by
+default. The code and PIN requirement MUST be bound to the signed offer. Missing
+or wrong PINs MUST fail, repeated wrong attempts MUST be bounded per offer, and
+invalid redemption attempts MUST be rate limited. An explicit `required: false`
+profile MAY support a wallet that cannot present a PIN, including the Walt
+compatibility profile, only when the pre-authorized code lifetime is no more
+than 300 seconds. In both modes the pre-authorized code MUST be single-use. The
+no-PIN offer MUST be treated as bearer credential material that a thief can
+redeem during its bounded lifetime.
 
-REQ-PR-NOTARY-032: The direct and OID4VCI credential endpoints MUST reject delegated-attestation evaluations or transaction tokens before signer access. Credential issuance is available only for non-delegated registry-backed claims in this version.
+REQ-PR-NOTARY-017: The credential endpoint (`POST /oid4vci/credential`) MUST
+require a valid Notary-issued access token and one holder proof of possession.
+The holder proof MUST use EdDSA with `did:jwk`, MUST bind the credential issuer
+as audience, and MUST contain the fresh transaction-bound nonce returned by the
+token response. The nonce MUST be unexpired and single-use. ES256 holder proof
+MUST be rejected.
+
+REQ-PR-NOTARY-036: A Notary-issued access token MUST carry transaction-scoped
+authorization details that exactly match the stored transaction's credential
+configuration, action, service, claims, disclosure, format, purpose, subject
+binding, and direct subject-access mode. Missing, empty, context-only, or
+mismatched details MUST be denied before signer access. The credential endpoint
+MUST reload the stored transaction and evaluation and enforce
+REQ-PR-NOTARY-037 before signing.
+
+REQ-PR-NOTARY-032: Direct and OID4VCI credential endpoints MUST reject
+source-free, delegated-attestation, and registry-backed evaluation-only records
+before signer access. Credential issuance is available only for non-delegated
+registry-backed claims.
+
+REQ-PR-NOTARY-041: A deployment authority MUST pair one Registry Notary
+authority with one Registry Relay authority. Notary MUST own the PostgreSQL
+correctness state used for its transactions, pre-authorized codes, proof replay,
+evaluations, audit, and credential status. Explicit in-memory state MAY be used
+only for local single-process development.
 
 ## 9. Delegated (federated) evaluation
 
@@ -265,13 +317,15 @@ REQ-PR-NOTARY-033: Self-attestation policy denials MUST use the public problem c
 These constraints are stated so a reader does not infer a capability from the route list that the reviewed implementation does not provide.
 
 - Plugin rule type: Declared in configuration, unimplemented (REQ-PR-NOTARY-007).
-- Holder binding: `did:jwk` is the only supported proof-of-possession binding method (REQ-PR-NOTARY-015).
-- OID4VCI profile: The OID4VCI surface is a scoped self-attestation issuance profile, not a full issuer or general external-wallet interoperability claim (REQ-PR-NOTARY-016, REQ-PR-NOTARY-027).
+- Holder binding: OID4VCI supports EdDSA `did:jwk` holder proof only. ES256 holder proof is not supported (REQ-PR-NOTARY-015, REQ-PR-NOTARY-017).
+- OID4VCI profile: The OID4VCI surface is a registry-backed issuer-initiated pre-authorized profile, not a full issuer or general external-wallet interoperability claim. EUDI, HAIP, PAR, DPoP, and wallet attestation are not supported profiles (REQ-PR-NOTARY-016, REQ-PR-NOTARY-039).
 - Delegated issuance: Delegated self-attestation is evaluation and rendering only. Direct and OID4VCI credential issuance reject delegated evaluations, and delegated credential-profile bindings are invalid configuration (REQ-PR-NOTARY-030, REQ-PR-NOTARY-031, REQ-PR-NOTARY-032).
 - Notary transaction details: Notary-issued transaction and credential access tokens are bound to the configured Notary issuer before the transaction-details requirement applies. Externally issued OIDC tokens are not treated as Notary tokens by `typ` alone (REQ-PR-NOTARY-035, REQ-PR-NOTARY-036).
 - Federation: Static-peer delegated evaluation only; no dynamic discovery, shared replay storage, or federated credential issuance (REQ-PR-NOTARY-019).
 - Relay dependency: Registry-backed claims require their exact compiler-pinned Relay consultation to be ready. Notary does not provide a direct-source or self-attested fallback (REQ-PR-NOTARY-006).
-- Issuance provenance: Source-free and legacy evaluations are nonissuable. Every selected root must retain an exact compiler pin for every registry-backed claim in its executed dependency closure and one normalized execution record per unique consultation ULID. Direct issuance performs the exact-set check before holder-proof replay mutation; OID4VCI preserves nonce-before-evaluation ordering (REQ-PR-NOTARY-037).
+- Issuance provenance: Source-free and legacy evaluations are nonissuable. Every selected root must retain an exact compiler pin for every registry-backed claim in its executed dependency closure and one normalized execution record per unique consultation ULID. Direct issuance performs the exact-set check before holder-proof replay mutation; OID4VCI evaluates and stores the registry transaction before rendering an offer, then revalidates it after holder-proof nonce consumption (REQ-PR-NOTARY-027, REQ-PR-NOTARY-037).
+- Status: A status-bearing credential cannot selectively hide status, and verification fails closed if the signed status cannot be validated from the exact trusted HTTPS origin (REQ-PR-NOTARY-038).
+- External evidence: Source tests establish the implemented profile. Wallet, verifier, and OpenID conformance claims require immutable evidence from a frozen candidate artifact and are otherwise candidate-only.
 - Project fixtures: Offline fixtures prove the compiled request and response contract against synthetic observations. They do not prove live source interoperability or production approval.
 - Admin reload: The admin reload route returns HTTP 501 with code `registry.admin.capability.not_supported` in the standalone router; it performs no reload; runtime configuration changes require deploying a signed local bundle and restarting the service.
 
@@ -286,9 +340,9 @@ A Registry Notary deployment conforms to this specification when it:
 - evaluates claims itself from pinned Relay outputs or permitted self-attestation, without direct source connectors, using only implemented rule types (REQ-PR-NOTARY-005, REQ-PR-NOTARY-006, REQ-PR-NOTARY-007);
 - records and honors the disclosure mode, and never leaks a redacted value (REQ-PR-NOTARY-008, REQ-PR-NOTARY-009, REQ-PR-NOTARY-010);
 - returns the claim-result format, may render CCCEV-shaped JSON-LD, and states its CCCEV output as a profiled subset (REQ-PR-NOTARY-011, REQ-PR-NOTARY-012);
-- issues only SD-JWT VC credentials from exact registry-backed evaluation provenance, with digest-based selective disclosure and `did:jwk` holder binding (REQ-PR-NOTARY-013, REQ-PR-NOTARY-014, REQ-PR-NOTARY-015, REQ-PR-NOTARY-037);
+- issues only SD-JWT VC credentials from exact registry-backed evaluation provenance, with EdDSA or ES256 issuer signing, digest-based selective disclosure, EdDSA `did:jwk` OID4VCI holder binding, and fail-closed status verification for status-bearing credentials (REQ-PR-NOTARY-013, REQ-PR-NOTARY-014, REQ-PR-NOTARY-015, REQ-PR-NOTARY-037, REQ-PR-NOTARY-038);
 - treats self-attestation as constrained authenticated trust context, including delegated self-attestation only when requester, dependent target, relationship proof, and stored-evaluation metadata all bind to the configured policy (REQ-PR-NOTARY-026, REQ-PR-NOTARY-029, REQ-PR-NOTARY-030, REQ-PR-NOTARY-031, REQ-PR-NOTARY-035);
-- exposes OID4VCI as a scoped non-full-issuer subset that requires holder proof of possession, rejects expired or already-consumed nonces where nonces are enabled, requires Notary-issued access tokens to carry matching transaction details, and keeps delegated self-attestation evaluation-only across both credential paths (REQ-PR-NOTARY-016, REQ-PR-NOTARY-017, REQ-PR-NOTARY-027, REQ-PR-NOTARY-030, REQ-PR-NOTARY-031, REQ-PR-NOTARY-032, REQ-PR-NOTARY-036);
+- exposes OID4VCI as a registry-backed non-full-issuer subset with issuer-initiated pre-authorized code only, secure transaction-code defaults, EdDSA `did:jwk` holder proof, matching stored transaction details, one Notary per Relay authority, and no source-free or delegated issuance (REQ-PR-NOTARY-016, REQ-PR-NOTARY-017, REQ-PR-NOTARY-027, REQ-PR-NOTARY-032, REQ-PR-NOTARY-036, REQ-PR-NOTARY-039, REQ-PR-NOTARY-040, REQ-PR-NOTARY-041);
 - restricts federation to verified, static peers and never issues credentials over it (REQ-PR-NOTARY-018, REQ-PR-NOTARY-019);
 - audits every evaluation, fails the request when it cannot, reports errors as problem+json, and carries policy/provenance context without raw requester secrets (REQ-PR-NOTARY-020, REQ-PR-NOTARY-021, REQ-PR-NOTARY-022, REQ-PR-NOTARY-028, REQ-PR-NOTARY-033).
 
@@ -306,6 +360,7 @@ This specification is `verified`: every requirement describes shipped behavior a
 - Delegated relationship configuration validation is implemented in [`config.rs`](https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-notary-core/src/config.rs).
 - Request context derivation, stored-evaluation revalidation, OID4VCI delegated-token rejection, explicit target binding, and proof-gated Relay consultations are implemented in Registry Notary Server.
 - Private evaluation provenance capture and the shared direct/OID4VCI issuance verifier (REQ-PR-NOTARY-037) are implemented in Registry Notary Server's evaluation and render runtime modules.
+- Complete pre-authorized browser callback, token, credential, EdDSA and ES256 issuer, EdDSA holder, route-removal, replay, and unsupported-profile coverage is implemented in Registry Notary Server standalone HTTP tests.
 - OIDC principal derivation from the configured principal claim, without client id, authorized party, or audience fallback (REQ-PR-NOTARY-034), is implemented in [`standalone.rs`](https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-notary-server/src/standalone.rs)'s `principal_from_oidc` function and its `oidc_principal_requires_configured_principal_claim` test.
 - The issuer-bound self-attestation transaction-token gate (REQ-PR-NOTARY-035) is implemented in [`api.rs`](https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-notary-server/src/api.rs)'s `self_attestation_requires_authorization_details` function.
 - The issuer-bound OID4VCI transaction-detail gate (REQ-PR-NOTARY-036) is implemented in [`api.rs`](https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-notary-server/src/api.rs)'s `oid4vci_requires_authorization_details` and `require_oid4vci_issuance_authorization_details` functions.

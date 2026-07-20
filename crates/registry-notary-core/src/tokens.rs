@@ -87,6 +87,10 @@ pub struct PreAuthorizedCodeClaims {
     pub jti: String,
     /// Selected credential configuration the code is bound to.
     pub credential_configuration_id: String,
+    /// Opaque identifier of the immutable registry-backed issuance transaction.
+    pub issuance_transaction_id: String,
+    /// Versioned commitment over the authority-bearing transaction fields.
+    pub issuance_transaction_commitment: String,
     /// Whether this individual code requires the holder-presented transaction
     /// code advertised with its credential offer.
     pub tx_code_required: bool,
@@ -114,6 +118,10 @@ pub struct AccessTokenClaims {
     pub token_type: String,
     /// Credential configuration the token is scoped to.
     pub credential_configuration_id: String,
+    /// Opaque identifier of the immutable registry-backed issuance transaction.
+    pub issuance_transaction_id: String,
+    /// Versioned commitment copied from the pre-authorized code transaction.
+    pub issuance_transaction_commitment: String,
     /// eSignet-verified subject claims.
     pub subject: BoundSubject,
     /// OAuth 2.0 Rich Authorization Requests-shaped authorization details.
@@ -166,6 +174,14 @@ pub async fn mint_pre_authorized_code(
         Value::String(claims.credential_configuration_id.clone()),
     );
     payload.insert(
+        "issuance_transaction_id".to_string(),
+        Value::String(claims.issuance_transaction_id.clone()),
+    );
+    payload.insert(
+        "issuance_transaction_commitment".to_string(),
+        Value::String(claims.issuance_transaction_commitment.clone()),
+    );
+    payload.insert(
         "tx_code_required".to_string(),
         Value::Bool(claims.tx_code_required),
     );
@@ -204,6 +220,14 @@ pub async fn mint_access_token(
     payload.insert(
         "credential_configuration_id".to_string(),
         Value::String(claims.credential_configuration_id.clone()),
+    );
+    payload.insert(
+        "issuance_transaction_id".to_string(),
+        Value::String(claims.issuance_transaction_id.clone()),
+    );
+    payload.insert(
+        "issuance_transaction_commitment".to_string(),
+        Value::String(claims.issuance_transaction_commitment.clone()),
     );
     payload.insert("iat".to_string(), Value::from(claims.iat));
     payload.insert("nbf".to_string(), Value::from(claims.iat));
@@ -356,6 +380,8 @@ const RESERVED_TOKEN_CLAIMS: &[&str] = &[
     "client_id",
     "token_type",
     "credential_configuration_id",
+    "issuance_transaction_id",
+    "issuance_transaction_commitment",
     "tx_code_required",
     "acr",
     "auth_time",
@@ -542,6 +568,8 @@ mod tests {
             audiences: vec![AUDIENCE.to_string()],
             token_type: "Bearer".to_string(),
             credential_configuration_id: "date_of_birth_sd_jwt".to_string(),
+            issuance_transaction_id: "transaction-123".to_string(),
+            issuance_transaction_commitment: "sha256:transaction".to_string(),
             subject: bound_subject(),
             authorization_details: Vec::new(),
             confirmation: None,
@@ -558,6 +586,8 @@ mod tests {
             audiences: vec![AUDIENCE.to_string()],
             token_type: "Bearer".to_string(),
             credential_configuration_id: "date_of_birth_sd_jwt".to_string(),
+            issuance_transaction_id: "transaction-123".to_string(),
+            issuance_transaction_commitment: "sha256:transaction".to_string(),
             subject: bound_subject(),
             authorization_details: vec![serde_json::json!({
                 "type": NOTARY_AUTHORIZATION_DETAILS_TYPE,
@@ -581,6 +611,8 @@ mod tests {
             issuer: ISSUER.to_string(),
             jti: "01J0000000000000000000PREAU".to_string(),
             credential_configuration_id: "date_of_birth_sd_jwt".to_string(),
+            issuance_transaction_id: "01J0000000000000000000PREAU".to_string(),
+            issuance_transaction_commitment: "sha256:transaction".to_string(),
             tx_code_required: true,
             subject: bound_subject(),
             iat: NOW,
@@ -1029,7 +1061,7 @@ mod tests {
     fn mint_rejects_subject_binding_claim_colliding_with_a_reserved_claim() {
         // A subject_binding_claim configured to a reserved/emitted claim name
         // would overwrite that claim; minting must fail loudly instead.
-        for reserved in ["iss", "aud", "sub", "exp", "scope", "client_id"] {
+        for &reserved in RESERVED_TOKEN_CLAIMS {
             let mut subject = bound_subject();
             subject.subject_binding_claim = reserved.to_string();
             let claims = AccessTokenClaims {

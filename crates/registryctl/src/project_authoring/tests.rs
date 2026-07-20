@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn corrected_http_authoring_lowers_to_one_product_neutral_request() {
-        let authored: AuthoredIntegrationDocument = serde_yaml::from_str(
+        let authored: AuthoredIntegrationDocument = serde_norway::from_str(
             r#"
 version: 1
 id: person-status
@@ -99,7 +99,7 @@ outputs:
 
     #[test]
     fn date_outputs_keep_the_typed_contract_without_a_string_bound() {
-        let entity_field: EntityFieldSchema = serde_yaml::from_str(
+        let entity_field: EntityFieldSchema = serde_norway::from_str(
             r#"type: string
 format: date
 maxLength: 10
@@ -125,7 +125,7 @@ maxLength: 10
         )
         .expect("typed snapshot date validates");
 
-        let authored: AuthoredIntegrationDocument = serde_yaml::from_str(
+        let authored: AuthoredIntegrationDocument = serde_norway::from_str(
             r#"
 version: 1
 id: person-birth-date
@@ -155,7 +155,7 @@ outputs:
 
     #[test]
     fn corrected_authoring_rejects_the_superseded_operation_graph() {
-        serde_yaml::from_str::<AuthoredIntegrationDocument>(
+        serde_norway::from_str::<AuthoredIntegrationDocument>(
             r#"
 version: 1
 id: obsolete-flow
@@ -176,7 +176,7 @@ outputs:
 
     #[test]
     fn typed_authoring_preserves_roles_scalar_contracts_and_conservative_bounds() {
-        let authored: AuthoredIntegrationDocument = serde_yaml::from_str(
+        let authored: AuthoredIntegrationDocument = serde_norway::from_str(
             r#"
 version: 1
 id: typed-person-status
@@ -296,7 +296,7 @@ outputs:
             "type: [string, \"null\"], maxLength: 64",
         );
         let authored: AuthoredIntegrationDocument =
-            serde_yaml::from_str(&nullable_selector).expect("nullable selector parses");
+            serde_norway::from_str(&nullable_selector).expect("nullable selector parses");
         assert!(lower_authored_integration(&authored)
             .expect_err("nullable selector rejects")
             .to_string()
@@ -307,7 +307,7 @@ outputs:
             "type: integer, minimum: -9007199254740992, maximum: 1",
         );
         let authored: AuthoredIntegrationDocument =
-            serde_yaml::from_str(&unsafe_integer).expect("unsafe integer parses");
+            serde_norway::from_str(&unsafe_integer).expect("unsafe integer parses");
         assert!(lower_authored_integration(&authored)
             .expect_err("unsafe integer rejects")
             .to_string()
@@ -315,7 +315,7 @@ outputs:
 
         let oversized_selector = base.replace("maxLength: 64", "maxLength: 1025");
         let authored: AuthoredIntegrationDocument =
-            serde_yaml::from_str(&oversized_selector).expect("oversized selector parses");
+            serde_norway::from_str(&oversized_selector).expect("oversized selector parses");
         assert!(lower_authored_integration(&authored)
             .expect_err("aggregate selector bytes reject")
             .to_string()
@@ -353,7 +353,7 @@ outputs:
         }
 
         let authored: AuthoredIntegrationDocument =
-            serde_yaml::from_str(&authored_with_inputs(8, 8))
+            serde_norway::from_str(&authored_with_inputs(8, 8))
                 .expect("maximum typed input map parses");
         assert_eq!(
             lower_authored_integration(&authored)
@@ -364,14 +364,14 @@ outputs:
         );
 
         let authored: AuthoredIntegrationDocument =
-            serde_yaml::from_str(&authored_with_inputs(9, 0)).expect("nine-selector map parses");
+            serde_norway::from_str(&authored_with_inputs(9, 0)).expect("nine-selector map parses");
         assert!(lower_authored_integration(&authored)
             .expect_err("nine selectors reject")
             .to_string()
             .contains("between one and eight selectors"));
 
         let authored: AuthoredIntegrationDocument =
-            serde_yaml::from_str(&authored_with_inputs(8, 9)).expect("seventeen-input map parses");
+            serde_norway::from_str(&authored_with_inputs(8, 9)).expect("seventeen-input map parses");
         assert!(lower_authored_integration(&authored)
             .expect_err("seventeen inputs reject")
             .to_string()
@@ -417,7 +417,7 @@ outputs:
         let compiled = compile_project(&loaded, None).expect("NIA release project compiles");
         validate_generated_product_configs(&compiled)
             .expect("generated NIA Relay config passes the product validator");
-        let relay: Value = serde_yaml::from_slice(
+        let relay: Value = serde_norway::from_slice(
             compiled
                 .relay_private
                 .get(Path::new("config/relay.yaml"))
@@ -509,7 +509,7 @@ outputs:
         validate_entity_definition(&loaded.entities["population"].document)
             .expect("one-minute materialization refresh is supported");
         let compiled = compile_project(&loaded, None).expect("interval project compiles");
-        let relay: Value = serde_yaml::from_slice(
+        let relay: Value = serde_norway::from_slice(
             compiled
                 .relay_private
                 .get(Path::new("config/relay.yaml"))
@@ -638,13 +638,13 @@ outputs:
             .relay_private
             .get(Path::new("config/relay.yaml"))
             .expect("Relay config exists");
-        let original: Value = serde_yaml::from_slice(relay).expect("Relay config parses");
+        let original: Value = serde_norway::from_slice(relay).expect("Relay config parses");
 
         for field in ["sha256", "hash"] {
             let mut tampered = original.clone();
             tampered["consultation"]["artifacts"]["private_bindings"][0][field] =
                 Value::String(format!("sha256:{}", "0".repeat(64)));
-            let bytes = serde_yaml::to_string(&tampered).expect("tampered config serializes");
+            let bytes = serde_norway::to_string(&tampered).expect("tampered config serializes");
             let error = validate_generated_relay(bytes.as_bytes(), &compiled.relay_private)
                 .expect_err("tampered binding pin must fail closed");
             let diagnostic = format!("{error:#}");
@@ -815,7 +815,7 @@ outputs:
             .expect("golden project loads");
         let mut compiled = compile_project(&loaded, None).expect("golden project compiles");
         let config_path = Path::new("config/notary.yaml").to_path_buf();
-        let mut notary: Value = serde_yaml::from_slice(
+        let mut notary: Value = serde_norway::from_slice(
             compiled
                 .notary_private
                 .get(&config_path)
@@ -825,7 +825,7 @@ outputs:
         notary["evidence"]["claims"][0]["formats"] = Value::Array(Vec::new());
         compiled.notary_private.insert(
             config_path,
-            serde_yaml::to_string(&notary)
+            serde_norway::to_string(&notary)
                 .expect("tampered Notary config serializes")
                 .into_bytes()
                 .into_boxed_slice(),
@@ -1021,7 +1021,7 @@ fn fixture_input_validation_uses_typed_values_and_explicit_null() {
 
 #[test]
 fn oauth_authoring_lowers_host_owned_form_exchange_with_expiry_cache() {
-    let authored: AuthoredIntegrationDocument = serde_yaml::from_str(
+    let authored: AuthoredIntegrationDocument = serde_norway::from_str(
         r#"
 version: 1
 id: generic-status
@@ -1061,7 +1061,7 @@ outputs:
 
 #[test]
 fn environment_source_binding_has_no_legacy_destination_or_credential_type_aliases() {
-    let source: EnvironmentIntegration = serde_yaml::from_str(
+    let source: EnvironmentIntegration = serde_norway::from_str(
         r#"
 source:
   origin: https://registry.invalid
@@ -1091,6 +1091,6 @@ source:
         "source: { origin: https://registry.invalid, advanced_capabilities: {} }",
         "source: { origin: https://registry.invalid, credential: { type: basic, generation: 1 } }",
     ] {
-        assert!(serde_yaml::from_str::<EnvironmentIntegration>(legacy).is_err());
+        assert!(serde_norway::from_str::<EnvironmentIntegration>(legacy).is_err());
     }
 }

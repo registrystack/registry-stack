@@ -58,56 +58,67 @@ pub enum SigningAlgorithm {
     Rs256,
 }
 
-/// Shared, public provider-kind vocabulary for signing keys.
-///
-/// Provider-specific connection fields remain product-local so simple local
-/// config, PKCS#11, KMS, and future provider syntax can evolve independently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum KeyProviderKind {
-    LocalJwkEnv,
-    FileWatch,
-    Pkcs11,
-    LocalPkcs12File,
-    Kms,
-    WorkloadIdentity,
+/// Define a closed string vocabulary once for its Rust enum, parser labels,
+/// diagnostics, and schema consumers.
+macro_rules! define_string_roster {
+    (
+        $(#[$enum_meta:meta])*
+        $visibility:vis enum $name:ident {
+            $(
+                $(#[$variant_meta:meta])*
+                $variant:ident => $label:literal,
+            )+
+        }
+    ) => {
+        $(#[$enum_meta])*
+        $visibility enum $name {
+            $(
+                $(#[$variant_meta])*
+                #[serde(rename = $label)]
+                $variant,
+            )+
+        }
+
+        impl $name {
+            /// Every label accepted by the parser, in stable declaration order.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $label,)+
+                }
+            }
+        }
+    };
 }
 
-impl KeyProviderKind {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::LocalJwkEnv => "local_jwk_env",
-            Self::FileWatch => "file_watch",
-            Self::Pkcs11 => "pkcs11",
-            Self::LocalPkcs12File => "local_pkcs12_file",
-            Self::Kms => "kms",
-            Self::WorkloadIdentity => "workload_identity",
-        }
+define_string_roster! {
+    #[doc = "Shared, public provider-kind vocabulary for signing keys.\n\nProvider-specific connection fields remain product-local so simple local config, PKCS#11, KMS, and future provider syntax can evolve independently."]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+    #[non_exhaustive]
+    pub enum KeyProviderKind {
+        LocalJwkEnv => "local_jwk_env",
+        FileWatch => "file_watch",
+        Pkcs11 => "pkcs11",
+        LocalPkcs12File => "local_pkcs12_file",
+        Kms => "kms",
+        WorkloadIdentity => "workload_identity",
     }
 }
 
-/// Shared lifecycle status for a configured signing key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum KeyStatus {
-    Active,
-    PublishOnly,
-    Disabled,
+define_string_roster! {
+    #[doc = "Shared lifecycle status for a configured signing key."]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+    #[non_exhaustive]
+    pub enum KeyStatus {
+        Active => "active",
+        PublishOnly => "publish_only",
+        Disabled => "disabled",
+    }
 }
 
 impl KeyStatus {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::PublishOnly => "publish_only",
-            Self::Disabled => "disabled",
-        }
-    }
-
     #[must_use]
     pub const fn may_sign(self) -> bool {
         matches!(self, Self::Active)

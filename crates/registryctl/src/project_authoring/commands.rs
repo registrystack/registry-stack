@@ -1,49 +1,67 @@
 // SPDX-License-Identifier: Apache-2.0
 
+struct StagedProjectInit {
+    project: String,
+    starter_id: String,
+    starter_release: String,
+    starter_content_digest: String,
+}
+
 pub fn init_registry_project(options: &ProjectInitOptions) -> Result<crate::InitReport> {
-    if options.directory.exists() {
-        let metadata = fs::symlink_metadata(&options.directory)
-            .context("failed to inspect project destination")?;
-        if metadata.file_type().is_symlink()
-            || !metadata.is_dir()
-            || fs::read_dir(&options.directory)
-                .context("failed to inspect project destination")?
-                .next()
-                .is_some()
-        {
-            bail!("project destination must be absent or an empty real directory");
-        }
-    }
+    let destination_existed = preflight_project_init_destination(&options.directory)?;
     let starter = options.starter.embedded()?;
-    if !options.directory.exists() {
-        create_dir_owner_only(&options.directory)?;
+    let parent = options
+        .directory
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    create_dir_owner_only(parent).context("failed to create project destination parent")?;
+    let staging = tempfile::Builder::new()
+        .prefix(".registry-stack-init.transaction-")
+        .tempdir_in(parent)
+        .context("failed to create private project initialization staging")?;
+
+    let staged = match stage_registry_project_init(starter, options.starter, staging.path()) {
+        Ok(staged) => staged,
+        Err(error) => {
+            return match staging.close() {
+                Ok(()) => Err(error.context("project initialization staging was discarded")),
+                Err(cleanup_error) => Err(error.context(format!(
+                    "failed to discard private project initialization staging: {cleanup_error}"
+                ))),
+            };
+        }
+    };
+
+    match (destination_existed, preflight_project_init_destination(&options.directory)?) {
+        (false, false) => {
+            let staging = staging.keep();
+            if let Err(error) = rename_project_init_noreplace(&staging, &options.directory) {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(error);
+            }
+        }
+        (true, true) => {
+            publish_staged_project_into_existing(staging.path(), &options.directory)?;
+            staging
+                .close()
+                .context("failed to discard private project initialization staging")?;
+        }
+        _ => bail!(
+            "project destination changed while initialization was staged; no project files were published"
+        ),
     }
-    copy_embedded_dir(starter, &options.directory)?;
-    let project = load_registry_project(&options.directory, None)?;
-    let provenance = project
-        .project
-        .starter
-        .as_ref()
-        .ok_or_else(|| anyhow!("embedded project starter is missing provenance"))?;
-    if provenance.id != options.starter.id() {
-        bail!("embedded project starter provenance does not match the selected starter");
-    }
-    if provenance.content_digest != project.project_content_digest {
-        bail!("embedded project starter content digest is invalid");
-    }
-    setup_registry_project_editor(&ProjectEditorSetupOptions {
-        project_directory: options.directory.clone(),
-    })?;
+
     Ok(crate::InitReport {
         schema_version: crate::INIT_REPORT_SCHEMA_VERSION,
         status: "initialized",
-        project: project.project.registry.id.clone(),
+        project: staged.project,
         project_kind: crate::InitProjectKind::RegistryProject,
         output: options.directory.clone(),
         source: crate::InitSource::Starter {
-            id: provenance.id.clone(),
-            release: provenance.release.clone(),
-            content_digest: provenance.content_digest.clone(),
+            id: staged.starter_id,
+            release: staged.starter_release,
+            content_digest: staged.starter_content_digest,
             content_state: "matches",
         },
         artifacts: crate::InitArtifacts {
@@ -52,6 +70,197 @@ pub fn init_registry_project(options: &ProjectInitOptions) -> Result<crate::Init
             editor_manifest: Some(options.directory.join(EDITOR_MANIFEST_PATH)),
         },
     })
+}
+
+fn preflight_project_init_destination(destination: &Path) -> Result<bool> {
+    let metadata = match fs::symlink_metadata(destination) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("failed to inspect project destination"),
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || fs::read_dir(destination)
+            .context("failed to inspect project destination")?
+            .next()
+            .is_some()
+    {
+        bail!("project destination must be absent or an empty real directory");
+    }
+    Ok(true)
+}
+
+fn stage_registry_project_init(
+    starter: &include_dir::Dir<'_>,
+    selected_starter: ProjectStarter,
+    staging: &Path,
+) -> Result<StagedProjectInit> {
+    copy_embedded_dir(starter, staging)?;
+    let project = load_registry_project(staging, None)?;
+    let provenance = project
+        .project
+        .starter
+        .as_ref()
+        .ok_or_else(|| anyhow!("embedded project starter is missing provenance"))?;
+    if provenance.id != selected_starter.id() {
+        bail!("embedded project starter provenance does not match the selected starter");
+    }
+    if provenance.content_digest != project.project_content_digest {
+        bail!("embedded project starter content digest is invalid");
+    }
+    setup_registry_project_editor(&ProjectEditorSetupOptions {
+        project_directory: staging.to_path_buf(),
+    })?;
+    Ok(StagedProjectInit {
+        project: project.project.registry.id.clone(),
+        starter_id: provenance.id.clone(),
+        starter_release: provenance.release.clone(),
+        starter_content_digest: provenance.content_digest.clone(),
+    })
+}
+
+fn publish_staged_project_into_existing(source: &Path, destination: &Path) -> Result<()> {
+    let mut entries = fs::read_dir(source)
+        .with_context(|| format!("failed to read staged project {}", source.display()))?
+        .collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let source_path = entry.path();
+        let target = destination.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path).with_context(|| {
+            format!("failed to inspect staged project path {}", source_path.display())
+        })?;
+        if metadata.file_type().is_symlink() {
+            bail!("staged project contains a forbidden symlink");
+        }
+        if metadata.is_dir() {
+            let mut builder = fs::DirBuilder::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt as _;
+                builder.mode(0o700);
+            }
+            builder.create(&target).with_context(|| {
+                format!("failed to create project directory {}", target.display())
+            })?;
+            publish_staged_project_into_existing(&source_path, &target)?;
+        } else if metadata.is_file() {
+            write_private_file(&target, &fs::read(&source_path)?).with_context(|| {
+                format!("failed to publish staged project file {}", target.display())
+            })?;
+        } else {
+            bail!("staged project contains an unsupported file type");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+fn rename_project_init_noreplace(source: &Path, destination: &Path) -> Result<()> {
+    rustix::fs::renameat_with(
+        rustix::fs::CWD,
+        source,
+        rustix::fs::CWD,
+        destination,
+        rustix::fs::RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
+    .context("failed to publish staged project without replacing an existing path")
+}
+
+#[cfg(windows)]
+fn rename_project_init_noreplace(source: &Path, destination: &Path) -> Result<()> {
+    fs::rename(source, destination)
+        .context("failed to publish staged project without replacing an existing path")
+}
+
+#[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
+fn rename_project_init_noreplace(_source: &Path, _destination: &Path) -> Result<()> {
+    bail!("atomic no-clobber project publication is unsupported on this platform")
+}
+
+#[cfg(test)]
+mod project_init_staging_tests {
+    use super::*;
+
+    fn options(directory: PathBuf) -> ProjectInitOptions {
+        ProjectInitOptions {
+            starter: ProjectStarter::Http,
+            directory,
+        }
+    }
+
+    fn inject_late_editor_failure() {
+        EDITOR_TEST_PUBLISH_FAILURE_AFTER.with(|remaining| remaining.set(Some(3)));
+    }
+
+    fn assert_no_staging_directories(parent: &Path) {
+        assert!(
+            fs::read_dir(parent)
+                .expect("project parent reads")
+                .all(|entry| !entry
+                    .expect("project parent entry reads")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".registry-stack-init.transaction-")),
+            "project initialization staging must be cleaned"
+        );
+    }
+
+    #[test]
+    fn late_editor_failure_leaves_absent_destination_untouched_and_retry_succeeds() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let destination = temporary.path().join("missing-parent/registry-project");
+        inject_late_editor_failure();
+
+        init_registry_project(&options(destination.clone()))
+            .expect_err("late editor publication failure must fail init");
+        assert!(!destination.exists());
+        assert_no_staging_directories(destination.parent().expect("destination parent"));
+
+        let report = init_registry_project(&options(destination.clone()))
+            .expect("retry after staged editor failure succeeds");
+        assert_eq!(report.status, "initialized");
+        assert!(destination.join(PROJECT_FILE).is_file());
+        assert!(destination.join(EDITOR_MANIFEST_PATH).is_file());
+    }
+
+    #[test]
+    fn late_editor_failure_leaves_preexisting_empty_destination_untouched() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let destination = temporary.path().join("registry-project");
+        fs::create_dir(&destination).expect("empty destination creates");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&destination, fs::Permissions::from_mode(0o750))
+                .expect("destination mode sets");
+        }
+        inject_late_editor_failure();
+
+        init_registry_project(&options(destination.clone()))
+            .expect_err("late editor publication failure must fail init");
+        assert!(destination.is_dir());
+        assert!(
+            fs::read_dir(&destination)
+                .expect("destination reads")
+                .next()
+                .is_none()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                fs::metadata(&destination)
+                    .expect("destination metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o750
+            );
+        }
+        assert_no_staging_directories(temporary.path());
+    }
 }
 
 fn starter_explanation(loaded: &LoadedRegistryProject) -> Value {
@@ -106,6 +315,7 @@ pub fn test_registry_project_selected(
         reports.push(execute_governed_live_test(&loaded)?);
     }
     Ok(ProjectCommandReport {
+        schema_version: PROJECT_COMMAND_REPORT_SCHEMA_VERSION,
         status: "passed",
         project: loaded.project.registry.id.clone(),
         environment: loaded.environment_name.clone(),
@@ -277,6 +487,7 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
             },
             signing_kid: "offline-fixture-key".to_string(),
             generation: 1,
+            algorithm: IssuanceSigningAlgorithm::default(),
         }),
         callers: if requires_notary {
             callers
@@ -737,6 +948,7 @@ pub fn check_registry_project(options: &ProjectCheckOptions) -> Result<ProjectCo
     let fixtures = execute_all_fixtures(&loaded, &compiled, None, None, false)?;
     require_passing_fixtures(&fixtures)?;
     Ok(ProjectCommandReport {
+        schema_version: PROJECT_COMMAND_REPORT_SCHEMA_VERSION,
         status: "valid",
         project: loaded.project.registry.id.clone(),
         environment: loaded.environment_name.clone(),
@@ -799,6 +1011,7 @@ fn build_registry_project_inner(
         .join(options.environment.as_str());
     write_compiled_project(&loaded.root, &output, &compiled, runtime_identity)?;
     Ok(ProjectCommandReport {
+        schema_version: PROJECT_COMMAND_REPORT_SCHEMA_VERSION,
         status: "built",
         project: loaded.project.registry.id.clone(),
         environment: loaded.environment_name.clone(),
@@ -819,17 +1032,17 @@ fn apply_local_tutorial_runtime_overrides(compiled: &mut CompiledProject) -> Res
         .notary_private
         .get_mut(Path::new("config/notary.yaml"))
         .ok_or_else(|| anyhow!("generated local Notary config is absent"))?;
-    let mut notary_config: serde_yaml::Value = serde_yaml::from_slice(notary)
+    let mut notary_config: serde_norway::Value = serde_norway::from_slice(notary)
         .context("generated local Notary config did not parse")?;
     notary_config["server"]["bind"] =
-        serde_yaml::Value::String("0.0.0.0:8081".to_string());
-    notary_config["state"] = serde_yaml::from_str("storage: in_memory\n")?;
-    notary_config["evidence"]["signing_keys"] = serde_yaml::from_str(&format!(
+        serde_norway::Value::String("0.0.0.0:8081".to_string());
+    notary_config["state"] = serde_norway::from_str("storage: in_memory\n")?;
+    notary_config["evidence"]["signing_keys"] = serde_norway::from_str(&format!(
         "relay-workload:\n  provider: local_jwk_env\n  private_jwk_env: {}\n  alg: EdDSA\n  kid: {}\n  status: active\n",
         super::NOTARY_RELAY_WORKLOAD_JWK_ENV,
         super::NOTARY_RELAY_WORKLOAD_KID,
     ))?;
-    *notary = serde_yaml::to_string(&notary_config)
+    *notary = serde_norway::to_string(&notary_config)
         .context("failed to render local Notary config")?
         .into_bytes()
         .into_boxed_slice();
@@ -838,15 +1051,15 @@ fn apply_local_tutorial_runtime_overrides(compiled: &mut CompiledProject) -> Res
         .relay_private
         .get_mut(Path::new("config/relay.yaml"))
         .ok_or_else(|| anyhow!("generated local consultation Relay config is absent"))?;
-    let mut relay_config: serde_yaml::Value = serde_yaml::from_slice(relay)
+    let mut relay_config: serde_norway::Value = serde_norway::from_slice(relay)
         .context("generated local consultation Relay config did not parse")?;
     relay_config["server"]["bind"] =
-        serde_yaml::Value::String("0.0.0.0:8082".to_string());
+        serde_norway::Value::String("0.0.0.0:8082".to_string());
     relay_config["auth"]["oidc"]["allow_dev_insecure_fetch_urls"] =
-        serde_yaml::Value::Bool(true);
+        serde_norway::Value::Bool(true);
     relay_config["consultation"]["state_plane"]["root_certificate_path"] =
-        serde_yaml::Value::String("/run/registry-tls/state-plane-ca.pem".to_string());
-    *relay = serde_yaml::to_string(&relay_config)
+        serde_norway::Value::String("/run/registry-tls/state-plane-ca.pem".to_string());
+    *relay = serde_norway::to_string(&relay_config)
         .context("failed to render local consultation Relay config")?
         .into_bytes()
         .into_boxed_slice();

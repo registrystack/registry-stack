@@ -426,7 +426,7 @@ def cmd_render_config(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     plan_map = load_plan_map(args.plan_map)
     scenario = find_scenario(plan_map, args.scenario)
-    if scenario.get("status") != "applicable" and not args.allow_blocked:
+    if scenario.get("status") not in {"applicable", "candidate-only"} and not args.allow_blocked:
         raise RunnerError(
             f"scenario {scenario['id']} is {scenario.get('status')}; "
             "pass --allow-blocked to run it anyway"

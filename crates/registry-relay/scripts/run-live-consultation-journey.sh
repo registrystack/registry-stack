@@ -279,7 +279,7 @@ if [[ "$product" == "rhai" ]]; then
     --volume "$HOME/.cargo/git:/usr/local/cargo/git" \
     --volume registry-relay-linux-target:/target \
     --workdir /workspace \
-    rust:1.95-bookworm \
+    rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 \
     sh -eu -c \
     'cp /live-postgres-ca/ca.crt /usr/local/share/ca-certificates/registry-live-source.crt
      update-ca-certificates >/dev/null 2>&1

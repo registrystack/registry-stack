@@ -9,16 +9,23 @@
 //! Run the harness with:
 //!   cargo nextest run -p registry-notary-server sd_jwt_vc_verifier_compat
 //! or:
-//!   cargo test -p registry-notary-server sd_jwt_vc_verifier_compat
+//!   cargo test -p registry-notary-server --test sd_jwt_vc_verifier_compat
 //!
 //! The harness requires no secret material and no network access.
 //! Fixtures are pre-generated synthetic material. Regenerate them with:
 //!   cargo run -p xtask -- gen-sd-jwt-vc-fixtures
+//! or regenerate only the deterministic 1.0 algorithm fixtures with:
+//!   cargo run -p xtask -- gen-oid4vci-algorithm-fixtures
 
 use std::path::Path;
+use std::time::Duration;
 
 use registry_notary_client::verifier::verify_sd_jwt_vc;
 use registry_notary_client::{HolderBindingPolicy, VerifyOptions};
+use registry_platform_crypto::{did_jwk_from_public_jwk, PrivateJwk};
+use registry_platform_oid4vci::{
+    validate_proof_jwt, ProofError, ProofIssuerPolicy, ProofValidationPolicy,
+};
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -122,6 +129,164 @@ fn valid_holder_bound_credential_verifies_with_required_kid_policy() {
         result.holder_key_id.as_deref(),
         Some(holder_did.as_str()),
         "holder_key_id must match the cnf.kid in the credential"
+    );
+}
+
+#[test]
+fn es256_credential_verifies_end_to_end_with_explicit_algorithm_policy() {
+    let compact = read_fixture("valid-es256.sd-jwt");
+    let meta = meta();
+    let holder_did = meta["holder_did"]
+        .as_str()
+        .expect("holder_did in meta")
+        .to_string();
+    let options = base_options()
+        .accepted_algorithms(["ES256"])
+        .holder_binding(HolderBindingPolicy::RequiredKid(holder_did.clone()));
+
+    let result = verify_sd_jwt_vc(&compact, &jwks(), &options)
+        .expect("ES256 issuer fixture must verify when explicitly accepted");
+
+    assert_eq!(result.algorithm, "ES256");
+    assert_eq!(
+        result.key_id,
+        meta["es256_key_id"].as_str().expect("es256_key_id in meta")
+    );
+    assert_eq!(result.holder_key_id.as_deref(), Some(holder_did.as_str()));
+    assert_eq!(result.disclosure_count, 0);
+}
+
+#[test]
+fn es256_credential_is_not_silently_enabled_by_the_default_verifier_policy() {
+    let err = verify_sd_jwt_vc(
+        &read_fixture("valid-es256.sd-jwt"),
+        &jwks(),
+        &base_options(),
+    )
+    .expect_err("ES256 must require an explicit verifier allow-list");
+
+    assert_eq!(err.code(), "algorithm.disallowed");
+}
+
+#[test]
+fn oid4vci_algorithm_profile_is_exact_and_narrow() {
+    let profile = read_fixture_json("algorithm-profile.json");
+    let configurations = &profile["credential_configurations"];
+
+    assert_eq!(
+        configurations["fixture_eddsa"],
+        serde_json::json!({
+            "credential_signing_alg_values_supported": ["EdDSA"],
+            "proof_signing_alg_values_supported": ["EdDSA"],
+            "cryptographic_binding_methods_supported": ["did:jwk"],
+            "fixture": "valid-holder-bound.sd-jwt",
+            "private_jwk_fixture": "issuer-eddsa-private.test.jwk.json"
+        })
+    );
+    assert_eq!(
+        configurations["fixture_es256"],
+        serde_json::json!({
+            "credential_signing_alg_values_supported": ["ES256"],
+            "proof_signing_alg_values_supported": ["EdDSA"],
+            "cryptographic_binding_methods_supported": ["did:jwk"],
+            "fixture": "valid-es256.sd-jwt",
+            "private_jwk_fixture": "issuer-es256-private.test.jwk.json"
+        })
+    );
+    assert_eq!(
+        profile["holder_proof"],
+        serde_json::json!({
+            "signing_alg_values_supported": ["EdDSA"],
+            "cryptographic_binding_methods_supported": ["did:jwk"],
+            "fixture": "holder-proof-eddsa.jwt",
+            "private_jwk_fixture": "holder-eddsa-private.test.jwk.json",
+            "unsupported_fixture": "holder-proof-es256-unsupported.jwt"
+        })
+    );
+    assert_eq!(
+        configurations
+            .as_object()
+            .expect("credential_configurations is an object")
+            .len(),
+        2,
+        "fixture profile must not imply additional credential algorithms"
+    );
+}
+
+#[test]
+fn algorithm_private_key_fixtures_match_public_metadata() {
+    let profile = read_fixture_json("algorithm-profile.json");
+    let jwks = jwks();
+    let public_keys = jwks["keys"].as_array().expect("JWKS keys is an array");
+
+    for configuration_id in ["fixture_eddsa", "fixture_es256"] {
+        let configuration = &profile["credential_configurations"][configuration_id];
+        let private_jwk = PrivateJwk::parse(&read_fixture(
+            configuration["private_jwk_fixture"]
+                .as_str()
+                .expect("private_jwk_fixture is configured"),
+        ))
+        .expect("private issuer fixture parses");
+        let public_jwk = serde_json::to_value(private_jwk.public()).expect("public JWK serialises");
+        let key_id = public_jwk["kid"].as_str().expect("public JWK has kid");
+        let published = public_keys
+            .iter()
+            .find(|key| key["kid"] == key_id)
+            .expect("issuer public JWK is published");
+
+        assert_eq!(&public_jwk, published);
+        assert!(
+            published.get("d").is_none(),
+            "JWKS must not expose private key material"
+        );
+    }
+
+    let holder_private = PrivateJwk::parse(&read_fixture(
+        profile["holder_proof"]["private_jwk_fixture"]
+            .as_str()
+            .expect("holder private_jwk_fixture is configured"),
+    ))
+    .expect("holder private fixture parses");
+    assert_eq!(
+        did_jwk_from_public_jwk(&holder_private.public()).expect("holder did:jwk encodes"),
+        meta()["holder_did"].as_str().expect("holder_did in meta")
+    );
+}
+
+#[test]
+fn eddsa_did_jwk_holder_proof_validates_and_es256_holder_proof_is_rejected() {
+    let profile = read_fixture_json("algorithm-profile.json");
+    let audience = profile["proof_audience"]
+        .as_str()
+        .expect("proof_audience in profile");
+    let nonce = profile["proof_nonce"]
+        .as_str()
+        .expect("proof_nonce in profile");
+    let policy = ProofValidationPolicy {
+        audience,
+        expected_nonce: Some(nonce),
+        issuer: ProofIssuerPolicy::Optional,
+        max_lifetime: Duration::from_secs(300),
+        future_skew: Duration::from_secs(30),
+        forbidden_holder_keys: &[],
+    };
+
+    let proof = validate_proof_jwt(&read_fixture("holder-proof-eddsa.jwt"), &policy, NOW_UNIX)
+        .expect("EdDSA did:jwk holder proof must validate");
+    assert_eq!(
+        proof.holder_id,
+        meta()["holder_did"].as_str().expect("holder_did in meta")
+    );
+    assert_eq!(proof.nonce.as_deref(), Some(nonce));
+
+    assert_eq!(
+        validate_proof_jwt(
+            &read_fixture("holder-proof-es256-unsupported.jwt"),
+            &policy,
+            NOW_UNIX,
+        ),
+        Err(ProofError::InvalidHeader),
+        "Registry Stack 1.0 must not accept ES256 holder proof"
     );
 }
 

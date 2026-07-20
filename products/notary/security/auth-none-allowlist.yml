@@ -26,10 +26,6 @@ allowed:
     reason: Public OID4VCI issuer metadata.
   - listener: public
     method: GET
-    path: /oid4vci/credential-offer
-    reason: Public OID4VCI credential offer endpoint.
-  - listener: public
-    method: GET
     path: /oid4vci/offer/start
     reason: Public OID4VCI pre-authorized-code browser start endpoint.
   - listener: public
@@ -40,10 +36,6 @@ allowed:
     method: POST
     path: /oid4vci/token
     reason: Public OID4VCI pre-authorized-code token endpoint with code, PIN, and route-local replay controls.
-  - listener: public
-    method: POST
-    path: /oid4vci/nonce
-    reason: Public OID4VCI nonce endpoint.
   - listener: public
     method: GET
     path: /credentials/{*vct_path}

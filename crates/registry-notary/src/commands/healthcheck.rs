@@ -17,26 +17,6 @@ pub(crate) async fn run_healthcheck(
     }
 }
 
-pub(crate) fn lightweight_schema() -> Value {
-    json!({
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Registry Notary standalone config",
-        "type": "object",
-        "required": ["auth", "evidence"],
-        "properties": {
-            "server": { "type": "object" },
-            "auth": { "type": "object" },
-            "audit": { "type": "object" },
-            "state": { "type": "object" },
-            "credential_status": { "type": "object" },
-            "subject_access": { "type": "object" },
-            "oid4vci": { "type": "object" },
-            "evidence": { "type": "object" },
-            "federation": { "type": "object" }
-        },
-        "additionalProperties": false
-    })
-}
 #[cfg(test)]
 #[path = "healthcheck/tests.rs"]
 mod tests;

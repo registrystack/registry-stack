@@ -329,38 +329,6 @@ class RegistryNotaryClient:
             error_kind="oid4vci",
         )
 
-    def oid4vci_credential_offer(
-        self,
-        credential_configuration_id: str | None = None,
-        *,
-        request_id: str | None = None,
-    ) -> dict[str, Any]:
-        path = "/oid4vci/credential-offer"
-        if credential_configuration_id is not None:
-            path = (
-                "/oid4vci/credential-offer?credential_configuration_id="
-                f"{quote(credential_configuration_id, safe='')}"
-            )
-        return self._decode_json_response(self._get(path, request_id=request_id), error_kind="oid4vci")
-
-    def oid4vci_nonce(
-        self,
-        request: Mapping[str, Any] | None = None,
-        *,
-        request_id: str | None = None,
-        traceparent: str | None = None,
-    ) -> dict[str, Any]:
-        response = self._post_json(
-            "/oid4vci/nonce",
-            request or {"credential_configuration_id": None},
-            purpose=None,
-            request_id=request_id,
-            traceparent=traceparent,
-            accept=JSON,
-            retry_kind="post_no_retry",
-        )
-        return self._decode_json_response(response, error_kind="oid4vci")
-
     def oid4vci_credential(
         self,
         request: Mapping[str, Any],

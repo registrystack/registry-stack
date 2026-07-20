@@ -16,6 +16,8 @@
                 audiences: vec!["registry-notary".to_string()],
                 token_type: "Bearer".to_string(),
                 credential_configuration_id: "identity_credential".to_string(),
+                issuance_transaction_id: "transaction-1".to_string(),
+                issuance_transaction_commitment: "commitment-1".to_string(),
                 subject: BoundSubject {
                     subject: "subject-1".to_string(),
                     subject_binding_claim: "civil_id".to_string(),
@@ -83,6 +85,8 @@
                 audiences: vec!["registry-notary".to_string()],
                 token_type: "Bearer".to_string(),
                 credential_configuration_id: "identity_credential".to_string(),
+                issuance_transaction_id: "transaction-2".to_string(),
+                issuance_transaction_commitment: "commitment-2".to_string(),
                 subject: BoundSubject {
                     subject: "subject-1".to_string(),
                     subject_binding_claim: "civil_id".to_string(),

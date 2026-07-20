@@ -9,7 +9,7 @@ source_repos:
   - registry-platform
   - registry-manifest
   - registry-notary
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-07-19"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -39,11 +39,27 @@ standards_referenced:
 ---
 
 import StandardsTable from '../../../components/StandardsTable.astro';
+import RelaySupportRoster from '../../../components/RelaySupportRoster.astro';
 
 This register lists every standard the registry stack touches, the projects that touch it, and the claim level that names how strong the relationship is. The registry stack does not introduce a new standard; each project emits, maps to, or aligns with existing ones, and says so explicitly.
 
 The table is generated from `src/data/standards.yaml`.
 For selected external validator results, see [ITB and SEMIC evidence](../itb-semic-evidence/).
+
+## Registry Relay 1.0 support roster
+
+Registry Relay's 1.0 compatibility promise covers the stable surfaces in this roster.
+Experimental surfaces are outside that promise and feature-frozen: maintainers keep their source
+and tests, but do not expand them without a separately reviewed support decision.
+Non-feature-gated experimental formats remain shipped and unstable because adding a gate for 1.0
+would break existing configurations.
+
+The stable link-free OGC Records metadata artifacts are separate from the experimental live OGC
+API Records adapter.
+CSV, XLSX, and Parquet are source decoders.
+Aggregate output supports JSON, CSV, and SDMX-JSON, with only JSON stable for 1.0.
+
+<RelaySupportRoster />
 
 ## Register
 

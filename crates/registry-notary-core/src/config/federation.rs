@@ -7,7 +7,7 @@ pub const FEDERATION_PROTOCOL_V0_1: &str = "registry-notary-federation/v0.1";
 pub const FEDERATION_REQUEST_JWT_TYP: &str = "registry-notary-request+jwt";
 pub const FEDERATION_RESPONSE_JWT_TYP: &str = "registry-notary-response+jwt";
 pub const FEDERATION_SIGNING_ALG_EDDSA: &str = "EdDSA";
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FederationConfig {
     #[serde(default)]
@@ -229,20 +229,20 @@ impl FederationConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FederationSigningConfig {
     pub signing_key: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FederationPairwiseSubjectHashConfig {
     #[serde(default)]
     pub secret_env: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FederationResponseShapingConfig {
     #[serde(default = "default_minimum_denial_latency_ms")]
@@ -261,7 +261,7 @@ pub(super) const fn default_minimum_denial_latency_ms() -> u64 {
     250
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FederationEmergencyDenylistConfig {
     #[serde(default)]
@@ -270,7 +270,7 @@ pub struct FederationEmergencyDenylistConfig {
     pub kids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FederationPeerConfig {
     pub node_id: String,
@@ -290,7 +290,7 @@ pub struct FederationPeerConfig {
     pub evaluation_scopes: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FederationEvaluationProfileConfig {
     pub id: String,

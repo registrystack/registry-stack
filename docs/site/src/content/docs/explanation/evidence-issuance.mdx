@@ -93,7 +93,8 @@ evaluation, or receipt.
        alt="Four transports for a claim evaluation, sharing one claim model. (1) Direct API:
             a backend calls /v1/evaluations; pair with /v1/credentials to mint an SD-JWT
             VC. (2) OID4VCI offer: a wallet caller discovers the issuer via /.well-known and
-            completes a nonce-bound flow at /oid4vci/credential. (3) Receipt only: a backend
+            redeems an issuer-initiated pre-authorized offer, then presents a
+            transaction-bound holder proof at /oid4vci/credential. (3) Receipt only: a backend
             calls /v1/evaluations and stores the audit-stamped result; no credential is
             issued. (4) Federated: a peer Notary posts a signed JWT to
             /federation/v1/evaluations and receives a signed JWT response." />
@@ -104,22 +105,19 @@ evaluation, or receipt.
    is a backend (a program registry, a benefits portal) that holds a Registry Notary API key or
    an OIDC token. The credential ends up wherever the calling backend chooses to send it.
 2. OID4VCI offer flow. The caller is a wallet, not a backend. Registry Notary publishes
-   `/.well-known/openid-credential-issuer` so the wallet learns the credential endpoint, the
-   nonce endpoint, and the supported credential configurations. The wallet (or a portal acting on
-   the wallet's behalf) fetches a `CredentialOffer` from `GET /oid4vci/credential-offer`, the
-   user authenticates at the configured authorization server, the wallet calls
-   `POST /oid4vci/nonce` to get a `c_nonce`, signs a proof-of-possession JWT with its `did:jwk`
-   key, and posts the bearer access token plus the proof to `POST /oid4vci/credential`. The
-   choreography is implemented in the Notary server's API module at
-   [`crates/registry-notary-server/src/api.rs`](https://github.com/registrystack/registry-stack/blob/v0.8.1/crates/registry-notary-server/src/api.rs).
-   The offer can carry an authorization-code grant (the user authenticates at the authorization
-   server, as in the authorization-code grant) or a pre-authorized-code grant; the hosted lab uses pre-authorized-code with
-   eSignet (an open-source identity and e-signature platform) as the authorization server.
-   Direct and OID4VCI issuance accept only newly stored, non-delegated
-   evaluations that retain exact claim pins and normalized unique Relay
-   execution records for every selected root's registry-backed dependency
-   closure. Source-free and delegated evaluations cannot enter either
-   credential path.
+   `/.well-known/openid-credential-issuer` so the wallet learns the token and
+   credential endpoints and supported configurations. The citizen opens
+   `/oid4vci/offer/start` in a browser and authenticates at the configured
+   identity provider. Notary consumes that internal authorization code, derives
+   the subject binding, creates the registry transaction, executes the
+   compiler-pinned Relay consultation, and only then renders an
+   issuer-initiated pre-authorized offer. The wallet redeems that offer, receives
+   a transaction-bound proof nonce from the token response, signs an EdDSA proof
+   with its `did:jwk` key, and posts the Notary access token plus proof to
+   `POST /oid4vci/credential`. The wallet-facing grant is pre-authorized code
+   only. Source-free and delegated evaluations cannot enter the credential
+   path. Transaction code is required by default; an explicit no-PIN wallet
+   profile has a maximum 300-second bearer-offer window.
 3. Verifiable receipt only. The caller does not need a credential at all. It calls
    `POST /v1/evaluations`, accepts the disclosure mode the claim allows (often `predicate` or
    `redacted`), and stores the audit-stamped result. Every evaluation, credential or not, is
@@ -155,6 +153,11 @@ Three mechanics make selective disclosure work.
   binds with `did:jwk`, and issuing an unbound, bearer-style credential requires an explicit
   `holder_binding.mode: none`. This has been the default since v0.8.4, and `registry-notary doctor`
   warns on a profile that opts out (`notary.credential_profile.unbound_holder_binding`).
+- Live status outside selective disclosure. When a credential contains a
+  `status.status_list` claim, that top-level claim is always visible. A verifier
+  retrieves the signed status token only from its exact configured HTTPS trusted
+  origin and fails closed when status is unavailable, invalid, suspended,
+  revoked, or expired.
 
 Evidence: the [v0.8.4 Notary changelog](https://github.com/registrystack/registry-stack/blob/v0.8.4/products/notary/CHANGELOG.md#084---2026-07-04) records the default, and the [configuration loader](https://github.com/registrystack/registry-stack/blob/v0.8.4/crates/registry-notary-core/src/config.rs) applies it.
 

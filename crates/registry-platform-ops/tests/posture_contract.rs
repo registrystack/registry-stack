@@ -70,9 +70,36 @@ fn posture_examples_and_redaction_fixtures_validate() {
         registry_platform_ops::NOTARY_POSTURE_EXAMPLE_V1,
         registry_platform_ops::DEFAULT_REDACTED_POSTURE_FIXTURE_V1,
         registry_platform_ops::RESTRICTED_POSTURE_FIXTURE_V1,
+        registry_platform_ops::RELAY_RESTRICTED_POSTURE_FIXTURE_V1,
     ] {
         assert_valid(&validator, &parse(fixture));
     }
+}
+
+#[test]
+fn relay_refresh_health_is_restricted_and_schema_valid() {
+    let validator = posture_validator();
+    let restricted = parse(registry_platform_ops::RELAY_RESTRICTED_POSTURE_FIXTURE_V1);
+    assert_valid(&validator, &restricted);
+    assert_eq!(
+        restricted["relay"]["refresh_health"][0]["consecutive_refresh_failures"],
+        3
+    );
+    assert_eq!(
+        restricted["relay"]["refresh_health"][0]["serving_last_good"],
+        true
+    );
+
+    let default = registry_platform_ops::filter_posture_for_tier(
+        restricted,
+        registry_platform_ops::PostureTier::Default,
+    )
+    .expect("restricted Relay posture filters to default");
+    assert_valid(&validator, &default);
+    assert!(
+        default["relay"].get("refresh_health").is_none(),
+        "per-resource refresh health must stay out of the default tier"
+    );
 }
 
 #[test]

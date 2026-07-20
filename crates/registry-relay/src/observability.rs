@@ -249,6 +249,10 @@ fn render_readiness(readiness: Option<&ReadinessSnapshot>, out: &mut String) {
     out.push_str("# TYPE registry_relay_readiness_unresolved_entities gauge\n");
     out.push_str("# HELP registry_relay_readiness_fully_ready Whether all resources are ready and all entities are resolved, as 0 or 1.\n");
     out.push_str("# TYPE registry_relay_readiness_fully_ready gauge\n");
+    out.push_str("# HELP registry_relay_ingest_consecutive_refresh_failures Consecutive failed refresh attempts since the last successful data load or unchanged metadata poll.\n");
+    out.push_str("# TYPE registry_relay_ingest_consecutive_refresh_failures gauge\n");
+    out.push_str("# HELP registry_relay_ingest_last_successful_refresh_timestamp_seconds Unix timestamp of the last successful data load.\n");
+    out.push_str("# TYPE registry_relay_ingest_last_successful_refresh_timestamp_seconds gauge\n");
 
     let (ready, not_ready, failed, unresolved, fully_ready) =
         readiness.map_or((0, 0, 0, 0, 0), |snapshot| {
@@ -270,6 +274,27 @@ fn render_readiness(readiness: Option<&ReadinessSnapshot>, out: &mut String) {
         ready, not_ready, failed, unresolved, fully_ready
     )
     .expect("write to String cannot fail");
+
+    if let Some(snapshot) = readiness {
+        for ((dataset_id, resource_id), resource) in &snapshot.ready {
+            writeln!(
+                out,
+                "registry_relay_ingest_consecutive_refresh_failures{{dataset_id=\"{}\",resource_id=\"{}\"}} {}",
+                escape_label(dataset_id.as_str()),
+                escape_label(resource_id.as_str()),
+                resource.consecutive_refresh_failures,
+            )
+            .expect("write to String cannot fail");
+            writeln!(
+                out,
+                "registry_relay_ingest_last_successful_refresh_timestamp_seconds{{dataset_id=\"{}\",resource_id=\"{}\"}} {}",
+                escape_label(dataset_id.as_str()),
+                escape_label(resource_id.as_str()),
+                resource.registered_at.unix_timestamp(),
+            )
+            .expect("write to String cannot fail");
+        }
+    }
 }
 
 fn method_label(method: &str) -> &'static str {

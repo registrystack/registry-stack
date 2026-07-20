@@ -104,7 +104,9 @@ pub(super) async fn credential_status_list_response(
     let cache_expires_at =
         status_list_jwt_cache_expires_at(record, &effective_status, token_expires_at);
     let payload = json!({
+        "iss": record.issuer,
         "sub": status_url,
+        "aud": status_url,
         "iat": now.unix_timestamp(),
         "exp": token_expires_at.unix_timestamp(),
         "ttl": ttl_seconds,
@@ -207,7 +209,7 @@ pub(super) fn status_list_jwt_cache_key(
         "typ": "statuslist+jwt",
         "issuer": record.issuer,
         "issuer_public_jwk_sha256": public_jwk_hash,
-        "audience": Value::Null,
+        "audience": status_url,
         "credential_id": record.credential_id,
         "credential_profile": record.credential_profile,
         "status_url": status_url,

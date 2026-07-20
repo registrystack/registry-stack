@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""Enforce the Debian 13 boundary for maintained Registry Stack images."""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+RUST_BUILDER = (
+    "rust:1.95-trixie@sha256:"
+    "f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3"
+)
+DEBIAN_PREPARATION = (
+    "debian:trixie-slim@sha256:"
+    "020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd"
+)
+DISTROLESS_RUNTIME = (
+    "gcr.io/distroless/cc-debian13:nonroot@sha256:"
+    "d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775"
+)
+
+DOCKERFILES = (
+    Path("crates/registry-relay/Dockerfile"),
+    Path("crates/registry-relay/Dockerfile.demo"),
+    Path("products/notary/Dockerfile"),
+    Path("release/docker/Dockerfile.registry-notary"),
+    Path("release/docker/Dockerfile.registry-relay"),
+)
+
+# These are the maintained image and image-policy surfaces. Historical release
+# notes are immutable evidence and intentionally are not rewritten by this gate.
+MAINTAINED_TEXT_PATHS = DOCKERFILES + (
+    Path(".github/workflows/release.yml"),
+    Path("crates/registry-relay/docs/ops.md"),
+    Path("crates/registry-relay/docs/security-assurance.md"),
+    Path("crates/registry-relay/scripts/check_docker_build_contract.py"),
+    Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
+    Path("products/notary/docs/security-assurance.md"),
+)
+
+RUST_BUILDER_DOCKERFILES = DOCKERFILES[:3]
+PREPARATION_DOCKERFILES = DOCKERFILES[3:]
+RELAY_DOCKERFILES = (
+    Path("crates/registry-relay/Dockerfile"),
+    Path("crates/registry-relay/Dockerfile.demo"),
+    Path("release/docker/Dockerfile.registry-relay"),
+)
+NOTARY_DOCKERFILES = (
+    Path("products/notary/Dockerfile"),
+    Path("release/docker/Dockerfile.registry-notary"),
+)
+
+FROM_RE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", re.MULTILINE)
+DIGEST_PIN_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+
+
+def read(root: Path, relative: Path, failures: list[str]) -> str:
+    path = root / relative
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        failures.append(f"missing maintained image surface: {relative}")
+        return ""
+
+
+def require(
+    text: str,
+    needle: str,
+    relative: Path,
+    detail: str,
+    failures: list[str],
+) -> None:
+    if needle not in text:
+        failures.append(f"{relative}: missing {detail}: {needle!r}")
+
+
+def runtime_stage(text: str) -> str:
+    marker = f"FROM {DISTROLESS_RUNTIME} AS runtime"
+    offset = text.find(marker)
+    return text[offset:] if offset >= 0 else ""
+
+
+def check_repository(root: Path = ROOT) -> list[str]:
+    failures: list[str] = []
+    texts = {
+        relative: read(root, relative, failures)
+        for relative in MAINTAINED_TEXT_PATHS
+    }
+
+    retired_markers = ("book" + "worm", "debian" + "12")
+    for relative, text in texts.items():
+        lowered = text.casefold()
+        for marker in retired_markers:
+            if marker in lowered:
+                failures.append(
+                    f"{relative}: retired Debian image generation marker remains: {marker}"
+                )
+
+    for relative in DOCKERFILES:
+        text = texts[relative]
+        bases = FROM_RE.findall(text)
+        if not bases:
+            failures.append(f"{relative}: no FROM instruction found")
+            continue
+        for base in bases:
+            if not DIGEST_PIN_RE.search(base):
+                failures.append(
+                    f"{relative}: upstream base is not pinned by immutable digest: {base}"
+                )
+
+        require(
+            text,
+            f"FROM {DISTROLESS_RUNTIME} AS runtime",
+            relative,
+            "Distroless Debian 13 non-root final runtime",
+            failures,
+        )
+        runtime = runtime_stage(text)
+        for forbidden in ("\nRUN ", "apt-get", "/bin/sh", "curl ", "wget "):
+            if forbidden in runtime:
+                failures.append(
+                    f"{relative}: final Distroless runtime contains {forbidden.strip()!r}"
+                )
+        require(
+            runtime,
+            "HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3",
+            relative,
+            "binary healthcheck",
+            failures,
+        )
+
+    for relative in RUST_BUILDER_DOCKERFILES:
+        require(
+            texts[relative],
+            f"FROM {RUST_BUILDER} AS builder",
+            relative,
+            "pinned Debian 13 Rust builder",
+            failures,
+        )
+
+    for relative in PREPARATION_DOCKERFILES:
+        require(
+            texts[relative],
+            f"FROM {DEBIAN_PREPARATION} AS runtime-root",
+            relative,
+            "pinned Debian 13 runtime preparation base",
+            failures,
+        )
+
+    for relative in RELAY_DOCKERFILES:
+        text = texts[relative]
+        require(
+            text,
+            "/usr/local/bin/registry-relay-rhai-worker",
+            relative,
+            "Relay worker binary",
+            failures,
+        )
+        require(
+            runtime_stage(text),
+            'ENTRYPOINT ["/usr/local/bin/registry-relay"]',
+            relative,
+            "absolute Relay entrypoint",
+            failures,
+        )
+
+    product_notary = texts[Path("products/notary/Dockerfile")]
+    require(
+        product_notary,
+        'ARG REGISTRY_NOTARY_FEATURES="registry-notary-cel,pkcs11"',
+        Path("products/notary/Dockerfile"),
+        "PKCS#11-enabled product build",
+        failures,
+    )
+    for relative in NOTARY_DOCKERFILES:
+        text = texts[relative]
+        require(
+            text,
+            "registry-notary-cel-worker",
+            relative,
+            "Notary CEL worker binary",
+            failures,
+        )
+        require(
+            runtime_stage(text),
+            'ENTRYPOINT ["/usr/local/bin/registry-notary"]',
+            relative,
+            "absolute Notary entrypoint",
+            failures,
+        )
+        require(
+            runtime_stage(text),
+            "--chown=65532:65532 /workspace/runtime-root/ /",
+            relative,
+            "numeric nonroot-owned Notary runtime directories",
+            failures,
+        )
+        require(
+            runtime_stage(text),
+            "WORKDIR /var/lib/registry-notary",
+            relative,
+            "Notary working directory",
+            failures,
+        )
+        if re.search(
+            r"^\s*(?:COPY|ADD)\b[^\n]*(?:\.so\b|pkcs11[^/\s]*module)",
+            text,
+            re.IGNORECASE | re.MULTILINE,
+        ):
+            failures.append(
+                f"{relative}: vendor PKCS#11 modules must remain external read-only mounts"
+            )
+
+    workflow = texts[Path(".github/workflows/release.yml")]
+    require(
+        workflow,
+        f"RELEASE_BUILDER_IMAGE: {RUST_BUILDER}",
+        Path(".github/workflows/release.yml"),
+        "pinned Debian 13 release builder",
+        failures,
+    )
+    require(
+        workflow,
+        "--features registry-notary/registry-notary-cel,registry-notary/pkcs11",
+        Path(".github/workflows/release.yml"),
+        "PKCS#11-enabled release build",
+        failures,
+    )
+
+    live_journey = texts[
+        Path("crates/registry-relay/scripts/run-live-consultation-journey.sh")
+    ]
+    require(
+        live_journey,
+        RUST_BUILDER,
+        Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
+        "pinned Debian 13 live-journey builder",
+        failures,
+    )
+
+    return failures
+
+
+def main() -> int:
+    failures = check_repository()
+    if failures:
+        print("Debian 13 image contract check failed:", file=sys.stderr)
+        for failure in failures:
+            print(f"- {failure}", file=sys.stderr)
+        return 1
+    print("Debian 13 image contract check passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

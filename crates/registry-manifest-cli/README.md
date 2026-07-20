@@ -4,31 +4,32 @@ Command-line validation, rendering, static publication, and profile fixture
 validation for Registry Manifest.
 
 The binary name is `registry-manifest`.
+Run the commands below from the monorepo root.
 
 ## Commands
 
 Validate a metadata manifest:
 
 ```sh
-cargo run -p registry-manifest-cli -- validate profiles/example-civil-registration/fixtures/metadata.yaml
+cargo run -p registry-manifest-cli -- validate products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml
 ```
 
 Render one artifact:
 
 ```sh
-cargo run -p registry-manifest-cli -- render profiles/example-civil-registration/fixtures/metadata.yaml --format catalog
+cargo run -p registry-manifest-cli -- render products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml --format catalog
 ```
 
 Render a service-form JSON Schema:
 
 ```sh
-cargo run -p registry-manifest-cli -- render fixtures/cpsv-ap/health-linked-child-support.metadata.yaml --format form-json-schema --form child-support-review-form
+cargo run -p registry-manifest-cli -- render products/manifest/fixtures/cpsv-ap/health-linked-child-support.metadata.yaml --format form-json-schema --form child-support-review-form
 ```
 
 Publish a static metadata directory:
 
 ```sh
-cargo run -p registry-manifest-cli -- publish profiles/example-civil-registration/fixtures/metadata.yaml --out target/metadata/public
+cargo run -p registry-manifest-cli -- publish products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml --out target/metadata/public
 ```
 
 By default, publishing writes every artifact, including `.well-known/api-catalog`
@@ -45,7 +46,7 @@ itself (for example, when `--out` points at `/srv/site/metadata-public/`), pass
 `--site-root` so the discovery files land at the URL root:
 
 ```sh
-cargo run -p registry-manifest-cli -- publish profiles/example-civil-registration/fixtures/metadata.yaml \
+cargo run -p registry-manifest-cli -- publish products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml \
     --out /srv/site/metadata-public \
     --site-root /srv/site
 ```
@@ -57,14 +58,14 @@ outside `--out` (or `SITE`, when set).
 Validate all checked-in profile descriptors and fixtures:
 
 ```sh
-cargo run -p registry-manifest-cli -- validate-profiles profiles
+cargo run -p registry-manifest-cli -- validate-profiles products/manifest/profiles
 ```
 
 Run the commons contract-kernel check, optionally with consumer manifests:
 
 ```sh
 SOLMARA_LAB_DIR=/path/to/solmara-lab
-scripts/check-contract-kernel.sh \
+products/manifest/scripts/check-contract-kernel.sh \
   "$SOLMARA_LAB_DIR/metadata/solmara-wave1.metadata.yaml"
 ```
 

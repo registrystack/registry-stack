@@ -298,6 +298,7 @@ async fn try_server_with_config(
         ReadyResource {
             ingest_ulid,
             registered_at: time::OffsetDateTime::now_utc(),
+            consecutive_refresh_failures: 0,
         },
     );
     let (_tx, readiness) = watch::channel(snapshot);
@@ -1835,6 +1836,7 @@ mod full_stack {
             ReadyResource {
                 ingest_ulid,
                 registered_at: time::OffsetDateTime::now_utc(),
+                consecutive_refresh_failures: 0,
             },
         );
         let (_readiness_tx, readiness) = watch::channel(snapshot);

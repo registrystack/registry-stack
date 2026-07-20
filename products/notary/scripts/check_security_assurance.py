@@ -837,6 +837,45 @@ def check_dockerfile_secret_patterns() -> None:
                 fail(f"{path.name}:{lineno} may copy secret or private JWK material")
 
 
+def check_container_runtime_contract() -> None:
+    path = ROOT / "Dockerfile"
+    if not path.is_file():
+        fail(f"missing required Dockerfile: {path.relative_to(ROOT)}")
+    text = path.read_text(encoding="utf-8")
+    runtime_base = "gcr.io/distroless/cc-debian13:nonroot@sha256:"
+    marker = f"FROM {runtime_base}"
+    marker_at = text.find(marker)
+    if marker_at < 0:
+        fail("Dockerfile must use the pinned Distroless Debian 13 nonroot runtime")
+    runtime = text[marker_at:]
+    first_line = runtime.splitlines()[0]
+    if not re.fullmatch(
+        r"FROM gcr\.io/distroless/cc-debian13:nonroot@sha256:[0-9a-f]{64} AS runtime",
+        first_line,
+    ):
+        fail("Dockerfile runtime base must use an immutable Distroless image digest")
+    required = (
+        'ARG REGISTRY_NOTARY_FEATURES="registry-notary-cel,pkcs11"',
+        'HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/registry-notary", "healthcheck"]',
+        'ENTRYPOINT ["/usr/local/bin/registry-notary"]',
+        "COPY --from=builder --chown=65532:65532 /workspace/runtime-root/ /",
+        "WORKDIR /var/lib/registry-notary",
+        "registry-notary-cel-worker",
+    )
+    for needle in required:
+        if needle not in text:
+            fail(f"Dockerfile is missing container runtime contract: {needle}")
+    for forbidden in ("\nRUN ", "apt-get", "/bin/sh", "curl ", "wget "):
+        if forbidden in runtime:
+            fail(f"Dockerfile final runtime contains forbidden dependency: {forbidden.strip()}")
+    if re.search(
+        r"^\s*(?:COPY|ADD)\b[^\n]*(?:\.so\b|pkcs11[^/\s]*module)",
+        text,
+        re.IGNORECASE | re.MULTILINE,
+    ):
+        fail("vendor PKCS#11 modules must remain external read-only mounts")
+
+
 def check_openapi_baseline() -> None:
     baseline = ROOT / "openapi" / "registry-notary.openapi.json"
     if not baseline.exists():
@@ -935,6 +974,7 @@ def main() -> None:
             "manifest",
             "route-sources",
             "dockerfile-secrets",
+            "container-runtime",
             "openapi-baseline",
             "openapi-coverage",
         ],
@@ -944,6 +984,7 @@ def main() -> None:
     checks = args.checks or [
         "manifest",
         "dockerfile-secrets",
+        "container-runtime",
         "openapi-baseline",
     ]
     if "manifest" in checks:
@@ -952,6 +993,8 @@ def main() -> None:
         validate_route_sources()
     if "dockerfile-secrets" in checks:
         check_dockerfile_secret_patterns()
+    if "container-runtime" in checks:
+        check_container_runtime_contract()
     if "openapi-baseline" in checks:
         check_openapi_baseline()
     if "openapi-coverage" in checks:

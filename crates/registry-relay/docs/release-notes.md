@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.12.0
+
+- Relay now surfaces per-resource last-good refresh health through protected
+  Prometheus gauges and restricted admin posture. Failed refreshes preserve a
+  valid last-good table and `/ready` remains healthy, while consecutive failure
+  counts and the last successful data-load timestamp support operator alerts.
+- The 1.0 support roster now treats OpenAPI 3.x and RFC 9457, RFC 9727 and the
+  portable metadata family, CSV and XLSX source input, and JSON aggregate output
+  as stable. Live OGC adapters, SP DCI routes, standards-CEL mapping, CSV and
+  SDMX-JSON aggregate output, attribute release, and Parquet source input are
+  experimental and feature-frozen. Feature-gated experimental adapters are
+  excluded from the canonical release binary while their source and all-feature
+  tests remain available. Non-feature-gated experimental formats remain shipped
+  but outside the 1.0 compatibility promise.
+- Maintained Relay runtime images now use Debian 13. Release checks enforce the
+  expected base and vulnerability policy before publication.
+
 ## 0.11.0
 
 - BREAKING: Configuration `${VAR}` expansion now rejects environment variables

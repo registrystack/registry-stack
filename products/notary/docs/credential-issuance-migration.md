@@ -7,6 +7,18 @@ selected claims were produced by fresh, exact compiler-pinned Registry Relay
 consultations. This applies to `POST /v1/credentials` and
 `POST /oid4vci/credential`.
 
+The OID4VCI surface also changes to issuer-initiated pre-authorized code only.
+Remove integrations that call the former credential-offer or public nonce
+routes, or that treat an identity-provider authorization code as a wallet
+grant. The corresponding Rust `oid4vci_credential_offer` and `oid4vci_nonce`,
+Node.js `oid4vciCredentialOffer` and `oid4vciNonce`, and Python
+`oid4vci_credential_offer` and `oid4vci_nonce` client helpers are also removed.
+Start the browser journey at `GET /oid4vci/offer/start`, import the offer
+rendered after the callback, redeem its pre-authorized code at
+`POST /oid4vci/token`, and use the proof nonce from that token response. The
+issuer metadata no longer contains `nonce_endpoint`, and the credential
+response no longer returns a next nonce.
+
 ## Configuration changes
 
 Before upgrading, inspect every credential profile, every
@@ -58,9 +70,11 @@ that root's closure. Missing, duplicate, extra, stale, or modified claim pins or
 execution records are denied before signer access, signing, credential
 identifiers, or status writes.
 Direct issuance performs this check before holder-proof replay mutation. The
-OID4VCI path rejects a source-free credential configuration before nonce
-consumption, then preserves its nonce-before-evaluation ordering and verifies
-the newly stored evaluation before signer access.
+OID4VCI callback creates the registry-backed transaction and completes the
+Relay evaluation before it renders an offer. The credential endpoint rejects a
+source-free configuration, consumes the transaction-bound proof nonce, reloads
+the stored transaction and evaluation, and verifies exact provenance before
+signer access.
 
 The execution binding detects partial stored-record mutation, including a
 changed acquisition time or consultation ids swapped between claims. It is not
@@ -82,7 +96,9 @@ change.
 3. Deploy compatible Relay and Notary configuration from one project
    generation.
 4. Re-evaluate claims used by in-progress credential journeys.
-5. Exercise both direct and OID4VCI issuance and confirm the Relay receives the
+5. Replace wallet authorization-code, public nonce, and next-nonce assumptions
+   with the pre-authorized transaction flow.
+6. Exercise both direct and OID4VCI issuance and confirm the Relay receives the
    exact configured profile, purpose, and contract hash.
 
 Do not copy provenance from an old evaluation or retry with an edited stored

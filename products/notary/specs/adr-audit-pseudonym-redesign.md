@@ -50,7 +50,7 @@ normalization rules were used.
 | Domain id | Event use | Purpose |
 | --- | --- | --- |
 | `matched-reference-v1` | routine successful or policy-denied evaluations after a provider match | Link audit events for the same matched requester or target within the same purpose scope without exposing source identifiers. |
-| `matching-attempt-v1` | optional no-match repeat-probe detection | Short-lived, purpose-scoped correlation of failed matching attempts when explicitly enabled by deployment policy. |
+| `matching-attempt-v1` | failed evaluation attempts | Purpose-scoped correlation of failed matching attempts without retaining raw identifiers. |
 | `investigation-reference-v1` | elevated investigation or abuse-response events | Separately authorized handle for incident review, never emitted by routine evaluation paths. |
 
 The platform hash primitive frames the HMAC input as:
@@ -83,10 +83,10 @@ entity being pseudonymized, the canonical object is:
 }
 ```
 
-The raw-identifier-array path is the `matching-attempt-v1` class. It is used
-only for optional repeat-probe detection and produces no durable pseudonym: the
-matching-attempt hasher derives the canonical input but returns no pseudonym
-value, so no long-lived handle is emitted from raw target attributes.
+The raw-identifier-array path is the `matching-attempt-v1` class. It produces a
+purpose-scoped keyed pseudonym for a failed attempt when the request contains a
+target or requester identifier. The canonical input exists only in memory and
+the serialized audit record contains only the HMAC result.
 
 Canonicalization rules:
 
@@ -107,26 +107,18 @@ Canonicalization rules:
   identifiers must never appear in serialized audit events or logs. They may
   appear only inside the in-memory HMAC input during pseudonym generation.
 
-### No-Match Behavior
+### Failed-Attempt Behavior
 
-Pure no-match failures do not emit a durable attribute-derived entity
-pseudonym. Routine no-match audit events record request metadata, profile,
-purpose, requester authentication context, match status, and redacted failure
-reason only.
+Failed single and batch evaluation attempts use `matching-attempt-v1` when the
+request includes a target or requester identifier. The pseudonym is scoped by
+role, entity type, and purpose, and uses a separate domain from matched
+references. An entity without a usable identifier produces no pseudonym.
 
-If a deployment needs repeat-probe detection, it must explicitly enable the
-`matching-attempt-v1` domain with all of these controls:
-
-- a dedicated matching-attempt key distinct from the routine audit key;
-- retention no longer than the configured abuse-detection window;
-- purpose scope included in the canonical input;
-- no federation handle, matched-reference pseudonym, or investigation
-  pseudonym derived from the same no-match input;
-- operator documentation that the handle is for abuse detection, not subject
-  identity.
-
-If repeat-probe correlation is disabled, no no-match event contains a
-long-lived pseudonym derived from target attributes.
+Routine audit records include request metadata, purpose, authentication
+context, value-free outcome and error codes, and the keyed pseudonym. They do
+not include raw identifiers, claim values, consultation inputs, or consultation
+outputs. The pseudonym is an audit correlation handle, not subject identity and
+not an input to federation or investigation handles.
 
 ### Retention, Key Rotation, And Erasure
 
@@ -139,8 +131,8 @@ Retention classes:
 
 - `matched-reference-v1`: follows the routine audit retention period for the
   deployment and purpose scope.
-- `matching-attempt-v1`: expires at the shorter of the routine audit retention
-  period or the configured abuse-detection window.
+- `matching-attempt-v1`: follows the routine audit retention period for the
+  deployment and purpose scope.
 - `investigation-reference-v1`: expires under the case or legal-hold policy
   that authorized the investigation event. When no legal hold exists, it must
   not outlive routine audit retention.
@@ -181,8 +173,8 @@ different, non-interchangeable values for federation and audit.
 
 - Implementations get deterministic matched-reference audit correlation without
   retaining raw identifiers.
-- No-match events are private by default and require an explicit short-lived
-  abuse-detection configuration before any attribute-derived handle is emitted.
+- Failed-attempt events remain value-free while supporting purpose-scoped
+  correlation through a distinct keyed pseudonym domain.
 - Operators must manage audit pseudonym keys as retention and erasure controls,
   not only as generic application secrets.
 - Federation remains aligned with the pairwise subject hash design while

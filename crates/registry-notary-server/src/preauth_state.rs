@@ -12,6 +12,8 @@ use std::{
 };
 
 use registry_platform_replay::ReplayScope;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
@@ -23,6 +25,67 @@ use crate::{
 };
 
 const PREAUTH_LOGIN_STATE_MAX_ENTRIES: usize = 4_096;
+const OID4VCI_ISSUANCE_TRANSACTION_MAX_ENTRIES: usize = 4_096;
+
+/// Immutable authority-bearing portion of one registry-backed issuance.
+///
+/// The raw authenticated civil identifier is deliberately absent. The stored
+/// evaluation is retrieved through its secret-keyed client binding, while the
+/// commitment covers only normalized, authority-bearing values.
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct IssuanceTransaction {
+    pub(crate) transaction_id: String,
+    pub(crate) evaluation_id: String,
+    pub(crate) evaluation_client_id: String,
+    pub(crate) credential_configuration_id: String,
+    pub(crate) commitment: String,
+}
+
+impl std::fmt::Debug for IssuanceTransaction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IssuanceTransaction")
+            .field("transaction_id", &"[redacted]")
+            .field("evaluation_id", &self.evaluation_id)
+            .field("evaluation_client_id", &"[redacted]")
+            .field(
+                "credential_configuration_id",
+                &self.credential_configuration_id,
+            )
+            .field("commitment", &self.commitment)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum CredentialMaterialization {
+    Acquired(IssuanceTransaction),
+    Cached(Value),
+    Busy,
+    Denied,
+}
+
+#[derive(Clone)]
+enum MaterializationState {
+    Ready,
+    Issuing {
+        holder_thumbprint: String,
+        request_hash: String,
+    },
+    Completed {
+        holder_thumbprint: String,
+        request_hash: String,
+        response: Value,
+    },
+    Failed,
+}
+
+#[derive(Clone)]
+struct StoredIssuanceTransaction {
+    transaction: IssuanceTransaction,
+    nonce: Option<String>,
+    state: MaterializationState,
+}
 
 /// The login state reserved at `offer/start` and consumed exactly once at the
 /// eSignet callback. Secret fields are redacted from `Debug`.
@@ -81,8 +144,12 @@ impl std::fmt::Debug for VerifiedTransactionCode {
 pub(crate) enum PreauthorizationStateError {
     #[error("preauthorization login state already exists")]
     DuplicateLoginState,
+    #[error("issuance transaction already exists")]
+    DuplicateIssuanceTransaction,
     #[error("preauthorization login-state capacity is exhausted")]
     LoginStateCapacity,
+    #[error("issuance transaction capacity is exhausted")]
+    IssuanceTransactionCapacity,
     #[error("preauthorization state is unavailable")]
     Unavailable,
     #[error("preauthorization transaction-code proof is incompatible")]
@@ -98,6 +165,11 @@ pub(crate) enum PreauthorizationStateError {
 /// operations.
 pub(crate) struct PreauthorizationState {
     backend: PreauthorizationBackend,
+    // This store is process-local for the in-memory state profile. PostgreSQL
+    // support is intentionally rejected by the methods below until the fixed
+    // state-plane transaction functions are active, rather than silently
+    // weakening cross-replica correctness.
+    issuance: Arc<Mutex<HashMap<[u8; 32], Stored<StoredIssuanceTransaction>>>>,
 }
 
 enum PreauthorizationBackend {
@@ -114,7 +186,249 @@ impl PreauthorizationState {
         } else {
             PreauthorizationBackend::Postgresql(state_plane)
         };
-        Ok(Self { backend })
+        Ok(Self {
+            backend,
+            issuance: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    pub(crate) async fn reserve_issuance_transaction(
+        &self,
+        transaction_id: &str,
+        transaction: IssuanceTransaction,
+        expires_at: OffsetDateTime,
+    ) -> Result<(), PreauthorizationStateError> {
+        if let PreauthorizationBackend::Postgresql(handle) = &self.backend {
+            use crate::state_plane::IssuanceReserveOutcome;
+            return match handle
+                .sensitive_state()?
+                .reserve_issuance_transaction(transaction_id, &transaction, expires_at)
+                .await?
+            {
+                IssuanceReserveOutcome::Reserved => Ok(()),
+                IssuanceReserveOutcome::Duplicate => {
+                    Err(PreauthorizationStateError::DuplicateIssuanceTransaction)
+                }
+                IssuanceReserveOutcome::Capacity => {
+                    Err(PreauthorizationStateError::IssuanceTransactionCapacity)
+                }
+            };
+        }
+        let now = OffsetDateTime::now_utc();
+        if expires_at <= now {
+            return Err(PreauthorizationStateError::InvalidExpiry);
+        }
+        let key = replay_identifier_hash(transaction_id);
+        let mut records = self
+            .issuance
+            .lock()
+            .map_err(|_| PreauthorizationStateError::Unavailable)?;
+        records.retain(|_, record| record.expires_at > now);
+        if records.contains_key(&key) {
+            return Err(PreauthorizationStateError::DuplicateIssuanceTransaction);
+        }
+        if records.len() >= OID4VCI_ISSUANCE_TRANSACTION_MAX_ENTRIES {
+            return Err(PreauthorizationStateError::IssuanceTransactionCapacity);
+        }
+        records.insert(
+            key,
+            Stored {
+                value: StoredIssuanceTransaction {
+                    transaction,
+                    nonce: None,
+                    state: MaterializationState::Ready,
+                },
+                expires_at,
+            },
+        );
+        Ok(())
+    }
+
+    pub(crate) async fn transaction(
+        &self,
+        transaction_id: &str,
+    ) -> Result<Option<IssuanceTransaction>, PreauthorizationStateError> {
+        if let PreauthorizationBackend::Postgresql(handle) = &self.backend {
+            return Ok(handle
+                .sensitive_state()?
+                .issuance_transaction(transaction_id)
+                .await?);
+        }
+        let now = OffsetDateTime::now_utc();
+        let key = replay_identifier_hash(transaction_id);
+        let mut records = self
+            .issuance
+            .lock()
+            .map_err(|_| PreauthorizationStateError::Unavailable)?;
+        records.retain(|_, record| record.expires_at > now);
+        Ok(records
+            .get(&key)
+            .map(|record| record.value.transaction.clone()))
+    }
+
+    pub(crate) async fn bind_transaction_nonce(
+        &self,
+        transaction_id: &str,
+        commitment: &str,
+        nonce: String,
+    ) -> Result<bool, PreauthorizationStateError> {
+        if let PreauthorizationBackend::Postgresql(handle) = &self.backend {
+            return Ok(handle
+                .sensitive_state()?
+                .bind_issuance_nonce(transaction_id, commitment, &nonce)
+                .await?);
+        }
+        let now = OffsetDateTime::now_utc();
+        let key = replay_identifier_hash(transaction_id);
+        let mut records = self
+            .issuance
+            .lock()
+            .map_err(|_| PreauthorizationStateError::Unavailable)?;
+        records.retain(|_, record| record.expires_at > now);
+        let Some(record) = records.get_mut(&key) else {
+            return Ok(false);
+        };
+        if record.value.transaction.commitment != commitment || record.value.nonce.is_some() {
+            return Ok(false);
+        }
+        record.value.nonce = Some(nonce);
+        Ok(true)
+    }
+
+    pub(crate) async fn begin_credential_materialization(
+        &self,
+        transaction_id: &str,
+        commitment: &str,
+        configuration_id: &str,
+        nonce: &str,
+        holder_thumbprint: &str,
+        request_hash: &str,
+    ) -> Result<CredentialMaterialization, PreauthorizationStateError> {
+        if let PreauthorizationBackend::Postgresql(handle) = &self.backend {
+            return Ok(handle
+                .sensitive_state()?
+                .begin_issuance_materialization(
+                    transaction_id,
+                    commitment,
+                    configuration_id,
+                    nonce,
+                    holder_thumbprint,
+                    request_hash,
+                )
+                .await?);
+        }
+        let now = OffsetDateTime::now_utc();
+        let key = replay_identifier_hash(transaction_id);
+        let mut records = self
+            .issuance
+            .lock()
+            .map_err(|_| PreauthorizationStateError::Unavailable)?;
+        records.retain(|_, record| record.expires_at > now);
+        let Some(record) = records.get_mut(&key) else {
+            return Ok(CredentialMaterialization::Denied);
+        };
+        let transaction = &record.value.transaction;
+        if transaction.commitment != commitment
+            || transaction.credential_configuration_id != configuration_id
+            || record.value.nonce.as_deref() != Some(nonce)
+        {
+            return Ok(CredentialMaterialization::Denied);
+        }
+        match &record.value.state {
+            MaterializationState::Ready => {
+                let transaction = transaction.clone();
+                record.value.state = MaterializationState::Issuing {
+                    holder_thumbprint: holder_thumbprint.to_string(),
+                    request_hash: request_hash.to_string(),
+                };
+                Ok(CredentialMaterialization::Acquired(transaction))
+            }
+            MaterializationState::Issuing {
+                holder_thumbprint: bound,
+                request_hash: bound_request,
+            } if bound == holder_thumbprint && bound_request == request_hash => {
+                Ok(CredentialMaterialization::Busy)
+            }
+            MaterializationState::Completed {
+                holder_thumbprint: bound,
+                request_hash: bound_request,
+                response,
+            } if bound == holder_thumbprint && bound_request == request_hash => {
+                Ok(CredentialMaterialization::Cached(response.clone()))
+            }
+            MaterializationState::Issuing { .. }
+            | MaterializationState::Completed { .. }
+            | MaterializationState::Failed => Ok(CredentialMaterialization::Denied),
+        }
+    }
+
+    pub(crate) async fn complete_credential_materialization(
+        &self,
+        transaction_id: &str,
+        holder_thumbprint: &str,
+        request_hash: &str,
+        response: Value,
+    ) -> Result<bool, PreauthorizationStateError> {
+        if let PreauthorizationBackend::Postgresql(handle) = &self.backend {
+            return Ok(handle
+                .sensitive_state()?
+                .complete_issuance_materialization(
+                    transaction_id,
+                    holder_thumbprint,
+                    request_hash,
+                    &response,
+                )
+                .await?);
+        }
+        let key = replay_identifier_hash(transaction_id);
+        let mut records = self
+            .issuance
+            .lock()
+            .map_err(|_| PreauthorizationStateError::Unavailable)?;
+        let Some(record) = records.get_mut(&key) else {
+            return Ok(false);
+        };
+        match &record.value.state {
+            MaterializationState::Issuing {
+                holder_thumbprint: bound,
+                request_hash: bound_request,
+            } if bound == holder_thumbprint && bound_request == request_hash => {
+                record.value.state = MaterializationState::Completed {
+                    holder_thumbprint: holder_thumbprint.to_string(),
+                    request_hash: request_hash.to_string(),
+                    response,
+                };
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    pub(crate) async fn fail_credential_materialization(
+        &self,
+        transaction_id: &str,
+        holder_thumbprint: &str,
+    ) -> Result<(), PreauthorizationStateError> {
+        if let PreauthorizationBackend::Postgresql(handle) = &self.backend {
+            return Ok(handle
+                .sensitive_state()?
+                .fail_issuance_materialization(transaction_id, holder_thumbprint)
+                .await?);
+        }
+        let key = replay_identifier_hash(transaction_id);
+        let mut records = self
+            .issuance
+            .lock()
+            .map_err(|_| PreauthorizationStateError::Unavailable)?;
+        if let Some(record) = records.get_mut(&key) {
+            if matches!(
+                &record.value.state,
+                MaterializationState::Issuing { holder_thumbprint: bound, .. } if bound == holder_thumbprint
+            ) {
+                record.value.state = MaterializationState::Failed;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn reserve_login(
@@ -239,6 +553,7 @@ impl std::fmt::Debug for PreauthorizationState {
                     PreauthorizationBackend::Postgresql(_) => "postgresql",
                 },
             )
+            .field("issuance", &"<redacted>")
             .finish()
     }
 }
@@ -448,11 +763,22 @@ mod tests {
             backend: PreauthorizationBackend::InMemory(Arc::new(
                 InMemoryPreauthorizationState::new().unwrap(),
             )),
+            issuance: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     fn scope() -> ReplayScope {
         ReplayScope::new([("tenant", "tenant-a"), ("kind", "oid4vci-preauth-code")]).unwrap()
+    }
+
+    fn issuance_transaction() -> IssuanceTransaction {
+        IssuanceTransaction {
+            transaction_id: "transaction-1".to_string(),
+            evaluation_id: "evaluation-1".to_string(),
+            evaluation_client_id: "client-1".to_string(),
+            credential_configuration_id: "person_is_alive_sd_jwt".to_string(),
+            commitment: format!("sha256:{}", "a".repeat(64)),
+        }
     }
 
     #[tokio::test]
@@ -464,6 +790,150 @@ mod tests {
             .unwrap();
         assert!(state.consume_login("opaque").await.unwrap().is_some());
         assert!(state.consume_login("opaque").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn issuance_materialization_binds_holder_and_exact_request_and_caches_response() {
+        let state = memory_state();
+        let transaction = issuance_transaction();
+        let expires_at = OffsetDateTime::now_utc() + Duration::minutes(5);
+        state
+            .reserve_issuance_transaction(
+                &transaction.transaction_id,
+                transaction.clone(),
+                expires_at,
+            )
+            .await
+            .unwrap();
+        assert!(state
+            .bind_transaction_nonce(
+                &transaction.transaction_id,
+                &transaction.commitment,
+                "token-nonce".to_string(),
+            )
+            .await
+            .unwrap());
+        assert!(matches!(
+            state
+                .begin_credential_materialization(
+                    &transaction.transaction_id,
+                    &transaction.commitment,
+                    &transaction.credential_configuration_id,
+                    "token-nonce",
+                    "holder-one",
+                    "request-one",
+                )
+                .await
+                .unwrap(),
+            CredentialMaterialization::Acquired(_)
+        ));
+        assert!(matches!(
+            state
+                .begin_credential_materialization(
+                    &transaction.transaction_id,
+                    &transaction.commitment,
+                    &transaction.credential_configuration_id,
+                    "token-nonce",
+                    "holder-two",
+                    "request-one",
+                )
+                .await
+                .unwrap(),
+            CredentialMaterialization::Denied
+        ));
+        let response = serde_json::json!({"credential": "signed-once"});
+        assert!(state
+            .complete_credential_materialization(
+                &transaction.transaction_id,
+                "holder-one",
+                "request-one",
+                response.clone(),
+            )
+            .await
+            .unwrap());
+        match state
+            .begin_credential_materialization(
+                &transaction.transaction_id,
+                &transaction.commitment,
+                &transaction.credential_configuration_id,
+                "token-nonce",
+                "holder-one",
+                "request-one",
+            )
+            .await
+            .unwrap()
+        {
+            CredentialMaterialization::Cached(cached) => assert_eq!(cached, response),
+            outcome => panic!("expected cached response, got {outcome:?}"),
+        }
+        assert!(matches!(
+            state
+                .begin_credential_materialization(
+                    &transaction.transaction_id,
+                    &transaction.commitment,
+                    &transaction.credential_configuration_id,
+                    "token-nonce",
+                    "holder-one",
+                    "different-request",
+                )
+                .await
+                .unwrap(),
+            CredentialMaterialization::Denied
+        ));
+    }
+
+    #[tokio::test]
+    async fn failed_issuance_materialization_is_terminal() {
+        let state = memory_state();
+        let transaction = issuance_transaction();
+        state
+            .reserve_issuance_transaction(
+                &transaction.transaction_id,
+                transaction.clone(),
+                OffsetDateTime::now_utc() + Duration::minutes(5),
+            )
+            .await
+            .unwrap();
+        assert!(state
+            .bind_transaction_nonce(
+                &transaction.transaction_id,
+                &transaction.commitment,
+                "token-nonce".to_string(),
+            )
+            .await
+            .unwrap());
+        assert!(matches!(
+            state
+                .begin_credential_materialization(
+                    &transaction.transaction_id,
+                    &transaction.commitment,
+                    &transaction.credential_configuration_id,
+                    "token-nonce",
+                    "holder-one",
+                    "request-one",
+                )
+                .await
+                .unwrap(),
+            CredentialMaterialization::Acquired(_)
+        ));
+        state
+            .fail_credential_materialization(&transaction.transaction_id, "holder-one")
+            .await
+            .unwrap();
+        assert!(matches!(
+            state
+                .begin_credential_materialization(
+                    &transaction.transaction_id,
+                    &transaction.commitment,
+                    &transaction.credential_configuration_id,
+                    "token-nonce",
+                    "holder-one",
+                    "request-one",
+                )
+                .await
+                .unwrap(),
+            CredentialMaterialization::Denied
+        ));
     }
 
     #[tokio::test]
@@ -504,6 +974,7 @@ mod tests {
         let backend = Arc::new(InMemoryPreauthorizationState::new().unwrap());
         let issuing_runtime = PreauthorizationState {
             backend: PreauthorizationBackend::InMemory(Arc::clone(&backend)),
+            issuance: Arc::new(Mutex::new(HashMap::new())),
         };
         let expires_at = OffsetDateTime::now_utc() + Duration::minutes(5);
         assert!(issuing_runtime
@@ -513,6 +984,7 @@ mod tests {
 
         let reconfigured_runtime = PreauthorizationState {
             backend: PreauthorizationBackend::InMemory(backend),
+            issuance: Arc::clone(&issuing_runtime.issuance),
         };
         assert!(matches!(
             reconfigured_runtime
