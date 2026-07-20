@@ -9,8 +9,8 @@ import io
 import json
 import subprocess
 import unittest
+import unittest.mock
 from pathlib import Path
-from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("check-release-image-oci-labels.py")
@@ -55,15 +55,15 @@ class ReleaseImageOciLabelsTest(unittest.TestCase):
         stderr: str = "",
         returncode: int = 0,
         extra_args: list[str] | None = None,
-    ) -> tuple[int, str, str, mock.Mock]:
+    ) -> tuple[int, str, str, unittest.mock.Mock]:
         completed = subprocess.CompletedProcess(
             args=[], returncode=returncode, stdout=stdout, stderr=stderr
         )
-        run = mock.Mock(return_value=completed)
+        run = unittest.mock.Mock(return_value=completed)
         captured_stdout = io.StringIO()
         captured_stderr = io.StringIO()
         with (
-            mock.patch.object(self.module.subprocess, "run", run),
+            unittest.mock.patch.object(self.module.subprocess, "run", run),
             contextlib.redirect_stdout(captured_stdout),
             contextlib.redirect_stderr(captured_stderr),
         ):
