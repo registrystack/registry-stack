@@ -154,7 +154,7 @@ tower-http = { version = "0.7", features = ["cors", "limit", "request-id", "set-
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
 ulid = { version = "1" }
-ureq = { version = "2" }
+ureq = { version = "3" }
 url = { version = "2" }
 utoipa = { version = "5" }
 uuid = { version = "1", features = ["v4"] }

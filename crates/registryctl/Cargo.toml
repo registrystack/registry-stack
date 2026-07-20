@@ -40,7 +40,7 @@ sha2.workspace = true
 tempfile = "3"
 time = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "process"] }
-ureq = "2"
+ureq = "3"
 url = "2"
 zeroize.workspace = true
 
