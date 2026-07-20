@@ -7,13 +7,17 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
+import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
 
 
 SCRIPT = Path(__file__).with_name("check-release-image-oci-labels.py")
+SMOKE_SCRIPT = Path(__file__).with_name("smoke-release-image-oci-labels.sh")
+ROOT = SCRIPT.parents[2]
 IMAGE_REF = "example.invalid/registry-relay@sha256:" + "a" * 64
 SOURCE = "https://github.com/registrystack/registry-stack"
 REVISION = "b" * 40
@@ -163,6 +167,101 @@ class ReleaseImageOciLabelsTest(unittest.TestCase):
         self.assertEqual(1, result)
         self.assertIn("cannot evaluate field config", stderr)
         self.assertEqual("{{json .Image.config}}", run.call_args.args[0][5])
+
+
+class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
+    def test_smoke_builds_both_release_dockerfiles_without_publishing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_bin = Path(temporary) / "bin"
+            fake_bin.mkdir()
+            docker_log = Path(temporary) / "docker.log"
+            checker_log = Path(temporary) / "checker.log"
+            fake_docker = fake_bin / "docker"
+            fake_docker.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "{ printf 'BEGIN\\n'; printf '%s\\n' \"$@\"; printf 'END\\n'; } "
+                '>> "${DOCKER_LOG}"\n',
+                encoding="utf-8",
+            )
+            fake_docker.chmod(0o755)
+            fake_python = fake_bin / "python3"
+            fake_python.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "{ printf 'BEGIN\\n'; printf '%s\\n' \"$@\"; printf 'END\\n'; } "
+                '>> "${CHECKER_LOG}"\n'
+                "case \"$*\" in\n"
+                "  *missing-version*|*wrong-revision*|*'{{json .Image.config}}'*) "
+                "exit 1 ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_python.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+            environment["DOCKER_LOG"] = str(docker_log)
+            environment["CHECKER_LOG"] = str(checker_log)
+
+            result = subprocess.run(
+                [str(SMOKE_SCRIPT)],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+                env=environment,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+
+            def read_calls(path: Path) -> list[list[str]]:
+                calls: list[list[str]] = []
+                current: list[str] | None = None
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    if line == "BEGIN":
+                        current = []
+                    elif line == "END":
+                        self.assertIsNotNone(current)
+                        calls.append(current or [])
+                        current = None
+                    else:
+                        self.assertIsNotNone(current)
+                        current.append(line)
+                self.assertIsNone(current)
+                return calls
+
+            dockerfiles = []
+            for call in read_calls(docker_log):
+                self.assertEqual(["buildx", "build"], call[:2])
+                self.assertIn("--platform", call)
+                self.assertEqual("linux/amd64", call[call.index("--platform") + 1])
+                self.assertIn("--provenance=false", call)
+                self.assertNotIn("--push", call)
+                self.assertNotIn("--load", call)
+                output = call[call.index("--output") + 1]
+                self.assertTrue(output.startswith("type=oci,dest="), output)
+                self.assertTrue(output.endswith(",tar=false"), output)
+                dockerfiles.append(call[call.index("--file") + 1])
+
+            self.assertEqual(
+                {
+                    str(ROOT / "release/docker/Dockerfile.registry-notary"),
+                    str(ROOT / "release/docker/Dockerfile.registry-relay"),
+                },
+                set(dockerfiles),
+            )
+            inspected_layouts = {
+                call[1]
+                for call in read_calls(checker_log)
+                if len(call) > 1 and "/correct-" in call[1]
+            }
+            self.assertEqual(
+                {"correct-registry-notary", "correct-registry-relay"},
+                {
+                    Path(layout.removeprefix("oci-layout://")).name
+                    for layout in inspected_layouts
+                },
+            )
 
 
 if __name__ == "__main__":

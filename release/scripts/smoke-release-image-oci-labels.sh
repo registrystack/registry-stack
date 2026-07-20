@@ -4,7 +4,8 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../.." && pwd)"
 checker="${script_dir}/check-release-image-oci-labels.py"
-dockerfile="${repo_root}/release/docker/Dockerfile.registry-relay"
+images=(registry-notary registry-relay)
+relay_dockerfile="${repo_root}/release/docker/Dockerfile.registry-relay"
 
 source_label="https://github.com/registrystack/registry-stack"
 revision_label="0123456789abcdef0123456789abcdef01234567"
@@ -22,12 +23,15 @@ if [[ ! -x "${true_binary}" ]]; then
 fi
 cp "${true_binary}" "${context_dir}/dist/image-bin/registry-relay"
 cp "${true_binary}" "${context_dir}/dist/image-bin/registry-relay-rhai-worker"
+cp "${true_binary}" "${context_dir}/dist/image-bin/registry-notary"
+cp "${true_binary}" "${context_dir}/dist/image-bin/registry-notary-cel-worker"
 cp "${repo_root}/LICENSE" "${context_dir}/LICENSE"
 
 build_layout() {
-  local layout="$1"
-  local revision="$2"
-  local version="${3-}"
+  local dockerfile="$1"
+  local layout="$2"
+  local revision="$3"
+  local version="${4-}"
   local -a label_args=(
     --label "org.opencontainers.image.source=${source_label}"
     --label "org.opencontainers.image.revision=${revision}"
@@ -54,15 +58,19 @@ expect_failure() {
   fi
 }
 
-correct_layout="${tmp_root}/correct"
+for image in "${images[@]}"; do
+  correct_layout="${tmp_root}/correct-${image}"
+  build_layout "${repo_root}/release/docker/Dockerfile.${image}" "${correct_layout}" \
+    "${revision_label}" "${version_label}"
+  python3 "${checker}" "oci-layout://${correct_layout}" \
+    --source "${source_label}" \
+    --revision "${revision_label}" \
+    --version "${version_label}"
+done
+
+correct_layout="${tmp_root}/correct-registry-relay"
 missing_version_layout="${tmp_root}/missing-version"
 wrong_revision_layout="${tmp_root}/wrong-revision"
-
-build_layout "${correct_layout}" "${revision_label}" "${version_label}"
-python3 "${checker}" "oci-layout://${correct_layout}" \
-  --source "${source_label}" \
-  --revision "${revision_label}" \
-  --version "${version_label}"
 
 expect_failure "lower-case image config template" \
   python3 "${checker}" "oci-layout://${correct_layout}" \
@@ -71,14 +79,15 @@ expect_failure "lower-case image config template" \
     --version "${version_label}" \
     --format-template '{{json .Image.config}}'
 
-build_layout "${missing_version_layout}" "${revision_label}"
+build_layout "${relay_dockerfile}" "${missing_version_layout}" "${revision_label}"
 expect_failure "image missing the version label" \
   python3 "${checker}" "oci-layout://${missing_version_layout}" \
     --source "${source_label}" \
     --revision "${revision_label}" \
     --version "${version_label}"
 
-build_layout "${wrong_revision_layout}" "${wrong_revision_label}" "${version_label}"
+build_layout "${relay_dockerfile}" "${wrong_revision_layout}" \
+  "${wrong_revision_label}" "${version_label}"
 expect_failure "image with the wrong revision label" \
   python3 "${checker}" "oci-layout://${wrong_revision_layout}" \
     --source "${source_label}" \

@@ -1223,6 +1223,50 @@ def release_tags(repo: Path) -> dict[str, list[str]]:
     return tags_by_version
 
 
+def remote_release_tag_exists(repo: Path, version: str) -> bool:
+    tag_ref = f"refs/tags/v{version}"
+    try:
+        result = git(
+            repo,
+            "ls-remote",
+            "--exit-code",
+            "--refs",
+            "--tags",
+            "origin",
+            tag_ref,
+            check=False,
+        )
+    except OSError as exc:
+        raise ReleasePlanError(
+            f"cannot determine whether release tag v{version} exists on origin"
+        ) from exc
+    if result.returncode == 2 and not result.stdout.strip():
+        return False
+    if result.returncode != 0:
+        raise ReleasePlanError(
+            f"cannot determine whether release tag v{version} exists on origin "
+            f"(git ls-remote exited {result.returncode})"
+        )
+
+    lines = [line for line in result.stdout.splitlines() if line]
+    if len(lines) != 1:
+        raise ReleasePlanError(
+            f"cannot determine whether release tag v{version} exists on origin: "
+            "git ls-remote returned ambiguous output"
+        )
+    object_id, separator, remote_ref = lines[0].partition("\t")
+    if (
+        not separator
+        or remote_ref != tag_ref
+        or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", object_id) is None
+    ):
+        raise ReleasePlanError(
+            f"cannot determine whether release tag v{version} exists on origin: "
+            "git ls-remote returned ambiguous output"
+        )
+    return True
+
+
 def load_release_manifests(repo: Path) -> list[dict[str, Any]]:
     manifest_dir = repo / "release" / "manifests"
     if not manifest_dir.is_dir():
@@ -1335,6 +1379,10 @@ def select_release_history(
     if version in tags:
         raise ReleasePlanError(
             f"version {version} is already represented by release tag {tags[version][0]}"
+        )
+    if remote_release_tag_exists(repo, version):
+        raise ReleasePlanError(
+            f"version {version} is already represented by release tag v{version} on origin"
         )
     return selected, previous, advisory
 
@@ -1682,6 +1730,10 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
             "release-identity",
             f"explicit version {version} and release ID {release_id} match the target manifest",
         ),
+        passed_check(
+            "immutable-release-tag",
+            f"v{version} is absent from the local and origin tag sets",
+        ),
     ]
     workspace = validate_workspace_versions(repo, version)
     checks.append(
@@ -1974,10 +2026,6 @@ def build_finalize_plan(
             passed_check(
                 "default-branch-reachability",
                 f"promotion commit is reachable from {default_branch} at {resolved_default}",
-            ),
-            passed_check(
-                "immutable-release-tag",
-                f"v{version} is not present in the repository tag set",
             ),
             passed_check(
                 "generated-finalization-mirrors",

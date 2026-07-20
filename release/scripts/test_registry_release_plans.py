@@ -85,6 +85,17 @@ class FixtureRepo:
         git(root, "add", ".")
         git(root, "commit", "-m", "promote release metadata")
         self.promotion = git(root, "rev-parse", "HEAD")
+        self.origin = root.parent / "origin.git"
+        git(
+            root.parent,
+            "init",
+            "--bare",
+            "--initial-branch=main",
+            str(self.origin),
+        )
+        git(root, "remote", "add", "origin", str(self.origin))
+        git(root, "push", "--set-upstream", "origin", "main")
+        git(root, "push", "origin", "refs/tags/v1.0.0")
 
     def _write_surfaces(self) -> None:
         root = self.root
@@ -236,6 +247,21 @@ source = "git+https://github.com/PublicSchema/crosswalk?rev={CROSSWALK_REF}#{CRO
             if path.is_file() and ".git" not in path.parts
         }
 
+    def git_read_state(self) -> dict[str, str | None]:
+        fetch_head = Path(git(self.root, "rev-parse", "--git-path", "FETCH_HEAD"))
+        if not fetch_head.is_absolute():
+            fetch_head = self.root / fetch_head
+        return {
+            "refs": git(
+                self.root,
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+            ),
+            "fetch_head": (
+                fetch_head.read_text(encoding="utf-8") if fetch_head.exists() else None
+            ),
+        }
+
 
 class RegistryReleasePlanTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -334,6 +360,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
             {
                 "release-history",
                 "release-identity",
+                "immutable-release-tag",
                 "workspace-versions",
                 "docsets",
                 "repo-docs",
@@ -509,13 +536,54 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertIn("not reachable from default branch", unreachable.stderr)
 
     def test_finalize_rejects_existing_target_tag(self) -> None:
-        git(self.repo.root, "tag", "v1.1.0")
+        git(self.repo.root, "tag", "--annotate", "v1.1.0", "--message", "release")
 
         result = self.finalize()
 
         self.assertNotEqual(0, result.returncode)
         self.assertEqual("", result.stdout)
         self.assertIn("already represented by release tag", result.stderr)
+
+    def test_prepare_and_finalize_reject_stale_local_tags_when_origin_has_target(
+        self,
+    ) -> None:
+        git(self.repo.root, "tag", "--annotate", "v1.1.0", "--message", "release")
+        git(self.repo.root, "push", "origin", "refs/tags/v1.1.0")
+        git(self.repo.root, "tag", "--delete", "v1.1.0")
+        self.assertEqual("", git(self.repo.root, "tag", "--list", "v1.1.0"))
+        before = self.repo.git_read_state()
+
+        for operation in (self.prepare, self.finalize):
+            with self.subTest(operation=operation.__name__):
+                result = operation()
+                self.assertEqual(1, result.returncode)
+                self.assertEqual("", result.stdout)
+                self.assertIn(
+                    "release tag v1.1.0 on origin",
+                    result.stderr,
+                )
+                self.assertEqual(before, self.repo.git_read_state())
+
+    def test_prepare_and_finalize_fail_closed_when_origin_cannot_be_read(self) -> None:
+        git(
+            self.repo.root,
+            "remote",
+            "set-url",
+            "origin",
+            str(Path(self.temporary.name) / "missing-origin.git"),
+        )
+        before = self.repo.git_read_state()
+
+        for operation in (self.prepare, self.finalize):
+            with self.subTest(operation=operation.__name__):
+                result = operation()
+                self.assertEqual(1, result.returncode)
+                self.assertEqual("", result.stdout)
+                self.assertIn(
+                    "cannot determine whether release tag v1.1.0 exists on origin",
+                    result.stderr,
+                )
+                self.assertEqual(before, self.repo.git_read_state())
 
 
 if __name__ == "__main__":
