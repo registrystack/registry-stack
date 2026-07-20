@@ -165,9 +165,11 @@ jobs:
         run: |
           set -euo pipefail
           fingerprint="$(printf '%s' "${RELEASE_BUILDER_IMAGE}" | sha256sum | awk '{print $1}')"
+          recipe_fingerprint="$(sha256sum release/scripts/build-release-binaries.sh | awk '{print $1}')"
           printf 'fingerprint=%s\n' "${fingerprint}" >> "${GITHUB_OUTPUT}"
+          printf 'recipe_fingerprint=%s\n' "${recipe_fingerprint}" >> "${GITHUB_OUTPUT}"
           printf 'cache_key=%s\n' \
-            "registry-stack-release-cargo-${{ runner.os }}-${fingerprint}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}" \
+            "registry-stack-release-cargo-${{ runner.os }}-${fingerprint}-${recipe_fingerprint}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}" \
             >> "${GITHUB_OUTPUT}"
 
       - name: Restore Cargo release cache
@@ -180,7 +182,7 @@ jobs:
             target
           key: ${{ steps.release-builder.outputs.cache_key }}
           restore-keys: |
-            registry-stack-release-cargo-${{ runner.os }}-${{ steps.release-builder.outputs.fingerprint }}-
+            registry-stack-release-cargo-${{ runner.os }}-${{ steps.release-builder.outputs.fingerprint }}-${{ steps.release-builder.outputs.recipe_fingerprint }}-
 
       - name: Record binary build start
         id: binary-build-start
@@ -196,47 +198,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p .cargo-home target dist/bin dist/image-bin
-          docker run --rm \
-            --platform linux/amd64 \
-            --user "$(id -u):$(id -g)" \
-            --volume "${PWD}:/workspace" \
-            --workdir /workspace \
-            --env CARGO_HOME=/workspace/.cargo-home \
-            --env CARGO_TARGET_DIR=/workspace/target \
-            --env CARGO_TERM_COLOR="${CARGO_TERM_COLOR}" \
-            --env HOME=/workspace \
-            "${RELEASE_BUILDER_IMAGE}" \
-            bash -c 'set -euo pipefail
-              cargo build --release --locked \
-                -p registryctl \
-                -p registry-manifest-cli \
-                -p registry-relay \
-                -p registry-notary \
-                --features registry-notary/registry-notary-cel
-              cp target/release/registry-notary dist/image-bin/registry-notary
-              cargo build --release --locked \
-                -p registry-notary \
-                --features registry-notary/registry-notary-cel,registry-notary/pkcs11
-              cp target/release/registry-notary dist/image-bin/registry-notary-pkcs11
-              cargo build --release --locked \
-                -p registry-notary-server \
-                --bin registry-notary-cel-worker \
-                --features registry-notary-server/registry-notary-cel
-              cp target/release/registry-notary-cel-worker dist/image-bin/registry-notary-cel-worker'
-          cp target/release/registryctl "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-linux-amd64"
-          cp target/release/registry-manifest "dist/bin/registry-manifest-${{ needs.verify.outputs.tag }}-linux-amd64"
-          cp target/release/registry-relay "dist/bin/registry-relay-${{ needs.verify.outputs.tag }}-linux-amd64"
-          cp target/release/registry-relay-rhai-worker "dist/bin/registry-relay-rhai-worker-${{ needs.verify.outputs.tag }}-linux-amd64"
-          cp dist/image-bin/registry-notary "dist/bin/registry-notary-${{ needs.verify.outputs.tag }}-linux-amd64"
-          cp dist/image-bin/registry-notary-cel-worker "dist/bin/registry-notary-cel-worker-${{ needs.verify.outputs.tag }}-linux-amd64"
-          mv dist/image-bin/registry-notary-pkcs11 dist/image-bin/registry-notary
-          cp target/release/registry-relay dist/image-bin/registry-relay
-          cp target/release/registry-relay-rhai-worker dist/image-bin/registry-relay-rhai-worker
-          printf '%s\n' "${RELEASE_BUILDER_IMAGE}" > dist/image-bin/RELEASE_BUILDER_IMAGE
-          chmod 0755 dist/bin/* dist/image-bin/registry-notary dist/image-bin/registry-notary-cel-worker dist/image-bin/registry-relay dist/image-bin/registry-relay-rhai-worker
-          (cd dist/bin && sha256sum -- * > SHA256SUMS)
-          (cd dist/image-bin && sha256sum -- * > SHA256SUMS)
+          grep -F -- "--features registry-notary/registry-notary-cel,registry-notary/pkcs11" \
+            release/scripts/build-release-binaries.sh >/dev/null
+          release/scripts/build-release-binaries.sh "${{ needs.verify.outputs.version }}"
 
       - name: Record binary build telemetry
         if: ${{ always() }}
@@ -402,7 +366,11 @@ jobs:
           path: dist/image-bin
 
       - name: Set up Docker Buildx
+        id: buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
+        with:
+          version: v0.33.0
+          driver-opts: image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f
 
       - name: Log in to GHCR
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee
@@ -445,21 +413,18 @@ jobs:
           cp dist/image-bin/RELEASE_BUILDER_IMAGE dist/images/release-builder-image.txt
           build_image() {
             local name="$1"
-            local dockerfile="$2"
             local image="${REGISTRY}/${IMAGE_NAMESPACE}/${name}:${{ needs.verify.outputs.tag }}"
             local metadata="dist/images/${name}.metadata.json"
-            docker buildx build \
-              --platform linux/amd64 \
-              --file "${dockerfile}" \
-              --tag "${image}" \
-              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-              --label "org.opencontainers.image.revision=${{ needs.verify.outputs.tag_target }}" \
-              --label "org.opencontainers.image.version=${{ needs.verify.outputs.version }}" \
-              --metadata-file "${metadata}" \
-              --cache-from "type=gha,scope=registry-stack-${name}" \
-              --cache-to "type=gha,mode=max,scope=registry-stack-${name}" \
-              --push \
-              .
+            RELEASE_IMAGE_CACHE_FROM="type=gha,scope=registry-stack-${name}" \
+              RELEASE_IMAGE_CACHE_TO="type=gha,mode=max,scope=registry-stack-${name}" \
+              RELEASE_BUILDX_BUILDER="${{ steps.buildx.outputs.name }}" \
+              release/scripts/build-release-image.sh \
+                "${name}" \
+                "${image}" \
+                "https://github.com/${GITHUB_REPOSITORY}" \
+                "${{ needs.verify.outputs.tag_target }}" \
+                "${{ needs.verify.outputs.version }}" \
+                "${metadata}"
             local digest
             digest="$(jq -r '."containerimage.digest"' "${metadata}")"
             local digest_ref="${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}"
@@ -476,8 +441,8 @@ jobs:
               --digest-ref "${digest_ref}"
             grype "${digest_ref}" -o json > "dist/grype/${name}.grype.json"
           }
-          build_image registry-notary release/docker/Dockerfile.registry-notary
-          build_image registry-relay release/docker/Dockerfile.registry-relay
+          build_image registry-notary
+          build_image registry-relay
 
       - name: Generate image binary SBOMs
         shell: bash
