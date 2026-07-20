@@ -46,14 +46,28 @@ the same new builder digest and lockfiles, comparing the generated
 with the retired builder. The exact pushed candidate still needs its normal
 digest-bound SBOM, Grype, release-capsule, and standalone implementer evidence.
 
-The Debian 13 migration check on July 19, 2026 scanned a structural Relay image
-with the pinned final base and placeholder binaries. It found the non-fixable
-Debian 13 `libc6` findings CVE-2026-5450 (Critical), CVE-2026-5928 (High), and
-CVE-2026-5435 (High). No risk dispositions are recorded for these findings, so
-a candidate that still reports them remains blocked. This structural scan only
-supports removal of the retired Debian 12 exception. The scan of the exact
-pushed image, including the real Relay and worker binaries, supersedes it for
-release decisions.
+The failed `v0.12.0` release workflow run `29714784416` scanned exact Relay
+image digest
+`sha256:06dddb1cb88bb9f5dfae8eacfb71e25a49e4a9d370a539b7ff2ce90259c59672`.
+It confirmed the non-fixable Debian 13 `libc6` findings CVE-2026-5450
+(Critical), CVE-2026-5928 (High), and CVE-2026-5435 (High). Debian classifies
+all three Trixie issues as minor and no-DSA. The exact service's two direct
+AWS-LC `sscanf` call sites use fixed `%lu` and `%lx` numeric formats. Neither
+the service nor its linked libcrypto contains the vulnerable `%mc` conversion.
+Neither the service nor Rhai worker imports `ungetwc` or the affected deprecated
+DNS-printing functions. The libstdc++ object that imports `ungetwc` is not in
+either executable dependency closure.
+
+The matching accepted-risk entries expire on August 20, 2026. A Trixie fix,
+changed fingerprint, new scanf format or call path, new C++ or wide-character
+input path, or new DNS TSIG debugging or printing path requires earlier review.
+The accepted-risk entries record the evidence image digest and OCI source
+revision. Enforcement binds them to a digest of the ordered root filesystem
+layers, so a changed package or binary layer requires a new review while a
+review-only commit that changes the OCI revision label does not create a
+self-referential image digest. The next candidate must still produce an exact
+digest-bound scan; this review does not waive fixable findings or a changed
+package fingerprint.
 
 For each candidate, execute the image with a read-only root filesystem and only
 the documented cache, data, and audit mounts writable. Confirm that the Relay
@@ -70,8 +84,11 @@ to the exact candidate digest; the source checks do not substitute for them.
 - Reviewed advisory ratchets: [`security/advisory-baseline.json`](../security/advisory-baseline.json).
   Fixable Grype findings block at every severity and cannot be dispositioned.
   Each reviewed High or Critical entry names a matching rule and severity,
-  owner, reason, review date, and expiration date. Stale reviewed entries are
-  reported so the baseline can shrink after the underlying issue is fixed.
+  owner, reason, review date, expiration date, evidence image digest and
+  revision, and the root filesystem layer digest enforced by the checker.
+  Future-dated, expired, or rootfs-mismatched entries fail while the finding is
+  active. Stale reviewed entries are reported so the baseline can shrink after
+  the underlying issue is fixed.
 - Unauthenticated endpoint allowlist: [`security/auth-none-allowlist.yml`](../security/auth-none-allowlist.yml).
   Additions require maintainer review through [CODEOWNERS](../CODEOWNERS).
 - GitHub Actions pinning: most workflows pin well-known maintained actions to

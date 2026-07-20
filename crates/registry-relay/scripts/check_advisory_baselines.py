@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +42,9 @@ REQUIRED_REVIEW_FIELDS = {
     "expires_at",
 }
 
+SHA256_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+GIT_REVISION_RE = re.compile(r"[0-9a-f]{40}")
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -51,6 +56,9 @@ class Finding:
     summary: str
     fix_versions: tuple[str, ...] = ()
     fix_state: str = ""
+    image_digest: str = ""
+    rootfs_digest: str = ""
+    source_revision: str = ""
 
     @property
     def fixable(self) -> bool:
@@ -67,6 +75,9 @@ class Finding:
             "fixable": self.fixable,
             "fix_versions": list(self.fix_versions),
             "fix_state": self.fix_state,
+            "image_digest": self.image_digest,
+            "rootfs_digest": self.rootfs_digest,
+            "source_revision": self.source_revision,
         }
 
 
@@ -170,9 +181,49 @@ def normalize_zizmor(report: Any) -> list[Finding]:
     return findings
 
 
-def normalize_grype(report: Any, subject: str) -> list[Finding]:
+def grype_source_context(report: Any) -> tuple[str, str, str]:
     if not isinstance(report, dict):
         fail("grype report must be a JSON object")
+    source = report.get("source")
+    if not isinstance(source, dict) or source.get("type") != "image":
+        fail("grype report source must describe an image")
+    target = source.get("target")
+    if not isinstance(target, dict):
+        fail("grype report source must contain an image target")
+    user_input = target.get("userInput")
+    if not isinstance(user_input, str) or "@" not in user_input:
+        fail("grype image target must be pinned by digest")
+    image_digest = user_input.rsplit("@", 1)[1]
+    if SHA256_DIGEST_RE.fullmatch(image_digest) is None:
+        fail("grype image target must use a sha256 digest")
+    repo_digests = target.get("repoDigests")
+    if not isinstance(repo_digests, list) or user_input not in repo_digests:
+        fail("grype image target digest must appear in repoDigests")
+    layers = target.get("layers")
+    if not isinstance(layers, list) or not layers:
+        fail("grype image target must contain rootfs layers")
+    layer_digests: list[str] = []
+    for layer in layers:
+        digest = layer.get("digest") if isinstance(layer, dict) else None
+        if not isinstance(digest, str) or SHA256_DIGEST_RE.fullmatch(digest) is None:
+            fail("grype image target layers must use sha256 digests")
+        layer_digests.append(digest)
+    rootfs_payload = "".join(f"{digest}\n" for digest in layer_digests).encode()
+    rootfs_digest = f"sha256:{hashlib.sha256(rootfs_payload).hexdigest()}"
+    labels = target.get("labels")
+    if not isinstance(labels, dict):
+        fail("grype image target must contain OCI labels")
+    source_revision = labels.get("org.opencontainers.image.revision")
+    if (
+        not isinstance(source_revision, str)
+        or GIT_REVISION_RE.fullmatch(source_revision) is None
+    ):
+        fail("grype image target must contain a full Git revision label")
+    return image_digest, rootfs_digest, source_revision
+
+
+def normalize_grype(report: Any, subject: str) -> list[Finding]:
+    image_digest, rootfs_digest, source_revision = grype_source_context(report)
     matches = report.get("matches")
     if not isinstance(matches, list):
         fail("grype report must contain a matches list")
@@ -229,6 +280,9 @@ def normalize_grype(report: Any, subject: str) -> list[Finding]:
                 summary=f"{vuln_id} in {package_name} {package_version}",
                 fix_versions=fix_versions,
                 fix_state=fix_state_value.strip(),
+                image_digest=image_digest,
+                rootfs_digest=rootfs_digest,
+                source_revision=source_revision,
             )
         )
     return findings
@@ -282,6 +336,21 @@ def validate_review_entry(review: Any) -> None:
         value = review.get(field)
         if not isinstance(value, str) or not value.strip():
             fail(f"reviewed finding {field} must be a non-blank string")
+    if review["tool"] == "grype":
+        for field in (
+            "evidence_image_digest",
+            "reviewed_rootfs_digest",
+            "evidence_revision",
+        ):
+            value = review.get(field)
+            if not isinstance(value, str) or not value.strip():
+                fail(f"grype reviewed finding {field} must be a non-blank string")
+        if SHA256_DIGEST_RE.fullmatch(review["evidence_image_digest"]) is None:
+            fail("grype reviewed finding evidence_image_digest must be a sha256 digest")
+        if SHA256_DIGEST_RE.fullmatch(review["reviewed_rootfs_digest"]) is None:
+            fail("grype reviewed finding reviewed_rootfs_digest must be a sha256 digest")
+        if GIT_REVISION_RE.fullmatch(review["evidence_revision"]) is None:
+            fail("grype reviewed finding evidence_revision must be a full Git revision")
     reviewed_at = parse_date(str(review["reviewed_at"]), "reviewed_at")
     expires_at = parse_date(str(review["expires_at"]), "expires_at")
     if expires_at < reviewed_at:
@@ -368,6 +437,14 @@ def check_findings(
             != finding.severity.casefold()
         )
     ]
+    context_mismatched = [
+        finding
+        for finding in reviewable
+        if finding.fingerprint in active_reviews
+        and tool == "grype"
+        and str(active_reviews[finding.fingerprint]["reviewed_rootfs_digest"])
+        != finding.rootfs_digest
+    ]
     for finding in fixable:
         print(
             "fixable finding cannot be dispositioned: "
@@ -391,6 +468,18 @@ def check_findings(
             f"review_severity={review['severity']}",
             file=sys.stderr,
         )
+    for finding in context_mismatched:
+        review = active_reviews[finding.fingerprint]
+        print(
+            "reviewed finding rootfs context mismatch: "
+            f"{finding.fingerprint} report_rootfs={finding.rootfs_digest} "
+            f"review_rootfs={review['reviewed_rootfs_digest']} "
+            f"report_image={finding.image_digest} "
+            f"evidence_image={review['evidence_image_digest']} "
+            f"report_revision={finding.source_revision} "
+            f"evidence_revision={review['evidence_revision']}",
+            file=sys.stderr,
+        )
 
     unreviewed = [
         finding for finding in reviewable if finding.fingerprint not in reviews
@@ -409,11 +498,22 @@ def check_findings(
         f"{tool} threshold={threshold} blocking={len(blocking)} "
         f"fixable={len(fixable)} reviewed={len(active_reviews)} "
         f"unreviewed={len(unreviewed)} expired={len(expired)} "
-        f"invalid={len(future_reviewed) + len(mismatched)} stale={len(stale)}"
+        "invalid="
+        f"{len(future_reviewed) + len(mismatched) + len(context_mismatched)} "
+        f"stale={len(stale)}"
     )
     if stale:
         print(f"advisory baseline: {tool} has stale reviewed entries: {len(stale)}")
-    return int(bool(fixable or expired or future_reviewed or mismatched or unreviewed))
+    return int(
+        bool(
+            fixable
+            or expired
+            or future_reviewed
+            or mismatched
+            or context_mismatched
+            or unreviewed
+        )
+    )
 
 
 def main() -> None:
