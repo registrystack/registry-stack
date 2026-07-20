@@ -24,8 +24,15 @@ Documentation updates for the v0.12.2 beta-16 fix-forward release:
   contracts, projects, and standards links to Registry Stack `v0.12.2`.
 - Added the `v0.12.2` archived docset while retaining the incomplete v0.12.0
   and v0.12.1 publication records and every earlier archive.
-- Recorded the canonical binary and image build paths used to reproduce the
-  reviewed candidate before an immutable release tag is created.
+- Recorded separate Registryctl and Relay release builds, verification of the
+  shipped Relay feature set, and pinned canonical binary and image wrappers
+  used to reproduce candidate hashes and ordered runtime root filesystem
+  layers.
+- Recorded Relay's move to `quick-xml` 0.41 and the exact `ryu-js` 1.0.3 pin,
+  retiring temporary dependency exceptions without adding product features.
+- Moved Registry Notary router tests to in-process transport where network
+  semantics are not under test, preventing release-gate socket exhaustion
+  without changing production request handling.
 - Kept Solmara, hosted publication, external integration, OpenID, lifecycle,
   and pilot evidence held.
 

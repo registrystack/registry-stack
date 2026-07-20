@@ -10,9 +10,13 @@
   0.41, removing the temporary RUSTSEC-2026-0194 and RUSTSEC-2026-0195
   exceptions now that maintained upstream releases carry the fixes.
 
-- No user-visible Relay changes. This release fixes forward from the
-  incomplete v0.12.1 publication with a canonical reproducible release-build
-  path for binaries and runtime images.
+### Fixed
+
+- Fix forward from the incomplete v0.12.1 publication with separate
+  Registryctl and Relay release builds, verification of the shipped Relay
+  feature set, and pinned canonical build paths for reproducible Relay
+  binaries and runtime-image root filesystem layers. This release adds no new
+  Relay product features.
 
 ## 0.12.1 - 2026-07-20
 
