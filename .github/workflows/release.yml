@@ -396,7 +396,7 @@ jobs:
             local digest_ref="${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}"
             printf '%s\n' "${digest_ref}" | tee "dist/images/${name}.digest"
             docker buildx imagetools inspect "${digest_ref}" \
-              --format '{{json .Image.config}}' \
+              --format '{{json .Image.Config}}' \
               | jq -e \
                 --arg source "https://github.com/${GITHUB_REPOSITORY}" \
                 --arg revision "${{ needs.verify.outputs.tag_target }}" \

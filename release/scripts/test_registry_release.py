@@ -106,6 +106,7 @@ class RegistryReleaseTest(unittest.TestCase):
         ]:
             self.assertEqual(workflow.count(label), 1)
         self.assertIn('docker buildx imagetools inspect "${digest_ref}"', workflow)
+        self.assertIn("--format '{{json .Image.Config}}'", workflow)
         for label_name in [
             "org.opencontainers.image.source",
             "org.opencontainers.image.revision",
