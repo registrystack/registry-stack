@@ -9,9 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.12.2] - 2026-07-20
 
-- No user-visible Notary changes. This release fixes forward from the
-  incomplete v0.12.1 publication with a canonical reproducible release-build
-  path for binaries and runtime images.
+- No new Notary product features or public API contract changes. This release
+  fixes forward from the incomplete v0.12.1 publication with a canonical
+  reproducible release-build path for binaries and runtime images.
+- Isolated the single-use eSignet authorization-code exchange on short-lived
+  DNS-pinned transport. Redirects and proxies remain denied, timeouts remain
+  bounded, and the non-idempotent exchange is not transparently retried. No
+  public route or authentication contract changed.
 
 ## [0.12.1] - 2026-07-20
 

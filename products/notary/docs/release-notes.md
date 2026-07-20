@@ -8,6 +8,10 @@
   release fixes forward from the incomplete v0.12.1 publication with a
   canonical reproducible release-build path for the Notary binary, CEL worker,
   and runtime image.
+- The single-use eSignet authorization-code exchange now uses short-lived
+  DNS-pinned transport. Redirects and proxies remain denied, request timeouts
+  remain bounded, and the non-idempotent token exchange is not transparently
+  retried. Public routes and authentication contracts are unchanged.
 
 ## 0.12.1
 

@@ -33,6 +33,9 @@ Documentation updates for the v0.12.2 beta-16 fix-forward release:
 - Moved Registry Notary router tests to in-process transport where network
   semantics are not under test, preventing release-gate socket exhaustion
   without changing production request handling.
+- Recorded the production fix that isolates each single-use eSignet
+  authorization-code exchange on short-lived DNS-pinned transport, with
+  redirects and proxies denied, bounded timeouts, and no transparent retry.
 - Kept Solmara, hosted publication, external integration, OpenID, lifecycle,
   and pilot evidence held.
 
