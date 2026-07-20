@@ -238,8 +238,44 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "docs/site/src/data/relay-support.yaml|docs/site/src/data/generated/relay-support.json)",
     ),
     ("Docs dependency install", "run: npm ci"),
+    (
+        "Docs pull request incremental archive mode",
+        'pull_request)\n              mode="incremental"\n              ;;',
+    ),
+    (
+        "Docs main push full archive mode",
+        'push)\n              mode="full"\n              ;;',
+    ),
+    (
+        "Docs incremental archive cache key condition",
+        "name: Compute docs archive cache key\n        if: github.event_name == 'pull_request' && steps.docs-archives.outputs.mode == 'incremental'",
+    ),
+    (
+        "Docs incremental archive cache restore",
+        "name: Restore docs archive cache\n        if: github.event_name == 'pull_request' && steps.docs-archives.outputs.mode == 'incremental'\n        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8",
+    ),
+    (
+        "Docs archive cache key computation",
+        'run: node scripts/archive-cache.mjs collection-key >> "${GITHUB_OUTPUT}"',
+    ),
+    ("Docs archive cache path", "path: docs/site/.archive-build-cache"),
+    (
+        "Docs archive cache key",
+        "key: registry-docs-archives-v1-${{ runner.os }}-node-22.12.0-${{ steps.docs-archive-cache-key.outputs.key }}",
+    ),
     ("Docs tests", "run: npm test"),
-    ("Docs build check", "run: npm run check"),
+    (
+        "Docs archive mode input",
+        "ARCHIVE_MODE: ${{ steps.docs-archives.outputs.mode }}",
+    ),
+    (
+        "Docs build check",
+        "name: Check docs build\n"
+        "        working-directory: docs/site\n"
+        "        env:\n"
+        "          ARCHIVE_MODE: ${{ steps.docs-archives.outputs.mode }}\n"
+        "        run: npm run check",
+    ),
     (
         "Registryctl tutorial path filter",
         "registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}",

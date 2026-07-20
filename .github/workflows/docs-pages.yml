@@ -1,6 +1,8 @@
 name: Deploy RegistryStack Docs
 
 on:
+  schedule:
+    - cron: "0 3 * * 1"
   push:
     branches:
       - main
@@ -13,6 +15,14 @@ on:
       - "products/notary/openapi/**"
       - "products/manifest/docs/**"
   workflow_dispatch:
+    inputs:
+      archive_mode:
+        description: Archived documentation verification mode
+        type: choice
+        options:
+          - full
+          - incremental
+        default: full
 
 permissions:
   contents: read
@@ -45,6 +55,50 @@ jobs:
         working-directory: docs/site
         run: npm ci
 
+      - name: Select archive build mode
+        id: archives
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_MODE: ${{ inputs.archive_mode }}
+        run: |
+          set -euo pipefail
+          case "${EVENT_NAME}" in
+            push)
+              mode="incremental"
+              ;;
+            schedule)
+              mode="full"
+              ;;
+            workflow_dispatch)
+              mode="${REQUESTED_MODE:-full}"
+              ;;
+            *)
+              echo "Unsupported workflow event: ${EVENT_NAME}" >&2
+              exit 1
+              ;;
+          esac
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+
+      - name: Compute archive cache key
+        if: steps.archives.outputs.mode == 'incremental'
+        id: archive-cache-key
+        working-directory: docs/site
+        env:
+          PUBLIC_UMAMI_WEBSITE_ID: ${{ vars.PUBLIC_UMAMI_WEBSITE_ID }}
+          PUBLIC_UMAMI_SCRIPT_SRC: ${{ vars.PUBLIC_UMAMI_SCRIPT_SRC }}
+          PUBLIC_UMAMI_DOMAINS: ${{ vars.PUBLIC_UMAMI_DOMAINS }}
+        run: node scripts/archive-cache.mjs collection-key >> "${GITHUB_OUTPUT}"
+
+      - name: Restore archived documentation cache
+        if: steps.archives.outputs.mode == 'incremental'
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8
+        with:
+          path: docs/site/.archive-build-cache
+          key: registry-docs-archives-v1-${{ runner.os }}-node-22.12.0-${{ steps.archive-cache-key.outputs.key }}
+          restore-keys: |
+            registry-docs-archives-v1-${{ runner.os }}-node-22.12.0-
+
       - name: Build latest docs
         working-directory: docs/site
         run: npm run build
@@ -55,11 +109,18 @@ jobs:
 
       - name: Build archived docs
         working-directory: docs/site
-        run: npm run build:archives
         env:
+          ARCHIVE_MODE: ${{ steps.archives.outputs.mode }}
           PUBLIC_UMAMI_WEBSITE_ID: ${{ vars.PUBLIC_UMAMI_WEBSITE_ID }}
           PUBLIC_UMAMI_SCRIPT_SRC: ${{ vars.PUBLIC_UMAMI_SCRIPT_SRC }}
           PUBLIC_UMAMI_DOMAINS: ${{ vars.PUBLIC_UMAMI_DOMAINS }}
+        run: npm run "build:archives:${ARCHIVE_MODE}"
+
+      - name: Check combined current and archived docs
+        working-directory: docs/site
+        run: |
+          npm run check:seo:built
+          npm run check:links:built
 
       - name: Configure Pages
         uses: actions/configure-pages@v6

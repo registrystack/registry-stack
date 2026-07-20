@@ -54,3 +54,50 @@ test('keeps rejecting unrelated links that escape an archive', (t) => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /links outside its archive/);
 });
+
+test('uses a restored archive link index in the combined link check', (t) => {
+  const root = fixture(t, '/explanation/current/');
+  write(
+    root,
+    'dist/.archive-link-indexes/v1.json',
+    `${JSON.stringify({
+      schema_version: 'registry-docs.link-index.v1',
+      cache_key: 'a'.repeat(64),
+      docset_id: 'v1',
+      archive_path: '/v/v1/',
+      pages: [
+        {
+          file: 'v/v1/reference/standards/index.html',
+          url: '/v/v1/reference/standards/',
+          ids: [],
+          links: ['/not-evidence/'],
+        },
+      ],
+    })}\n`,
+  );
+
+  const result = run(root);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /links outside its archive/);
+});
+
+test('rejects a cached index whose page roster omits archive output', (t) => {
+  const root = fixture(t, '/explanation/current/');
+  write(
+    root,
+    'dist/.archive-link-indexes/v1.json',
+    `${JSON.stringify({
+      schema_version: 'registry-docs.link-index.v1',
+      cache_key: 'a'.repeat(64),
+      docset_id: 'v1',
+      archive_path: '/v/v1/',
+      pages: [],
+    })}\n`,
+  );
+
+  const result = run(root);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /page roster does not match/);
+});

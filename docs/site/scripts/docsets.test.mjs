@@ -76,6 +76,27 @@ test('validateDocsets rejects duplicate docset ids', () => {
   assert.throws(() => validateDocsets(manifest), /Duplicate docset id/);
 });
 
+test('validateDocsets rejects duplicate archive paths', () => {
+  const manifest = validDocsets();
+  manifest.docsets.push({
+    ...structuredClone(manifest.docsets[1]),
+    id: 'another-archive',
+  });
+  assert.throws(() => validateDocsets(manifest), /Duplicate docset path/);
+});
+
+test('validateDocsets rejects archive path traversal and nesting', () => {
+  for (const path of ['/v/../escape/', '/v/release/nested/', '/archive/release/']) {
+    const manifest = validDocsets();
+    manifest.docsets[1].path = path;
+    assert.throws(
+      () => validateDocsets(manifest),
+      /must not contain traversal|safe direct child of \/v\//,
+      path,
+    );
+  }
+});
+
 test('validateDocsets rejects non-SHA product refs', () => {
   const manifest = validDocsets();
   manifest.docsets[0].products['registry-relay'].ref = 'main';

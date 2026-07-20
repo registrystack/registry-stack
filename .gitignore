@@ -3,6 +3,7 @@
 /node_modules/
 /docs/site/node_modules/
 /docs/site/.repo-docs-cache/
+/docs/site/.archive-build-cache/
 __pycache__/
 *.py[cod]
 

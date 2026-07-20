@@ -39,6 +39,7 @@ export function validateDocsets(manifest) {
   }
 
   const ids = new Set();
+  const paths = new Set();
   for (const [index, docset] of manifest.docsets.entries()) {
     const prefix = `docsets[${index}]`;
     for (const key of ['id', 'label', 'path', 'status', 'source', 'published_at', 'description', 'products']) {
@@ -58,6 +59,20 @@ export function validateDocsets(manifest) {
     }
     if (!docset.path.startsWith('/') || !docset.path.endsWith('/')) {
       throw new Error(`${prefix}.path must be an absolute path with a trailing slash`);
+    }
+    if (paths.has(docset.path)) {
+      throw new Error(`Duplicate docset path "${docset.path}"`);
+    }
+    paths.add(docset.path);
+    if (
+      docset.path.includes('\\') ||
+      docset.path.includes('\0') ||
+      docset.path.split('/').some((part) => part === '.' || part === '..')
+    ) {
+      throw new Error(`${prefix}.path must not contain traversal or platform separators`);
+    }
+    if (docset.status === 'archived' && !/^\/v\/[a-z0-9][a-z0-9.-]*\/$/.test(docset.path)) {
+      throw new Error(`${prefix}.path for an archived docset must be a safe direct child of /v/`);
     }
     if (typeof docset.products !== 'object' || Array.isArray(docset.products)) {
       throw new Error(`${prefix}.products must be a map`);

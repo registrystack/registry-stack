@@ -489,6 +489,76 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("Relay support roster path filter", self.module.missing_gates(text))
 
+    def test_missing_docs_archive_cache_wiring_is_reported(self) -> None:
+        mutations = (
+            (
+                'pull_request)\n              mode="incremental"\n              ;;',
+                'pull_request)\n              mode="full"\n              ;;',
+                "Docs pull request incremental archive mode",
+            ),
+            (
+                'push)\n              mode="full"\n              ;;',
+                'push)\n              mode="incremental"\n              ;;',
+                "Docs main push full archive mode",
+            ),
+            (
+                "name: Compute docs archive cache key\n"
+                "        if: github.event_name == 'pull_request' && "
+                "steps.docs-archives.outputs.mode == 'incremental'",
+                "name: Compute docs archive cache key\n"
+                "        if: steps.docs-archives.outputs.mode == 'incremental'",
+                "Docs incremental archive cache key condition",
+            ),
+            (
+                "name: Restore docs archive cache\n"
+                "        if: github.event_name == 'pull_request' && "
+                "steps.docs-archives.outputs.mode == 'incremental'\n"
+                "        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8",
+                "name: Restore docs archive cache\n"
+                "        if: steps.docs-archives.outputs.mode == 'incremental'\n"
+                "        uses: actions/cache@disabled",
+                "Docs incremental archive cache restore",
+            ),
+            (
+                'run: node scripts/archive-cache.mjs collection-key >> "${GITHUB_OUTPUT}"',
+                "run: echo key=stale >> \"${GITHUB_OUTPUT}\"",
+                "Docs archive cache key computation",
+            ),
+            (
+                "path: docs/site/.archive-build-cache",
+                "path: docs/site/dist",
+                "Docs archive cache path",
+            ),
+            (
+                "key: registry-docs-archives-v1-${{ runner.os }}-node-22.12.0-${{ steps.docs-archive-cache-key.outputs.key }}",
+                "key: registry-docs-archives-v1-static",
+                "Docs archive cache key",
+            ),
+            (
+                "ARCHIVE_MODE: ${{ steps.docs-archives.outputs.mode }}",
+                "ARCHIVE_MODE: full",
+                "Docs archive mode input",
+            ),
+            (
+                "name: Check docs build\n"
+                "        working-directory: docs/site\n"
+                "        env:\n"
+                "          ARCHIVE_MODE: ${{ steps.docs-archives.outputs.mode }}\n"
+                "        run: npm run check",
+                "name: Check docs build\n"
+                "        working-directory: docs/site\n"
+                "        env:\n"
+                "          ARCHIVE_MODE: ${{ steps.docs-archives.outputs.mode }}\n"
+                "        run: npm run build",
+                "Docs build check",
+            ),
+        )
+        for old, new, expected in mutations:
+            with self.subTest(gate=expected):
+                self.assertIn(old, self.workflow)
+                text = self.workflow.replace(old, new, 1)
+                self.assertIn(expected, self.module.missing_gates(text))
+
     def test_missing_registryctl_tutorial_path_filter_is_reported(self) -> None:
         text = self.workflow.replace(
             "registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}",

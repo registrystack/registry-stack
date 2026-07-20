@@ -810,12 +810,47 @@ jobs:
         working-directory: docs/site
         run: npm ci
 
+      - name: Select docs archive mode
+        id: docs-archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${GITHUB_EVENT_NAME}" in
+            pull_request)
+              mode="incremental"
+              ;;
+            push)
+              mode="full"
+              ;;
+            *)
+              mode="full"
+              ;;
+          esac
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+
+      - name: Compute docs archive cache key
+        if: github.event_name == 'pull_request' && steps.docs-archives.outputs.mode == 'incremental'
+        id: docs-archive-cache-key
+        working-directory: docs/site
+        run: node scripts/archive-cache.mjs collection-key >> "${GITHUB_OUTPUT}"
+
+      - name: Restore docs archive cache
+        if: github.event_name == 'pull_request' && steps.docs-archives.outputs.mode == 'incremental'
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8
+        with:
+          path: docs/site/.archive-build-cache
+          key: registry-docs-archives-v1-${{ runner.os }}-node-22.12.0-${{ steps.docs-archive-cache-key.outputs.key }}
+          restore-keys: |
+            registry-docs-archives-v1-${{ runner.os }}-node-22.12.0-
+
       - name: Test docs scripts
         working-directory: docs/site
         run: npm test
 
       - name: Check docs build
         working-directory: docs/site
+        env:
+          ARCHIVE_MODE: ${{ steps.docs-archives.outputs.mode }}
         run: npm run check
 
   editor-extensions:
