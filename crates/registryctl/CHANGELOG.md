@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Smoke reports now carry the `registryctl.smoke.v1` schema version and are
+  validated against a committed JSON Schema.
+
+### Removed
+
+- Removed the hidden `registryctl init spreadsheet-api` compatibility alias.
+  Use `registryctl init relay` for the local spreadsheet tutorial or
+  `registryctl init --from` for Registry Stack project authoring.
+
 ## [0.12.0] - 2026-07-19
 
 ### Changed
