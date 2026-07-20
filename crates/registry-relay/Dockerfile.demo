@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # Keep the tag for humans and the digest for reproducible pulls.
-FROM rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 AS builder
+FROM rust:1.97-trixie@sha256:9a2cd304a852f05d3352f75bc2775242371c0169a72dbb40d5d881379d571989 AS builder
 WORKDIR /workspace/registry_relay
 
 COPY Cargo.toml Cargo.lock ./
