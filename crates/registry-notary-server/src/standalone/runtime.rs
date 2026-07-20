@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use tokio::sync::OnceCell;
@@ -45,7 +45,7 @@ use registry_platform_authcommon::{
 use registry_platform_crypto::{
     sign, verify, KeyReadiness, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider,
 };
-use registry_platform_httputil::{read_bounded, FetchUrlError, FetchUrlPolicy, ValidatedFetchUrl};
+use registry_platform_httputil::{read_bounded, FetchUrlPolicy};
 use registry_platform_oidc::{
     fetch_userinfo_jwt_with_policy, Audience, JwksFetcher, JwksFetcherConfig, OidcError,
     TokenVerifier, TokenVerifierConfig, VerifiedToken,

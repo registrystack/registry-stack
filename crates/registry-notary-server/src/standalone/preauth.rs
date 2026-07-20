@@ -642,14 +642,14 @@ impl PreAuthRuntime {
         if validated_url.url() != &token_url {
             return Err(EvidenceError::MissingCredential);
         }
-        let request = pinned_request_builder(
-            &validated_url,
-            reqwest::Method::POST,
-            ESIGNET_REQUEST_TIMEOUT,
-        )
-        .map_err(|_| EvidenceError::MissingCredential)?
-        .timeout(ESIGNET_REQUEST_TIMEOUT)
-        .header("accept", "application/json");
+        // Authorization codes are single-use. Keep this client short-lived so a
+        // pooled connection cannot cross validated endpoint lifecycles, and do
+        // not transparently retry the non-idempotent token exchange.
+        let request = validated_url
+            .immediate_post_with_timeout(ESIGNET_REQUEST_TIMEOUT)
+            .map_err(|_| EvidenceError::MissingCredential)?
+            .header("user-agent", "registry-notary/0.2")
+            .header("accept", "application/json");
         let client_assertion = self.client_assertion_jwt().await?;
         let mut params: BTreeMap<&str, &str> = BTreeMap::new();
         params.insert("grant_type", "authorization_code");
