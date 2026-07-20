@@ -10,7 +10,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
+from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -40,12 +43,60 @@ RELEASE_IMAGE_LOCK_REPOSITORIES = {
     "registry-relay": "ghcr.io/registrystack/registry-relay",
     "registry-notary": "ghcr.io/registrystack/registry-notary",
 }
+RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
+RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+STRICT_SEMVER = re.compile(
+    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
+)
+CROSSWALK_REPO = "PublicSchema/crosswalk"
+CROSSWALK_GIT_URL = "https://github.com/PublicSchema/crosswalk"
+RELEASE_CHANGELOG_GLOBS = (
+    "products/*/CHANGELOG.md",
+    "crates/*/CHANGELOG.md",
+)
+PRODUCT_RELEASE_NOTE_GLOBS = (
+    "products/*/docs/release-notes.md",
+    "crates/*/docs/release-notes.md",
+)
+OPENAPI_RELEASE_SURFACE_GLOBS = (
+    "products/*/openapi/*.openapi.json",
+    "crates/*/openapi/*.openapi.json",
+)
 
 
 def release_version_tuple(version: str) -> tuple[int, int, int] | None:
     if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
         return None
     return tuple(int(part) for part in version.split("."))
+
+
+def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[str]:
+    parsed_version = release_version_tuple(version)
+    errors: list[str] = []
+    if (
+        parsed_version is not None
+        and parsed_version >= RELEASE_IMAGE_LOCK_MINIMUM_VERSION
+        and "registryctl-image-lock" not in artifacts
+    ):
+        errors.append("artifact registryctl-image-lock is required for version 0.9.0 or later")
+    if (
+        parsed_version is not None
+        and parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION
+    ):
+        artifact_names = set(artifacts)
+        missing = sorted(EXACT_ARTIFACT_INVENTORY - artifact_names)
+        unexpected = sorted(artifact_names - EXACT_ARTIFACT_INVENTORY)
+        if missing or unexpected:
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if unexpected:
+                details.append(f"unexpected {', '.join(unexpected)}")
+            errors.append(
+                "artifact inventory for version 0.10.0 or later must be exactly the "
+                f"supported release set: {'; '.join(details)}"
+            )
+    return errors
 
 
 def require_registryctl_image_lock_release_version(version: str) -> None:
@@ -355,30 +406,7 @@ def validate(manifest_path: Path) -> int:
         errors.append("stack.source_ref must be HEAD for a draft or a 40-character commit")
     if source_ref == "HEAD" and status != "draft":
         errors.append("stack.source_ref may be HEAD only when stack.status is draft")
-    parsed_version = release_version_tuple(version)
-    if (
-        parsed_version is not None
-        and parsed_version >= RELEASE_IMAGE_LOCK_MINIMUM_VERSION
-        and "registryctl-image-lock" not in artifacts
-    ):
-        errors.append("artifact registryctl-image-lock is required for version 0.9.0 or later")
-    if (
-        parsed_version is not None
-        and parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION
-    ):
-        artifact_names = set(artifacts)
-        missing = sorted(EXACT_ARTIFACT_INVENTORY - artifact_names)
-        unexpected = sorted(artifact_names - EXACT_ARTIFACT_INVENTORY)
-        if missing or unexpected:
-            details = []
-            if missing:
-                details.append(f"missing {', '.join(missing)}")
-            if unexpected:
-                details.append(f"unexpected {', '.join(unexpected)}")
-            errors.append(
-                "artifact inventory for version 0.10.0 or later must be exactly the "
-                f"supported release set: {'; '.join(details)}"
-            )
+    errors.extend(artifact_inventory_errors(version, artifacts))
     for name, artifact_version in sorted(artifacts.items()):
         if str(artifact_version) != version:
             errors.append(f"artifact {name} version {artifact_version} does not match stack version {version}")
@@ -1077,6 +1105,1040 @@ def audit(import_map_path: Path) -> int:
     return 0
 
 
+class ReleasePlanError(ValueError):
+    """A release plan cannot be produced without weakening its invariants."""
+
+
+def strict_semver(value: str) -> tuple[int, int, int]:
+    match = STRICT_SEMVER.fullmatch(value)
+    if match is None:
+        raise ReleasePlanError(
+            f"version must be canonical SemVer MAJOR.MINOR.PATCH text, got {value!r}"
+        )
+    return tuple(int(part) for part in match.groups())
+
+
+def validate_release_id(value: str) -> str:
+    if RELEASE_ID.fullmatch(value) is None:
+        raise ReleasePlanError(
+            "release ID must start with an alphanumeric character and contain only "
+            "alphanumerics, '.', '_', or '-' (64 characters maximum)"
+        )
+    return value
+
+
+def json_compatible(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): json_compatible(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_compatible(item) for item in value]
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
+
+
+def required_yaml(path: Path) -> Any:
+    if not path.is_file():
+        raise ReleasePlanError(f"required release surface is missing: {path}")
+    try:
+        return load_yaml(path)
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise ReleasePlanError(f"cannot load YAML release surface {path}: {exc}") from exc
+
+
+def required_json(path: Path) -> Any:
+    if not path.is_file():
+        raise ReleasePlanError(f"required release surface is missing: {path}")
+    try:
+        return load_json(path)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReleasePlanError(f"cannot load JSON release surface {path}: {exc}") from exc
+
+
+def required_toml(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise ReleasePlanError(f"required release surface is missing: {path}")
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        raise ReleasePlanError(f"cannot load TOML release surface {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ReleasePlanError(f"TOML release surface must be an object: {path}")
+    return data
+
+
+def relative_path(repo: Path, path: Path) -> str:
+    try:
+        return path.relative_to(repo).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def passed_check(name: str, detail: str) -> dict[str, str]:
+    return {"name": name, "status": "passed", "detail": detail}
+
+
+def git_plan_output(repo: Path, *args: str) -> str:
+    try:
+        result = git(repo, *args, check=False)
+    except OSError as exc:
+        raise ReleasePlanError(f"cannot execute git in {repo}: {exc}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise ReleasePlanError(f"git {' '.join(args)} failed: {detail}")
+    return result.stdout.strip()
+
+
+def resolve_commit(repo: Path, revision: str, description: str) -> str:
+    try:
+        resolved = git_plan_output(repo, "rev-parse", "--verify", f"{revision}^{{commit}}")
+    except ReleasePlanError as exc:
+        raise ReleasePlanError(
+            f"{description} does not resolve to an existing commit: {exc}"
+        ) from exc
+    if HEX40.fullmatch(resolved) is None:
+        raise ReleasePlanError(f"{description} did not resolve to one exact commit SHA")
+    return resolved
+
+
+def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
+    try:
+        result = git(repo, "merge-base", "--is-ancestor", ancestor, descendant, check=False)
+    except OSError as exc:
+        raise ReleasePlanError(f"cannot execute git in {repo}: {exc}") from exc
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+    raise ReleasePlanError(f"git ancestry check failed: {detail}")
+
+
+def release_tags(repo: Path) -> dict[str, list[str]]:
+    tags_by_version: dict[str, list[str]] = {}
+    output = git_plan_output(repo, "tag", "--list")
+    for tag in output.splitlines():
+        candidate = tag[1:] if tag.startswith("v") else tag
+        if STRICT_SEMVER.fullmatch(candidate) is not None:
+            tags_by_version.setdefault(candidate, []).append(tag)
+    duplicates = {
+        version: sorted(tags)
+        for version, tags in tags_by_version.items()
+        if len(tags) > 1
+    }
+    if duplicates:
+        rendered = "; ".join(
+            f"{version}: {', '.join(tags)}" for version, tags in sorted(duplicates.items())
+        )
+        raise ReleasePlanError(f"duplicate release versions are represented by tags: {rendered}")
+    return tags_by_version
+
+
+def remote_release_tag_exists(repo: Path, version: str) -> bool:
+    tag_ref = f"refs/tags/v{version}"
+    try:
+        result = git(
+            repo,
+            "ls-remote",
+            "--exit-code",
+            "--refs",
+            "--tags",
+            "origin",
+            tag_ref,
+            check=False,
+        )
+    except OSError as exc:
+        raise ReleasePlanError(
+            f"cannot determine whether release tag v{version} exists on origin"
+        ) from exc
+    if result.returncode == 2 and not result.stdout.strip():
+        return False
+    if result.returncode != 0:
+        raise ReleasePlanError(
+            f"cannot determine whether release tag v{version} exists on origin "
+            f"(git ls-remote exited {result.returncode})"
+        )
+
+    lines = [line for line in result.stdout.splitlines() if line]
+    if len(lines) != 1:
+        raise ReleasePlanError(
+            f"cannot determine whether release tag v{version} exists on origin: "
+            "git ls-remote returned ambiguous output"
+        )
+    object_id, separator, remote_ref = lines[0].partition("\t")
+    if (
+        not separator
+        or remote_ref != tag_ref
+        or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", object_id) is None
+    ):
+        raise ReleasePlanError(
+            f"cannot determine whether release tag v{version} exists on origin: "
+            "git ls-remote returned ambiguous output"
+        )
+    return True
+
+
+def load_release_manifests(repo: Path) -> list[dict[str, Any]]:
+    manifest_dir = repo / "release" / "manifests"
+    if not manifest_dir.is_dir():
+        raise ReleasePlanError(f"release manifest directory is missing: {manifest_dir}")
+    records: list[dict[str, Any]] = []
+    for path in sorted(manifest_dir.glob("registry-stack-*.yaml")):
+        data = required_yaml(path)
+        if not isinstance(data, dict) or not isinstance(data.get("stack"), dict):
+            raise ReleasePlanError(f"release manifest must contain a stack object: {path}")
+        stack = data["stack"]
+        release_id = stack.get("release")
+        version = stack.get("version")
+        source_tag = stack.get("source_tag")
+        if not isinstance(release_id, str):
+            raise ReleasePlanError(f"release manifest stack.release must be text: {path}")
+        validate_release_id(release_id)
+        if path.name != f"registry-stack-{release_id}.yaml":
+            raise ReleasePlanError(
+                f"release manifest filename {path.name} does not match stack.release {release_id!r}"
+            )
+        if not isinstance(version, str):
+            raise ReleasePlanError(f"release manifest stack.version must be text: {path}")
+        parsed_version = strict_semver(version)
+        if source_tag != f"v{version}":
+            raise ReleasePlanError(
+                f"release manifest {path.name} stack.source_tag must be v{version}"
+            )
+        records.append(
+            {
+                "path": path,
+                "data": data,
+                "release_id": release_id,
+                "version": version,
+                "parsed_version": parsed_version,
+                "source_tag": source_tag,
+            }
+        )
+    if not records:
+        raise ReleasePlanError("no Registry Stack release manifests were found")
+
+    for field, label in (
+        ("release_id", "release ID"),
+        ("version", "version"),
+        ("source_tag", "source tag"),
+    ):
+        values: dict[str, list[str]] = {}
+        for record in records:
+            values.setdefault(str(record[field]), []).append(record["path"].name)
+        duplicates = {value: paths for value, paths in values.items() if len(paths) > 1}
+        if duplicates:
+            rendered = "; ".join(
+                f"{value}: {', '.join(paths)}"
+                for value, paths in sorted(duplicates.items())
+            )
+            raise ReleasePlanError(f"duplicate release manifest {label}: {rendered}")
+    return records
+
+
+def select_release_history(
+    repo: Path,
+    version: str,
+    release_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+    requested_version = strict_semver(version)
+    validate_release_id(release_id)
+    records = load_release_manifests(repo)
+    expected_path = repo / "release" / "manifests" / f"registry-stack-{release_id}.yaml"
+    selected = next((record for record in records if record["path"] == expected_path), None)
+    if selected is None:
+        reused_version = next(
+            (record for record in records if record["version"] == version), None
+        )
+        if reused_version is not None:
+            raise ReleasePlanError(
+                f"version {version} is already assigned to release ID "
+                f"{reused_version['release_id']}"
+            )
+        raise ReleasePlanError(f"exact target manifest is missing: {expected_path}")
+    if selected["version"] != version:
+        raise ReleasePlanError(
+            f"exact target manifest {expected_path.name} has version "
+            f"{selected['version']}, not requested version {version}"
+        )
+
+    other_records = [record for record in records if record is not selected]
+    non_lower = [
+        record for record in other_records if record["parsed_version"] >= requested_version
+    ]
+    if non_lower:
+        newest = max(non_lower, key=lambda record: record["parsed_version"])
+        raise ReleasePlanError(
+            f"requested version {version} is not greater than existing version "
+            f"{newest['version']} ({newest['release_id']})"
+        )
+    lower = [
+        record for record in other_records if record["parsed_version"] < requested_version
+    ]
+    if not lower:
+        raise ReleasePlanError(f"version {version} has no lower previous release manifest")
+    previous = max(lower, key=lambda record: record["parsed_version"])
+
+    beta_numbers = []
+    for record in other_records:
+        match = re.fullmatch(r"beta-([0-9]+)", record["release_id"])
+        if match is not None:
+            beta_numbers.append(int(match.group(1)))
+    advisory = f"beta-{max(beta_numbers) + 1}" if beta_numbers else None
+
+    tags = release_tags(repo)
+    if version in tags:
+        raise ReleasePlanError(
+            f"version {version} is already represented by release tag {tags[version][0]}"
+        )
+    if remote_release_tag_exists(repo, version):
+        raise ReleasePlanError(
+            f"version {version} is already represented by release tag v{version} on origin"
+        )
+    return selected, previous, advisory
+
+
+def validate_selected_manifest(repo: Path, record: dict[str, Any]) -> None:
+    data = record["data"]
+    stack = data["stack"]
+    version = record["version"]
+    if stack.get("source_repo") != "registrystack/registry-stack":
+        raise ReleasePlanError(
+            f"selected manifest stack.source_repo must be registrystack/registry-stack"
+        )
+    source_ref = stack.get("source_ref")
+    status = stack.get("status")
+    if source_ref == "HEAD":
+        if status != "draft":
+            raise ReleasePlanError(
+                "selected manifest stack.source_ref may be HEAD only for draft status"
+            )
+    elif not isinstance(source_ref, str) or HEX40.fullmatch(source_ref) is None:
+        raise ReleasePlanError(
+            "selected manifest stack.source_ref must be HEAD or one exact lowercase commit SHA"
+        )
+    if not isinstance(status, str) or not status:
+        raise ReleasePlanError("selected manifest stack.status is required")
+    if status != "draft":
+        resolved_source_ref = resolve_commit(
+            repo,
+            source_ref,
+            "selected manifest stack.source_ref",
+        )
+        if resolved_source_ref != source_ref:
+            raise ReleasePlanError(
+                "selected manifest stack.source_ref must resolve to its exact recorded commit"
+            )
+    artifacts = data.get("artifacts")
+    if not isinstance(artifacts, dict) or not artifacts:
+        raise ReleasePlanError("selected manifest artifacts must be a non-empty object")
+    inventory_errors = artifact_inventory_errors(version, artifacts)
+    if inventory_errors:
+        raise ReleasePlanError(f"selected manifest {inventory_errors[0]}")
+    for name, artifact_version in sorted(artifacts.items()):
+        if str(artifact_version) != version:
+            raise ReleasePlanError(
+                f"selected manifest artifact {name} version {artifact_version!r} "
+                f"does not match {version}"
+            )
+
+
+def validate_workspace_versions(repo: Path, version: str) -> dict[str, Any]:
+    cargo = required_toml(repo / "Cargo.toml")
+    workspace = cargo.get("workspace")
+    if not isinstance(workspace, dict) or not isinstance(workspace.get("package"), dict):
+        raise ReleasePlanError("Cargo.toml must contain workspace.package")
+    if workspace["package"].get("version") != version:
+        raise ReleasePlanError(
+            f"Cargo.toml workspace.package.version must be {version!r}"
+        )
+    dependencies = workspace.get("dependencies")
+    if not isinstance(dependencies, dict):
+        raise ReleasePlanError("Cargo.toml must contain workspace.dependencies")
+    path_dependencies = {
+        name: entry
+        for name, entry in dependencies.items()
+        if isinstance(entry, dict) and "path" in entry
+    }
+    if not path_dependencies:
+        raise ReleasePlanError("Cargo.toml has no versioned workspace path dependencies")
+    for name, entry in sorted(path_dependencies.items()):
+        if entry.get("version") != version:
+            raise ReleasePlanError(
+                f"Cargo.toml workspace path dependency {name} version must be {version!r}"
+            )
+
+    cargo_lock = required_toml(repo / "Cargo.lock")
+    packages = cargo_lock.get("package")
+    if not isinstance(packages, list):
+        raise ReleasePlanError("Cargo.lock must contain a package list")
+    workspace_packages = [
+        package
+        for package in packages
+        if isinstance(package, dict)
+        and (
+            str(package.get("name", "")).startswith("registry-")
+            or package.get("name") == "registryctl"
+        )
+        and "source" not in package
+    ]
+    if not workspace_packages:
+        raise ReleasePlanError("Cargo.lock has no Registry Stack workspace packages")
+    for package in workspace_packages:
+        if package.get("version") != version:
+            raise ReleasePlanError(
+                f"Cargo.lock workspace package {package.get('name')} version must be {version!r}"
+            )
+    return {
+        "cargo": cargo,
+        "cargo_lock": cargo_lock,
+        "path_dependency_count": len(path_dependencies),
+        "workspace_package_count": len(workspace_packages),
+    }
+
+
+def selected_docsets(
+    repo: Path,
+    record: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], int]:
+    version = record["version"]
+    tag = f"v{version}"
+    source_ref = record["data"]["stack"].get("source_ref")
+    external = record["data"].get("external")
+    if not isinstance(external, dict):
+        raise ReleasePlanError("selected manifest external must be an object")
+    path = repo / "docs" / "site" / "src" / "data" / "docsets.yaml"
+    data = required_yaml(path)
+    if not isinstance(data, dict) or not isinstance(data.get("docsets"), list):
+        raise ReleasePlanError("docsets.yaml must contain a docsets list")
+    docsets = data["docsets"]
+    ids: dict[str, list[int]] = {}
+    for index, docset in enumerate(docsets):
+        if not isinstance(docset, dict) or not isinstance(docset.get("id"), str):
+            raise ReleasePlanError(f"docsets.yaml entry {index} must have a text id")
+        ids.setdefault(docset["id"], []).append(index)
+    duplicate_ids = {key: indexes for key, indexes in ids.items() if len(indexes) > 1}
+    if duplicate_ids:
+        raise ReleasePlanError(
+            "docsets.yaml contains duplicate docset IDs: "
+            + ", ".join(sorted(duplicate_ids))
+        )
+    current_id = data.get("current")
+    if not isinstance(current_id, str) or current_id not in ids:
+        raise ReleasePlanError("docsets.yaml current must select one exact docset")
+    current = docsets[ids[current_id][0]]
+    if current.get("status") != "current" or not isinstance(current.get("products"), dict):
+        raise ReleasePlanError("current docset must have current status and a products object")
+    for name, product in sorted(current["products"].items()):
+        if not isinstance(product, dict):
+            raise ReleasePlanError(f"current docset product {name} must be an object")
+        if product.get("version") != tag or product.get("ref") != "HEAD":
+            raise ReleasePlanError(
+                f"current docset product {name} must use version {tag} and ref HEAD"
+            )
+    if tag not in ids:
+        raise ReleasePlanError(f"docsets.yaml has no exact archived docset {tag}")
+    selected_index = ids[tag][0]
+    selected = docsets[selected_index]
+    if selected.get("status") != "archived":
+        raise ReleasePlanError(f"docset {tag} status must be archived")
+    if selected.get("source") != f"registry-stack-{tag}":
+        raise ReleasePlanError(
+            f"docset {tag} source must be registry-stack-{tag}"
+        )
+    if selected.get("path") != f"/v/{version}/":
+        raise ReleasePlanError(f"docset {tag} path must be /v/{version}/")
+    products = selected.get("products")
+    if not isinstance(products, dict):
+        raise ReleasePlanError(f"docset {tag} products must be an object")
+    for name, product in sorted(products.items()):
+        if not isinstance(product, dict):
+            raise ReleasePlanError(f"docset {tag} product {name} must be an object")
+        if name in external:
+            expected = external[name]
+            if not isinstance(expected, dict) or product.get("ref") != expected.get("ref"):
+                raise ReleasePlanError(
+                    f"docset {tag} external {name} ref must match the selected manifest"
+                )
+            continue
+        if product.get("version") != tag or product.get("ref") != source_ref:
+            raise ReleasePlanError(
+                f"docset {tag} product {name} must use version {tag} and selected source_ref"
+            )
+    for name in external:
+        if name not in products:
+            raise ReleasePlanError(f"docset {tag} is missing external product {name}")
+
+    generated_path = repo / "docs" / "site" / "src" / "data" / "generated" / "docsets.json"
+    generated = required_json(generated_path)
+    if json_compatible(data) != generated:
+        raise ReleasePlanError("generated/docsets.json does not exactly mirror docsets.yaml")
+    return data, selected, selected_index
+
+
+def validate_repo_docs(repo: Path, version: str) -> int:
+    path = repo / "docs" / "site" / "src" / "data" / "repo-docs.yaml"
+    data = required_yaml(path)
+    repos = data.get("repos") if isinstance(data, dict) else None
+    if not isinstance(repos, dict) or not repos:
+        raise ReleasePlanError("repo-docs.yaml must contain a non-empty repos object")
+    expected_version = f"v{version}"
+    for name, entry in sorted(repos.items()):
+        if not isinstance(entry, dict):
+            raise ReleasePlanError(f"repo-docs.yaml repo {name} must be an object")
+        if entry.get("version") != expected_version or entry.get("ref") != "HEAD":
+            raise ReleasePlanError(
+                f"repo-docs.yaml repo {name} must use version {expected_version} and ref HEAD"
+            )
+    return len(repos)
+
+
+def release_surface_files(repo: Path, patterns: tuple[str, ...]) -> list[Path]:
+    paths: set[Path] = set()
+    for pattern in patterns:
+        paths.update(path for path in repo.glob(pattern) if path.is_file())
+    return sorted(paths)
+
+
+def validate_release_documents(
+    repo: Path,
+    version: str,
+    release_id: str,
+) -> dict[str, Any]:
+    heading = re.compile(rf"^##\s+\[?v?{re.escape(version)}\]?(?:\s|$)", re.MULTILINE)
+    changelogs = release_surface_files(repo, RELEASE_CHANGELOG_GLOBS)
+    if not changelogs:
+        raise ReleasePlanError("no product changelog release surfaces were found")
+    for path in changelogs:
+        if heading.search(path.read_text(encoding="utf-8")) is None:
+            raise ReleasePlanError(
+                f"changelog {relative_path(repo, path)} has no {version} release heading"
+            )
+    product_notes = release_surface_files(repo, PRODUCT_RELEASE_NOTE_GLOBS)
+    if not product_notes:
+        raise ReleasePlanError("no product release-note surfaces were found")
+    for path in product_notes:
+        if heading.search(path.read_text(encoding="utf-8")) is None:
+            raise ReleasePlanError(
+                f"release notes {relative_path(repo, path)} have no {version} release heading"
+            )
+    release_note = repo / "release" / "notes" / f"v{version}.md"
+    if not release_note.is_file():
+        raise ReleasePlanError(f"release note is missing: {release_note}")
+    release_text = release_note.read_text(encoding="utf-8")
+    if not release_text.startswith(f"# Registry Stack v{version}\n"):
+        raise ReleasePlanError(
+            f"release note {relative_path(repo, release_note)} has the wrong title"
+        )
+    if release_id not in release_text:
+        raise ReleasePlanError(
+            f"release note {relative_path(repo, release_note)} does not name {release_id}"
+        )
+    return {
+        "changelogs": changelogs,
+        "product_notes": product_notes,
+        "release_note": release_note,
+        "release_text": release_text,
+    }
+
+
+def validate_openapi_versions(repo: Path, version: str) -> list[Path]:
+    paths = release_surface_files(repo, OPENAPI_RELEASE_SURFACE_GLOBS)
+    if not paths:
+        raise ReleasePlanError("no committed OpenAPI release surfaces were found")
+    for path in paths:
+        data = required_json(path)
+        info = data.get("info") if isinstance(data, dict) else None
+        if not isinstance(info, dict) or info.get("version") != version:
+            raise ReleasePlanError(
+                f"OpenAPI surface {relative_path(repo, path)} info.version must be {version!r}"
+            )
+    return paths
+
+
+def validate_crosswalk(
+    record: dict[str, Any],
+    workspace: dict[str, Any],
+    selected_docset: dict[str, Any],
+    release_text: str,
+) -> dict[str, Any]:
+    dependencies = workspace["cargo"]["workspace"]["dependencies"]
+    crosswalk_dependencies = {
+        name: entry
+        for name, entry in dependencies.items()
+        if name.startswith("crosswalk-")
+    }
+    if not crosswalk_dependencies or not all(
+        isinstance(entry, dict) for entry in crosswalk_dependencies.values()
+    ):
+        raise ReleasePlanError(
+            "Cargo.toml Crosswalk workspace dependencies must use pinned dependency tables"
+        )
+    workspace_refs = {entry.get("rev") for entry in crosswalk_dependencies.values()}
+    workspace_repos = {entry.get("git") for entry in crosswalk_dependencies.values()}
+    if len(workspace_refs) != 1 or not all(
+        isinstance(ref, str) and HEX40.fullmatch(ref) is not None
+        for ref in workspace_refs
+    ):
+        raise ReleasePlanError("Cargo.toml Crosswalk dependencies must share one exact rev")
+    if workspace_repos != {CROSSWALK_GIT_URL}:
+        raise ReleasePlanError(
+            f"Cargo.toml Crosswalk dependencies must use {CROSSWALK_GIT_URL}"
+        )
+    crosswalk_ref = next(iter(workspace_refs))
+
+    lock_packages = [
+        package
+        for package in workspace["cargo_lock"]["package"]
+        if isinstance(package, dict)
+        and str(package.get("name", "")).startswith("crosswalk-")
+    ]
+    if not lock_packages:
+        raise ReleasePlanError("Cargo.lock must contain Crosswalk packages")
+    expected_prefix = f"git+{CROSSWALK_GIT_URL}?"
+    for package in lock_packages:
+        source = package.get("source")
+        if not isinstance(source, str) or not source.startswith(expected_prefix):
+            raise ReleasePlanError(
+                f"Cargo.lock Crosswalk package {package.get('name')} must use the canonical repository"
+            )
+        if f"rev={crosswalk_ref}" not in source or not source.endswith(f"#{crosswalk_ref}"):
+            raise ReleasePlanError(
+                f"Cargo.lock Crosswalk package {package.get('name')} must resolve rev {crosswalk_ref}"
+            )
+
+    external = record["data"].get("external")
+    manifest_crosswalk = external.get("crosswalk") if isinstance(external, dict) else None
+    if not isinstance(manifest_crosswalk, dict):
+        raise ReleasePlanError("selected manifest external.crosswalk must be an object")
+    if manifest_crosswalk.get("repo") != CROSSWALK_REPO:
+        raise ReleasePlanError(
+            f"selected manifest external.crosswalk.repo must be {CROSSWALK_REPO}"
+        )
+    if manifest_crosswalk.get("ref") != crosswalk_ref:
+        raise ReleasePlanError(
+            "selected manifest external.crosswalk.ref must match the Cargo.toml pin"
+        )
+    products = selected_docset.get("products")
+    docset_crosswalk = products.get("crosswalk") if isinstance(products, dict) else None
+    if not isinstance(docset_crosswalk, dict) or docset_crosswalk.get("ref") != crosswalk_ref:
+        raise ReleasePlanError("selected docset Crosswalk ref must match the Cargo.toml pin")
+    core = crosswalk_dependencies.get("crosswalk-core")
+    core_version = core.get("version") if isinstance(core, dict) else None
+    if not isinstance(core_version, str):
+        raise ReleasePlanError("Cargo.toml crosswalk-core must declare an exact version")
+    if docset_crosswalk.get("version") != f"crosswalk-core-v{core_version}":
+        raise ReleasePlanError(
+            "selected docset Crosswalk version must match Cargo.toml crosswalk-core"
+        )
+    if crosswalk_ref not in release_text:
+        raise ReleasePlanError("release note must record the exact Crosswalk ref")
+    return {
+        "repo": CROSSWALK_REPO,
+        "ref": crosswalk_ref,
+        "version": core_version,
+        "workspace_dependencies": sorted(crosswalk_dependencies),
+        "lock_packages": sorted(str(package.get("name")) for package in lock_packages),
+    }
+
+
+def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[str, Any]:
+    repo = repo.resolve()
+    if not repo.is_dir():
+        raise ReleasePlanError(f"repository does not exist: {repo}")
+    selected, previous, advisory = select_release_history(repo, version, release_id)
+    validate_selected_manifest(repo, selected)
+    checks = [
+        passed_check(
+            "release-history",
+            f"selected {selected['path'].name}; previous is {previous['path'].name}",
+        ),
+        passed_check(
+            "release-identity",
+            f"explicit version {version} and release ID {release_id} match the target manifest",
+        ),
+        passed_check(
+            "immutable-release-tag",
+            f"v{version} is absent from the local and origin tag sets",
+        ),
+    ]
+    workspace = validate_workspace_versions(repo, version)
+    checks.append(
+        passed_check(
+            "workspace-versions",
+            f"{workspace['path_dependency_count']} path dependencies and "
+            f"{workspace['workspace_package_count']} lock packages use {version}",
+        )
+    )
+    docsets_data, selected_docset, selected_docset_index = selected_docsets(repo, selected)
+    checks.append(
+        passed_check(
+            "docsets",
+            f"current and archived v{version} docsets agree with the selected manifest",
+        )
+    )
+    repo_docs_count = validate_repo_docs(repo, version)
+    checks.append(
+        passed_check(
+            "repo-docs",
+            f"{repo_docs_count} current repository documentation sources use v{version}",
+        )
+    )
+    documents = validate_release_documents(repo, version, release_id)
+    checks.append(
+        passed_check(
+            "release-documents",
+            f"{len(documents['changelogs'])} changelogs and "
+            f"{len(documents['product_notes']) + 1} release notes name {version}",
+        )
+    )
+    openapi_paths = validate_openapi_versions(repo, version)
+    checks.append(
+        passed_check(
+            "openapi-versions",
+            f"{len(openapi_paths)} committed OpenAPI documents use {version}",
+        )
+    )
+    crosswalk = validate_crosswalk(
+        selected,
+        workspace,
+        selected_docset,
+        documents["release_text"],
+    )
+    checks.append(
+        passed_check(
+            "crosswalk-pin",
+            f"workspace, lock, manifest, docset, and release note agree on {crosswalk['ref']}",
+        )
+    )
+    checks.append(
+        passed_check(
+            "generated-docset-mirror",
+            "generated/docsets.json exactly mirrors docsets.yaml",
+        )
+    )
+    return {
+        "repo": repo,
+        "selected": selected,
+        "previous": previous,
+        "advisory": advisory,
+        "workspace": workspace,
+        "docsets_data": docsets_data,
+        "selected_docset": selected_docset,
+        "selected_docset_index": selected_docset_index,
+        "documents": documents,
+        "openapi_paths": openapi_paths,
+        "crosswalk": crosswalk,
+        "checks": checks,
+    }
+
+
+def manifest_plan_identity(repo: Path, record: dict[str, Any]) -> dict[str, Any]:
+    stack = record["data"]["stack"]
+    return {
+        "manifest": relative_path(repo, record["path"]),
+        "version": record["version"],
+        "release_id": record["release_id"],
+        "source_tag": record["source_tag"],
+        "source_ref": stack.get("source_ref"),
+        "status": stack.get("status"),
+    }
+
+
+def prepare_changes(context: dict[str, Any]) -> list[dict[str, Any]]:
+    repo = context["repo"]
+    previous_version = context["previous"]["version"]
+    version = context["selected"]["version"]
+    surfaces = [
+        (context["selected"]["path"], "target-manifest"),
+        (repo / "Cargo.toml", "workspace-version"),
+        (repo / "Cargo.lock", "workspace-lock"),
+        (repo / "docs/site/src/data/docsets.yaml", "docset"),
+        (repo / "docs/site/src/data/generated/docsets.json", "generated-mirror"),
+        (repo / "docs/site/src/data/repo-docs.yaml", "documentation-version"),
+        (context["documents"]["release_note"], "release-note"),
+    ]
+    surfaces.extend((path, "changelog") for path in context["documents"]["changelogs"])
+    surfaces.extend(
+        (path, "product-release-note") for path in context["documents"]["product_notes"]
+    )
+    surfaces.extend((path, "openapi-version") for path in context["openapi_paths"])
+    return [
+        {
+            "path": relative_path(repo, path),
+            "kind": kind,
+            "from": previous_version,
+            "to": version,
+        }
+        for path, kind in surfaces
+    ]
+
+
+def build_prepare_plan(repo: Path, version: str, release_id: str) -> dict[str, Any]:
+    context = prepare_release_context(repo, version, release_id)
+    previous = manifest_plan_identity(context["repo"], context["previous"])
+    previous["advisory_next_release_id"] = context["advisory"]
+    return {
+        "schema_version": RELEASE_PLAN_SCHEMA,
+        "operation": "prepare",
+        "status": "ready",
+        "requested": {"version": version, "release_id": release_id},
+        "previous": previous,
+        "selected": manifest_plan_identity(context["repo"], context["selected"]),
+        "crosswalk": context["crosswalk"],
+        "checks": context["checks"],
+        "changes": prepare_changes(context),
+    }
+
+
+def load_exact_generated_mirror(repo: Path, name: str, source: Any) -> Any:
+    path = repo / "docs" / "site" / "src" / "data" / "generated" / f"{name}.json"
+    generated = required_json(path)
+    if json_compatible(source) != generated:
+        raise ReleasePlanError(f"generated/{name}.json does not exactly mirror {name}.yaml")
+    return generated
+
+
+def ref_change(
+    repo: Path,
+    path: Path,
+    pointer: str,
+    old: str,
+    new: str,
+) -> dict[str, str]:
+    return {
+        "path": relative_path(repo, path),
+        "pointer": pointer,
+        "kind": "replace",
+        "from": old,
+        "to": new,
+    }
+
+
+def candidate_registry_stack_url_match(
+    url: Any,
+    candidate: str,
+) -> re.Match[str] | None:
+    if not isinstance(url, str):
+        return None
+    prefix = "https://github.com/registrystack/registry-stack/"
+    return re.fullmatch(
+        re.escape(prefix)
+        + rf"(?:blob|tree)/(?P<ref>{re.escape(candidate)})/[^?#]+"
+        + r"(?:\?[^#]*)?(?:#.*)?",
+        url,
+    )
+
+
+def candidate_registry_stack_url(url: Any, candidate: str) -> bool:
+    return candidate_registry_stack_url_match(url, candidate) is not None
+
+
+def replace_url_ref(url: str, old: str, new: str) -> str:
+    match = candidate_registry_stack_url_match(url, old)
+    if match is None:
+        raise ReleasePlanError(f"candidate Registry Stack URL has an ambiguous ref: {url}")
+    start, end = match.span("ref")
+    return f"{url[:start]}{new}{url[end:]}"
+
+
+def finalize_ref_changes(
+    context: dict[str, Any],
+    promotion_commit: str,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    repo = context["repo"]
+    candidate = context["selected"]["data"]["stack"]["source_ref"]
+    source_changes = [
+        ref_change(
+            repo,
+            context["selected"]["path"],
+            "/stack/source_ref",
+            candidate,
+            promotion_commit,
+        )
+    ]
+    mirror_changes: list[dict[str, str]] = []
+
+    docsets_path = repo / "docs/site/src/data/docsets.yaml"
+    generated_docsets_path = repo / "docs/site/src/data/generated/docsets.json"
+    external_names = set(context["selected"]["data"].get("external", {}))
+    products = context["selected_docset"]["products"]
+    docset_index = context["selected_docset_index"]
+    for name in sorted(products):
+        product = products[name]
+        if name in external_names or product.get("ref") != candidate:
+            continue
+        pointer = f"/docsets/{docset_index}/products/{name}/ref"
+        source_changes.append(
+            ref_change(repo, docsets_path, pointer, candidate, promotion_commit)
+        )
+        mirror_changes.append(
+            ref_change(repo, generated_docsets_path, pointer, candidate, promotion_commit)
+        )
+
+    contracts_path = repo / "docs/site/src/data/contracts.yaml"
+    contracts = required_yaml(contracts_path)
+    if not isinstance(contracts, list):
+        raise ReleasePlanError("contracts.yaml must contain a top-level list")
+    load_exact_generated_mirror(repo, "contracts", contracts)
+    generated_contracts_path = repo / "docs/site/src/data/generated/contracts.json"
+    for index, contract in enumerate(contracts):
+        source = contract.get("source_of_truth") if isinstance(contract, dict) else None
+        url = source.get("url") if isinstance(source, dict) else None
+        if not candidate_registry_stack_url(url, candidate):
+            continue
+        replacement = replace_url_ref(url, candidate, promotion_commit)
+        pointer = f"/{index}/source_of_truth/url"
+        source_changes.append(ref_change(repo, contracts_path, pointer, url, replacement))
+        mirror_changes.append(
+            ref_change(repo, generated_contracts_path, pointer, url, replacement)
+        )
+
+    standards_path = repo / "docs/site/src/data/standards.yaml"
+    standards = required_yaml(standards_path)
+    if not isinstance(standards, list):
+        raise ReleasePlanError("standards.yaml must contain a top-level list")
+    load_exact_generated_mirror(repo, "standards", standards)
+    generated_standards_path = repo / "docs/site/src/data/generated/standards.json"
+    for entry_index, standard in enumerate(standards):
+        evidence = standard.get("evidence_docs") if isinstance(standard, dict) else None
+        if not isinstance(evidence, list):
+            continue
+        for evidence_index, item in enumerate(evidence):
+            url = item.get("url") if isinstance(item, dict) else None
+            if not candidate_registry_stack_url(url, candidate):
+                continue
+            replacement = replace_url_ref(url, candidate, promotion_commit)
+            pointer = f"/{entry_index}/evidence_docs/{evidence_index}/url"
+            source_changes.append(ref_change(repo, standards_path, pointer, url, replacement))
+            mirror_changes.append(
+                ref_change(repo, generated_standards_path, pointer, url, replacement)
+            )
+    return source_changes, mirror_changes
+
+
+def build_finalize_plan(
+    repo: Path,
+    version: str,
+    release_id: str,
+    promotion_commit: str,
+    default_branch: str,
+) -> dict[str, Any]:
+    context = prepare_release_context(repo, version, release_id)
+    stack = context["selected"]["data"]["stack"]
+    if stack.get("status") != "release-candidate":
+        raise ReleasePlanError(
+            "finalize requires the selected manifest to have release-candidate status"
+        )
+    candidate = stack.get("source_ref")
+    if not isinstance(candidate, str) or HEX40.fullmatch(candidate) is None:
+        raise ReleasePlanError(
+            "finalize requires the selected manifest to record one exact candidate source_ref"
+        )
+    resolved_promotion = resolve_commit(context["repo"], promotion_commit, "promotion commit")
+    resolved_default = resolve_commit(context["repo"], default_branch, "default branch")
+    if not is_ancestor(context["repo"], candidate, resolved_promotion):
+        raise ReleasePlanError(
+            f"candidate source_ref {candidate} is not an ancestor of promotion commit "
+            f"{resolved_promotion}"
+        )
+    if not is_ancestor(context["repo"], resolved_promotion, resolved_default):
+        raise ReleasePlanError(
+            f"promotion commit {resolved_promotion} is not reachable from default branch "
+            f"{default_branch} ({resolved_default})"
+        )
+    source_changes, mirror_changes = finalize_ref_changes(context, resolved_promotion)
+    checks = list(context["checks"])
+    checks.extend(
+        [
+            passed_check(
+                "release-candidate",
+                f"selected manifest records exact candidate source_ref {candidate}",
+            ),
+            passed_check(
+                "promotion-lineage",
+                f"candidate is an ancestor of exact promotion commit {resolved_promotion}",
+            ),
+            passed_check(
+                "default-branch-reachability",
+                f"promotion commit is reachable from {default_branch} at {resolved_default}",
+            ),
+            passed_check(
+                "generated-finalization-mirrors",
+                "contracts, standards, and docset generated mirrors match their YAML sources",
+            ),
+        ]
+    )
+    previous = manifest_plan_identity(context["repo"], context["previous"])
+    previous["advisory_next_release_id"] = context["advisory"]
+    selected = manifest_plan_identity(context["repo"], context["selected"])
+    selected["candidate_source_ref"] = candidate
+    selected["promotion_commit"] = resolved_promotion
+    return {
+        "schema_version": RELEASE_PLAN_SCHEMA,
+        "operation": "finalize",
+        "status": "ready",
+        "requested": {
+            "version": version,
+            "release_id": release_id,
+            "promotion_commit": resolved_promotion,
+            "default_branch": default_branch,
+            "default_branch_commit": resolved_default,
+        },
+        "previous": previous,
+        "selected": selected,
+        "crosswalk": context["crosswalk"],
+        "checks": checks,
+        "changes": source_changes + mirror_changes,
+    }
+
+
+def emit_release_plan(plan: dict[str, Any], plan_output: Path | None) -> None:
+    body = json.dumps(plan, indent=2, sort_keys=True) + "\n"
+    if plan_output is not None:
+        if plan_output.is_symlink() or (plan_output.exists() and not plan_output.is_file()):
+            raise ReleasePlanError(
+                f"plan output must be a regular, non-symlink file path: {plan_output}"
+            )
+        try:
+            plan_output.write_text(body, encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise ReleasePlanError(f"cannot write release plan {plan_output}: {exc}") from exc
+    print(body, end="")
+
+
+def run_release_plan(
+    operation: str,
+    repo: Path,
+    version: str,
+    release_id: str,
+    plan_output: Path | None,
+    *,
+    promotion_commit: str | None = None,
+    default_branch: str = "origin/main",
+) -> int:
+    try:
+        if operation == "prepare":
+            plan = build_prepare_plan(repo, version, release_id)
+        elif operation == "finalize":
+            if promotion_commit is None:
+                raise AssertionError("finalize promotion commit was not parsed")
+            plan = build_finalize_plan(
+                repo,
+                version,
+                release_id,
+                promotion_commit,
+                default_branch,
+            )
+        else:
+            raise AssertionError(operation)
+        emit_release_plan(plan, plan_output)
+    except (OSError, UnicodeError, ReleasePlanError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="registry-release")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1136,6 +2198,18 @@ def main() -> int:
     capsule_parser.add_argument("--repo", type=Path, default=ROOT)
     capsule_parser.add_argument("--default-branch", default="origin/main")
     capsule_parser.add_argument("--require-registryctl-image-lock", action="store_true")
+    prepare_parser = subparsers.add_parser("prepare")
+    prepare_parser.add_argument("--version", required=True)
+    prepare_parser.add_argument("--release-id", required=True)
+    prepare_parser.add_argument("--repo", type=Path, default=ROOT)
+    prepare_parser.add_argument("--plan-output", type=Path)
+    finalize_parser = subparsers.add_parser("finalize")
+    finalize_parser.add_argument("--version", required=True)
+    finalize_parser.add_argument("--release-id", required=True)
+    finalize_parser.add_argument("--promotion-commit", required=True)
+    finalize_parser.add_argument("--default-branch", default="origin/main")
+    finalize_parser.add_argument("--repo", type=Path, default=ROOT)
+    finalize_parser.add_argument("--plan-output", type=Path)
     args = parser.parse_args()
 
     if args.command == "validate":
@@ -1181,6 +2255,24 @@ def main() -> int:
             args.repo,
             args.default_branch,
             args.require_registryctl_image_lock,
+        )
+    if args.command == "prepare":
+        return run_release_plan(
+            "prepare",
+            args.repo,
+            args.version,
+            args.release_id,
+            args.plan_output,
+        )
+    if args.command == "finalize":
+        return run_release_plan(
+            "finalize",
+            args.repo,
+            args.version,
+            args.release_id,
+            args.plan_output,
+            promotion_commit=args.promotion_commit,
+            default_branch=args.default_branch,
         )
     raise AssertionError(args.command)
 
