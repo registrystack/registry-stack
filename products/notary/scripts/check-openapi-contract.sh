@@ -11,6 +11,10 @@ GENERATED="$WORK_DIR/generated.openapi.json"
 BASELINE="$WORK_DIR/base.openapi.json"
 RAW_BREAKING_DIFF="$WORK_DIR/breaking.singleline.txt"
 BREAKING_IGNORE="openapi/oasdiff-1.0-err-ignore.txt"
+# Exact git blob for the Notary 1.0 contract on main before beta-14 promotion.
+# The release-only exception below must never apply after that contract baseline
+# advances, even when BASE_REF also contains unrelated commits.
+OPENAPI_1_0_BASELINE_BLOB="083a894a853c1791f2ba87f5ecee259e687eab70"
 
 mkdir -p "$WORK_DIR"
 
@@ -62,6 +66,12 @@ if ! git cat-file -e "$BASE_REF:$SPEC_PATH_FROM_ROOT" 2>/dev/null; then
 fi
 
 git show "$BASE_REF:$SPEC_PATH_FROM_ROOT" > "$BASELINE"
+
+BASELINE_BLOB="$(git rev-parse "$BASE_REF:$SPEC_PATH_FROM_ROOT")"
+if [[ "$BASELINE_BLOB" != "$OPENAPI_1_0_BASELINE_BLOB" ]]; then
+    oasdiff breaking --fail-on ERR "$BASELINE" "$GENERATED"
+    exit 0
+fi
 
 # Keep the one-time 1.0 exception exact and self-expiring. An added allowlist
 # line fails this check, and an accepted line that disappears from the raw diff

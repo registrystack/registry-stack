@@ -380,6 +380,8 @@ const RESERVED_TOKEN_CLAIMS: &[&str] = &[
     "client_id",
     "token_type",
     "credential_configuration_id",
+    "issuance_transaction_id",
+    "issuance_transaction_commitment",
     "tx_code_required",
     "acr",
     "auth_time",
@@ -1059,7 +1061,7 @@ mod tests {
     fn mint_rejects_subject_binding_claim_colliding_with_a_reserved_claim() {
         // A subject_binding_claim configured to a reserved/emitted claim name
         // would overwrite that claim; minting must fail loudly instead.
-        for reserved in ["iss", "aud", "sub", "exp", "scope", "client_id"] {
+        for &reserved in RESERVED_TOKEN_CLAIMS {
             let mut subject = bound_subject();
             subject.subject_binding_claim = reserved.to_string();
             let claims = AccessTokenClaims {
