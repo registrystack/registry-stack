@@ -53,15 +53,15 @@ Neither the service nor CEL worker imports `ungetwc` or the affected deprecated
 DNS-printing functions. The libstdc++ object that imports `ungetwc` is not in
 either executable dependency closure.
 
-The implementation reviewed for the pre-tag `v0.12.1` candidate is protected-
-main revision `d6d2d167426ada77097c8d5606f100b1554aaadc`, which remains an ancestor
+The implementation reviewed for the pre-tag `v0.12.2` candidate is protected-
+main revision `0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8`, which remains an ancestor
 of the release lineage. The versioned candidate was built with the release's
 pinned Linux/amd64 builder and scanned at exact Notary image digest
-`sha256:d1b54805445c13c425dd75853715102cda1da35be020ad78218e9abab2399c97`.
-Grype 0.114.0 with valid database schema v6.1.9, built July 19, 2026, reported
+`sha256:d120f03836c5dbb9850b807fa67c68ac21a3e5f293f77953aa25e07924b92fcb`.
+Grype 0.114.0 with valid database schema v6.1.9, built July 20, 2026, reported
 the same three non-fixable blocking-severity findings and no fixable finding.
 The reviewed root filesystem digest is
-`sha256:ae4f26951d5d32b845f984f9a14c7eb8ae18b15b396d583f4d05d35473377823`.
+`sha256:2dd9f5f9d9eadcaa10644a977e3fad2b1e1b3b529c9b8fe647de34f5664dada3`.
 Direct inspection of the candidate service and CEL worker confirmed that they
 do not import `ungetwc` or the affected DNS-printing functions and contain no
 `%mc` format string. The tagged release must reproduce this root filesystem
