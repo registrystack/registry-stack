@@ -74,9 +74,9 @@ from pathlib import Path
 expected = {
     "GET /oid4vci/credential-offer api path removed without deprecation",
     "POST /oid4vci/nonce api path removed without deprecation",
-    "GET /.well-known/openid-credential-issuer removed the optional property 'nonce_endpoint' from the response with the '200' status",
-    "POST /oid4vci/credential removed the optional property 'c_nonce' from the response with the '200' status",
-    "POST /oid4vci/credential removed the optional property 'c_nonce_expires_in' from the response with the '200' status",
+    "GET /.well-known/openid-credential-issuer removed the optional property `nonce_endpoint` from the response with the `200` status",
+    "POST /oid4vci/credential removed the optional property `c_nonce` from the response with the `200` status",
+    "POST /oid4vci/credential removed the optional property `c_nonce_expires_in` from the response with the `200` status",
 }
 
 ignore_path = Path(sys.argv[1])
