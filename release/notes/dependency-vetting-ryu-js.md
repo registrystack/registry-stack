@@ -1,11 +1,11 @@
 # `ryu-js` Dependency Vetting Review
 
-Reviewed: 2026-07-11
+Reviewed: 2026-07-20
 
-Decision: accept the locked `ryu-js` 1.0.2 release for the narrow runtime use
-described below, subject to the controls and review triggers in this note. This
-decision is not a certification of RFC 8785 conformance, memory safety, or
-upstream supply-chain security.
+Decision: accept the exactly pinned `ryu-js` 1.0.3 release for the narrow
+runtime use described below, subject to the controls and review triggers in
+this note. This decision is not a certification of RFC 8785 conformance,
+memory safety, or upstream supply-chain security.
 
 ## Scope and Need
 
@@ -24,27 +24,33 @@ security-sensitive implementation.
 
 ## Package and Dependency Graph
 
-- Package: `ryu-js` 1.0.2.
-- Source: <https://crates.io/crates/ryu-js/1.0.2>.
+- Package: `ryu-js` 1.0.3.
+- Source: <https://crates.io/crates/ryu-js/1.0.3>.
 - Cargo checksum:
-  `dd29631678d6fb0903b69223673e122c32e9ae559d0960a38d574695ebc0ea15`.
+  `04d056b875a9d2e6cb9a61d127afee9ac5999b9f87bcb32079d1318e505be714`.
 - Upstream: <https://github.com/boa-dev/ryu-js>.
 - License: `Apache-2.0 OR BSL-1.0`. Both choices are allowed by all five
   repository `deny.toml` license policies.
 - Features: no optional feature is enabled; the crate's default feature set is
   empty.
 - Normal transitive dependencies: none.
-- Lockfile impact: version 1.0.2 was already present through the `oxjsonld`
-  development dependency path. The product change promotes the same locked
-  package to a direct runtime dependency of
-  `registry-platform-canonical-json`; it does not add another external package
-  version or checksum.
+- Lockfile impact: the workspace resolves one `ryu-js` version shared by the
+  `oxjsonld` development path and the direct runtime dependency of
+  `registry-platform-canonical-json`. This review upgrades that resolution from
+  1.0.2 to 1.0.3 without adding a package or transitive dependency.
 
 ## Maintenance and Security Signals
 
-At review time, the upstream repository was not archived and reported a most
-recent push on 2026-07-10. Its latest crates.io/GitHub release was 1.0.2 on
-2025-02-16. The repository includes fuzzing and Dependabot configuration.
+At review time, the upstream repository was not archived. Its latest
+crates.io/GitHub release was 1.0.3 on 2026-07-10. That release raises the
+upstream MSRV from 1.64 to 1.71, expands the Miri test matrix, and fixes an
+out-of-bounds panic in `format64_to_fixed` when rounding carries through every
+digit. Registry Stack calls only `Buffer::format_finite`; it does not call the
+affected fixed-format API. The 1.0.2 to 1.0.3 diff also replaces pointer-offset
+operations in formatter modules reachable through `format_finite`, so the
+reachable unsafe implementation was re-reviewed even though the reported panic
+was not reachable. The repository includes fuzzing and Dependabot
+configuration.
 
 The [OpenSSF Scorecard API][scorecard] reported an overall score of 5.0 on
 2026-07-06. The report assigned zero scores to Token-Permissions,
@@ -60,12 +66,22 @@ source, or ban failure attributable to `ryu-js`.
 
 The first-party crate inherits `unsafe_code = "forbid"`, but that lint does not
 apply to dependencies. `ryu-js` exposes the safe `Buffer` API used by Registry
-Stack and implements it over third-party unsafe code. A source scan found 43
-lines matching unsafe constructs across 12 Rust source files, including raw
-buffer writes and unchecked UTF-8 conversion in the formatting path. The
-release unsafe-code inventory is explicitly first-party-only, so this note
-records the new runtime third-party unsafe surface without changing that
-inventory's scope.
+Stack and implements it over third-party unsafe code, including raw buffer
+writes, unchecked table access, pointer arithmetic, `MaybeUninit`, and unchecked
+UTF-8 conversion in the formatting path. The release unsafe-code inventory is
+explicitly first-party-only, so this note records the runtime third-party unsafe
+surface without changing that inventory's scope.
+
+## Alternatives Rechecked
+
+Plain `ryu` and `serde_json` do not implement the ECMAScript notation and tie
+behavior required by RFC 8785. Reviewed JCS crates either depend on `ryu-js` or
+failed existing midpoint-tie and canonical-byte expectations. A safe local
+formatter sampled against JavaScript also produced material output differences.
+Embedding a JavaScript or WASM runtime would add a larger dependency and
+execution surface to a pervasive signing primitive. No reviewed replacement
+therefore improves the combined correctness, security, and maintenance posture
+for this release.
 
 ## Accepted Risk and Controls
 
@@ -83,8 +99,8 @@ The following controls are required:
 - enable correctly rounded JSON-to-binary64 parsing with
   `serde_json/float_roundtrip` in every build graph that canonicalizes parsed
   JSON;
-- keep the exact version and checksum in `Cargo.lock`, and use locked build and
-  test commands;
+- pin the reviewed version exactly in `Cargo.toml`, keep its checksum in
+  `Cargo.lock`, and use locked build and test commands;
 - retain exact RFC 8785 number, string, UTF-16 property-order, nesting, and
   negative-zero regression vectors;
 - treat changes to canonical bytes as signature and digest compatibility

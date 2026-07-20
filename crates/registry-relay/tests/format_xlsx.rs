@@ -533,6 +533,20 @@ fn build_uncached_formula_xlsx() -> Vec<u8> {
     )
 }
 
+fn build_whitespace_xlsx() -> Vec<u8> {
+    build_minimal_xlsx(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:A3"/>
+  <sheetData>
+    <row r="1"><c r="A1" t="inlineStr"><is><t>value</t></is></c></row>
+    <row r="2"><c r="A2" t="inlineStr"><is><t>  ordinary  </t></is></c></row>
+    <row r="3"><c r="A3" t="inlineStr"><is><t xml:space="preserve">  preserved  </t></is></c></row>
+  </sheetData>
+</worksheet>"#,
+    )
+}
+
 /// The synthetic-bomb helper above must actually be a workbook calamine
 /// will open. This sanity test uses a tiny dimension so `worksheet_range`
 /// is cheap and the bomb-guard path is not exercised. If this fails, the
@@ -548,6 +562,28 @@ async fn synthetic_xlsx_helper_produces_a_workbook_calamine_can_open() {
     let batch = batches[0].as_ref().expect("batch");
     // Header row only; no data rows.
     assert_eq!(batch.num_rows(), 0);
+}
+
+/// Calamine 0.36 follows SpreadsheetML's `xml:space` semantics. Pin both
+/// branches so dependency updates cannot silently change ingested identifiers.
+#[tokio::test]
+async fn honors_xlsx_inline_string_whitespace_semantics() {
+    let bytes = build_whitespace_xlsx();
+    let decoded = XlsxFormat::new()
+        .decode(Box::pin(std::io::Cursor::new(bytes)), hints_default())
+        .await
+        .expect("synthetic whitespace workbook should decode");
+    let batches: Vec<_> = decoded.batches.collect::<Vec<_>>().await;
+    let batch = batches[0].as_ref().expect("batch");
+    let values = batch
+        .column_by_name("value")
+        .expect("value column")
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("value: StringArray");
+
+    assert_eq!(values.value(0), "ordinary");
+    assert_eq!(values.value(1), "  preserved  ");
 }
 
 /// A workbook whose `<dimension>` advertises more than `MAX_XLSX_CELLS`
