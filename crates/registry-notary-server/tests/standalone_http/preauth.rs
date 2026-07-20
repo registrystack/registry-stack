@@ -28,7 +28,7 @@ pub(super) async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing()
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let start = server
         .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
@@ -83,7 +83,7 @@ pub(super) async fn preauth_offer_start_returns_429_when_login_state_store_is_fu
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     for _ in 0..4096 {
         server
@@ -131,7 +131,7 @@ pub(super) async fn preauth_offer_start_requests_userinfo_subject_binding_claim_
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let start = server
         .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
@@ -178,7 +178,7 @@ pub(super) async fn preauth_offer_start_rejects_unknown_configuration_id() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let start = server
         .get("/oid4vci/offer/start?credential_configuration_id=unknown_config")
@@ -204,7 +204,7 @@ pub(super) async fn preauth_credential_rejects_inline_jwk_holder_proof_before_au
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let response = server
         .post("/oid4vci/credential")
         .json(&json!({
@@ -239,7 +239,7 @@ pub(super) async fn preauth_callback_mints_pre_authorized_offer_with_tx_code() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
     assert!(!code.is_empty(), "callback mints a pre-authorized_code");
@@ -280,7 +280,7 @@ pub(super) async fn preauth_callback_omits_tx_code_when_optional() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let page = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
     assert!(
@@ -322,7 +322,7 @@ pub(super) async fn preauth_callback_accepts_esignet_id_token_without_typ_header
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let start = server
         .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
@@ -448,7 +448,7 @@ pub(super) async fn preauth_client_assertion_is_rs256_signed_when_rp_key_is_rsa(
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let (code, _pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
     assert!(!code.is_empty(), "callback mints a pre-authorized_code");
@@ -511,7 +511,7 @@ pub(super) async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
     let token = redeem_token(&server, &code, &pin).await;
@@ -668,7 +668,7 @@ pub(super) async fn preauth_callback_binds_subject_from_userinfo_when_claim_sour
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     // The id_token (minted by drive_offer_to_code) carries no individual_id;
     // the userinfo JWS supplies it, bound to the same subject.
@@ -726,7 +726,7 @@ pub(super) async fn preauth_callback_denies_when_userinfo_lacks_subject_binding_
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     // userinfo JWS bound to the subject but without the binding claim.
     let userinfo = idp.mint_token(json!({
@@ -794,7 +794,7 @@ pub(super) async fn preauth_code_is_single_use() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
     redeem_token(&server, &code, &pin).await.assert_status_ok();
@@ -822,7 +822,7 @@ pub(super) async fn preauth_token_rejects_wrong_and_missing_tx_code() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let (code, _pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
 
@@ -873,7 +873,7 @@ pub(super) async fn preauth_token_accepts_missing_tx_code_when_optional() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let page = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
     assert!(
@@ -922,7 +922,7 @@ pub(super) async fn preauth_signed_required_policy_and_lockout_survive_optional_
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let issued = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
     let mut payload = jwt_payload(&issued.code);
@@ -958,7 +958,7 @@ pub(super) async fn preauth_forged_optional_code_without_reserved_transaction_is
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let issued = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
     let mut payload = jwt_payload(&issued.code);
@@ -989,7 +989,7 @@ pub(super) async fn preauth_token_rejects_missing_or_non_boolean_signed_tx_code_
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let issued = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
     let baseline = jwt_payload(&issued.code);
@@ -1035,7 +1035,7 @@ pub(super) async fn preauth_repeated_wrong_pins_lock_the_code() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
 
@@ -1071,7 +1071,7 @@ pub(super) async fn preauth_token_rejects_wrong_and_missing_grant_cleanly() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let other_grant = server
         .post("/oid4vci/token")
@@ -1161,7 +1161,7 @@ pub(super) async fn preauth_disabled_exposes_no_wallet_issuance_grant() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     server
         .get("/oid4vci/offer/start?credential_configuration_id=person_is_alive_sd_jwt")
@@ -1311,7 +1311,7 @@ pub(super) async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_no
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     // Use a protected route without a proof precheck, so the trust-anchor
     // verification alone decides the outcome.
@@ -1363,7 +1363,7 @@ pub(super) async fn preauth_transaction_token_jti_denials_are_stable_and_redacte
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let missing_jti_token = mint_notary_access_token(
         TEST_ACCESS_TOKEN_JWK,
@@ -1480,7 +1480,7 @@ pub(super) async fn preauth_trust_anchor_isolates_esignet_and_notary_paths() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     // A token claiming the Notary issuer but actually an eSignet-minted token
     // fails: the Notary anchor verifies it against the access-token key only.
@@ -1523,7 +1523,7 @@ pub(super) async fn preauth_existing_esignet_token_still_authenticates_credentia
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let now = OffsetDateTime::now_utc().unix_timestamp();
     // An eSignet-issued token (issuer == eSignet) on the unchanged path.
@@ -1563,7 +1563,7 @@ pub(super) async fn preauth_notary_access_token_with_empty_authorization_details
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let old_shape_token = mint_notary_access_token_with_scope_and_authorization_details(
         TEST_ACCESS_TOKEN_JWK,
@@ -1607,7 +1607,7 @@ pub(super) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     // Issuer metadata advertises the Notary token endpoint when pre-auth is
     // enabled, so a wallet discovers it can redeem the pre-authorized_code grant.
@@ -1727,7 +1727,7 @@ pub(super) async fn preauth_end_to_end_issuer_algorithms_match_metadata_and_clie
         let app = standalone_router(config)
             .await
             .expect("standalone router builds");
-        let server = TestServer::builder().http_transport().build(app);
+        let server = TestServer::builder().mock_transport().build(app);
 
         let metadata = server.get("/.well-known/openid-credential-issuer").await;
         metadata.assert_status_ok();
@@ -1821,7 +1821,7 @@ pub(super) async fn preauth_cached_retry_cannot_escape_failed_credential_audit()
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
     let token = redeem_token(&server, &code, &pin).await;
@@ -1966,7 +1966,7 @@ pub(super) async fn preauth_transaction_cannot_be_bypassed_with_esignet_wallet_t
     ))
     .await
     .expect("baseline router builds");
-    let baseline_server = TestServer::builder().http_transport().build(baseline_app);
+    let baseline_server = TestServer::builder().mock_transport().build(baseline_app);
 
     let now = OffsetDateTime::now_utc().unix_timestamp();
     // An eSignet-issued token bound to civil id "person-1" via national_id.
@@ -2012,7 +2012,7 @@ pub(super) async fn preauth_transaction_cannot_be_bypassed_with_esignet_wallet_t
     ))
     .await
     .expect("preauth router builds");
-    let preauth_server = TestServer::builder().http_transport().build(preauth_app);
+    let preauth_server = TestServer::builder().mock_transport().build(preauth_app);
 
     let (code, pin) = drive_offer_to_code(
         &preauth_server,
@@ -2090,7 +2090,7 @@ pub(super) async fn preauth_callback_and_token_audit_events_carry_only_hashes() 
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
     redeem_token(&server, &code, &pin).await.assert_status_ok();

@@ -33,7 +33,7 @@ pub(super) async fn direct_registry_dependency_journey_evaluates_and_issues_over
     let app = standalone_router(config)
         .await
         .expect("validated config activates the HTTP Relay adapter");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
         "sub": "citizen-subject",
@@ -114,7 +114,7 @@ pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_red
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
         "sub": "citizen-subject",
@@ -360,7 +360,7 @@ pub(super) async fn direct_credentials_issue_creates_retrievable_status_record()
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
         "sub": "citizen-subject",
@@ -477,7 +477,7 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
         "sub": "citizen-subject",
@@ -617,7 +617,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
         "sub": "citizen-subject",
@@ -862,7 +862,7 @@ pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
         "sub": "citizen-subject",
@@ -1014,7 +1014,7 @@ pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
         "sub": "citizen-subject",
@@ -1147,7 +1147,7 @@ pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
         "sub": "citizen-subject",
@@ -1268,7 +1268,7 @@ pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted()
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
         "sub": "citizen-subject",
@@ -1450,7 +1450,7 @@ pub(super) async fn subject_access_subject_mismatch_audit_names_token_claim_not_
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
         "sub": "citizen-subject",
