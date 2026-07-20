@@ -5,7 +5,7 @@
   surface: Shared Rust crate APIs for auth helpers, OIDC verification, audit envelopes and sinks, HTTP security middleware, outbound HTTP policy, Ed25519 JWK and DID helpers, SD-JWT VC issuance, and testing fixtures.
   source_of_truth:
     label: Registry Platform crates
-    url: https://github.com/registrystack/registry-stack/tree/984efe0eff5eb7e73b5983dc03ccdade0ff05661/crates
+    url: https://github.com/registrystack/registry-stack/tree/0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8/crates
   consumer_note: Relay, Notary, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally.
 - id: registry-platform.ops-posture-v1
   name: Registry Ops Posture v1
@@ -27,7 +27,7 @@
   surface: "Protected Registry Data API, metadata API, evidence offering discovery, aggregates, health and readiness, plus optional standards adapters (OGC API Features, OGC API Records, OGC API EDR, SP DCI)."
   source_of_truth:
     label: Registry Relay abstract OpenAPI contract
-    url: https://github.com/registrystack/registry-stack/blob/984efe0eff5eb7e73b5983dc03ccdade0ff05661/crates/registry-relay/openapi/registry-relay.openapi.json
+    url: https://github.com/registrystack/registry-stack/blob/0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8/crates/registry-relay/openapi/registry-relay.openapi.json
   consumer_note: Hand-authored from `docs/api.md` and the runtime route table. Uses templated paths and capability tags. For instance-specific shape of `{dataset_id}` and `{entity}`, fetch `GET /openapi.json` from a configured gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
 - id: registry-notary.openapi
   name: Registry Notary OpenAPI
@@ -36,7 +36,7 @@
   surface: Claim discovery, claim evaluation, batch evaluation, federated delegated evaluation, rendering, JWKS, service metadata, and credential issuance.
   source_of_truth:
     label: Registry Notary OpenAPI generator
-    url: https://github.com/registrystack/registry-stack/blob/984efe0eff5eb7e73b5983dc03ccdade0ff05661/crates/registry-notary-server/src/openapi.rs
+    url: https://github.com/registrystack/registry-stack/blob/0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8/crates/registry-notary-server/src/openapi.rs
   consumer_note: Generate with `cargo run -p registry-notary -- openapi`. Both direct and OID4VCI credential routes require a fresh non-delegated stored evaluation with exact claim pins and normalized unique Relay execution records for every selected root's registry-backed dependency closure.
 - id: registry-notary.oid4vci
   name: Registry Notary OID4VCI surface
@@ -45,7 +45,7 @@
   surface: OID4VCI issuer metadata, Type Metadata, offer start and authenticated callback, pre-authorized token redemption, and registry-backed credential issuance. The wallet-facing grant is issuer-initiated pre-authorized code. Primitives are sourced from the `registry-platform-oid4vci` crate.
   source_of_truth:
     label: Registry Notary OID4VCI routes
-    url: https://github.com/registrystack/registry-stack/blob/984efe0eff5eb7e73b5983dc03ccdade0ff05661/crates/registry-notary-server/src/api.rs
+    url: https://github.com/registrystack/registry-stack/blob/0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8/crates/registry-notary-server/src/api.rs
   consumer_note: >-
     Registry Notary advertises `dc+sd-jwt`, EdDSA `did:jwk` holder proof, and
     the configured EdDSA or ES256 issuer algorithm. Credential configurations
@@ -64,7 +64,7 @@
   surface: Static-peer delegated evaluation over `POST /federation/v1/evaluations`, compact JWS request and response JWTs, peer policy checks, pairwise subject handles, replay protection, and federation audit fields.
   source_of_truth:
     label: Registry Notary federation module
-    url: https://github.com/registrystack/registry-stack/tree/984efe0eff5eb7e73b5983dc03ccdade0ff05661/crates/registry-notary-server/src/federation
+    url: https://github.com/registrystack/registry-stack/tree/0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8/crates/registry-notary-server/src/federation
   consumer_note: This is delegated evaluation only. Open federation, trust-chain discovery, shared replay storage, audit checkpoint exchange, and federated credential issuance are outside the MVP.
 - id: registry-manifest.metadata-yaml
   name: Metadata Manifest
@@ -73,7 +73,7 @@
   surface: Portable `metadata.yaml` documents, compiled metadata model, public services, forms, policies, requirements, evidence type lists, evidence offering metadata, public federation metadata, and evaluation profile metadata.
   source_of_truth:
     label: Registry Manifest core
-    url: https://github.com/registrystack/registry-stack/tree/984efe0eff5eb7e73b5983dc03ccdade0ff05661/crates/registry-manifest-core
+    url: https://github.com/registrystack/registry-stack/tree/0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8/crates/registry-manifest-core
   consumer_note: Runtime source paths, scopes, table names, backend URLs, peer allowlists, replay storage, and federation secrets belong in runtime service config, not manifests.
 - id: registry-manifest.cpsv-ap-service-catalogue
   name: CPSV-AP Service Catalogue Render Contract
@@ -82,7 +82,7 @@
   surface: CPSV-AP JSON-LD service catalogue, CCCEV requirements, grouped evidence type lists, local form-definition links, DCAT data services, and form JSON Schemas.
   source_of_truth:
     label: Registry Manifest CPSV-AP fixture
-    url: https://github.com/registrystack/registry-stack/tree/984efe0eff5eb7e73b5983dc03ccdade0ff05661/products/manifest/fixtures/cpsv-ap
+    url: https://github.com/registrystack/registry-stack/tree/0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8/products/manifest/fixtures/cpsv-ap
   consumer_note: Each CCCEV evidence type list is one grouped option; multiple lists on a requirement are alternatives.
 - id: registry-manifest.static-publication
   name: Static Metadata Publication Bundle
@@ -91,5 +91,5 @@
   surface: Static index, catalog JSON, evidence offerings, policies, DCAT, CPSV-AP, BRegDCAT-AP, SHACL, OGC Records item collection, entity JSON Schemas, form JSON Schemas, and embedded SKOS-shaped codelist nodes.
   source_of_truth:
     label: Registry Manifest CLI
-    url: https://github.com/registrystack/registry-stack/tree/984efe0eff5eb7e73b5983dc03ccdade0ff05661/crates/registry-manifest-cli
+    url: https://github.com/registrystack/registry-stack/tree/0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8/crates/registry-manifest-cli
   consumer_note: The bundle can be hosted as static files without running Registry Relay.
