@@ -183,21 +183,64 @@ class RegistryReleaseTest(unittest.TestCase):
             ),
         )
         self.assertNotIn("docker run --rm", binaries_job)
-        self.assertIn('"${repo_root}:/workspace"', binary_recipe)
-        self.assertIn('"${release_cargo_home}:/workspace/.cargo-home"', binary_recipe)
-        self.assertIn('"${release_target_dir}:/workspace/target"', binary_recipe)
-        self.assertIn('"${release_target_dir}/release/registryctl"', binary_recipe)
-        self.assertIn('"${release_target_dir}/release/registry-relay-rhai-worker"', binary_recipe)
-        host_packaging = binary_recipe.split('cd -- "${repo_root}"', 1)[1]
-        self.assertNotIn('cp target/release/', host_packaging)
+        self.assertIn('--volume "${repo_root}:/workspace"', binary_recipe)
+        self.assertIn(
+            '--volume "${release_cargo_home}:/workspace/.cargo-home"', binary_recipe
+        )
+        self.assertIn(
+            '--volume "${release_target_dir}:/workspace/target"', binary_recipe
+        )
         self.assertIn("--env CARGO_HOME=/workspace/.cargo-home", binary_recipe)
         self.assertIn("--env CARGO_TARGET_DIR=/workspace/target", binary_recipe)
+        self.assertIn("--env CARGO_INCREMENTAL=0", binary_recipe)
         self.assertIn("--env HOME=/workspace", binary_recipe)
         self.assertIn("--platform linux/amd64", binary_recipe)
         self.assertIn("--locked", binary_recipe)
-        self.assertIn("registry-notary/registry-notary-cel,registry-notary/pkcs11", binary_recipe)
+        self.assertIn(
+            "--remap-path-prefix=/workspace/.cargo-home=/cargo-home", binary_recipe
+        )
+        self.assertIn("--remap-path-prefix=/workspace=/source", binary_recipe)
+        self.assertIn(
+            "registry-notary/registry-notary-cel,registry-notary/pkcs11",
+            binary_recipe,
+        )
         self.assertIn("RELEASE_BUILDER_IMAGE must remain pinned", binary_recipe)
-        self.assertIn('"${RELEASE_BUILDER_IMAGE}" != "${default_builder_image}"', binary_recipe)
+        self.assertIn(
+            '"${RELEASE_BUILDER_IMAGE}" != "${default_builder_image}"', binary_recipe
+        )
+        self.assertIn(
+            'rm -rf -- "${repo_root}/dist/bin" "${repo_root}/dist/image-bin"',
+            binary_recipe,
+        )
+
+        cargo_commands = [
+            "cargo build" + chunk.split("\n    cp ", 1)[0]
+            for chunk in binary_recipe.split("cargo build")[1:]
+        ]
+        registryctl_commands = [
+            command for command in cargo_commands if "-p registryctl" in command
+        ]
+        relay_commands = [
+            command for command in cargo_commands if "-p registry-relay" in command
+        ]
+        self.assertEqual(1, len(registryctl_commands), cargo_commands)
+        self.assertEqual(1, len(relay_commands), cargo_commands)
+        self.assertNotEqual(registryctl_commands[0], relay_commands[0])
+        self.assertNotIn("-p registry-relay", registryctl_commands[0])
+        self.assertNotIn("-p registryctl", relay_commands[0])
+        self.assertIn("--no-default-features", relay_commands[0])
+        feature_check = (
+            "python3 release/scripts/check-release-relay-features.py "
+            "target/release/registry-relay"
+        )
+        self.assertIn(feature_check, binary_recipe)
+        self.assertLess(binary_recipe.index(relay_commands[0]), binary_recipe.index(feature_check))
+        self.assertLess(
+            binary_recipe.index(feature_check),
+            binary_recipe.index(
+                "cp target/release/registry-relay dist/image-bin/registry-relay"
+            ),
+        )
 
         self.assertEqual(1, images_job.count("release/scripts/build-release-image.sh"))
         self.assertNotIn("docker buildx build", images_job)
@@ -210,9 +253,18 @@ class RegistryReleaseTest(unittest.TestCase):
             "type=registry,push=true,rewrite-timestamp=true,compatibility-version=20",
             image_recipe,
         )
+        self.assertIn(
+            "type=oci,dest=${RELEASE_IMAGE_OCI_LAYOUT},tar=false,"
+            "rewrite-timestamp=true,compatibility-version=20",
+            image_recipe,
+        )
+        self.assertIn("provenance_args+=(--provenance=false)", image_recipe)
+        self.assertIn('if [[ -n "${RELEASE_IMAGE_OCI_LAYOUT:-}" ]]', image_recipe)
+        self.assertNotIn("RELEASE_IMAGE_OCI_LAYOUT", images_job)
         self.assertIn("--metadata-file", image_recipe)
         self.assertIn(
-            "moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f",
+            "moby/buildkit:v0.31.2@sha256:"
+            "2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec",
             image_recipe,
         )
         self.assertIn("--driver docker-container", image_recipe)
@@ -221,7 +273,8 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("buildx_buildkit_${release_buildx_builder}0", image_recipe)
         self.assertIn("docker inspect --format '{{.Config.Image}}'", image_recipe)
         self.assertIn(
-            "default_buildkit_repo_digest=\"moby/buildkit@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f\"",
+            "default_buildkit_repo_digest=\"moby/buildkit@sha256:"
+            "2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec\"",
             image_recipe,
         )
         self.assertIn("docker image inspect --format", image_recipe)
@@ -229,12 +282,14 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("docker buildx version", image_recipe)
         self.assertIn("v0\\.33\\.0", image_recipe)
         self.assertIn("RELEASE_IMAGE_NO_CACHE", image_recipe)
+        self.assertIn("RELEASE_IMAGE_OCI_LAYOUT", image_recipe)
         self.assertIn("RELEASE_IMAGE_REGISTRY_INSECURE", image_recipe)
         self.assertIn("RELEASE_IMAGE_CONTEXT", image_recipe)
-        self.assertIn("BuildKit( version:)?[[:space:]]+v0\\.30\\.0", image_recipe)
-        self.assertIn("version: v0.33.0", images_job)
+        self.assertIn("BuildKit( version:)?[[:space:]]+v0\\.31\\.2", image_recipe)
+        self.assertIn("RELEASE_BUILDX_VERSION: v0.33.0", workflow)
+        self.assertIn("version: ${{ env.RELEASE_BUILDX_VERSION }}", images_job)
         self.assertIn(
-            "driver-opts: image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f",
+            "driver-opts: image=${{ env.RELEASE_BUILDKIT_IMAGE }}",
             images_job,
         )
         release_tool_job = ci_workflow[
@@ -242,7 +297,8 @@ class RegistryReleaseTest(unittest.TestCase):
         ]
         self.assertIn("version: v0.33.0", release_tool_job)
         self.assertIn(
-            "driver-opts: image=moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f",
+            "driver-opts: image=moby/buildkit:v0.31.2@sha256:"
+            "2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec",
             release_tool_job,
         )
         self.assertLess(
@@ -259,7 +315,17 @@ class RegistryReleaseTest(unittest.TestCase):
                 ),
                 dockerfile,
             )
-        self.assertIn('rm -rf -- "${repo_root}/dist/bin" "${repo_root}/dist/image-bin"', binary_recipe)
+            dockerfile_text = dockerfile.read_text(encoding="utf-8")
+            self.assertIn("ARG SOURCE_DATE_EPOCH=0", dockerfile_text)
+            self.assertIn(
+                "RUN --mount=type=bind,source=dist/image-bin,"
+                "target=/workspace/image-bin",
+                dockerfile_text,
+            )
+            self.assertIn(
+                'find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +',
+                dockerfile_text,
+            )
 
     def test_release_records_cache_and_duration_telemetry(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -344,7 +410,7 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertIn(f"/usr/local/bin/{worker}", text)
 
         self.assertIn(
-            f'"dist/bin/{worker}-${{tag}}-linux-amd64"',
+            f'"dist/bin/{worker}-${{RELEASE_TAG}}-linux-amd64"',
             binary_recipe,
         )
         self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
@@ -352,7 +418,8 @@ class RegistryReleaseTest(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn(
-            f"COPY --chmod=0755 dist/image-bin/{worker} /usr/local/bin/{worker}",
+            f"install -m 0755 /workspace/image-bin/{worker} "
+            f"/workspace/runtime-root/usr/local/bin/{worker}",
             release_dockerfile,
         )
         self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
@@ -370,7 +437,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn(worker, product_dockerfile)
 
         self.assertIn(
-            f'"dist/bin/{worker}-${{tag}}-linux-amd64"',
+            f'"dist/bin/{worker}-${{RELEASE_TAG}}-linux-amd64"',
             binary_recipe,
         )
         self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
@@ -382,7 +449,8 @@ class RegistryReleaseTest(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn(
-            f"COPY --chmod=0755 dist/image-bin/{worker} /usr/local/bin/{worker}",
+            f"install -m 0755 /workspace/image-bin/{worker} "
+            f"/workspace/runtime-root/usr/local/bin/{worker}",
             release_dockerfile,
         )
         self.assertIn(f"dist/image-bin/{worker}", binary_recipe)

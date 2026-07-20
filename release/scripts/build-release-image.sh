@@ -16,8 +16,8 @@ revision_label="$4"
 version_label="$5"
 metadata_file="$6"
 source_date_epoch=0
-default_buildkit_image="moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f"
-default_buildkit_repo_digest="moby/buildkit@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f"
+default_buildkit_image="moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
+default_buildkit_repo_digest="moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
 release_buildkit_image="${default_buildkit_image}"
 release_buildx_builder="${RELEASE_BUILDX_BUILDER:-}"
 release_image_context="${RELEASE_IMAGE_CONTEXT:-${repo_root}}"
@@ -46,12 +46,29 @@ elif [[ -n "${RELEASE_IMAGE_NO_CACHE:-}" ]]; then
   exit 2
 fi
 
-output="type=registry,push=true,rewrite-timestamp=true,compatibility-version=20"
-if [[ "${RELEASE_IMAGE_REGISTRY_INSECURE:-}" == "true" ]]; then
-  output+=",registry.insecure=true"
-elif [[ -n "${RELEASE_IMAGE_REGISTRY_INSECURE:-}" ]]; then
-  echo "RELEASE_IMAGE_REGISTRY_INSECURE must be true when set" >&2
-  exit 2
+provenance_args=()
+if [[ -n "${RELEASE_IMAGE_OCI_LAYOUT:-}" ]]; then
+  if [[ "${RELEASE_IMAGE_OCI_LAYOUT}" != /* || "${RELEASE_IMAGE_OCI_LAYOUT}" == *','* ]]; then
+    echo "RELEASE_IMAGE_OCI_LAYOUT must be an absolute path without commas" >&2
+    exit 2
+  fi
+  if [[ -n "${RELEASE_IMAGE_REGISTRY_INSECURE:-}" ]]; then
+    echo "RELEASE_IMAGE_REGISTRY_INSECURE is incompatible with RELEASE_IMAGE_OCI_LAYOUT" >&2
+    exit 2
+  fi
+  output="type=oci,dest=${RELEASE_IMAGE_OCI_LAYOUT},tar=false,rewrite-timestamp=true,compatibility-version=20"
+  # Timestamped BuildKit attestations make retained comparison layouts vary.
+  # Registry-pushed release images keep BuildKit provenance; only the local
+  # exact-reproduction layout suppresses it.
+  provenance_args+=(--provenance=false)
+else
+  output="type=registry,push=true,rewrite-timestamp=true,compatibility-version=20"
+  if [[ "${RELEASE_IMAGE_REGISTRY_INSECURE:-}" == "true" ]]; then
+    output+=",registry.insecure=true"
+  elif [[ -n "${RELEASE_IMAGE_REGISTRY_INSECURE:-}" ]]; then
+    echo "RELEASE_IMAGE_REGISTRY_INSECURE must be true when set" >&2
+    exit 2
+  fi
 fi
 
 if [[ ! -d "${release_image_context}" ]]; then
@@ -93,8 +110,8 @@ if ! grep -Eq '^[[:space:]]*Driver:[[:space:]]+docker-container[[:space:]]*$' <<
   echo "release builder ${release_buildx_builder} must use the docker-container driver" >&2
   exit 1
 fi
-if ! grep -Eq 'BuildKit( version:)?[[:space:]]+v0\.30\.0([[:space:]]|$)' <<<"${buildkit_details}"; then
-  echo "release builder ${release_buildx_builder} is not BuildKit v0.30.0" >&2
+if ! grep -Eq 'BuildKit( version:)?[[:space:]]+v0\.31\.2([[:space:]]|$)' <<<"${buildkit_details}"; then
+  echo "release builder ${release_buildx_builder} is not BuildKit v0.31.2" >&2
   exit 1
 fi
 
@@ -139,6 +156,7 @@ docker buildx build \
   --platform linux/amd64 \
   --file "${dockerfile}" \
   --tag "${image}" \
+  "${provenance_args[@]}" \
   --label "org.opencontainers.image.source=${source_label}" \
   --label "org.opencontainers.image.revision=${revision_label}" \
   --label "org.opencontainers.image.version=${version_label}" \

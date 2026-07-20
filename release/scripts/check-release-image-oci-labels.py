@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 
@@ -23,7 +25,62 @@ class CheckError(RuntimeError):
     """An image could not be proven to have the required OCI labels."""
 
 
+def read_layout_blob(layout: Path, digest: object) -> dict[str, Any]:
+    if not isinstance(digest, str) or not digest.startswith("sha256:"):
+        raise CheckError(f"unsupported OCI digest in {layout}: {digest!r}")
+    value = digest.removeprefix("sha256:")
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise CheckError(f"invalid sha256 digest in {layout}: {digest!r}")
+    path = layout / "blobs" / "sha256" / value
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        raise CheckError(f"could not read OCI blob {digest} in {layout}: {error}") from error
+    actual = f"sha256:{hashlib.sha256(content).hexdigest()}"
+    if actual != digest:
+        raise CheckError(
+            f"OCI blob digest mismatch in {layout}: expected {digest}, got {actual}"
+        )
+    try:
+        document = json.loads(content)
+    except json.JSONDecodeError as error:
+        raise CheckError(f"invalid OCI JSON blob {digest} in {layout}: {error}") from error
+    if not isinstance(document, dict):
+        raise CheckError(f"OCI JSON blob {digest} in {layout} must be an object")
+    return document
+
+
+def inspect_oci_layout(image_ref: str, format_template: str) -> dict[str, Any]:
+    if format_template != DEFAULT_FORMAT_TEMPLATE:
+        raise CheckError("format-template overrides are not supported for OCI layouts")
+    layout = Path(image_ref.removeprefix("oci-layout://"))
+    try:
+        index = json.loads((layout / "index.json").read_text(encoding="utf-8"))
+    except OSError as error:
+        raise CheckError(f"could not read OCI layout index in {layout}: {error}") from error
+    except json.JSONDecodeError as error:
+        raise CheckError(f"invalid OCI layout index in {layout}: {error}") from error
+    manifests = index.get("manifests") if isinstance(index, dict) else None
+    if not isinstance(manifests, list) or len(manifests) != 1:
+        count = len(manifests) if isinstance(manifests, list) else 0
+        raise CheckError(f"expected exactly one OCI manifest in {layout}, found {count}")
+    descriptor = manifests[0]
+    if not isinstance(descriptor, dict):
+        raise CheckError(f"invalid OCI manifest descriptor in {layout}")
+    manifest = read_layout_blob(layout, descriptor.get("digest"))
+    config_descriptor = manifest.get("config")
+    if not isinstance(config_descriptor, dict):
+        raise CheckError(f"OCI manifest in {layout} has no config descriptor")
+    config_document = read_layout_blob(layout, config_descriptor.get("digest"))
+    config = config_document.get("config")
+    if not isinstance(config, dict):
+        raise CheckError(f"OCI image config in {layout} has no config object")
+    return config
+
+
 def inspect_image_config(image_ref: str, format_template: str) -> dict[str, Any]:
+    if image_ref.startswith("oci-layout://"):
+        return inspect_oci_layout(image_ref, format_template)
     command = [
         "docker",
         "buildx",

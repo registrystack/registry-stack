@@ -260,6 +260,14 @@ When the workflow runs from the release tag ref, the separate SLSA generator
 job publishes provenance for those non-signature artifacts. OCI image
 signatures are not yet published for the root monorepo release.
 
+Registry-pushed Notary and Relay image indexes retain BuildKit provenance.
+`RELEASE_IMAGE_OCI_LAYOUT` disables timestamped BuildKit provenance only for
+retained local layouts used in exact same-ref reproducibility comparisons. Do
+not publish that comparison layout as the release image. For post-tag
+verification, require the pushed image's Linux amd64 application manifest and
+ordered rootfs layers to match the retained final-target proof, then verify the
+published index's BuildKit provenance separately.
+
 The release capsule summarizes binary asset hashes, the image lock under
 `release_files`, file SBOM asset names, image digests, image SBOMs, Grype
 reports, workflow lineage, and release warnings. It does not carry
