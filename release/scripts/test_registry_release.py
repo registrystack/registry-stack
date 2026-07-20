@@ -96,6 +96,23 @@ class RegistryReleaseTest(unittest.TestCase):
             text = (ROOT / dockerfile).read_text(encoding="utf-8")
             self.assertIn("dist/image-bin", text)
 
+    def test_release_images_publish_and_verify_source_labels(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+
+        for label in [
+            '--label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}"',
+            '--label "org.opencontainers.image.revision=${{ needs.verify.outputs.tag_target }}"',
+            '--label "org.opencontainers.image.version=${{ needs.verify.outputs.version }}"',
+        ]:
+            self.assertEqual(workflow.count(label), 1)
+        self.assertIn('docker buildx imagetools inspect "${digest_ref}"', workflow)
+        for label_name in [
+            "org.opencontainers.image.source",
+            "org.opencontainers.image.revision",
+            "org.opencontainers.image.version",
+        ]:
+            self.assertGreaterEqual(workflow.count(label_name), 2)
+
     def test_release_cargo_cache_is_scoped_to_builder_image(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         binaries_job = workflow[
