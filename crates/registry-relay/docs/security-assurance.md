@@ -59,9 +59,9 @@ DNS-printing functions. The libstdc++ object that imports `ungetwc` is not in
 either executable dependency closure.
 
 The pre-tag `v0.12.1` candidate rooted at source revision
-`fedf2ecc98ed695bfdd13b72f1c6c8f037e917bd` was built with the release's pinned
+`84d037d26deac42cedfce1f7d334ef3a2eb75d02` was built with the release's pinned
 Linux/amd64 builder and scanned at exact Relay image digest
-`sha256:3be7f7853548f234cf6b43ad166cb2add3d39e1105ed6f7c255bd111e38e42b6`.
+`sha256:b1d93ce38ae70f27f2fd0b04bdd5deb5ab5f7772bd205188a64cff9dd6253168`.
 Grype 0.114.0 with valid database schema v6.1.9, built July 19, 2026, reported
 the same three non-fixable blocking-severity findings and no fixable finding.
 The reviewed root filesystem digest is
