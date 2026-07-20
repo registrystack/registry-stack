@@ -243,7 +243,7 @@ jobs:
           key: platform-coverage
 
       - name: Install pinned coverage tool
-        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         with:
           tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
 
@@ -309,7 +309,7 @@ jobs:
           key: platform-fuzz-${{ matrix.target }}
 
       - name: Install pinned cargo-fuzz
-        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         with:
           tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
 
@@ -326,7 +326,7 @@ jobs:
 
       - name: Upload fuzz failures
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: platform-fuzz-${{ matrix.target }}
           path: products/platform/fuzz/artifacts/${{ matrix.target }}/
@@ -350,7 +350,7 @@ jobs:
           cache-targets: false
 
       - name: Install cargo-deny and just
-        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b # v2.83.4
         with:
           tool: cargo-deny@0.19.8,just@1.51.0
 
@@ -509,7 +509,7 @@ jobs:
         run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
 
       - name: Smoke release image OCI labels
         run: release/scripts/smoke-release-image-oci-labels.sh
@@ -606,7 +606,7 @@ jobs:
           [[ "$(uname -m)" == "x86_64" ]]
 
       - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22.12.0
           cache: npm
@@ -625,7 +625,7 @@ jobs:
         run: npm run check:tutorial:dry-run
 
       - name: Cache source-under-test Cargo build
-        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             target/registryctl-tutorial-cargo-home
@@ -651,7 +651,7 @@ jobs:
           submodules: false
 
       - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22.12.0
           cache: npm
@@ -682,7 +682,7 @@ jobs:
           submodules: false
 
       - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22.12.0
           cache: npm
