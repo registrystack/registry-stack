@@ -53,9 +53,10 @@ Neither the service nor CEL worker imports `ungetwc` or the affected deprecated
 DNS-printing functions. The libstdc++ object that imports `ungetwc` is not in
 either executable dependency closure.
 
-The pre-tag `v0.12.1` candidate rooted at source revision
-`84d037d26deac42cedfce1f7d334ef3a2eb75d02` was built with the release's pinned
-Linux/amd64 builder and scanned at exact Notary image digest
+The implementation reviewed for the pre-tag `v0.12.1` candidate is protected-
+main revision `d6d2d167426ada77097c8d5606f100b1554aaadc`, which remains an ancestor
+of the release lineage. The versioned candidate was built with the release's
+pinned Linux/amd64 builder and scanned at exact Notary image digest
 `sha256:d1b54805445c13c425dd75853715102cda1da35be020ad78218e9abab2399c97`.
 Grype 0.114.0 with valid database schema v6.1.9, built July 19, 2026, reported
 the same three non-fixable blocking-severity findings and no fixable finding.
@@ -69,14 +70,16 @@ digest and pass the same policy against its exact pushed digest.
 The matching accepted-risk entries expire on August 20, 2026. A Trixie fix,
 changed fingerprint, new scanf format or call path, new C++ or wide-character
 input path, or new DNS TSIG debugging or printing path requires earlier review.
-The accepted-risk entries record the evidence image digest and OCI source
-revision. Enforcement binds them to a digest of the ordered root filesystem
-layers, so a changed package or binary layer requires a new review while a
-review-only commit that changes the OCI revision label does not create a
-self-referential image digest. The next candidate must still produce an exact
-digest-bound scan; this review does not waive fixable findings or a changed
-package fingerprint. External PKCS#11 modules and their dependency closures
-remain deployment inputs and need their own review.
+The accepted-risk entries record the evidence image digest and the reachable
+protected-main implementation revision inspected during review. The exact
+candidate OCI revision label is verified separately when the image is built.
+Enforcement binds the review to a digest of the ordered root filesystem layers,
+so a changed package or binary layer requires a new review while a review-only
+commit that changes the OCI revision label does not create a self-referential
+image digest. The next candidate must still produce an exact digest-bound scan;
+this review does not waive fixable findings or a changed package fingerprint.
+External PKCS#11 modules and their dependency closures remain deployment inputs
+and need their own review.
 
 PKCS#11 support remains compiled in but config-gated. A vendor module and any
 vendor-owned shared-library dependencies remain deployment inputs, not image
