@@ -12,6 +12,27 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release" / "scripts" / "check-gates-inventory.py"
 
 
+def extract_top_level_block(workflow: str, name: str) -> str:
+    lines = workflow.splitlines()
+    start = lines.index(f"{name}:")
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index] and not lines[index].startswith(" ")
+        ),
+        len(lines),
+    )
+    return "\n".join(lines[start:end]).rstrip()
+
+
+def extract_classifier_arm(workflow: str, pattern: str) -> list[str]:
+    lines = workflow.splitlines()
+    start = lines.index(f"                {pattern})") + 1
+    end = lines.index("                  ;;", start)
+    return [line.strip() for line in lines[start:end]]
+
+
 def load_module():
     spec = importlib.util.spec_from_file_location("check_gates_inventory", SCRIPT)
     if spec is None or spec.loader is None:
@@ -37,6 +58,36 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_real_ci_workflow_declares_inventory(self) -> None:
         self.assertEqual([], self.module.missing_gates(self.workflow))
+
+    def test_ci_concurrency_is_pr_scoped_and_only_cancels_pull_requests(self) -> None:
+        self.assertEqual(
+            "\n".join(
+                (
+                    "concurrency:",
+                    "  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}",
+                    "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+                )
+            ),
+            extract_top_level_block(self.workflow, "concurrency"),
+        )
+
+    def test_ci_workflow_change_marks_all_gates(self) -> None:
+        self.assertEqual(
+            ["mark_all"],
+            extract_classifier_arm(self.workflow, ".github/workflows/ci.yml"),
+        )
+
+    def test_release_workflow_change_marks_only_release_gates(self) -> None:
+        self.assertEqual(
+            ["release_tool=true", "release_source_proof=true"],
+            extract_classifier_arm(self.workflow, ".github/workflows/release.yml"),
+        )
+
+    def test_other_workflow_change_marks_all_gates(self) -> None:
+        self.assertEqual(
+            ["mark_all"],
+            extract_classifier_arm(self.workflow, ".github/workflows/*"),
+        )
 
     def test_real_repository_has_no_tracked_nested_workflows(self) -> None:
         self.assertEqual(
@@ -69,6 +120,63 @@ class GateInventoryTest(unittest.TestCase):
     def test_missing_relay_exposure_gate_is_reported(self) -> None:
         text = self.workflow.replace("name: Relay exposure check", "name: Relay exposure")
         self.assertIn("Relay exposure check", self.module.missing_gates(text))
+
+    def test_missing_pull_request_concurrency_group_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "format('pr-{0}', github.event.pull_request.number)",
+            "format('ref-{0}', github.ref)",
+        )
+        self.assertIn(
+            "Pull request concurrency group", self.module.missing_gates(text)
+        )
+
+    def test_missing_pull_request_only_cancellation_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+            "cancel-in-progress: true",
+        )
+        self.assertIn(
+            "Pull request concurrency cancellation", self.module.missing_gates(text)
+        )
+
+    def test_missing_release_planning_command_tests_are_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: python3 -m unittest release/scripts/test_registry_release_plans.py",
+            "run: true",
+        )
+        self.assertIn("Release planning command tests", self.module.missing_gates(text))
+
+    def test_missing_release_image_oci_checker_tests_are_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py",
+            "run: true",
+        )
+        self.assertIn(
+            "Release image OCI label checker tests", self.module.missing_gates(text)
+        )
+
+    def test_missing_executable_release_image_oci_smoke_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: release/scripts/smoke-release-image-oci-labels.sh",
+            "run: true",
+        )
+        self.assertIn(
+            "Executable release image OCI label smoke", self.module.missing_gates(text)
+        )
+
+    def test_missing_release_workflow_classification_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "                .github/workflows/release.yml)\n"
+            "                  release_tool=true\n"
+            "                  release_source_proof=true\n"
+            "                  ;;",
+            "                .github/workflows/release.yml)\n"
+            "                  mark_all\n"
+            "                  ;;",
+        )
+        self.assertIn(
+            "Release workflow path classification", self.module.missing_gates(text)
+        )
 
     def test_missing_platform_all_features_gate_is_reported(self) -> None:
         text = self.workflow.replace(

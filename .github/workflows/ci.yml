@@ -9,6 +9,10 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -92,6 +96,13 @@ jobs:
           else
             while IFS= read -r -d '' path; do
               case "${path}" in
+                .github/workflows/ci.yml)
+                  mark_all
+                  ;;
+                .github/workflows/release.yml)
+                  release_tool=true
+                  release_source_proof=true
+                  ;;
                 .github/workflows/*)
                   mark_all
                   ;;
@@ -490,6 +501,18 @@ jobs:
 
       - name: Test release helper
         run: python3 -m unittest release/scripts/test_registry_release.py
+
+      - name: Test release planning commands
+        run: python3 -m unittest release/scripts/test_registry_release_plans.py
+
+      - name: Test release image OCI label checker
+        run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
+
+      - name: Smoke release image OCI labels
+        run: release/scripts/smoke-release-image-oci-labels.sh
 
       - name: Test OpenID conformance runner
         run: python3 -m unittest release/scripts/test_openid_conformance_runner.py

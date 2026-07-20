@@ -166,19 +166,33 @@ jobs:
           set -euo pipefail
           fingerprint="$(printf '%s' "${RELEASE_BUILDER_IMAGE}" | sha256sum | awk '{print $1}')"
           printf 'fingerprint=%s\n' "${fingerprint}" >> "${GITHUB_OUTPUT}"
+          printf 'cache_key=%s\n' \
+            "registry-stack-release-cargo-${{ runner.os }}-${fingerprint}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}" \
+            >> "${GITHUB_OUTPUT}"
 
       - name: Restore Cargo release cache
+        id: cargo-cache
         uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8
         with:
           path: |
             .cargo-home/registry
             .cargo-home/git
             target
-          key: registry-stack-release-cargo-${{ runner.os }}-${{ steps.release-builder.outputs.fingerprint }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          key: ${{ steps.release-builder.outputs.cache_key }}
           restore-keys: |
             registry-stack-release-cargo-${{ runner.os }}-${{ steps.release-builder.outputs.fingerprint }}-
 
+      - name: Record binary build start
+        id: binary-build-start
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'epoch=%s\n' "$(date -u +%s)" >> "${GITHUB_OUTPUT}"
+          printf 'timestamp=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+
       - name: Build binaries
+        id: build-binaries
         shell: bash
         run: |
           set -euo pipefail
@@ -223,6 +237,61 @@ jobs:
           chmod 0755 dist/bin/* dist/image-bin/registry-notary dist/image-bin/registry-notary-cel-worker dist/image-bin/registry-relay dist/image-bin/registry-relay-rhai-worker
           (cd dist/bin && sha256sum -- * > SHA256SUMS)
           (cd dist/image-bin && sha256sum -- * > SHA256SUMS)
+
+      - name: Record binary build telemetry
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-telemetry
+          completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          completed_epoch="$(date -u +%s)"
+          duration_seconds="$((completed_epoch - ${{ steps.binary-build-start.outputs.epoch }}))"
+          jq -n \
+            --arg tag "${{ needs.verify.outputs.tag }}" \
+            --arg tag_target "${{ needs.verify.outputs.tag_target }}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg builder_image "${RELEASE_BUILDER_IMAGE}" \
+            --arg builder_fingerprint "${{ steps.release-builder.outputs.fingerprint }}" \
+            --arg cache_key "${{ steps.release-builder.outputs.cache_key }}" \
+            --arg cache_result "${{ steps.cargo-cache.outputs.cache-hit }}" \
+            --arg outcome "${{ steps.build-binaries.outcome }}" \
+            --arg started_at "${{ steps.binary-build-start.outputs.timestamp }}" \
+            --arg completed_at "${completed_at}" \
+            --argjson duration_seconds "${duration_seconds}" \
+            '{
+              schema_version: "registry-stack.release-binary-telemetry.v1",
+              run: {id: $run_id, attempt: $run_attempt},
+              release: {tag: $tag, tag_target: $tag_target},
+              builder: {image: $builder_image, fingerprint: $builder_fingerprint},
+              cargo_cache: {
+                primary_key: $cache_key,
+                exact_key_hit: ($cache_result == "true"),
+                action_output: (if $cache_result == "" then "not-reported" else $cache_result end)
+              },
+              binary_build: {
+                outcome: $outcome,
+                started_at: $started_at,
+                completed_at: $completed_at,
+                duration_seconds: $duration_seconds
+              }
+            }' > dist/release-telemetry/binaries.json
+          {
+            echo "### Release binary build telemetry"
+            echo
+            echo "- Duration: ${duration_seconds} seconds"
+            echo "- Cargo exact-key cache hit: ${{ steps.cargo-cache.outputs.cache-hit || 'not-reported' }}"
+            echo "- Build outcome: ${{ steps.build-binaries.outcome }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload binary build telemetry
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: registry-stack-release-binary-telemetry
+          path: dist/release-telemetry/binaries.json
+          if-no-files-found: error
 
       - name: Verify built registryctl binary version
         run: |
@@ -395,15 +464,11 @@ jobs:
             digest="$(jq -r '."containerimage.digest"' "${metadata}")"
             local digest_ref="${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}"
             printf '%s\n' "${digest_ref}" | tee "dist/images/${name}.digest"
-            docker buildx imagetools inspect "${digest_ref}" \
-              --format '{{json .Image.Config}}' \
-              | jq -e \
-                --arg source "https://github.com/${GITHUB_REPOSITORY}" \
-                --arg revision "${{ needs.verify.outputs.tag_target }}" \
-                --arg version "${{ needs.verify.outputs.version }}" \
-                '.Labels["org.opencontainers.image.source"] == $source and
-                 .Labels["org.opencontainers.image.revision"] == $revision and
-                 .Labels["org.opencontainers.image.version"] == $version'
+            python3 release/scripts/check-release-image-oci-labels.py \
+              "${digest_ref}" \
+              --source "https://github.com/${GITHUB_REPOSITORY}" \
+              --revision "${{ needs.verify.outputs.tag_target }}" \
+              --version "${{ needs.verify.outputs.version }}"
             syft "${digest_ref}" -o "spdx-json=dist/sbom/${name}.spdx.json"
             release/scripts/registry-release bind-spdx-subject \
               "dist/sbom/${name}.spdx.json" \
@@ -737,3 +802,95 @@ jobs:
           done
           echo "GitHub Release asset ${asset} was not found" >&2
           exit 1
+
+  release-telemetry:
+    name: Record release workflow telemetry
+    needs:
+      - verify
+      - binaries
+      - registryctl-extra-binaries
+      - images
+      - github-release
+      - release-provenance
+      - verify-release-provenance
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Collect workflow duration and runner occupancy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-telemetry
+          run_json="$(mktemp)"
+          jobs_json="$(mktemp)"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" > "${run_json}"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" > "${jobs_json}"
+          collected_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          jq -n \
+            --slurpfile run "${run_json}" \
+            --slurpfile job_page "${jobs_json}" \
+            --arg collected_at "${collected_at}" \
+            '
+              ($run[0]) as $workflow |
+              ($job_page[0].jobs) as $jobs |
+              ($collected_at | fromdateiso8601) as $collected_epoch |
+              ([
+                $jobs[] |
+                select(.started_at != null and .completed_at != null) |
+                ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601))
+              ] | add // 0) as $runner_seconds |
+              {
+                schema_version: "registry-stack.release-workflow-telemetry.v1",
+                workflow: {
+                  id: ($workflow.id | tostring),
+                  run_attempt: ($workflow.run_attempt | tostring),
+                  event: $workflow.event,
+                  head_sha: $workflow.head_sha,
+                  created_at: $workflow.created_at,
+                  collected_at: $collected_at,
+                  elapsed_to_collector_seconds:
+                    ($collected_epoch - ($workflow.created_at | fromdateiso8601))
+                },
+                jobs: [
+                  $jobs[] | {
+                    id: (.id | tostring),
+                    name,
+                    conclusion,
+                    started_at,
+                    completed_at,
+                    duration_seconds:
+                      (if .started_at != null and .completed_at != null
+                       then ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601))
+                       else null
+                       end)
+                  }
+                ],
+                completed_job_count: ([$jobs[] | select(.completed_at != null)] | length),
+                incomplete_job_count: ([$jobs[] | select(.completed_at == null)] | length),
+                completed_runner_seconds: $runner_seconds,
+                completed_runner_minutes: ($runner_seconds / 60),
+                warnings:
+                  (if any($jobs[]; .completed_at == null)
+                   then ["The collector job and any still-running jobs are excluded from completed runner occupancy."]
+                   else []
+                   end)
+              }
+            ' > dist/release-telemetry/workflow.json
+          jq -r '
+            "### Release workflow telemetry\n\n" +
+            "- Elapsed to collector: \(.workflow.elapsed_to_collector_seconds) seconds\n" +
+            "- Completed runner occupancy: \(.completed_runner_minutes) minutes\n" +
+            "- Completed jobs: \(.completed_job_count)"
+          ' dist/release-telemetry/workflow.json >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload workflow telemetry
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: registry-stack-release-workflow-telemetry
+          path: dist/release-telemetry/workflow.json
+          if-no-files-found: error

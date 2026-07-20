@@ -12,6 +12,26 @@ ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 REQUIRED_GATES: tuple[tuple[str, str], ...] = (
+    (
+        "Pull request concurrency group",
+        "group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}",
+    ),
+    (
+        "Pull request concurrency cancellation",
+        "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+    ),
+    (
+        "CI workflow path classification",
+        ".github/workflows/ci.yml)\n                  mark_all\n                  ;;",
+    ),
+    (
+        "Release workflow path classification",
+        ".github/workflows/release.yml)\n                  release_tool=true\n                  release_source_proof=true\n                  ;;",
+    ),
+    (
+        "Other workflow path classification",
+        ".github/workflows/*)\n                  mark_all\n                  ;;",
+    ),
     ("Cargo metadata", "run: cargo metadata --locked --format-version 1"),
     (
         "Manifest profile validation",
@@ -92,6 +112,18 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Relay OpenAPI command", "run: just openapi-contract"),
     ("Relay exposure check", "name: Relay exposure check"),
     ("Release helper tests", "run: python3 -m unittest release/scripts/test_registry_release.py"),
+    (
+        "Release planning command tests",
+        "run: python3 -m unittest release/scripts/test_registry_release_plans.py",
+    ),
+    (
+        "Release image OCI label checker tests",
+        "run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py",
+    ),
+    (
+        "Executable release image OCI label smoke",
+        "run: release/scripts/smoke-release-image-oci-labels.sh",
+    ),
     (
         "OpenID conformance runner tests",
         "run: python3 -m unittest release/scripts/test_openid_conformance_runner.py",

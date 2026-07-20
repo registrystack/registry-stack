@@ -96,23 +96,25 @@ class RegistryReleaseTest(unittest.TestCase):
             text = (ROOT / dockerfile).read_text(encoding="utf-8")
             self.assertIn("dist/image-bin", text)
 
-    def test_release_images_publish_and_verify_source_labels(self) -> None:
+    def test_release_images_publish_and_executably_verify_oci_labels(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        images_job = workflow[
+            workflow.index("\n  images:") : workflow.index("\n  github-release:")
+        ]
 
-        for label in [
+        for label in (
             '--label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}"',
             '--label "org.opencontainers.image.revision=${{ needs.verify.outputs.tag_target }}"',
             '--label "org.opencontainers.image.version=${{ needs.verify.outputs.version }}"',
-        ]:
-            self.assertEqual(workflow.count(label), 1)
-        self.assertIn('docker buildx imagetools inspect "${digest_ref}"', workflow)
-        self.assertIn("--format '{{json .Image.Config}}'", workflow)
-        for label_name in [
-            "org.opencontainers.image.source",
-            "org.opencontainers.image.revision",
-            "org.opencontainers.image.version",
-        ]:
-            self.assertGreaterEqual(workflow.count(label_name), 2)
+        ):
+            self.assertEqual(1, images_job.count(label))
+        checker = "python3 release/scripts/check-release-image-oci-labels.py"
+        self.assertEqual(1, images_job.count(checker))
+        self.assertLess(images_job.index('local digest_ref="'), images_job.index(checker))
+        self.assertIn('--source "https://github.com/${GITHUB_REPOSITORY}"', images_job)
+        self.assertIn('--revision "${{ needs.verify.outputs.tag_target }}"', images_job)
+        self.assertIn('--version "${{ needs.verify.outputs.version }}"', images_job)
+        self.assertNotIn("{{json .Image.config}}", workflow)
 
     def test_release_cargo_cache_is_scoped_to_builder_image(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -128,11 +130,34 @@ class RegistryReleaseTest(unittest.TestCase):
             binaries_job,
         )
         builder_fingerprint = "${{ steps.release-builder.outputs.fingerprint }}"
-        self.assertEqual(2, binaries_job.count(builder_fingerprint))
+        self.assertGreaterEqual(binaries_job.count(builder_fingerprint), 2)
         self.assertNotIn(
             "registry-stack-release-cargo-${{ runner.os }}-rust-1.95.0-",
             binaries_job,
         )
+
+    def test_release_records_cache_and_duration_telemetry(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        binaries_job = workflow[
+            workflow.index("\n  binaries:") : workflow.index("\n  registryctl-extra-binaries:")
+        ]
+        telemetry_job = workflow[workflow.index("\n  release-telemetry:") :]
+
+        self.assertIn("name: Restore Cargo release cache\n        id: cargo-cache", binaries_job)
+        self.assertIn("steps.cargo-cache.outputs.cache-hit", binaries_job)
+        self.assertIn("registry-stack.release-binary-telemetry.v1", binaries_job)
+        self.assertIn("exact_key_hit", binaries_job)
+        self.assertIn("duration_seconds", binaries_job)
+        self.assertIn("name: Upload binary build telemetry", binaries_job)
+        self.assertIn("if: ${{ always() }}", binaries_job)
+
+        self.assertIn("name: Record release workflow telemetry", telemetry_job)
+        self.assertIn("if: ${{ always() }}", telemetry_job)
+        self.assertIn("actions: read", telemetry_job)
+        self.assertIn("registry-stack.release-workflow-telemetry.v1", telemetry_job)
+        self.assertIn("elapsed_to_collector_seconds", telemetry_job)
+        self.assertIn("completed_runner_minutes", telemetry_job)
+        self.assertIn("name: Upload workflow telemetry", telemetry_job)
 
     def test_release_image_scans_are_policy_enforced_and_preserved(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
