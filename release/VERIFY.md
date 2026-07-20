@@ -32,6 +32,87 @@ For repeatable evidence, pin and record the verifier version you used. As of
 2026-07-09, the current upstream release is
 [`v2.7.1`](https://github.com/slsa-framework/slsa-verifier/releases/tag/v2.7.1).
 
+The complete `v0.12.0+` verifier also requires Docker with Buildx. Run it from
+a clean full checkout at the release tag so `HEAD`, the peeled tag target, and
+the protected default-branch lineage can be compared.
+
+## Verify The Complete v0.12.0+ Published Release
+
+The post-publication verifier checks the whole release as one contract. For
+the current release shape it requires exactly 35 payloads, 35 cosign
+signatures, 35 signing certificates, and one SLSA provenance file. Missing,
+unsigned, unprovenanced, mismatched, private, incorrectly labelled, or
+root-running release objects fail the verification.
+
+Start with no Docker registry credentials in the verification environment.
+The verifier creates and uses a separate empty Docker configuration for its
+anonymous tag and digest pulls.
+
+```bash
+git fetch origin main --tags
+git checkout --detach v0.12.0
+
+release/scripts/registry-release verify-published \
+  release/manifests/registry-stack-beta-14.yaml \
+  --output-json registry-stack-v0.12.0-post-publication-verification.json
+```
+
+A successful run exits zero and writes a report with
+`schema_version: registry-stack.verify-published.v1` and `status: passed`.
+The report is public-only. It contains normalized observations and failure
+codes, never commands, process output, environment data, credentials, or local
+paths. A failed or incomplete run exits nonzero but still writes the report.
+
+The report covers the `pre_evidence_bundle` release asset set. The evidence
+bundle and closeout files are deliberately excluded so a later release phase
+can sign and provenance-cover them without recursively attesting to
+themselves.
+
+The verifier accepts the exact 106-file pre-bundle state plus any subset of the
+seven recognized final evidence files. This permits safe recovery when the
+evidence or closeout upload succeeds but the second provenance upload must be
+rerun. It downloads and validates only the original 106 files. Any unknown
+extra file fails the inventory check. The report records the final evidence
+roles as excluded and emits `partial_final_evidence_assets_excluded` for a
+proper nonempty subset or `final_evidence_assets_excluded` for all seven. The
+later final-evidence verification gate still requires all seven files before
+release success.
+
+The verifier checks all of the following without optional skip flags:
+
+- Exact GitHub Release metadata and 106-file pre-bundle asset inventory
+- Strict `SHA256SUMS` and image-input checksum inventories
+- Every payload's exact cosign workflow identity and SLSA source/tag identity
+- Exact equality between the authenticated SLSA subject set and all 35 payloads
+- Image-lock, digest, Buildx metadata, capsule, SPDX, Grype, and extracted image-binary bindings
+- GHCR package visibility, repository linkage, anonymous tag and digest pulls, and tag-to-lock digest equality
+- Exact OCI source, revision, and version labels and numeric image user `65532`
+- Notary and Relay versions executed from the immutable digest images
+- The downloaded Linux amd64 Registryctl binary's HTTP starter `init`, editor, test, check, and build journey
+- Versioned archived documentation routes, Markdown source, version markers, canonical Registryctl commands, and archive noindex policy
+
+The canonical `registryctl init --from http` authoring journey proves the
+published project's authoring and build behavior. Image-lock integrity and
+digest pins are verified independently because this starter path does not
+consume the image lock.
+
+Before publication, validate the local manifest and closed result schema
+without contacting GitHub, GHCR, Sigstore, or the documentation site:
+
+```bash
+release/scripts/registry-release verify-published \
+  release/manifests/registry-stack-beta-14.yaml \
+  --output-json /tmp/registry-stack-v0.12.0-verifier-dry-run.json \
+  --dry-validate
+```
+
+This dry validation intentionally reports `status: incomplete` and exits 2.
+It is not release evidence and cannot be substituted for the clean-environment
+post-publication run. The importable
+`release/scripts/verify_published_release.py` entrypoint remains available for
+focused development and testing, but the registered `registry-release`
+command is the operator contract used by both automation and this guide.
+
 ## Verify A v0.8.4 Registryctl Binary
 
 ### Download The v0.8.4 Assets

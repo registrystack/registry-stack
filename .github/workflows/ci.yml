@@ -654,6 +654,18 @@ jobs:
       - name: Test Dependabot release window checker
         run: python3 -m unittest release/scripts/test_check_dependabot_release_window.py
 
+      - name: Check release manual commands
+        run: python3 release/scripts/check-release-manual.py
+
+      - name: Test release manual checker
+        run: python3 -m unittest release/scripts/test_check_release_manual.py
+
+      - name: Test published release verifier
+        run: python3 -m unittest release/scripts/test_verify_published_release.py
+
+      - name: Test release evidence bundle
+        run: python3 -m unittest release/scripts/test_registry_release_evidence.py
+
       - name: Test release image OCI label checker
         run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py
 

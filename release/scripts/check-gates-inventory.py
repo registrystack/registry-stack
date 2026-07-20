@@ -161,6 +161,22 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_check_dependabot_release_window.py",
     ),
     (
+        "Release manual command check",
+        "run: python3 release/scripts/check-release-manual.py",
+    ),
+    (
+        "Release manual checker tests",
+        "run: python3 -m unittest release/scripts/test_check_release_manual.py",
+    ),
+    (
+        "Published release verifier tests",
+        "run: python3 -m unittest release/scripts/test_verify_published_release.py",
+    ),
+    (
+        "Release evidence bundle tests",
+        "run: python3 -m unittest release/scripts/test_registry_release_evidence.py",
+    ),
+    (
         "Release image OCI label checker tests",
         "run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py",
     ),

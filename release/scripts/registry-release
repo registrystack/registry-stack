@@ -17,6 +17,16 @@ from typing import Any
 
 import yaml
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from release_evidence import (  # noqa: E402
+    EvidenceError,
+    render_closeout_file,
+    write_evidence_bundle,
+)
+
 
 ROOT = Path(__file__).resolve().parents[2]
 RELEASE_MANIFEST_DIR = ROOT / "release" / "manifests"
@@ -2103,78 +2113,258 @@ def run_release_plan(
     return 0
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(prog="registry-release")
+def collect_evidence_bundle(
+    manifest: Path,
+    capsule: Path,
+    verification_result: Path,
+    asset_dir: Path,
+    output_json: Path,
+) -> int:
+    try:
+        bundle = write_evidence_bundle(
+            manifest,
+            capsule,
+            verification_result,
+            asset_dir,
+            output_json,
+        )
+    except (EvidenceError, OSError, UnicodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(
+        f"collected {bundle['verification']['status']} public release evidence "
+        f"for {bundle['release']['tag']}: {output_json}"
+    )
+    return 0
+
+
+def render_release_closeout(bundle: Path, output_markdown: Path) -> int:
+    try:
+        status = render_closeout_file(bundle, output_markdown)
+    except (EvidenceError, OSError, UnicodeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if status != "passed":
+        print(
+            f"error: rendered an explicitly unsuccessful {status} release closeout: "
+            f"{output_markdown}",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"rendered passed public release closeout {output_markdown}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="registry-release",
+        description=(
+            "Validate, plan, package, and record a Registry Stack public release "
+            "without mutating release state implicitly."
+        ),
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    validate_parser = subparsers.add_parser("validate")
-    validate_parser.add_argument("manifest", type=Path)
-    docsets_parser = subparsers.add_parser("validate-docsets")
+    validate_parser = subparsers.add_parser(
+        "validate",
+        help="validate a release manifest",
+        description="Validate release manifest identity, versions, and pinned inputs.",
+    )
+    validate_parser.add_argument("manifest", type=Path, help="release manifest YAML")
+    docsets_parser = subparsers.add_parser(
+        "validate-docsets",
+        help="validate archived documentation sets",
+        description="Validate documentation sets against all release manifests.",
+    )
     docsets_parser.add_argument(
-        "--manifest-dir", type=Path, default=RELEASE_MANIFEST_DIR
+        "--manifest-dir",
+        type=Path,
+        default=RELEASE_MANIFEST_DIR,
+        help="directory containing release manifests",
     )
-    docsets_parser.add_argument("--docsets", type=Path, default=DOCSETS_PATH)
-    source_parser = subparsers.add_parser("validate-source")
-    source_parser.add_argument("manifest", type=Path)
-    source_parser.add_argument("--tag", required=True)
-    source_parser.add_argument("--repo", type=Path, default=ROOT)
-    source_parser.add_argument("--default-branch", default="origin/main")
-    audit_parser = subparsers.add_parser("audit")
-    audit_parser.add_argument("import_map", type=Path)
-    stage_parser = subparsers.add_parser("stage-capsule-backfill-assets")
-    stage_parser.add_argument("asset_dir", type=Path)
-    stage_parser.add_argument("--tag", required=True)
-    stage_parser.add_argument("--binary-dir", type=Path, required=True)
-    stage_parser.add_argument("--image-evidence-dir", type=Path, required=True)
-    bind_spdx_parser = subparsers.add_parser("bind-spdx-subject")
-    bind_spdx_parser.add_argument("spdx", type=Path)
-    bind_spdx_parser.add_argument("--image-name", required=True)
-    bind_spdx_parser.add_argument("--digest-ref", required=True)
-    bind_file_spdx_parser = subparsers.add_parser("bind-spdx-file-subject")
-    bind_file_spdx_parser.add_argument("spdx", type=Path)
-    bind_file_spdx_parser.add_argument("--file-name", required=True)
-    bind_file_spdx_parser.add_argument("--sha256", required=True)
-    image_lock_parser = subparsers.add_parser("render-registryctl-image-lock")
-    image_lock_parser.add_argument("manifest", type=Path)
-    image_lock_parser.add_argument("--relay-digest", type=Path, required=True)
-    image_lock_parser.add_argument("--notary-digest", type=Path, required=True)
-    image_lock_parser.add_argument("--tag-target", required=True)
-    image_lock_parser.add_argument("--output", type=Path, required=True)
+    docsets_parser.add_argument(
+        "--docsets", type=Path, default=DOCSETS_PATH, help="documentation-set YAML"
+    )
+    source_parser = subparsers.add_parser(
+        "validate-source",
+        help="validate immutable source lineage",
+        description="Verify the release tag, selected source, and default-branch ancestry.",
+    )
+    source_parser.add_argument("manifest", type=Path, help="release manifest YAML")
+    source_parser.add_argument("--tag", required=True, help="release tag, such as v0.12.0")
+    source_parser.add_argument("--repo", type=Path, default=ROOT, help="Registry Stack checkout")
+    source_parser.add_argument(
+        "--default-branch", default="origin/main", help="default branch ref used for ancestry"
+    )
+    audit_parser = subparsers.add_parser(
+        "audit",
+        help="audit imported repository history",
+        description="Audit the immutable external-source import map.",
+    )
+    audit_parser.add_argument("import_map", type=Path, help="release import-map YAML")
+    stage_parser = subparsers.add_parser(
+        "stage-capsule-backfill-assets",
+        help="stage assets for a capsule backfill",
+        description="Copy the bounded published assets needed to backfill a release capsule.",
+    )
+    stage_parser.add_argument("asset_dir", type=Path, help="downloaded release assets")
+    stage_parser.add_argument("--tag", required=True, help="release tag")
+    stage_parser.add_argument("--binary-dir", type=Path, required=True, help="binary staging directory")
+    stage_parser.add_argument(
+        "--image-evidence-dir", type=Path, required=True, help="image-evidence staging directory"
+    )
+    bind_spdx_parser = subparsers.add_parser(
+        "bind-spdx-subject",
+        help="bind an SPDX image subject",
+        description="Add one immutable image digest subject to an SPDX JSON document.",
+    )
+    bind_spdx_parser.add_argument("spdx", type=Path, help="SPDX JSON document")
+    bind_spdx_parser.add_argument("--image-name", required=True, help="release image name")
+    bind_spdx_parser.add_argument("--digest-ref", required=True, help="immutable image digest ref")
+    bind_file_spdx_parser = subparsers.add_parser(
+        "bind-spdx-file-subject",
+        help="bind an SPDX file subject",
+        description="Add one filename and SHA-256 subject to an SPDX JSON document.",
+    )
+    bind_file_spdx_parser.add_argument("spdx", type=Path, help="SPDX JSON document")
+    bind_file_spdx_parser.add_argument("--file-name", required=True, help="published asset filename")
+    bind_file_spdx_parser.add_argument("--sha256", required=True, help="asset SHA-256")
+    image_lock_parser = subparsers.add_parser(
+        "render-registryctl-image-lock",
+        help="render the registryctl release image lock",
+        description="Render registryctl image inputs bound to immutable release digests.",
+    )
+    image_lock_parser.add_argument("manifest", type=Path, help="release manifest YAML")
+    image_lock_parser.add_argument("--relay-digest", type=Path, required=True, help="relay digest file")
+    image_lock_parser.add_argument("--notary-digest", type=Path, required=True, help="notary digest file")
+    image_lock_parser.add_argument("--tag-target", required=True, help="release tag target commit")
+    image_lock_parser.add_argument("--output", type=Path, required=True, help="output image-lock JSON")
     image_lock_version_parser = subparsers.add_parser(
-        "verify-registryctl-image-lock-release-version"
+        "verify-registryctl-image-lock-release-version",
+        help="check image-lock release compatibility",
+        description="Require a release version that supports registryctl image locks.",
     )
-    image_lock_version_parser.add_argument("--version", required=True)
-    binary_version_parser = subparsers.add_parser("verify-registryctl-binary-version")
-    binary_version_parser.add_argument("binary", type=Path)
-    binary_version_parser.add_argument("--version", required=True)
-    capsule_parser = subparsers.add_parser("render-capsule")
-    capsule_parser.add_argument("manifest", type=Path)
-    capsule_parser.add_argument("--tag", required=True)
-    capsule_parser.add_argument("--version", required=True)
-    capsule_parser.add_argument("--binary-dir", type=Path, required=True)
-    capsule_parser.add_argument("--binary-sbom-dir", type=Path, required=True)
-    capsule_parser.add_argument("--image-evidence-dir", type=Path, required=True)
-    capsule_parser.add_argument("--output-json", type=Path, required=True)
-    capsule_parser.add_argument("--output-markdown", type=Path, required=True)
-    capsule_parser.add_argument("--workflow-name", default="RegistryStack Release")
-    capsule_parser.add_argument("--workflow-run-url", required=True)
-    capsule_parser.add_argument("--workflow-run-id", default="not-recorded")
-    capsule_parser.add_argument("--default-branch-protection", default="unverified")
-    capsule_parser.add_argument("--repo", type=Path, default=ROOT)
-    capsule_parser.add_argument("--default-branch", default="origin/main")
-    capsule_parser.add_argument("--require-registryctl-image-lock", action="store_true")
-    prepare_parser = subparsers.add_parser("prepare")
-    prepare_parser.add_argument("--version", required=True)
-    prepare_parser.add_argument("--release-id", required=True)
-    prepare_parser.add_argument("--repo", type=Path, default=ROOT)
-    prepare_parser.add_argument("--plan-output", type=Path)
-    finalize_parser = subparsers.add_parser("finalize")
-    finalize_parser.add_argument("--version", required=True)
-    finalize_parser.add_argument("--release-id", required=True)
-    finalize_parser.add_argument("--promotion-commit", required=True)
-    finalize_parser.add_argument("--default-branch", default="origin/main")
-    finalize_parser.add_argument("--repo", type=Path, default=ROOT)
-    finalize_parser.add_argument("--plan-output", type=Path)
-    args = parser.parse_args()
+    image_lock_version_parser.add_argument("--version", required=True, help="semantic release version")
+    binary_version_parser = subparsers.add_parser(
+        "verify-registryctl-binary-version",
+        help="check the registryctl binary version",
+        description="Execute registryctl --version and require the exact release version.",
+    )
+    binary_version_parser.add_argument("binary", type=Path, help="registryctl binary")
+    binary_version_parser.add_argument("--version", required=True, help="expected semantic version")
+    capsule_parser = subparsers.add_parser(
+        "render-capsule",
+        help="render the public release trust capsule",
+        description="Render public release identity, artifact, image, and scan evidence.",
+    )
+    capsule_parser.add_argument("manifest", type=Path, help="release manifest YAML")
+    capsule_parser.add_argument("--tag", required=True, help="release tag")
+    capsule_parser.add_argument("--version", required=True, help="semantic release version")
+    capsule_parser.add_argument("--binary-dir", type=Path, required=True, help="verified binary assets")
+    capsule_parser.add_argument("--binary-sbom-dir", type=Path, required=True, help="binary SPDX documents")
+    capsule_parser.add_argument(
+        "--image-evidence-dir", type=Path, required=True, help="digest-bound image evidence"
+    )
+    capsule_parser.add_argument("--output-json", type=Path, required=True, help="output capsule JSON")
+    capsule_parser.add_argument(
+        "--output-markdown", type=Path, required=True, help="output capsule Markdown"
+    )
+    capsule_parser.add_argument("--workflow-name", default="RegistryStack Release", help="workflow display name")
+    capsule_parser.add_argument("--workflow-run-url", required=True, help="public workflow run URL")
+    capsule_parser.add_argument("--workflow-run-id", default="not-recorded", help="workflow run ID")
+    capsule_parser.add_argument(
+        "--default-branch-protection",
+        default="unverified",
+        help="verified, unverified, or not-public",
+    )
+    capsule_parser.add_argument("--repo", type=Path, default=ROOT, help="Registry Stack checkout")
+    capsule_parser.add_argument("--default-branch", default="origin/main", help="default branch ref")
+    capsule_parser.add_argument(
+        "--require-registryctl-image-lock",
+        action="store_true",
+        help="require the versioned registryctl image-lock asset",
+    )
+    prepare_parser = subparsers.add_parser(
+        "prepare",
+        help="build a deterministic candidate preparation plan",
+        description="Validate a selected candidate and emit its explicit preparation plan.",
+    )
+    prepare_parser.add_argument("--version", required=True, help="semantic release version")
+    prepare_parser.add_argument("--release-id", required=True, help="manifest release ID")
+    prepare_parser.add_argument("--repo", type=Path, default=ROOT, help="Registry Stack checkout")
+    prepare_parser.add_argument("--plan-output", type=Path, help="optional plan JSON output")
+    finalize_parser = subparsers.add_parser(
+        "finalize",
+        help="build a deterministic source finalization plan",
+        description="Validate promoted source and emit explicit finalization pointer changes.",
+    )
+    finalize_parser.add_argument("--version", required=True, help="semantic release version")
+    finalize_parser.add_argument("--release-id", required=True, help="manifest release ID")
+    finalize_parser.add_argument("--promotion-commit", required=True, help="exact promoted commit SHA")
+    finalize_parser.add_argument("--default-branch", default="origin/main", help="default branch ref")
+    finalize_parser.add_argument("--repo", type=Path, default=ROOT, help="Registry Stack checkout")
+    finalize_parser.add_argument("--plan-output", type=Path, help="optional plan JSON output")
+    published_parser = subparsers.add_parser(
+        "verify-published",
+        help="verify the complete published release contract",
+        description=(
+            "Verify a v0.12+ release from a clean tag checkout, including exact public assets, "
+            "authenticity, bindings, images, archived docs, and the Registryctl authoring journey."
+        ),
+    )
+    published_parser.add_argument("manifest", type=Path, help="published release manifest YAML")
+    published_parser.add_argument("--output-json", type=Path, required=True, help="normalized public result JSON")
+    published_parser.add_argument("--repo-root", type=Path, default=ROOT, help="clean release-tag checkout")
+    published_parser.add_argument(
+        "--assets-dir",
+        type=Path,
+        help="existing directory containing the exact pre-evidence release assets",
+    )
+    published_parser.add_argument(
+        "--dry-validate",
+        action="store_true",
+        help="validate only the local manifest and closed result contract; returns incomplete",
+    )
+    published_parser.add_argument("--docs-attempts", type=int, default=6, help="archived-doc probe attempts")
+    published_parser.add_argument(
+        "--docs-retry-seconds",
+        type=float,
+        default=10.0,
+        help="seconds between archived-doc probes",
+    )
+    evidence_parser = subparsers.add_parser(
+        "collect-evidence-bundle",
+        help="collect the bounded public release evidence bundle",
+        description=(
+            "Recompute the exact pre-bundle asset inventory and collect a deterministic, "
+            "public-only release evidence bundle."
+        ),
+    )
+    evidence_parser.add_argument("--manifest", type=Path, required=True, help="published release manifest YAML")
+    evidence_parser.add_argument("--capsule", type=Path, required=True, help="published release capsule JSON")
+    evidence_parser.add_argument(
+        "--verification-result",
+        type=Path,
+        required=True,
+        help="normalized verify-published JSON result",
+    )
+    evidence_parser.add_argument(
+        "--asset-dir", type=Path, required=True, help="directory containing only pre-bundle release assets"
+    )
+    evidence_parser.add_argument("--output-json", type=Path, required=True, help="output evidence bundle JSON")
+    closeout_parser = subparsers.add_parser(
+        "render-release-closeout",
+        help="render a public release closeout",
+        description="Render a deterministic closeout without presenting failed or incomplete evidence as success.",
+    )
+    closeout_parser.add_argument("--bundle", type=Path, required=True, help="public evidence bundle JSON")
+    closeout_parser.add_argument(
+        "--output-markdown", type=Path, required=True, help="output closeout Markdown"
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     if args.command == "validate":
         return validate(args.manifest)
@@ -2238,6 +2428,37 @@ def main() -> int:
             promotion_commit=args.promotion_commit,
             default_branch=args.default_branch,
         )
+    if args.command == "verify-published":
+        # Keep this import lazy because the verifier reuses the stable release
+        # document helpers from this script when it runs standalone.
+        import verify_published_release as published_verifier
+
+        verifier_argv = [
+            str(args.manifest),
+            "--output-json",
+            str(args.output_json),
+            "--repo-root",
+            str(args.repo_root),
+            "--docs-attempts",
+            str(args.docs_attempts),
+            "--docs-retry-seconds",
+            str(args.docs_retry_seconds),
+        ]
+        if args.assets_dir is not None:
+            verifier_argv.extend(("--assets-dir", str(args.assets_dir)))
+        if args.dry_validate:
+            verifier_argv.append("--dry-validate")
+        return published_verifier.main(verifier_argv)
+    if args.command == "collect-evidence-bundle":
+        return collect_evidence_bundle(
+            args.manifest,
+            args.capsule,
+            args.verification_result,
+            args.asset_dir,
+            args.output_json,
+        )
+    if args.command == "render-release-closeout":
+        return render_release_closeout(args.bundle, args.output_markdown)
     raise AssertionError(args.command)
 
 

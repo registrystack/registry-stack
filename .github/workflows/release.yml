@@ -27,6 +27,8 @@ env:
   SYFT_LINUX_AMD64_SHA256: 20c84195e24927f50a3b2269946be51f4c4abc9d2f145fee7388b4199149f716
   GRYPE_VERSION: v0.114.0
   GRYPE_LINUX_AMD64_SHA256: edda0968d8827daab01d32b3cd7de192ae0915005e7bbfcfef9e68e79bc43343
+  SLSA_VERIFIER_VERSION: v2.7.1
+  SLSA_VERIFIER_LINUX_AMD64_SHA256: 946dbec729094195e88ef78e1734324a27869f03e2c6bd2f61cbc06bd5350339
 
 jobs:
   verify:
@@ -739,8 +741,19 @@ jobs:
             | xargs -0 -n1 basename \
             | sort > "${tmp}/expected-assets"
           provenance_asset="registry-stack-${tag}-release-provenance.intoto.jsonl"
+          evidence_asset="registry-stack-${tag}-release-evidence.json"
+          closeout_asset="registry-stack-${tag}-release-closeout.md"
+          evidence_provenance="registry-stack-${tag}-release-evidence-provenance.intoto.jsonl"
           gh release view "${tag}" --json assets --jq '.assets[].name' \
-            | awk -v provenance_asset="${provenance_asset}" '$0 != provenance_asset { print }' \
+            | awk \
+                -v provenance_asset="${provenance_asset}" \
+                -v evidence_asset="${evidence_asset}" \
+                -v closeout_asset="${closeout_asset}" \
+                -v evidence_provenance="${evidence_provenance}" \
+                '$0 != provenance_asset &&
+                 $0 != evidence_asset && $0 != evidence_asset ".sig" && $0 != evidence_asset ".pem" &&
+                 $0 != closeout_asset && $0 != closeout_asset ".sig" && $0 != closeout_asset ".pem" &&
+                 $0 != evidence_provenance { print }' \
             | sort > "${tmp}/actual-assets"
           if ! diff -u "${tmp}/expected-assets" "${tmp}/actual-assets"; then
             echo "GitHub Release assets differ from generated assets" >&2
@@ -803,6 +816,299 @@ jobs:
           echo "GitHub Release asset ${asset} was not found" >&2
           exit 1
 
+  verify-published-release:
+    name: Verify published release as a consumer
+    needs:
+      - verify
+      - release-provenance
+      - verify-release-provenance
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout immutable release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.verify.outputs.tag_target }}
+          fetch-depth: 0
+          submodules: false
+
+      - name: Assert clean verifier checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/tags/${{ needs.verify.outputs.tag }}:refs/tags/${{ needs.verify.outputs.tag }}"
+          test "$(git rev-parse HEAD)" = "${{ needs.verify.outputs.tag_target }}"
+          test -z "$(git status --short)"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Install pinned SLSA verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${SLSA_VERIFIER_VERSION:?}"
+          : "${SLSA_VERIFIER_LINUX_AMD64_SHA256:?}"
+          tool_dir="${RUNNER_TEMP}/registry-stack-verifier-tools"
+          mkdir -p "${tool_dir}"
+          curl -sSfL \
+            "https://github.com/slsa-framework/slsa-verifier/releases/download/${SLSA_VERIFIER_VERSION}/slsa-verifier-linux-amd64" \
+            -o "${tool_dir}/slsa-verifier"
+          echo "${SLSA_VERIFIER_LINUX_AMD64_SHA256}  ${tool_dir}/slsa-verifier" | sha256sum -c -
+          chmod 0755 "${tool_dir}/slsa-verifier"
+          echo "${tool_dir}" >> "${GITHUB_PATH}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5
+
+      - name: Verify exact public release contract
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-verification
+          release/scripts/registry-release verify-published \
+            "${{ needs.verify.outputs.manifest }}" \
+            --repo-root . \
+            --output-json "dist/release-verification/registry-stack-${{ needs.verify.outputs.tag }}-post-publication-verification.json"
+
+      - name: Upload normalized verification result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: registry-stack-post-publication-verification
+          path: dist/release-verification/*.json
+          if-no-files-found: error
+
+  release-evidence:
+    name: Publish release evidence bundle
+    needs:
+      - verify
+      - verify-published-release
+    runs-on: ubuntu-24.04
+    outputs:
+      provenance_subjects: ${{ steps.provenance-subjects.outputs.base64_subjects }}
+    permissions:
+      contents: write
+      id-token: write # keyless cosign signing via OIDC
+    steps:
+      - name: Checkout immutable release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.verify.outputs.tag_target }}
+          fetch-depth: 0
+          submodules: false
+
+      - name: Download normalized verification result
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: registry-stack-post-publication-verification
+          path: dist/release-verification
+
+      - name: Download exact pre-evidence release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-assets
+          PYTHONPATH=release/scripts python3 - "${{ needs.verify.outputs.manifest }}" > "${RUNNER_TEMP}/pre-evidence-assets" <<'PY'
+          import sys
+          from pathlib import Path
+          from verify_published_release import expected_asset_contract, load_release_identity
+
+          identity = load_release_identity(Path(sys.argv[1]))
+          for name in expected_asset_contract(identity).all_assets:
+              print(name)
+          PY
+          while IFS= read -r asset; do
+            gh release download "${{ needs.verify.outputs.tag }}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${asset}" \
+              --dir dist/release-assets \
+              --clobber
+          done < "${RUNNER_TEMP}/pre-evidence-assets"
+          test "$(find dist/release-assets -maxdepth 1 -type f | wc -l)" -eq 106
+
+      - name: Collect and render public release evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.verify.outputs.tag }}"
+          mkdir -p dist/release-evidence
+          release/scripts/registry-release collect-evidence-bundle \
+            --manifest "${{ needs.verify.outputs.manifest }}" \
+            --capsule "dist/release-assets/registry-stack-${tag}-release-capsule.json" \
+            --verification-result "dist/release-verification/registry-stack-${tag}-post-publication-verification.json" \
+            --asset-dir dist/release-assets \
+            --output-json "dist/release-evidence/registry-stack-${tag}-release-evidence.json"
+          release/scripts/registry-release render-release-closeout \
+            --bundle "dist/release-evidence/registry-stack-${tag}-release-evidence.json" \
+            --output-markdown "dist/release-evidence/registry-stack-${tag}-release-closeout.md"
+
+      - name: Generate evidence provenance subjects
+        id: provenance-subjects
+        shell: bash
+        run: |
+          set -euo pipefail
+          subjects="$(mktemp)"
+          while IFS= read -r -d '' file; do
+            printf '%s  %s\n' \
+              "$(sha256sum "${file}" | awk '{print $1}')" \
+              "$(basename "${file}")" >> "${subjects}"
+          done < <(find dist/release-evidence -maxdepth 1 -type f -print0 | sort -z)
+          test "$(wc -l < "${subjects}")" -eq 2
+          echo "base64_subjects=$(base64 -w0 "${subjects}")" >> "${GITHUB_OUTPUT}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Sign public release evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t files < <(find dist/release-evidence -maxdepth 1 -type f -print0 | sort -z)
+          test "${#files[@]}" -eq 2
+          for file in "${files[@]}"; do
+            cosign sign-blob --yes \
+              --output-signature "${file}.sig" \
+              --output-certificate "${file}.pem" \
+              "${file}"
+          done
+
+      - name: Upload public release evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t assets < <(find dist/release-evidence -maxdepth 1 -type f -print0 | sort -z)
+          test "${#assets[@]}" -eq 6
+          gh release upload "${{ needs.verify.outputs.tag }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber \
+            "${assets[@]}"
+
+  release-evidence-provenance:
+    name: Generate release evidence provenance
+    needs:
+      - verify
+      - release-evidence
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    permissions:
+      actions: read # read workflow metadata for SLSA provenance
+      id-token: write # sign provenance with GitHub OIDC
+      contents: write # upload provenance to the GitHub Release
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.release-evidence.outputs.provenance_subjects }}
+      upload-assets: true
+      upload-tag-name: ${{ needs.verify.outputs.tag }}
+      provenance-name: registry-stack-${{ needs.verify.outputs.tag }}-release-evidence-provenance.intoto.jsonl
+
+  verify-release-evidence:
+    name: Verify published release evidence
+    needs:
+      - verify
+      - release-evidence-provenance
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout immutable release tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.verify.outputs.tag_target }}
+          fetch-depth: 0
+          submodules: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Install pinned SLSA verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool_dir="${RUNNER_TEMP}/registry-stack-verifier-tools"
+          mkdir -p "${tool_dir}"
+          curl -sSfL \
+            "https://github.com/slsa-framework/slsa-verifier/releases/download/${SLSA_VERIFIER_VERSION}/slsa-verifier-linux-amd64" \
+            -o "${tool_dir}/slsa-verifier"
+          echo "${SLSA_VERIFIER_LINUX_AMD64_SHA256}  ${tool_dir}/slsa-verifier" | sha256sum -c -
+          chmod 0755 "${tool_dir}/slsa-verifier"
+          echo "${tool_dir}" >> "${GITHUB_PATH}"
+
+      - name: Verify exact final evidence assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.verify.outputs.tag }}"
+          evidence="registry-stack-${tag}-release-evidence.json"
+          closeout="registry-stack-${tag}-release-closeout.md"
+          provenance="registry-stack-${tag}-release-evidence-provenance.intoto.jsonl"
+          mkdir -p dist/release-evidence
+          PYTHONPATH=release/scripts python3 - "${{ needs.verify.outputs.manifest }}" > "${RUNNER_TEMP}/expected-final-assets" <<'PY'
+          import sys
+          from pathlib import Path
+          from verify_published_release import (
+              expected_asset_contract,
+              expected_finalization_assets,
+              load_release_identity,
+          )
+
+          identity = load_release_identity(Path(sys.argv[1]))
+          names = set(expected_asset_contract(identity).all_assets)
+          names.update(expected_finalization_assets(identity))
+          for name in sorted(names):
+              print(name)
+          PY
+          gh release view "${tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json assets \
+            --jq '.assets[].name' \
+            | sort > "${RUNNER_TEMP}/actual-final-assets"
+          diff -u "${RUNNER_TEMP}/expected-final-assets" "${RUNNER_TEMP}/actual-final-assets"
+          for asset in \
+            "${evidence}" "${evidence}.sig" "${evidence}.pem" \
+            "${closeout}" "${closeout}.sig" "${closeout}.pem" \
+            "${provenance}"; do
+            gh release download "${tag}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${asset}" \
+              --dir dist/release-evidence \
+              --clobber
+          done
+          test "$(find dist/release-evidence -maxdepth 1 -type f | wc -l)" -eq 7
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}"
+          for payload in "${evidence}" "${closeout}"; do
+            cosign verify-blob "dist/release-evidence/${payload}" \
+              --signature "dist/release-evidence/${payload}.sig" \
+              --certificate "dist/release-evidence/${payload}.pem" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --certificate-identity "${identity}"
+            slsa-verifier verify-artifact "dist/release-evidence/${payload}" \
+              --provenance-path "dist/release-evidence/${provenance}" \
+              --source-uri "github.com/${GITHUB_REPOSITORY}" \
+              --source-tag "${tag}"
+          done
+          PYTHONPATH=release/scripts python3 - "dist/release-evidence" "${evidence}" "${closeout}" "${provenance}" <<'PY'
+          import sys
+          from pathlib import Path
+          from verify_published_release import AssetContract, verify_provenance_subjects
+
+          verify_provenance_subjects(
+              Path(sys.argv[1]),
+              AssetContract((sys.argv[2], sys.argv[3]), (), (), sys.argv[4]),
+          )
+          PY
+
   release-telemetry:
     name: Record release workflow telemetry
     needs:
@@ -813,6 +1119,10 @@ jobs:
       - github-release
       - release-provenance
       - verify-release-provenance
+      - verify-published-release
+      - release-evidence
+      - release-evidence-provenance
+      - verify-release-evidence
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     permissions:

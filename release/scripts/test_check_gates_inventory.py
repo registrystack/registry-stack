@@ -238,6 +238,26 @@ class GateInventoryTest(unittest.TestCase):
                 "run: true # Dependabot checker tests disabled",
                 "Dependabot release window checker tests",
             ),
+            (
+                "run: python3 release/scripts/check-release-manual.py",
+                "run: true # release manual check disabled",
+                "Release manual command check",
+            ),
+            (
+                "run: python3 -m unittest release/scripts/test_check_release_manual.py",
+                "run: true # release manual checker tests disabled",
+                "Release manual checker tests",
+            ),
+            (
+                "run: python3 -m unittest release/scripts/test_verify_published_release.py",
+                "run: true # published release verifier tests disabled",
+                "Published release verifier tests",
+            ),
+            (
+                "run: python3 -m unittest release/scripts/test_registry_release_evidence.py",
+                "run: true # release evidence bundle tests disabled",
+                "Release evidence bundle tests",
+            ),
         )
         for old, new, expected in mutations:
             with self.subTest(gate=expected):

@@ -1,0 +1,382 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/schemas/release/release-evidence-bundle-v1.json",
+  "title": "Registry Stack public release evidence bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_kind",
+    "classification",
+    "release",
+    "lineage",
+    "workflow",
+    "tools",
+    "artifact_inventory",
+    "verification",
+    "warnings",
+    "gates",
+    "privacy"
+  ],
+  "properties": {
+    "schema_version": { "const": "registry-stack.release-evidence-bundle.v1" },
+    "record_kind": { "const": "public_release_evidence" },
+    "classification": { "const": "public" },
+    "release": { "$ref": "#/$defs/release" },
+    "lineage": { "$ref": "#/$defs/lineage" },
+    "workflow": { "$ref": "#/$defs/workflow" },
+    "tools": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/tool" }
+    },
+    "artifact_inventory": { "$ref": "#/$defs/artifactInventory" },
+    "verification": { "$ref": "#/$defs/verification" },
+    "warnings": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/warning" }
+    },
+    "gates": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/gate" }
+    },
+    "privacy": { "$ref": "#/$defs/privacy" }
+  },
+  "$defs": {
+    "safeName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"
+    },
+    "safeToken": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+@#=-]*$"
+    },
+    "observedVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["payloads", "signatures", "certificates", "provenance", "total"],
+      "properties": {
+        "payloads": { "type": "integer", "minimum": 0, "maximum": 512 },
+        "signatures": { "type": "integer", "minimum": 0, "maximum": 512 },
+        "certificates": { "type": "integer", "minimum": 0, "maximum": 512 },
+        "provenance": { "type": "integer", "minimum": 0, "maximum": 512 },
+        "total": { "type": "integer", "minimum": 0, "maximum": 512 }
+      }
+    },
+    "expectedCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["payloads", "signatures", "certificates", "provenance", "total"],
+      "properties": {
+        "payloads": { "const": 35 },
+        "signatures": { "const": 35 },
+        "certificates": { "const": 35 },
+        "provenance": { "const": 1 },
+        "total": { "const": 106 }
+      }
+    },
+    "assetBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_name", "sha256"],
+      "properties": {
+        "asset_name": { "$ref": "#/$defs/safeName" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "manifestBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256"],
+      "properties": {
+        "name": { "$ref": "#/$defs/safeName" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "release_id", "version", "tag", "manifest", "capsule"],
+      "properties": {
+        "repository": { "const": "registrystack/registry-stack" },
+        "release_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "tag": {
+          "type": "string",
+          "maxLength": 33,
+          "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "manifest": { "$ref": "#/$defs/manifestBinding" },
+        "capsule": { "$ref": "#/$defs/assetBinding" }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest_source_ref",
+        "tag_target",
+        "default_branch",
+        "default_branch_commit",
+        "tag_matches_source_tag",
+        "head_matches_tag_target",
+        "source_ref_ancestor_or_equal",
+        "default_branch_reachable"
+      ],
+      "properties": {
+        "manifest_source_ref": { "$ref": "#/$defs/commit" },
+        "tag_target": { "$ref": "#/$defs/commit" },
+        "default_branch": { "$ref": "#/$defs/safeName" },
+        "default_branch_commit": { "$ref": "#/$defs/commit" },
+        "tag_matches_source_tag": { "type": "boolean" },
+        "head_matches_tag_target": { "type": "boolean" },
+        "source_ref_ancestor_or_equal": { "type": "boolean" },
+        "default_branch_reachable": { "type": "boolean" }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "run_id",
+        "run_attempt",
+        "run_url",
+        "event",
+        "ref",
+        "head_sha",
+        "started_at",
+        "completed_at",
+        "duration_seconds"
+      ],
+      "properties": {
+        "name": { "type": ["string", "null"], "minLength": 1, "maxLength": 100 },
+        "run_id": { "type": ["string", "null"], "pattern": "^[1-9][0-9]*$", "maxLength": 20 },
+        "run_attempt": { "type": ["string", "null"], "pattern": "^[1-9][0-9]*$", "maxLength": 10 },
+        "run_url": { "type": ["string", "null"], "format": "uri", "maxLength": 256 },
+        "event": { "enum": ["push", "workflow_dispatch", null] },
+        "ref": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 },
+        "head_sha": { "oneOf": [{ "$ref": "#/$defs/commit" }, { "type": "null" }] },
+        "started_at": { "type": ["string", "null"], "format": "date-time", "maxLength": 32 },
+        "completed_at": { "type": ["string", "null"], "format": "date-time", "maxLength": 32 },
+        "duration_seconds": { "type": ["integer", "null"], "minimum": 0, "maximum": 604800 }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "source"],
+      "properties": {
+        "name": { "$ref": "#/$defs/safeName" },
+        "version": { "$ref": "#/$defs/observedVersion" },
+        "source": { "const": "observed" }
+      }
+    },
+    "artifactVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checksum", "signature", "provenance"],
+      "properties": {
+        "checksum": { "enum": ["passed", "failed", "not_applicable"] },
+        "signature": { "enum": ["passed", "failed", "not_applicable"] },
+        "provenance": { "enum": ["passed", "failed", "not_applicable"] }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role", "payload_name", "size_bytes", "sha256", "verification"],
+      "properties": {
+        "name": { "$ref": "#/$defs/safeName" },
+        "role": { "enum": ["payload", "signature", "certificate", "provenance"] },
+        "payload_name": { "oneOf": [{ "$ref": "#/$defs/safeName" }, { "type": "null" }] },
+        "size_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "verification": { "$ref": "#/$defs/artifactVerification" }
+      }
+    },
+    "artifactInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope_name", "expected_counts", "observed_counts", "excluded_roles", "artifacts"],
+      "properties": {
+        "scope_name": { "const": "pre_evidence_bundle" },
+        "expected_counts": { "$ref": "#/$defs/expectedCounts" },
+        "observed_counts": { "$ref": "#/$defs/counts" },
+        "excluded_roles": {
+          "const": [
+            "evidence_bundle",
+            "evidence_bundle_signature",
+            "evidence_bundle_certificate",
+            "evidence_bundle_provenance"
+          ]
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 106,
+          "items": { "$ref": "#/$defs/artifact" }
+        }
+      }
+    },
+    "imageLabels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "revision", "version"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "revision": { "$ref": "#/$defs/commit" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 32 }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "repository",
+        "tag_ref",
+        "digest_ref",
+        "digest",
+        "anonymous_tag_pull",
+        "anonymous_digest_pull",
+        "config_user",
+        "labels",
+        "reported_version"
+      ],
+      "properties": {
+        "component": { "$ref": "#/$defs/safeName" },
+        "repository": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "tag_ref": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "digest_ref": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "anonymous_tag_pull": { "enum": ["passed", "failed"] },
+        "anonymous_digest_pull": { "enum": ["passed", "failed"] },
+        "config_user": { "$ref": "#/$defs/safeToken" },
+        "labels": { "$ref": "#/$defs/imageLabels" },
+        "reported_version": { "type": "string", "minLength": 1, "maxLength": 32 }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "phase", "subject", "status", "tool", "failure_codes"],
+      "properties": {
+        "id": { "$ref": "#/$defs/safeName" },
+        "phase": { "$ref": "#/$defs/safeName" },
+        "subject": { "$ref": "#/$defs/safeToken" },
+        "status": { "enum": ["passed", "failed", "incomplete"] },
+        "tool": { "$ref": "#/$defs/safeName" },
+        "failure_codes": {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/safeName" }
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "checks", "images", "warnings"],
+      "properties": {
+        "status": { "enum": ["passed", "failed", "incomplete"] },
+        "checks": {
+          "type": "array",
+          "minItems": 17,
+          "maxItems": 17,
+          "items": { "$ref": "#/$defs/check" }
+        },
+        "images": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/image" }
+        },
+        "warnings": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/verifierWarning" }
+        }
+      }
+    },
+    "verifierWarning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "subject"],
+      "properties": {
+        "code": { "$ref": "#/$defs/safeName" },
+        "subject": { "$ref": "#/$defs/safeName" }
+      }
+    },
+    "warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "classification", "detail"],
+      "properties": {
+        "code": { "$ref": "#/$defs/safeName" },
+        "classification": { "$ref": "#/$defs/safeName" },
+        "detail": { "type": "string", "minLength": 1, "maxLength": 1000 }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "classification", "status"],
+      "properties": {
+        "code": { "$ref": "#/$defs/safeName" },
+        "classification": { "$ref": "#/$defs/safeName" },
+        "status": { "enum": ["held", "pending"] }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "raw_logs_included",
+        "environment_values_included",
+        "commands_included",
+        "private_evidence_included",
+        "restricted_evidence_included",
+        "secret_values_included"
+      ],
+      "properties": {
+        "raw_logs_included": { "const": false },
+        "environment_values_included": { "const": false },
+        "commands_included": { "const": false },
+        "private_evidence_included": { "const": false },
+        "restricted_evidence_included": { "const": false },
+        "secret_values_included": { "const": false }
+      }
+    }
+  }
+}

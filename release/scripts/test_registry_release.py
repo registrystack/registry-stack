@@ -159,6 +159,40 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("completed_runner_minutes", telemetry_job)
         self.assertIn("name: Upload workflow telemetry", telemetry_job)
 
+    def test_release_workflow_publishes_and_verifies_bounded_evidence(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        consumer_job = workflow[
+            workflow.index("\n  verify-published-release:") : workflow.index("\n  release-evidence:")
+        ]
+        evidence_job = workflow[
+            workflow.index("\n  release-evidence:") : workflow.index("\n  release-evidence-provenance:")
+        ]
+        final_job = workflow[
+            workflow.index("\n  verify-release-evidence:") : workflow.index("\n  release-telemetry:")
+        ]
+
+        self.assertIn("- release-provenance", consumer_job)
+        self.assertIn("- verify-release-provenance", consumer_job)
+        self.assertIn("Assert clean verifier checkout", consumer_job)
+        self.assertIn("registry-release verify-published", consumer_job)
+        self.assertIn("SLSA_VERIFIER_LINUX_AMD64_SHA256", consumer_job)
+        self.assertIn("registry-stack-post-publication-verification", consumer_job)
+
+        self.assertIn("- verify-published-release", evidence_job)
+        self.assertIn("registry-release collect-evidence-bundle", evidence_job)
+        self.assertIn("registry-release render-release-closeout", evidence_job)
+        self.assertIn("test \"$(find dist/release-assets -maxdepth 1 -type f | wc -l)\" -eq 106", evidence_job)
+        self.assertIn("test \"${#assets[@]}\" -eq 6", evidence_job)
+        self.assertIn("cosign sign-blob --yes", evidence_job)
+
+        self.assertIn("test \"$(find dist/release-evidence -maxdepth 1 -type f | wc -l)\" -eq 7", final_job)
+        self.assertIn("expected_finalization_assets", final_job)
+        self.assertIn("diff -u \"${RUNNER_TEMP}/expected-final-assets\"", final_job)
+        self.assertIn("slsa-verifier verify-artifact", final_job)
+        self.assertIn("verify_provenance_subjects", final_job)
+        telemetry_job = workflow[workflow.index("\n  release-telemetry:") :]
+        self.assertIn("- verify-release-evidence", telemetry_job)
+
     def test_release_image_scans_are_policy_enforced_and_preserved(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         images_job = workflow[
