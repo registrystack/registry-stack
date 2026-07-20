@@ -32,6 +32,38 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Other workflow path classification",
         ".github/workflows/*)\n                  mark_all\n                  ;;",
     ),
+    (
+        "Finalization profile output",
+        "finalization_profile: ${{ steps.filter.outputs.finalization_profile }}",
+    ),
+    (
+        "Finalization promotion commit output",
+        "finalization_promotion_commit: ${{ steps.filter.outputs.finalization_promotion_commit }}",
+    ),
+    (
+        "Trusted base finalization checker",
+        'git show "${base}:release/scripts/check-finalization-profile.py"',
+    ),
+    (
+        "Exact finalization checker refs",
+        '--base-ref "${base}" \\\n                 --head-ref "${head}"',
+    ),
+    (
+        "Eligible finalization reduced gates",
+        "eligible)\n                release_tool=true\n                release_source_proof=true\n                docs=true\n                ;;",
+    ),
+    (
+        "Finalization full-CI fallback",
+        "full-ci)\n                all=true\n                ;;",
+    ),
+    (
+        "Finalization profile evidence",
+        "name: registry-stack-finalization-profile-${{ github.run_id }}",
+    ),
+    (
+        "Dependabot release-tool classification",
+        ".github/dependabot.yml)\n                  release_tool=true\n                  ;;",
+    ),
     ("Cargo metadata", "run: cargo metadata --locked --format-version 1"),
     (
         "Manifest profile validation",
@@ -115,6 +147,18 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Release planning command tests",
         "run: python3 -m unittest release/scripts/test_registry_release_plans.py",
+    ),
+    (
+        "Release finalization profile tests",
+        "run: python3 -m unittest release/scripts/test_check_finalization_profile.py",
+    ),
+    (
+        "Dependabot release window check",
+        "run: python3 release/scripts/check-dependabot-release-window.py",
+    ),
+    (
+        "Dependabot release window checker tests",
+        "run: python3 -m unittest release/scripts/test_check_dependabot_release_window.py",
     ),
     (
         "Release image OCI label checker tests",

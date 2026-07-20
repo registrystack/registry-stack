@@ -38,6 +38,8 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       editors: ${{ steps.filter.outputs.editors }}
       registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}
+      finalization_profile: ${{ steps.filter.outputs.finalization_profile }}
+      finalization_promotion_commit: ${{ steps.filter.outputs.finalization_promotion_commit }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -59,6 +61,8 @@ jobs:
           editors=false
           registryctl_tutorial=false
           all=false
+          finalization_profile=not-applicable
+          finalization_promotion_commit=
 
           if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
             base="${{ github.event.pull_request.base.sha }}"
@@ -83,16 +87,124 @@ jobs:
           }
 
           changed_files="${RUNNER_TEMP}/registry-stack-changed-files"
+          profile_path="${RUNNER_TEMP}/registry-stack-finalization-profile.json"
+          checker_path="${RUNNER_TEMP}/check-finalization-profile.py"
+
+          write_full_profile() {
+            local reason="$1"
+            python3 - "${profile_path}" "${base}" "${head}" "${reason}" <<'PY'
+          import json
+          import sys
+
+          path, base, head, reason = sys.argv[1:]
+          gates = {
+              name: True
+              for name in (
+                  "rust",
+                  "platform",
+                  "platform_hygiene",
+                  "release_tool",
+                  "release_source_proof",
+                  "docs",
+                  "editors",
+                  "registryctl_tutorial",
+              )
+          }
+          profile = {
+              "schema_version": "registry-stack.finalization-profile.v1",
+              "classification": "full-ci",
+              "base_commit": base or None,
+              "head_commit": head or None,
+              "candidate_source_ref": None,
+              "promotion_commit": None,
+              "release": None,
+              "changed_paths": [],
+              "planned_changes": [],
+              "selected_gates": gates,
+              "errors": [reason],
+          }
+          with open(path, "w", encoding="utf-8") as handle:
+              json.dump(profile, handle, indent=2, sort_keys=True)
+              handle.write("\n")
+          PY
+          }
+
           if [[ -z "${base}" ]] ||
              ! git cat-file -e "${base}^{commit}" 2>/dev/null ||
              ! git cat-file -e "${head}^{commit}" 2>/dev/null; then
             all=true
+            if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+              finalization_profile=full-ci
+              write_full_profile "base or head commit could not be resolved"
+            fi
           else
             git diff --name-only -z "${base}" "${head}" > "${changed_files}"
           fi
 
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" && "${all}" != "true" ]]; then
+            if git show "${base}:release/scripts/check-finalization-profile.py" \
+                 > "${checker_path}" 2>/dev/null &&
+               python3 "${checker_path}" \
+                 --repo "${GITHUB_WORKSPACE}" \
+                 --base-ref "${base}" \
+                 --head-ref "${head}" \
+                 --output "${profile_path}" >/dev/null; then
+              if profile_fields="$(python3 - "${profile_path}" <<'PY'
+          import json
+          import re
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              profile = json.load(handle)
+          if profile.get("schema_version") != "registry-stack.finalization-profile.v1":
+              raise SystemExit("unexpected finalization profile schema")
+          classification = profile.get("classification")
+          if classification not in {"eligible", "full-ci", "not-applicable"}:
+              raise SystemExit("unexpected finalization profile classification")
+          promotion = profile.get("promotion_commit")
+          if classification == "eligible" and (
+              not isinstance(promotion, str)
+              or re.fullmatch(r"[0-9a-f]{40}", promotion) is None
+          ):
+              raise SystemExit("eligible profile has no exact promotion commit")
+          print(classification)
+          print(promotion or "")
+          PY
+              )"; then
+                finalization_profile="$(sed -n '1p' <<< "${profile_fields}")"
+                finalization_promotion_commit="$(sed -n '2p' <<< "${profile_fields}")"
+              else
+                finalization_profile=full-ci
+                write_full_profile "finalization checker returned invalid JSON evidence"
+              fi
+            else
+              finalization_profile=full-ci
+              write_full_profile "trusted base finalization checker was unavailable or failed"
+            fi
+
+            case "${finalization_profile}" in
+              eligible)
+                release_tool=true
+                release_source_proof=true
+                docs=true
+                ;;
+              full-ci)
+                all=true
+                ;;
+              not-applicable)
+                ;;
+              *)
+                finalization_profile=full-ci
+                all=true
+                write_full_profile "finalization checker returned an unknown classification"
+                ;;
+            esac
+          fi
+
           if [[ "${all}" == "true" ]]; then
             mark_all
+          elif [[ "${finalization_profile}" == "eligible" ]]; then
+            : # The trusted profile selected the exact reduced gate set above.
           else
             while IFS= read -r -d '' path; do
               case "${path}" in
@@ -126,6 +238,9 @@ jobs:
                   ;;
               esac
               case "${path}" in
+                .github/dependabot.yml)
+                  release_tool=true
+                  ;;
                 release/*)
                   release_tool=true
                   ;;
@@ -165,7 +280,32 @@ jobs:
             echo "docs=${docs}"
             echo "editors=${editors}"
             echo "registryctl_tutorial=${registryctl_tutorial}"
+            echo "finalization_profile=${finalization_profile}"
+            echo "finalization_promotion_commit=${finalization_promotion_commit}"
           } >> "${GITHUB_OUTPUT}"
+
+      - name: Summarize finalization profile
+        if: github.event_name == 'pull_request' && steps.filter.outputs.finalization_profile != 'not-applicable'
+        shell: bash
+        run: |
+          {
+            echo "### Release finalization profile"
+            echo
+            echo "- Classification: ${{ steps.filter.outputs.finalization_profile }}"
+            echo "- Promotion commit: ${{ steps.filter.outputs.finalization_promotion_commit || 'not eligible' }}"
+            echo
+            echo '```json'
+            cat "${RUNNER_TEMP}/registry-stack-finalization-profile.json"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload finalization profile evidence
+        if: github.event_name == 'pull_request' && steps.filter.outputs.finalization_profile != 'not-applicable'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: registry-stack-finalization-profile-${{ github.run_id }}
+          path: ${{ runner.temp }}/registry-stack-finalization-profile.json
+          if-no-files-found: error
 
   secrets:
     name: Secret scan
@@ -504,6 +644,15 @@ jobs:
 
       - name: Test release planning commands
         run: python3 -m unittest release/scripts/test_registry_release_plans.py
+
+      - name: Test release finalization profile
+        run: python3 -m unittest release/scripts/test_check_finalization_profile.py
+
+      - name: Check Dependabot release window
+        run: python3 release/scripts/check-dependabot-release-window.py
+
+      - name: Test Dependabot release window checker
+        run: python3 -m unittest release/scripts/test_check_dependabot_release_window.py
 
       - name: Test release image OCI label checker
         run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py

@@ -93,3 +93,35 @@ Before a 1.0 or stable release, maintainers should review:
 - the Crosswalk pin rationale in `external/README.md`;
 - release workflow pins for Syft, Grype, cosign, checkout, upload/download
   actions, and the Rust builder image.
+
+## Automated Update And Release Windows
+
+Routine Dependabot version updates enter the repository during a fixed weekly
+maintenance window on Wednesday from 04:00 through 12:00 UTC. Ecosystems are
+staggered within that window so their pull requests do not all compete for the
+shared Linux runners at once. The schedule controls when Dependabot starts its
+checks; it does not guarantee when pull-request CI will finish.
+
+An active release window is lifecycle-based, not calendar-based. It opens when
+a maintainer designates a release candidate for preparation or promotion and
+closes after clean-environment publication verification succeeds or the
+release is put on a recorded hold. During that window, maintainers should not
+rebase, merge, manually trigger, or retry routine version-update pull requests.
+Queued or running routine version-update CI may be canceled when it competes
+with the active release, after confirming that the pull request is not linked
+to a security update. Keep viable pull requests open and rerun them after the
+window closes.
+
+This policy never pauses Dependabot alerts or security updates, nightly
+security checks, CodeQL, secret scanning, or OpenSSF Scorecard. Security work
+may preempt routine updates and may hold a release. The configured
+`open-pull-requests-limit` applies to routine version updates; GitHub manages
+security-update pull requests separately. Do not add a `target-branch`, ignore
+rule, or committed zero-limit pause as a release shortcut.
+
+The machine-readable schedule contract is checked with the same command
+locally and in CI:
+
+```bash
+python3 release/scripts/check-dependabot-release-window.py
+```

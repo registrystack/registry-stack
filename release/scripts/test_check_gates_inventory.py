@@ -33,6 +33,13 @@ def extract_classifier_arm(workflow: str, pattern: str) -> list[str]:
     return [line.strip() for line in lines[start:end]]
 
 
+def extract_finalization_arm(workflow: str, classification: str) -> list[str]:
+    lines = workflow.splitlines()
+    start = lines.index(f"              {classification})") + 1
+    end = lines.index("                ;;", start)
+    return [line.strip() for line in lines[start:end]]
+
+
 def load_module():
     spec = importlib.util.spec_from_file_location("check_gates_inventory", SCRIPT)
     if spec is None or spec.loader is None:
@@ -87,6 +94,24 @@ class GateInventoryTest(unittest.TestCase):
         self.assertEqual(
             ["mark_all"],
             extract_classifier_arm(self.workflow, ".github/workflows/*"),
+        )
+
+    def test_dependabot_change_marks_only_release_tool(self) -> None:
+        self.assertEqual(
+            ["release_tool=true"],
+            extract_classifier_arm(self.workflow, ".github/dependabot.yml"),
+        )
+
+    def test_eligible_finalization_selects_only_reduced_gates(self) -> None:
+        self.assertEqual(
+            ["release_tool=true", "release_source_proof=true", "docs=true"],
+            extract_finalization_arm(self.workflow, "eligible"),
+        )
+
+    def test_full_ci_finalization_fails_closed(self) -> None:
+        self.assertEqual(
+            ["all=true"],
+            extract_finalization_arm(self.workflow, "full-ci"),
         )
 
     def test_real_repository_has_no_tracked_nested_workflows(self) -> None:
@@ -145,6 +170,80 @@ class GateInventoryTest(unittest.TestCase):
             "run: true",
         )
         self.assertIn("Release planning command tests", self.module.missing_gates(text))
+
+    def test_missing_finalization_and_release_policy_wiring_is_reported(self) -> None:
+        mutations = (
+            (
+                "finalization_profile: ${{ steps.filter.outputs.finalization_profile }}",
+                "finalization_profile_disabled: true",
+                "Finalization profile output",
+            ),
+            (
+                "finalization_promotion_commit: ${{ steps.filter.outputs.finalization_promotion_commit }}",
+                "finalization_promotion_commit_disabled: true",
+                "Finalization promotion commit output",
+            ),
+            (
+                'git show "${base}:release/scripts/check-finalization-profile.py"',
+                'git show "${head}:release/scripts/check-finalization-profile.py"',
+                "Trusted base finalization checker",
+            ),
+            (
+                '--base-ref "${base}" \\\n                 --head-ref "${head}"',
+                '--base-ref "${head}" \\\n                 --head-ref "${head}"',
+                "Exact finalization checker refs",
+            ),
+            (
+                "eligible)\n"
+                "                release_tool=true\n"
+                "                release_source_proof=true\n"
+                "                docs=true\n"
+                "                ;;",
+                "eligible)\n"
+                "                mark_all\n"
+                "                ;;",
+                "Eligible finalization reduced gates",
+            ),
+            (
+                "full-ci)\n                all=true\n                ;;",
+                "full-ci)\n                docs=true\n                ;;",
+                "Finalization full-CI fallback",
+            ),
+            (
+                "name: registry-stack-finalization-profile-${{ github.run_id }}",
+                "name: omitted-finalization-profile",
+                "Finalization profile evidence",
+            ),
+            (
+                ".github/dependabot.yml)\n"
+                "                  release_tool=true\n"
+                "                  ;;",
+                ".github/dependabot.yml)\n"
+                "                  docs=true\n"
+                "                  ;;",
+                "Dependabot release-tool classification",
+            ),
+            (
+                "run: python3 -m unittest release/scripts/test_check_finalization_profile.py",
+                "run: true # finalization tests disabled",
+                "Release finalization profile tests",
+            ),
+            (
+                "run: python3 release/scripts/check-dependabot-release-window.py",
+                "run: true # Dependabot check disabled",
+                "Dependabot release window check",
+            ),
+            (
+                "run: python3 -m unittest release/scripts/test_check_dependabot_release_window.py",
+                "run: true # Dependabot checker tests disabled",
+                "Dependabot release window checker tests",
+            ),
+        )
+        for old, new, expected in mutations:
+            with self.subTest(gate=expected):
+                self.assertIn(old, self.workflow)
+                text = self.workflow.replace(old, new, 1)
+                self.assertIn(expected, self.module.missing_gates(text))
 
     def test_missing_release_image_oci_checker_tests_are_reported(self) -> None:
         text = self.workflow.replace(
