@@ -3127,7 +3127,6 @@ fn consultation_provenance_schema() -> Value {
         "source_revision",
         "acquisition_class",
         "integration",
-        "consent",
     ];
     let common_properties = json!({
         "acquired_at": { "type": "string", "format": "date-time" },
@@ -3139,19 +3138,6 @@ fn consultation_provenance_schema() -> Value {
             "properties": {
                 "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
                 "revision": { "type": "integer", "minimum": 1 }
-            },
-            "additionalProperties": false
-        },
-        "consent": {
-            "type": "object",
-            "required": ["outcome", "verifier_id", "verifier_revision", "checked_at", "expires_at", "revocation_status"],
-            "properties": {
-                "outcome": { "const": "not_required" },
-                "verifier_id": { "type": ["string", "null"], "maxLength": 128 },
-                "verifier_revision": { "type": ["string", "null"], "maxLength": 128 },
-                "checked_at": { "type": ["string", "null"], "format": "date-time" },
-                "expires_at": { "type": ["string", "null"], "format": "date-time" },
-                "revocation_status": { "const": "not_applicable" }
             },
             "additionalProperties": false
         }
@@ -6091,6 +6077,16 @@ mod tests {
                     .len(),
                 2
             );
+            for provenance in variant["properties"]["provenance"]["oneOf"]
+                .as_array()
+                .unwrap()
+            {
+                assert!(provenance["properties"]["consent"].is_null());
+                assert!(!provenance["required"]
+                    .as_array()
+                    .expect("required provenance fields")
+                    .contains(&json!("consent")));
+            }
         }
         assert_eq!(
             variants[0]["properties"]["outputs"]["additionalProperties"]["type"],

@@ -553,14 +553,6 @@ fn result_value() -> Value {
             "integration": {
                 "id": "dhis2.tracker.enrollment-status",
                 "revision": 1
-            },
-            "consent": {
-                "outcome": "not_required",
-                "verifier_id": null,
-                "verifier_revision": null,
-                "checked_at": null,
-                "expires_at": null,
-                "revocation_status": "not_applicable"
             }
         }
     })
@@ -1375,6 +1367,36 @@ async fn result_union_requires_outputs_only_for_match() {
             .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
             .await
             .expect_err("no_match with outputs fails closed"),
+        RelayClientError::InvalidResult
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn result_rejects_retired_provenance_consent_member() {
+    let token_file = TestTokenFile::new(&test_token());
+    let mut result = result_value();
+    assert!(result["provenance"].get("consent").is_none());
+    result["provenance"]["consent"] = json!({
+        "outcome": "not_required",
+        "verifier_id": null,
+        "verifier_revision": null,
+        "checked_at": null,
+        "expires_at": null,
+        "revocation_status": "not_applicable"
+    });
+    let server = FakeRelay::start(
+        metadata_response(),
+        WireResponse::ok(serde_json::to_vec(&result).unwrap()),
+    )
+    .await;
+    let client = verified(&server, &token_file).await;
+
+    assert_eq!(
+        client
+            .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+            .await
+            .expect_err("retired consent member fails closed"),
         RelayClientError::InvalidResult
     );
     server.shutdown().await;
