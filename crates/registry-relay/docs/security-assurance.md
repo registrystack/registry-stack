@@ -58,6 +58,19 @@ Neither the service nor Rhai worker imports `ungetwc` or the affected deprecated
 DNS-printing functions. The libstdc++ object that imports `ungetwc` is not in
 either executable dependency closure.
 
+The pre-tag `v0.12.1` candidate rooted at source revision
+`fedf2ecc98ed695bfdd13b72f1c6c8f037e917bd` was built with the release's pinned
+Linux/amd64 builder and scanned at exact Relay image digest
+`sha256:3be7f7853548f234cf6b43ad166cb2add3d39e1105ed6f7c255bd111e38e42b6`.
+Grype 0.114.0 with valid database schema v6.1.9, built July 19, 2026, reported
+the same three non-fixable blocking-severity findings and no fixable finding.
+The reviewed root filesystem digest is
+`sha256:c399a0f9eb66fe583597398356893e92268c954ce905db8ca434e158b94743a8`.
+Direct inspection of the candidate service and Rhai worker confirmed that they
+do not import `ungetwc` or the affected DNS-printing functions and contain no
+`%mc` format string. The tagged release must reproduce this root filesystem
+digest and pass the same policy against its exact pushed digest.
+
 The matching accepted-risk entries expire on August 20, 2026. A Trixie fix,
 changed fingerprint, new scanf format or call path, new C++ or wide-character
 input path, or new DNS TSIG debugging or printing path requires earlier review.

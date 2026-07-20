@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-07-20
+
+### Security
+
+- Bound time-bounded reviews of the three non-fixable Debian 13 `libc6`
+  findings to the ordered runtime root filesystem layer digest. Fixable,
+  expired, mismatched, and unreviewed findings fail the image advisory gate.
+
 ## [0.12.0] - 2026-07-19
 
 ### Added

@@ -53,6 +53,19 @@ Neither the service nor CEL worker imports `ungetwc` or the affected deprecated
 DNS-printing functions. The libstdc++ object that imports `ungetwc` is not in
 either executable dependency closure.
 
+The pre-tag `v0.12.1` candidate rooted at source revision
+`fedf2ecc98ed695bfdd13b72f1c6c8f037e917bd` was built with the release's pinned
+Linux/amd64 builder and scanned at exact Notary image digest
+`sha256:68afc70512aaa42b2d7c5568008d3b02475d6c5f4b8c1fa5c37e408913f8c74d`.
+Grype 0.114.0 with valid database schema v6.1.9, built July 19, 2026, reported
+the same three non-fixable blocking-severity findings and no fixable finding.
+The reviewed root filesystem digest is
+`sha256:ae4f26951d5d32b845f984f9a14c7eb8ae18b15b396d583f4d05d35473377823`.
+Direct inspection of the candidate service and CEL worker confirmed that they
+do not import `ungetwc` or the affected DNS-printing functions and contain no
+`%mc` format string. The tagged release must reproduce this root filesystem
+digest and pass the same policy against its exact pushed digest.
+
 The matching accepted-risk entries expire on August 20, 2026. A Trixie fix,
 changed fingerprint, new scanf format or call path, new C++ or wide-character
 input path, or new DNS TSIG debugging or printing path requires earlier review.
