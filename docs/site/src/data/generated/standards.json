@@ -20,15 +20,15 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/README.md"
       },
       {
         "label": "Registry Manifest README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/manifest/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/manifest/README.md"
       },
       {
         "label": "Registry Relay DCAT catalog tests",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/tests/catalog_entity.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/tests/catalog_entity.rs"
       }
     ],
     "last_checked": "2026-06-13",
@@ -54,15 +54,15 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/README.md"
       },
       {
         "label": "Registry Manifest README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/manifest/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/manifest/README.md"
       },
       {
         "label": "Registry Relay BRegDCAT-AP route tests",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/tests/catalog_entity.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/tests/catalog_entity.rs"
       }
     ],
     "last_checked": "2026-06-13",
@@ -88,7 +88,7 @@
     "evidence_docs": [
       {
         "label": "Registry Manifest CPSV-AP fixture",
-        "url": "https://github.com/registrystack/registry-stack/tree/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/manifest/fixtures/cpsv-ap"
+        "url": "https://github.com/registrystack/registry-stack/tree/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/manifest/fixtures/cpsv-ap"
       }
     ],
     "last_checked": "2026-05-25",
@@ -114,15 +114,15 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/README.md"
       },
       {
         "label": "Registry Manifest README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/manifest/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/manifest/README.md"
       },
       {
         "label": "Registry Relay OGC records API tests",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/tests/ogc_records_api.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/tests/ogc_records_api.rs"
       }
     ],
     "last_checked": "2026-07-19",
@@ -147,11 +147,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/README.md"
       },
       {
         "label": "Registry Relay OGC Features API tests",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/tests/ogc_api.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/tests/ogc_api.rs"
       }
     ],
     "last_checked": "2026-07-19",
@@ -176,7 +176,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay OGC EDR API tests",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/tests/ogc_edr_api.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/tests/ogc_edr_api.rs"
       }
     ],
     "last_checked": "2026-07-19",
@@ -202,19 +202,19 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/README.md"
       },
       {
         "label": "Registry Notary README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/notary/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/notary/README.md"
       },
       {
         "label": "Registry Relay generated OpenAPI document (pinned)",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/openapi/registry-relay.openapi.json"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/openapi/registry-relay.openapi.json"
       },
       {
         "label": "Registry Notary generated OpenAPI document (pinned)",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/notary/openapi/registry-notary.openapi.json"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/notary/openapi/registry-notary.openapi.json"
       }
     ],
     "last_checked": "2026-07-19",
@@ -240,15 +240,15 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/README.md"
       },
       {
         "label": "Registry Manifest README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/manifest/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/manifest/README.md"
       },
       {
         "label": "Registry Relay SHACL document structure tests",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/tests/catalog_entity.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/tests/catalog_entity.rs"
       }
     ],
     "last_checked": "2026-06-13",
@@ -274,11 +274,11 @@
     "evidence_docs": [
       {
         "label": "Registry Manifest codelist renderer",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-manifest-core/src/lib.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-manifest-core/src/lib.rs"
       },
       {
         "label": "Registry Manifest codelist tests",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-manifest-core/tests/metadata_core.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-manifest-core/tests/metadata_core.rs"
       }
     ],
     "last_checked": "2026-06-20",
@@ -304,15 +304,15 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/README.md"
       },
       {
         "label": "Registry Manifest README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/manifest/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/manifest/README.md"
       },
       {
         "label": "Registry Manifest form schema fixture (Draft 2020-12)",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/manifest/fixtures/cpsv-ap/health-linked-child-support.form.schema.json"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/manifest/fixtures/cpsv-ap/health-linked-child-support.form.schema.json"
       }
     ],
     "last_checked": "2026-06-13",
@@ -341,15 +341,15 @@
     "evidence_docs": [
       {
         "label": "Registry Relay JSON-LD renderers",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/src/metadata/shacl.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/src/metadata/shacl.rs"
       },
       {
         "label": "Registry Notary CCCEV renderer",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-notary-server/src/runtime.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-notary-server/src/runtime.rs"
       },
       {
         "label": "Registry Manifest CPSV-AP JSON-LD fixture",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/manifest/fixtures/cpsv-ap/health-linked-child-support.cpsv-ap.jsonld"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/manifest/fixtures/cpsv-ap/health-linked-child-support.cpsv-ap.jsonld"
       }
     ],
     "last_checked": "2026-06-13",
@@ -376,15 +376,15 @@
     "evidence_docs": [
       {
         "label": "Registry Notary SD-JWT VC conformance profile",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/notary/docs/sd-jwt-vc-conformance-profile.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/notary/docs/sd-jwt-vc-conformance-profile.md"
       },
       {
         "label": "Registry Notary format constants",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-notary-core/src/model.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-notary-core/src/model.rs"
       },
       {
         "label": "Registry Platform SD-JWT crate",
-        "url": "https://github.com/registrystack/registry-stack/tree/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-platform-sdjwt"
+        "url": "https://github.com/registrystack/registry-stack/tree/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-platform-sdjwt"
       }
     ],
     "last_checked": "2026-06-13",
@@ -409,7 +409,7 @@
     "evidence_docs": [
       {
         "label": "Registry Notary README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/notary/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/notary/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -438,15 +438,15 @@
     "evidence_docs": [
       {
         "label": "Registry Manifest grouped evidence fixture",
-        "url": "https://github.com/registrystack/registry-stack/tree/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/manifest/fixtures/cpsv-ap"
+        "url": "https://github.com/registrystack/registry-stack/tree/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/manifest/fixtures/cpsv-ap"
       },
       {
         "label": "Registry Notary CCCEV renderer",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-notary-server/src/runtime.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-notary-server/src/runtime.rs"
       },
       {
         "label": "Registry Notary media type constants",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-notary-core/src/model.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-notary-core/src/model.rs"
       }
     ],
     "last_checked": "2026-05-25",
@@ -474,23 +474,23 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/README.md"
       },
       {
         "label": "Registry Manifest README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/products/manifest/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/products/manifest/README.md"
       },
       {
         "label": "Registry Relay catalog tests (ODRL offer assertions)",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/tests/catalog_entity.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/tests/catalog_entity.rs"
       },
       {
         "label": "Registry Platform PDP ODRL enforcement profile constants",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-platform-pdp/src/lib.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-platform-pdp/src/lib.rs"
       },
       {
         "label": "Registry Relay governed evidence PDP path",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/src/api/governed.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/src/api/governed.rs"
       }
     ],
     "last_checked": "2026-07-09",
@@ -515,11 +515,11 @@
     "evidence_docs": [
       {
         "label": "Registry Relay client integration guide",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/docs/client-integration.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/docs/client-integration.md"
       },
       {
         "label": "Registry Relay aggregates tests (schema-validated SDMX-JSON output)",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/tests/aggregates_entity.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/tests/aggregates_entity.rs"
       }
     ],
     "last_checked": "2026-07-19",
@@ -544,7 +544,7 @@
     "evidence_docs": [
       {
         "label": "Registry Notary claim model",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-notary-core/src/model.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-notary-core/src/model.rs"
       }
     ],
     "last_checked": "2026-05-23",
@@ -598,7 +598,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/README.md"
       }
     ],
     "last_checked": "2026-05-23",
@@ -650,7 +650,7 @@
     "evidence_docs": [
       {
         "label": "Registry Relay README",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-relay/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-relay/README.md"
       },
       {
         "label": "Registry Stack OpenCRVS project-authoring fixture",
@@ -684,11 +684,11 @@
     "evidence_docs": [
       {
         "label": "Registry Notary OID4VCI routes",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-notary-server/src/api.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-notary-server/src/api.rs"
       },
       {
         "label": "Registry Platform OID4VCI crate",
-        "url": "https://github.com/registrystack/registry-stack/tree/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-platform-oid4vci"
+        "url": "https://github.com/registrystack/registry-stack/tree/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-platform-oid4vci"
       },
       {
         "label": "Registry Notary wallet facade specification",
@@ -719,11 +719,11 @@
     "evidence_docs": [
       {
         "label": "Registry Notary did:jwk handling",
-        "url": "https://github.com/registrystack/registry-stack/blob/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-notary-server/src/api.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-notary-server/src/api.rs"
       },
       {
         "label": "Registry Platform crypto crate",
-        "url": "https://github.com/registrystack/registry-stack/tree/97bcf34ca1f27f05adf7ba42158fbd694ea62a83/crates/registry-platform-crypto"
+        "url": "https://github.com/registrystack/registry-stack/tree/d82a9dbaf513139f0134fef9ec4b761fbefb740e/crates/registry-platform-crypto"
       }
     ],
     "last_checked": "2026-06-13",
