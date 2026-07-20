@@ -52,7 +52,7 @@ async fn assert_ambiguous_primary_headers_are_candidate_neutral(
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let response = server
         .get("/v1/claims")
@@ -149,7 +149,7 @@ pub(super) async fn additive_api_key_and_oidc_authenticate_on_the_same_router() 
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let denied = server.get("/v1/claims").await;
     denied.assert_status(StatusCode::UNAUTHORIZED);
@@ -270,7 +270,7 @@ pub(super) async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let non_metrics = server
         .get("/metrics")
@@ -309,7 +309,7 @@ pub(super) async fn jwks_is_public_and_contains_no_private_members() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let jwks = server.get("/.well-known/evidence/jwks.json").await;
 
@@ -340,7 +340,7 @@ pub(super) async fn oidc_subject_access_evaluates_renders_and_audits_access_mode
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
         "sub": "citizen-subject",

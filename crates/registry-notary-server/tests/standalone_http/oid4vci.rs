@@ -24,7 +24,7 @@ pub(super) async fn oid4vci_metadata_is_public_but_legacy_offer_and_nonce_are_no
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let metadata = server.get("/.well-known/openid-credential-issuer").await;
     metadata.assert_status_ok();
@@ -255,7 +255,7 @@ pub(super) async fn oid4vci_type_metadata_supports_nested_paths_and_public_404s(
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let nested = server
         .get("/credentials/dhis2/health-status/v1")
@@ -356,7 +356,7 @@ pub(super) async fn oid4vci_type_metadata_is_not_served_when_oid4vci_is_disabled
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     server
         .get("/credentials/civil-status")
@@ -462,7 +462,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_supports_nested_paths_and_p
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let nested = server
         .get("/.well-known/vct/credentials/dhis2/health-status/v1")
@@ -502,7 +502,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_is_not_served_when_oid4vci_
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     server
         .get("/.well-known/vct/credentials/civil-status")
@@ -532,7 +532,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_keeps_protected_routes_auth
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     server
         .get("/.well-known/vct/credentials/civil-status")
@@ -570,7 +570,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_serves_wallet_cors() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let type_metadata = server
         .get("/.well-known/vct/credentials/civil-status")
@@ -630,7 +630,7 @@ pub(super) async fn public_probe_routes_remain_public_except_metrics() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     server.get("/healthz").await.assert_status_ok();
     let ready = server.get("/ready").await;
@@ -703,7 +703,7 @@ pub(super) async fn manifest_public_protected_routes_are_mounted_behind_auth() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     for endpoint in manifest.endpoints.iter().filter(|endpoint| {
         endpoint.listener == "public" && endpoint.auth != "none" && endpoint.feature.is_none()
@@ -755,7 +755,7 @@ pub(super) async fn service_document_advertises_credential_status_when_enabled()
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let response = server
         .get("/.well-known/evidence-service")
@@ -811,7 +811,7 @@ pub(super) async fn credential_status_admin_edges_return_expected_http_statuses(
         scopes: vec!["registry_notary:admin".to_string()],
         authorization_details: None,
     });
-    let enabled_server = TestServer::builder().http_transport().build(
+    let enabled_server = TestServer::builder().mock_transport().build(
         standalone_router(enabled_config)
             .await
             .expect("enabled router builds"),
@@ -853,7 +853,7 @@ pub(super) async fn credential_status_admin_edges_return_expected_http_statuses(
             scopes: vec!["registry_notary:admin".to_string()],
             authorization_details: None,
         });
-    let disabled_server = TestServer::builder().http_transport().build(
+    let disabled_server = TestServer::builder().mock_transport().build(
         standalone_router(disabled_config)
             .await
             .expect("disabled router builds"),
@@ -984,7 +984,7 @@ pub(super) async fn admin_scope_is_instance_global_across_credential_profiles() 
         "issuer_two_sd_jwt".to_string(),
     ];
 
-    let server = TestServer::builder().http_transport().build(
+    let server = TestServer::builder().mock_transport().build(
         standalone_router(config)
             .await
             .expect("standalone router builds"),
@@ -1041,7 +1041,7 @@ pub(super) async fn disabled_oid4vci_credential_route_stays_hidden_for_malformed
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let response = server
         .post("/oid4vci/credential")
@@ -1087,7 +1087,7 @@ pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let missing_status = server
         .get("/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
@@ -1320,7 +1320,7 @@ pub(super) async fn oid4vci_field_projection_issues_separate_disclosures() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let metadata = server
         .get("/credentials/civil-status")
@@ -1442,7 +1442,7 @@ pub(super) async fn oid4vci_malformed_proof_is_rejected_before_oidc_auth() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
         "sub": "citizen-subject",

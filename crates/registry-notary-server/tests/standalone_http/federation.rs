@@ -709,7 +709,7 @@ pub(super) fn assert_federation_request_context_is_absent(record: &Value) {
 #[tokio::test]
 pub(super) async fn healthz_ready_opaque_counters_in_503_body() {
     let server = TestServer::builder()
-        .http_transport()
+        .mock_transport()
         .build(registry_notary_server::router::<()>());
 
     let healthz = server.get("/healthz").await;
@@ -750,7 +750,7 @@ pub(super) async fn federation_route_is_not_mounted_until_enabled() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let response = server
         .post("/federation/v1/evaluations")
@@ -783,7 +783,7 @@ pub(super) async fn federation_evaluation_returns_signed_response_and_rejects_re
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let token = federation_request_jwt(
         "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6",
         "https://purpose.example.test/eligibility",
@@ -914,7 +914,7 @@ pub(super) async fn federation_stale_claim_result_returns_signed_evaluation_erro
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let response = server
         .post("/federation/v1/evaluations")
@@ -964,7 +964,7 @@ pub(super) async fn federation_auth_exempt_route_still_requires_valid_jws() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let response = server
         .post("/federation/v1/evaluations")
@@ -996,7 +996,7 @@ pub(super) async fn federation_two_standalone_notaries_smoke() {
     let tmp = TempDir::new().expect("tempdir");
     let agency_a_audit = tmp.path().join("agency-a-audit.jsonl");
     let agency_b_audit = tmp.path().join("agency-b-audit.jsonl");
-    let agency_a = TestServer::builder().http_transport().build(
+    let agency_a = TestServer::builder().mock_transport().build(
         standalone_router(federation_config_for(
             "http://127.0.0.1:1",
             agency_a_audit.to_str().expect("audit path is UTF-8"),
@@ -1009,7 +1009,7 @@ pub(super) async fn federation_two_standalone_notaries_smoke() {
         .await
         .expect("agency A standalone router builds"),
     );
-    let agency_b = TestServer::builder().http_transport().build(
+    let agency_b = TestServer::builder().mock_transport().build(
         standalone_router(federation_config_for(
             "http://127.0.0.1:1",
             agency_b_audit.to_str().expect("audit path is UTF-8"),
@@ -1067,7 +1067,7 @@ pub(super) async fn federation_denial_happens_before_claim_evaluation() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let token = federation_request_jwt(
         "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q7",
         "https://purpose.example.test/not-allowed",
@@ -1283,7 +1283,7 @@ pub(super) async fn assert_federation_emergency_denylist_blocks_before_claim_eva
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let request_jti = if deny_kid {
         "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7R0"
     } else {
@@ -1328,7 +1328,7 @@ pub(super) async fn federation_request_claims_must_match_profile_before_claim_ev
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let token = federation_request_jwt_with_claims(
         "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q9",
         "https://purpose.example.test/eligibility",
@@ -1382,7 +1382,7 @@ pub(super) async fn federation_audit_write_failure_replaces_signed_success() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let token = federation_request_jwt(
         "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7Q0",
         "https://purpose.example.test/eligibility",

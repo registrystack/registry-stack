@@ -27,7 +27,7 @@ pub(super) async fn standalone_server_authenticates_and_audits_unsupported_acces
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let denied = server.get("/v1/claims").await;
     denied.assert_status(StatusCode::UNAUTHORIZED);
@@ -123,7 +123,7 @@ pub(super) async fn audit_chain_bootstraps_from_sink_tail() {
         audit_path.to_str().expect("audit path is UTF-8"),
     );
 
-    let first = TestServer::builder().http_transport().build(
+    let first = TestServer::builder().mock_transport().build(
         standalone_router(config.clone())
             .await
             .expect("first router builds"),
@@ -138,7 +138,7 @@ pub(super) async fn audit_chain_bootstraps_from_sink_tail() {
     drop(first);
     tokio::task::yield_now().await;
 
-    let second = TestServer::builder().http_transport().build(
+    let second = TestServer::builder().mock_transport().build(
         standalone_router(config)
             .await
             .expect("second router builds"),
@@ -176,7 +176,7 @@ pub(super) async fn audit_chain_detects_inserted_envelope() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
-    let first = TestServer::builder().http_transport().build(
+    let first = TestServer::builder().mock_transport().build(
         standalone_router(config.clone())
             .await
             .expect("first router builds"),
@@ -200,7 +200,7 @@ pub(super) async fn audit_chain_detects_inserted_envelope() {
     lines.insert(1, lines[0]);
     std::fs::write(&audit_path, format!("{}\n", lines.join("\n"))).expect("tampered audit write");
 
-    let second = TestServer::builder().http_transport().build(
+    let second = TestServer::builder().mock_transport().build(
         standalone_router(config)
             .await
             .expect("second router builds"),
@@ -229,7 +229,7 @@ pub(super) async fn standalone_router_verifies_audit_before_returning_readiness(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
-    let first = TestServer::builder().http_transport().build(
+    let first = TestServer::builder().mock_transport().build(
         standalone_router(config.clone())
             .await
             .expect("first router builds"),
@@ -251,7 +251,7 @@ pub(super) async fn standalone_router_verifies_audit_before_returning_readiness(
     let app = standalone_router(config)
         .await
         .expect("public helper returns a router with integrity failure latched");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);

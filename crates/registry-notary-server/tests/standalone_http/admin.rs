@@ -37,7 +37,7 @@ pub(super) async fn admin_reload_401_unauth_403_wrong_scope_501_admin() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let unauthenticated = server.post("/admin/v1/reload").await;
     unauthenticated.assert_status(StatusCode::UNAUTHORIZED);
@@ -115,7 +115,7 @@ pub(super) async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_rel
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     server
         .get("/admin/v1/posture")
@@ -186,7 +186,7 @@ pub(super) async fn admin_capabilities_requires_ops_read_and_reports_notary_surf
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     server
         .get("/admin/v1/capabilities")
@@ -304,8 +304,8 @@ pub(super) async fn dedicated_topology_splits_admin_routes_and_reports_capabilit
         .await
         .expect("runtime activates for dedicated topology");
     let routers = notary_routers_from_runtime(runtime).expect("Notary-only runtime is serve-ready");
-    let public = TestServer::builder().http_transport().build(routers.public);
-    let admin = TestServer::builder().http_transport().build(routers.admin);
+    let public = TestServer::builder().mock_transport().build(routers.public);
+    let admin = TestServer::builder().mock_transport().build(routers.admin);
 
     public.get("/healthz").await.assert_status_ok();
     public
@@ -397,7 +397,7 @@ pub(super) async fn admin_posture_rejects_unknown_tier_with_shared_error_code() 
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let response = server
         .get("/admin/v1/posture?tier=complete")
@@ -438,7 +438,7 @@ pub(super) async fn admin_posture_reports_configured_instance_override() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
         .add_header("x-api-key", "ops-token")
@@ -473,7 +473,7 @@ pub(super) async fn admin_posture_top_level_keys_match_documented_example() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let default_posture = server
         .get("/admin/v1/posture")
@@ -576,7 +576,7 @@ pub(super) async fn admin_posture_reports_subject_access_summary_and_redacts_sig
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
         .add_header("authorization", format!("Bearer {ops_token}"))
@@ -653,7 +653,7 @@ pub(super) async fn admin_posture_reports_oid4vci_bearer_offer_mode() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
         .add_header("authorization", format!("Bearer {ops_token}"))
@@ -721,7 +721,7 @@ pub(super) async fn admin_posture_redacts_runtime_config_signing_secrets() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
         .add_header("x-api-key", "ops-token")
@@ -765,7 +765,7 @@ pub(super) async fn admin_posture_classifies_in_memory_state_storage() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
         .add_header("x-api-key", "ops-token")
@@ -797,7 +797,7 @@ pub(super) async fn admin_posture_warns_for_production_like_in_memory_state() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
         .add_header("x-api-key", "ops-token")
@@ -833,7 +833,7 @@ pub(super) async fn admin_posture_federation_summary_omits_peer_private_data() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
         .add_header("x-api-key", "ops-token")
@@ -876,7 +876,7 @@ pub(super) async fn metrics_requires_metrics_scope_and_keeps_health_public() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let health = server.get("/healthz").await;
     health.assert_status_ok();

@@ -70,7 +70,7 @@ pub(super) async fn request_uri_limit_returns_414_problem_details() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let long_path = format!("/{}", "a".repeat(8 * 1024 + 1));
 
     let response = server
@@ -116,7 +116,7 @@ pub(super) async fn error_responses_match_rfc_9457_problem_details_shape() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let response = server
         .get("/v1/claims")
@@ -158,7 +158,7 @@ pub(super) async fn evaluation_json_rejections_and_unsupported_idempotency_are_p
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let old_shape = server
         .post("/v1/evaluations")
@@ -269,7 +269,7 @@ pub(super) async fn cors_csp_corp_headers_present_and_corp_conditional() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let response = server
         .get("/healthz")
@@ -353,7 +353,7 @@ pub(super) async fn subject_access_cors_uses_wallet_origins_on_browser_paths() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let wallet = server
         .get("/.well-known/evidence-service")
@@ -422,7 +422,7 @@ pub(super) async fn subject_access_preflight_uses_wallet_origin_allow_list() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let wallet = server
         .method(Method::OPTIONS, "/v1/evaluations")
@@ -505,7 +505,7 @@ pub(super) async fn standalone_router_hides_admin_and_metrics_when_admin_listene
         let app = standalone_router(config)
             .await
             .expect("standalone router builds");
-        let server = TestServer::builder().http_transport().build(app);
+        let server = TestServer::builder().mock_transport().build(app);
 
         server.get("/healthz").await.assert_status_ok();
         server
@@ -540,7 +540,7 @@ pub(super) async fn standalone_router_default_config_hides_admin_and_metrics() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     server.get("/healthz").await.assert_status_ok();
     server
@@ -574,7 +574,7 @@ pub(super) async fn standalone_server_can_serve_openapi_without_auth_when_config
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let openapi = server.get("/openapi.json").await;
     openapi.assert_status_ok();
@@ -628,7 +628,7 @@ pub(super) async fn standalone_server_serves_docs_shell_without_auth() {
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
 
     let docs = server.get("/docs").await;
     docs.assert_status_ok();
@@ -667,7 +667,7 @@ pub(super) async fn request_uri_limit_414_carries_server_owned_request_id() {
     ))
     .await
     .expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
+    let server = TestServer::builder().mock_transport().build(app);
     let long_path = format!("/{}", "a".repeat(8 * 1024 + 1));
 
     let response = server
