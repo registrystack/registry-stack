@@ -70,6 +70,35 @@ def release_version_tuple(version: str) -> tuple[int, int, int] | None:
     return tuple(int(part) for part in version.split("."))
 
 
+def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[str]:
+    parsed_version = release_version_tuple(version)
+    errors: list[str] = []
+    if (
+        parsed_version is not None
+        and parsed_version >= RELEASE_IMAGE_LOCK_MINIMUM_VERSION
+        and "registryctl-image-lock" not in artifacts
+    ):
+        errors.append("artifact registryctl-image-lock is required for version 0.9.0 or later")
+    if (
+        parsed_version is not None
+        and parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION
+    ):
+        artifact_names = set(artifacts)
+        missing = sorted(EXACT_ARTIFACT_INVENTORY - artifact_names)
+        unexpected = sorted(artifact_names - EXACT_ARTIFACT_INVENTORY)
+        if missing or unexpected:
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if unexpected:
+                details.append(f"unexpected {', '.join(unexpected)}")
+            errors.append(
+                "artifact inventory for version 0.10.0 or later must be exactly the "
+                f"supported release set: {'; '.join(details)}"
+            )
+    return errors
+
+
 def require_registryctl_image_lock_release_version(version: str) -> None:
     parsed = release_version_tuple(version)
     if parsed is None:
@@ -377,30 +406,7 @@ def validate(manifest_path: Path) -> int:
         errors.append("stack.source_ref must be HEAD for a draft or a 40-character commit")
     if source_ref == "HEAD" and status != "draft":
         errors.append("stack.source_ref may be HEAD only when stack.status is draft")
-    parsed_version = release_version_tuple(version)
-    if (
-        parsed_version is not None
-        and parsed_version >= RELEASE_IMAGE_LOCK_MINIMUM_VERSION
-        and "registryctl-image-lock" not in artifacts
-    ):
-        errors.append("artifact registryctl-image-lock is required for version 0.9.0 or later")
-    if (
-        parsed_version is not None
-        and parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION
-    ):
-        artifact_names = set(artifacts)
-        missing = sorted(EXACT_ARTIFACT_INVENTORY - artifact_names)
-        unexpected = sorted(artifact_names - EXACT_ARTIFACT_INVENTORY)
-        if missing or unexpected:
-            details = []
-            if missing:
-                details.append(f"missing {', '.join(missing)}")
-            if unexpected:
-                details.append(f"unexpected {', '.join(unexpected)}")
-            errors.append(
-                "artifact inventory for version 0.10.0 or later must be exactly the "
-                f"supported release set: {'; '.join(details)}"
-            )
+    errors.extend(artifact_inventory_errors(version, artifacts))
     for name, artifact_version in sorted(artifacts.items()):
         if str(artifact_version) != version:
             errors.append(f"artifact {name} version {artifact_version} does not match stack version {version}")
@@ -1184,7 +1190,12 @@ def git_plan_output(repo: Path, *args: str) -> str:
 
 
 def resolve_commit(repo: Path, revision: str, description: str) -> str:
-    resolved = git_plan_output(repo, "rev-parse", "--verify", f"{revision}^{{commit}}")
+    try:
+        resolved = git_plan_output(repo, "rev-parse", "--verify", f"{revision}^{{commit}}")
+    except ReleasePlanError as exc:
+        raise ReleasePlanError(
+            f"{description} does not resolve to an existing commit: {exc}"
+        ) from exc
     if HEX40.fullmatch(resolved) is None:
         raise ReleasePlanError(f"{description} did not resolve to one exact commit SHA")
     return resolved
@@ -1387,7 +1398,7 @@ def select_release_history(
     return selected, previous, advisory
 
 
-def validate_selected_manifest(record: dict[str, Any]) -> None:
+def validate_selected_manifest(repo: Path, record: dict[str, Any]) -> None:
     data = record["data"]
     stack = data["stack"]
     version = record["version"]
@@ -1408,9 +1419,22 @@ def validate_selected_manifest(record: dict[str, Any]) -> None:
         )
     if not isinstance(status, str) or not status:
         raise ReleasePlanError("selected manifest stack.status is required")
+    if status != "draft":
+        resolved_source_ref = resolve_commit(
+            repo,
+            source_ref,
+            "selected manifest stack.source_ref",
+        )
+        if resolved_source_ref != source_ref:
+            raise ReleasePlanError(
+                "selected manifest stack.source_ref must resolve to its exact recorded commit"
+            )
     artifacts = data.get("artifacts")
     if not isinstance(artifacts, dict) or not artifacts:
         raise ReleasePlanError("selected manifest artifacts must be a non-empty object")
+    inventory_errors = artifact_inventory_errors(version, artifacts)
+    if inventory_errors:
+        raise ReleasePlanError(f"selected manifest {inventory_errors[0]}")
     for name, artifact_version in sorted(artifacts.items()):
         if str(artifact_version) != version:
             raise ReleasePlanError(
@@ -1452,7 +1476,10 @@ def validate_workspace_versions(repo: Path, version: str) -> dict[str, Any]:
         package
         for package in packages
         if isinstance(package, dict)
-        and str(package.get("name", "")).startswith("registry-")
+        and (
+            str(package.get("name", "")).startswith("registry-")
+            or package.get("name") == "registryctl"
+        )
         and "source" not in package
     ]
     if not workspace_packages:
@@ -1720,7 +1747,7 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
     if not repo.is_dir():
         raise ReleasePlanError(f"repository does not exist: {repo}")
     selected, previous, advisory = select_release_history(repo, version, release_id)
-    validate_selected_manifest(selected)
+    validate_selected_manifest(repo, selected)
     checks = [
         passed_check(
             "release-history",
@@ -1888,22 +1915,31 @@ def ref_change(
     }
 
 
-def candidate_registry_stack_url(url: Any, candidate: str) -> bool:
+def candidate_registry_stack_url_match(
+    url: Any,
+    candidate: str,
+) -> re.Match[str] | None:
     if not isinstance(url, str):
-        return False
+        return None
     prefix = "https://github.com/registrystack/registry-stack/"
-    match = re.fullmatch(
-        re.escape(prefix) + rf"(?:blob|tree)/{re.escape(candidate)}/[^?#]+",
+    return re.fullmatch(
+        re.escape(prefix)
+        + rf"(?:blob|tree)/(?P<ref>{re.escape(candidate)})/[^?#]+"
+        + r"(?:\?[^#]*)?(?:#.*)?",
         url,
     )
-    return match is not None
+
+
+def candidate_registry_stack_url(url: Any, candidate: str) -> bool:
+    return candidate_registry_stack_url_match(url, candidate) is not None
 
 
 def replace_url_ref(url: str, old: str, new: str) -> str:
-    marker = f"/{old}/"
-    if url.count(marker) != 1:
+    match = candidate_registry_stack_url_match(url, old)
+    if match is None:
         raise ReleasePlanError(f"candidate Registry Stack URL has an ambiguous ref: {url}")
-    return url.replace(marker, f"/{new}/", 1)
+    start, end = match.span("ref")
+    return f"{url[:start]}{new}{url[end:]}"
 
 
 def finalize_ref_changes(

@@ -14,6 +14,16 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "release/scripts/registry-release"
 CROSSWALK_REF = "1" * 40
+EXACT_ARTIFACT_INVENTORY = (
+    "registry-docs",
+    "registry-manifest-cli",
+    "registry-notary",
+    "registry-notary-cel-worker",
+    "registry-relay",
+    "registry-relay-rhai-worker",
+    "registryctl",
+    "registryctl-image-lock",
+)
 
 
 def run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -58,7 +68,7 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
             "source_tag": f"v{version}",
             "status": status,
         },
-        "artifacts": {"registry-core": version},
+        "artifacts": {name: version for name in EXACT_ARTIFACT_INVENTORY},
         "external": {
             "crosswalk": {
                 "repo": "PublicSchema/crosswalk",
@@ -102,7 +112,7 @@ class FixtureRepo:
         write(
             root / "Cargo.toml",
             f'''[workspace]
-members = ["crates/registry-core"]
+members = ["crates/registry-core", "crates/registryctl"]
 
 [workspace.package]
 version = "1.1.0"
@@ -118,6 +128,10 @@ crosswalk-core = {{ git = "https://github.com/PublicSchema/crosswalk", rev = "{C
 
 [[package]]
 name = "registry-core"
+version = "1.1.0"
+
+[[package]]
+name = "registryctl"
 version = "1.1.0"
 
 [[package]]
@@ -193,7 +207,7 @@ source = "git+https://github.com/PublicSchema/crosswalk?rev={CROSSWALK_REF}#{CRO
         )
         candidate_url = (
             "https://github.com/registrystack/registry-stack/blob/"
-            f"{self.candidate}/crates/registry-core/src/lib.rs"
+            f"{self.candidate}/crates/registry-core/src/lib.rs#L10"
         )
         contracts = [
             {
@@ -214,7 +228,8 @@ source = "git+https://github.com/PublicSchema/crosswalk?rev={CROSSWALK_REF}#{CRO
                 "evidence_docs": [
                     {
                         "url": candidate_url.replace(
-                            "crates/registry-core/src/lib.rs", "docs/standard.md"
+                            "crates/registry-core/src/lib.rs#L10",
+                            f"docs/standard.md?candidate={self.candidate}&plain=1#L4-L7",
                         )
                     },
                     {"url": "https://www.example.invalid/standard"},
@@ -445,6 +460,66 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertEqual("", result.stdout)
         self.assertIn("Crosswalk", result.stderr)
 
+    def test_prepare_rejects_missing_required_artifacts(self) -> None:
+        target = self.repo.root / "release/manifests/registry-stack-beta-9.yaml"
+        data = yaml.safe_load(target.read_text())
+
+        data["artifacts"].pop("registryctl-image-lock")
+        write_yaml(target, data)
+        missing_lock = self.prepare()
+        self.assertEqual(1, missing_lock.returncode)
+        self.assertEqual("", missing_lock.stdout)
+        self.assertIn(
+            "artifact registryctl-image-lock is required for version 0.9.0 or later",
+            missing_lock.stderr,
+        )
+
+        data["artifacts"]["registryctl-image-lock"] = "1.1.0"
+        data["artifacts"].pop("registry-docs")
+        write_yaml(target, data)
+        incomplete_inventory = self.prepare()
+        self.assertEqual(1, incomplete_inventory.returncode)
+        self.assertEqual("", incomplete_inventory.stdout)
+        self.assertIn(
+            "artifact inventory for version 0.10.0 or later must be exactly",
+            incomplete_inventory.stderr,
+        )
+        self.assertIn("missing registry-docs", incomplete_inventory.stderr)
+
+    def test_prepare_rejects_stale_registryctl_lock_version(self) -> None:
+        lock = self.repo.root / "Cargo.lock"
+        lock.write_text(
+            lock.read_text(encoding="utf-8").replace(
+                'name = "registryctl"\nversion = "1.1.0"',
+                'name = "registryctl"\nversion = "1.0.0"',
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("", result.stdout)
+        self.assertIn(
+            "Cargo.lock workspace package registryctl version must be '1.1.0'",
+            result.stderr,
+        )
+
+    def test_prepare_rejects_dangling_candidate_source_ref(self) -> None:
+        target = self.repo.root / "release/manifests/registry-stack-beta-9.yaml"
+        data = yaml.safe_load(target.read_text())
+        data["stack"]["source_ref"] = "f" * 40
+        write_yaml(target, data)
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("", result.stdout)
+        self.assertIn(
+            "selected manifest stack.source_ref does not resolve to an existing commit",
+            result.stderr,
+        )
+
     def test_finalize_lists_only_bounded_candidate_ref_changes(self) -> None:
         before = self.repo.snapshot()
         result = self.finalize()
@@ -480,7 +555,77 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertFalse(
             any("registry-stack-beta-7.yaml" == change["path"] for change in plan["changes"])
         )
+        url_changes = {
+            change["pointer"]: change
+            for change in plan["changes"]
+            if change["kind"] == "replace" and "url" in change["pointer"]
+        }
+        self.assertTrue(url_changes["/0/source_of_truth/url"]["from"].endswith("#L10"))
+        self.assertTrue(url_changes["/0/source_of_truth/url"]["to"].endswith("#L10"))
+        self.assertTrue(
+            url_changes["/0/evidence_docs/0/url"]["from"].endswith(
+                f"?candidate={self.repo.candidate}&plain=1#L4-L7"
+            )
+        )
+        self.assertTrue(
+            url_changes["/0/evidence_docs/0/url"]["to"].endswith(
+                f"?candidate={self.repo.candidate}&plain=1#L4-L7"
+            )
+        )
         self.assertEqual(before, self.repo.snapshot())
+
+    def test_finalize_ignores_ambiguous_and_external_candidate_urls(self) -> None:
+        data_dir = self.repo.root / "docs/site/src/data"
+        contracts_path = data_dir / "contracts.yaml"
+        contracts = yaml.safe_load(contracts_path.read_text())
+        contracts.extend(
+            [
+                {
+                    "id": "wrong-owner",
+                    "source_of_truth": {
+                        "url": (
+                            "https://github.com/other/registry-stack/blob/"
+                            f"{self.repo.candidate}/README.md#L1"
+                        )
+                    },
+                },
+                {
+                    "id": "ambiguous-ref-segment",
+                    "source_of_truth": {
+                        "url": (
+                            "https://github.com/registrystack/registry-stack/blob/"
+                            f"{self.repo.candidate}{self.repo.candidate}/README.md"
+                        )
+                    },
+                },
+                {
+                    "id": "missing-path",
+                    "source_of_truth": {
+                        "url": (
+                            "https://github.com/registrystack/registry-stack/blob/"
+                            f"{self.repo.candidate}?plain=1#L1"
+                        )
+                    },
+                },
+            ]
+        )
+        write_yaml(contracts_path, contracts)
+        write_json(data_dir / "generated/contracts.json", contracts)
+
+        result = self.finalize()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        plan = json.loads(result.stdout)
+        contract_url_changes = [
+            change
+            for change in plan["changes"]
+            if change["path"] == "docs/site/src/data/contracts.yaml"
+            and change["pointer"].endswith("/source_of_truth/url")
+        ]
+        self.assertEqual(
+            ["/0/source_of_truth/url"],
+            [change["pointer"] for change in contract_url_changes],
+        )
 
     def test_finalize_rejects_non_candidate_manifest(self) -> None:
         target = self.repo.root / "release/manifests/registry-stack-beta-9.yaml"
