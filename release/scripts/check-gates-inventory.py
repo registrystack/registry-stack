@@ -121,6 +121,14 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py",
     ),
     (
+        "Release image layout comparator tests",
+        "run: python3 -m unittest release/scripts/test_compare_release_image_layouts.py",
+    ),
+    (
+        "Release Relay feature checker tests",
+        "run: python3 -m unittest release/scripts/test_check_release_relay_features.py",
+    ),
+    (
         "Executable release image OCI label smoke",
         "run: release/scripts/smoke-release-image-oci-labels.sh",
     ),

@@ -1,4 +1,6 @@
 /target/
+/.cargo-home/
+/dist/
 /.repo-docs-cache/
 /node_modules/
 /docs/site/node_modules/

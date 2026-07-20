@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -23,10 +24,10 @@ SOURCE = "https://github.com/registrystack/registry-stack"
 REVISION = "b" * 40
 VERSION = "v0.12.0"
 BUILDKIT_IMAGE = (
-    "moby/buildkit:v0.30.0@sha256:"
-    "0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f"
+    "moby/buildkit:v0.31.2@sha256:"
+    "2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
 )
-BUILDKIT_REPO_DIGEST = "moby/buildkit@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f"
+BUILDKIT_REPO_DIGEST = "moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
 
 
 def load_module():
@@ -42,6 +43,54 @@ def load_module():
 
 def config_json(labels: object) -> str:
     return json.dumps({"User": "65532", "Labels": labels})
+
+
+def write_oci_layout(layout: Path, labels: dict[str, str]) -> Path:
+    blobs = layout / "blobs/sha256"
+    blobs.mkdir(parents=True)
+
+    def write_blob(document: dict[str, object]) -> str:
+        content = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+        value = hashlib.sha256(content).hexdigest()
+        (blobs / value).write_bytes(content)
+        return f"sha256:{value}"
+
+    config_digest = write_blob(
+        {
+            "architecture": "amd64",
+            "os": "linux",
+            "config": {"User": "65532", "Labels": labels},
+            "rootfs": {"type": "layers", "diff_ids": []},
+        }
+    )
+    manifest_digest = write_blob(
+        {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {
+                "mediaType": "application/vnd.oci.image.config.v1+json",
+                "digest": config_digest,
+                "size": 0,
+            },
+            "layers": [],
+        }
+    )
+    (layout / "index.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 2,
+                "manifests": [
+                    {
+                        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                        "digest": manifest_digest,
+                        "size": 0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return blobs / config_digest.removeprefix("sha256:")
 
 
 class ReleaseImageOciLabelsTest(unittest.TestCase):
@@ -108,6 +157,55 @@ class ReleaseImageOciLabelsTest(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+
+    def test_oci_layout_is_verified_without_registry_inspection(self) -> None:
+        labels = {
+            "org.opencontainers.image.source": SOURCE,
+            "org.opencontainers.image.revision": REVISION,
+            "org.opencontainers.image.version": VERSION,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            layout = Path(temporary) / "layout"
+            write_oci_layout(layout, labels)
+            with unittest.mock.patch.object(self.module.subprocess, "run") as run:
+                result = self.module.main(
+                    [
+                        f"oci-layout://{layout}",
+                        "--source",
+                        SOURCE,
+                        "--revision",
+                        REVISION,
+                        "--version",
+                        VERSION,
+                    ]
+                )
+
+        self.assertEqual(0, result)
+        run.assert_not_called()
+
+    def test_oci_layout_rejects_corrupted_config_blob(self) -> None:
+        labels = {
+            "org.opencontainers.image.source": SOURCE,
+            "org.opencontainers.image.revision": REVISION,
+            "org.opencontainers.image.version": VERSION,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            layout = Path(temporary) / "layout"
+            config_blob = write_oci_layout(layout, labels)
+            config_blob.write_bytes(config_blob.read_bytes() + b"corrupt")
+            result = self.module.main(
+                [
+                    f"oci-layout://{layout}",
+                    "--source",
+                    SOURCE,
+                    "--revision",
+                    REVISION,
+                    "--version",
+                    VERSION,
+                ]
+            )
+
+        self.assertEqual(1, result)
 
     def test_inspection_command_failure_is_rejected(self) -> None:
         result, _, stderr, _ = self.run_with_inspect(
@@ -239,6 +337,7 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
         builder_containers: str,
         builder_container_image: str,
         buildkit_repo_digests: str = BUILDKIT_REPO_DIGEST,
+        oci_layout: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         image_builder = ROOT / "release/scripts/build-release-image.sh"
         with tempfile.TemporaryDirectory() as temporary:
@@ -248,6 +347,8 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
             fake_docker.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
+                "if [[ \"${1:-} ${2:-}\" == 'buildx build' ]]; then "
+                "printf 'BUILD_ARGS'; printf ' <%s>' \"$@\"; printf '\\n'; fi\n"
                 "case \"${1:-} ${2:-}\" in\n"
                 "  'buildx version') echo 'github.com/docker/buildx v0.33.0 test' ;;\n"
                 "  'buildx inspect') printf '%s\\n' \"${BUILDER_INSPECT}\" ;;\n"
@@ -270,6 +371,10 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
                     "BUILDKIT_REPO_DIGESTS": buildkit_repo_digests,
                 }
             )
+            if oci_layout:
+                environment["RELEASE_IMAGE_OCI_LAYOUT"] = str(
+                    Path(temporary) / "layout"
+                )
             return subprocess.run(
                 [
                     str(image_builder),
@@ -289,16 +394,28 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
 
     def test_reused_builder_requires_pinned_standard_buildkit_container(self) -> None:
         result = self.run_wrapper(
-            builder_inspect="Driver: docker-container\nBuildKit version: v0.30.0",
+            builder_inspect="Driver: docker-container\nBuildKit version: v0.31.2",
             builder_containers="buildx_buildkit_release-builder0",
             builder_container_image=BUILDKIT_IMAGE,
         )
 
         self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("--provenance=false", result.stdout)
+
+    def test_retained_oci_layout_disables_timestamped_provenance(self) -> None:
+        result = self.run_wrapper(
+            builder_inspect="Driver: docker-container\nBuildKit version: v0.31.2",
+            builder_containers="buildx_buildkit_release-builder0",
+            builder_container_image=BUILDKIT_IMAGE,
+            oci_layout=True,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("--provenance=false", result.stdout)
 
     def test_reused_builder_rejects_non_container_driver(self) -> None:
         result = self.run_wrapper(
-            builder_inspect="Driver: docker\nBuildKit version: v0.30.0",
+            builder_inspect="Driver: docker\nBuildKit version: v0.31.2",
             builder_containers="buildx_buildkit_release-builder0",
             builder_container_image=BUILDKIT_IMAGE,
         )
@@ -308,9 +425,9 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
 
     def test_reused_builder_rejects_unpinned_container_image(self) -> None:
         result = self.run_wrapper(
-            builder_inspect="Driver: docker-container\nBuildKit version: v0.30.0",
+            builder_inspect="Driver: docker-container\nBuildKit version: v0.31.2",
             builder_containers="buildx_buildkit_release-builder0",
-            builder_container_image="moby/buildkit:v0.30.0",
+            builder_container_image="moby/buildkit:v0.31.2",
         )
 
         self.assertNotEqual(0, result.returncode)
@@ -319,7 +436,7 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
 
     def test_reused_builder_rejects_wrong_repo_digest(self) -> None:
         result = self.run_wrapper(
-            builder_inspect="Driver: docker-container\nBuildKit version: v0.30.0",
+            builder_inspect="Driver: docker-container\nBuildKit version: v0.31.2",
             builder_containers="buildx_buildkit_release-builder0",
             builder_container_image=BUILDKIT_IMAGE,
             buildkit_repo_digests="moby/buildkit@sha256:" + "0" * 64,
@@ -330,7 +447,7 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
 
     def test_reused_builder_rejects_nonstandard_container_shape(self) -> None:
         result = self.run_wrapper(
-            builder_inspect="Driver: docker-container\nBuildKit version: v0.30.0",
+            builder_inspect="Driver: docker-container\nBuildKit version: v0.31.2",
             builder_containers="buildx_buildkit_release-builder0\nbuildx_buildkit_release-builder1",
             builder_container_image=BUILDKIT_IMAGE,
         )
@@ -340,7 +457,7 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
 
 
 class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
-    def test_smoke_builds_both_release_dockerfiles_via_ephemeral_registry(self) -> None:
+    def test_smoke_builds_both_release_dockerfiles_via_shared_wrapper(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fake_bin = Path(temporary) / "bin"
             fake_bin.mkdir()
@@ -361,11 +478,11 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 "        printf 'buildx_buildkit_%s0\\n' \"${!next}\" > \"${DOCKER_STATE}\"\n"
                 "      fi\n"
                 "    done ;;\n"
-                "  'buildx inspect '* ) printf 'Driver: docker-container\\nBuildKit version: v0.30.0\\n' ;;\n"
+                "  'buildx inspect '* ) printf 'Driver: docker-container\\nBuildKit version: v0.31.2\\n' ;;\n"
                 "  'ps --all '* ) cat \"${DOCKER_STATE}\" ;;\n"
                 "  'inspect --format '* )\n"
-                "    echo 'moby/buildkit:v0.30.0@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f' ;;\n"
-                "  'image inspect '* ) echo 'moby/buildkit@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f' ;;\n"
+                "    echo 'moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec' ;;\n"
+                "  'image inspect '* ) echo 'moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec' ;;\n"
                 "  'port '* ) echo '127.0.0.1:5000' ;;\n"
                 "esac\n",
                 encoding="utf-8",
@@ -378,7 +495,9 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 "{ printf 'BEGIN\\n'; printf '%s\\n' \"$@\"; printf 'END\\n'; } "
                 '>> "${CHECKER_LOG}"\n'
                 "case \"$*\" in\n"
-                "  *missing-version*|*wrong-revision*|*'{{json .Image.config}}'*) "
+                "  *check-release-image-oci-labels.py*missing-version*|"
+                "*check-release-image-oci-labels.py*wrong-revision*|"
+                "*check-release-image-oci-labels.py*'{{json .Image.config}}'*) "
                 "exit 1 ;;\n"
                 "esac\n",
                 encoding="utf-8",
@@ -422,34 +541,26 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
             ]
             self.assertEqual(6, len(build_calls))
             dockerfiles = []
-            published_builds = []
-            negative_builds = []
             for call in build_calls:
                 self.assertEqual(["buildx", "build"], call[:2])
+                self.assertIn("--builder", call)
                 self.assertIn("--platform", call)
                 self.assertEqual("linux/amd64", call[call.index("--platform") + 1])
+                self.assertIn("--provenance=false", call)
+                self.assertIn("--no-cache", call)
+                self.assertIn("--build-arg", call)
+                self.assertEqual(
+                    "SOURCE_DATE_EPOCH=0", call[call.index("--build-arg") + 1]
+                )
                 output = call[call.index("--output") + 1]
-                if output.startswith("type=registry,"):
-                    published_builds.append(call)
-                    self.assertIn("--builder", call)
-                    self.assertIn("--no-cache", call)
-                    self.assertIn("--build-arg", call)
-                    self.assertEqual(
-                        "SOURCE_DATE_EPOCH=0", call[call.index("--build-arg") + 1]
-                    )
-                    self.assertEqual(
-                        "type=registry,push=true,rewrite-timestamp=true,compatibility-version=20,registry.insecure=true",
-                        output,
-                    )
-                else:
-                    negative_builds.append(call)
-                    self.assertIn("--provenance=false", call)
-                    self.assertTrue(output.startswith("type=oci,dest="), output)
-                    self.assertTrue(output.endswith(",tar=false"), output)
+                self.assertTrue(output.startswith("type=oci,dest="), output)
+                self.assertTrue(
+                    output.endswith(
+                        ",tar=false,rewrite-timestamp=true,compatibility-version=20"
+                    ),
+                    output,
+                )
                 dockerfiles.append(call[call.index("--file") + 1])
-
-            self.assertEqual(4, len(published_builds))
-            self.assertEqual(2, len(negative_builds))
 
             self.assertEqual(
                 {
@@ -458,18 +569,43 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 },
                 set(dockerfiles),
             )
+            self.assertEqual(
+                2,
+                dockerfiles.count(
+                    str(ROOT / "release/docker/Dockerfile.registry-notary")
+                ),
+            )
+            self.assertEqual(
+                4,
+                dockerfiles.count(
+                    str(ROOT / "release/docker/Dockerfile.registry-relay")
+                ),
+            )
+            python_calls = read_calls(checker_log)
             inspected_layouts = {
                 call[1]
-                for call in read_calls(checker_log)
-                if len(call) > 1 and ":correct" in call[1]
+                for call in python_calls
+                if len(call) > 1
+                and call[0].endswith("check-release-image-oci-labels.py")
+                and "/correct-" in call[1]
             }
             self.assertEqual(
-                {"registry-notary:correct", "registry-relay:correct"},
                 {
-                    Path(layout).name
+                    "correct-registry-notary-first",
+                    "correct-registry-relay-first",
+                },
+                {
+                    Path(layout.removeprefix("oci-layout://")).name
                     for layout in inspected_layouts
                 },
             )
+            comparisons = [
+                call
+                for call in python_calls
+                if call and call[0].endswith("compare-release-image-layouts.py")
+            ]
+            self.assertEqual(3, len(comparisons))
+            self.assertEqual(1, sum("--rootfs-only" in call for call in comparisons))
 
 
 if __name__ == "__main__":

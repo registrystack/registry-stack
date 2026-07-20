@@ -1,20 +1,31 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime-root
+ARG SOURCE_DATE_EPOCH=0
 
-RUN mkdir -p \
+FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime-root
+ARG SOURCE_DATE_EPOCH
+
+RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
+    --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \
+    mkdir -p \
         /workspace/runtime-root/etc/registry-relay \
+        /workspace/runtime-root/licenses/registry-relay \
+        /workspace/runtime-root/usr/local/bin \
         /workspace/runtime-root/var/lib/registry-relay/cache \
         /workspace/runtime-root/var/lib/registry-relay/data \
-        /workspace/runtime-root/var/log/registry-relay && \
-    chown -R 65532:65532 /workspace/runtime-root
+        /workspace/runtime-root/var/log/registry-relay \
+    && install -m 0755 /workspace/image-bin/registry-relay /workspace/runtime-root/usr/local/bin/registry-relay \
+    && install -m 0755 /workspace/image-bin/registry-relay-rhai-worker /workspace/runtime-root/usr/local/bin/registry-relay-rhai-worker \
+    && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/registry-relay/LICENSE \
+    && chown -R 65532:65532 \
+        /workspace/runtime-root/etc/registry-relay \
+        /workspace/runtime-root/var/lib/registry-relay \
+        /workspace/runtime-root/var/log/registry-relay \
+    && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775 AS runtime
 
-COPY --from=runtime-root --chown=65532:65532 /workspace/runtime-root/ /
-COPY --chmod=0755 dist/image-bin/registry-relay /usr/local/bin/registry-relay
-COPY --chmod=0755 dist/image-bin/registry-relay-rhai-worker /usr/local/bin/registry-relay-rhai-worker
-COPY LICENSE /licenses/registry-relay/LICENSE
+COPY --from=runtime-root /workspace/runtime-root/ /
 
 WORKDIR /var/lib/registry-relay
 

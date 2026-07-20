@@ -22,6 +22,10 @@ DISTROLESS_RUNTIME = (
     "gcr.io/distroless/cc-debian13:nonroot@sha256:"
     "d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775"
 )
+DOCKERFILE_FRONTEND = (
+    "docker/dockerfile:1.7@sha256:"
+    "a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+)
 
 DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile"),
@@ -35,6 +39,7 @@ DOCKERFILES = (
 # notes are immutable evidence and intentionally are not rewritten by this gate.
 MAINTAINED_TEXT_PATHS = DOCKERFILES + (
     Path(".github/workflows/release.yml"),
+    Path("release/scripts/build-release-binaries.sh"),
     Path("crates/registry-relay/docs/ops.md"),
     Path("crates/registry-relay/docs/security-assurance.md"),
     Path("crates/registry-relay/scripts/check_docker_build_contract.py"),
@@ -143,11 +148,37 @@ def check_repository(root: Path = ROOT) -> list[str]:
         )
 
     for relative in PREPARATION_DOCKERFILES:
+        text = texts[relative]
+        if not text.startswith(f"# syntax={DOCKERFILE_FRONTEND}\n"):
+            failures.append(
+                f"{relative}: pinned Dockerfile frontend must be the first line"
+            )
         require(
-            texts[relative],
+            text,
             f"FROM {DEBIAN_PREPARATION} AS runtime-root",
             relative,
             "pinned Debian 13 runtime preparation base",
+            failures,
+        )
+        require(
+            text,
+            "ARG SOURCE_DATE_EPOCH=0",
+            relative,
+            "fixed release filesystem timestamp",
+            failures,
+        )
+        require(
+            text,
+            "RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin",
+            relative,
+            "ephemeral release input mount",
+            failures,
+        )
+        require(
+            text,
+            'find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +',
+            relative,
+            "normalized release filesystem metadata",
             failures,
         )
 
@@ -193,8 +224,8 @@ def check_repository(root: Path = ROOT) -> list[str]:
             failures,
         )
         require(
-            runtime_stage(text),
-            "--chown=65532:65532 /workspace/runtime-root/ /",
+            text,
+            "chown -R 65532:65532",
             relative,
             "numeric nonroot-owned Notary runtime directories",
             failures,
@@ -216,6 +247,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
             )
 
     workflow = texts[Path(".github/workflows/release.yml")]
+    binary_recipe = texts[Path("release/scripts/build-release-binaries.sh")]
     require(
         workflow,
         f"RELEASE_BUILDER_IMAGE: {RUST_BUILDER}",
@@ -224,9 +256,9 @@ def check_repository(root: Path = ROOT) -> list[str]:
         failures,
     )
     require(
-        workflow,
+        binary_recipe,
         "--features registry-notary/registry-notary-cel,registry-notary/pkcs11",
-        Path(".github/workflows/release.yml"),
+        Path("release/scripts/build-release-binaries.sh"),
         "PKCS#11-enabled release build",
         failures,
     )
