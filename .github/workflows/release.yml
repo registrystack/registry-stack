@@ -383,6 +383,9 @@ jobs:
               --platform linux/amd64 \
               --file "${dockerfile}" \
               --tag "${image}" \
+              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+              --label "org.opencontainers.image.revision=${{ needs.verify.outputs.tag_target }}" \
+              --label "org.opencontainers.image.version=${{ needs.verify.outputs.version }}" \
               --metadata-file "${metadata}" \
               --cache-from "type=gha,scope=registry-stack-${name}" \
               --cache-to "type=gha,mode=max,scope=registry-stack-${name}" \
@@ -392,6 +395,15 @@ jobs:
             digest="$(jq -r '."containerimage.digest"' "${metadata}")"
             local digest_ref="${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}"
             printf '%s\n' "${digest_ref}" | tee "dist/images/${name}.digest"
+            docker buildx imagetools inspect "${digest_ref}" \
+              --format '{{json .Image.Config}}' \
+              | jq -e \
+                --arg source "https://github.com/${GITHUB_REPOSITORY}" \
+                --arg revision "${{ needs.verify.outputs.tag_target }}" \
+                --arg version "${{ needs.verify.outputs.version }}" \
+                '.Labels["org.opencontainers.image.source"] == $source and
+                 .Labels["org.opencontainers.image.revision"] == $revision and
+                 .Labels["org.opencontainers.image.version"] == $version'
             syft "${digest_ref}" -o "spdx-json=dist/sbom/${name}.spdx.json"
             release/scripts/registry-release bind-spdx-subject \
               "dist/sbom/${name}.spdx.json" \
