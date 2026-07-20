@@ -10,8 +10,8 @@ use super::super::{
     compile_notary_runtime_for_gate_test as compile_notary_runtime,
     compile_notary_runtime_with_provenance_for_gate_test as compile_notary_runtime_with_provenance,
     notary_routers_from_runtime, notary_shared_router_from_runtime,
-    standalone_router_for_gate_test as standalone_router, StandaloneServerError,
-    standalone_router_with_ready_relay_for_gate_test,
+    standalone_router_for_gate_test as standalone_router,
+    standalone_router_with_ready_relay_for_gate_test, StandaloneServerError,
 };
 use axum::http::StatusCode;
 use axum_test::TestServer;
@@ -428,6 +428,10 @@ fn assert_matches_posture_schema(body: &Value) {
 }
 
 async fn fetch_posture(config: StandaloneRegistryNotaryConfig) -> Value {
+    fetch_posture_for_tier(config, "restricted").await
+}
+
+async fn fetch_posture_for_tier(config: StandaloneRegistryNotaryConfig, tier: &str) -> Value {
     let mut config = config;
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
     add_ops_read_api_key(&mut config);
@@ -439,11 +443,37 @@ async fn fetch_posture(config: StandaloneRegistryNotaryConfig) -> Value {
     let app = notary_shared_router_from_runtime(runtime).expect("activated runtime is serve-ready");
     let server = TestServer::builder().http_transport().build(app);
     let response = server
-        .get("/admin/v1/posture?tier=restricted")
+        .get(&format!("/admin/v1/posture?tier={tier}"))
         .add_header("x-api-key", "ops-token")
         .await;
     response.assert_status_ok();
     response.json()
+}
+
+async fn fetch_default_and_restricted_posture(
+    config: StandaloneRegistryNotaryConfig,
+) -> (Value, Value) {
+    let mut config = config;
+    config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
+    add_ops_read_api_key(&mut config);
+    let runtime = compile_notary_runtime(config)
+        .expect("runtime compiles for posture")
+        .activate()
+        .await
+        .expect("source-free runtime activates");
+    let app = notary_shared_router_from_runtime(runtime).expect("activated runtime is serve-ready");
+    let server = TestServer::builder().http_transport().build(app);
+    let default = server
+        .get("/admin/v1/posture?tier=default")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    default.assert_status_ok();
+    let restricted = server
+        .get("/admin/v1/posture?tier=restricted")
+        .add_header("x-api-key", "ops-token")
+        .await;
+    restricted.assert_status_ok();
+    (default.json(), restricted.json())
 }
 
 fn audit_path(tmp: &tempfile::TempDir) -> String {
@@ -670,7 +700,7 @@ fn waiver_for_startup_fail_gate_is_rejected_at_load() {
     let config = ConfigBuilder::new(&audit_path(&tmp))
         .durable_audit(false)
         .deployment(
-            "deployment:\n  profile: production\n  waivers:\n    - finding: notary.audit.sink_missing\n      reason: \"synthetic test waiver\"\n      expires: 2999-01-01\n",
+            "deployment:\n  profile: production\n  waivers:\n    - finding: notary.audit.sink_missing\n      reference: OPS-TEST-HARD-GATE\n      expires: 2999-01-01\n",
         )
         .build();
 
@@ -689,7 +719,9 @@ async fn production_multi_instance_postgresql_default_is_state_ready() {
         .build();
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
 
-    let app = standalone_router(config).await.expect("production PostgreSQL config starts in harness");
+    let app = standalone_router(config)
+        .await
+        .expect("production PostgreSQL config starts in harness");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status_ok();
@@ -829,7 +861,9 @@ async fn production_federation_signer_is_reported_by_surface() {
         .deployment("deployment:\n  profile: production\n")
         .build();
 
-    let app = standalone_router(config).await.expect("production federation signer config starts");
+    let app = standalone_router(config)
+        .await
+        .expect("production federation signer config starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -1197,11 +1231,16 @@ async fn posture_reports_waived_finding_with_active_waiver() {
     let config = ConfigBuilder::new(&audit_path(&tmp))
         .openapi_public(true)
         .deployment(
-            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: notary.openapi.public\n      reason: \"synthetic single-node lab, ticket TEST-1\"\n      expires: 2999-01-01\n",
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: notary.openapi.public\n      reference: OPS-TEST-POSTURE\n      summary: \"Synthetic single-node lab\"\n      expires: 2999-01-01\n",
         )
         .build();
 
-    let posture = fetch_posture(config).await;
+    let (default, posture) = fetch_default_and_restricted_posture(config).await;
+    let default_rendered = default.to_string();
+    assert!(!default_rendered.contains("OPS-TEST-POSTURE"));
+    assert!(!default_rendered.contains("Synthetic single-node lab"));
+    assert!(default["deployment"].get("waivers").is_none());
+
     assert_matches_posture_schema(&posture);
 
     let findings = posture["deployment"]["findings"]
@@ -1212,17 +1251,21 @@ async fn posture_reports_waived_finding_with_active_waiver() {
         .find(|finding| finding["id"] == "notary.openapi.public")
         .expect("public OpenAPI finding is present");
     assert_eq!(waived["status"], "waived");
+    assert_eq!(waived["waiver"]["reference"], "OPS-TEST-POSTURE");
+    assert_eq!(waived["waiver"]["summary"], "Synthetic single-node lab");
     assert_eq!(waived["waiver"]["expires"], "2999-01-01");
+    assert!(waived["waiver"].get("reason").is_none());
 
     let waivers = posture["deployment"]["waivers"]
         .as_array()
         .expect("deployment waivers is an array");
-    assert!(
-        waivers
-            .iter()
-            .any(|waiver| waiver["finding"] == "notary.openapi.public"),
-        "active waiver must be echoed in: {waivers:#?}"
-    );
+    let active = waivers
+        .iter()
+        .find(|waiver| waiver["finding"] == "notary.openapi.public")
+        .unwrap_or_else(|| panic!("active waiver must be echoed in: {waivers:#?}"));
+    assert_eq!(active["reference"], "OPS-TEST-POSTURE");
+    assert_eq!(active["summary"], "Synthetic single-node lab");
+    assert!(active.get("reason").is_none());
 }
 
 #[tokio::test]
@@ -1231,7 +1274,7 @@ async fn posture_re_triggers_expired_waiver() {
     let config = ConfigBuilder::new(&audit_path(&tmp))
         .openapi_public(true)
         .deployment(
-            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: notary.openapi.public\n      reason: \"synthetic expired waiver\"\n      expires: 2000-01-01\n",
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: notary.openapi.public\n      reference: OPS-TEST-EXPIRED\n      expires: 2000-01-01\n",
         )
         .build();
 
@@ -1618,7 +1661,8 @@ fn retention_local_only_waiver_is_honored_under_production() {
     };
     let waiver = DeploymentWaiverConfig {
         finding: FINDING_AUDIT_RETENTION_LOCAL_ONLY.to_string(),
-        reason: "synthetic test waiver, ticket TEST-1".to_string(),
+        reference: "OPS-TEST-RETENTION".to_string(),
+        summary: Some("Synthetic test waiver".to_string()),
         expires: "2999-01-01".to_string(),
     };
     let evaluation = evaluate_gates(

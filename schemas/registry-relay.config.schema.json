@@ -1446,7 +1446,7 @@
           "default": null
         },
         "waivers": {
-          "description": "Per-deployment waivers. Each names one finding id, a free-text reason,\nand a mandatory expiry date. Expired waivers stop suppressing their\nfinding and raise `deployment.waiver_expired`.",
+          "description": "Per-deployment waivers. Each names one finding id, a required operator\nreference, an optional summary, and a mandatory expiry date. Expired\nwaivers stop suppressing their finding and raise\n`deployment.waiver_expired`.",
           "items": {
             "$ref": "#/$defs/DeploymentWaiverConfig"
           },
@@ -1507,7 +1507,7 @@
     },
     "DeploymentWaiverConfig": {
       "additionalProperties": false,
-      "description": "One declared waiver. `expires` is an ISO 8601 `YYYY-MM-DD` date; format is\nvalidated at load time. Reasons must not carry secrets.",
+      "description": "One declared waiver. `expires` is an ISO 8601 `YYYY-MM-DD` date; format is\nvalidated at load time. The reference and optional summary are validated by\nthe shared operations contract before either can reach posture or logs.",
       "properties": {
         "expires": {
           "type": "string"
@@ -1515,13 +1515,21 @@
         "finding": {
           "type": "string"
         },
-        "reason": {
+        "reference": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^(?!.*\\.\\.)[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 256,
+          "minLength": 1,
           "type": "string"
         }
       },
       "required": [
         "finding",
-        "reason",
+        "reference",
         "expires"
       ],
       "type": "object"

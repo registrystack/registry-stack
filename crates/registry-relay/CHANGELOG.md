@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: Replace deployment-waiver `reason` with a required validated
+  `reference` and an optional validated `summary`. Strict configuration parsing
+  rejects the retired field. Restricted posture and boot warnings expose only
+  the new metadata, default posture continues to omit waiver metadata, and
+  waived-gate audit records remain minimized to finding IDs. Expiry and
+  non-waivable startup/readiness gate behavior are unchanged.
 - BREAKING: Remove the inert six-field `provenance.consent` member from the
   pre-1.0 `registry.relay.consultation-result.v1` response and its closed
   batch-terminal replay representation. The PostgreSQL terminal constraint is

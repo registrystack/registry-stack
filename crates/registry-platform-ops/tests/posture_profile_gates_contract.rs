@@ -57,7 +57,8 @@ fn posture_with_profile_gates() -> Value {
                 "severity": "finding_warn",
                 "status": "waived",
                 "waiver": {
-                    "reason": "temporary maintenance window",
+                    "reference": "OPS-2026-0042",
+                    "summary": "Temporary maintenance window",
                     "expires": "2026-07-01"
                 }
             }
@@ -65,7 +66,8 @@ fn posture_with_profile_gates() -> Value {
         "waivers": [
             {
                 "finding": "readiness.cache.degraded",
-                "reason": "temporary maintenance window",
+                "reference": "OPS-2026-0042",
+                "summary": "Temporary maintenance window",
                 "expires": "2026-07-01"
             }
         ]
@@ -143,7 +145,8 @@ fn posture_profile_gate_structs_round_trip_and_accept_unknown_finding_ids() {
             severity: GateSeverity::FindingWarn,
             status: DeploymentFindingStatus::Waived,
             waiver: Some(DeploymentFindingWaiver {
-                reason: "operator approved temporary exception".to_string(),
+                reference: "OPS-2026-0042".to_string(),
+                summary: Some("Operator approved temporary exception".to_string()),
                 expires: "2026-07-01".to_string(),
             }),
         },
@@ -152,7 +155,8 @@ fn posture_profile_gate_structs_round_trip_and_accept_unknown_finding_ids() {
             "severity": "finding_warn",
             "status": "waived",
             "waiver": {
-                "reason": "operator approved temporary exception",
+                "reference": "OPS-2026-0042",
+                "summary": "Operator approved temporary exception",
                 "expires": "2026-07-01"
             }
         }),
@@ -161,15 +165,90 @@ fn posture_profile_gate_structs_round_trip_and_accept_unknown_finding_ids() {
     round_trip(
         DeploymentWaiver {
             finding: "future.product.finding".to_string(),
-            reason: "operator approved temporary exception".to_string(),
+            reference: "OPS-2026-0042".to_string(),
+            summary: None,
             expires: "2026-07-01".to_string(),
         },
         json!({
             "finding": "future.product.finding",
-            "reason": "operator approved temporary exception",
+            "reference": "OPS-2026-0042",
             "expires": "2026-07-01"
         }),
     );
+}
+
+#[test]
+fn posture_waiver_structs_reject_explicit_null_summary() {
+    let finding_waiver = json!({
+        "reference": "OPS-2026-0042",
+        "summary": null,
+        "expires": "2026-07-01"
+    });
+    assert!(
+        serde_json::from_value::<DeploymentFindingWaiver>(finding_waiver).is_err(),
+        "finding waiver summary must be omitted rather than null"
+    );
+
+    let waiver = json!({
+        "finding": "future.product.finding",
+        "reference": "OPS-2026-0042",
+        "summary": null,
+        "expires": "2026-07-01"
+    });
+    assert!(
+        serde_json::from_value::<DeploymentWaiver>(waiver).is_err(),
+        "deployment waiver summary must be omitted rather than null"
+    );
+}
+
+#[test]
+fn posture_waiver_structs_reject_retired_or_invalid_metadata() {
+    for invalid in [
+        json!({
+            "finding": "future.product.finding",
+            "reference": "OPS-42",
+            "reason": "retired waiver text",
+            "expires": "2026-07-01"
+        }),
+        json!({
+            "finding": "future.product.finding",
+            "reference": "OPS..42",
+            "expires": "2026-07-01"
+        }),
+        json!({
+            "finding": "future.product.finding",
+            "reference": "OPS-42",
+            "summary": "bearer credential-value",
+            "expires": "2026-07-01"
+        }),
+    ] {
+        assert!(
+            serde_json::from_value::<DeploymentWaiver>(invalid).is_err(),
+            "shared deployment waiver deserialization must enforce the closed metadata contract"
+        );
+    }
+
+    for invalid in [
+        json!({
+            "reference": "OPS-42",
+            "reason": "retired waiver text",
+            "expires": "2026-07-01"
+        }),
+        json!({
+            "reference": "OPS..42",
+            "expires": "2026-07-01"
+        }),
+        json!({
+            "reference": "OPS-42",
+            "summary": "summary\nwith control",
+            "expires": "2026-07-01"
+        }),
+    ] {
+        assert!(
+            serde_json::from_value::<DeploymentFindingWaiver>(invalid).is_err(),
+            "shared finding waiver deserialization must enforce the closed metadata contract"
+        );
+    }
 }
 
 #[test]
@@ -224,7 +303,7 @@ fn audit_assurance_types_round_trip() {
 }
 
 #[test]
-fn default_filter_drops_waiver_reasons_from_profile_gate_fields() {
+fn default_filter_drops_waiver_metadata_from_profile_gate_fields() {
     let filtered = registry_platform_ops::filter_posture_for_tier(
         posture_with_profile_gates(),
         registry_platform_ops::PostureTier::Default,
@@ -244,5 +323,6 @@ fn default_filter_drops_waiver_reasons_from_profile_gate_fields() {
         .expect("deployment is object")
         .get("waivers")
         .is_none());
-    assert!(!rendered.contains("temporary maintenance window"));
+    assert!(!rendered.contains("OPS-2026-0042"));
+    assert!(!rendered.contains("Temporary maintenance window"));
 }

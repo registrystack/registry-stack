@@ -67,6 +67,17 @@ fn assert_runtime_rejects(instance: &Value, label: &str) {
     );
 }
 
+fn assert_runtime_load_rejects(instance: &Value, label: &str) {
+    let yaml = serde_norway::to_string(instance)
+        .unwrap_or_else(|error| panic!("failed to serialize {label} as YAML: {error}"));
+    if let Ok(config) = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(&yaml) {
+        assert!(
+            config.validate().is_err(),
+            "{label} must be rejected during runtime validation"
+        );
+    }
+}
+
 fn maintained_runtime_fixtures() -> Vec<PathBuf> {
     let profiles = stack_root().join("crates/registry-relay/profiles");
     let mut fixtures = fs::read_dir(profiles)
@@ -295,6 +306,34 @@ fn strict_nested_objects_and_tagged_variants_match_runtime_deserialization() {
         "unknown signing-key status",
     );
     assert_runtime_rejects(&unknown_signing_status, "unknown signing-key status");
+}
+
+#[test]
+fn deployment_waiver_schema_rejects_retired_and_noncanonical_metadata() {
+    let schema = document();
+    let mut config = example_config();
+    config["deployment"] = json!({
+        "profile": "hosted_lab",
+        "waivers": [{
+            "finding": "notary.openapi.public",
+            "reference": "OPS..42",
+            "expires": "2999-01-01"
+        }]
+    });
+    assert_invalid(&schema, &config, "waiver reference containing '..'");
+
+    config["deployment"]["waivers"][0]["reference"] = json!("OPS-42");
+    config["deployment"]["waivers"][0]["summary"] = Value::Null;
+    assert_invalid(&schema, &config, "null deployment waiver summary");
+    assert_runtime_load_rejects(&config, "null deployment waiver summary");
+
+    config["deployment"]["waivers"][0]
+        .as_object_mut()
+        .expect("waiver is an object")
+        .remove("summary");
+    config["deployment"]["waivers"][0]["reason"] = json!("retired waiver text");
+    assert_invalid(&schema, &config, "retired deployment waiver reason");
+    assert_runtime_load_rejects(&config, "retired deployment waiver reason");
 }
 
 #[test]
