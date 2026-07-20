@@ -31,22 +31,22 @@ docsets:
     products:
       registry-stack:
         version: v0.12.1
-        ref: d6d2d167426ada77097c8d5606f100b1554aaadc
+        ref: a6f409259158f44c9fdbe99242ec0f9ac10d9373
       registry-platform:
         version: v0.12.1
-        ref: d6d2d167426ada77097c8d5606f100b1554aaadc
+        ref: a6f409259158f44c9fdbe99242ec0f9ac10d9373
       registry-manifest:
         version: v0.12.1
-        ref: d6d2d167426ada77097c8d5606f100b1554aaadc
+        ref: a6f409259158f44c9fdbe99242ec0f9ac10d9373
       registry-notary:
         version: v0.12.1
-        ref: d6d2d167426ada77097c8d5606f100b1554aaadc
+        ref: a6f409259158f44c9fdbe99242ec0f9ac10d9373
       registry-relay:
         version: v0.12.1
-        ref: d6d2d167426ada77097c8d5606f100b1554aaadc
+        ref: a6f409259158f44c9fdbe99242ec0f9ac10d9373
       registry-registryctl:
         version: v0.12.1
-        ref: d6d2d167426ada77097c8d5606f100b1554aaadc
+        ref: a6f409259158f44c9fdbe99242ec0f9ac10d9373
       crosswalk:
         version: crosswalk-core-v0.2.0
         ref: 1d44ec735fdc8a7c719264b339574371e8330337
