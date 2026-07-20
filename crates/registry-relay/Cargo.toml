@@ -138,7 +138,7 @@ rustix.workspace = true
 # ─── dev / test ──────────────────────────────────────────────────────────────
 [dev-dependencies]
 aws-lc-rs = { version = "1" }
-axum-test = { version = "20" }
+axum-test = { version = "21" }
 assert-json-diff = { version = "2" }
 chrono = { version = "0.4" }
 registry-notary-core.workspace = true

@@ -84,7 +84,7 @@ assert-json-diff = { version = "2" }
 async-trait = { version = "0.1" }
 aws-lc-rs = { version = "1" }
 axum = { version = "0.8" }
-axum-test = { version = "20" }
+axum-test = { version = "21" }
 base64 = { version = "0.22" }
 bytes = { version = "1" }
 calamine = { version = "0.35" }
