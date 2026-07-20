@@ -11,27 +11,20 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 # Advisory ignores must include a scoped rationale and a review trigger.
 ignore = [
-    # RUSTSEC-2023-0089: `atomic-polyfill` is pulled transitively by
-    # `crosswalk-core` through phonenumber's build dependency stack (postcard
-    # → heapless 0.7) in consumers. Review when `crosswalk-core` or phonenumber
-    # removes this path, or before making CEL mapping part of a hardened
-    # default runtime.
+    # RUSTSEC-2023-0089: the all-features graph reaches `atomic-polyfill`
+    # through Crosswalk -> phonenumber -> postcard -> heapless 0.7. Phonenumber
+    # uses postcard at build time and runtime, but heapless selects
+    # `atomic-polyfill` only for AVR, riscv32i/riscv32imc, thumbv6m, and
+    # xtensa-esp32s2, not Registry Stack's supported service targets. Review
+    # when the chain removes it, before supporting an affected embedded target,
+    # or before making CEL mapping part of a hardened default runtime.
     "RUSTSEC-2023-0089",
-    # RUSTSEC-2024-0436: `paste` is pulled transitively by DataFusion in Relay.
-    # It is unmaintained, but remains compile-time/runtime macro plumbing, not
-    # request-facing parsing. Review when DataFusion moves off `paste` or when
-    # upgrading the DataFusion major version.
+    # RUSTSEC-2024-0436: `paste` is an unmaintained build-time procedural macro
+    # pulled in by Relay's DataFusion and Parquet graph. It does not remain in
+    # the runtime binary as request-facing parser code. Review when DataFusion
+    # or Arrow/Parquet removes `paste` from the resolved graph, or before
+    # upgrading those major versions.
     "RUSTSEC-2024-0436",
-    # RUSTSEC-2026-0194: quick-xml <=0.39 has quadratic duplicate-attribute
-    # checks. It is currently pinned by calamine 0.35 in Relay's XLSX connector
-    # and by phonenumber through the pinned Crosswalk stack. Review when
-    # calamine supports quick-xml >=0.41, when Crosswalk/phonenumber moves off
-    # quick-xml <=0.38, or before accepting untrusted end-user XLSX/XML inputs.
-    "RUSTSEC-2026-0194",
-    # RUSTSEC-2026-0195: quick-xml <=0.39 can over-allocate namespace
-    # declarations in NsReader. Same temporary scope and review triggers as
-    # RUSTSEC-2026-0194.
-    "RUSTSEC-2026-0195",
 ]
 
 [licenses]

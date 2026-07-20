@@ -4,6 +4,12 @@
 
 ## 0.12.2 - 2026-07-20
 
+### Security
+
+- Upgrade the XLSX and phone-metadata XML dependency paths to `quick-xml`
+  0.41, removing the temporary RUSTSEC-2026-0194 and RUSTSEC-2026-0195
+  exceptions now that maintained upstream releases carry the fixes.
+
 - No user-visible Relay changes. This release fixes forward from the
   incomplete v0.12.1 publication with a canonical reproducible release-build
   path for binaries and runtime images.

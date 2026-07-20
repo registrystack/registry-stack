@@ -49,8 +49,13 @@ The repository currently carries five `deny.toml` files:
 - `products/platform/templates/deny.toml`;
 - `products/manifest/deny.toml`.
 
-Keep duplicated policy entries synchronized unless the divergence is deliberate
-and documented in the changed file.
+These files govern different resolved product graphs. Keep common license,
+registry, and ban policy aligned where the product contract is the same, but
+scope advisory exceptions and Git source allowances to dependencies actually
+present in the graph governed by that file. Do not copy an exception or trusted
+source into a product or template pre-emptively. Deliberate differences must be
+documented in the changed file. The platform product policy and its published
+template are byte-aligned by `products/platform/scripts/check-hygiene-alignment.sh`.
 
 ## Git Dependencies
 
