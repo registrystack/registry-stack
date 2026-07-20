@@ -14,7 +14,7 @@ BREAKING_IGNORE="openapi/oasdiff-1.0-err-ignore.txt"
 # Exact git blob for the Notary 1.0 contract on main before beta-14 promotion.
 # The release-only exception below must never apply after that contract baseline
 # advances, even when BASE_REF also contains unrelated commits.
-OPENAPI_1_0_BASELINE_BLOB="083a894a853c1791f2ba87f5ecee259e687eab70"
+NOTARY_1_0_BASELINE_BLOB="083a894a853c1791f2ba87f5ecee259e687eab70"
 
 mkdir -p "$WORK_DIR"
 
@@ -68,7 +68,7 @@ fi
 git show "$BASE_REF:$SPEC_PATH_FROM_ROOT" > "$BASELINE"
 
 BASELINE_BLOB="$(git rev-parse "$BASE_REF:$SPEC_PATH_FROM_ROOT")"
-if [[ "$BASELINE_BLOB" != "$OPENAPI_1_0_BASELINE_BLOB" ]]; then
+if [[ "$BASELINE_BLOB" != "$NOTARY_1_0_BASELINE_BLOB" ]]; then
     oasdiff breaking --fail-on ERR "$BASELINE" "$GENERATED"
     exit 0
 fi
