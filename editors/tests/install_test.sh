@@ -57,7 +57,7 @@ readonly FAKE_OPEN_CANONICAL
 printf '%s\n' \
   '[workspace]' \
   '[workspace.package]' \
-  'version = "0.12.1"' \
+  'version = "0.12.2"' \
   > "${FAKE_REPO_ROOT}/Cargo.toml"
 printf '{}\n' > "${FAKE_REPO_ROOT}/editors/vscode/package.json"
 printf '[package]\nname = "registry-stack-zed"\n' \
@@ -79,7 +79,7 @@ command_name="$(basename -- "$0")"
 case "${command_name}" in
   registryctl)
     if [[ "${1:-}" == "--version" ]]; then
-      printf 'registryctl %s\n' "${FAKE_REGISTRYCTL_VERSION:-0.12.1}"
+      printf 'registryctl %s\n' "${FAKE_REGISTRYCTL_VERSION:-0.12.2}"
     fi
     ;;
   node)
@@ -176,7 +176,7 @@ if FAKE_REGISTRYCTL_VERSION=0.10.0 "${INSTALLER}" vscode \
   > "${mismatch_output}" 2>&1; then
   fail 'version mismatch should fail'
 fi
-assert_contains 'this checkout is 0.12.1 but registryctl is 0.10.0' "${mismatch_output}"
+assert_contains 'this checkout is 0.12.2 but registryctl is 0.10.0' "${mismatch_output}"
 assert_not_contains 'npm <' "${COMMAND_LOG}"
 
 reset_log

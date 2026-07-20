@@ -281,7 +281,7 @@ default and accept `--format json` for automation.
 ## Project setup
 
 The legacy `init relay` command creates a local spreadsheet project.
-In registryctl `v0.12.1`, this generation command requires the strict
+In registryctl `v0.12.2`, this generation command requires the strict
 `registryctl-vX.Y.Z-image-lock.json` from the same release beside the running
 binary. Set `REGISTRYCTL_IMAGE_LOCK` only when an operator has verified the same
 file at a separate explicit path. Registryctl does not search the current
@@ -308,7 +308,7 @@ Notary-only project contains source-free or self-attested evaluation-only claims
 
 ### Local Notary add-on
 
-Registryctl `v0.12.1` includes `registryctl add notary`. From a generated `benefits` spreadsheet
+Registryctl `v0.12.2` includes `registryctl add notary`. From a generated `benefits` spreadsheet
 project, it creates an editable authored project under `notary/project/`, adds a private
 consultation Relay and local Notary services, and generates local-only evaluator and workload
 credentials. It refuses an existing Notary directory or a second invocation instead of
@@ -379,6 +379,6 @@ Related environment variables are listed in the [environment variable reference]
 
 ## Source
 
-The released command tree comes from the registryctl source at `v0.12.1`.
+The released command tree comes from the registryctl source at `v0.12.2`.
 For its canonical definitions, read the
-[registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.12.1/crates/registryctl/src/main.rs).
+[registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.12.2/crates/registryctl/src/main.rs).

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.12.2
+
+- Registry Notary has no new product features relative to v0.12.1. This
+  release fixes forward from the incomplete v0.12.1 publication with a
+  canonical reproducible release-build path for the Notary binary, CEL worker,
+  and runtime image.
+
 ## 0.12.1
 
 - Registry Notary has no new product features relative to v0.12.0. The release

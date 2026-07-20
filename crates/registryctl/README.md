@@ -5,7 +5,7 @@
 Install a pinned release without cloning this repo:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.12.1/crates/registryctl/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.12.2/crates/registryctl/install.sh | bash
 ```
 
 The quick installer verifies downloaded release assets against `SHA256SUMS`
@@ -99,7 +99,7 @@ workers need a platform-specific process limit. The Notary default remains
 128 MiB. The maximum 1 GiB value supports emulated local runtimes and is a
 per-worker data/address-space ceiling, not reserved memory.
 
-The installer defaults to `v0.12.1`. To install a different pinned release, set
+The installer defaults to `v0.12.2`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 
 ```sh
@@ -110,10 +110,10 @@ Fetch the installer from the same pinned tag selected by
 `REGISTRYCTL_VERSION`. An older installer does not know the asset contract of a
 newer release.
 
-Prebuilt binaries are published for the `v0.12.1` stack release on Linux x86_64,
+Prebuilt binaries are published for the `v0.12.2` stack release on Linux x86_64,
 Linux arm64, and macOS arm64. On other platforms, install from source with
-`cargo install --git https://github.com/registrystack/registry-stack --tag v0.12.1 registryctl --locked`.
-Intel macOS has no prebuilt binary for `v0.12.1`, so the installer stops after
+`cargo install --git https://github.com/registrystack/registry-stack --tag v0.12.2 registryctl --locked`.
+Intel macOS has no prebuilt binary for `v0.12.2`, so the installer stops after
 printing that Cargo command. It does not run the source build automatically.
 
 ## Release image lock (`v0.9.0` and later)

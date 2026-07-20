@@ -1,8 +1,8 @@
 version: 1
 starter:
   id: snapshot
-  release: 0.12.1
-  content_digest: sha256:6d4b177ec3eb58df7d750c7f50e7fa7a5672f5908f54947911f3886366aaf85b
+  release: 0.12.2
+  content_digest: sha256:efcf38e246e52ad93ca5d0f716386f8657080afe133a63782d1892f802ee630f
 registry: { id: fictional-population-registry }
 integrations:
   person-snapshot: { file: integrations/person-snapshot/integration.yaml }

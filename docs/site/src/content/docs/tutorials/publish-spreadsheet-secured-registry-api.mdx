@@ -25,14 +25,14 @@ identity reads, and inspect the contract Registry Stack generated.
   outcome="A protected local API over a benefits workbook, with operational and restricted identity reads separated, one canonical birth date retained, and an edited disclosure rule enforced."
   time="About 15 minutes after Docker is installed"
   level="Local single-node"
-  prerequisites={['registryctl 0.12.1', 'A Docker Compose provider', 'curl']}
+  prerequisites={['registryctl 0.12.2', 'A Docker Compose provider', 'curl']}
 />
 
 This tutorial uses synthetic data and local demo credentials.
 Do not use the generated local keys in production.
 
 :::note[Current first-run route]
-The v0.12.1 source beta and this local tutorial can be used while hosted credential publication is
+The v0.12.2 source beta and this local tutorial can be used while hosted credential publication is
 held by [GH#330](https://github.com/registrystack/registry-stack/issues/330) and the incomplete
 [GH#198](https://github.com/registrystack/registry-stack/issues/198) fresh-reader run.
 :::
@@ -42,7 +42,7 @@ held by [GH#330](https://github.com/registrystack/registry-stack/issues/330) and
 Install `registryctl` without cloning the repository:
 
 The quick installer verifies downloaded release assets against the release's
-`SHA256SUMS`. The pinned `v0.12.1` installer installs the binary and matching
+`SHA256SUMS`. The pinned `v0.12.2` installer installs the binary and matching
 release image lock beside each other. It
 does not authenticate the installer script or release. Before running it,
 review the available signature and provenance evidence in the
@@ -50,7 +50,7 @@ canonical [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/
 guide. Evidence availability varies by release, and `v0.8.0` is unsigned.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.12.1/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.12.1 bash
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.12.2/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.12.2 bash
 registryctl --version
 ```
 
@@ -61,7 +61,7 @@ Prebuilt `registryctl` assets exist for Linux x86_64, Linux arm64, and macOS arm
 On Intel macOS, the installer stops after printing the pinned `cargo install` command.
 It does not run the source build automatically.
 After installing a Rust toolchain, run the command printed by the installer. For
-`v0.12.1`, also checksum-verify the matching release image lock and
+`v0.12.2`, also checksum-verify the matching release image lock and
 place it beside the Cargo-installed binary, as described in the troubleshooting table.
 
 ## Create the sample project
@@ -483,7 +483,7 @@ Relay refused to start when the floor dropped under 2 on personal data.
 | `registryctl` is not found | The install directory is not on `PATH`. | Add the directory printed by the installer, usually `~/.local/bin`, to `PATH`. |
 | The installer reports an unsupported platform | No binary is published for that OS or CPU. | Run the pinned `cargo install` command printed by the installer. For `v0.9.0` or later, also checksum-verify the matching `registryctl-vX.Y.Z-image-lock.json` release asset and place it beside the installed binary. |
 | `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, OrbStack, Colima, Podman, or your supported provider, then run `registryctl start` again. |
-| Docker reports no `linux/arm64` manifest for a Registry Stack image | The v0.12.1 Relay and Notary images are published for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`. |
+| Docker reports no `linux/arm64` manifest for a Registry Stack image | The v0.12.2 Relay and Notary images are published for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`. |
 | `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | The locally cached container image does not match the digest-pinned image in the generated `compose.yaml`. | Run `docker compose pull` in the project directory (on Apple silicon, prefix it with `DOCKER_DEFAULT_PLATFORM=linux/amd64`), then `registryctl start` again. |
 | `registryctl start` times out and the container log shows `missing field \`commitment\`` | registryctl v0.8.4 pins a service image older than its own generated config format ([GH#278](https://github.com/registrystack/registry-stack/issues/278)). | Pin the project's `compose.yaml` to the published v0.8.4 release digests: `ghcr.io/registrystack/registry-relay@sha256:93e194500a3500ba3f6331d5a0a9a3069127c48a709beccb083a5fcbdbc3ec61` and, when present, `ghcr.io/registrystack/registry-notary@sha256:0cf05184885d7ed17dd9889e20f3797eb2a9ad07517f4ac7c05c03b774a00b8f`. Then run `docker compose pull`; reapply the pins after a generation command rewrites `compose.yaml`. |
 | `registryctl init` reports that its image lock is missing or invalid | The binary was moved or built without the strict image lock from the same release, or the file failed its release, source, platform, or digest checks. | Rerun the installer from the same pinned target tag so it checksum-verifies and installs both files. For an operator-managed or source-test location, set `REGISTRYCTL_IMAGE_LOCK` to the checksum-verified lock from that exact release. Do not substitute a lock from another version or a mutable image tag. |
