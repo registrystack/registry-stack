@@ -795,7 +795,7 @@ fn issuance_record_aad(
     commitment: &str,
     expires_at: OffsetDateTime,
 ) -> Result<Vec<u8>, SensitiveStateError> {
-    if key_id.len() != KEY_BYTES || commitment.len() != 64 {
+    if key_id.len() != KEY_BYTES || !sha256_uri(commitment) {
         return Err(SensitiveStateError::InvalidStoredRecord);
     }
     let mut aad = Vec::with_capacity(192 + configuration_id.len());
@@ -807,6 +807,15 @@ fn issuance_record_aad(
     append_aad_text(&mut aad, configuration_id)?;
     append_aad_text(&mut aad, commitment)?;
     Ok(aad)
+}
+
+fn sha256_uri(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    })
 }
 
 fn issuance_response_aad(
@@ -932,6 +941,34 @@ mod tests {
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn issuance_aad_requires_the_canonical_sha256_uri_commitment() {
+        let keys = test_keys(10);
+        let transaction_hash = keys.identifier_hash(ISSUANCE_TRANSACTION_CONTEXT, "transaction");
+        let expiry = OffsetDateTime::from_unix_timestamp(1_900_000_000).unwrap();
+        let commitment = format!("sha256:{}", "a".repeat(64));
+
+        assert!(issuance_record_aad(
+            &transaction_hash,
+            &keys.key_id,
+            "person",
+            &commitment,
+            expiry,
+        )
+        .is_ok());
+        for invalid in [
+            "a".repeat(64),
+            format!("sha256:{}", "A".repeat(64)),
+            format!("sha256:{}", "a".repeat(63)),
+        ] {
+            assert_eq!(
+                issuance_record_aad(&transaction_hash, &keys.key_id, "person", &invalid, expiry,)
+                    .unwrap_err(),
+                SensitiveStateError::InvalidStoredRecord
+            );
+        }
     }
 
     #[test]

@@ -33,11 +33,11 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1\0",
     "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2\0",
     "preauthorization-tx-code=verified-notary-issuer-stable-scope-jti-keyed-pin-verifier-peek-redeem-one-winner-expiry-live-key-attestation-v3\0",
-    "oid4vci-issuance-transaction=keyed-id-encrypted-immutable-record-token-nonce-bind-holder-and-request-atomic-one-materialization-encrypted-response-terminal-failure-expiry-v1\0",
+    "oid4vci-issuance-transaction=keyed-id-encrypted-immutable-record-sha256-uri-commitment-token-nonce-bind-holder-and-request-atomic-one-materialization-encrypted-response-terminal-failure-expiry-v2\0",
     "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2\0",
 );
 pub const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "bb0e4d21cc3313ee0b5156d83a16623b0683da5af2cdfdd3ba4ce529b481032b";
+    "f08bb0bc9b927b534ce736c640d43e3c7f898bd110616f92a60857c5fd1323fd";
 
 const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 0x4e4f_5441_5259_0001;
 const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 11;
@@ -787,11 +787,11 @@ fn expected_catalog_definition_fingerprint(
 // These fingerprints are derived from the deterministic catalog projection
 // below and are pinned separately for every supported PostgreSQL major.
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG16_V1: &str =
-    "7722e1e6b41b96109ea96f9939a1f6860ed6ff96203f0d16bfa1bc5be6f8000d";
+    "cf45576aced8a825cd2891800f2636ec1ca0dd0959b81f3a787cc0ed36ea09a5";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG17_V1: &str =
-    "7722e1e6b41b96109ea96f9939a1f6860ed6ff96203f0d16bfa1bc5be6f8000d";
+    "cf45576aced8a825cd2891800f2636ec1ca0dd0959b81f3a787cc0ed36ea09a5";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG18_V1: &str =
-    "96a28f3cc5fed47adb9732a45765e744989994a1e7129e8e15366e738bd23b33";
+    "81760fbb2d3839783503774b3e6b436187c1969a154a331929d097e0e654eea2";
 
 const CATALOG_DEFINITION_QUERY_V1: &str = r#"
 SELECT COALESCE((
@@ -1076,7 +1076,7 @@ CREATE TABLE registry_notary_private.oid4vci_issuance_transaction (
     key_id bytea NOT NULL CHECK (pg_catalog.octet_length(key_id) = 32),
     credential_configuration_id text NOT NULL
         CHECK (pg_catalog.length(credential_configuration_id) BETWEEN 1 AND 256),
-    commitment text NOT NULL CHECK (commitment ~ '^[0-9a-f]{64}$'),
+    commitment text NOT NULL CHECK (commitment ~ '^sha256:[0-9a-f]{64}$'),
     record_aead_nonce bytea NOT NULL
         CHECK (pg_catalog.octet_length(record_aead_nonce) BETWEEN 12 AND 24),
     record_ciphertext bytea NOT NULL
@@ -2272,7 +2272,7 @@ DECLARE
 BEGIN
     IF pg_catalog.octet_length(p_transaction_hash) <> 32
        OR pg_catalog.octet_length(p_key_id) <> 32
-       OR p_commitment !~ '^[0-9a-f]{64}$'
+       OR p_commitment !~ '^sha256:[0-9a-f]{64}$'
        OR p_expires_at <= v_now THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid issuance transaction';
     END IF;
@@ -2692,7 +2692,7 @@ mod tests {
             "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1",
             "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2",
             "preauthorization-tx-code=verified-notary-issuer-stable-scope-jti-keyed-pin-verifier-peek-redeem-one-winner-expiry-live-key-attestation-v3",
-            "oid4vci-issuance-transaction=keyed-id-encrypted-immutable-record-token-nonce-bind-holder-and-request-atomic-one-materialization-encrypted-response-terminal-failure-expiry-v1",
+            "oid4vci-issuance-transaction=keyed-id-encrypted-immutable-record-sha256-uri-commitment-token-nonce-bind-holder-and-request-atomic-one-materialization-encrypted-response-terminal-failure-expiry-v2",
             "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2",
         ] {
             assert!(
@@ -4735,7 +4735,7 @@ mod tests {
             evaluation_id: "adapter-evaluation".to_string(),
             evaluation_client_id: "hmac-sha256:adapter-client".to_string(),
             credential_configuration_id: "adapter-config".to_string(),
-            commitment: "c".repeat(64),
+            commitment: format!("sha256:{}", "c".repeat(64)),
         };
         preauthorization_state
             .reserve_issuance_transaction(transaction_id, transaction.clone(), expires_at)
@@ -4752,7 +4752,7 @@ mod tests {
             !preauthorization_state
                 .bind_transaction_nonce(
                     transaction_id,
-                    &"d".repeat(64),
+                    &format!("sha256:{}", "d".repeat(64)),
                     "adapter-token-nonce".to_string(),
                 )
                 .await?,
@@ -4991,7 +4991,8 @@ mod tests {
                      record_aead_nonce, record_ciphertext, state, created_at, updated_at,
                      expires_at)
                  SELECT decode(repeat(marker, 32), 'hex'), decode(repeat('b2', 32), 'hex'),
-                        'retention', repeat('c', 64), decode(repeat('b3', 12), 'hex'),
+                        'retention', 'sha256:' || repeat('c', 64),
+                        decode(repeat('b3', 12), 'hex'),
                         decode(repeat('b4', 17), 'hex'), 'ready',
                         clock_timestamp() - interval '2 seconds', clock_timestamp(),
                         clock_timestamp() + lifetime

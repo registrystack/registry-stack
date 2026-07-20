@@ -777,7 +777,7 @@ mod tests {
             evaluation_id: "evaluation-1".to_string(),
             evaluation_client_id: "client-1".to_string(),
             credential_configuration_id: "person_is_alive_sd_jwt".to_string(),
-            commitment: "a".repeat(64),
+            commitment: format!("sha256:{}", "a".repeat(64)),
         }
     }
 
