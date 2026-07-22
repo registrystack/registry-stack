@@ -5,7 +5,10 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+      day: wednesday
+      time: "04:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 1
     groups:
       cargo-minor-patch:
         update-types:
@@ -17,7 +20,10 @@ updates:
     directory: "/docs/site"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+      day: wednesday
+      time: "05:30"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 1
     groups:
       npm-minor-patch:
         update-types:
@@ -30,7 +36,10 @@ updates:
     directory: "/release/conformance/openid"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+      day: wednesday
+      time: "08:30"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 1
     groups:
       conformance-python:
         patterns:
@@ -41,6 +50,10 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+      day: wednesday
+      time: "07:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 1
     groups:
       actions:
         patterns:
@@ -56,7 +69,10 @@ updates:
       - "/products/notary"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+      day: wednesday
+      time: "10:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 1
     groups:
       docker-images:
         patterns:
@@ -68,7 +84,10 @@ updates:
     directory: "/release/conformance/openid"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+      day: wednesday
+      time: "11:30"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 1
     groups:
       docker-compose-images:
         patterns:

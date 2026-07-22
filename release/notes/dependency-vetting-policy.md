@@ -98,3 +98,19 @@ Before a 1.0 or stable release, maintainers should review:
 - the Crosswalk pin rationale in `external/README.md`;
 - release workflow pins for Syft, Grype, cosign, checkout, upload/download
   actions, and the Rust builder image.
+
+## Automated Update Window
+
+Routine Dependabot updates are staggered on Wednesday between 04:00 and 11:30
+UTC, with at most one open version-update pull request per ecosystem. This
+keeps the dependency-update tool active without starting every update workflow
+at once.
+
+During an active release window, maintainers may cancel routine update runs
+that compete with the release. Routine pull requests may be closed when they
+are superseded or deliberately deferred. Reopen or recreate a deferred pull
+request if it is later accepted; Dependabot may propose newer versions on later
+runs. Do not pause security alerts, nightly security checks, CodeQL, secret
+scanning, or OpenSSF Scorecard. Automated security-update pull requests are a
+separate repository setting; when disabled, maintainers still triage visible
+alerts through the normal security workflow.
