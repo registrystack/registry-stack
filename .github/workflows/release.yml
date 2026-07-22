@@ -104,6 +104,35 @@ jobs:
             echo "manifest=${manifest}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Refuse an existing GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.release.outputs.tag }}"
+          response="$(mktemp)"
+          if gh api --include --silent \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+              >"${response}" 2>&1; then
+            lookup_rc=0
+          else
+            lookup_rc=$?
+          fi
+          status="$(awk '/^HTTP\// { code=$2 } END { print code }' "${response}")"
+          case "${status}" in
+            200)
+              echo "Release ${tag} already exists; published artifacts are immutable. Fix forward with a new patch release." >&2
+              exit 1
+              ;;
+            404)
+              ;;
+            *)
+              echo "Could not verify that release ${tag} is absent (HTTP ${status:-unknown}, gh exit ${lookup_rc})." >&2
+              exit 1
+              ;;
+          esac
+
       - name: Set up evidence checker runtime
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
@@ -672,7 +701,7 @@ jobs:
           done
           echo "Signed ${#files[@]} release artifacts with keyless cosign (.sig + .pem)."
 
-      - name: Create or update release
+      - name: Create immutable release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -685,15 +714,32 @@ jobs:
             echo "No release assets found" >&2
             exit 1
           fi
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            gh release upload "${tag}" "${assets[@]}" --clobber
+          response="$(mktemp)"
+          if gh api --include --silent \
+              "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+              >"${response}" 2>&1; then
+            lookup_rc=0
           else
-            gh release create "${tag}" \
-              --title "RegistryStack ${tag}" \
-              --notes-file "${notes}" \
-              --prerelease \
-              "${assets[@]}"
+            lookup_rc=$?
           fi
+          status="$(awk '/^HTTP\// { code=$2 } END { print code }' "${response}")"
+          case "${status}" in
+            200)
+              echo "Release ${tag} already exists; published artifacts are immutable. Fix forward with a new patch release." >&2
+              exit 1
+              ;;
+            404)
+              ;;
+            *)
+              echo "Could not verify that release ${tag} is absent (HTTP ${status:-unknown}, gh exit ${lookup_rc})." >&2
+              exit 1
+              ;;
+          esac
+          gh release create "${tag}" \
+            --title "RegistryStack ${tag}" \
+            --notes-file "${notes}" \
+            --prerelease \
+            "${assets[@]}"
 
       - name: Reconcile release assets
         env:

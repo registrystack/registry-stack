@@ -468,6 +468,37 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertIn(asset, workflow)
             self.assertIn(f"registry-stack-registryctl-{asset}", workflow)
 
+    def test_release_workflow_never_replaces_published_assets(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        verify = workflow[
+            workflow.index("  verify:\n") : workflow.index("\n  binaries:")
+        ]
+        step = workflow[
+            workflow.index("      - name: Create immutable release") :
+            workflow.index("      - name: Reconcile release assets")
+        ]
+
+        self.assertIn("Refuse an existing GitHub Release", verify)
+        self.assertIn("published artifacts are immutable", verify)
+        self.assertIn("published artifacts are immutable", step)
+        self.assertEqual(2, workflow.count("gh api --include --silent"))
+        self.assertEqual(2, workflow.count('404)'))
+        self.assertEqual(2, workflow.count("Could not verify that release"))
+        self.assertNotIn("gh release upload", step)
+        self.assertNotIn("--clobber", step)
+        self.assertLess(
+            workflow.index("Refuse an existing GitHub Release"),
+            workflow.index("\n  binaries:"),
+        )
+        self.assertLess(
+            workflow.index("Refuse an existing GitHub Release"),
+            workflow.index("\n  images:"),
+        )
+        self.assertLess(
+            step.index("gh api --include --silent"),
+            step.index('gh release create "${tag}"'),
+        )
+
     def test_release_workflow_publishes_digest_bound_release_file_sboms(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         backfill = (ROOT / ".github/workflows/release-capsule-backfill.yml").read_text(

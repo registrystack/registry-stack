@@ -253,6 +253,11 @@ certificate identity, the release capsule's workflow URL, and the SLSA
 provenance source before accepting the asset. The release workflow only uploads
 SLSA provenance when the run is associated with `refs/tags/${tag}`.
 
+The workflow never replaces assets on an existing GitHub Release. If a tag run
+has already created the Release, fix forward with a new version instead of
+rerunning it with `--clobber`. This keeps published payloads, signatures, and
+SLSA provenance immutable as one set.
+
 For `v0.9.0` and later, the `github-release` job signs binaries, the registryctl
 image lock, checksums, release file SBOMs, image-input binary SBOMs, image
 evidence files, image SBOMs, Grype reports, and release capsules before upload.
