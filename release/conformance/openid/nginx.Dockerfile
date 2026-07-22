@@ -1,4 +1,4 @@
-FROM nginx:1.27.3@sha256:bc2f6a7c8ddbccf55bdb19659ce3b0a92ca6559e86d42677a5a02ef6bda2fcef
+FROM nginx:1.31.3@sha256:5a88c9c45479443d7be2eadc894b4ed0a9801bae03d97a5760ae13b5c2005942
 
 RUN openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
         -keyout /etc/ssl/private/nginx-selfsigned.key \
