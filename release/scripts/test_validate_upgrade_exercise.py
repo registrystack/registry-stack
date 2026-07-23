@@ -7,6 +7,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -151,11 +152,32 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
 
     def test_candidate_uses_historical_schema_not_ambient_checkout(self) -> None:
         record = self.candidate()
+        notary_schema = self.module.CONFIG_SCHEMAS["registry-notary"]
+        historical_schema = b'{"historical_target_schema": true}\n'
+        record["config_schemas"]["registry-notary"]["sha256"] = (
+            self.module.sha256_bytes(historical_schema)
+        )
         ambient = "sha256:" + hashlib.sha256(
-            (ROOT / self.module.CONFIG_SCHEMAS["registry-notary"]).read_bytes()
+            (ROOT / notary_schema).read_bytes()
         ).hexdigest()
         self.assertNotEqual(ambient, record["config_schemas"]["registry-notary"]["sha256"])
-        self.module.validate_record(record, allow_template=False)
+        read_git_bytes = self.module.git_bytes
+
+        def historical_git_bytes(root: Path, commit: str, path: Path) -> bytes:
+            if commit == TARGET_COMMIT and path == notary_schema:
+                return historical_schema
+            return read_git_bytes(root, commit, path)
+
+        with mock.patch.object(
+            self.module, "git_bytes", side_effect=historical_git_bytes
+        ) as git_bytes:
+            self.module.validate_config_schemas(
+                record["config_schemas"],
+                template=False,
+                root=ROOT,
+                target_commit=TARGET_COMMIT,
+            )
+        git_bytes.assert_any_call(ROOT, TARGET_COMMIT, notary_schema)
 
     def test_manifest_hash_ref_and_artifact_set_drift_are_rejected(self) -> None:
         record = self.candidate()
