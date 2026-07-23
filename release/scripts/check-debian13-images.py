@@ -141,7 +141,7 @@ def require(
 
 def require_unique_active_line(
     text: str,
-    line: str,
+    allowed_lines: tuple[str, ...],
     active_pattern: re.Pattern[str],
     relative: Path,
     detail: str,
@@ -152,10 +152,10 @@ def require_unique_active_line(
         for candidate in text.splitlines()
         if active_pattern.match(candidate)
     ]
-    if active_lines != [line]:
+    if len(active_lines) != 1 or active_lines[0] not in allowed_lines:
         failures.append(
             f"{relative}: missing {detail}: expected exactly one active "
-            f"line {line!r}; found {active_lines!r}"
+            f"line from {allowed_lines!r}; found {active_lines!r}"
         )
 
 
@@ -322,7 +322,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
     tutorial_check = texts[Path("docs/site/scripts/check-registryctl-tutorials.sh")]
     require_unique_active_line(
         workflow,
-        f"  RELEASE_BUILDER_IMAGE: {RUST_BUILDER}",
+        (f"  RELEASE_BUILDER_IMAGE: {RUST_BUILDER}",),
         RELEASE_BUILDER_KEY_RE,
         Path(".github/workflows/release.yml"),
         "pinned Debian 13 release builder",
@@ -330,7 +330,10 @@ def check_repository(root: Path = ROOT) -> list[str]:
     )
     require_unique_active_line(
         binary_recipe,
-        f'default_builder_image="{RUST_BUILDER}"',
+        tuple(
+            f'{prefix}default_builder_image="{RUST_BUILDER}"'
+            for prefix in ("", "readonly ", "export ")
+        ),
         DEFAULT_BUILDER_ASSIGNMENT_RE,
         Path("release/scripts/build-release-binaries.sh"),
         "pinned Debian 13 release recipe builder",
@@ -345,7 +348,10 @@ def check_repository(root: Path = ROOT) -> list[str]:
     )
     require_unique_active_line(
         tutorial_check,
-        f'BUILDER_IMAGE="{RUST_BUILDER}"',
+        tuple(
+            f'{prefix}BUILDER_IMAGE="{RUST_BUILDER}"'
+            for prefix in ("", "readonly ", "export ")
+        ),
         TUTORIAL_BUILDER_ASSIGNMENT_RE,
         Path("docs/site/scripts/check-registryctl-tutorials.sh"),
         "pinned Debian 13 registryctl tutorial builder",
@@ -357,7 +363,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
     ]
     require_unique_active_line(
         live_journey,
-        f"    {RUST_BUILDER} \\",
+        (f"    {RUST_BUILDER} \\",),
         LIVE_JOURNEY_BUILDER_RE,
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
         "pinned Debian 13 live-journey builder",
@@ -372,7 +378,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
     else:
         require_unique_active_line(
             tutorial_cache,
-            TUTORIAL_CACHE_KEY,
+            (TUTORIAL_CACHE_KEY,),
             CACHE_KEY_RE,
             Path(".github/workflows/ci.yml"),
             "registryctl tutorial builder cache key",

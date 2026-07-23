@@ -234,6 +234,60 @@ class Debian13ImageCheckTest(unittest.TestCase):
             "missing pinned Debian 13 live-journey builder",
         )
 
+    def test_shell_builder_contracts_allow_only_one_canonical_assignment(
+        self,
+    ) -> None:
+        pin = self.module.RUST_BUILDER
+        cases = (
+            (
+                RELEASE_BINARY_RECIPE,
+                f'default_builder_image="{pin}"',
+                "default_builder_image",
+                "missing pinned Debian 13 release recipe builder",
+            ),
+            (
+                TUTORIAL_CHECK,
+                f'BUILDER_IMAGE="{pin}"',
+                "BUILDER_IMAGE",
+                "missing pinned Debian 13 registryctl tutorial builder",
+            ),
+        )
+        for relative, exact, variable, failure in cases:
+            for prefix in ("readonly ", "export "):
+                with self.subTest(
+                    relative=relative,
+                    prefix=prefix,
+                    valid=True,
+                ):
+                    root = self.fixture()
+                    target = root / relative
+                    text = target.read_text(encoding="utf-8")
+                    target.write_text(
+                        text.replace(exact, prefix + exact, 1),
+                        encoding="utf-8",
+                    )
+                    self.assertEqual([], self.module.check_repository(root))
+
+            invalid_replacements = (
+                f"readonly {exact}\nexport {exact}",
+                f'readonly {variable}="rust:1.95-trixie"',
+                f'export {variable}="rust:1.95-trixie"',
+            )
+            for replacement in invalid_replacements:
+                with self.subTest(
+                    relative=relative,
+                    replacement=replacement,
+                    valid=False,
+                ):
+                    root = self.fixture()
+                    target = root / relative
+                    text = target.read_text(encoding="utf-8")
+                    target.write_text(
+                        text.replace(exact, replacement, 1),
+                        encoding="utf-8",
+                    )
+                    self.assert_has_failure(root, failure)
+
     def test_every_dockerfile_base_requires_an_immutable_digest(self) -> None:
         for relative in self.module.DOCKERFILES:
             with self.subTest(relative=relative):
