@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -281,7 +282,9 @@ class Debian13ImageCheckTest(unittest.TestCase):
             script.write_text(
                 "#!/usr/bin/env bash\n"
                 'cd "$PWD" && docker run --rm debian true\n'
-                "echo ok; podman run --rm node:22 true\n",
+                "echo ok; podman run --rm node:22 true\n"
+                "echo ok & docker run --rm python:3.12 true\n"
+                "echo ok |& podman run --rm rust:1.95-trixie true\n",
                 encoding="utf-8",
             )
 
@@ -303,6 +306,8 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 ),
                 failures,
             )
+            self.assertTrue(any("build-example.sh:4" in item for item in failures))
+            self.assertTrue(any("build-example.sh:5" in item for item in failures))
 
     def test_shell_control_prefixes_find_image_references(self) -> None:
         cases = {
@@ -338,6 +343,9 @@ class Debian13ImageCheckTest(unittest.TestCase):
             "docker run --rm rust:1.95-trixie true": ["rust:1.95-trixie"],
             "sudo --preserve-env=CI time -p "
             "podman run --rm debian true": ["debian"],
+            "sudo -A docker run --rm debian true": ["debian"],
+            "sudo -i podman run --rm node:22 true": ["node:22"],
+            "sudo -P docker run --rm python:3.12 true": ["python:3.12"],
         }
 
         for command, expected in cases.items():
@@ -346,6 +354,41 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     expected,
                     self.module.command_image_references_in_command(command),
                 )
+
+    def test_shell_launchers_are_unwrapped_with_a_depth_bound(self) -> None:
+        cases = {
+            'sh -c "docker run --rm debian true"': ["debian"],
+            'sudo -A bash -lc "podman run --rm node:22 true"': ["node:22"],
+            "env -S 'bash -c \"docker run --rm python:3.12 true\"'": [
+                "python:3.12"
+            ],
+            "env --split-string='sh -c \"podman run --rm rust:1.95-trixie\"'": [
+                "rust:1.95-trixie"
+            ],
+            "env -Ssh -c 'docker run --rm debian true'": ["debian"],
+        }
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(
+                    expected,
+                    self.module.command_image_references_in_command(command),
+                )
+
+        nested = "docker run --rm debian true"
+        for _ in range(self.module.MAX_SHELL_RECURSION_DEPTH + 1):
+            nested = f"sh -c {self.module.shlex.quote(nested)}"
+        with self.assertRaisesRegex(
+            self.module.ImageSurfaceError,
+            "shell command nesting exceeds",
+        ):
+            self.module.command_image_references_in_command(nested)
+        with self.assertRaisesRegex(
+            self.module.ImageSurfaceError,
+            "shell command exceeds",
+        ):
+            self.module.command_image_references_in_command(
+                "x" * (self.module.MAX_SHELL_COMMAND_CHARS + 1)
+            )
 
     def test_shell_parser_rejects_invalid_control_and_wrapper_prefixes(self) -> None:
         commands = (
@@ -384,109 +427,158 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     self.module.command_image_references_in_command(command),
                 )
 
-    def test_yaml_executable_command_forms_find_image_references(self) -> None:
+    def test_yaml_supported_executable_contexts_find_image_references(self) -> None:
         cases = {
-            "inline scalar": (
-                "run: sudo -E docker run --rm debian true\n",
-                [(1, "debian")],
+            "workflow literal": (
+                Path(".github/workflows/example.yml"),
+                "jobs:\n"
+                "  test:\n"
+                "    steps:\n"
+                "      - run: |\n"
+                "          command -- docker run --rm python:3.12 true\n",
+                [(5, "python:3.12")],
             ),
-            "quoted scalar": (
-                'script: "env -i podman run --rm node:22 true"\n',
-                [(1, "node:22")],
+            "workflow folded reports scalar start": (
+                Path(".github/workflows/example.yml"),
+                "jobs:\n"
+                "  test:\n"
+                "    steps:\n"
+                "      - run: >\n"
+                "          sudo -E docker run --rm\n"
+                "          rust:1.95-trixie true\n",
+                [(4, "rust:1.95-trixie")],
             ),
-            "literal scalar": (
-                "run: |\n"
-                "  command -- docker run --rm python:3.12 true\n",
-                [(2, "python:3.12")],
-            ),
-            "folded scalar": (
-                "script: >\n"
-                "  sudo -E docker run --rm\n"
-                "  rust:1.95-trixie true\n",
-                [(2, "rust:1.95-trixie")],
-            ),
-            "flow script list": (
-                "script: [\"docker run --rm debian true\", "
-                "\"env -i podman run --rm node:22 true\"]\n",
-                [(1, "debian"), (1, "node:22")],
-            ),
-            "flow command argv": (
-                "command: [command, --, docker, run, --rm, python:3.12]\n",
-                [(1, "python:3.12")],
-            ),
-            "multiline flow script list": (
-                "script: [\n"
-                "  \"sudo -E docker run --rm debian true\",\n"
-                "  \"podman run --rm node:22 true\"\n"
-                "]\n",
-                [(2, "debian"), (3, "node:22")],
-            ),
-            "block script list": (
-                "script:\n"
-                "  # CI commands\n"
-                "  - docker run --rm debian true\n"
-                "  - env -i podman run --rm node:22 true\n",
+            "compose argv": (
+                Path("compose.yaml"),
+                "services:\n"
+                "  helper:\n"
+                "    image: debian\n"
+                "    command: [sh, -c, \"podman run --rm node:22 true\"]\n",
                 [(3, "debian"), (4, "node:22")],
             ),
-            "block command argv": (
-                "command:\n"
-                "  - command\n"
-                "  - --\n"
-                "  - docker\n"
-                "  - run\n"
-                "  - --rm\n"
-                "  - python:3.12\n",
-                [(2, "python:3.12")],
+            "Kubernetes command and args": (
+                Path("pod.yaml"),
+                "apiVersion: v1\n"
+                "kind: Pod\n"
+                "spec:\n"
+                "  containers:\n"
+                "    - name: helper\n"
+                "      image: debian\n"
+                "      command: [sh, -c]\n"
+                "      args: [\"docker run --rm python:3.12 true\"]\n",
+                [(6, "debian"), (7, "python:3.12")],
             ),
-            "shell image assignment": (
-                "run: |\n"
-                "  BUILDER_IMAGE=debian\n",
-                [(2, "debian")],
+            "image variable": (
+                Path("images.yaml"),
+                "BUILDER_IMAGE: debian\n",
+                [(1, "debian")],
             ),
         }
 
-        for name, (text, expected) in cases.items():
+        for name, (relative, text, expected) in cases.items():
             with self.subTest(name=name):
                 self.assertEqual(
                     expected,
-                    self.module.image_references(Path("example.yaml"), text),
+                    self.module.image_references(relative, text),
                 )
 
-    def test_yaml_descriptive_scalars_and_lists_are_not_executable(self) -> None:
+    def test_yaml_domain_data_is_not_executable(self) -> None:
         text = (
-            "\"description\": |\n"
-            "  docker run --rm debian true\n"
-            "  run: podman run --rm node:22 true\n"
-            "  image: debian\n"
-            "  uses: docker://python:3.12\n"
-            "notes: >\n"
-            "  command -- docker run --rm python:3.12 true\n"
-            "examples:\n"
-            "  - |\n"
-            "    script: docker run --rm rust:1.95-trixie true\n"
-            "summary: [\"docker run --rm debian true\"]\n"
-            "script:\n"
-            "  file: adapter.rhai\n"
+            "experiment:\n"
+            "  run: docker run --rm debian true\n"
+            "capability:\n"
+            "  script: docker run --rm node:22 true\n"
+            "metadata:\n"
+            "  command: [docker, run, --rm, python:3.12]\n"
         )
 
+        self.assertEqual([], self.module.image_references(Path("data.yaml"), text))
+
+    def test_yaml_all_documents_are_scanned(self) -> None:
+        text = (
+            "experiment:\n"
+            "  run: docker run --rm debian true\n"
+            "---\n"
+            "services:\n"
+            "  helper:\n"
+            "    image: node:22\n"
+            "---\n"
+            "jobs:\n"
+            "  test:\n"
+            "    steps:\n"
+            "      - run: docker run --rm python:3.12 true\n"
+        )
         self.assertEqual(
-            [],
+            [(6, "node:22"), (11, "python:3.12")],
             self.module.image_references(Path("example.yaml"), text),
         )
 
-    def test_yaml_block_scalar_scope_ends_at_parent_indent(self) -> None:
-        text = (
-            "steps:\n"
-            "  - description: |\n"
-            "      docker run --rm debian true\n"
-            "    run: docker run --rm node:22 true\n"
-            "  - run: docker run --rm python:3.12 true\n"
-        )
+    def test_malformed_yaml_fails_the_repository_check(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            manifest = root / "products/example/broken.yaml"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text("jobs:\n  broken: [\n", encoding="utf-8")
 
-        self.assertEqual(
-            [(4, "node:22"), (5, "python:3.12")],
-            self.module.command_image_references(Path("example.yaml"), text),
-        )
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "products/example/broken.yaml: image scan failed: invalid YAML"
+                    in failure
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_yaml_parser_recursion_and_depth_fail_explicitly(self) -> None:
+        self.module.compose_yaml_documents.cache_clear()
+        with mock.patch.object(
+            self.module.yaml,
+            "compose_all",
+            side_effect=RecursionError,
+        ):
+            with self.assertRaisesRegex(
+                self.module.ImageSurfaceError,
+                "YAML parser recursion limit exceeded",
+            ):
+                self.module.image_references(Path("recursive.yaml"), "jobs: {}\n")
+
+        deep = "".join(
+            f"{'  ' * depth}level_{depth}:\n" for depth in range(6)
+        ) + "            value: true\n"
+        with mock.patch.object(self.module, "MAX_YAML_DEPTH", 3):
+            with self.assertRaisesRegex(
+                self.module.ImageSurfaceError,
+                "YAML nesting exceeds",
+            ):
+                self.module.image_references(Path("deep.yaml"), deep)
+        with mock.patch.object(self.module, "MAX_YAML_DOCUMENTS", 2):
+            with self.assertRaisesRegex(
+                self.module.ImageSurfaceError,
+                "YAML input exceeds 2 documents",
+            ):
+                self.module.image_references(
+                    Path("documents.yaml"),
+                    "---\n---\n---\n",
+                )
+
+    def test_missing_pyyaml_fails_with_dependency_name(self) -> None:
+        self.module.compose_yaml_documents.cache_clear()
+        with (
+            mock.patch.object(self.module, "yaml", None),
+            mock.patch.object(
+                self.module,
+                "YAML_IMPORT_ERROR",
+                ImportError("No module named yaml"),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                self.module.ImageSurfaceError,
+                "PyYAML is required",
+            ):
+                self.module.image_references(Path("missing.yaml"), "jobs: {}\n")
 
     def test_discovered_script_rejects_untagged_debian_image(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -539,15 +631,19 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 failures,
             )
 
-    def test_discovered_yaml_rejects_list_item_image_key(self) -> None:
+    def test_discovered_kubernetes_yaml_rejects_container_image(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.copy_required_surfaces(root)
-            compose = root / "products/example/compose.yaml"
-            compose.parent.mkdir(parents=True, exist_ok=True)
-            compose.write_text(
-                "containers:\n"
-                "  - image: debian\n",
+            manifest = root / "products/example/pod.yaml"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(
+                "apiVersion: v1\n"
+                "kind: Pod\n"
+                "spec:\n"
+                "  containers:\n"
+                "    - name: helper\n"
+                "      image: debian\n",
                 encoding="utf-8",
             )
 
@@ -555,7 +651,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
 
             self.assertTrue(
                 any(
-                    "products/example/compose.yaml:2" in failure
+                    "products/example/pod.yaml:6" in failure
                     and failure.endswith(": debian")
                     for failure in failures
                 ),

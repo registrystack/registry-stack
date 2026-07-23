@@ -10,8 +10,15 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-import yaml
-from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
+try:
+    import yaml
+    from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
+except ImportError as error:
+    yaml = None
+    MappingNode = Node = ScalarNode = SequenceNode = None
+    YAML_IMPORT_ERROR = error
+else:
+    YAML_IMPORT_ERROR = None
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -167,7 +174,7 @@ CONTAINER_BOOLEAN_OPTIONS = {
     "-q",
     "-t",
 }
-SHELL_COMMAND_SEPARATORS = {";", "&&", "||", "|"}
+SHELL_COMMAND_SEPARATORS = {";", "&&", "||", "&", "|", "|&"}
 SHELL_COMMAND_CONTROL_PREFIXES = {
     "do",
     "elif",
@@ -178,22 +185,37 @@ SHELL_COMMAND_CONTROL_PREFIXES = {
     "while",
 }
 SHELL_OPEN_GROUP_PREFIXES = {"(", "{"}
-# Only these YAML values are command surfaces. Other scalars may contain
-# shell-looking documentation or data and must not be interpreted as executable.
-YAML_EXECUTABLE_KEYS = {"command", "run", "script"}
+SUPPORTED_SHELL_COMMANDS = {"bash", "dash", "ksh", "sh", "zsh"}
+SHELL_COMMAND_SHORT_OPTIONS = set("abcefhklmnptuvxBCEHP")
+MAX_SHELL_COMMAND_CHARS = 65_536
+MAX_SHELL_COMMAND_TOKENS = 2_048
+MAX_SHELL_RECURSION_DEPTH = 4
+MAX_YAML_TEXT_CHARS = 2_000_000
+MAX_YAML_DOCUMENTS = 128
+MAX_YAML_NODES = 100_000
+MAX_YAML_DEPTH = 64
+KUBERNETES_CONTAINER_COLLECTIONS = {
+    "containers", "ephemeralContainers", "initContainers"
+}
 COMMAND_BOOLEAN_OPTIONS = {"-p"}
 ENV_BOOLEAN_OPTIONS = {"--debug", "--ignore-environment", "-i", "-v"}
-ENV_VALUE_OPTIONS = {"--chdir", "--split-string", "--unset", "-C", "-S", "-u"}
+ENV_VALUE_OPTIONS = {"--chdir", "--unset", "-C", "-u"}
 SUDO_BOOLEAN_OPTIONS = {
+    "--askpass",
     "--background",
+    "--login",
     "--non-interactive",
     "--preserve-env",
+    "--preserve-groups",
     "--set-home",
     "--stdin",
+    "-A",
     "-E",
     "-H",
+    "-P",
     "-S",
     "-b",
+    "-i",
     "-k",
     "-n",
 }
@@ -222,6 +244,10 @@ SUDO_VALUE_OPTIONS = {
 MARKDOWN_SHELL_FENCE_LANGS = {"bash", "console", "sh", "shell", "terminal", "zsh"}
 MARKDOWN_YAML_FENCE_LANGS = {"yaml", "yml"}
 MARKDOWN_DOCKERFILE_FENCE_LANGS = {"dockerfile"}
+
+
+class ImageSurfaceError(RuntimeError):
+    """A maintained image surface could not be scanned conclusively."""
 
 
 def is_excluded(relative: Path) -> bool:
@@ -415,20 +441,45 @@ def skip_explicit_options(
     groupable_short_options: set[str],
     attached_value_options: set[str],
     optional_value_options: set[str] | None = None,
-) -> int | None:
+    split_string_options: set[str] | None = None,
+) -> tuple[int | None, str | None]:
     optional_value_options = optional_value_options or set()
+    split_string_options = split_string_options or set()
     while index < len(tokens):
         candidate = tokens[index]
         if candidate == "--":
-            return index + 1
+            return index + 1, None
         if not candidate.startswith("-") or candidate == "-":
-            return index
+            return index, None
+        split_option = candidate.split("=", 1)[0]
+        attached_split = (
+            "-S"
+            if "-S" in split_string_options
+            and candidate.startswith("-S")
+            and candidate != "-S"
+            else None
+        )
+        if split_option in split_string_options or attached_split is not None:
+            if "=" in candidate:
+                payload = candidate.split("=", 1)[1]
+                suffix = tokens[index + 1 :]
+            elif candidate in split_string_options:
+                if index + 1 >= len(tokens):
+                    return None, None
+                payload = tokens[index + 1]
+                suffix = tokens[index + 2 :]
+            else:
+                payload = candidate[len(attached_split) :]
+                suffix = tokens[index + 1 :]
+            return None, (
+                payload if not suffix else f"{payload} {shlex.join(suffix)}"
+            )
         if candidate in boolean_options:
             index += 1
             continue
         if candidate in value_options:
             if index + 1 >= len(tokens):
-                return None
+                return None, None
             index += 2
             continue
         if candidate.startswith("--") and "=" in candidate:
@@ -436,7 +487,7 @@ def skip_explicit_options(
             if option in value_options | optional_value_options:
                 index += 1
                 continue
-            return None
+            return None, None
         if any(
             candidate.startswith(option) and len(candidate) > len(option)
             for option in attached_value_options
@@ -448,8 +499,8 @@ def skip_explicit_options(
         ):
             index += 1
             continue
-        return None
-    return index
+        return None, None
+    return index, None
 
 
 def skip_time_prefix(tokens: list[str], index: int) -> int:
@@ -461,7 +512,7 @@ def skip_time_prefix(tokens: list[str], index: int) -> int:
     return index
 
 
-def simple_command_index(tokens: list[str]) -> int | None:
+def simple_command(tokens: list[str]) -> tuple[int | None, str | None]:
     """Locate a container CLI only through the supported shell prefix grammar."""
 
     index = 0
@@ -494,7 +545,7 @@ def simple_command_index(tokens: list[str]) -> int | None:
         while index < len(tokens) and SHELL_ASSIGNMENT_RE.fullmatch(tokens[index]):
             index += 1
         if index >= len(tokens):
-            return None
+            return None, None
 
         wrapper = tokens[index]
         if wrapper == "time" and not seen_time:
@@ -502,7 +553,7 @@ def simple_command_index(tokens: list[str]) -> int | None:
             index = skip_time_prefix(tokens, index)
             continue
         if wrapper == "command":
-            index = skip_explicit_options(
+            index, _ = skip_explicit_options(
                 tokens,
                 index + 1,
                 boolean_options=COMMAND_BOOLEAN_OPTIONS,
@@ -511,21 +562,24 @@ def simple_command_index(tokens: list[str]) -> int | None:
                 attached_value_options=set(),
             )
         elif wrapper == "env":
-            index = skip_explicit_options(
+            index, payload = skip_explicit_options(
                 tokens,
                 index + 1,
                 boolean_options=ENV_BOOLEAN_OPTIONS,
                 value_options=ENV_VALUE_OPTIONS,
                 groupable_short_options={"i", "v"},
                 attached_value_options={"-C", "-S", "-u"},
+                split_string_options={"-S", "--split-string"},
             )
+            if payload is not None:
+                return None, payload
         elif wrapper == "sudo":
-            index = skip_explicit_options(
+            index, _ = skip_explicit_options(
                 tokens,
                 index + 1,
                 boolean_options=SUDO_BOOLEAN_OPTIONS,
                 value_options=SUDO_VALUE_OPTIONS,
-                groupable_short_options={"E", "H", "S", "b", "k", "n"},
+                groupable_short_options={"A", "E", "H", "P", "S", "b", "i", "k", "n"},
                 attached_value_options={
                     "-C",
                     "-D",
@@ -541,10 +595,10 @@ def simple_command_index(tokens: list[str]) -> int | None:
                 optional_value_options={"--preserve-env"},
             )
         else:
-            return index
+            return index, None
         if index is None:
-            return None
-    return index
+            return None, None
+    return index, None
 
 
 def skip_options(
@@ -577,11 +631,12 @@ def skip_options(
     return index
 
 
-def command_segment_image_reference(tokens: list[str]) -> str | None:
-    container_index = simple_command_index(tokens)
+def container_command_image_reference(
+    tokens: list[str],
+    container_index: int,
+) -> str | None:
     if (
-        container_index is None
-        or container_index >= len(tokens)
+        container_index >= len(tokens)
         or tokens[container_index] not in {"docker", "podman"}
     ):
         return None
@@ -611,12 +666,75 @@ def command_segment_image_reference(tokens: list[str]) -> str | None:
     return None
 
 
-def command_image_references_in_command(command: str) -> list[str]:
+def shell_command_payload(tokens: list[str], command_index: int) -> str | None:
+    command = tokens[command_index].rsplit("/", 1)[-1]
+    if command not in SUPPORTED_SHELL_COMMANDS:
+        return None
+    index = command_index + 1
+    while index < len(tokens):
+        option = tokens[index]
+        if option == "-c":
+            return tokens[index + 1] if index + 1 < len(tokens) else None
+        if (
+            option.startswith("-")
+            and not option.startswith("--")
+            and len(option) > 2
+            and all(character in SHELL_COMMAND_SHORT_OPTIONS for character in option[1:])
+        ):
+            if "c" in option[1:]:
+                return tokens[index + 1] if index + 1 < len(tokens) else None
+            index += 1
+            continue
+        if (
+            len(option) == 2
+            and option.startswith("-")
+            and option[1] in SHELL_COMMAND_SHORT_OPTIONS
+        ):
+            index += 1
+            continue
+        return None
+    return None
+
+
+def command_segment_image_references(
+    tokens: list[str],
+    depth: int,
+) -> list[str]:
+    command_index, split_payload = simple_command(tokens)
+    if split_payload is not None:
+        return command_image_references_in_command(split_payload, depth=depth + 1)
+    if command_index is None or command_index >= len(tokens):
+        return []
+    reference = container_command_image_reference(tokens, command_index)
+    if reference is not None:
+        return [reference]
+    payload = shell_command_payload(tokens, command_index)
+    if payload is not None:
+        return command_image_references_in_command(payload, depth=depth + 1)
+    return []
+
+
+def command_image_references_in_command(
+    command: str,
+    *,
+    depth: int = 0,
+) -> list[str]:
+    if depth > MAX_SHELL_RECURSION_DEPTH:
+        raise ImageSurfaceError(
+            f"shell command nesting exceeds {MAX_SHELL_RECURSION_DEPTH} levels"
+        )
+    if len(command) > MAX_SHELL_COMMAND_CHARS:
+        raise ImageSurfaceError(
+            f"shell command exceeds {MAX_SHELL_COMMAND_CHARS} characters"
+        )
+    tokens = shell_tokens(command)
+    if len(tokens) > MAX_SHELL_COMMAND_TOKENS:
+        raise ImageSurfaceError(
+            f"shell command exceeds {MAX_SHELL_COMMAND_TOKENS} tokens"
+        )
     references: list[str] = []
-    for segment in shell_command_segments(shell_tokens(command)):
-        reference = command_segment_image_reference(segment)
-        if reference is not None:
-            references.append(reference)
+    for segment in shell_command_segments(tokens):
+        references.extend(command_segment_image_references(segment, depth))
     return references
 
 
@@ -675,8 +793,8 @@ def assignment_continues(relative: Path, value: str) -> bool:
 
 def image_assignment_references(relative: Path, text: str) -> list[tuple[int, str]]:
     if relative.suffix in YAML_SUFFIXES:
-        references = set(yaml_declarative_image_references(text))
-        for line_number, command in yaml_executable_commands(text):
+        references = set(yaml_declarative_image_references(relative, text))
+        for line_number, command in yaml_executable_commands(relative, text):
             matched = assignment_match(relative, command)
             if matched is None:
                 continue
@@ -717,29 +835,140 @@ def image_assignment_references(relative: Path, text: str) -> list[tuple[int, st
     return sorted(references)
 
 
-@lru_cache(maxsize=1)
-def compose_yaml(text: str) -> Node | None:
+def require_yaml() -> None:
+    if yaml is None:
+        detail = f": {YAML_IMPORT_ERROR}" if YAML_IMPORT_ERROR is not None else ""
+        raise ImageSurfaceError(
+            "PyYAML is required to scan maintained YAML image surfaces" + detail
+        )
+
+
+@lru_cache(maxsize=4)
+def compose_yaml_documents(text: str) -> tuple[Node, ...]:
+    require_yaml()
+    if len(text) > MAX_YAML_TEXT_CHARS:
+        raise ImageSurfaceError(
+            f"YAML input exceeds {MAX_YAML_TEXT_CHARS} characters"
+        )
     try:
-        return yaml.compose(text, Loader=yaml.SafeLoader)
-    except yaml.YAMLError:
-        return None
+        documents: list[Node] = []
+        document_count = 0
+        for root in yaml.compose_all(text, Loader=yaml.SafeLoader):
+            document_count += 1
+            if root is not None:
+                documents.append(root)
+            if document_count > MAX_YAML_DOCUMENTS:
+                raise ImageSurfaceError(
+                    f"YAML input exceeds {MAX_YAML_DOCUMENTS} documents"
+                )
+        return tuple(documents)
+    except RecursionError as error:
+        raise ImageSurfaceError("YAML parser recursion limit exceeded") from error
+    except yaml.YAMLError as error:
+        detail = str(error).splitlines()[0] if str(error) else type(error).__name__
+        raise ImageSurfaceError(f"invalid YAML: {detail}") from error
 
 
-def yaml_mapping_entries(root: Node) -> list[tuple[Node, Node]]:
-    entries: list[tuple[Node, Node]] = []
-    stack = [root]
-    visited: set[int] = set()
+def yaml_mapping_entries(
+    root: Node,
+) -> list[tuple[tuple[str | int, ...], Node, Node]]:
+    entries: list[tuple[tuple[str | int, ...], Node, Node]] = []
+    stack: list[tuple[Node, tuple[str | int, ...], int, tuple[int, ...]]] = [
+        (root, (), 0, ())
+    ]
+    visited_nodes = 0
     while stack:
-        node = stack.pop()
-        if id(node) in visited:
-            continue
-        visited.add(id(node))
+        node, path, depth, ancestors = stack.pop()
+        if depth > MAX_YAML_DEPTH:
+            raise ImageSurfaceError(f"YAML nesting exceeds {MAX_YAML_DEPTH} levels")
+        if id(node) in ancestors:
+            raise ImageSurfaceError("recursive YAML aliases are not supported")
+        visited_nodes += 1 + (len(node.value) if isinstance(node, MappingNode) else 0)
+        if visited_nodes > MAX_YAML_NODES:
+            raise ImageSurfaceError(f"YAML input exceeds {MAX_YAML_NODES} nodes")
+        child_ancestors = ancestors + (id(node),)
         if isinstance(node, MappingNode):
-            entries.extend(node.value)
-            stack.extend(value for _, value in node.value)
+            for key_node, value_node in reversed(node.value):
+                key = (
+                    key_node.value
+                    if isinstance(key_node, ScalarNode)
+                    and key_node.tag == "tag:yaml.org,2002:str"
+                    else "<non-string-key>"
+                )
+                child_path = path + (key,)
+                entries.append((child_path, key_node, value_node))
+                stack.append((value_node, child_path, depth + 1, child_ancestors))
         elif isinstance(node, SequenceNode):
-            stack.extend(node.value)
+            for index, value_node in reversed(list(enumerate(node.value))):
+                stack.append(
+                    (value_node, path + (index,), depth + 1, child_ancestors)
+                )
     return entries
+
+
+def yaml_document_context(relative: Path, root: Node) -> tuple[bool, bool, bool]:
+    fields = (
+        {
+            key.value: value
+            for key, value in root.value
+            if isinstance(key, ScalarNode)
+            and key.tag == "tag:yaml.org,2002:str"
+        }
+        if isinstance(root, MappingNode)
+        else {}
+    )
+    name = relative.name.casefold()
+    compose = (
+        name in {"compose.yaml", "compose.yml"}
+        or name.startswith("docker-compose")
+        or isinstance(fields.get("services"), MappingNode)
+        and not {"registry", "starter", "integrations", "entities"} & set(fields)
+    )
+    return (
+        is_workflow(relative) or isinstance(fields.get("jobs"), MappingNode),
+        compose,
+        {"apiVersion", "kind"} <= set(fields),
+    )
+
+
+def yaml_field_context(
+    path: tuple[str | int, ...],
+    context: tuple[bool, bool, bool],
+) -> str:
+    """Classify only GitHub Actions, Compose, Kubernetes, and image variables."""
+
+    workflow, compose, kubernetes = context
+    if (
+        workflow
+        and len(path) == 5
+        and path[:1] == ("jobs",)
+        and path[2] == "steps"
+        and path[4] in {"run", "uses"}
+    ):
+        return f"workflow_{path[4]}"
+    if workflow and path[:1] == ("jobs",) and (
+        len(path) == 3 and path[2] == "container"
+        or len(path) == 4 and path[2:] == ("container", "image")
+        or len(path) == 5 and path[2] == "services" and path[4] == "image"
+    ):
+        return "image"
+    if compose and len(path) == 3 and path[0] == "services":
+        return f"compose_{path[2]}"
+    if kubernetes and len(path) >= 4 and (
+        path[-3] in KUBERNETES_CONTAINER_COLLECTIONS
+        and isinstance(path[-2], int)
+        and "spec" in path[:-3]
+    ):
+        return f"kubernetes_{path[-1]}"
+    key = str(path[-1]) if path else ""
+    lowered = key.casefold().replace("-", "_")
+    return (
+        "image"
+        if key == "IMAGE"
+        or lowered.endswith("_image")
+        or key != lowered and lowered.endswith("image")
+        else ""
+    )
 
 
 def yaml_scalar_commands(
@@ -748,13 +977,14 @@ def yaml_scalar_commands(
 ) -> list[tuple[int, str]]:
     if node.tag != "tag:yaml.org,2002:str" or not node.value:
         return []
+    if node.style == ">":
+        source_line = node.start_mark.line + 1
+        return [
+            (source_line, command)
+            for _, command in logical_lines(node.value)
+        ]
     if node.style != "|":
         source_line = node.start_mark.line + 1
-        if node.style == ">":
-            for index in range(node.start_mark.line + 1, node.end_mark.line):
-                if index < len(lines) and lines[index].strip():
-                    source_line = index + 1
-                    break
         return [
             (source_line + line_number - 1, command)
             for line_number, command in logical_lines(node.value)
@@ -783,66 +1013,90 @@ def yaml_scalar_commands(
     )
 
 
-def yaml_executable_commands(text: str) -> list[tuple[int, str]]:
-    """Extract only values of YAML run, script, and command mapping keys."""
+def yaml_sequence_argv(node: Node) -> list[str] | None:
+    if not isinstance(node, SequenceNode):
+        return None
+    values = [
+        item.value
+        for item in node.value
+        if isinstance(item, ScalarNode)
+        and item.tag == "tag:yaml.org,2002:str"
+    ]
+    return values if len(values) == len(node.value) else None
 
-    root = compose_yaml(text)
-    if root is None:
-        return []
+
+@lru_cache(maxsize=4)
+def yaml_surface_values(
+    relative: Path,
+    text: str,
+) -> tuple[tuple[tuple[int, str], ...], tuple[tuple[int, str], ...]]:
+    """Return commands and image references from the finite YAML support matrix."""
+
+    roots = compose_yaml_documents(text)
     lines = text.splitlines()
     commands: list[tuple[int, str]] = []
-    for key_node, value_node in yaml_mapping_entries(root):
-        if (
-            not isinstance(key_node, ScalarNode)
-            or key_node.tag != "tag:yaml.org,2002:str"
-            or key_node.value.casefold() not in YAML_EXECUTABLE_KEYS
-        ):
-            continue
-        key = key_node.value.casefold()
-        if isinstance(value_node, ScalarNode):
-            commands.extend(yaml_scalar_commands(value_node, lines))
-        elif isinstance(value_node, SequenceNode):
-            scalar_nodes = [
-                item
-                for item in value_node.value
-                if isinstance(item, ScalarNode)
-                and item.tag == "tag:yaml.org,2002:str"
-            ]
-            if len(scalar_nodes) != len(value_node.value):
-                continue
-            # Command sequences are exec-form argv; run/script sequences are
-            # lists of shell command strings.
-            if key == "command":
-                command = shlex.join([item.value for item in scalar_nodes])
-                if command:
-                    commands.append((value_node.start_mark.line + 1, command))
-            else:
-                for item in scalar_nodes:
-                    commands.extend(yaml_scalar_commands(item, lines))
-    return commands
-
-
-def yaml_declarative_image_references(text: str) -> list[tuple[int, str]]:
-    root = compose_yaml(text)
-    if root is None:
-        return []
     references: set[tuple[int, str]] = set()
-    for key_node, value_node in yaml_mapping_entries(root):
-        if (
-            not isinstance(key_node, ScalarNode)
-            or key_node.tag != "tag:yaml.org,2002:str"
-            or not isinstance(value_node, ScalarNode)
-            or value_node.tag != "tag:yaml.org,2002:str"
-        ):
-            continue
-        key = key_node.value.casefold()
-        if key == "uses" and not value_node.value.casefold().startswith("docker://"):
-            continue
-        if key != "uses" and not is_image_assignment(key):
-            continue
-        for reference in reference_candidates(normalize_reference(value_node.value)):
-            references.add((key_node.start_mark.line + 1, reference))
-    return sorted(references)
+    for root in roots:
+        document_context = yaml_document_context(relative, root)
+        kubernetes_argv: dict[
+            tuple[str | int, ...], dict[str, tuple[int, list[str]]]
+        ] = {}
+        for path, key_node, value_node in yaml_mapping_entries(root):
+            context = yaml_field_context(path, document_context)
+            if context == "workflow_run" and isinstance(value_node, ScalarNode):
+                commands.extend(yaml_scalar_commands(value_node, lines))
+                continue
+            if context in {"compose_command", "compose_entrypoint"}:
+                if isinstance(value_node, ScalarNode):
+                    commands.extend(yaml_scalar_commands(value_node, lines))
+                else:
+                    argv = yaml_sequence_argv(value_node)
+                    if argv:
+                        commands.append((key_node.start_mark.line + 1, shlex.join(argv)))
+                continue
+            if context in {"kubernetes_command", "kubernetes_args"}:
+                argv = yaml_sequence_argv(value_node)
+                if argv is not None:
+                    kubernetes_argv.setdefault(path[:-1], {})[context] = (
+                        key_node.start_mark.line + 1,
+                        argv,
+                    )
+                continue
+            if (
+                context
+                not in {
+                    "compose_image",
+                    "image",
+                    "kubernetes_image",
+                    "workflow_uses",
+                }
+                or not isinstance(key_node, ScalarNode)
+                or not isinstance(value_node, ScalarNode)
+                or value_node.tag != "tag:yaml.org,2002:str"
+            ):
+                continue
+            value = value_node.value
+            if context == "workflow_uses" and not value.casefold().startswith("docker://"):
+                continue
+            for reference in reference_candidates(normalize_reference(value)):
+                references.add((key_node.start_mark.line + 1, reference))
+        for fields in kubernetes_argv.values():
+            command = fields.get("kubernetes_command")
+            args = fields.get("kubernetes_args", (0, []))[1]
+            if command is not None and command[1] + args:
+                commands.append((command[0], shlex.join(command[1] + args)))
+    return tuple(commands), tuple(sorted(references))
+
+
+def yaml_executable_commands(relative: Path, text: str) -> list[tuple[int, str]]:
+    return list(yaml_surface_values(relative, text)[0])
+
+
+def yaml_declarative_image_references(
+    relative: Path,
+    text: str,
+) -> list[tuple[int, str]]:
+    return list(yaml_surface_values(relative, text)[1])
 
 
 def command_image_references(relative: Path, text: str) -> list[tuple[int, str]]:
@@ -850,7 +1104,7 @@ def command_image_references(relative: Path, text: str) -> list[tuple[int, str]]
         return []
     references: set[tuple[int, str]] = set()
     commands = (
-        yaml_executable_commands(text)
+        yaml_executable_commands(relative, text)
         if relative.suffix in YAML_SUFFIXES
         else logical_lines(text)
     )
@@ -1071,7 +1325,12 @@ def check_repository(root: Path = ROOT) -> list[str]:
         if not is_image_reference_surface(relative):
             continue
         text = texts[relative]
-        for line, reference in image_references(relative, text):
+        try:
+            references = image_references(relative, text)
+        except ImageSurfaceError as error:
+            failures.append(f"{relative}: image scan failed: {error}")
+            continue
+        for line, reference in references:
             append_reference_failures(failures, relative, line, reference)
 
     for relative in PRODUCT_DOCKERFILES:
