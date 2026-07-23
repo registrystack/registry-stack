@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -97,6 +98,40 @@ SCRIPT_IMAGE_CONTEXT_RE = re.compile(
     r"|\b[A-Za-z_][A-Za-z0-9_]*(?:image|base)[A-Za-z0-9_]*\s*=",
     re.IGNORECASE,
 )
+IMAGE_ASSIGNMENT_RE = re.compile(
+    r"^\s*(?:export\s+)?"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_-]*)\s*(?:=|:)\s*"
+    r"(?P<reference>[^#\s]+)",
+)
+UNTAGGED_IMAGE_REFERENCE_RE = re.compile(
+    r"(?:[A-Za-z0-9.-]+(?::[0-9]+)?/)*[A-Za-z0-9._-]+",
+)
+DEBIAN_DEFAULT_IMAGE_NAMES = {
+    "buildpack-deps",
+    "debian",
+    "golang",
+    "node",
+    "python",
+    "rust",
+}
+CONTAINER_COMMANDS = {"create", "pull", "run"}
+CONTAINER_BOOLEAN_OPTIONS = {
+    "--detach",
+    "--init",
+    "--interactive",
+    "--privileged",
+    "--publish-all",
+    "--quiet",
+    "--read-only",
+    "--rm",
+    "--tty",
+    "-d",
+    "-i",
+    "-it",
+    "-P",
+    "-q",
+    "-t",
+}
 
 
 def is_excluded(relative: Path) -> bool:
@@ -178,6 +213,97 @@ def is_debian_derived(reference: str) -> bool:
         or re.search(r"(?:^|[-_.])debian-?1[0-9](?:$|[-_.])", lowered_tag)
         is not None
     )
+
+
+def is_untagged_debian_derived(reference: str) -> bool:
+    if UNTAGGED_IMAGE_REFERENCE_RE.fullmatch(reference) is None:
+        return False
+    image_name = reference.rsplit("/", 1)[-1].casefold()
+    return "debian" in image_name or image_name in DEBIAN_DEFAULT_IMAGE_NAMES
+
+
+def is_image_assignment(name: str) -> bool:
+    tokens = re.split(r"[_-]+", name.casefold())
+    return "image" in tokens or ("base" in tokens and len(tokens) > 1)
+
+
+def logical_lines(text: str) -> list[tuple[int, str]]:
+    lines: list[tuple[int, str]] = []
+    start = 0
+    parts: list[str] = []
+    for line_number, raw_line in enumerate(text.splitlines(), 1):
+        if not parts:
+            start = line_number
+        stripped = raw_line.rstrip()
+        continued = stripped.endswith("\\")
+        parts.append(stripped[:-1] if continued else stripped)
+        if not continued:
+            lines.append((start, " ".join(parts)))
+            parts = []
+    if parts:
+        lines.append((start, " ".join(parts)))
+    return lines
+
+
+def command_image_reference(command: str) -> str | None:
+    try:
+        tokens = shlex.split(command, comments=True, posix=True)
+    except ValueError:
+        return None
+    for container_index, token in enumerate(tokens):
+        if token not in {"docker", "podman"}:
+            continue
+        prefix = tokens[:container_index]
+        if any(
+            item not in {"-", "command", "env", "sudo"} and "=" not in item
+            for item in prefix
+        ):
+            continue
+        action_index = container_index + 1
+        if action_index >= len(tokens):
+            continue
+        action = tokens[action_index]
+        if action == "image" and action_index + 1 < len(tokens):
+            action_index += 1
+            action = tokens[action_index]
+        if action not in CONTAINER_COMMANDS:
+            continue
+        index = action_index + 1
+        while index < len(tokens):
+            candidate = tokens[index]
+            if candidate == "--":
+                index += 1
+                break
+            if not candidate.startswith("-"):
+                break
+            if "=" in candidate or candidate in CONTAINER_BOOLEAN_OPTIONS:
+                index += 1
+            else:
+                index += 2
+        if index < len(tokens):
+            return tokens[index]
+    return None
+
+
+def untagged_debian_references(
+    relative: Path,
+    text: str,
+) -> list[tuple[int, str]]:
+    references: set[tuple[int, str]] = set()
+    for line_number, line in enumerate(text.splitlines(), 1):
+        assignment = IMAGE_ASSIGNMENT_RE.match(line)
+        if assignment is None or not is_image_assignment(assignment.group("name")):
+            continue
+        reference = assignment.group("reference").strip("\"'")
+        if is_untagged_debian_derived(reference):
+            references.add((line_number, reference))
+
+    if relative.suffix in {".bash", ".sh", ".yaml", ".yml"} or not relative.suffix:
+        for line_number, command in logical_lines(text):
+            reference = command_image_reference(command)
+            if reference is not None and is_untagged_debian_derived(reference):
+                references.add((line_number, reference))
+    return sorted(references)
 
 
 def script_reference_is_consumed(
@@ -281,6 +407,11 @@ def check_repository(root: Path = ROOT) -> list[str]:
             ):
                 continue
             line = text.count("\n", 0, match.start()) + 1
+            failures.append(
+                f"{relative}:{line}: Debian-derived image reference is not pinned "
+                f"by immutable digest: {reference}"
+            )
+        for line, reference in untagged_debian_references(relative, text):
             failures.append(
                 f"{relative}:{line}: Debian-derived image reference is not pinned "
                 f"by immutable digest: {reference}"

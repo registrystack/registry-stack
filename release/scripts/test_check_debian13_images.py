@@ -105,6 +105,77 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 failures,
             )
 
+    def test_discovered_script_rejects_untagged_debian_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            script = root / "docs/site/scripts/build-example.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(
+                "#!/usr/bin/env bash\n"
+                "docker run --rm debian apt-get update\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "Debian-derived image reference is not pinned by immutable digest"
+                    in failure
+                    and "docs/site/scripts/build-example.sh:2" in failure
+                    and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_discovered_yaml_rejects_untagged_debian_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            compose = root / "products/example/compose.yaml"
+            compose.parent.mkdir(parents=True, exist_ok=True)
+            compose.write_text(
+                "services:\n"
+                "  helper:\n"
+                "    image: debian\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "Debian-derived image reference is not pinned by immutable digest"
+                    in failure
+                    and "products/example/compose.yaml:3" in failure
+                    and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_untagged_detection_ignores_comments_and_yaml_prose(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            script = root / "docs/site/scripts/explain-example.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(
+                "# docker run --rm debian apt-get update\n",
+                encoding="utf-8",
+            )
+            metadata = root / "products/example/metadata.yaml"
+            metadata.parent.mkdir(parents=True, exist_ok=True)
+            metadata.write_text(
+                'description: "docker run --rm debian is an unsafe example"\n'
+                "base: debian\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual([], self.module.check_repository(root))
+
     def test_dockerfile_internal_stage_reference_needs_no_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
