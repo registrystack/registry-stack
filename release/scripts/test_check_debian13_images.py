@@ -357,38 +357,35 @@ class Debian13ImageCheckTest(unittest.TestCase):
         cases = (
             (
                 RELEASE_BINARY_RECIPE,
-                "docker run --rm \\",
-                self.module.RELEASE_BUILDER_TAIL.splitlines()[0],
+                self.module.RELEASE_BUILDER_PREFIX,
                 self.module.RELEASE_BUILDER_CONSUMER,
                 "  ",
-                "release Docker builder command contains non-option lines",
+                "does not match the exact expected header/options/image prefix",
             ),
             (
                 TUTORIAL_CHECK,
-                "\tdocker run --rm \\",
-                self.module.TUTORIAL_BUILDER_TAIL.splitlines()[0],
+                self.module.TUTORIAL_BUILDER_PREFIX,
                 self.module.TUTORIAL_BUILDER_CONSUMER,
                 "\t\t",
-                "registryctl tutorial Docker builder command contains "
-                "non-option lines",
+                "does not match the exact expected header/options/image prefix",
             ),
             (
                 LIVE_JOURNEY,
-                "  docker run --rm \\",
-                self.module.LIVE_JOURNEY_BUILDER_TAIL.splitlines()[0],
+                self.module.LIVE_JOURNEY_BUILDER_PREFIX,
                 self.module.LIVE_JOURNEY_BUILDER,
                 "    ",
-                "live-journey Docker builder command contains non-option lines",
+                "does not match the exact expected header/options/image prefix",
             ),
         )
         for (
             relative,
-            command_start,
-            last_option,
+            expected_prefix,
             approved,
             indentation,
             failure,
         ) in cases:
+            command_start = expected_prefix[0]
+            last_option = expected_prefix[-2]
             for image in ("alpine:3.22", "debian:trixie-slim"):
                 positional = f"{indentation}{image} \\"
                 positions = (
@@ -420,6 +417,46 @@ class Debian13ImageCheckTest(unittest.TestCase):
                         self.assertIn(anchor, text)
                         target.write_text(
                             text.replace(anchor, replacement, 1),
+                            encoding="utf-8",
+                        )
+                        self.assert_has_failure(root, failure)
+
+    def test_docker_builder_prefixes_reject_images_on_option_lines(
+        self,
+    ) -> None:
+        cases = (
+            (
+                RELEASE_BINARY_RECIPE,
+                self.module.RELEASE_BUILDER_PREFIX,
+            ),
+            (
+                TUTORIAL_CHECK,
+                self.module.TUTORIAL_BUILDER_PREFIX,
+            ),
+            (
+                LIVE_JOURNEY,
+                self.module.LIVE_JOURNEY_BUILDER_PREFIX,
+            ),
+        )
+        failure = "does not match the exact expected header/options/image prefix"
+        for relative, expected_prefix in cases:
+            for image in ("alpine:3.22", "debian:trixie-slim"):
+                for position, option in (
+                    ("early", expected_prefix[1]),
+                    ("late", expected_prefix[-2]),
+                ):
+                    with self.subTest(
+                        relative=relative,
+                        image=image,
+                        position=position,
+                    ):
+                        root = self.fixture()
+                        target = root / relative
+                        text = target.read_text(encoding="utf-8")
+                        self.assertIn(option, text)
+                        mutated = option[:-1] + f"{image} \\"
+                        target.write_text(
+                            text.replace(option, mutated, 1),
                             encoding="utf-8",
                         )
                         self.assert_has_failure(root, failure)

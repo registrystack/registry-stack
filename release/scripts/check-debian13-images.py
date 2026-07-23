@@ -41,24 +41,64 @@ RELEASE_BUILDER_HANDOFF = 'release_builder_image="${default_builder_image}"'
 RELEASE_BUILDER_CONSUMER = '  "${release_builder_image}" \\'
 TUTORIAL_BUILDER_CONSUMER = '\t\t"$BUILDER_IMAGE" \\'
 LIVE_JOURNEY_BUILDER = f"    {RUST_BUILDER} \\"
+RELEASE_BUILDER_PREFIX = (
+    "docker run --rm \\",
+    "  --platform linux/amd64 \\",
+    '  --user "$(id -u):$(id -g)" \\',
+    '  --volume "${repo_root}:/workspace" \\',
+    '  --volume "${release_cargo_home}:/workspace/.cargo-home" \\',
+    '  --volume "${release_target_dir}:/workspace/target" \\',
+    "  --workdir /workspace \\",
+    "  --env CARGO_HOME=/workspace/.cargo-home \\",
+    "  --env CARGO_TARGET_DIR=/workspace/target \\",
+    "  --env CARGO_INCREMENTAL=0 \\",
+    '  --env CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}" \\',
+    "  --env HOME=/workspace \\",
+    '  --env RELEASE_TAG="${tag}" \\',
+    '  --env RELEASE_RUSTFLAGS="${release_rustflags}" \\',
+    RELEASE_BUILDER_CONSUMER,
+)
+TUTORIAL_BUILDER_PREFIX = (
+    "\tdocker run --rm \\",
+    "\t\t--platform linux/amd64 \\",
+    '\t\t--user "$(id -u):$(id -g)" \\',
+    '\t\t--volume "$REPO_ROOT:/workspace" \\',
+    "\t\t--workdir /workspace \\",
+    "\t\t--env CARGO_HOME=/workspace/target/registryctl-tutorial-cargo-home \\",
+    "\t\t--env CARGO_TARGET_DIR=/workspace/target/registryctl-tutorial-linux-amd64 \\",
+    "\t\t--env CARGO_TERM_COLOR=always \\",
+    "\t\t--env HOME=/tmp/registryctl-tutorial-home \\",
+    TUTORIAL_BUILDER_CONSUMER,
+)
+LIVE_JOURNEY_BUILDER_PREFIX = (
+    "  docker run --rm \\",
+    "    --add-host host.docker.internal:host-gateway \\",
+    '    --network "$network_name" \\',
+    "    --network-alias rhai-runner \\",
+    '    --env-file "$rhai_test_env_file" \\',
+    '    --volume "$repository_root:/workspace" \\',
+    '    --volume "$certificate_input:/live-postgres-ca:ro" \\',
+    '    --volume "$HOME/.cargo/registry:/usr/local/cargo/registry" \\',
+    '    --volume "$HOME/.cargo/git:/usr/local/cargo/git" \\',
+    "    --volume registry-relay-linux-target:/target \\",
+    "    --workdir /workspace \\",
+    LIVE_JOURNEY_BUILDER,
+)
 RELEASE_BUILDER_TAIL = "\n".join(
     (
-        '  --env RELEASE_RUSTFLAGS="${release_rustflags}" \\',
-        RELEASE_BUILDER_CONSUMER,
+        *RELEASE_BUILDER_PREFIX[-2:],
         "  bash -c 'set -euo pipefail",
     )
 )
 TUTORIAL_BUILDER_TAIL = "\n".join(
     (
-        "\t\t--env HOME=/tmp/registryctl-tutorial-home \\",
-        TUTORIAL_BUILDER_CONSUMER,
+        *TUTORIAL_BUILDER_PREFIX[-2:],
         "\t\tbash -c 'set -euo pipefail",
     )
 )
 LIVE_JOURNEY_BUILDER_TAIL = "\n".join(
     (
-        "    --workdir /workspace \\",
-        LIVE_JOURNEY_BUILDER,
+        *LIVE_JOURNEY_BUILDER_PREFIX[-2:],
         "    sh -eu -c \\",
     )
 )
@@ -226,38 +266,19 @@ def require_unique_text(
         )
 
 
-def require_option_lines_before_image(
+def require_exact_command_prefix(
     command: str,
-    approved_image: str,
+    expected_lines: tuple[str, ...],
     relative: Path,
     detail: str,
     failures: list[str],
 ) -> None:
-    lines = command.splitlines()
-    image_indexes = [
-        index for index, line in enumerate(lines) if line == approved_image
-    ]
-    if (
-        not lines
-        or lines[0].lstrip() != "docker run --rm \\"
-        or len(image_indexes) != 1
-    ):
+    actual_lines = tuple(command.splitlines()[: len(expected_lines)])
+    if actual_lines != expected_lines:
         failures.append(
-            f"{relative}: missing {detail}: expected one approved image "
-            "inside the selected docker run --rm command"
-        )
-        return
-    invalid_lines = [
-        line
-        for line in lines[1 : image_indexes[0]]
-        if line.strip()
-        and not line.lstrip().startswith("#")
-        and not line.lstrip().startswith("--")
-    ]
-    if invalid_lines:
-        failures.append(
-            f"{relative}: {detail} contains non-option lines before the "
-            f"approved image: {invalid_lines!r}"
+            f"{relative}: {detail} does not match the exact expected "
+            f"header/options/image prefix: expected {expected_lines!r}; "
+            f"found {actual_lines!r}"
         )
 
 
@@ -512,9 +533,9 @@ def check_repository(root: Path = ROOT) -> list[str]:
         "release Docker builder command tail",
         failures,
     )
-    require_option_lines_before_image(
+    require_exact_command_prefix(
         release_builder_command,
-        RELEASE_BUILDER_CONSUMER,
+        RELEASE_BUILDER_PREFIX,
         Path("release/scripts/build-release-binaries.sh"),
         "release Docker builder command",
         failures,
@@ -548,9 +569,9 @@ def check_repository(root: Path = ROOT) -> list[str]:
         "registryctl tutorial Docker builder command tail",
         failures,
     )
-    require_option_lines_before_image(
+    require_exact_command_prefix(
         tutorial_builder_command,
-        TUTORIAL_BUILDER_CONSUMER,
+        TUTORIAL_BUILDER_PREFIX,
         Path("docs/site/scripts/check-registryctl-tutorials.sh"),
         "registryctl tutorial Docker builder command",
         failures,
@@ -579,9 +600,9 @@ def check_repository(root: Path = ROOT) -> list[str]:
         "live-journey Docker builder command tail",
         failures,
     )
-    require_option_lines_before_image(
+    require_exact_command_prefix(
         live_builder_command,
-        LIVE_JOURNEY_BUILDER,
+        LIVE_JOURNEY_BUILDER_PREFIX,
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
         "live-journey Docker builder command",
         failures,
