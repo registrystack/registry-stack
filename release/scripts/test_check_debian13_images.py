@@ -320,14 +320,51 @@ class Debian13ImageCheckTest(unittest.TestCase):
             ],
             "if true; then docker run --rm debian true; fi": ["debian"],
             "while true; do podman run --rm node:22 true; done": ["node:22"],
-            "run: if docker run --rm debian true; then": ["debian"],
-            "- script: time -p podman run --rm node:22 true": ["node:22"],
         }
 
         for command, expected in cases.items():
             with self.subTest(command=command):
                 self.assertEqual(
                     expected,
+                    self.module.command_image_references_in_command(command),
+                )
+
+    def test_shell_wrapper_options_find_image_references(self) -> None:
+        cases = {
+            "sudo -E docker run --rm debian true": ["debian"],
+            "env -i podman run --rm node:22 true": ["node:22"],
+            "command -- docker run --rm python:3.12 true": ["python:3.12"],
+            "sudo -u root env -u EXAMPLE command -p "
+            "docker run --rm rust:1.95-trixie true": ["rust:1.95-trixie"],
+            "sudo --preserve-env=CI time -p "
+            "podman run --rm debian true": ["debian"],
+        }
+
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(
+                    expected,
+                    self.module.command_image_references_in_command(command),
+                )
+
+    def test_shell_parser_rejects_invalid_control_and_wrapper_prefixes(self) -> None:
+        commands = (
+            "if then docker run --rm debian true",
+            "while until docker run --rm debian true",
+            "! if docker run --rm debian true",
+            "time while docker run --rm debian true",
+            "time -- -p docker run --rm debian true",
+            "sudo if docker run --rm debian true",
+            "sudo --unknown docker run --rm debian true",
+            "sudo -v docker run --rm debian true",
+            "env --unknown docker run --rm debian true",
+            "command -v docker run --rm debian true",
+        )
+
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(
+                    [],
                     self.module.command_image_references_in_command(command),
                 )
 
@@ -346,6 +383,110 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     [],
                     self.module.command_image_references_in_command(command),
                 )
+
+    def test_yaml_executable_command_forms_find_image_references(self) -> None:
+        cases = {
+            "inline scalar": (
+                "run: sudo -E docker run --rm debian true\n",
+                [(1, "debian")],
+            ),
+            "quoted scalar": (
+                'script: "env -i podman run --rm node:22 true"\n',
+                [(1, "node:22")],
+            ),
+            "literal scalar": (
+                "run: |\n"
+                "  command -- docker run --rm python:3.12 true\n",
+                [(2, "python:3.12")],
+            ),
+            "folded scalar": (
+                "script: >\n"
+                "  sudo -E docker run --rm\n"
+                "  rust:1.95-trixie true\n",
+                [(2, "rust:1.95-trixie")],
+            ),
+            "flow script list": (
+                "script: [\"docker run --rm debian true\", "
+                "\"env -i podman run --rm node:22 true\"]\n",
+                [(1, "debian"), (1, "node:22")],
+            ),
+            "flow command argv": (
+                "command: [command, --, docker, run, --rm, python:3.12]\n",
+                [(1, "python:3.12")],
+            ),
+            "multiline flow script list": (
+                "script: [\n"
+                "  \"sudo -E docker run --rm debian true\",\n"
+                "  \"podman run --rm node:22 true\"\n"
+                "]\n",
+                [(2, "debian"), (3, "node:22")],
+            ),
+            "block script list": (
+                "script:\n"
+                "  # CI commands\n"
+                "  - docker run --rm debian true\n"
+                "  - env -i podman run --rm node:22 true\n",
+                [(3, "debian"), (4, "node:22")],
+            ),
+            "block command argv": (
+                "command:\n"
+                "  - command\n"
+                "  - --\n"
+                "  - docker\n"
+                "  - run\n"
+                "  - --rm\n"
+                "  - python:3.12\n",
+                [(2, "python:3.12")],
+            ),
+            "shell image assignment": (
+                "run: |\n"
+                "  BUILDER_IMAGE=debian\n",
+                [(2, "debian")],
+            ),
+        }
+
+        for name, (text, expected) in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(
+                    expected,
+                    self.module.image_references(Path("example.yaml"), text),
+                )
+
+    def test_yaml_descriptive_scalars_and_lists_are_not_executable(self) -> None:
+        text = (
+            "\"description\": |\n"
+            "  docker run --rm debian true\n"
+            "  run: podman run --rm node:22 true\n"
+            "  image: debian\n"
+            "  uses: docker://python:3.12\n"
+            "notes: >\n"
+            "  command -- docker run --rm python:3.12 true\n"
+            "examples:\n"
+            "  - |\n"
+            "    script: docker run --rm rust:1.95-trixie true\n"
+            "summary: [\"docker run --rm debian true\"]\n"
+            "script:\n"
+            "  file: adapter.rhai\n"
+        )
+
+        self.assertEqual(
+            [],
+            self.module.image_references(Path("example.yaml"), text),
+        )
+
+    def test_yaml_block_scalar_scope_ends_at_parent_indent(self) -> None:
+        text = (
+            "steps:\n"
+            "  - description: |\n"
+            "      docker run --rm debian true\n"
+            "    run: docker run --rm node:22 true\n"
+            "  - run: docker run --rm python:3.12 true\n"
+        )
+
+        self.assertEqual(
+            [(4, "node:22"), (5, "python:3.12")],
+            self.module.command_image_references(Path("example.yaml"), text),
+        )
 
     def test_discovered_script_rejects_untagged_debian_image(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

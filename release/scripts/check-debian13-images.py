@@ -7,7 +7,11 @@ import os
 import re
 import shlex
 import sys
+from functools import lru_cache
 from pathlib import Path
+
+import yaml
+from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -116,11 +120,8 @@ JS_TS_IMAGE_ASSIGNMENT_RE = re.compile(
 STRING_LITERAL_RE = re.compile(
     r"\"(?P<double>(?:\\.|[^\"\\])*)\"|'(?P<single>(?:\\.|[^'\\])*)'"
 )
-GITHUB_ACTIONS_DOCKER_USES_RE = re.compile(
-    r"^\s*(?:-\s*)?uses:\s*docker://(?P<reference>[^#\s]+)",
-    re.IGNORECASE,
-)
 COPY_RE = re.compile(r"^\s*COPY\b(?P<args>.*)$", re.IGNORECASE)
+SHELL_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 UNTAGGED_IMAGE_REFERENCE_RE = re.compile(
     r"(?:[A-Za-z0-9.-]+(?::[0-9]+)?/)*[A-Za-z0-9._-]+",
 )
@@ -168,9 +169,6 @@ CONTAINER_BOOLEAN_OPTIONS = {
 }
 SHELL_COMMAND_SEPARATORS = {";", "&&", "||", "|"}
 SHELL_COMMAND_CONTROL_PREFIXES = {
-    "!",
-    "(",
-    "{",
     "do",
     "elif",
     "else",
@@ -179,9 +177,48 @@ SHELL_COMMAND_CONTROL_PREFIXES = {
     "until",
     "while",
 }
-SHELL_COMMAND_WRAPPER_PREFIXES = {"command", "env", "sudo"}
-SHELL_TIME_OPTIONS = {"--", "-p"}
-YAML_COMMAND_PREFIXES = {"command:", "run:", "script:"}
+SHELL_OPEN_GROUP_PREFIXES = {"(", "{"}
+# Only these YAML values are command surfaces. Other scalars may contain
+# shell-looking documentation or data and must not be interpreted as executable.
+YAML_EXECUTABLE_KEYS = {"command", "run", "script"}
+COMMAND_BOOLEAN_OPTIONS = {"-p"}
+ENV_BOOLEAN_OPTIONS = {"--debug", "--ignore-environment", "-i", "-v"}
+ENV_VALUE_OPTIONS = {"--chdir", "--split-string", "--unset", "-C", "-S", "-u"}
+SUDO_BOOLEAN_OPTIONS = {
+    "--background",
+    "--non-interactive",
+    "--preserve-env",
+    "--set-home",
+    "--stdin",
+    "-E",
+    "-H",
+    "-S",
+    "-b",
+    "-k",
+    "-n",
+}
+SUDO_VALUE_OPTIONS = {
+    "--chdir",
+    "--chroot",
+    "--close-from",
+    "--command-timeout",
+    "--group",
+    "--host",
+    "--prompt",
+    "--role",
+    "--type",
+    "--user",
+    "-C",
+    "-D",
+    "-g",
+    "-h",
+    "-p",
+    "-r",
+    "-R",
+    "-t",
+    "-T",
+    "-u",
+}
 MARKDOWN_SHELL_FENCE_LANGS = {"bash", "console", "sh", "shell", "terminal", "zsh"}
 MARKDOWN_YAML_FENCE_LANGS = {"yaml", "yml"}
 MARKDOWN_DOCKERFILE_FENCE_LANGS = {"dockerfile"}
@@ -320,11 +357,13 @@ def is_image_assignment(name: str) -> bool:
     return lowered in {"container", "image"} or lowered.endswith("image")
 
 
-def logical_lines(text: str) -> list[tuple[int, str]]:
+def numbered_logical_lines(
+    numbered_lines: list[tuple[int, str]],
+) -> list[tuple[int, str]]:
     lines: list[tuple[int, str]] = []
     start = 0
     parts: list[str] = []
-    for line_number, raw_line in enumerate(text.splitlines(), 1):
+    for line_number, raw_line in numbered_lines:
         if not parts:
             start = line_number
         stripped = raw_line.rstrip()
@@ -336,6 +375,10 @@ def logical_lines(text: str) -> list[tuple[int, str]]:
     if parts:
         lines.append((start, " ".join(parts)))
     return lines
+
+
+def logical_lines(text: str) -> list[tuple[int, str]]:
+    return numbered_logical_lines(list(enumerate(text.splitlines(), 1)))
 
 
 def shell_tokens(command: str) -> list[str]:
@@ -363,29 +406,145 @@ def shell_command_segments(tokens: list[str]) -> list[list[str]]:
     return segments
 
 
-def is_allowed_command_prefix(tokens: list[str]) -> bool:
-    index = 0
-    if index < len(tokens) and tokens[index] in {"$", "-"}:
-        index += 1
-    if index < len(tokens) and tokens[index].casefold() in YAML_COMMAND_PREFIXES:
-        index += 1
-
+def skip_explicit_options(
+    tokens: list[str],
+    index: int,
+    *,
+    boolean_options: set[str],
+    value_options: set[str],
+    groupable_short_options: set[str],
+    attached_value_options: set[str],
+    optional_value_options: set[str] | None = None,
+) -> int | None:
+    optional_value_options = optional_value_options or set()
     while index < len(tokens):
-        token = tokens[index]
-        if (
-            token in SHELL_COMMAND_CONTROL_PREFIXES
-            or token in SHELL_COMMAND_WRAPPER_PREFIXES
-            or "=" in token
+        candidate = tokens[index]
+        if candidate == "--":
+            return index + 1
+        if not candidate.startswith("-") or candidate == "-":
+            return index
+        if candidate in boolean_options:
+            index += 1
+            continue
+        if candidate in value_options:
+            if index + 1 >= len(tokens):
+                return None
+            index += 2
+            continue
+        if candidate.startswith("--") and "=" in candidate:
+            option = candidate.split("=", 1)[0]
+            if option in value_options | optional_value_options:
+                index += 1
+                continue
+            return None
+        if any(
+            candidate.startswith(option) and len(candidate) > len(option)
+            for option in attached_value_options
         ):
             index += 1
             continue
-        if token == "time":
+        if len(candidate) > 2 and all(
+            character in groupable_short_options for character in candidate[1:]
+        ):
             index += 1
-            if index < len(tokens) and tokens[index] in SHELL_TIME_OPTIONS:
-                index += 1
             continue
-        return False
-    return True
+        return None
+    return index
+
+
+def skip_time_prefix(tokens: list[str], index: int) -> int:
+    index += 1
+    if index < len(tokens) and tokens[index] == "-p":
+        index += 1
+    if index < len(tokens) and tokens[index] == "--":
+        index += 1
+    return index
+
+
+def simple_command_index(tokens: list[str]) -> int | None:
+    """Locate a container CLI only through the supported shell prefix grammar."""
+
+    index = 0
+    if index < len(tokens) and tokens[index] == "$":
+        index += 1
+
+    while index < len(tokens) and tokens[index] in SHELL_OPEN_GROUP_PREFIXES:
+        index += 1
+    if index < len(tokens) and tokens[index] in SHELL_COMMAND_CONTROL_PREFIXES:
+        index += 1
+    while index < len(tokens) and tokens[index] in SHELL_OPEN_GROUP_PREFIXES:
+        index += 1
+
+    seen_negation = False
+    seen_time = False
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "!" and not seen_negation:
+            seen_negation = True
+            index += 1
+        elif token == "time" and not seen_time:
+            seen_time = True
+            index = skip_time_prefix(tokens, index)
+        elif token in SHELL_OPEN_GROUP_PREFIXES:
+            index += 1
+        else:
+            break
+
+    while index < len(tokens):
+        while index < len(tokens) and SHELL_ASSIGNMENT_RE.fullmatch(tokens[index]):
+            index += 1
+        if index >= len(tokens):
+            return None
+
+        wrapper = tokens[index]
+        if wrapper == "time" and not seen_time:
+            seen_time = True
+            index = skip_time_prefix(tokens, index)
+            continue
+        if wrapper == "command":
+            index = skip_explicit_options(
+                tokens,
+                index + 1,
+                boolean_options=COMMAND_BOOLEAN_OPTIONS,
+                value_options=set(),
+                groupable_short_options={"p"},
+                attached_value_options=set(),
+            )
+        elif wrapper == "env":
+            index = skip_explicit_options(
+                tokens,
+                index + 1,
+                boolean_options=ENV_BOOLEAN_OPTIONS,
+                value_options=ENV_VALUE_OPTIONS,
+                groupable_short_options={"i", "v"},
+                attached_value_options={"-C", "-S", "-u"},
+            )
+        elif wrapper == "sudo":
+            index = skip_explicit_options(
+                tokens,
+                index + 1,
+                boolean_options=SUDO_BOOLEAN_OPTIONS,
+                value_options=SUDO_VALUE_OPTIONS,
+                groupable_short_options={"E", "H", "S", "b", "k", "n"},
+                attached_value_options={
+                    "-C",
+                    "-D",
+                    "-g",
+                    "-h",
+                    "-p",
+                    "-r",
+                    "-R",
+                    "-t",
+                    "-T",
+                    "-u",
+                },
+                optional_value_options={"--preserve-env"},
+            )
+        else:
+            return index
+        if index is None:
+            return None
+    return index
 
 
 def skip_options(
@@ -419,35 +578,36 @@ def skip_options(
 
 
 def command_segment_image_reference(tokens: list[str]) -> str | None:
-    for container_index, token in enumerate(tokens):
-        if token not in {"docker", "podman"}:
-            continue
-        prefix = tokens[:container_index]
-        if not is_allowed_command_prefix(prefix):
-            continue
-        action_index = skip_options(
-            tokens,
-            container_index + 1,
-            boolean_options=DOCKER_GLOBAL_BOOLEAN_OPTIONS,
-            value_options=DOCKER_GLOBAL_VALUE_OPTIONS,
-        )
-        if action_index >= len(tokens):
-            continue
+    container_index = simple_command_index(tokens)
+    if (
+        container_index is None
+        or container_index >= len(tokens)
+        or tokens[container_index] not in {"docker", "podman"}
+    ):
+        return None
+    action_index = skip_options(
+        tokens,
+        container_index + 1,
+        boolean_options=DOCKER_GLOBAL_BOOLEAN_OPTIONS,
+        value_options=DOCKER_GLOBAL_VALUE_OPTIONS,
+    )
+    if action_index >= len(tokens):
+        return None
+    action = tokens[action_index]
+    if action in {"container", "image"} and action_index + 1 < len(tokens):
+        action_index += 1
         action = tokens[action_index]
-        if action in {"container", "image"} and action_index + 1 < len(tokens):
-            action_index += 1
-            action = tokens[action_index]
-        if action not in CONTAINER_COMMANDS:
-            continue
-        index = action_index + 1
-        index = skip_options(
-            tokens,
-            index,
-            boolean_options=CONTAINER_BOOLEAN_OPTIONS,
-            value_options=set(),
-        )
-        if index < len(tokens):
-            return normalize_reference(tokens[index])
+    if action not in CONTAINER_COMMANDS:
+        return None
+    index = action_index + 1
+    index = skip_options(
+        tokens,
+        index,
+        boolean_options=CONTAINER_BOOLEAN_OPTIONS,
+        value_options=set(),
+    )
+    if index < len(tokens):
+        return normalize_reference(tokens[index])
     return None
 
 
@@ -514,15 +674,22 @@ def assignment_continues(relative: Path, value: str) -> bool:
 
 
 def image_assignment_references(relative: Path, text: str) -> list[tuple[int, str]]:
+    if relative.suffix in YAML_SUFFIXES:
+        references = set(yaml_declarative_image_references(text))
+        for line_number, command in yaml_executable_commands(text):
+            matched = assignment_match(relative, command)
+            if matched is None:
+                continue
+            name, value = matched
+            if not is_image_assignment(name):
+                continue
+            for reference in reference_candidates(value):
+                references.add((line_number, reference))
+        return sorted(references)
+
     references: set[tuple[int, str]] = set()
     active = False
     for line_number, line in enumerate(text.splitlines(), 1):
-        if relative.suffix in YAML_SUFFIXES:
-            match = GITHUB_ACTIONS_DOCKER_USES_RE.match(line)
-            if match is not None:
-                for reference in reference_candidates(match.group("reference")):
-                    references.add((line_number, reference))
-
         if active:
             for literal in string_literals(line):
                 for reference in reference_candidates(literal):
@@ -550,11 +717,144 @@ def image_assignment_references(relative: Path, text: str) -> list[tuple[int, st
     return sorted(references)
 
 
+@lru_cache(maxsize=1)
+def compose_yaml(text: str) -> Node | None:
+    try:
+        return yaml.compose(text, Loader=yaml.SafeLoader)
+    except yaml.YAMLError:
+        return None
+
+
+def yaml_mapping_entries(root: Node) -> list[tuple[Node, Node]]:
+    entries: list[tuple[Node, Node]] = []
+    stack = [root]
+    visited: set[int] = set()
+    while stack:
+        node = stack.pop()
+        if id(node) in visited:
+            continue
+        visited.add(id(node))
+        if isinstance(node, MappingNode):
+            entries.extend(node.value)
+            stack.extend(value for _, value in node.value)
+        elif isinstance(node, SequenceNode):
+            stack.extend(node.value)
+    return entries
+
+
+def yaml_scalar_commands(
+    node: ScalarNode,
+    lines: list[str],
+) -> list[tuple[int, str]]:
+    if node.tag != "tag:yaml.org,2002:str" or not node.value:
+        return []
+    if node.style != "|":
+        source_line = node.start_mark.line + 1
+        if node.style == ">":
+            for index in range(node.start_mark.line + 1, node.end_mark.line):
+                if index < len(lines) and lines[index].strip():
+                    source_line = index + 1
+                    break
+        return [
+            (source_line + line_number - 1, command)
+            for line_number, command in logical_lines(node.value)
+        ]
+
+    content = [
+        (index + 1, lines[index])
+        for index in range(
+            node.start_mark.line + 1,
+            min(node.end_mark.line, len(lines)),
+        )
+    ]
+    indents = [
+        len(line) - len(line.lstrip(" "))
+        for _, line in content
+        if line.strip()
+    ]
+    if not indents:
+        return []
+    content_indent = min(indents)
+    return numbered_logical_lines(
+        [
+            (line_number, line[content_indent:] if line.strip() else "")
+            for line_number, line in content
+        ]
+    )
+
+
+def yaml_executable_commands(text: str) -> list[tuple[int, str]]:
+    """Extract only values of YAML run, script, and command mapping keys."""
+
+    root = compose_yaml(text)
+    if root is None:
+        return []
+    lines = text.splitlines()
+    commands: list[tuple[int, str]] = []
+    for key_node, value_node in yaml_mapping_entries(root):
+        if (
+            not isinstance(key_node, ScalarNode)
+            or key_node.tag != "tag:yaml.org,2002:str"
+            or key_node.value.casefold() not in YAML_EXECUTABLE_KEYS
+        ):
+            continue
+        key = key_node.value.casefold()
+        if isinstance(value_node, ScalarNode):
+            commands.extend(yaml_scalar_commands(value_node, lines))
+        elif isinstance(value_node, SequenceNode):
+            scalar_nodes = [
+                item
+                for item in value_node.value
+                if isinstance(item, ScalarNode)
+                and item.tag == "tag:yaml.org,2002:str"
+            ]
+            if len(scalar_nodes) != len(value_node.value):
+                continue
+            # Command sequences are exec-form argv; run/script sequences are
+            # lists of shell command strings.
+            if key == "command":
+                command = shlex.join([item.value for item in scalar_nodes])
+                if command:
+                    commands.append((value_node.start_mark.line + 1, command))
+            else:
+                for item in scalar_nodes:
+                    commands.extend(yaml_scalar_commands(item, lines))
+    return commands
+
+
+def yaml_declarative_image_references(text: str) -> list[tuple[int, str]]:
+    root = compose_yaml(text)
+    if root is None:
+        return []
+    references: set[tuple[int, str]] = set()
+    for key_node, value_node in yaml_mapping_entries(root):
+        if (
+            not isinstance(key_node, ScalarNode)
+            or key_node.tag != "tag:yaml.org,2002:str"
+            or not isinstance(value_node, ScalarNode)
+            or value_node.tag != "tag:yaml.org,2002:str"
+        ):
+            continue
+        key = key_node.value.casefold()
+        if key == "uses" and not value_node.value.casefold().startswith("docker://"):
+            continue
+        if key != "uses" and not is_image_assignment(key):
+            continue
+        for reference in reference_candidates(normalize_reference(value_node.value)):
+            references.add((key_node.start_mark.line + 1, reference))
+    return sorted(references)
+
+
 def command_image_references(relative: Path, text: str) -> list[tuple[int, str]]:
     if relative.suffix not in SHELL_SUFFIXES | YAML_SUFFIXES and relative.suffix:
         return []
     references: set[tuple[int, str]] = set()
-    for line_number, command in logical_lines(text):
+    commands = (
+        yaml_executable_commands(text)
+        if relative.suffix in YAML_SUFFIXES
+        else logical_lines(text)
+    )
+    for line_number, command in commands:
         for reference in command_image_references_in_command(command):
             references.add((line_number, reference))
     return sorted(references)
