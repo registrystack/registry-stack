@@ -9,6 +9,7 @@ import json
 import sys
 import tempfile
 import threading
+from argparse import Namespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import TestCase, main
@@ -18,6 +19,7 @@ from unittest.mock import patch
 SCRIPT_DIR = Path(__file__).resolve().parent
 RUNNER_PATH = SCRIPT_DIR / "relay-oidc-smoke.py"
 HELPER_PATH = SCRIPT_DIR.parent / "conformance" / "relay-oidc" / "zitadel-helper.py"
+sys.path.insert(0, str(SCRIPT_DIR))
 
 
 def load_runner():
@@ -160,27 +162,9 @@ class RelayOidcSmokeTest(TestCase):
             self.assertRegex(image, self.runner.DIGEST_IMAGE_RE)
         self.assertNotIn("ghcr.io/registrystack/registry-relay@sha256:", compose)
 
-    def test_relay_image_requires_exact_repository_and_lowercase_digest(self) -> None:
-        valid = "ghcr.io/registrystack/registry-relay@sha256:" + "a" * 64
-        self.assertEqual(valid, self.runner.validate_relay_image(valid))
-
-        invalid = (
-            "ghcr.io/registrystack/registry-relay:1.0.0",
-            "ghcr.io/registrystack/registry-relay:1.0.0@sha256:" + "a" * 64,
-            "example.test/registry-relay@sha256:" + "a" * 64,
-            "ghcr.io/registrystack/registry-relay@sha256:" + "A" * 64,
-        )
-        for image in invalid:
-            with self.subTest(image=image):
-                with self.assertRaises(self.runner.SmokeError):
-                    self.runner.validate_relay_image(image)
-
     def test_plan_is_offline_and_does_not_claim_live_evidence(self) -> None:
-        plan = self.runner.plan_document(
-            "ghcr.io/registrystack/registry-relay@sha256:" + "a" * 64,
-            "b" * 40,
-            "1.0.0-rc.1",
-        )
+        candidate = {"release_id": "beta-17", "source_ref": "a" * 40}
+        plan = self.runner.plan_document(candidate)
 
         self.assertFalse(plan["plan_network_required"])
         self.assertTrue(plan["live_run_requires_docker"])
@@ -188,16 +172,53 @@ class RelayOidcSmokeTest(TestCase):
         self.assertFalse(plan["live_evidence"])
         self.assertEqual(list(self.runner.REQUIRED_CHECKS), plan["checks"])
         self.assertEqual("candidate-neutral-harness-plan", plan["classification"])
+        self.assertEqual(candidate, plan["candidate"])
 
-    def test_candidate_identifiers_are_bounded(self) -> None:
-        self.assertEqual("a" * 40, self.runner.validate_source_ref("a" * 40))
-        self.assertEqual("1.0.0-rc.1", self.runner.validate_release_id("1.0.0-rc.1"))
-        for source_ref in ("a" * 39, "A" * 40, "main"):
-            with self.assertRaises(self.runner.SmokeError):
-                self.runner.validate_source_ref(source_ref)
-        for release_id in ("", "contains space", "a" * 65):
-            with self.assertRaises(self.runner.SmokeError):
-                self.runner.validate_release_id(release_id)
+    def test_candidate_binding_rejects_manifest_lock_and_image_mismatches(self) -> None:
+        candidate_module = sys.modules["conformance_candidate"]
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = (
+                self.runner.REPO_ROOT / "release/manifests/registry-stack-beta-16.yaml"
+            )
+            image_lock = Path(tmp) / "registryctl-v0.12.2-image-lock.json"
+            lock = {
+                "schema_version": "registryctl.release_image_lock.v1",
+                "release_tag": "v0.12.2",
+                "manifest_source_ref": "0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8",
+                "tag_target": "b" * 40,
+                "platform": "linux/amd64",
+                "images": {
+                    "registry-notary": (
+                        "ghcr.io/registrystack/registry-notary@sha256:" + "c" * 64
+                    ),
+                    "registry-relay": (
+                        "ghcr.io/registrystack/registry-relay@sha256:" + "d" * 64
+                    ),
+                },
+            }
+            image_lock.write_text(json.dumps(lock), encoding="utf-8")
+            args = Namespace(
+                release_manifest=manifest,
+                image_lock=image_lock,
+                topology="release-owned",
+                solmara_source_ref=None,
+            )
+            candidate = self.runner.candidate_from_args(args)
+            self.assertEqual("beta-16", candidate["release_id"])
+            self.assertEqual(lock["images"]["registry-relay"], candidate["relay_image"])
+
+            lock["manifest_source_ref"] = "e" * 40
+            image_lock.write_text(json.dumps(lock), encoding="utf-8")
+            with self.assertRaisesRegex(
+                candidate_module.CandidateError, "does not match"
+            ):
+                self.runner.candidate_from_args(args)
+
+            lock["manifest_source_ref"] = "0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8"
+            lock["images"]["registry-relay"] = "registry-relay:mutable"
+            image_lock.write_text(json.dumps(lock), encoding="utf-8")
+            with self.assertRaisesRegex(candidate_module.CandidateError, "not pinned"):
+                self.runner.candidate_from_args(args)
 
     def test_native_zitadel_role_claim_drives_scope_profile(self) -> None:
         token = fake_token(role_claim={"registry-smoke-reader": {"org-1": "active"}})
@@ -323,7 +344,9 @@ class RelayOidcSmokeTest(TestCase):
     def test_run_requires_all_candidate_binding_arguments(self) -> None:
         with patch.object(sys, "stderr"):
             with self.assertRaises(SystemExit):
-                self.runner.parse_args(["run", "--release-id", "1.0.0-rc.1"])
+                self.runner.parse_args(
+                    ["run", "--release-manifest", "release/manifests/example.yaml"]
+                )
 
     def test_helper_never_logs_secret_response_fields(self) -> None:
         helper = self.runner.HELPER_PATH.read_text(encoding="utf-8")
@@ -337,7 +360,7 @@ class RelayOidcSmokeTest(TestCase):
 
     def test_readme_states_binding_and_ephemeral_secret_boundaries(self) -> None:
         readme = (self.runner.CONFIG_DIR / "README.md").read_text(encoding="utf-8")
-        self.assertIn("does not derive or\ncryptographically verify", readme)
+        self.assertIn("release-tag, product-version, or image-digest mismatch", readme)
         self.assertIn("container environment metadata", readme)
         self.assertIn("container command metadata", readme)
         self.assertIn("never follow redirects", readme)

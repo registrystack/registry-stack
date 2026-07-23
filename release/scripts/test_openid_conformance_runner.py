@@ -8,9 +8,10 @@ import re
 import shutil
 import sys
 import tempfile
+import urllib.parse
 from pathlib import Path
 from unittest import TestCase, main
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -79,9 +80,7 @@ class OpenIdConformanceRunnerTest(TestCase):
         self.assertIn("does not support or claim DPoP", metadata_notes)
         self.assertIn("frozen candidate artifact", metadata_notes)
 
-        self.assertEqual(
-            "blocked-by-suite-profile-and-offer-adapter", full["status"]
-        )
+        self.assertEqual("blocked-by-suite-profile", full["status"])
         self.assertEqual(
             "pre_authorization_code", full["variants"]["vci_grant_type"]
         )
@@ -92,6 +91,71 @@ class OpenIdConformanceRunnerTest(TestCase):
             "policy decision on whether the first full run targets",
             full_contract,
         )
+        verifier = next(
+            item
+            for item in self.plan_map["non_oidf_surfaces"]
+            if item["surface"] == "Registry Notary Rust SD-JWT verifier"
+        )
+        self.assertIn("not an OID4VP endpoint", verifier["reason"])
+
+    def test_submit_offer_forwards_only_the_real_notary_preauthorized_offer(
+        self,
+    ) -> None:
+        issuer = "https://issuer.example.test"
+        grant = "urn:ietf:params:oauth:grant-type:pre-authorized_code"
+        inline = json.dumps(
+            {
+                "credential_issuer": issuer,
+                "credential_configuration_ids": ["person_is_alive_sd_jwt"],
+                "grants": {grant: {"pre-authorized_code": "owner-only-code"}},
+            }
+        )
+        offer_uri = "openid-credential-offer://?" + urllib.parse.urlencode(
+            {"credential_offer": inline}
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            offer_file = Path(tmp) / "offer.txt"
+            offer_file.write_text(offer_uri, encoding="utf-8")
+            offer_file.chmod(0o600)
+            args = self.runner.parse_args(
+                [
+                    "submit-offer",
+                    "--offer-file",
+                    str(offer_file),
+                    "--issuer-url",
+                    issuer,
+                    "--suite-offer-endpoint",
+                    "https://suite.example.test/run/credential_offer",
+                    "--conformance-server",
+                    "https://suite.example.test",
+                ]
+            )
+            response = MagicMock()
+            response.__enter__.return_value.status = 204
+            opener = MagicMock()
+            opener.open.return_value = response
+            with patch.object(
+                self.runner.urllib.request, "build_opener", return_value=opener
+            ):
+                with patch("builtins.print") as printed:
+                    self.assertEqual(0, self.runner.cmd_submit_offer(args))
+
+            submitted = urllib.parse.urlsplit(opener.open.call_args.args[0])
+            self.assertEqual(
+                [inline],
+                urllib.parse.parse_qs(submitted.query)["credential_offer"],
+            )
+            printed.assert_called_once_with("credential offer submitted")
+
+            opener.open.side_effect = self.runner.urllib.error.URLError(inline)
+            with patch.object(
+                self.runner.urllib.request, "build_opener", return_value=opener
+            ):
+                with self.assertRaisesRegex(
+                    self.runner.RunnerError, "submission failed"
+                ) as caught:
+                    self.runner.cmd_submit_offer(args)
+            self.assertNotIn("owner-only-code", str(caught.exception))
 
     def test_builder_override_pins_maven_image_by_digest(self) -> None:
         override = self.runner.BUILDER_COMPOSE_OVERRIDE_PATH.read_text(
@@ -448,7 +512,7 @@ class OpenIdConformanceRunnerTest(TestCase):
             ]
         )
         with self.assertRaisesRegex(
-            self.runner.RunnerError, "blocked-by-suite-profile-and-offer-adapter"
+            self.runner.RunnerError, "blocked-by-suite-profile"
         ):
             self.runner.cmd_run(args)
 

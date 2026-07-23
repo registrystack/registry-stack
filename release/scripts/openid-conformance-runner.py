@@ -11,10 +11,12 @@ import json
 import os
 import shutil
 import ssl
+import stat
 import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from string import Template
@@ -39,6 +41,11 @@ COMPOSE_CONFIG_DIR_ENV = "REGISTRY_OPENID_CONFORMANCE_CONFIG_DIR"
 
 class RunnerError(RuntimeError):
     """A user-actionable conformance runner failure."""
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, url):
+        return None
 
 
 def load_plan_map(path: Path = PLAN_MAP_PATH) -> dict[str, Any]:
@@ -340,6 +347,75 @@ def wait_for_suite(base_url: str, timeout_seconds: int) -> None:
     raise RunnerError(f"conformance suite did not become ready at {url}: {last_error}")
 
 
+def read_offer(path: Path, issuer_url: str) -> str:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
+        raise RunnerError("offer input must be an owner-only regular file")
+    if not 0 < info.st_size <= 65_536:
+        raise RunnerError("offer input has an invalid size")
+    offer_uri = path.read_text(encoding="utf-8").strip()
+    parsed = urllib.parse.urlsplit(offer_uri)
+    try:
+        query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
+    except ValueError:
+        raise RunnerError("offer input has a malformed query") from None
+    if (
+        parsed.scheme != "openid-credential-offer"
+        or parsed.netloc
+        or parsed.path
+        or parsed.fragment
+        or set(query) != {"credential_offer"}
+        or len(query["credential_offer"]) != 1
+    ):
+        raise RunnerError("offer input is not one inline credential offer URI")
+    inline = query["credential_offer"][0]
+    offer = json.loads(inline)
+    grant = "urn:ietf:params:oauth:grant-type:pre-authorized_code"
+    if (
+        not isinstance(offer, dict)
+        or offer.get("credential_issuer") != issuer_url.rstrip("/")
+        or not isinstance(offer.get("grants"), dict)
+        or set(offer["grants"]) != {grant}
+        or not isinstance(offer["grants"][grant], dict)
+        or not isinstance(offer["grants"][grant].get("pre-authorized_code"), str)
+    ):
+        raise RunnerError("offer is not the expected Notary pre-authorized offer")
+    return inline
+
+
+def cmd_submit_offer(args: argparse.Namespace) -> int:
+    inline = read_offer(args.offer_file, args.issuer_url)
+    base = urllib.parse.urlsplit(args.conformance_server)
+    endpoint = urllib.parse.urlsplit(args.suite_offer_endpoint)
+    if (
+        (endpoint.scheme, endpoint.netloc) != (base.scheme, base.netloc)
+        or endpoint.scheme not in {"http", "https"}
+        or not endpoint.path.endswith("/credential_offer")
+        or endpoint.query
+        or endpoint.fragment
+    ):
+        raise RunnerError("suite offer endpoint must use the pinned suite origin")
+    url = urllib.parse.urlunsplit(
+        endpoint._replace(query=urllib.parse.urlencode({"credential_offer": inline}))
+    )
+    context = ssl._create_unverified_context()
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPSHandler(context=context),
+        NoRedirect(),
+    )
+    try:
+        with opener.open(url, timeout=args.timeout_seconds) as response:
+            if not 200 <= response.status < 300:
+                raise RunnerError(f"suite offer endpoint returned HTTP {response.status}")
+    except urllib.error.HTTPError as exc:
+        raise RunnerError(f"suite offer endpoint returned HTTP {exc.code}") from None
+    except (OSError, urllib.error.URLError):
+        raise RunnerError("suite offer submission failed") from None
+    print("credential offer submitted")
+    return 0
+
+
 def output_dir_for(args: argparse.Namespace, scenario_id: str) -> Path:
     if args.output_dir:
         return Path(args.output_dir).expanduser().resolve()
@@ -511,6 +587,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     run_parser.add_argument("--no-prepare", action="store_true")
     run_parser.add_argument("--wait-seconds", type=int, default=180)
     run_parser.set_defaults(func=cmd_run)
+
+    offer_parser = subparsers.add_parser("submit-offer")
+    offer_parser.add_argument("--offer-file", type=Path, required=True)
+    offer_parser.add_argument("--issuer-url", required=True)
+    offer_parser.add_argument("--suite-offer-endpoint", required=True)
+    offer_parser.add_argument(
+        "--conformance-server",
+        default=load_plan_map()["suite"]["base_url"],
+    )
+    offer_parser.add_argument("--timeout-seconds", type=int, default=10)
+    offer_parser.set_defaults(func=cmd_submit_offer)
 
     return parser.parse_args(argv)
 
