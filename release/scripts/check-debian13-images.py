@@ -134,6 +134,9 @@ DOCKERFILES = (
     Path("release/docker/Dockerfile.registry-notary"),
     Path("release/docker/Dockerfile.registry-relay"),
 )
+NOTARY_POSTGRES_CONFORMANCE_SCRIPT = Path(
+    "products/notary/scripts/postgresql-conformance.sh"
+)
 
 # These are the maintained image and image-policy surfaces. Historical release
 # notes are immutable evidence and intentionally are not rewritten by this gate.
@@ -147,6 +150,7 @@ MAINTAINED_TEXT_PATHS = DOCKERFILES + (
     Path("crates/registry-relay/scripts/check_docker_build_contract.py"),
     Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
     Path("products/notary/docs/security-assurance.md"),
+    NOTARY_POSTGRES_CONFORMANCE_SCRIPT,
 )
 
 NOTARY_POSTGRES_WORKFLOW_IMAGES = (
@@ -178,6 +182,35 @@ WORKFLOW_IMAGE_ALLOWLIST = {
     },
 }
 WORKFLOW_IMAGE_KEYS = frozenset(("image", "source_image", "target_image"))
+NOTARY_POSTGRES_IMAGE_ASSIGNMENTS = (
+    ("default_source_image", '"postgres:16.13-alpine"'),
+    ("default_target_image", '"postgres:16.14-alpine"'),
+    ("default_restore_image", '"postgres:17.10-alpine"'),
+    ("default_source_image", '"postgres:17.9-alpine"'),
+    ("default_target_image", '"postgres:17.10-alpine"'),
+    ("default_restore_image", '"postgres:18.4-alpine"'),
+    ("default_source_image", '"postgres:18.3-alpine"'),
+    ("default_target_image", '"postgres:18.4-alpine"'),
+    ("default_restore_image", '"postgres:18.4-alpine"'),
+    ("unsupported_postgres_image", '"postgres:15.18-alpine"'),
+)
+NOTARY_POSTGRES_LITERAL_LINES = tuple(
+    f"{name}={value}" for name, value in NOTARY_POSTGRES_IMAGE_ASSIGNMENTS
+)
+NOTARY_POSTGRES_FALLBACK_BINDINGS = (
+    (
+        "source_image",
+        '"${NOTARY_POSTGRES_SOURCE_IMAGE:-${default_source_image}}"',
+    ),
+    (
+        "target_image",
+        '"${NOTARY_POSTGRES_TARGET_IMAGE:-${default_target_image}}"',
+    ),
+    (
+        "restore_image",
+        '"${NOTARY_POSTGRES_RESTORE_IMAGE:-${default_restore_image}}"',
+    ),
+)
 
 RUST_BUILDER_DOCKERFILES = DOCKERFILES[:3]
 PREPARATION_DOCKERFILES = DOCKERFILES[3:]
@@ -202,6 +235,32 @@ DOCKERFILE_NAMED_CONTEXTS = {
     ),
     Path("release/docker/Dockerfile.registry-notary"): frozenset(),
     Path("release/docker/Dockerfile.registry-relay"): frozenset(),
+}
+RELAY_FINAL_STAGE_COPY_INSTRUCTIONS = (
+    "COPY --from=builder --chown=65532:65532 /workspace/runtime-root/ /",
+    (
+        "COPY --from=builder /usr/local/bin/registry-relay "
+        "/usr/local/bin/registry-relay"
+    ),
+    (
+        "COPY --from=builder /usr/local/bin/registry-relay-rhai-worker "
+        "/usr/local/bin/registry-relay-rhai-worker"
+    ),
+    "COPY LICENSE /licenses/registry-relay/LICENSE",
+)
+FINAL_STAGE_COPY_INSTRUCTIONS = {
+    Path("crates/registry-relay/Dockerfile"): RELAY_FINAL_STAGE_COPY_INSTRUCTIONS,
+    Path("crates/registry-relay/Dockerfile.demo"): RELAY_FINAL_STAGE_COPY_INSTRUCTIONS,
+    Path("products/notary/Dockerfile"): (
+        "COPY --from=builder --chown=65532:65532 /workspace/runtime-root/ /",
+        "COPY --from=builder /workspace/out/ /usr/local/bin/",
+    ),
+    Path("release/docker/Dockerfile.registry-notary"): (
+        "COPY --from=runtime-root /workspace/runtime-root/ /",
+    ),
+    Path("release/docker/Dockerfile.registry-relay"): (
+        "COPY --from=runtime-root /workspace/runtime-root/ /",
+    ),
 }
 
 RELAY_RUNTIME_DIRECTIVES = (
@@ -254,9 +313,21 @@ COPY_INSTRUCTION_RE = re.compile(
     re.IGNORECASE,
 )
 COPY_OPTION_NAMES = frozenset(("from", "chown"))
-COPY_OPTION_RE = re.compile(
+LEADING_OPTION_RE = re.compile(
     r"--(?P<name>[a-z][a-z0-9-]*)=(?P<value>[^\s\\\"']+)"
 )
+RUN_INSTRUCTION_RE = re.compile(
+    r"^[ \t]*RUN[ \t]+(?P<arguments>.*)$",
+    re.IGNORECASE,
+)
+RUN_OPTION_NAMES = frozenset(("mount",))
+RUN_MOUNT_FIELD_RE = re.compile(
+    r"(?P<name>[a-z][a-z0-9-]*)=(?P<value>[^,\s\\\"']+)"
+)
+RUN_MOUNT_FIELDS = {
+    "cache": ("type", "target"),
+    "bind": ("type", "source", "target"),
+}
 DIGEST_PIN_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 RETIRED_MARKER_RE = re.compile(
     r"\b(?:bookworm|debian[ \t_:-]*v?[ \t_:-]*12)\b",
@@ -292,6 +363,15 @@ RESTORE_KEYS_RE = re.compile(
     r"""^[ \t]*(?:restore-keys|'restore-keys'|"restore-keys")[ \t]*:""",
     re.MULTILINE,
 )
+NOTARY_POSTGRES_IMAGE_ASSIGNMENT_RE = re.compile(
+    r"^[ \t]*(?P<name>default_source_image|default_target_image|"
+    r"default_restore_image|unsupported_postgres_image)[ \t]*="
+    r"(?P<value>.*)$"
+)
+NOTARY_POSTGRES_FALLBACK_RE = re.compile(
+    r"^[ \t]*(?P<name>source_image|target_image|restore_image)[ \t]*="
+    r"(?P<value>.*)$"
+)
 
 
 def read(root: Path, relative: Path, failures: list[str]) -> str:
@@ -321,11 +401,11 @@ def discover_workflow_paths(root: Path) -> tuple[Path, ...]:
     )
 
 
-def collect_dockerfile_copy_sources(
+def normalize_dockerfile_instructions(
     text: str,
     relative: Path,
     failures: list[str],
-) -> list[str]:
+) -> tuple[str, ...]:
     lines = text.splitlines()
     escape_directives = []
     for line in lines:
@@ -345,11 +425,11 @@ def collect_dockerfile_copy_sources(
     ):
         failures.append(
             f"{relative}: unsupported Dockerfile escape directive prevents "
-            "bounded COPY source inspection"
+            "bounded instruction inspection"
         )
-        return []
+        return ()
 
-    sources = []
+    instructions = []
     index = 0
     while index < len(lines):
         line = lines[index]
@@ -375,17 +455,28 @@ def collect_dockerfile_copy_sources(
             else:
                 failures.append(
                     f"{relative}: unterminated Dockerfile line continuation "
-                    "prevents bounded COPY source inspection"
+                    "prevents bounded instruction inspection"
                 )
-                return []
+                return ()
 
-        instruction_match = COPY_INSTRUCTION_RE.match("".join(parts))
+        instructions.append("".join(parts))
+    return tuple(instructions)
+
+
+def collect_dockerfile_copy_sources(
+    instructions: tuple[str, ...],
+    relative: Path,
+    failures: list[str],
+) -> list[str]:
+    sources = []
+    for instruction in instructions:
+        instruction_match = COPY_INSTRUCTION_RE.match(instruction)
         if instruction_match is None:
             continue
         tokens = instruction_match.group("arguments").split()
         seen_options = set()
         while tokens and tokens[0].startswith("--"):
-            option_match = COPY_OPTION_RE.fullmatch(tokens.pop(0))
+            option_match = LEADING_OPTION_RE.fullmatch(tokens.pop(0))
             if option_match is None:
                 failures.append(
                     f"{relative}: unsupported COPY option syntax prevents "
@@ -410,6 +501,58 @@ def collect_dockerfile_copy_sources(
             )
             return []
     return sources
+
+
+def check_dockerfile_run_options(
+    instructions: tuple[str, ...],
+    relative: Path,
+    failures: list[str],
+) -> None:
+    for instruction in instructions:
+        instruction_match = RUN_INSTRUCTION_RE.match(instruction)
+        if instruction_match is None:
+            continue
+        tokens = instruction_match.group("arguments").split()
+        while tokens and tokens[0].startswith("--"):
+            option_match = LEADING_OPTION_RE.fullmatch(tokens.pop(0))
+            if (
+                option_match is None
+                or option_match.group("name") not in RUN_OPTION_NAMES
+            ):
+                failures.append(
+                    f"{relative}: unsupported RUN option syntax prevents "
+                    "bounded mount inspection"
+                )
+                return
+
+            fields = []
+            for field in option_match.group("value").split(","):
+                field_match = RUN_MOUNT_FIELD_RE.fullmatch(field)
+                if field_match is None:
+                    failures.append(
+                        f"{relative}: unsupported RUN mount syntax prevents "
+                        "bounded mount inspection"
+                    )
+                    return
+                fields.append(
+                    (field_match.group("name"), field_match.group("value"))
+                )
+
+            field_names = tuple(name for name, _value in fields)
+            mount_type = fields[0][1] if fields else ""
+            if RUN_MOUNT_FIELDS.get(mount_type) != field_names:
+                failures.append(
+                    f"{relative}: unsupported RUN mount syntax prevents "
+                    "bounded mount inspection"
+                )
+                return
+
+        if not tokens or tokens[0].startswith(("-", "'", '"', "\\")):
+            failures.append(
+                f"{relative}: unsupported RUN operand prefix prevents "
+                "bounded mount inspection"
+            )
+            return
 
 
 def collect_workflow_image_references(
@@ -625,8 +768,46 @@ def check_repository(root: Path = ROOT) -> list[str]:
                     f"at {location}"
                 )
 
+    notary_postgres = texts[NOTARY_POSTGRES_CONFORMANCE_SCRIPT]
+    notary_postgres_assignments = tuple(
+        (match.group("name"), match.group("value"))
+        for line in notary_postgres.splitlines()
+        if (match := NOTARY_POSTGRES_IMAGE_ASSIGNMENT_RE.match(line))
+    )
+    if notary_postgres_assignments != NOTARY_POSTGRES_IMAGE_ASSIGNMENTS:
+        failures.append(
+            f"{NOTARY_POSTGRES_CONFORMANCE_SCRIPT}: PostgreSQL image "
+            "assignments must match the exact ordered reviewed inventory"
+        )
+    notary_postgres_literal_lines = tuple(
+        line.strip()
+        for line in notary_postgres.splitlines()
+        if not line.lstrip().startswith("#") and "postgres:" in line
+    )
+    if notary_postgres_literal_lines != NOTARY_POSTGRES_LITERAL_LINES:
+        failures.append(
+            f"{NOTARY_POSTGRES_CONFORMANCE_SCRIPT}: direct PostgreSQL image "
+            "literals must match the exact ordered reviewed assignment lines"
+        )
+    notary_postgres_fallbacks = tuple(
+        (match.group("name"), match.group("value"))
+        for line in notary_postgres.splitlines()
+        if (match := NOTARY_POSTGRES_FALLBACK_RE.match(line))
+    )
+    if notary_postgres_fallbacks != NOTARY_POSTGRES_FALLBACK_BINDINGS:
+        failures.append(
+            f"{NOTARY_POSTGRES_CONFORMANCE_SCRIPT}: PostgreSQL environment "
+            "fallbacks must match the exact ordered reviewed bindings"
+        )
+
     for relative in DOCKERFILES:
         text = texts[relative]
+        instructions = normalize_dockerfile_instructions(
+            text,
+            relative,
+            failures,
+        )
+        check_dockerfile_run_options(instructions, relative, failures)
         stage_matches = list(FROM_RE.finditer(text))
         if not stage_matches:
             failures.append(f"{relative}: no FROM instruction found")
@@ -662,7 +843,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
         }
         named_contexts = DOCKERFILE_NAMED_CONTEXTS[relative]
         for source in collect_dockerfile_copy_sources(
-            text,
+            instructions,
             relative,
             failures,
         ):
@@ -673,6 +854,25 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 failures.append(
                     f"{relative}: COPY --from source is not a declared stage "
                     "or reviewed named build context"
+                )
+        final_from_indexes = [
+            index
+            for index, instruction in enumerate(instructions)
+            if FROM_RE.fullmatch(instruction)
+        ]
+        if final_from_indexes:
+            final_copy_instructions = tuple(
+                " ".join(instruction.split())
+                for instruction in instructions[final_from_indexes[-1] + 1 :]
+                if COPY_INSTRUCTION_RE.match(instruction)
+            )
+            if (
+                final_copy_instructions
+                != FINAL_STAGE_COPY_INSTRUCTIONS[relative]
+            ):
+                failures.append(
+                    f"{relative}: final-stage COPY instructions must match "
+                    "the exact reviewed inventory"
                 )
         for base, _alias, _platform in stages:
             if not DIGEST_PIN_RE.search(base):

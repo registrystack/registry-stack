@@ -23,6 +23,9 @@ NOTARY_POSTGRES_WORKFLOW = Path(
 RELAY_POSTGRES_WORKFLOW = Path(
     ".github/workflows/relay-postgres-conformance.yml"
 )
+NOTARY_POSTGRES_CONFORMANCE_SCRIPT = Path(
+    "products/notary/scripts/postgresql-conformance.sh"
+)
 
 EXPECTED_SURFACES = {
     CI_WORKFLOW,
@@ -36,6 +39,7 @@ EXPECTED_SURFACES = {
     TUTORIAL_CHECK,
     Path("products/notary/Dockerfile"),
     Path("products/notary/docs/security-assurance.md"),
+    NOTARY_POSTGRES_CONFORMANCE_SCRIPT,
     Path("release/docker/Dockerfile.registry-notary"),
     Path("release/docker/Dockerfile.registry-relay"),
     RELEASE_BINARY_RECIPE,
@@ -368,6 +372,173 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 root = self.fixture()
                 self.write_workflow(root, name, workflow)
                 self.assert_has_failure(root, failure)
+
+    def test_notary_postgres_script_has_exact_reviewed_image_defaults(
+        self,
+    ) -> None:
+        self.assertEqual(
+            (
+                ("default_source_image", '"postgres:16.13-alpine"'),
+                ("default_target_image", '"postgres:16.14-alpine"'),
+                ("default_restore_image", '"postgres:17.10-alpine"'),
+                ("default_source_image", '"postgres:17.9-alpine"'),
+                ("default_target_image", '"postgres:17.10-alpine"'),
+                ("default_restore_image", '"postgres:18.4-alpine"'),
+                ("default_source_image", '"postgres:18.3-alpine"'),
+                ("default_target_image", '"postgres:18.4-alpine"'),
+                ("default_restore_image", '"postgres:18.4-alpine"'),
+                ("unsupported_postgres_image", '"postgres:15.18-alpine"'),
+            ),
+            self.module.NOTARY_POSTGRES_IMAGE_ASSIGNMENTS,
+        )
+        self.assertEqual(
+            (
+                (
+                    "source_image",
+                    '"${NOTARY_POSTGRES_SOURCE_IMAGE:-'
+                    '${default_source_image}}"',
+                ),
+                (
+                    "target_image",
+                    '"${NOTARY_POSTGRES_TARGET_IMAGE:-'
+                    '${default_target_image}}"',
+                ),
+                (
+                    "restore_image",
+                    '"${NOTARY_POSTGRES_RESTORE_IMAGE:-'
+                    '${default_restore_image}}"',
+                ),
+            ),
+            self.module.NOTARY_POSTGRES_FALLBACK_BINDINGS,
+        )
+
+    def test_notary_postgres_image_assignments_reject_mutable_defaults(
+        self,
+    ) -> None:
+        cases = (
+            (
+                '    default_source_image="postgres:16.13-alpine"',
+                '    default_source_image="postgres:16"',
+            ),
+            (
+                '    default_restore_image="postgres:17.10-alpine"',
+                '    default_restore_image="postgres:17"',
+            ),
+            (
+                'unsupported_postgres_image="postgres:15.18-alpine"',
+                'unsupported_postgres_image="postgres:15"',
+            ),
+        )
+        failure = (
+            "PostgreSQL image assignments must match the exact ordered "
+            "reviewed inventory"
+        )
+        for exact, replacement in cases:
+            with self.subTest(replacement=replacement):
+                root = self.fixture()
+                target = root / NOTARY_POSTGRES_CONFORMANCE_SCRIPT
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(exact, text)
+                target.write_text(
+                    text.replace(exact, replacement, 1),
+                    encoding="utf-8",
+                )
+                failures = self.module.check_repository(root)
+                self.assertTrue(
+                    any(failure in item for item in failures),
+                    failures,
+                )
+                self.assertNotIn(replacement, "\n".join(failures))
+
+    def test_notary_postgres_defaults_cannot_be_shadowed_by_comments(
+        self,
+    ) -> None:
+        exact = '    default_restore_image="postgres:17.10-alpine"'
+        replacement = (
+            f"    # {exact.strip()}\n"
+            '    default_restore_image="postgres:17"'
+        )
+        root = self.fixture()
+        target = root / NOTARY_POSTGRES_CONFORMANCE_SCRIPT
+        text = target.read_text(encoding="utf-8")
+        self.assertIn(exact, text)
+        target.write_text(
+            text.replace(exact, replacement, 1),
+            encoding="utf-8",
+        )
+        self.assert_has_failure(
+            root,
+            "PostgreSQL image assignments must match the exact ordered "
+            "reviewed inventory",
+        )
+
+    def test_notary_postgres_rejects_new_direct_image_literals(
+        self,
+    ) -> None:
+        failure = (
+            "direct PostgreSQL image literals must match the exact ordered "
+            "reviewed assignment lines"
+        )
+        for addition in (
+            'direct_image="postgres:16"\n',
+            "docker pull postgres:16\n",
+        ):
+            with self.subTest(addition=addition):
+                root = self.fixture()
+                target = root / NOTARY_POSTGRES_CONFORMANCE_SCRIPT
+                text = target.read_text(encoding="utf-8")
+                target.write_text(text + addition, encoding="utf-8")
+                failures = self.module.check_repository(root)
+                self.assertTrue(
+                    any(failure in item for item in failures),
+                    failures,
+                )
+                self.assertNotIn(addition.strip(), "\n".join(failures))
+
+        root = self.fixture()
+        target = root / NOTARY_POSTGRES_CONFORMANCE_SCRIPT
+        text = target.read_text(encoding="utf-8")
+        target.write_text(
+            text + '# example_image="postgres:16"\n',
+            encoding="utf-8",
+        )
+        self.assertEqual([], self.module.check_repository(root))
+
+    def test_notary_postgres_env_fallbacks_remain_bound_to_defaults(
+        self,
+    ) -> None:
+        exact = (
+            'source_image="${NOTARY_POSTGRES_SOURCE_IMAGE:-'
+            '${default_source_image}}"'
+        )
+        replacements = (
+            (
+                'source_image="${NOTARY_POSTGRES_SOURCE_IMAGE:-'
+                'postgres:16}"'
+            ),
+            f"# {exact}\nsource_image=\"postgres:16\"",
+            f"{exact}\nsource_image=\"postgres:16\"",
+        )
+        failure = (
+            "PostgreSQL environment fallbacks must match the exact ordered "
+            "reviewed bindings"
+        )
+        for replacement in replacements:
+            with self.subTest(replacement=replacement):
+                root = self.fixture()
+                target = root / NOTARY_POSTGRES_CONFORMANCE_SCRIPT
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(exact, text)
+                target.write_text(
+                    text.replace(exact, replacement, 1),
+                    encoding="utf-8",
+                )
+                failures = self.module.check_repository(root)
+                self.assertTrue(
+                    any(failure in item for item in failures),
+                    failures,
+                )
+                self.assertNotIn(replacement, "\n".join(failures))
 
     def test_retired_markers_cover_dynamically_discovered_workflows(
         self,
@@ -808,9 +979,14 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     if match.group("alias") is not None
                 }
                 failures: list[str] = []
+                instructions = self.module.normalize_dockerfile_instructions(
+                    text,
+                    relative,
+                    failures,
+                )
                 sources = set(
                     self.module.collect_dockerfile_copy_sources(
-                        text,
+                        instructions,
                         relative,
                         failures,
                     )
@@ -936,7 +1112,6 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 "COPY --from=runtime-root /workspace/runtime-root/ /",
                 "COPY \\\n"
                 "  --from=runtime-root \\\n"
-                "  --chown=65532:65532 \\\n"
                 "  /workspace/runtime-root/ /",
             ),
         )
@@ -1044,6 +1219,132 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     f"{relative}: COPY --from source is not a declared stage "
                     "or reviewed named build context",
                 )
+
+    def test_dockerfile_run_mounts_use_the_reviewed_canonical_shapes(
+        self,
+    ) -> None:
+        self.assertEqual({"mount"}, set(self.module.RUN_OPTION_NAMES))
+        self.assertEqual(
+            {
+                "cache": ("type", "target"),
+                "bind": ("type", "source", "target"),
+            },
+            self.module.RUN_MOUNT_FIELDS,
+        )
+        for relative in self.module.DOCKERFILES:
+            with self.subTest(relative=relative):
+                failures: list[str] = []
+                instructions = self.module.normalize_dockerfile_instructions(
+                    (ROOT / relative).read_text(encoding="utf-8"),
+                    relative,
+                    failures,
+                )
+                self.module.check_dockerfile_run_options(
+                    instructions,
+                    relative,
+                    failures,
+                )
+                self.assertEqual([], failures)
+
+    def test_dockerfile_run_mounts_reject_unreviewed_sources_and_syntax(
+        self,
+    ) -> None:
+        relative = Path("release/docker/Dockerfile.registry-relay")
+        exact = (
+            "--mount=type=bind,source=dist/image-bin,"
+            "target=/workspace/image-bin"
+        )
+        cases = (
+            (
+                "external-from",
+                "--mount=type=bind,from=debian:trixie-slim,"
+                "source=dist/image-bin,target=/workspace/image-bin",
+                "unsupported RUN mount syntax",
+            ),
+            (
+                "escaped-mount-key",
+                r"--mount=type=bind,fr\om=debian:trixie-slim,"
+                "source=dist/image-bin,target=/workspace/image-bin",
+                "unsupported RUN option syntax",
+            ),
+            (
+                "quoted-mount-key",
+                '--mount=type=bind,fr"om"=debian:trixie-slim,'
+                "source=dist/image-bin,target=/workspace/image-bin",
+                "unsupported RUN option syntax",
+            ),
+            (
+                "escaped-option-name",
+                r"--mo\unt=type=bind,source=dist/image-bin,"
+                "target=/workspace/image-bin",
+                "unsupported RUN option syntax",
+            ),
+            (
+                "quoted-option-name",
+                '--mo"unt"=type=bind,source=dist/image-bin,'
+                "target=/workspace/image-bin",
+                "unsupported RUN option syntax",
+            ),
+            (
+                "quoted-mount-value",
+                '--mount="type=bind,source=dist/image-bin,'
+                'target=/workspace/image-bin"',
+                "unsupported RUN option syntax",
+            ),
+            (
+                "unknown-option",
+                "--network=none",
+                "unsupported RUN option syntax",
+            ),
+            (
+                "cache-with-source",
+                "--mount=type=cache,source=dist/image-bin,"
+                "target=/workspace/image-bin",
+                "unsupported RUN mount syntax",
+            ),
+        )
+        for name, replacement, failure in cases:
+            with self.subTest(name=name):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(exact, text)
+                target.write_text(
+                    text.replace(exact, replacement, 1),
+                    encoding="utf-8",
+                )
+                failures = self.module.check_repository(root)
+                self.assertTrue(
+                    any(failure in item for item in failures),
+                    failures,
+                )
+                self.assertNotIn(replacement, "\n".join(failures))
+
+    def test_final_stage_copy_inventories_reject_extra_files(self) -> None:
+        self.assertEqual(
+            set(self.module.DOCKERFILES),
+            set(self.module.FINAL_STAGE_COPY_INSTRUCTIONS),
+        )
+        for relative in self.module.DOCKERFILES:
+            with self.subTest(relative=relative):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                addition = "COPY /bin/bash /bin/bash"
+                target.write_text(
+                    text + f"\n{addition}\n",
+                    encoding="utf-8",
+                )
+                failures = self.module.check_repository(root)
+                self.assertTrue(
+                    any(
+                        "final-stage COPY instructions must match the exact "
+                        "reviewed inventory" in item
+                        for item in failures
+                    ),
+                    failures,
+                )
+                self.assertNotIn(addition, "\n".join(failures))
 
     def test_dockerfile_named_context_allowlist_is_path_bounded(self) -> None:
         for relative, contexts in self.module.DOCKERFILE_NAMED_CONTEXTS.items():
