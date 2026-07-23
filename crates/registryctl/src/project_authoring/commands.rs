@@ -789,20 +789,26 @@ fn validate_live_response(
         {
             bail!("governed Notary result claim version does not match the authored project");
         }
-        validate_live_result_redaction(&result_view)?;
         let expected_result = expected[claim_id]
             .as_object()
             .ok_or_else(|| anyhow!("live expected claim result must be an object"))?;
-        if expected_result
+        let expected_keys = expected_result
             .keys()
             .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-            != BTreeSet::from(["disclosure", "satisfied", "value"])
+            .collect::<BTreeSet<_>>();
+        if expected_keys != BTreeSet::from(["disclosure", "satisfied", "value"])
+            && expected_keys
+                != BTreeSet::from(["disclosure", "redacted_fields", "satisfied", "value"])
         {
             bail!(
-                "live expected claim result must contain exactly value, satisfied, and disclosure"
+                "live expected claim result must contain value, satisfied, disclosure, and optional redacted_fields"
             );
         }
+        validate_live_result_redaction(
+            &result_view,
+            expected_result.get("redacted_fields"),
+            expected_result.get("disclosure"),
+        )?;
         for field in ["value", "satisfied", "disclosure"] {
             if result_object.get(field) != expected_result.get(field) {
                 bail!("governed Notary disclosed claim result did not match the expected fixture");
@@ -886,25 +892,36 @@ fn is_notary_pseudonymous_handle(value: &str) -> bool {
     })
 }
 
-fn validate_live_result_redaction(result: &registry_notary_core::ClaimResultView) -> Result<()> {
+fn validate_live_result_redaction(
+    result: &registry_notary_core::ClaimResultView,
+    expected_redacted_fields: Option<&Value>,
+    expected_disclosure: Option<&Value>,
+) -> Result<()> {
     let disclosure = registry_notary_core::DisclosureProfile::parse(&result.disclosure)
         .ok_or_else(|| anyhow!("governed Notary result has an invalid disclosure profile"))?;
     match disclosure {
         registry_notary_core::DisclosureProfile::Redacted => {
+            let expected_markers = match expected_redacted_fields {
+                Some(fields) => validate_live_expected_redaction_fields(fields)?,
+                None => vec![result.claim_id.clone()],
+            };
             if result.value.is_some()
                 || result.satisfied.is_some()
-                || result.redacted_fields.len() != 1
-                || result.redacted_fields[0] != result.claim_id
+                || result.redacted_fields != expected_markers
+                || expected_disclosure.and_then(Value::as_str) != Some("redacted")
             {
                 bail!("governed Notary result violates full-redaction semantics");
             }
         }
         registry_notary_core::DisclosureProfile::Predicate => {
-            if !result.redacted_fields.is_empty() {
+            if !result.redacted_fields.is_empty() || expected_redacted_fields.is_some() {
                 bail!("governed Notary result exposes a predicate over redacted fields");
             }
         }
         registry_notary_core::DisclosureProfile::Value => {
+            if expected_redacted_fields.is_some() {
+                bail!("live expected redacted_fields apply only to a fully redacted claim result");
+            }
             if result.redacted_fields.is_empty() {
                 return Ok(());
             }
@@ -932,6 +949,30 @@ fn validate_live_result_redaction(result: &registry_notary_core::ClaimResultView
         }
     }
     Ok(())
+}
+
+fn validate_live_expected_redaction_fields(fields: &Value) -> Result<Vec<String>> {
+    let fields = fields
+        .as_array()
+        .filter(|fields| !fields.is_empty() && fields.len() <= MAX_OUTPUTS)
+        .ok_or_else(|| anyhow!("live expected redacted_fields have an invalid bounded shape"))?;
+    let mut unique = BTreeSet::new();
+    for field in fields {
+        let field = field
+            .as_str()
+            .filter(|field| is_live_top_level_redaction_field(field))
+            .ok_or_else(|| anyhow!("live expected redacted_fields have an invalid bounded shape"))?;
+        if !unique.insert(field.to_string()) {
+            bail!("live expected redacted_fields have an invalid bounded shape");
+        }
+    }
+    Ok(unique.into_iter().collect())
+}
+
+fn is_live_top_level_redaction_field(field: &str) -> bool {
+    field != "value"
+        && !field.contains('.')
+        && validate_stable_id(field, "live expected redacted field").is_ok()
 }
 
 fn validate_live_notary_origin(value: &str) -> Result<url::Url> {

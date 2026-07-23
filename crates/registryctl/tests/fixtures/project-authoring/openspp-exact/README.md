@@ -207,16 +207,23 @@ Each expected-result file must contain only a `claims` object.
 Its keys must exactly match the corresponding request's claim ids.
 Each claim value must contain exactly `value`, `satisfied`, and `disclosure`,
 using `null` when the Notary result has no value or satisfaction decision.
+For a fully redacted claim whose deployed policy configures top-level redaction
+fields, add `redacted_fields` containing that exact owner-approved field set.
+The set must contain one to 64 unique bounded top-level field names; order in
+the expected file is not significant. Omit `redacted_fields` when the policy
+does not configure a field set, in which case the runner requires Notary's
+default single claim-id marker.
 The live runner rejects keys outside its accepted result, reference, and
 provenance structures, including `pack_id` and `pack_version`; validates
-public `redacted_fields`, including the current claim-id marker for full
-redaction, without exposing a listed field value; requires `target_ref` and
-optional `requester_ref` handles to use the Notary `rnref:v1` pseudonymous
-SHA-256 shape; rejects nulls for optional public fields; requires one evaluation
-id, the canonical claim-result format, and RFC3339 timestamps; binds each
-provenance record and claim version to the returned result and authored
-project; requires exact `value`, `satisfied`, and `disclosure` matches; requires
-an empty `derived_from` array; and requires a non-zero Relay consultation count.
+public `redacted_fields` against either that owner-approved canonical field set
+or the default claim-id marker, without exposing a listed field value; requires
+`target_ref` and optional `requester_ref` handles to use the Notary `rnref:v1`
+pseudonymous SHA-256 shape; rejects nulls for optional public fields; requires
+one evaluation id, the canonical claim-result format, and RFC3339 timestamps;
+binds each provenance record and claim version to the returned result and
+authored project; requires exact `value`, `satisfied`, and `disclosure` matches;
+requires an empty `derived_from` array; and requires a non-zero Relay
+consultation count.
 The runner validates the public pseudonym shape but cannot recompute its keyed
 digest from the private owner record.
 These examples reflect only the committed synthetic fixture and must be

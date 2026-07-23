@@ -1063,6 +1063,40 @@ outputs:
                 .contains("full-redaction semantics")
         );
 
+        let mut configured_expected = expected.clone();
+        configured_expected["claims"]["household-reference"]["redacted_fields"] =
+            json!(["status", "private_field"]);
+        let mut configured_response = response.clone();
+        set_governed_live_result_pointer(
+            &mut configured_response,
+            "/redacted_fields",
+            json!(["private_field", "status"]),
+        );
+        assert_eq!(
+            validate_live_response(&configured_response, &request, &configured_expected)
+                .expect("owner-approved configured redaction fields pass"),
+            request.claims
+        );
+
+        for invalid_markers in [
+            json!([]),
+            json!(["private_field", "private_field"]),
+            json!(["private_field", "other_claim"]),
+            json!(["IND-AB12CD34"]),
+        ] {
+            let mut invalid = configured_response.clone();
+            set_governed_live_result_pointer(
+                &mut invalid,
+                "/redacted_fields",
+                invalid_markers.clone(),
+            );
+            let error = validate_live_response(&invalid, &request, &configured_expected)
+                .expect_err("runtime redaction fields must match the owner-approved set")
+                .to_string();
+            assert!(error.contains("full-redaction semantics"));
+            assert!(!error.contains("IND-AB12CD34"));
+        }
+
         for invalid_markers in [
             json!([]),
             json!([""]),
@@ -1081,6 +1115,24 @@ outputs:
                 .to_string();
             assert!(error.contains("full-redaction semantics"));
             assert!(!error.contains("IND-AB12CD34"));
+        }
+
+        for invalid_expected_markers in [
+            json!([]),
+            json!(["private_field", "private_field"]),
+            json!(["profile.value"]),
+            json!(["IND-AB12CD34"]),
+            json!(["ssn=123"]),
+        ] {
+            let mut invalid_expected = expected.clone();
+            invalid_expected["claims"]["household-reference"]["redacted_fields"] =
+                invalid_expected_markers.clone();
+            let error = validate_live_response(&configured_response, &request, &invalid_expected)
+                .expect_err("invalid owner redaction fields must fail closed")
+                .to_string();
+            assert!(error.contains("invalid bounded shape"));
+            assert!(!error.contains("IND-AB12CD34"));
+            assert!(!error.contains("ssn=123"));
         }
     }
 
@@ -1421,7 +1473,7 @@ outputs:
             validate_live_response(&response, &request, &expected)
                 .expect_err("partial expected disclosure must fail closed")
                 .to_string()
-                .contains("must contain exactly value, satisfied, and disclosure")
+                .contains("must contain value, satisfied, disclosure")
         );
     }
 
