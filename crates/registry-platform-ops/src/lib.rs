@@ -126,9 +126,39 @@ impl DeploymentFindingStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(try_from = "DeploymentFindingWaiverDocument")]
 pub struct DeploymentFindingWaiver {
-    pub reason: String,
+    pub reference: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_deployment_waiver_summary",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub summary: Option<String>,
     pub expires: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeploymentFindingWaiverDocument {
+    reference: String,
+    #[serde(default)]
+    summary: OptionalDeploymentWaiverSummary,
+    expires: String,
+}
+
+impl TryFrom<DeploymentFindingWaiverDocument> for DeploymentFindingWaiver {
+    type Error = DeploymentWaiverMetadataError;
+
+    fn try_from(value: DeploymentFindingWaiverDocument) -> Result<Self, Self::Error> {
+        let summary: Option<String> = value.summary.into();
+        validate_deployment_waiver_metadata(&value.reference, summary.as_deref())?;
+        Ok(Self {
+            reference: value.reference,
+            summary,
+            expires: value.expires,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -141,10 +171,42 @@ pub struct DeploymentFinding {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(try_from = "DeploymentWaiverDocument")]
 pub struct DeploymentWaiver {
     pub finding: String,
-    pub reason: String,
+    pub reference: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_deployment_waiver_summary",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub summary: Option<String>,
     pub expires: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeploymentWaiverDocument {
+    finding: String,
+    reference: String,
+    #[serde(default)]
+    summary: OptionalDeploymentWaiverSummary,
+    expires: String,
+}
+
+impl TryFrom<DeploymentWaiverDocument> for DeploymentWaiver {
+    type Error = DeploymentWaiverMetadataError;
+
+    fn try_from(value: DeploymentWaiverDocument) -> Result<Self, Self::Error> {
+        let summary: Option<String> = value.summary.into();
+        validate_deployment_waiver_metadata(&value.reference, summary.as_deref())?;
+        Ok(Self {
+            finding: value.finding,
+            reference: value.reference,
+            summary,
+            expires: value.expires,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -1042,6 +1104,216 @@ pub fn is_valid_approval_reference(reference: &str) -> bool {
     reference
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+}
+
+/// Maximum UTF-8 byte length for a deployment-waiver reference.
+pub const DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES: usize = 128;
+
+/// Maximum Unicode scalar-value count for an optional deployment-waiver summary.
+pub const DEPLOYMENT_WAIVER_SUMMARY_MAX_CHARS: usize = 256;
+
+/// Deserialize an optional waiver summary while distinguishing omission from
+/// explicit `null`. The 1.0 contract permits only an omitted field or a string;
+/// products reuse this helper so their config parsers cannot drift.
+pub fn deserialize_optional_deployment_waiver_summary<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    OptionalDeploymentWaiverSummary::deserialize(deserializer).map(Into::into)
+}
+
+/// Field adapter for optional waiver summaries that rejects explicit `null`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct OptionalDeploymentWaiverSummary(Option<String>);
+
+impl From<OptionalDeploymentWaiverSummary> for Option<String> {
+    fn from(value: OptionalDeploymentWaiverSummary) -> Self {
+        value.0
+    }
+}
+
+impl<'de> Deserialize<'de> for OptionalDeploymentWaiverSummary {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct OptionalSummaryVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for OptionalSummaryVisitor {
+            type Value = OptionalDeploymentWaiverSummary;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an omitted deployment waiver summary or a non-null string")
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::invalid_type(serde::de::Unexpected::Unit, &self))
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::invalid_type(serde::de::Unexpected::Unit, &self))
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                String::deserialize(deserializer)
+                    .map(|value| OptionalDeploymentWaiverSummary(Some(value)))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(OptionalDeploymentWaiverSummary(Some(value.to_string())))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(OptionalDeploymentWaiverSummary(Some(value)))
+            }
+        }
+
+        deserializer.deserialize_option(OptionalSummaryVisitor)
+    }
+}
+
+/// A field-level deployment-waiver metadata validation failure.
+///
+/// Waiver metadata is privileged, reviewed operator configuration, but it is
+/// copied into restricted posture, boot logs, screenshots, and support
+/// bundles. These narrow checks prevent accidental credential disclosure
+/// without applying hostname, URL, JWT, base64, entropy, or key-name
+/// heuristics that would reject ordinary operational text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DeploymentWaiverMetadataError {
+    ReferenceLength,
+    ReferenceNotCanonical,
+    ReferenceInvalidSyntax,
+    SummaryLength,
+    SummaryNotCanonical,
+    SummaryControlCharacter,
+    SummaryCredentialLiteral,
+}
+
+impl DeploymentWaiverMetadataError {
+    pub const fn field(self) -> &'static str {
+        match self {
+            Self::ReferenceLength | Self::ReferenceNotCanonical | Self::ReferenceInvalidSyntax => {
+                "reference"
+            }
+            Self::SummaryLength
+            | Self::SummaryNotCanonical
+            | Self::SummaryControlCharacter
+            | Self::SummaryCredentialLiteral => "summary",
+        }
+    }
+}
+
+impl Display for DeploymentWaiverMetadataError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReferenceLength => write!(
+                formatter,
+                "reference must be 1..={DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES} bytes"
+            ),
+            Self::ReferenceNotCanonical => write!(
+                formatter,
+                "reference must be 1..={DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES} bytes and already canonical without surrounding whitespace"
+            ),
+            Self::ReferenceInvalidSyntax => write!(
+                formatter,
+                "reference must be 1..={DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES} bytes and use only [A-Za-z0-9._:-] without '..'"
+            ),
+            Self::SummaryLength => write!(
+                formatter,
+                "summary must be 1..={DEPLOYMENT_WAIVER_SUMMARY_MAX_CHARS} characters when present"
+            ),
+            Self::SummaryNotCanonical => write!(
+                formatter,
+                "summary must be 1..={DEPLOYMENT_WAIVER_SUMMARY_MAX_CHARS} characters and already trimmed when present"
+            ),
+            Self::SummaryControlCharacter => write!(
+                formatter,
+                "summary must be 1..={DEPLOYMENT_WAIVER_SUMMARY_MAX_CHARS} characters and contain no control characters when present"
+            ),
+            Self::SummaryCredentialLiteral => write!(
+                formatter,
+                "summary must be 1..={DEPLOYMENT_WAIVER_SUMMARY_MAX_CHARS} characters and contain no authorization value or private-key begin marker when present"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DeploymentWaiverMetadataError {}
+
+/// Validate the cross-product deployment-waiver metadata contract.
+pub fn validate_deployment_waiver_metadata(
+    reference: &str,
+    summary: Option<&str>,
+) -> Result<(), DeploymentWaiverMetadataError> {
+    if reference.is_empty() || reference.len() > DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES {
+        return Err(DeploymentWaiverMetadataError::ReferenceLength);
+    }
+    if reference.trim() != reference {
+        return Err(DeploymentWaiverMetadataError::ReferenceNotCanonical);
+    }
+    if !is_valid_approval_reference(reference) {
+        return Err(DeploymentWaiverMetadataError::ReferenceInvalidSyntax);
+    }
+
+    let Some(summary) = summary else {
+        return Ok(());
+    };
+    if summary.is_empty() || summary.chars().count() > DEPLOYMENT_WAIVER_SUMMARY_MAX_CHARS {
+        return Err(DeploymentWaiverMetadataError::SummaryLength);
+    }
+    if summary.trim() != summary {
+        return Err(DeploymentWaiverMetadataError::SummaryNotCanonical);
+    }
+    if summary.chars().any(char::is_control) {
+        return Err(DeploymentWaiverMetadataError::SummaryControlCharacter);
+    }
+    if contains_high_confidence_credential_literal(summary) {
+        return Err(DeploymentWaiverMetadataError::SummaryCredentialLiteral);
+    }
+    Ok(())
+}
+
+fn contains_high_confidence_credential_literal(summary: &str) -> bool {
+    ["Bearer", "Basic"]
+        .iter()
+        .any(|scheme| contains_authorization_value_suffix(summary, scheme))
+        || summary.split("-----BEGIN ").skip(1).any(|suffix| {
+            suffix
+                .split_once("-----")
+                .is_some_and(|(label, _)| label == "PRIVATE KEY" || label.ends_with(" PRIVATE KEY"))
+        })
+}
+
+fn contains_authorization_value_suffix(summary: &str, scheme: &str) -> bool {
+    let mut words = summary.split_whitespace().rev();
+    let Some(credential) = words.next() else {
+        return false;
+    };
+    let Some(candidate_scheme) = words.next() else {
+        return false;
+    };
+    candidate_scheme.eq_ignore_ascii_case(scheme)
+        && !credential.is_empty()
+        && !credential.chars().any(char::is_whitespace)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -3462,6 +3734,157 @@ mod tests {
         assert!(!is_valid_approval_reference("with space"));
         assert!(!is_valid_approval_reference("nul\0byte"));
         assert!(!is_valid_approval_reference("ctrl\nchar"));
+    }
+
+    #[test]
+    fn deployment_waiver_metadata_accepts_reference_and_optional_summary() {
+        validate_deployment_waiver_metadata("OPS-2026:INC_42", None)
+            .expect("reference without summary is valid");
+        validate_deployment_waiver_metadata(
+            "OPS-2026:INC_42",
+            Some("Gateway rate limiting is tracked in the operations ticket"),
+        )
+        .expect("ordinary short summary is valid");
+    }
+
+    #[test]
+    fn deployment_waiver_metadata_rejects_invalid_or_overlong_reference() {
+        assert_eq!(
+            validate_deployment_waiver_metadata("", None),
+            Err(DeploymentWaiverMetadataError::ReferenceLength)
+        );
+        assert_eq!(
+            validate_deployment_waiver_metadata(" OPS-42", None),
+            Err(DeploymentWaiverMetadataError::ReferenceNotCanonical)
+        );
+        assert_eq!(
+            validate_deployment_waiver_metadata("OPS/42", None),
+            Err(DeploymentWaiverMetadataError::ReferenceInvalidSyntax)
+        );
+        assert_eq!(
+            validate_deployment_waiver_metadata("OPS..42", None),
+            Err(DeploymentWaiverMetadataError::ReferenceInvalidSyntax)
+        );
+        assert_eq!(
+            validate_deployment_waiver_metadata(&"x".repeat(129), None),
+            Err(DeploymentWaiverMetadataError::ReferenceLength)
+        );
+    }
+
+    #[test]
+    fn deployment_waiver_metadata_rejects_invalid_summary() {
+        for (summary, expected) in [
+            ("", DeploymentWaiverMetadataError::SummaryLength),
+            (
+                " summary",
+                DeploymentWaiverMetadataError::SummaryNotCanonical,
+            ),
+            (
+                "summary\ncontinued",
+                DeploymentWaiverMetadataError::SummaryControlCharacter,
+            ),
+            (
+                "Bearer credential-value",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Basic credential-value",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "bearer credential-value",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "basic credential-value",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "rotated leaked Bearer abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "copied Basic Zm9vOmJhcg==",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "rotated leaked bearer abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "accidentally pasted -----BEGIN PRIVATE KEY-----",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "accidentally pasted -----BEGIN OPENSSH PRIVATE KEY-----",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "accidentally pasted -----BEGIN ED25519 PRIVATE KEY-----",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+        ] {
+            assert_eq!(
+                validate_deployment_waiver_metadata("OPS-42", Some(summary)),
+                Err(expected),
+                "summary must be rejected without echoing it: {summary:?}"
+            );
+        }
+        assert_eq!(
+            validate_deployment_waiver_metadata("OPS-42", Some(&"x".repeat(257))),
+            Err(DeploymentWaiverMetadataError::SummaryLength)
+        );
+        validate_deployment_waiver_metadata("OPS-42", Some(&"é".repeat(256)))
+            .expect("summary limit counts Unicode characters");
+        assert_eq!(
+            validate_deployment_waiver_metadata("OPS-42", Some(&"é".repeat(257))),
+            Err(DeploymentWaiverMetadataError::SummaryLength),
+            "summary limit is measured in Unicode characters"
+        );
+    }
+
+    #[test]
+    fn deployment_waiver_summary_does_not_use_broad_secret_heuristics() {
+        for summary in [
+            "Review URL https://ops.example.test/tickets/42",
+            "JWT validation follow-up",
+            "base64 migration review",
+            "token_name configuration review",
+            "Bearer credential handling review",
+            "Basic authentication migration review",
+            "bearer credential handling review",
+            "basic authentication migration review",
+            "Rotated Bearer token handling review",
+            "Migrated Basic credential storage",
+        ] {
+            validate_deployment_waiver_metadata("OPS-42", Some(summary))
+                .unwrap_or_else(|error| panic!("ordinary summary rejected: {summary:?}: {error}"));
+        }
+    }
+
+    #[test]
+    fn deployment_waiver_summary_deserializer_rejects_explicit_null() {
+        #[derive(Deserialize)]
+        struct Fixture {
+            #[serde(
+                default,
+                deserialize_with = "deserialize_optional_deployment_waiver_summary"
+            )]
+            summary: Option<String>,
+        }
+
+        let omitted: Fixture =
+            serde_json::from_str(r#"{}"#).expect("omitted optional summary is accepted");
+        assert_eq!(omitted.summary, None);
+
+        let present: Fixture = serde_json::from_str(r#"{"summary":"Approved in OPS-42"}"#)
+            .expect("string summary is accepted");
+        assert_eq!(present.summary.as_deref(), Some("Approved in OPS-42"));
+
+        assert!(
+            serde_json::from_str::<Fixture>(r#"{"summary":null}"#).is_err(),
+            "explicit null must not be accepted as an omitted summary"
+        );
     }
 
     #[test]

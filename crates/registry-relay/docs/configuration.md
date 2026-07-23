@@ -536,7 +536,8 @@ deployment.waivers
 deployment.waivers[]
 deployment.waivers[].expires
 deployment.waivers[].finding
-deployment.waivers[].reason
+deployment.waivers[].reference
+deployment.waivers[].summary
 instance
 instance.environment
 instance.id
@@ -1274,7 +1275,8 @@ deployment:
     audit_ack_max_age_secs: 900 # how old acked_at may get before the cursor reads as stale
   waivers:
     - finding: relay.openapi.public
-      reason: public API catalog is intentional for this deployment
+      reference: OPS-2026-0042
+      summary: Public API catalog is intentional for this deployment
       expires: 2026-12-31
 ```
 
@@ -1298,20 +1300,21 @@ Some controls live outside the relay and cannot be observed by the process (for 
 
 ### Waivers
 
-A triggered, waivable finding can be suppressed by a waiver that names the finding id, carries a free-text reason, and a mandatory expiry date (`YYYY-MM-DD`):
+A triggered, waivable finding can be suppressed by a waiver that names the finding id, carries a required operator reference, and sets a mandatory expiry date (`YYYY-MM-DD`). An optional summary can add short operational context:
 
 ```yaml
 deployment:
   profile: hosted_lab
   waivers:
     - finding: relay.ingress.rate_limit_missing
-      reason: rate limiting is handled by the lab gateway
+      reference: OPS-2026-0042
+      summary: Rate limiting is handled by the lab gateway
       expires: 2026-09-30
 ```
 
-A waived finding reports status `waived` instead of its severity effect. Once the expiry date passes, the waiver stops suppressing the finding and the posture additionally raises `deployment.waiver_expired`. The expiry date is mandatory; reasons must be non-empty and must not contain secrets. A waiver naming a hard gate (`startup_fail` or `readiness_fail` severity under the active profile) fails config load instead of being silently accepted and ignored: there is no config-level override for a non-waivable gate.
+A waived finding reports status `waived` instead of its severity effect. Once the expiry date passes, the waiver stops suppressing the finding and the posture additionally raises `deployment.waiver_expired`. The `reference` is 1 to 128 bytes, has no surrounding whitespace, uses only letters, digits, `.`, `_`, `:`, and `-`, and cannot contain `..`. The optional `summary` is 1 to 256 Unicode characters when present, is already trimmed, contains no control characters, and cannot be an authorization value or contain a private-key begin marker. Omit `summary` when it is not needed; explicit `null` is invalid. Keep credentials and private keys out of both fields. A waiver naming a hard gate (`startup_fail` or `readiness_fail` severity under the active profile) fails config load instead of being silently accepted and ignored: there is no config-level override for a non-waivable gate.
 
-Waiver reasons are only visible in the restricted posture tier; the default tier reports finding id, severity, and status but not the reason.
+Waiver references and summaries are visible only in the restricted posture tier; the default tier reports finding id, severity, and status without the per-finding waiver object or deployment waivers array.
 
 ### Findings catalog
 
@@ -1337,7 +1340,7 @@ The current deployment profile, its findings, and active waivers are reported un
 
 ### Boot-time visibility
 
-Reduced posture is loud at boot, not only visible on the posture surface. Every config load warns once per waiver-suppressed finding (`deployment.gate_waived`, with the finding id, reason, and expiry), once per expired waiver (`deployment.waiver_expired`), and once when the profile is undeclared (`deployment.profile_undeclared`). The serve path additionally writes one operational audit record per waived gate at boot, once the audit pipeline exists: event `deployment.gate_waived` at audit path `/__events/deployment.gate_waived`, with `error_code` set to the gate id.
+Reduced posture is loud at boot, not only visible on the posture surface. Every config load warns once per waiver-suppressed finding (`deployment.gate_waived`, with the finding id, reference, optional summary, and expiry), once per expired waiver (`deployment.waiver_expired`), and once when the profile is undeclared (`deployment.profile_undeclared`). The serve path additionally writes one operational audit record per waived gate at boot, once the audit pipeline exists: event `deployment.gate_waived` at audit path `/__events/deployment.gate_waived`, with `error_code` set to the gate id. That minimized audit record does not copy waiver metadata.
 
 This boot-time audit write inherits `audit.write_policy` (see below). Under `fail_closed` (the default), a failed write aborts startup. Under `availability_first`, the failure is logged (`audit.operational_event_write_failed`) and startup continues, so the durable record is best-effort; the per-gate boot log warnings above remain the guaranteed floor.
 

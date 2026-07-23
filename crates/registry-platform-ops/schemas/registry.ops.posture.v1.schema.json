@@ -427,13 +427,20 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "reason",
+        "reference",
         "expires"
       ],
       "properties": {
-        "reason": {
+        "reference": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?!.*\\.\\.)[A-Za-z0-9._:-]+$"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
         },
         "expires": {
           "type": "string",
@@ -447,16 +454,23 @@
       "additionalProperties": false,
       "required": [
         "finding",
-        "reason",
+        "reference",
         "expires"
       ],
       "properties": {
         "finding": {
           "$ref": "#/$defs/finding_id"
         },
-        "reason": {
+        "reference": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?!.*\\.\\.)[A-Za-z0-9._:-]+$"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
         },
         "expires": {
           "type": "string",

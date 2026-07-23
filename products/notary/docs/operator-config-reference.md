@@ -210,7 +210,8 @@ deployment.waivers
 deployment.waivers[]
 deployment.waivers[].expires
 deployment.waivers[].finding
-deployment.waivers[].reason
+deployment.waivers[].reference
+deployment.waivers[].summary
 evidence
 evidence.allowed_purposes
 evidence.allowed_purposes[]
@@ -722,6 +723,28 @@ fields and recompute an unkeyed digest; database and audit controls remain the
 authenticity boundary.
 
 ## State and operations
+
+Deployment waivers name one finding, a required operator reference, and a mandatory expiry date.
+The reference is 1 to 128 bytes, has no surrounding whitespace, uses only letters, digits, `.`,
+`_`, `:`, and `-`, and cannot contain `..`. An optional summary is 1 to 256 Unicode characters,
+already trimmed, contains no control characters, and cannot be an authorization value or contain a
+private-key begin marker. Omit `summary` when it is not needed; explicit `null` is invalid. Keep
+credentials and private keys out of both fields.
+
+```yaml
+deployment:
+  profile: hosted_lab
+  waivers:
+    - finding: notary.openapi.public
+      reference: OPS-2026-0042
+      summary: Public API catalog is approved for the lab
+      expires: 2026-09-30
+```
+
+Expired waivers stop suppressing their finding and raise `deployment.waiver_expired`.
+`startup_fail` and `readiness_fail` gates are not waivable. The default posture tier omits waiver
+metadata; the restricted tier can report only the validated reference, optional summary, and
+expiry. Boot warnings use the same metadata. Audit records remain minimized to finding IDs.
 
 Use the typed Notary-owned PostgreSQL state schema for multi-instance or
 production deployments. The schema holds replay, nonce, evaluation,

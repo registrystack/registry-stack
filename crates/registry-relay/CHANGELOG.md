@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: Replace deployment-waiver `reason` with a required validated
+  `reference` and an optional validated `summary`. Strict configuration parsing
+  rejects the retired field. Restricted posture and boot warnings expose only
+  the new metadata, default posture continues to omit waiver metadata, and
+  waived-gate audit records remain minimized to finding IDs. Expiry and
+  non-waivable startup/readiness gate behavior are unchanged.
+
 ## 0.12.2 - 2026-07-20
 
 ### Security

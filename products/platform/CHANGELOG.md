@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- BREAKING: `registry-platform-ops` replaces deployment-waiver `reason` with
+  required `reference` plus optional omitted `summary` in the shared posture
+  contract. It now owns the common 128-byte reference and 256-character summary
+  validation authority used by Relay and Notary. The default posture allowlist
+  continues to exclude all waiver metadata.
+
 ## v0.12.2 - 2026-07-20
 
 - No user-visible Registry Platform changes. This release fixes forward from

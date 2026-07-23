@@ -42,6 +42,7 @@ evolution rules that JSON Schema alone does not express.
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-07-19 | draft | Initial posture-document contract for `registry.ops.posture.v1`. |
 | 0.1.1 | 2026-07-19 | draft | Added restricted Relay per-resource refresh health before the 1.0 schema freeze. |
+| 0.1.2 | 2026-07-20 | draft | Replaced waiver reason text with validated operator references and optional summaries before the 1.0 schema freeze. |
 
 ## 1. Scope and surface
 
@@ -116,6 +117,23 @@ restricted per-resource refresh health.
 The `notary` section reports claim and credential-profile counts plus state, credential-status,
 federation, OID4VCI, and optional subject-access observations.
 
+### Deployment waiver metadata
+
+A deployment waiver names one finding and expiry date. Its `reference` is a required opaque
+operator-local approval, incident, or ticket identifier. The optional `summary` adds short
+operational context. Neither value grants authority or changes which gate severities can be
+waived.
+
+REQ-OP-POSTURE-011: A producer that emits a deployment waiver MUST include `reference` as an
+already canonical 1 to 128 byte string using only ASCII letters, digits, `.`, `_`, `:`, and `-`.
+The reference MUST NOT contain `..`. If the producer emits `summary`, the summary MUST be an
+already trimmed 1 to 256 Unicode-character string without control characters, an authorization
+value, or a private-key begin marker. The producer MUST omit `summary` when no summary was
+configured and
+MUST NOT emit the retired `reason` property. These metadata rules do not alter expiry behavior:
+an expired waiver stops suppressing its finding. They also do not alter the hard-gate boundary:
+`startup_fail` and `readiness_fail` findings remain non-waivable.
+
 ## 3. Examples
 
 The schema-valid [Registry Relay default example](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/examples/registry-relay.posture.valid.json)
@@ -147,8 +165,8 @@ it in an opaque nested value.
 The default projection includes operational status, counts, selected digests, finding identifiers
 and severities, and non-secret audit-shipping observations.
 It excludes values that can reveal topology or operational free text, including instance URLs,
-build revisions and features, trusted roots, artifact URLs, waiver reasons, signing-key details,
-and Notary federation identities or peers.
+build revisions and features, trusted roots, artifact URLs, waiver references and summaries,
+signing-key details, and Notary federation identities or peers.
 The checked-in sensitive fixture proves that the projection excludes credentials, private keys,
 source URLs, subject identifiers, raw rows, claim values, and the restricted topology fields.
 The default tier also excludes `relay.refresh_health`, including its dataset and resource
@@ -229,8 +247,9 @@ freshness service-level objective requires it.
 A producer conforms to this specification when it emits a schema-valid, component-consistent,
 tier-labeled observation; uses the emit-only allowlist for default output; keeps restricted output
 within the same secret and source-data boundary; assigns a new schema identifier for every
-post-1.0 shape change; and reports Relay refresh health when applicable (REQ-OP-POSTURE-001 through
-REQ-OP-POSTURE-006, REQ-OP-POSTURE-008, and REQ-OP-POSTURE-010).
+post-1.0 shape change; reports Relay refresh health when applicable; and emits only validated
+deployment waiver metadata (REQ-OP-POSTURE-001 through REQ-OP-POSTURE-006,
+REQ-OP-POSTURE-008, REQ-OP-POSTURE-010, and REQ-OP-POSTURE-011).
 
 A consumer conforms when it validates and dispatches by schema, enforces component pairing,
 handles omissions as unreported, and does not elevate posture observations into proof or authority

@@ -8,7 +8,7 @@
 //! wiring that only an integration test can reach:
 //!
 //! * an invalid profile value fails config parse,
-//! * deployment waivers must carry a non-empty reason and a well-formed expiry,
+//! * deployment waivers must carry validated metadata and a well-formed expiry,
 //! * `evidence_grade` from an unsigned local file refuses startup,
 //! * the audit write-policy hook behaves under the default `fail_closed`
 //!   policy and explicit `availability_first` opt-out, proven with an
@@ -113,22 +113,105 @@ fn each_declared_profile_value_parses() {
 }
 
 #[test]
-fn waiver_missing_reason_is_rejected() {
+fn waiver_missing_reference_is_rejected_at_parse() {
     let yaml = format!(
-        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"\"\n      expires: \"2999-01-01\"\n",
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      expires: \"2999-01-01\"\n",
         minimal_config_yaml()
     );
-    let config = parse_config(&yaml).expect("config parses");
     assert!(
-        config::validate::run(&config).is_err(),
-        "a waiver with an empty reason must fail validation"
+        parse_config(&yaml).is_err(),
+        "a waiver without the required reference must fail deserialization"
     );
+}
+
+#[test]
+fn legacy_waiver_reason_is_rejected_as_unknown() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: OPS-42\n      reason: \"legacy waiver text\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    assert!(
+        parse_config(&yaml).is_err(),
+        "the removed reason field must fail strict deserialization"
+    );
+}
+
+#[test]
+fn invalid_or_overlong_waiver_reference_is_rejected() {
+    for reference in ["", " OPS-42", "OPS/42", &"x".repeat(129)] {
+        let yaml = format!(
+            "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: \"{reference}\"\n      expires: \"2999-01-01\"\n",
+            minimal_config_yaml()
+        );
+        let config = parse_config(&yaml).expect("reference value parses as YAML");
+        assert!(
+            config::validate::run(&config).is_err(),
+            "invalid reference must fail validation: {reference:?}"
+        );
+    }
+}
+
+#[test]
+fn absent_summary_and_ordinary_summary_are_accepted() {
+    for summary_line in [
+        "".to_string(),
+        "      summary: \"Gateway rate limiting is tracked in OPS-42\"\n".to_string(),
+    ] {
+        let yaml = format!(
+            "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: OPS-42\n{summary_line}      expires: \"2999-01-01\"\n",
+            minimal_config_yaml()
+        );
+        let config = parse_config(&yaml).expect("config parses");
+        config::validate::run(&config).expect("valid waiver metadata is accepted");
+    }
+}
+
+#[test]
+fn explicit_null_waiver_summary_is_rejected() {
+    let yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: OPS-42\n      summary: null\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    assert!(
+        parse_config(&yaml).is_err(),
+        "summary must be a string when present, not null"
+    );
+}
+
+#[test]
+fn invalid_waiver_summary_is_rejected() {
+    for summary in [
+        "",
+        " summary",
+        "Bearer credential-value",
+        "Basic credential-value",
+        "rotated leaked Bearer abcdef",
+        "-----BEGIN PRIVATE KEY-----",
+        &"x".repeat(257),
+    ] {
+        let yaml = format!(
+            "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: OPS-42\n      summary: \"{summary}\"\n      expires: \"2999-01-01\"\n",
+            minimal_config_yaml()
+        );
+        let config = parse_config(&yaml).expect("summary value parses as YAML");
+        assert!(
+            config::validate::run(&config).is_err(),
+            "invalid summary must fail validation: {summary:?}"
+        );
+    }
+
+    let control_yaml = format!(
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: OPS-42\n      summary: \"summary\\twith control\"\n      expires: \"2999-01-01\"\n",
+        minimal_config_yaml()
+    );
+    let config = parse_config(&control_yaml).expect("escaped control parses");
+    assert!(config::validate::run(&config).is_err());
 }
 
 #[test]
 fn waiver_bad_expiry_is_rejected() {
     let yaml = format!(
-        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"soon\"\n",
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: OPS-TEST-EXPIRY\n      expires: \"soon\"\n",
         minimal_config_yaml()
     );
     let config = parse_config(&yaml).expect("config parses");
@@ -141,7 +224,7 @@ fn waiver_bad_expiry_is_rejected() {
 #[test]
 fn waiver_with_valid_expiry_passes_validation() {
     let yaml = format!(
-        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: OPS-TEST-VALID\n      expires: \"2999-01-01\"\n",
         minimal_config_yaml()
     );
     let config = parse_config(&yaml).expect("config parses");
@@ -233,7 +316,7 @@ fn governed_candidate_apply_accepts_evidence_grade_with_signed_provenance() {
 #[tokio::test]
 async fn boot_audit_records_waived_gate() {
     let yaml = format!(
-        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: OPS-TEST-AUDIT\n      expires: \"2999-01-01\"\n",
         minimal_config_yaml()
     );
     let config = parse_config(&yaml).expect("config parses");
@@ -290,7 +373,7 @@ async fn boot_audit_writes_nothing_without_waivers() {
 #[tokio::test]
 async fn boot_audit_failure_fails_closed_for_waived_gate() {
     let yaml = format!(
-        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: OPS-TEST-FAIL-CLOSED\n      expires: \"2999-01-01\"\n",
         minimal_config_yaml()
     );
     let config = parse_config(&yaml).expect("config parses");
@@ -314,7 +397,7 @@ async fn boot_audit_failure_fails_closed_for_waived_gate() {
 #[tokio::test]
 async fn boot_audit_failure_is_best_effort_when_availability_first() {
     let yaml = format!(
-        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"\n",
+        "{}\ndeployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: OPS-TEST-AVAILABILITY\n      expires: \"2999-01-01\"\n",
         minimal_config_yaml()
     );
     let mut config = parse_config(&yaml).expect("config parses");

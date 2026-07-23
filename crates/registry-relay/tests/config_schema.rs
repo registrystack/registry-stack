@@ -72,6 +72,17 @@ fn assert_runtime_rejects(instance: &Value, label: &str) {
     );
 }
 
+fn assert_runtime_load_rejects(instance: &Value, label: &str) {
+    let yaml = serde_norway::to_string(instance)
+        .unwrap_or_else(|error| panic!("failed to serialize {label} as YAML: {error}"));
+    if let Ok(config) = serde_norway::from_str::<Config>(&yaml) {
+        assert!(
+            registry_relay::config::validate::run(&config).is_err(),
+            "{label} must be rejected during runtime validation"
+        );
+    }
+}
+
 fn example_config() -> Value {
     parse_yaml(&relay_root().join("config/example.yaml"))
 }
@@ -250,6 +261,34 @@ fn strict_nested_objects_tagged_variants_and_duration_shapes_are_enforced() {
     let mut duration_object = example_config();
     duration_object["server"]["request_timeout"] = json!({"secs": 30, "nanos": 0});
     assert_invalid(&schema, &duration_object, "object-form duration");
+}
+
+#[test]
+fn deployment_waiver_schema_rejects_retired_and_noncanonical_metadata() {
+    let schema = document();
+    let mut config = example_config();
+    config["deployment"] = json!({
+        "profile": "hosted_lab",
+        "waivers": [{
+            "finding": "relay.config.unsigned",
+            "reference": "OPS..42",
+            "expires": "2999-01-01"
+        }]
+    });
+    assert_invalid(&schema, &config, "waiver reference containing '..'");
+
+    config["deployment"]["waivers"][0]["reference"] = json!("OPS-42");
+    config["deployment"]["waivers"][0]["summary"] = Value::Null;
+    assert_invalid(&schema, &config, "null deployment waiver summary");
+    assert_runtime_load_rejects(&config, "null deployment waiver summary");
+
+    config["deployment"]["waivers"][0]
+        .as_object_mut()
+        .expect("waiver is an object")
+        .remove("summary");
+    config["deployment"]["waivers"][0]["reason"] = json!("retired waiver text");
+    assert_invalid(&schema, &config, "retired deployment waiver reason");
+    assert_runtime_load_rejects(&config, "retired deployment waiver reason");
 }
 
 #[test]

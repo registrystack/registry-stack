@@ -641,7 +641,7 @@
     },
     "DeploymentWaiverConfig": {
       "additionalProperties": false,
-      "description": "One operator-configured waiver.\n\nA waiver names exactly one finding id, a free-text reason, and a mandatory\nexpiry date (`YYYY-MM-DD`). Reasons must not contain secrets.",
+      "description": "One operator-configured waiver.\n\nA waiver names exactly one finding id, a required operator reference, an\noptional summary, and a mandatory expiry date (`YYYY-MM-DD`). The shared\noperations contract validates metadata before it can reach posture or logs.",
       "properties": {
         "expires": {
           "type": "string"
@@ -649,13 +649,21 @@
         "finding": {
           "type": "string"
         },
-        "reason": {
+        "reference": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^(?!.*\\.\\.)[A-Za-z0-9._:-]+$",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 256,
+          "minLength": 1,
           "type": "string"
         }
       },
       "required": [
         "finding",
-        "reason",
+        "reference",
         "expires"
       ],
       "type": "object"
