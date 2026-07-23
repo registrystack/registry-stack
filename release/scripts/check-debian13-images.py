@@ -67,12 +67,56 @@ NOTARY_DOCKERFILES = (
     Path("release/docker/Dockerfile.registry-notary"),
 )
 
-FROM_RE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", re.MULTILINE)
+RELAY_RUNTIME_DIRECTIVES = (
+    (
+        "HEALTHCHECK --interval=30s --timeout=5s --start-period=10s "
+        '--retries=3 CMD ["/usr/local/bin/registry-relay", "healthcheck"]',
+        "binary healthcheck",
+    ),
+    (
+        'ENTRYPOINT ["/usr/local/bin/registry-relay"]',
+        "absolute Relay entrypoint",
+    ),
+    ("WORKDIR /var/lib/registry-relay", "Relay working directory"),
+)
+NOTARY_RUNTIME_DIRECTIVES = (
+    (
+        "HEALTHCHECK --interval=30s --timeout=5s --start-period=10s "
+        '--retries=3 CMD ["/usr/local/bin/registry-notary", "healthcheck"]',
+        "binary healthcheck",
+    ),
+    (
+        'ENTRYPOINT ["/usr/local/bin/registry-notary"]',
+        "absolute Notary entrypoint",
+    ),
+    ("WORKDIR /var/lib/registry-notary", "Notary working directory"),
+)
+
+FROM_RE = re.compile(
+    r"^[ \t]*FROM[ \t]+(?:--platform=\S+[ \t]+)?"
+    r"(?P<base>[^\s#]+)"
+    r"(?:[ \t]+AS[ \t]+(?P<alias>[^\s#]+))?"
+    r"[ \t]*(?:#.*)?$",
+    re.IGNORECASE | re.MULTILINE,
+)
 DIGEST_PIN_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 RETIRED_MARKER_RE = re.compile(
     r"\b(?:bookworm|debian[ \t_:-]*12)\b",
     re.IGNORECASE,
 )
+RELEASE_BUILDER_KEY_RE = re.compile(
+    r"^[ \t]*RELEASE_BUILDER_IMAGE[ \t]*:"
+)
+DEFAULT_BUILDER_ASSIGNMENT_RE = re.compile(
+    r"^[ \t]*(?:(?:export|readonly)[ \t]+)?default_builder_image[ \t]*="
+)
+TUTORIAL_BUILDER_ASSIGNMENT_RE = re.compile(
+    r"^[ \t]*(?:(?:export|readonly)[ \t]+)?BUILDER_IMAGE[ \t]*="
+)
+LIVE_JOURNEY_BUILDER_RE = re.compile(
+    r"^[ \t]+rust:[^ \t#]+[ \t]+\\[ \t]*$"
+)
+CACHE_KEY_RE = re.compile(r"^[ \t]*key[ \t]*:")
 
 
 def read(root: Path, relative: Path, failures: list[str]) -> str:
@@ -95,15 +139,24 @@ def require(
         failures.append(f"{relative}: missing {detail}: {needle!r}")
 
 
-def require_exact_line(
+def require_unique_active_line(
     text: str,
     line: str,
+    active_pattern: re.Pattern[str],
     relative: Path,
     detail: str,
     failures: list[str],
 ) -> None:
-    if line not in text.splitlines():
-        failures.append(f"{relative}: missing {detail}: exact line {line!r}")
+    active_lines = [
+        candidate
+        for candidate in text.splitlines()
+        if active_pattern.match(candidate)
+    ]
+    if active_lines != [line]:
+        failures.append(
+            f"{relative}: missing {detail}: expected exactly one active "
+            f"line {line!r}; found {active_lines!r}"
+        )
 
 
 def workflow_step(text: str, name: str) -> str:
@@ -117,17 +170,11 @@ def workflow_step(text: str, name: str) -> str:
         (
             index
             for index in range(start + 1, len(lines))
-            if lines[index].startswith("      - name: ")
+            if lines[index].startswith("      - ")
         ),
         len(lines),
     )
     return "\n".join(lines[start:end])
-
-
-def runtime_stage(text: str) -> str:
-    marker = f"FROM {DISTROLESS_RUNTIME} AS runtime"
-    offset = text.find(marker)
-    return text[offset:] if offset >= 0 else ""
 
 
 def check_repository(root: Path = ROOT) -> list[str]:
@@ -147,50 +194,56 @@ def check_repository(root: Path = ROOT) -> list[str]:
 
     for relative in DOCKERFILES:
         text = texts[relative]
-        bases = FROM_RE.findall(text)
-        if not bases:
+        stage_matches = list(FROM_RE.finditer(text))
+        if not stage_matches:
             failures.append(f"{relative}: no FROM instruction found")
             continue
-        for base in bases:
+        stages = tuple(
+            (match.group("base"), match.group("alias"))
+            for match in stage_matches
+        )
+        expected_stages = (
+            (
+                (RUST_BUILDER, "builder"),
+                (DISTROLESS_RUNTIME, "runtime"),
+            )
+            if relative in RUST_BUILDER_DOCKERFILES
+            else (
+                (DEBIAN_PREPARATION, "runtime-root"),
+                (DISTROLESS_RUNTIME, "runtime"),
+            )
+        )
+        if stages != expected_stages:
+            failures.append(
+                f"{relative}: Dockerfile stage sequence must be exactly "
+                f"{expected_stages!r}; found {stages!r}"
+            )
+        for base, _alias in stages:
             if not DIGEST_PIN_RE.search(base):
                 failures.append(
                     f"{relative}: upstream base is not pinned by immutable digest: {base}"
                 )
-        if bases[-1] != DISTROLESS_RUNTIME:
+        runtime = text[stage_matches[-1].start() :]
+        if re.search(r"^[ \t]*RUN(?:[ \t]|$)", runtime, re.IGNORECASE | re.MULTILINE):
             failures.append(
-                f"{relative}: final Dockerfile stage must use pinned "
-                f"Distroless Debian 13 runtime: {bases[-1]}"
+                f"{relative}: final Distroless runtime contains 'RUN'"
             )
-
-        require(
-            text,
-            f"FROM {DISTROLESS_RUNTIME} AS runtime",
-            relative,
-            "Distroless Debian 13 non-root final runtime",
-            failures,
-        )
-        runtime = runtime_stage(text)
-        for forbidden in ("\nRUN ", "apt-get", "/bin/sh", "curl ", "wget "):
+        for forbidden in ("apt-get", "/bin/sh", "curl ", "wget "):
             if forbidden in runtime:
                 failures.append(
                     f"{relative}: final Distroless runtime contains {forbidden.strip()!r}"
                 )
-        require(
-            runtime,
-            "HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3",
-            relative,
-            "binary healthcheck",
-            failures,
+        runtime_directives = (
+            RELAY_RUNTIME_DIRECTIVES
+            if relative in RELAY_DOCKERFILES
+            else NOTARY_RUNTIME_DIRECTIVES
         )
-
-    for relative in RUST_BUILDER_DOCKERFILES:
-        require(
-            texts[relative],
-            f"FROM {RUST_BUILDER} AS builder",
-            relative,
-            "pinned Debian 13 Rust builder",
-            failures,
-        )
+        for directive, detail in runtime_directives:
+            if directive not in runtime.splitlines():
+                failures.append(
+                    f"{relative}: missing {detail} in final runtime stage: "
+                    f"{directive!r}"
+                )
 
     for relative in PREPARATION_DOCKERFILES:
         text = texts[relative]
@@ -198,13 +251,6 @@ def check_repository(root: Path = ROOT) -> list[str]:
             failures.append(
                 f"{relative}: pinned Dockerfile frontend must be the first line"
             )
-        require(
-            text,
-            f"FROM {DEBIAN_PREPARATION} AS runtime-root",
-            relative,
-            "pinned Debian 13 runtime preparation base",
-            failures,
-        )
         require(
             text,
             "ARG SOURCE_DATE_EPOCH=0",
@@ -236,13 +282,6 @@ def check_repository(root: Path = ROOT) -> list[str]:
             "Relay worker binary",
             failures,
         )
-        require(
-            runtime_stage(text),
-            'ENTRYPOINT ["/usr/local/bin/registry-relay"]',
-            relative,
-            "absolute Relay entrypoint",
-            failures,
-        )
 
     product_notary = texts[Path("products/notary/Dockerfile")]
     require(
@@ -262,24 +301,10 @@ def check_repository(root: Path = ROOT) -> list[str]:
             failures,
         )
         require(
-            runtime_stage(text),
-            'ENTRYPOINT ["/usr/local/bin/registry-notary"]',
-            relative,
-            "absolute Notary entrypoint",
-            failures,
-        )
-        require(
             text,
             "chown -R 65532:65532",
             relative,
             "numeric nonroot-owned Notary runtime directories",
-            failures,
-        )
-        require(
-            runtime_stage(text),
-            "WORKDIR /var/lib/registry-notary",
-            relative,
-            "Notary working directory",
             failures,
         )
         if re.search(
@@ -295,16 +320,18 @@ def check_repository(root: Path = ROOT) -> list[str]:
     ci_workflow = texts[Path(".github/workflows/ci.yml")]
     binary_recipe = texts[Path("release/scripts/build-release-binaries.sh")]
     tutorial_check = texts[Path("docs/site/scripts/check-registryctl-tutorials.sh")]
-    require_exact_line(
+    require_unique_active_line(
         workflow,
         f"  RELEASE_BUILDER_IMAGE: {RUST_BUILDER}",
+        RELEASE_BUILDER_KEY_RE,
         Path(".github/workflows/release.yml"),
         "pinned Debian 13 release builder",
         failures,
     )
-    require_exact_line(
+    require_unique_active_line(
         binary_recipe,
         f'default_builder_image="{RUST_BUILDER}"',
+        DEFAULT_BUILDER_ASSIGNMENT_RE,
         Path("release/scripts/build-release-binaries.sh"),
         "pinned Debian 13 release recipe builder",
         failures,
@@ -316,9 +343,10 @@ def check_repository(root: Path = ROOT) -> list[str]:
         "PKCS#11-enabled release build",
         failures,
     )
-    require_exact_line(
+    require_unique_active_line(
         tutorial_check,
         f'BUILDER_IMAGE="{RUST_BUILDER}"',
+        TUTORIAL_BUILDER_ASSIGNMENT_RE,
         Path("docs/site/scripts/check-registryctl-tutorials.sh"),
         "pinned Debian 13 registryctl tutorial builder",
         failures,
@@ -327,9 +355,10 @@ def check_repository(root: Path = ROOT) -> list[str]:
     live_journey = texts[
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh")
     ]
-    require_exact_line(
+    require_unique_active_line(
         live_journey,
         f"    {RUST_BUILDER} \\",
+        LIVE_JOURNEY_BUILDER_RE,
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
         "pinned Debian 13 live-journey builder",
         failures,
@@ -341,9 +370,10 @@ def check_repository(root: Path = ROOT) -> list[str]:
             f".github/workflows/ci.yml: missing unique {TUTORIAL_CACHE_STEP!r} step"
         )
     else:
-        require_exact_line(
+        require_unique_active_line(
             tutorial_cache,
             TUTORIAL_CACHE_KEY,
+            CACHE_KEY_RE,
             Path(".github/workflows/ci.yml"),
             "registryctl tutorial builder cache key",
             failures,

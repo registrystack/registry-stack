@@ -71,6 +71,16 @@ class Debian13ImageCheckTest(unittest.TestCase):
             failures,
         )
 
+    def runtime_directives(self, relative: Path) -> tuple[str, str, str]:
+        product = "relay" if relative in self.module.RELAY_DOCKERFILES else "notary"
+        binary = f"/usr/local/bin/registry-{product}"
+        return (
+            "HEALTHCHECK --interval=30s --timeout=5s "
+            f'--start-period=10s --retries=3 CMD ["{binary}", "healthcheck"]',
+            f'ENTRYPOINT ["{binary}"]',
+            f"WORKDIR /var/lib/registry-{product}",
+        )
+
     def test_current_repository_follows_contract(self) -> None:
         self.assertEqual([], self.module.check_repository(ROOT))
 
@@ -175,13 +185,62 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 )
                 self.assert_has_failure(root, failure)
 
+    def test_builder_contracts_reject_earlier_and_later_active_overrides(
+        self,
+    ) -> None:
+        pin = self.module.RUST_BUILDER
+        cases = (
+            (
+                RELEASE_WORKFLOW,
+                f"  RELEASE_BUILDER_IMAGE: {pin}",
+                "  RELEASE_BUILDER_IMAGE: rust:1.95-trixie",
+                "missing pinned Debian 13 release builder",
+            ),
+            (
+                RELEASE_BINARY_RECIPE,
+                f'default_builder_image="{pin}"',
+                'default_builder_image="rust:1.95-trixie"',
+                "missing pinned Debian 13 release recipe builder",
+            ),
+            (
+                TUTORIAL_CHECK,
+                f'BUILDER_IMAGE="{pin}"',
+                'BUILDER_IMAGE="rust:1.95-trixie"',
+                "missing pinned Debian 13 registryctl tutorial builder",
+            ),
+        )
+        for relative, exact, override, failure in cases:
+            for replacement in (f"{override}\n{exact}", f"{exact}\n{override}"):
+                with self.subTest(relative=relative, replacement=replacement):
+                    root = self.fixture()
+                    target = root / relative
+                    text = target.read_text(encoding="utf-8")
+                    target.write_text(
+                        text.replace(exact, replacement, 1),
+                        encoding="utf-8",
+                    )
+                    self.assert_has_failure(root, failure)
+
+        root = self.fixture()
+        target = root / LIVE_JOURNEY
+        exact = f"    {pin} \\"
+        text = target.read_text(encoding="utf-8")
+        target.write_text(
+            text.replace(exact, exact + "\n    rust:1.95-trixie \\", 1),
+            encoding="utf-8",
+        )
+        self.assert_has_failure(
+            root,
+            "missing pinned Debian 13 live-journey builder",
+        )
+
     def test_every_dockerfile_base_requires_an_immutable_digest(self) -> None:
         for relative in self.module.DOCKERFILES:
             with self.subTest(relative=relative):
                 root = self.fixture()
                 target = root / relative
                 text = target.read_text(encoding="utf-8")
-                base = self.module.FROM_RE.findall(text)[0]
+                base = next(self.module.FROM_RE.finditer(text)).group("base")
                 self.assertIn("@sha256:", base)
                 target.write_text(
                     text.replace(base, base.split("@sha256:", 1)[0], 1),
@@ -196,9 +255,9 @@ class Debian13ImageCheckTest(unittest.TestCase):
         pinned_alpine = "alpine:3.22@sha256:" + "a" * 64
         for relative in self.module.DOCKERFILES:
             additions = (
-                f"\nFROM {pinned_alpine} AS debug\n",
+                f"\n  from {pinned_alpine} as debug\n",
                 f"\n# FROM {self.module.DISTROLESS_RUNTIME} AS runtime\n"
-                f"FROM {self.module.DEBIAN_PREPARATION} AS debug\n",
+                f"  from {self.module.DEBIAN_PREPARATION} as debug\n",
             )
             for addition in additions:
                 with self.subTest(relative=relative, addition=addition):
@@ -208,9 +267,69 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     target.write_text(text + addition, encoding="utf-8")
                     self.assert_has_failure(
                         root,
-                        f"{relative}: final Dockerfile stage must use pinned "
-                        "Distroless Debian 13 runtime",
+                        f"{relative}: Dockerfile stage sequence must be exactly",
                     )
+
+    def test_dockerfile_stage_sequence_rejects_aliases_duplicates_and_empty_runtime(
+        self,
+    ) -> None:
+        runtime = f"FROM {self.module.DISTROLESS_RUNTIME} AS runtime"
+        for relative in self.module.DOCKERFILES:
+            with self.subTest(relative=relative, mutation="alias"):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                target.write_text(
+                    text.replace(runtime, runtime.replace("runtime", "final"), 1),
+                    encoding="utf-8",
+                )
+                self.assert_has_failure(
+                    root,
+                    f"{relative}: Dockerfile stage sequence must be exactly",
+                )
+
+            with self.subTest(relative=relative, mutation="duplicate"):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                target.write_text(text + f"\n{runtime}\n", encoding="utf-8")
+                self.assert_has_failure(
+                    root,
+                    f"{relative}: Dockerfile stage sequence must be exactly",
+                )
+
+            with self.subTest(relative=relative, mutation="empty"):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                final_stage = list(self.module.FROM_RE.finditer(text))[-1]
+                target.write_text(
+                    text[: final_stage.end()] + "\n",
+                    encoding="utf-8",
+                )
+                self.assert_has_failure(root, f"{relative}: missing binary healthcheck")
+
+    def test_runtime_directives_must_be_active_in_the_final_stage(self) -> None:
+        for relative in self.module.DOCKERFILES:
+            for directive in self.runtime_directives(relative):
+                with self.subTest(relative=relative, directive=directive):
+                    root = self.fixture()
+                    target = root / relative
+                    text = target.read_text(encoding="utf-8")
+                    final_stage = list(self.module.FROM_RE.finditer(text))[-1]
+                    prefix = text[: final_stage.start()]
+                    runtime = text[final_stage.start() :]
+                    self.assertIn(f"\n{directive}\n", runtime)
+                    runtime = runtime.replace(
+                        f"\n{directive}\n",
+                        f"\n# {directive}\n",
+                        1,
+                    )
+                    target.write_text(
+                        prefix + directive + "\n" + runtime,
+                        encoding="utf-8",
+                    )
+                    self.assert_has_failure(root, f"{relative}: missing")
 
     def test_tutorial_cache_is_bound_to_the_builder_script_without_fallback(
         self,
@@ -246,6 +365,45 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 )
                 self.assert_has_failure(root, failure)
 
+        wrong_key = (
+            "          key: registryctl-tutorial-${{ runner.os }}-"
+            "${{ hashFiles('Cargo.lock') }}"
+        )
+        root = self.fixture()
+        target = root / CI_WORKFLOW
+        text = target.read_text(encoding="utf-8")
+        target.write_text(
+            text.replace(
+                exact,
+                wrong_key
+                + "\n      - uses: example.invalid/cache@v1\n"
+                "        with:\n"
+                + exact,
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assert_has_failure(
+            root,
+            "missing registryctl tutorial builder cache key",
+        )
+
+        root = self.fixture()
+        target = root / CI_WORKFLOW
+        text = target.read_text(encoding="utf-8")
+        target.write_text(
+            text.replace(
+                exact,
+                exact
+                + "\n      - run: true\n"
+                "        env:\n"
+                "          restore-keys: belongs-to-next-step",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual([], self.module.check_repository(root))
+
     def test_every_runtime_stays_distroless_and_shell_free(self) -> None:
         marker = f"FROM {self.module.DISTROLESS_RUNTIME} AS runtime"
         mutable_runtime = "FROM debian:trixie-slim AS runtime"
@@ -265,7 +423,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 )
                 self.assert_has_failure(
                     root,
-                    f"{relative}: missing Distroless Debian 13 non-root final runtime",
+                    f"{relative}: Dockerfile stage sequence must be exactly",
                 )
 
             with self.subTest(relative=relative, invariant="runtime"):
