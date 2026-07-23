@@ -1202,6 +1202,7 @@ pub enum DeploymentWaiverMetadataError {
     ReferenceLength,
     ReferenceNotCanonical,
     ReferenceInvalidSyntax,
+    ReferenceCredentialLiteral,
     SummaryLength,
     SummaryNotCanonical,
     SummaryControlCharacter,
@@ -1211,9 +1212,10 @@ pub enum DeploymentWaiverMetadataError {
 impl DeploymentWaiverMetadataError {
     pub const fn field(self) -> &'static str {
         match self {
-            Self::ReferenceLength | Self::ReferenceNotCanonical | Self::ReferenceInvalidSyntax => {
-                "reference"
-            }
+            Self::ReferenceLength
+            | Self::ReferenceNotCanonical
+            | Self::ReferenceInvalidSyntax
+            | Self::ReferenceCredentialLiteral => "reference",
             Self::SummaryLength
             | Self::SummaryNotCanonical
             | Self::SummaryControlCharacter
@@ -1236,6 +1238,10 @@ impl Display for DeploymentWaiverMetadataError {
             Self::ReferenceInvalidSyntax => write!(
                 formatter,
                 "reference must be 1..={DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES} bytes and use only [A-Za-z0-9._:-] without '..'"
+            ),
+            Self::ReferenceCredentialLiteral => write!(
+                formatter,
+                "reference must be 1..={DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES} bytes and not encode a Bearer or Basic authorization value"
             ),
             Self::SummaryLength => write!(
                 formatter,
@@ -1273,6 +1279,9 @@ pub fn validate_deployment_waiver_metadata(
     if !is_valid_approval_reference(reference) {
         return Err(DeploymentWaiverMetadataError::ReferenceInvalidSyntax);
     }
+    if contains_reference_authorization_value(reference) {
+        return Err(DeploymentWaiverMetadataError::ReferenceCredentialLiteral);
+    }
 
     let Some(summary) = summary else {
         return Ok(());
@@ -1292,8 +1301,30 @@ pub fn validate_deployment_waiver_metadata(
     Ok(())
 }
 
+const AUTHORIZATION_SCHEMES: [&str; 2] = ["Bearer", "Basic"];
+
+fn contains_reference_authorization_value(reference: &str) -> bool {
+    // References are opaque identifiers, not prose. An exact scheme prefix
+    // plus a nonempty value is therefore a high-confidence pasted credential.
+    let reference = strip_ascii_case_prefix(reference, "Authorization:").unwrap_or(reference);
+    AUTHORIZATION_SCHEMES.iter().any(|scheme| {
+        reference
+            .get(..scheme.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme))
+            && reference.as_bytes().get(scheme.len()) == Some(&b':')
+            && reference.len() > scheme.len() + 1
+    })
+}
+
+fn strip_ascii_case_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    value
+        .get(..prefix.len())
+        .filter(|candidate| candidate.eq_ignore_ascii_case(prefix))
+        .and_then(|_| value.get(prefix.len()..))
+}
+
 fn contains_high_confidence_credential_literal(summary: &str) -> bool {
-    ["Bearer", "Basic"]
+    AUTHORIZATION_SCHEMES
         .iter()
         .any(|scheme| contains_authorization_value(summary, scheme))
         || summary.split("-----BEGIN ").skip(1).any(|suffix| {
@@ -1304,20 +1335,46 @@ fn contains_high_confidence_credential_literal(summary: &str) -> bool {
 }
 
 fn contains_authorization_value(summary: &str, scheme: &str) -> bool {
-    let mut words = summary.split_whitespace();
-    let Some(mut candidate_scheme) = words.next() else {
-        return false;
-    };
+    let mut value_follows = false;
+    for word in summary.split_whitespace() {
+        if value_follows {
+            value_follows = false;
+            if is_credential_like_authorization_value(word) {
+                return true;
+            }
+        }
 
-    for candidate_value in words {
-        if candidate_scheme.eq_ignore_ascii_case(scheme)
-            && is_credential_like_authorization_value(candidate_value)
-        {
+        let Some(inline_value) = authorization_value_in_word(word, scheme) else {
+            continue;
+        };
+        if inline_value.is_empty() {
+            value_follows = true;
+        } else if is_credential_like_authorization_value(inline_value) {
             return true;
         }
-        candidate_scheme = candidate_value;
     }
     false
+}
+
+fn authorization_value_in_word<'a>(word: &'a str, scheme: &str) -> Option<&'a str> {
+    let mut segment_start = 0;
+    for segment in word.split(':') {
+        let segment_end = segment_start + segment.len();
+        // Normalize punctuation surrounding a scheme segment while retaining
+        // internal punctuation, so prose such as "Bearer-based" stays valid.
+        let normalized_scheme =
+            segment.trim_matches(|character: char| character.is_ascii_punctuation());
+        if normalized_scheme.eq_ignore_ascii_case(scheme) {
+            if segment_end == word.len() {
+                return Some("");
+            }
+            return word
+                .get(segment_end + 1..)
+                .map(|value| value.trim_start_matches(':'));
+        }
+        segment_start = segment_end + 1;
+    }
+    None
 }
 
 fn is_credential_like_authorization_value(candidate: &str) -> bool {
@@ -3765,6 +3822,11 @@ mod tests {
     fn deployment_waiver_metadata_accepts_reference_and_optional_summary() {
         validate_deployment_waiver_metadata("OPS-2026:INC_42", None)
             .expect("reference without summary is valid");
+        for reference in ["OPS-BEARER-42", "BasicAuth:OPS-42", "Bearer-rotation:42"] {
+            validate_deployment_waiver_metadata(reference, None).unwrap_or_else(|error| {
+                panic!("ordinary operator reference rejected: {reference:?}: {error}")
+            });
+        }
         validate_deployment_waiver_metadata(
             "OPS-2026:INC_42",
             Some("Gateway rate limiting is tracked in the operations ticket"),
@@ -3794,6 +3856,20 @@ mod tests {
             validate_deployment_waiver_metadata(&"x".repeat(129), None),
             Err(DeploymentWaiverMetadataError::ReferenceLength)
         );
+        for reference in [
+            "Bearer:abcdef",
+            "bearer:abc123",
+            "Basic:abc123",
+            "bAsIc:credential-value",
+            "Authorization:Bearer:abc123",
+            "authorization:bAsIc:abc123",
+        ] {
+            assert_eq!(
+                validate_deployment_waiver_metadata(reference, None),
+                Err(DeploymentWaiverMetadataError::ReferenceCredentialLiteral),
+                "credential-like reference must be rejected without echoing it: {reference:?}"
+            );
+        }
     }
 
     #[test]
@@ -3846,6 +3922,30 @@ mod tests {
             ),
             (
                 "rotated leaked bearer abcdef before config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization:Bearer abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Bearer: abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization:Basic Zm9vOmJhcg== before config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "(bearer): abcdef after config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Bearer:abcdef before config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Bearer:token:abcdef before config apply",
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),
             (
@@ -3904,6 +4004,11 @@ mod tests {
             "Bearer access token handling review",
             "Basic auth scheme migration review",
             "Bearer header value handling review",
+            "Authorization: Bearer token handling review",
+            "Bearer: token handling review",
+            "Authorization:Basic authentication migration review",
+            "Bearer-based authentication review",
+            "Basic-auth migration review",
         ] {
             validate_deployment_waiver_metadata("OPS-42", Some(summary))
                 .unwrap_or_else(|error| panic!("ordinary summary rejected: {summary:?}: {error}"));
