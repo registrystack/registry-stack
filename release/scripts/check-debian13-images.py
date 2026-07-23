@@ -43,18 +43,12 @@ REQUIRED_PRODUCT_SURFACES = PRODUCT_DOCKERFILES + (
     Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
     TUTORIAL_SCRIPT,
 )
-RELAY_DOCKERFILES = (
-    PRODUCT_DOCKERFILES[0],
-    PRODUCT_DOCKERFILES[1],
-    PRODUCT_DOCKERFILES[4],
-)
+RELAY_DOCKERFILES = (PRODUCT_DOCKERFILES[0], PRODUCT_DOCKERFILES[1], PRODUCT_DOCKERFILES[4])
 NOTARY_DOCKERFILES = (PRODUCT_DOCKERFILES[2], PRODUCT_DOCKERFILES[3])
 
 # Scan tracked UTF-8 text, excluding only historical evidence, third-party or
 # generated material, build output, and this checker's negative fixtures.
-EXCLUDED_DIRS = set(
-    ".git .repo-docs-cache .research .venv __pycache__ dist node_modules target".split()
-)
+EXCLUDED_DIRS = set(".git .repo-docs-cache .research .venv __pycache__ dist node_modules target".split())
 EXCLUDED_PREFIXES = ("external/", "release/notes/")
 EXCLUDED_EXACT = {
     "release/scripts/check-debian13-images.py",
@@ -69,15 +63,17 @@ RETIRED_MARKERS = (
     "book" + "worm", "bullseye", "buster", "debian" + "12", "debian-12",
     "debian" + "11", "debian-11", "debian" + "10", "debian-10",
 )
-DEFAULT_DEBIAN_FAMILIES = {"golang", "node", "python", "rust"}
+DEFAULT_DEBIAN_FAMILIES = {"golang", "node", "postgres", "python", "rust"}
 OCI_RE = re.compile(
     r"(?<![A-Za-z0-9._/@+-])(?P<ref>(?:docker://)?"
     r"(?:[A-Za-z0-9.-]+(?::[0-9]+)?/)*[A-Za-z0-9._-]+"
     r"(?::[A-Za-z0-9_][A-Za-z0-9._-]*|@sha256:[0-9a-fA-F]{64})"
     r"(?:@sha256:[0-9a-fA-F]{64})?)(?![A-Za-z0-9._/@+-])"
 )
-BARE_DEBIAN_RE = re.compile(
-    r"(?<![A-Za-z0-9._@+-])debian(?![A-Za-z0-9._/@+:-])"
+BARE_DEFAULT_FAMILY_RE = re.compile(
+    rf"(?<![A-Za-z0-9._@+-])(?P<ref>(?:[A-Za-z0-9.-]+(?::[0-9]+)?/)*"
+    rf"(?P<name>debian|{'|'.join(sorted(DEFAULT_DEBIAN_FAMILIES))}))"
+    r"(?![A-Za-z0-9._/@+:-])"
 )
 DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 FROM_RE = re.compile(
@@ -105,10 +101,8 @@ EXEMPTION_RE = re.compile(
 MARKDOWN_SUFFIXES = {".md", ".mdx"}
 CODE_SUFFIXES = set(".bash .js .mjs .py .sh .ts .yaml .yml".split())
 STRICT_ASSIGNMENT_SUFFIXES = CODE_SUFFIXES - {".yaml", ".yml"}
-FENCE_LANGS = set(
-    "bash console dockerfile javascript js python sh shell terminal ts "
-    "typescript yaml yml zsh".split()
-)
+FENCE_LANGS = set("bash console dockerfile javascript js python sh shell terminal "
+                  "ts typescript yaml yml zsh".split())
 
 
 class ImageSurfaceError(RuntimeError):
@@ -195,13 +189,15 @@ def repository_and_tag(reference: str) -> tuple[str, str | None]:
 def is_debian_family(reference: str) -> bool:
     repository, tag = repository_and_tag(reference)
     name, tag = repository.rsplit("/", 1)[-1].casefold(), (tag or "").casefold()
-    return (
+    default = name in DEFAULT_DEBIAN_FAMILIES
+    excluded = default and ("alpine" in tag or "windows" in tag)
+    return not excluded and (
         "debian" in name
         or name == "buildpack-deps"
         or "trixie" in tag
         or re.search(r"debian-?13", tag) is not None
-        or name in DEFAULT_DEBIAN_FAMILIES
-        and (tag in {"latest", "slim"} or re.fullmatch(r"[0-9]+(?:[._][0-9]+)*", tag) is not None)
+        or default and (not tag or tag in {"latest", "slim"} or
+                        re.fullmatch(r"[0-9]+(?:[._][0-9]+)*(?:-slim)?", tag) is not None)
     )
 
 def assignment(path: Path, line: str) -> tuple[str, str] | None:
@@ -342,12 +338,16 @@ def scan_surface(path: Path, text: str) -> list[str]:
             declared.add(canonical)
             if has_literal and not computed or positional:
                 resolved.add(canonical)
-        if not comment and BARE_DEBIAN_RE.search(line) and (
-            item is not None or (code_file or markdown_code) and (is_dockerfile(path) or consumer)
-        ):
+        bare = BARE_DEFAULT_FAMILY_RE.search(line)
+        bare_assignment = item is not None and (
+            path.suffix in {".yaml", ".yml"} and re.sub("[^A-Za-z0-9]", "", item[0]).casefold() in {"image", "container"}
+            or path.suffix in STRICT_ASSIGNMENT_SUFFIXES and policy_image_name(item[0]))
+        if not comment and bare and (is_dockerfile(path) or consumer or bare_assignment):
+            family = bare.group("name")
+            label = "Debian" if family == "debian" else f"Debian-default {family}"
             failures.append(
-                f"{path}:{number}: bare Debian image reference is not pinned "
-                "and does not declare Trixie/Debian 13: debian"
+                f"{path}:{number}: bare {label} image reference is not pinned "
+                f"and does not declare Trixie/Debian 13: {bare.group('ref')}"
             )
     changed = True
     while changed:
@@ -368,7 +368,7 @@ def scan_surface(path: Path, text: str) -> list[str]:
         variables = {
             match.group("name").casefold() for match in IMAGE_VAR_RE.finditer(line)
         }
-        if not any(re.search("[A-Za-z]", repository_and_tag(item)[0]) for item in references(line)) and not BARE_DEBIAN_RE.search(line) and not variables & (resolved | declared):
+        if not any(re.search("[A-Za-z]", repository_and_tag(item)[0]) for item in references(line)) and not BARE_DEFAULT_FAMILY_RE.search(line) and not variables & (resolved | declared):
             failures.append(
                 f"{path}:{number}: Docker/Podman image consumer must use a "
                 "literal or a resolved *_IMAGE assignment"
@@ -427,6 +427,7 @@ def product_contracts(texts: dict[Path, str], failures: list[str]) -> None:
     require(workflow, f"RELEASE_BUILDER_IMAGE: {RUST_BUILDER}", Path(".github/workflows/release.yml"), "pinned Debian 13 release builder", failures)
     require(texts.get(Path("release/scripts/build-release-binaries.sh"), ""), "--features registry-notary/registry-notary-cel,registry-notary/pkcs11", Path("release/scripts/build-release-binaries.sh"), "PKCS#11-enabled release build", failures)
     require(texts.get(Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"), ""), RUST_BUILDER, Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"), "pinned Debian 13 live-journey builder", failures)
+    require(texts.get(Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"), ""), "postgres:16-trixie@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20", Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"), "pinned Debian 13 live-journey PostgreSQL", failures)
     tutorial = texts.get(TUTORIAL_SCRIPT, "")
     ci = texts.get(CI_WORKFLOW, "")
     start = ci.find("- name: Cache source-under-test Cargo build")
