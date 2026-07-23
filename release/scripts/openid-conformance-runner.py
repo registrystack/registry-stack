@@ -424,7 +424,30 @@ def cmd_submit_offer(args: argparse.Namespace) -> int:
     url = urllib.parse.urlunsplit(
         endpoint._replace(query=urllib.parse.urlencode({"credential_offer": inline}))
     )
-    context = ssl._create_unverified_context()
+    ca_certificate = args.suite_ca_certificate
+    if ca_certificate is not None:
+        ca_certificate = ca_certificate.expanduser()
+        try:
+            info = ca_certificate.lstat()
+        except OSError:
+            raise RunnerError(
+                "suite CA certificate could not be opened securely"
+            ) from None
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISREG(info.st_mode)
+            or not 0 < info.st_size <= 1024 * 1024
+        ):
+            raise RunnerError(
+                "suite CA certificate must be a bounded regular file"
+            )
+        ca_certificate = ca_certificate.resolve()
+    try:
+        context = ssl.create_default_context(
+            cafile=str(ca_certificate) if ca_certificate is not None else None
+        )
+    except OSError:
+        raise RunnerError("suite CA certificate could not be loaded") from None
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         urllib.request.HTTPSHandler(context=context),
@@ -622,6 +645,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--conformance-server",
         default=load_plan_map()["suite"]["base_url"],
     )
+    offer_parser.add_argument("--suite-ca-certificate", type=Path)
     offer_parser.add_argument("--timeout-seconds", type=int, default=10)
     offer_parser.set_defaults(func=cmd_submit_offer)
 

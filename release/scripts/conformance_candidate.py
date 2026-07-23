@@ -74,9 +74,46 @@ def verify_git_binding(
         object_size = int(git_output(["cat-file", "-s", object_name], 16))
     except ValueError:
         raise CandidateError("candidate Git binding could not be verified") from None
-    if object_size != len(manifest_bytes):
+    if not 0 < object_size <= 1024 * 1024:
         raise CandidateError("candidate Git binding could not be verified")
-    if git_output(["show", object_name], object_size) != manifest_bytes:
+    tagged_manifest_bytes = git_output(["show", object_name], object_size)
+    if len(tagged_manifest_bytes) != object_size:
+        raise CandidateError("candidate Git binding could not be verified")
+    verify_closeout_manifest_transition(
+        stack, manifest_bytes, tagged_manifest_bytes
+    )
+
+
+def verify_closeout_manifest_transition(
+    stack: dict[str, Any],
+    manifest_bytes: bytes,
+    tagged_manifest_bytes: bytes,
+) -> None:
+    if manifest_bytes == tagged_manifest_bytes:
+        return
+    released_line = b"  status: released\n"
+    candidate_line = b"  status: release-candidate\n"
+    if (
+        stack.get("status") != "released"
+        or manifest_bytes.count(released_line) != 1
+        or tagged_manifest_bytes.count(candidate_line) != 1
+        or manifest_bytes.replace(released_line, candidate_line, 1)
+        != tagged_manifest_bytes
+    ):
+        raise CandidateError("candidate Git binding could not be verified")
+    try:
+        tagged_manifest = yaml.safe_load(tagged_manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, yaml.YAMLError):
+        raise CandidateError("candidate Git binding could not be verified") from None
+    tagged_stack = (
+        tagged_manifest.get("stack")
+        if isinstance(tagged_manifest, dict)
+        else None
+    )
+    if (
+        not isinstance(tagged_stack, dict)
+        or tagged_stack.get("status") != "release-candidate"
+    ):
         raise CandidateError("candidate Git binding could not be verified")
 
 

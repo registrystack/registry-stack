@@ -14,6 +14,9 @@ The image lock must remain in its downloaded release asset directory alongside
 Cosign signature and certificate files for both the image lock and capsule.
 The runner verifies those bindings with installed `cosign` and `slsa-verifier`
 before using either product image digest.
+For a closed release manifest, it accepts only the byte-exact tag manifest with
+the single `stack.status: release-candidate` to `released` closeout transition.
+Any other post-tag manifest drift is rejected.
 
 ## Evidence boundary
 

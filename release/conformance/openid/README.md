@@ -102,12 +102,16 @@ chmod 600 /private/path/notary-offer.txt
 release/scripts/openid-conformance-runner.py submit-offer \
   --offer-file /private/path/notary-offer.txt \
   --issuer-url https://issuer.example.test \
-  --suite-offer-endpoint 'https://localhost.emobix.co.uk:8443/<module>/credential_offer'
+  --suite-offer-endpoint 'https://localhost.emobix.co.uk:8443/<module>/credential_offer' \
+  --suite-ca-certificate /private/path/conformance-suite-ca.pem
 ```
 
 The adapter accepts only an inline Notary offer with the pre-authorized-code
 grant, sends it once to the pinned suite origin without proxies or redirects,
-and prints no offer content. A fabricated offer is not candidate evidence.
+and prints no offer content. TLS uses normal hostname and certificate
+validation. The optional CA file adds only an explicitly supplied local trust
+anchor for the suite's self-signed development certificate. A fabricated offer
+is not candidate evidence.
 
 Set `REGISTRY_OPENID_CONFORMANCE_AUTHORIZATION_SERVER` when the authorization
 server differs from the issuer. Set

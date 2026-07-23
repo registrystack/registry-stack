@@ -408,47 +408,76 @@ class RelayOidcSmokeTest(TestCase):
                 command[command.index("--source-uri") + 1],
             )
 
-    def test_candidate_binding_rejects_promoted_manifest_not_present_at_tag(
+    def test_candidate_binding_accepts_only_the_manifest_closeout_transition(
         self,
     ) -> None:
         candidate_module = sys.modules["conformance_candidate"]
         with tempfile.TemporaryDirectory() as tmp:
             image_lock = Path(tmp) / "registryctl-v0.12.2-image-lock.json"
-            image_lock.write_text(
-                json.dumps(
-                    {
-                        "schema_version": "registryctl.release_image_lock.v1",
-                        "release_tag": "v0.12.2",
-                        "manifest_source_ref": (
-                            "0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8"
-                        ),
-                        "tag_target": "e25f081ce800ade13e892503cc19b96588e081ef",
-                        "platform": "linux/amd64",
-                        "images": {
-                            "registry-notary": (
-                                "ghcr.io/registrystack/registry-notary@sha256:"
-                                + "c" * 64
-                            ),
-                            "registry-relay": (
-                                "ghcr.io/registrystack/registry-relay@sha256:"
-                                + "d" * 64
-                            ),
-                        },
-                    }
+            lock = {
+                "schema_version": "registryctl.release_image_lock.v1",
+                "release_tag": "v0.12.2",
+                "manifest_source_ref": (
+                    "0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8"
                 ),
-                encoding="utf-8",
+                "tag_target": "e25f081ce800ade13e892503cc19b96588e081ef",
+                "platform": "linux/amd64",
+                "images": {
+                    "registry-notary": (
+                        "ghcr.io/registrystack/registry-notary@sha256:"
+                        + "c" * 64
+                    ),
+                    "registry-relay": (
+                        "ghcr.io/registrystack/registry-relay@sha256:"
+                        + "d" * 64
+                    ),
+                },
+            }
+            self.write_candidate_evidence(image_lock, lock)
+            manifest = (
+                self.runner.REPO_ROOT
+                / "release/manifests/registry-stack-beta-16.yaml"
             )
             args = Namespace(
-                release_manifest=(
-                    self.runner.REPO_ROOT
-                    / "release/manifests/registry-stack-beta-16.yaml"
-                ),
+                release_manifest=manifest,
                 image_lock=image_lock,
                 topology="release-owned",
                 solmara_source_ref=None,
             )
-            with self.assertRaisesRegex(candidate_module.CandidateError, "Git binding"):
-                self.runner.candidate_from_args(args)
+            with patch.object(
+                candidate_module, "verify_release_authenticity"
+            ) as authenticate:
+                candidate = self.runner.candidate_from_args(args)
+
+            self.assertEqual("beta-16", candidate["release_id"])
+            authenticate.assert_called_once()
+
+            tagged = candidate_module.git_output(
+                [
+                    "show",
+                    (
+                        "e25f081ce800ade13e892503cc19b96588e081ef:"
+                        "release/manifests/registry-stack-beta-16.yaml"
+                    ),
+                ],
+                1024 * 1024,
+            )
+            released = manifest.read_bytes()
+            candidate_module.verify_closeout_manifest_transition(
+                {"status": "released"}, released, tagged
+            )
+            with self.assertRaisesRegex(
+                candidate_module.CandidateError, "Git binding"
+            ):
+                candidate_module.verify_closeout_manifest_transition(
+                    {"status": "released"},
+                    released
+                    + (
+                        b"# Any post-tag change beyond the exact status closeout "
+                        b"is rejected.\n"
+                    ),
+                    tagged,
+                )
 
     def test_native_zitadel_role_claim_drives_scope_profile(self) -> None:
         token = fake_token(role_claim={"registry-smoke-reader": {"org-1": "active"}})

@@ -139,17 +139,37 @@ class OpenIdConformanceRunnerTest(TestCase):
             response.__enter__.return_value.status = 204
             opener = MagicMock()
             opener.open.return_value = response
+            tls_context = MagicMock()
             with patch.object(
-                self.runner.urllib.request, "build_opener", return_value=opener
-            ):
-                with patch("builtins.print") as printed:
-                    self.assertEqual(0, self.runner.cmd_submit_offer(args))
+                self.runner.ssl,
+                "create_default_context",
+                return_value=tls_context,
+            ) as create_context:
+                with patch.object(
+                    self.runner.ssl,
+                    "_create_unverified_context",
+                    side_effect=AssertionError("unverified TLS must not be used"),
+                ):
+                    with patch.object(
+                        self.runner.urllib.request,
+                        "build_opener",
+                        return_value=opener,
+                    ) as build_opener:
+                        with patch("builtins.print") as printed:
+                            self.assertEqual(0, self.runner.cmd_submit_offer(args))
 
             submitted = urllib.parse.urlsplit(opener.open.call_args.args[0])
             self.assertEqual(
                 [inline],
                 urllib.parse.parse_qs(submitted.query)["credential_offer"],
             )
+            create_context.assert_called_once_with(cafile=None)
+            https_handler = next(
+                handler
+                for handler in build_opener.call_args.args
+                if isinstance(handler, self.runner.urllib.request.HTTPSHandler)
+            )
+            self.assertIs(tls_context, https_handler._context)
             printed.assert_called_once_with("credential offer submitted")
 
             opener.open.side_effect = self.runner.urllib.error.URLError(inline)
@@ -161,6 +181,85 @@ class OpenIdConformanceRunnerTest(TestCase):
                 ) as caught:
                     self.runner.cmd_submit_offer(args)
             self.assertNotIn("owner-only-code", str(caught.exception))
+
+    def test_submit_offer_rejects_untrusted_remote_tls(self) -> None:
+        issuer = "https://issuer.example.test"
+        inline, offer_uri = self.offer_uri(issuer)
+        with tempfile.TemporaryDirectory() as tmp:
+            offer_file = Path(tmp) / "offer.txt"
+            offer_file.write_text(offer_uri, encoding="utf-8")
+            offer_file.chmod(0o600)
+            args = self.runner.parse_args(
+                [
+                    "submit-offer",
+                    "--offer-file",
+                    str(offer_file),
+                    "--issuer-url",
+                    issuer,
+                    "--suite-offer-endpoint",
+                    "https://suite.example.test/run/credential_offer",
+                    "--conformance-server",
+                    "https://suite.example.test",
+                ]
+            )
+            opener = MagicMock()
+            opener.open.side_effect = self.runner.urllib.error.URLError(
+                self.runner.ssl.SSLCertVerificationError(
+                    1, "self-signed certificate"
+                )
+            )
+            with patch.object(
+                self.runner.urllib.request, "build_opener", return_value=opener
+            ):
+                with self.assertRaisesRegex(
+                    self.runner.RunnerError, "submission failed"
+                ) as caught:
+                    self.runner.cmd_submit_offer(args)
+
+            self.assertNotIn(inline, str(caught.exception))
+
+    def test_submit_offer_accepts_an_explicit_local_suite_ca(self) -> None:
+        issuer = "https://issuer.example.test"
+        _, offer_uri = self.offer_uri(issuer)
+        with tempfile.TemporaryDirectory() as tmp:
+            offer_file = Path(tmp) / "offer.txt"
+            offer_file.write_text(offer_uri, encoding="utf-8")
+            offer_file.chmod(0o600)
+            suite_ca = Path(tmp) / "suite-ca.pem"
+            suite_ca.write_text("local test CA", encoding="utf-8")
+            args = self.runner.parse_args(
+                [
+                    "submit-offer",
+                    "--offer-file",
+                    str(offer_file),
+                    "--issuer-url",
+                    issuer,
+                    "--suite-offer-endpoint",
+                    "https://localhost.emobix.co.uk:8443/run/credential_offer",
+                    "--conformance-server",
+                    "https://localhost.emobix.co.uk:8443",
+                    "--suite-ca-certificate",
+                    str(suite_ca),
+                ]
+            )
+            response = MagicMock()
+            response.__enter__.return_value.status = 204
+            opener = MagicMock()
+            opener.open.return_value = response
+            with patch.object(
+                self.runner.ssl,
+                "create_default_context",
+                return_value=MagicMock(),
+            ) as create_context:
+                with patch.object(
+                    self.runner.urllib.request,
+                    "build_opener",
+                    return_value=opener,
+                ):
+                    with patch("builtins.print"):
+                        self.assertEqual(0, self.runner.cmd_submit_offer(args))
+
+            create_context.assert_called_once_with(cafile=str(suite_ca.resolve()))
 
     def test_submit_offer_rejects_cleartext_suite_endpoint(self) -> None:
         issuer = "https://issuer.example.test"
