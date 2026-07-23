@@ -19,49 +19,7 @@ IMAGE_DIGEST = "sha256:" + "a" * 64
 IMAGE_DIGEST_REF = f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}"
 
 
-def load_debian13_image_check():
-    path = ROOT / "release/scripts/check-debian13-images.py"
-    spec = importlib.util.spec_from_file_location("check_debian13_images", path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"could not load module spec from {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 class RegistryReleaseTest(unittest.TestCase):
-    def test_maintained_images_follow_debian13_contract(self) -> None:
-        module = load_debian13_image_check()
-        self.assertEqual([], module.check_repository(ROOT))
-
-    def test_debian13_contract_rejects_retired_base_and_unpinned_base(self) -> None:
-        module = load_debian13_image_check()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for relative in module.MAINTAINED_TEXT_PATHS:
-                destination = root / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(
-                    (ROOT / relative).read_text(encoding="utf-8"),
-                    encoding="utf-8",
-                )
-
-            relay_dockerfile = root / "crates/registry-relay/Dockerfile"
-            text = relay_dockerfile.read_text(encoding="utf-8")
-            text = text.replace(
-                module.RUST_BUILDER,
-                "rust:1.95-" + "book" + "worm",
-                1,
-            )
-            relay_dockerfile.write_text(text, encoding="utf-8")
-
-            failures = module.check_repository(root)
-            self.assertTrue(
-                any("retired Debian image generation marker" in failure for failure in failures)
-            )
-            self.assertTrue(
-                any("not pinned by immutable digest" in failure for failure in failures)
-            )
     def test_contributing_documents_major_functionality_test_policy(self) -> None:
         text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
 

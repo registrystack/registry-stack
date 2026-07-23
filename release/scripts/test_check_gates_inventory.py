@@ -146,6 +146,23 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("Release planning command tests", self.module.missing_gates(text))
 
+    def test_missing_debian13_image_contract_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: python3 release/scripts/check-debian13-images.py",
+            "run: python3 release/scripts/skip-debian13-images.py",
+        )
+        self.assertIn("Debian 13 image contract", self.module.missing_gates(text))
+
+    def test_missing_debian13_checker_tests_are_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: python3 -m unittest release/scripts/test_check_debian13_images.py",
+            "run: true",
+        )
+        self.assertIn(
+            "Debian 13 image contract checker tests",
+            self.module.missing_gates(text),
+        )
+
     def test_missing_release_image_oci_checker_tests_are_reported(self) -> None:
         text = self.workflow.replace(
             "run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py",

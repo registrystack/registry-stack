@@ -32,6 +32,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Other workflow path classification",
         ".github/workflows/*)\n                  mark_all\n                  ;;",
     ),
+    (
+        "Debian 13 image contract",
+        "run: python3 release/scripts/check-debian13-images.py",
+    ),
     ("Cargo metadata", "run: cargo metadata --locked --format-version 1"),
     (
         "Manifest profile validation",
@@ -112,6 +116,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Relay OpenAPI command", "run: just openapi-contract"),
     ("Relay exposure check", "name: Relay exposure check"),
     ("Release helper tests", "run: python3 -m unittest release/scripts/test_registry_release.py"),
+    (
+        "Debian 13 image contract checker tests",
+        "run: python3 -m unittest release/scripts/test_check_debian13_images.py",
+    ),
     (
         "Release planning command tests",
         "run: python3 -m unittest release/scripts/test_registry_release_plans.py",

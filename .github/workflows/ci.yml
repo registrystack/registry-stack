@@ -167,6 +167,9 @@ jobs:
             echo "registryctl_tutorial=${registryctl_tutorial}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Check Debian 13 image contract
+        run: python3 release/scripts/check-debian13-images.py
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-24.04
@@ -506,6 +509,9 @@ jobs:
 
       - name: Test release helper
         run: python3 -m unittest release/scripts/test_registry_release.py
+
+      - name: Test Debian 13 image contract checker
+        run: python3 -m unittest release/scripts/test_check_debian13_images.py
 
       - name: Test release planning commands
         run: python3 -m unittest release/scripts/test_registry_release_plans.py

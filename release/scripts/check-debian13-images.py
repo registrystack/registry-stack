@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -27,7 +28,7 @@ DOCKERFILE_FRONTEND = (
     "a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
 )
 
-DOCKERFILES = (
+PRODUCT_DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile"),
     Path("crates/registry-relay/Dockerfile.demo"),
     Path("products/notary/Dockerfile"),
@@ -35,9 +36,10 @@ DOCKERFILES = (
     Path("release/docker/Dockerfile.registry-relay"),
 )
 
-# These are the maintained image and image-policy surfaces. Historical release
-# notes are immutable evidence and intentionally are not rewritten by this gate.
-MAINTAINED_TEXT_PATHS = DOCKERFILES + (
+# Product-specific assertions below require these surfaces. The Debian
+# generation and immutable-pin boundary is broader and is discovered from the
+# repository instead of relying on this tuple.
+REQUIRED_PRODUCT_SURFACES = PRODUCT_DOCKERFILES + (
     Path(".github/workflows/release.yml"),
     Path("release/scripts/build-release-binaries.sh"),
     Path("crates/registry-relay/docs/ops.md"),
@@ -47,8 +49,24 @@ MAINTAINED_TEXT_PATHS = DOCKERFILES + (
     Path("products/notary/docs/security-assurance.md"),
 )
 
-RUST_BUILDER_DOCKERFILES = DOCKERFILES[:3]
-PREPARATION_DOCKERFILES = DOCKERFILES[3:]
+EXCLUDED_DIRECTORY_NAMES = {
+    ".git",
+    ".repo-docs-cache",
+    ".research",
+    ".venv",
+    "__pycache__",
+    "dist",
+    "node_modules",
+    "target",
+}
+# Historical release notes and .research preserve observations, not active policy.
+EXCLUDED_PATH_PREFIXES = (Path("release/notes"),)
+MARKDOWN_SUFFIXES = {".md", ".mdx"}
+SCRIPT_SUFFIXES = {".bash", ".js", ".mjs", ".py", ".sh", ".ts"}
+YAML_SUFFIXES = {".yaml", ".yml"}
+
+RUST_BUILDER_DOCKERFILES = PRODUCT_DOCKERFILES[:3]
+PREPARATION_DOCKERFILES = PRODUCT_DOCKERFILES[3:]
 RELAY_DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile"),
     Path("crates/registry-relay/Dockerfile.demo"),
@@ -59,8 +77,121 @@ NOTARY_DOCKERFILES = (
     Path("release/docker/Dockerfile.registry-notary"),
 )
 
-FROM_RE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", re.MULTILINE)
+FROM_RE = re.compile(
+    r"^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?",
+    re.IGNORECASE | re.MULTILINE,
+)
 DIGEST_PIN_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+CONTAINER_REFERENCE_RE = re.compile(
+    r"(?<![A-Za-z0-9._/@+-])"
+    r"(?P<reference>"
+    r"(?:[A-Za-z0-9.-]+(?::[0-9]+)?/)*"
+    r"[A-Za-z0-9._-]+:[A-Za-z0-9._-]+"
+    r"(?:@sha256:[0-9a-f]{64})?"
+    r")"
+    r"(?![A-Za-z0-9._/@+-])",
+    re.IGNORECASE,
+)
+SCRIPT_IMAGE_CONTEXT_RE = re.compile(
+    r"\b(?:docker|podman|container|image)\b"
+    r"|\b[A-Za-z_][A-Za-z0-9_]*(?:image|base)[A-Za-z0-9_]*\s*=",
+    re.IGNORECASE,
+)
+
+
+def is_excluded(relative: Path) -> bool:
+    if ".research" in relative.parts:
+        return True
+    return any(
+        relative == prefix or prefix in relative.parents
+        for prefix in EXCLUDED_PATH_PREFIXES
+    )
+
+
+def is_dockerfile(relative: Path) -> bool:
+    return (
+        relative.name == "Dockerfile"
+        or relative.name.startswith("Dockerfile.")
+        or relative.name.endswith(".Dockerfile")
+    )
+
+
+def is_active_script(relative: Path) -> bool:
+    return relative.suffix in {".bash", ".sh"} or (
+        "scripts" in relative.parts
+        and (relative.suffix in SCRIPT_SUFFIXES or not relative.suffix)
+    )
+
+
+def is_workflow(relative: Path) -> bool:
+    return relative.parts[:2] == (".github", "workflows")
+
+
+def is_maintained_text_surface(relative: Path) -> bool:
+    return (
+        is_dockerfile(relative)
+        or is_active_script(relative)
+        or is_workflow(relative)
+        or relative.suffix in MARKDOWN_SUFFIXES
+        or relative.suffix in YAML_SUFFIXES
+    )
+
+
+def is_image_reference_surface(relative: Path) -> bool:
+    return (
+        is_dockerfile(relative)
+        or is_active_script(relative)
+        or relative.suffix in YAML_SUFFIXES
+    )
+
+
+def discover_maintained_surfaces(root: Path) -> tuple[Path, ...]:
+    """Discover maintained image policy surfaces without walking build output."""
+
+    discovered: set[Path] = set()
+    for directory, directory_names, file_names in os.walk(root):
+        directory_path = Path(directory)
+        directory_names[:] = sorted(
+            name
+            for name in directory_names
+            if name not in EXCLUDED_DIRECTORY_NAMES
+            and not is_excluded((directory_path / name).relative_to(root))
+        )
+        for name in file_names:
+            relative = (directory_path / name).relative_to(root)
+            if is_excluded(relative) or not is_maintained_text_surface(relative):
+                continue
+            discovered.add(relative)
+    return tuple(sorted(discovered))
+
+
+def is_debian_derived(reference: str) -> bool:
+    unpinned = reference.split("@", 1)[0]
+    repository, tag = unpinned.rsplit(":", 1)
+    image_name = repository.rsplit("/", 1)[-1].casefold()
+    lowered_tag = tag.casefold()
+    generation_tags = ("trixie", "book" + "worm", "bullseye", "buster")
+    return (
+        image_name == "debian"
+        or "debian" in image_name
+        or any(marker in lowered_tag for marker in generation_tags)
+        or re.search(r"(?:^|[-_.])debian-?1[0-9](?:$|[-_.])", lowered_tag)
+        is not None
+    )
+
+
+def script_reference_is_consumed(
+    relative: Path,
+    text: str,
+    match: re.Match[str],
+) -> bool:
+    if relative.suffix not in {".js", ".mjs", ".py", ".ts"}:
+        return True
+    line_start = text.rfind("\n", 0, match.start()) + 1
+    line_end = text.find("\n", match.end())
+    if line_end < 0:
+        line_end = len(text)
+    return SCRIPT_IMAGE_CONTEXT_RE.search(text[line_start:line_end]) is not None
 
 
 def read(root: Path, relative: Path, failures: list[str]) -> str:
@@ -69,6 +200,9 @@ def read(root: Path, relative: Path, failures: list[str]) -> str:
         return path.read_text(encoding="utf-8")
     except FileNotFoundError:
         failures.append(f"missing maintained image surface: {relative}")
+        return ""
+    except UnicodeDecodeError:
+        failures.append(f"maintained image surface is not UTF-8 text: {relative}")
         return ""
 
 
@@ -91,13 +225,16 @@ def runtime_stage(text: str) -> str:
 
 def check_repository(root: Path = ROOT) -> list[str]:
     failures: list[str] = []
+    maintained_paths = discover_maintained_surfaces(root)
+    all_paths = tuple(sorted(set(maintained_paths) | set(REQUIRED_PRODUCT_SURFACES)))
     texts = {
         relative: read(root, relative, failures)
-        for relative in MAINTAINED_TEXT_PATHS
+        for relative in all_paths
     }
 
     retired_markers = ("book" + "worm", "debian" + "12")
-    for relative, text in texts.items():
+    for relative in maintained_paths:
+        text = texts[relative]
         lowered = text.casefold()
         for marker in retired_markers:
             if marker in lowered:
@@ -105,18 +242,52 @@ def check_repository(root: Path = ROOT) -> list[str]:
                     f"{relative}: retired Debian image generation marker remains: {marker}"
                 )
 
-    for relative in DOCKERFILES:
+    dockerfiles = tuple(
+        relative for relative in maintained_paths if is_dockerfile(relative)
+    )
+    if not dockerfiles:
+        failures.append("no maintained Dockerfiles discovered")
+
+    for relative in dockerfiles:
         text = texts[relative]
         bases = FROM_RE.findall(text)
         if not bases:
             failures.append(f"{relative}: no FROM instruction found")
             continue
-        for base in bases:
-            if not DIGEST_PIN_RE.search(base):
+        stage_names: set[str] = set()
+        for base, stage_name in bases:
+            internal_stage = base.casefold() in stage_names
+            if (
+                base.casefold() != "scratch"
+                and not internal_stage
+                and not DIGEST_PIN_RE.search(base)
+            ):
                 failures.append(
                     f"{relative}: upstream base is not pinned by immutable digest: {base}"
                 )
+            if stage_name:
+                stage_names.add(stage_name.casefold())
 
+    for relative in maintained_paths:
+        if not is_image_reference_surface(relative):
+            continue
+        text = texts[relative]
+        for match in CONTAINER_REFERENCE_RE.finditer(text):
+            reference = match.group("reference")
+            if (
+                not script_reference_is_consumed(relative, text, match)
+                or not is_debian_derived(reference)
+                or DIGEST_PIN_RE.search(reference)
+            ):
+                continue
+            line = text.count("\n", 0, match.start()) + 1
+            failures.append(
+                f"{relative}:{line}: Debian-derived image reference is not pinned "
+                f"by immutable digest: {reference}"
+            )
+
+    for relative in PRODUCT_DOCKERFILES:
+        text = texts[relative]
         require(
             text,
             f"FROM {DISTROLESS_RUNTIME} AS runtime",
