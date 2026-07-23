@@ -699,9 +699,19 @@ outputs:
         .expect("actual claim result serializes")
     }
 
-    fn governed_live_eligible_fixture() -> (Vec<String>, Value, Value) {
+    fn governed_live_validated_request(claims: &[&str]) -> ValidatedLiveRequest {
+        ValidatedLiveRequest {
+            claims: claims.iter().map(|claim| (*claim).to_string()).collect(),
+            claim_versions: claims
+                .iter()
+                .map(|claim| ((*claim).to_string(), "1.0.0".to_string()))
+                .collect(),
+        }
+    }
+
+    fn governed_live_eligible_fixture() -> (ValidatedLiveRequest, Value, Value) {
         (
-            vec!["eligible".to_string()],
+            governed_live_validated_request(&["eligible"]),
             json!({
                 "claims": {
                     "eligible": {
@@ -789,7 +799,7 @@ outputs:
 
     #[test]
     fn governed_live_result_accepts_actual_shape_and_requires_source_provenance() {
-        let claims = vec!["eligible".to_string()];
+        let request = governed_live_validated_request(&["eligible"]);
         let expected = json!({
             "claims": {
                 "eligible": {
@@ -808,15 +818,15 @@ outputs:
             )],
         });
         assert_eq!(
-            validate_live_response(&response, &claims, &expected).expect("exact result passes"),
-            claims
+            validate_live_response(&response, &request, &expected).expect("exact result passes"),
+            request.claims
         );
 
         let mut missing_provenance = response;
         missing_provenance["results"][0]["provenance"]["used"]["relay_consultation_count"] =
             json!(0);
         assert!(
-            validate_live_response(&missing_provenance, &claims, &expected)
+            validate_live_response(&missing_provenance, &request, &expected)
                 .expect_err("source-free result must fail")
                 .to_string()
                 .contains("source-backed provenance")
@@ -825,7 +835,7 @@ outputs:
 
     #[test]
     fn governed_live_result_requires_explicit_expires_at() {
-        let claims = vec!["eligible".to_string()];
+        let request = governed_live_validated_request(&["eligible"]);
         let expected = json!({
             "claims": {
                 "eligible": {
@@ -849,9 +859,9 @@ outputs:
             Some(&Value::Null)
         );
         assert_eq!(
-            validate_live_response(&response, &claims, &expected)
+            validate_live_response(&response, &request, &expected)
                 .expect("explicit null expires_at passes"),
-            claims
+            request.claims
         );
 
         let mut missing_expires_at = response;
@@ -863,7 +873,7 @@ outputs:
             Some(Value::Null)
         );
         assert!(
-            validate_live_response(&missing_expires_at, &claims, &expected)
+            validate_live_response(&missing_expires_at, &request, &expected)
                 .expect_err("missing expires_at must fail closed")
                 .to_string()
                 .contains("expires_at is required")
@@ -872,7 +882,7 @@ outputs:
 
     #[test]
     fn governed_live_result_requires_canonical_provenance_constants() {
-        let claims = vec!["eligible".to_string()];
+        let request = governed_live_validated_request(&["eligible"]);
         let expected = json!({
             "claims": {
                 "eligible": {
@@ -904,9 +914,9 @@ outputs:
             ))
         );
         assert_eq!(
-            validate_live_response(&response, &claims, &expected)
+            validate_live_response(&response, &request, &expected)
                 .expect("canonical provenance constants pass"),
-            claims
+            request.claims
         );
 
         for (pointer, value) in [
@@ -925,7 +935,7 @@ outputs:
                 .expect("actual provenance constant exists") = value;
 
             assert!(
-                validate_live_response(&invalid, &claims, &expected)
+                validate_live_response(&invalid, &request, &expected)
                     .expect_err("non-canonical provenance constant must fail closed")
                     .to_string()
                     .contains("provenance constants"),
@@ -936,11 +946,11 @@ outputs:
 
     #[test]
     fn governed_live_result_binds_provenance_to_returned_result() {
-        let (claims, expected, response) = governed_live_eligible_fixture();
+        let (request, expected, response) = governed_live_eligible_fixture();
         assert_eq!(
-            validate_live_response(&response, &claims, &expected)
+            validate_live_response(&response, &request, &expected)
                 .expect("canonical provenance binding passes"),
-            claims
+            request.claims
         );
 
         for (pointer, value) in [
@@ -958,7 +968,7 @@ outputs:
             set_governed_live_result_pointer(&mut invalid, pointer, value);
 
             assert!(
-                validate_live_response(&invalid, &claims, &expected)
+                validate_live_response(&invalid, &request, &expected)
                     .expect_err("misbound provenance must fail closed")
                     .to_string()
                     .contains("does not identify the returned claim result"),
@@ -969,16 +979,16 @@ outputs:
 
     #[test]
     fn governed_live_result_requires_public_date_time_timestamps() {
-        let (claims, expected, mut response) = governed_live_eligible_fixture();
+        let (request, expected, mut response) = governed_live_eligible_fixture();
         set_governed_live_result_pointer(
             &mut response,
             "/expires_at",
             json!("2026-07-24T07:30:00+07:00"),
         );
         assert_eq!(
-            validate_live_response(&response, &claims, &expected)
+            validate_live_response(&response, &request, &expected)
                 .expect("canonical RFC3339 timestamps pass"),
-            claims
+            request.claims
         );
 
         for pointer in ["/issued_at", "/expires_at"] {
@@ -986,7 +996,7 @@ outputs:
             set_governed_live_result_pointer(&mut invalid, pointer, json!("not-rfc3339"));
 
             assert!(
-                validate_live_response(&invalid, &claims, &expected)
+                validate_live_response(&invalid, &request, &expected)
                     .expect_err("invalid public timestamp must fail closed")
                     .to_string()
                     .contains("public date-time schema"),
@@ -996,31 +1006,209 @@ outputs:
     }
 
     #[test]
-    fn governed_live_result_rejects_schema_excluded_redacted_fields() {
-        let (claims, expected, mut response) = governed_live_eligible_fixture();
+    fn governed_live_result_accepts_runtime_redaction_evidence() {
+        let request = governed_live_validated_request(&["household-reference"]);
+        let expected = json!({
+            "claims": {
+                "household-reference": {
+                    "value": null,
+                    "satisfied": null,
+                    "disclosure": "redacted",
+                },
+            },
+        });
+        let mut response = json!({
+            "results": [governed_live_claim_result(
+                "household-reference",
+                Value::Null,
+                None,
+                "redacted",
+            )],
+        });
         assert!(
             response
                 .pointer("/results/0/redacted_fields")
                 .is_none(),
-            "canonical public result omits redacted_fields"
+            "empty redaction metadata is omitted"
         );
+        set_governed_live_result_pointer(
+            &mut response,
+            "/redacted_fields",
+            json!(["household-reference"]),
+        );
+
+        assert_eq!(
+            validate_live_response(&response, &request, &expected)
+                .expect("runtime full-redaction evidence passes"),
+            request.claims
+        );
+
+        let mut missing_evidence = response;
+        missing_evidence["results"][0]
+            .as_object_mut()
+            .expect("actual result is an object")
+            .remove("redacted_fields");
+        assert!(
+            validate_live_response(&missing_evidence, &request, &expected)
+                .expect_err("full redaction without redaction evidence must fail closed")
+                .to_string()
+                .contains("full-redaction semantics")
+        );
+    }
+
+    #[test]
+    fn governed_live_result_enforces_field_redaction_semantics() {
+        let request = governed_live_validated_request(&["profile"]);
+        let expected = json!({
+            "claims": {
+                "profile": {
+                    "value": { "status": "eligible" },
+                    "satisfied": null,
+                    "disclosure": "value",
+                },
+            },
+        });
+        let mut response = json!({
+            "results": [governed_live_claim_result(
+                "profile",
+                json!({ "status": "eligible" }),
+                None,
+                "value",
+            )],
+        });
         set_governed_live_result_pointer(
             &mut response,
             "/redacted_fields",
             json!(["private_field"]),
         );
+        assert_eq!(
+            validate_live_response(&response, &request, &expected)
+                .expect("field-redacted object evidence passes"),
+            request.claims
+        );
 
+        let mut leaked = response.clone();
+        leaked["results"][0]["value"]["private_field"] = json!("private source value");
+        let error = validate_live_response(&leaked, &request, &expected)
+            .expect_err("listed redacted field must be absent from the returned value")
+            .to_string();
+        assert!(error.contains("field-redaction semantics"));
+        assert!(!error.contains("private source value"));
+
+        let (predicate_request, predicate_expected, mut predicate_response) =
+            governed_live_eligible_fixture();
+        set_governed_live_result_pointer(
+            &mut predicate_response,
+            "/redacted_fields",
+            json!(["private_field"]),
+        );
         assert!(
-            validate_live_response(&response, &claims, &expected)
-                .expect_err("schema-excluded redacted_fields must fail closed")
+            validate_live_response(
+                &predicate_response,
+                &predicate_request,
+                &predicate_expected,
+            )
+            .expect_err("predicate over redacted fields must fail closed")
+            .to_string()
+            .contains("predicate over redacted fields")
+        );
+    }
+
+    #[test]
+    fn governed_live_response_requires_one_evaluation_id() {
+        let request = governed_live_validated_request(&["eligible", "active"]);
+        let expected = json!({
+            "claims": {
+                "eligible": {
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+                "active": {
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        });
+        let response = json!({
+            "results": [
+                governed_live_claim_result("eligible", json!(true), Some(true), "predicate"),
+                governed_live_claim_result("active", json!(true), Some(true), "predicate"),
+            ],
+        });
+        assert_eq!(
+            validate_live_response(&response, &request, &expected)
+                .expect("one evaluation id across all results passes"),
+            request.claim_versions.keys().cloned().collect::<Vec<_>>()
+        );
+
+        let mut mixed = response;
+        mixed["results"][1]["evaluation_id"] = json!("eval-live-2");
+        mixed["results"][1]["provenance"]["generated_by"]["evaluation_id"] =
+            json!("eval-live-2");
+        assert!(
+            validate_live_response(&mixed, &request, &expected)
+                .expect_err("mixed evaluation ids must fail closed")
                 .to_string()
-                .contains("exceeds the closed public claim-result schema")
+                .contains("different evaluations")
+        );
+    }
+
+    #[test]
+    fn governed_live_result_claim_version_matches_authored_request() {
+        let loaded = load_registry_project(&project_golden("openspp-exact"), None)
+            .expect("OpenSPP golden project loads");
+        let request = validate_live_request(
+            &loaded,
+            &json!({
+                "purpose": "social-programme-verification",
+                "claims": ["social-registry-record-exists"],
+                "disclosure": "predicate",
+            }),
+        )
+        .expect("authored request validates");
+        let expected = json!({
+            "claims": {
+                "social-registry-record-exists": {
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        });
+        let mut response = json!({
+            "results": [governed_live_claim_result(
+                "social-registry-record-exists",
+                json!(true),
+                Some(true),
+                "predicate",
+            )],
+        });
+        response["results"][0]["claim_version"] = json!("1");
+        response["results"][0]["provenance"]["generated_by"]["claim_version"] = json!("1");
+        assert_eq!(
+            validate_live_response(&response, &request, &expected)
+                .expect("authored claim version passes"),
+            request.claims
+        );
+
+        let mut wrong_version = response;
+        wrong_version["results"][0]["claim_version"] = json!("2.0.0");
+        wrong_version["results"][0]["provenance"]["generated_by"]["claim_version"] =
+            json!("2.0.0");
+        assert!(
+            validate_live_response(&wrong_version, &request, &expected)
+                .expect_err("result from a different claim version must fail closed")
+                .to_string()
+                .contains("does not match the authored project")
         );
     }
 
     #[test]
     fn governed_live_result_rejects_null_optional_public_fields_recursively() {
-        let (claims, expected, mut response) = governed_live_eligible_fixture();
+        let (request, expected, mut response) = governed_live_eligible_fixture();
+        set_governed_live_result_pointer(&mut response, "/redacted_fields", json!([]));
         for (pointer, value) in [
             ("/requester_ref/identifier_schemes", json!([])),
             ("/requester_ref/profile", json!("requester")),
@@ -1042,9 +1230,9 @@ outputs:
             );
         }
         assert_eq!(
-            validate_live_response(&response, &claims, &expected)
+            validate_live_response(&response, &request, &expected)
                 .expect("non-null optional public fields pass"),
-            claims
+            request.claims
         );
 
         for pointer in LIVE_RESULT_OPTIONAL_NON_NULL_PATHS {
@@ -1052,7 +1240,7 @@ outputs:
             set_governed_live_result_pointer(&mut invalid, pointer, Value::Null);
 
             assert!(
-                validate_live_response(&invalid, &claims, &expected)
+                validate_live_response(&invalid, &request, &expected)
                     .expect_err("null optional public field must fail closed")
                     .to_string()
                     .contains("optional public field cannot be null"),
@@ -1063,20 +1251,20 @@ outputs:
 
     #[test]
     fn governed_live_result_requires_claim_result_format() {
-        let (claims, expected, mut response) = governed_live_eligible_fixture();
+        let (request, expected, mut response) = governed_live_eligible_fixture();
         assert_eq!(
             response.pointer("/results/0/format"),
             Some(&json!(registry_notary_core::FORMAT_CLAIM_RESULT_JSON))
         );
         assert_eq!(
-            validate_live_response(&response, &claims, &expected)
+            validate_live_response(&response, &request, &expected)
                 .expect("canonical claim-result format passes"),
-            claims
+            request.claims
         );
 
         set_governed_live_result_pointer(&mut response, "/format", json!("application/json"));
         assert!(
-            validate_live_response(&response, &claims, &expected)
+            validate_live_response(&response, &request, &expected)
                 .expect_err("wrong result format must fail closed")
                 .to_string()
                 .contains("invalid claim-result format")
@@ -1085,7 +1273,7 @@ outputs:
 
     #[test]
     fn governed_live_result_rejects_partial_disclosure_expectations() {
-        let claims = vec!["eligible".to_string()];
+        let request = governed_live_validated_request(&["eligible"]);
         let expected = json!({
             "claims": {
                 "eligible": {
@@ -1104,7 +1292,7 @@ outputs:
         });
 
         assert!(
-            validate_live_response(&response, &claims, &expected)
+            validate_live_response(&response, &request, &expected)
                 .expect_err("partial expected disclosure must fail closed")
                 .to_string()
                 .contains("must contain exactly value, satisfied, and disclosure")
@@ -1113,7 +1301,7 @@ outputs:
 
     #[test]
     fn governed_live_result_rejects_unknown_result_fields() {
-        let claims = vec!["eligible".to_string()];
+        let request = governed_live_validated_request(&["eligible"]);
         let expected = json!({
             "claims": {
                 "eligible": {
@@ -1134,7 +1322,7 @@ outputs:
         response["results"][0]["raw_value"] = json!("unexpected source value");
 
         assert!(
-            validate_live_response(&response, &claims, &expected)
+            validate_live_response(&response, &request, &expected)
                 .expect_err("unknown result fields must fail closed")
                 .to_string()
                 .contains("closed public claim-result schema")
@@ -1143,7 +1331,7 @@ outputs:
 
     #[test]
     fn governed_live_result_rejects_nested_unknown_fields() {
-        let claims = vec!["eligible".to_string()];
+        let request = governed_live_validated_request(&["eligible"]);
         let expected = json!({
             "claims": {
                 "eligible": {
@@ -1177,7 +1365,7 @@ outputs:
                 .insert(field.to_string(), json!("private"));
 
             assert!(
-                validate_live_response(&over_disclosed, &claims, &expected)
+                validate_live_response(&over_disclosed, &request, &expected)
                     .expect_err("nested unknown fields must fail closed")
                     .to_string()
                     .contains("closed public claim-result schema"),
@@ -1188,7 +1376,7 @@ outputs:
 
     #[test]
     fn governed_live_result_requires_empty_derived_from() {
-        let claims = vec!["eligible".to_string()];
+        let request = governed_live_validated_request(&["eligible"]);
         let expected = json!({
             "claims": {
                 "eligible": {
@@ -1210,7 +1398,7 @@ outputs:
             json!([{ "raw_source_row": "private" }]);
 
         assert!(
-            validate_live_response(&response, &claims, &expected)
+            validate_live_response(&response, &request, &expected)
                 .expect_err("non-empty derived_from must fail closed")
                 .to_string()
                 .contains("derived_from must remain empty")
@@ -1219,7 +1407,7 @@ outputs:
 
     #[test]
     fn governed_live_result_rejects_provenance_fields_outside_public_schema() {
-        let claims = vec!["eligible".to_string()];
+        let request = governed_live_validated_request(&["eligible"]);
         let expected = json!({
             "claims": {
                 "eligible": {
@@ -1244,7 +1432,7 @@ outputs:
                 unsupported["results"][0]["provenance"]["generated_by"][field] = value;
 
                 assert!(
-                    validate_live_response(&unsupported, &claims, &expected)
+                    validate_live_response(&unsupported, &request, &expected)
                         .expect_err("fields outside the public schema must fail closed")
                         .to_string()
                         .contains("exceeds the closed public claim-result schema"),
@@ -1269,7 +1457,7 @@ outputs:
 
     #[test]
     fn governed_live_report_does_not_infer_a_source_outcome() {
-        let claims = vec!["record-exists".to_string()];
+        let request = governed_live_validated_request(&["record-exists"]);
         let expected = json!({
             "claims": {
                 "record-exists": {
@@ -1288,10 +1476,10 @@ outputs:
             )],
         });
         let returned_claims =
-            validate_live_response(&response, &claims, &expected).expect("no-match result passes");
+            validate_live_response(&response, &request, &expected).expect("no-match result passes");
         let report = governed_live_fixture_report(returned_claims);
 
-        assert_eq!(report.claims, claims);
+        assert_eq!(report.claims, request.claims);
         assert_eq!(report.outcome, None);
         assert!(
             serde_json::to_value(report)
@@ -1350,6 +1538,80 @@ outputs:
     }
 
     #[test]
+    fn live_request_requires_one_compatible_disclosure_profile() {
+        let loaded = load_registry_project(&project_golden("openspp-exact"), None)
+            .expect("OpenSPP golden project loads");
+
+        for (disclosure, claims) in [
+            (
+                "predicate",
+                vec!["social-registry-record-exists", "social-registry-active"],
+            ),
+            ("value", vec!["programme-code"]),
+            ("redacted", vec!["household-reference"]),
+        ] {
+            let request = json!({
+                "purpose": "social-programme-verification",
+                "claims": claims,
+                "disclosure": disclosure,
+            });
+            let validated = validate_live_request(&loaded, &request)
+                .expect("compatible disclosure request passes");
+            assert!(validated
+                .claim_versions
+                .values()
+                .all(|version| version == "1"));
+        }
+
+        let mixed = json!({
+            "purpose": "social-programme-verification",
+            "claims": [
+                "social-registry-record-exists",
+                "programme-code",
+                "household-reference",
+            ],
+        });
+        assert!(
+            validate_live_request(&loaded, &mixed)
+                .expect_err("mixed defaults must fail before source access")
+                .to_string()
+                .contains("not allowed for every selected project claim")
+        );
+    }
+
+    #[test]
+    fn live_request_claim_version_must_match_the_authored_service() {
+        let loaded = load_registry_project(&project_golden("openspp-exact"), None)
+            .expect("OpenSPP golden project loads");
+        let request = |version| {
+            json!({
+                "purpose": "social-programme-verification",
+                "claims": [{
+                    "id": "social-registry-record-exists",
+                    "version": version,
+                }],
+                "disclosure": "predicate",
+            })
+        };
+
+        let validated =
+            validate_live_request(&loaded, &request("1")).expect("authored version passes");
+        assert_eq!(
+            validated.claim_versions,
+            BTreeMap::from([(
+                "social-registry-record-exists".to_string(),
+                "1".to_string(),
+            )])
+        );
+        assert!(
+            validate_live_request(&loaded, &request("2"))
+                .expect_err("non-authored request version must fail closed")
+                .to_string()
+                .contains("does not match the authored project")
+        );
+    }
+
+    #[test]
     fn live_request_resolves_claims_across_services_with_the_same_purpose() {
         let project = project_golden("custom-system");
         let mut loaded = load_registry_project(&project, None).expect("golden project loads");
@@ -1397,15 +1659,26 @@ outputs:
                 .expect("split service project compiles");
         validate_generated_notary(&compiled).expect("split service Notary config activates");
 
-        let claims = validate_live_request(
+        let request = validate_live_request(
             &loaded,
             &json!({
                 "purpose": "household-support-screening",
                 "claims": ["household-category", "household-eligible"],
+                "disclosure": "redacted",
             }),
         )
         .expect("claims from both same-purpose services are valid");
-        assert_eq!(claims, ["household-category", "household-eligible"]);
+        assert_eq!(
+            request.claims,
+            ["household-category", "household-eligible"]
+        );
+        assert_eq!(
+            request.claim_versions,
+            BTreeMap::from([
+                ("household-category".to_string(), "1".to_string()),
+                ("household-eligible".to_string(), "1".to_string()),
+            ])
+        );
     }
 
     #[test]

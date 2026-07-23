@@ -81,9 +81,15 @@ Create the request and expected-result files under `.registry-stack/` in the
 private workspace.
 That directory is ignored by this workspace.
 Use only an owner-approved non-production record.
-The following request shape matches the committed synthetic project, so replace
-the identifier scheme, value, purpose, and claim ids when the authored project
-changes:
+Notary applies one disclosure profile to the whole evaluation, and this
+project's generated disclosure policies deny incompatible downgrades.
+Run separate request and expected-result pairs for the predicate, value, and
+redacted claims.
+The following pairs match the committed synthetic project, so replace the
+identifier scheme, value, purpose, claim ids, and expected values when the
+authored project changes.
+
+Predicate request:
 
 ```json
 {
@@ -98,33 +104,15 @@ changes:
   },
   "claims": [
     "social-registry-record-exists",
-    "social-registry-active",
-    "programme-code",
-    "household-reference"
+    "social-registry-active"
   ],
+  "disclosure": "predicate",
   "format": "application/vnd.registry-notary.claim-result+json",
   "purpose": "social-programme-verification"
 }
 ```
 
-`registryctl` sends
-`Accept: application/vnd.registry-notary.claim-result+json`, matching the
-request's `format`, and validates that claim-result envelope.
-
-The expected-result file must contain only a `claims` object.
-Its keys must exactly match the request's claim ids.
-Each claim value must contain exactly `value`, `satisfied`, and `disclosure`,
-using `null` when the Notary result has no value or satisfaction decision.
-The live runner rejects keys outside its accepted result, reference, and
-provenance structures, including `redacted_fields`, `pack_id`, and
-`pack_version`; rejects nulls for optional public fields; requires the canonical
-claim-result format and RFC3339 timestamps; binds each provenance record to its
-returned evaluation, claim, and version; requires exact `value`, `satisfied`,
-and `disclosure` matches; requires an empty `derived_from` array; and requires a
-non-zero Relay consultation count. It does not judge whether an otherwise
-allowed handle or identifier value is semantically appropriate.
-This example reflects only the committed synthetic fixture and must be replaced
-with reviewed expectations for the owner-approved record:
+Predicate expected result:
 
 ```json
 {
@@ -138,12 +126,70 @@ with reviewed expectations for the owner-approved record:
       "value": true,
       "satisfied": true,
       "disclosure": "predicate"
-    },
+    }
+  }
+}
+```
+
+Value request:
+
+```json
+{
+  "target": {
+    "type": "Person",
+    "identifiers": [
+      {
+        "scheme": "openspp_individual_id",
+        "value": "IND-AB12CD34"
+      }
+    ]
+  },
+  "claims": ["programme-code"],
+  "disclosure": "value",
+  "format": "application/vnd.registry-notary.claim-result+json",
+  "purpose": "social-programme-verification"
+}
+```
+
+Value expected result:
+
+```json
+{
+  "claims": {
     "programme-code": {
       "value": "SUPPORT",
       "satisfied": null,
       "disclosure": "value"
-    },
+    }
+  }
+}
+```
+
+Redacted request:
+
+```json
+{
+  "target": {
+    "type": "Person",
+    "identifiers": [
+      {
+        "scheme": "openspp_individual_id",
+        "value": "IND-AB12CD34"
+      }
+    ]
+  },
+  "claims": ["household-reference"],
+  "disclosure": "redacted",
+  "format": "application/vnd.registry-notary.claim-result+json",
+  "purpose": "social-programme-verification"
+}
+```
+
+Redacted expected result:
+
+```json
+{
+  "claims": {
     "household-reference": {
       "value": null,
       "satisfied": null,
@@ -152,6 +198,27 @@ with reviewed expectations for the owner-approved record:
   }
 }
 ```
+
+`registryctl` sends
+`Accept: application/vnd.registry-notary.claim-result+json`, matching the
+request's `format`, and validates that claim-result envelope.
+
+Each expected-result file must contain only a `claims` object.
+Its keys must exactly match the corresponding request's claim ids.
+Each claim value must contain exactly `value`, `satisfied`, and `disclosure`,
+using `null` when the Notary result has no value or satisfaction decision.
+The live runner rejects keys outside its accepted result, reference, and
+provenance structures, including `pack_id` and `pack_version`; validates
+public `redacted_fields` without exposing a listed field value; rejects nulls
+for optional public fields; requires one evaluation id, the canonical
+claim-result format, and RFC3339 timestamps; binds each provenance record and
+claim version to the returned result and authored project; requires exact
+`value`, `satisfied`, and `disclosure` matches; requires an empty
+`derived_from` array; and requires a non-zero Relay consultation count. It does
+not judge whether an otherwise allowed handle or identifier value is
+semantically appropriate.
+These examples reflect only the committed synthetic fixture and must be
+replaced with reviewed expectations for the owner-approved record.
 
 The governed live test reads exactly four process variables:
 
