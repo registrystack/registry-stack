@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import stat
 import subprocess
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import yaml
 
@@ -20,6 +23,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_DIR = REPO_ROOT / "release" / "manifests"
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+IMAGE_LOCK_FILE = re.compile(
+    r"^registryctl-(v[A-Za-z0-9][A-Za-z0-9._+-]*)-image-lock\.json$"
+)
 IMAGE_REPOSITORIES = {
     "registry-notary": "ghcr.io/registrystack/registry-notary",
     "registry-relay": "ghcr.io/registrystack/registry-relay",
@@ -34,6 +40,200 @@ RELEASE_WORKFLOW = (
 
 class CandidateError(RuntimeError):
     """Candidate inputs are mutable, malformed, or disagree."""
+
+
+def normalized_absolute_path(path: Path) -> Path:
+    return Path(os.path.abspath(path.expanduser()))
+
+
+def require_real_directory(path: Path) -> None:
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise CandidateError(
+            f"candidate input directory is unavailable: {path}: {exc}"
+        ) from exc
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise CandidateError(
+            "candidate input directory must be a real, non-symlink directory"
+        )
+
+
+def open_directory_no_follow(path: Path) -> int:
+    require_real_directory(path)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if no_follow is None or directory_flag is None:
+        raise CandidateError(
+            "candidate snapshotting requires O_NOFOLLOW and O_DIRECTORY"
+        )
+    try:
+        return os.open(
+            path,
+            os.O_RDONLY | os.O_CLOEXEC | no_follow | directory_flag,
+        )
+    except OSError as exc:
+        raise CandidateError(
+            f"candidate input directory could not be opened safely: {exc}"
+        ) from exc
+
+
+def read_regular_file_at(
+    directory_fd: int,
+    name: str,
+    *,
+    max_bytes: int,
+) -> bytes:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise CandidateError("candidate snapshotting requires O_NOFOLLOW")
+    source_fd = None
+    try:
+        source_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | no_follow,
+            dir_fd=directory_fd,
+        )
+        before = os.fstat(source_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise CandidateError(
+                f"candidate input must be a regular, non-symlink file: {name}"
+            )
+        if before.st_size <= 0 or before.st_size > max_bytes:
+            raise CandidateError(
+                f"candidate input size is invalid: {name}"
+            )
+        with os.fdopen(source_fd, "rb") as source:
+            source_fd = None
+            content = source.read(max_bytes + 1)
+            after = os.fstat(source.fileno())
+        identity_before = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        identity_after = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        if (
+            len(content) != before.st_size
+            or len(content) > max_bytes
+            or identity_before != identity_after
+        ):
+            raise CandidateError(
+                f"candidate input changed while snapshotting: {name}"
+            )
+        return content
+    except OSError as exc:
+        raise CandidateError(
+            f"candidate input could not be read safely: {name}: {exc}"
+        ) from exc
+    finally:
+        if source_fd is not None:
+            os.close(source_fd)
+
+
+def read_regular_file_no_follow(path: Path, *, max_bytes: int) -> bytes:
+    path = normalized_absolute_path(path)
+    directory_fd = open_directory_no_follow(path.parent)
+    try:
+        return read_regular_file_at(
+            directory_fd,
+            path.name,
+            max_bytes=max_bytes,
+        )
+    finally:
+        os.close(directory_fd)
+
+
+def candidate_asset_limits(tag: str, lock_name: str) -> dict[str, int]:
+    capsule_name = f"registry-stack-{tag}-release-capsule.json"
+    return {
+        lock_name: 1024 * 1024,
+        f"{lock_name}.sig": 1024 * 1024,
+        f"{lock_name}.pem": 1024 * 1024,
+        capsule_name: 8 * 1024 * 1024,
+        f"{capsule_name}.sig": 1024 * 1024,
+        f"{capsule_name}.pem": 1024 * 1024,
+        f"registry-stack-{tag}-release-provenance.intoto.jsonl": (
+            128 * 1024 * 1024
+        ),
+        "SHA256SUMS": 1024 * 1024,
+    }
+
+
+@contextmanager
+def candidate_asset_snapshot(
+    image_lock_path: Path,
+) -> Iterator[tuple[Path, bytes]]:
+    """Capture one candidate so parsing and verification cannot see different bytes.
+
+    The source directory is operator-supplied and remains writable. The
+    security invariant is that passive parsing and external authenticity tools
+    consume the same private, read-only files even if those source paths are
+    replaced concurrently.
+    """
+    image_lock_path = normalized_absolute_path(image_lock_path)
+    match = IMAGE_LOCK_FILE.fullmatch(image_lock_path.name)
+    if match is None:
+        raise CandidateError("release image-lock filename is invalid")
+    tag = match.group(1)
+    directory_fd = open_directory_no_follow(image_lock_path.parent)
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="registry-conformance-candidate-"
+        ) as temporary:
+            snapshot = Path(temporary)
+            snapshot_fd = open_directory_no_follow(snapshot)
+            captured: dict[str, bytes] = {}
+            try:
+                for name, max_bytes in candidate_asset_limits(
+                    tag, image_lock_path.name
+                ).items():
+                    content = read_regular_file_at(
+                        directory_fd,
+                        name,
+                        max_bytes=max_bytes,
+                    )
+                    destination_fd = None
+                    try:
+                        destination_fd = os.open(
+                            name,
+                            os.O_WRONLY
+                            | os.O_CREAT
+                            | os.O_EXCL
+                            | os.O_CLOEXEC
+                            | os.O_NOFOLLOW,
+                            0o600,
+                            dir_fd=snapshot_fd,
+                        )
+                        with os.fdopen(destination_fd, "wb") as output:
+                            destination_fd = None
+                            output.write(content)
+                            os.fchmod(output.fileno(), 0o400)
+                    finally:
+                        if destination_fd is not None:
+                            os.close(destination_fd)
+                    captured[name] = content
+                os.fchmod(snapshot_fd, 0o500)
+                try:
+                    yield snapshot, captured[image_lock_path.name]
+                finally:
+                    os.fchmod(snapshot_fd, 0o700)
+            finally:
+                os.close(snapshot_fd)
+    except OSError as exc:
+        raise CandidateError(
+            f"could not create private candidate snapshot: {exc}"
+        ) from exc
+    finally:
+        os.close(directory_fd)
 
 
 def git_output(arguments: list[str], max_bytes: int) -> bytes:
@@ -166,7 +366,18 @@ def find_named(items: Any, name: str, label: str) -> dict[str, Any]:
 
 
 def run_authenticity_command(command: list[str]) -> None:
-    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    try:
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise CandidateError(
+            f"candidate authenticity command could not complete ({command[0]})"
+        ) from None
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip().splitlines()
         suffix = f": {detail[-1]}" if detail else ""
@@ -331,20 +542,16 @@ def verify_release_asset_binding(
     return capsule_sha256
 
 
-def load_candidate(
+def _load_candidate_snapshot(
     manifest_path: Path,
     image_lock_path: Path,
+    manifest_bytes: bytes,
+    image_lock_bytes: bytes,
     *,
     topology: str = "release-owned",
     solmara_source_ref: str | None = None,
 ) -> dict[str, Any]:
-    manifest_path = require_regular_file(manifest_path, max_bytes=1024 * 1024)
-    image_lock_path = require_regular_file(image_lock_path, max_bytes=1024 * 1024)
-    if manifest_path.parent != MANIFEST_DIR.resolve():
-        raise CandidateError(f"release manifest must be under {MANIFEST_DIR}")
     try:
-        manifest_bytes = manifest_path.read_bytes()
-        image_lock_bytes = image_lock_path.read_bytes()
         manifest = yaml.safe_load(manifest_bytes.decode("utf-8"))
         lock = json.loads(image_lock_bytes)
     except (UnicodeDecodeError, json.JSONDecodeError, yaml.YAMLError) as exc:
@@ -443,3 +650,32 @@ def load_candidate(
         "topology": topology,
         "solmara_source_ref": solmara_source_ref,
     }
+
+
+def load_candidate(
+    manifest_path: Path,
+    image_lock_path: Path,
+    *,
+    topology: str = "release-owned",
+    solmara_source_ref: str | None = None,
+) -> dict[str, Any]:
+    manifest_path = normalized_absolute_path(manifest_path)
+    image_lock_path = normalized_absolute_path(image_lock_path)
+    if manifest_path.parent != MANIFEST_DIR:
+        raise CandidateError(f"release manifest must be under {MANIFEST_DIR}")
+    manifest_bytes = read_regular_file_no_follow(
+        manifest_path,
+        max_bytes=1024 * 1024,
+    )
+    with candidate_asset_snapshot(image_lock_path) as (
+        snapshot,
+        image_lock_bytes,
+    ):
+        return _load_candidate_snapshot(
+            manifest_path,
+            snapshot / image_lock_path.name,
+            manifest_bytes,
+            image_lock_bytes,
+            topology=topology,
+            solmara_source_ref=solmara_source_ref,
+        )
