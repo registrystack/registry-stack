@@ -244,11 +244,17 @@ FROM_RE = re.compile(
     r"[ \t]*(?:#.*)?$",
     re.IGNORECASE | re.MULTILINE,
 )
+DOCKERFILE_PARSER_DIRECTIVE_RE = re.compile(
+    r"^[ \t]*#[ \t]*(?P<key>[A-Za-z]+)[ \t]*="
+    r"[ \t]*(?P<value>\S+)[ \t]*$",
+    re.IGNORECASE,
+)
+COPY_INSTRUCTION_RE = re.compile(r"^[ \t]*COPY(?:[ \t]|$)", re.IGNORECASE)
 COPY_FROM_RE = re.compile(
     r"^[ \t]*COPY[ \t]+"
     r"(?:--[^\s=]+(?:=[^\s]+)?[ \t]+)*"
     r"--from=(?P<source>[^\s#]+)",
-    re.IGNORECASE | re.MULTILINE,
+    re.IGNORECASE,
 )
 DIGEST_PIN_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 RETIRED_MARKER_RE = re.compile(
@@ -312,6 +318,73 @@ def discover_workflow_paths(root: Path) -> tuple[Path, ...]:
             key=lambda path: path.name,
         )
     )
+
+
+def collect_dockerfile_copy_sources(
+    text: str,
+    relative: Path,
+    failures: list[str],
+) -> list[str]:
+    lines = text.splitlines()
+    escape_directives = []
+    for line in lines:
+        if not line.strip():
+            break
+        match = DOCKERFILE_PARSER_DIRECTIVE_RE.match(line)
+        if match is None:
+            break
+        key = match.group("key").casefold()
+        if key not in {"syntax", "escape", "check"}:
+            break
+        if key == "escape":
+            escape_directives.append(match.group("value"))
+    if len(escape_directives) > 1 or (
+        escape_directives
+        and escape_directives[0] != "\\"
+    ):
+        failures.append(
+            f"{relative}: unsupported Dockerfile escape directive prevents "
+            "bounded COPY source inspection"
+        )
+        return []
+
+    sources = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+
+        parts: list[str] = []
+        while True:
+            continued = line.rstrip().endswith("\\")
+            part = line.rstrip()
+            if continued:
+                part = part[:-1]
+            parts.append(part)
+            if not continued:
+                break
+
+            while index < len(lines):
+                line = lines[index]
+                index += 1
+                if line.strip() and not line.lstrip().startswith("#"):
+                    break
+            else:
+                failures.append(
+                    f"{relative}: unterminated Dockerfile line continuation "
+                    "prevents bounded COPY source inspection"
+                )
+                return []
+
+        instruction = "".join(parts)
+        if not COPY_INSTRUCTION_RE.match(instruction):
+            continue
+        match = COPY_FROM_RE.match(instruction)
+        if match:
+            sources.append(match.group("source"))
+    return sources
 
 
 def collect_workflow_image_references(
@@ -563,8 +636,11 @@ def check_repository(root: Path = ROOT) -> list[str]:
             if alias is not None
         }
         named_contexts = DOCKERFILE_NAMED_CONTEXTS[relative]
-        for match in COPY_FROM_RE.finditer(text):
-            source = match.group("source")
+        for source in collect_dockerfile_copy_sources(
+            text,
+            relative,
+            failures,
+        ):
             if (
                 source.casefold() not in stage_aliases
                 and source not in named_contexts

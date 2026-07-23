@@ -803,10 +803,15 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     for match in self.module.FROM_RE.finditer(text)
                     if match.group("alias") is not None
                 }
-                sources = {
-                    match.group("source")
-                    for match in self.module.COPY_FROM_RE.finditer(text)
-                }
+                failures: list[str] = []
+                sources = set(
+                    self.module.collect_dockerfile_copy_sources(
+                        text,
+                        relative,
+                        failures,
+                    )
+                )
+                self.assertEqual([], failures)
                 external_sources = {
                     source for source in sources if source.casefold() not in aliases
                 }
@@ -844,6 +849,135 @@ class Debian13ImageCheckTest(unittest.TestCase):
                         failures,
                     )
                     self.assertNotIn(source, "\n".join(failures))
+
+    def test_multiline_dockerfile_copy_sources_allow_reviewed_sources(
+        self,
+    ) -> None:
+        cases = (
+            (
+                Path("crates/registry-relay/Dockerfile"),
+                (
+                    "COPY --from=registry-platform /Cargo.toml /Cargo.lock "
+                    "/workspace/registry-platform/"
+                ),
+                "COPY --chown=0:0 \\\n"
+                "  # Supplied as a named BuildKit context.\n"
+                "  --from=registry-platform \\\n"
+                "  /Cargo.toml /Cargo.lock /workspace/registry-platform/",
+            ),
+            (
+                Path("release/docker/Dockerfile.registry-relay"),
+                "COPY --from=runtime-root /workspace/runtime-root/ /",
+                "COPY \\\n"
+                "  --from=runtime-root \\\n"
+                "  --chown=65532:65532 \\\n"
+                "  /workspace/runtime-root/ /",
+            ),
+        )
+        for relative, exact, multiline in cases:
+            with self.subTest(relative=relative):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(exact, text)
+                target.write_text(
+                    text.replace(exact, multiline, 1),
+                    encoding="utf-8",
+                )
+                self.assertEqual([], self.module.check_repository(root))
+
+    def test_multiline_dockerfile_copy_sources_reject_external_images(
+        self,
+    ) -> None:
+        relative = Path("crates/registry-relay/Dockerfile")
+        sources = (
+            "alpine:3.22",
+            "ghcr.io/example/tool@sha256:" + "a" * 64,
+        )
+        instructions = (
+            "COPY \\\n"
+            "  --from={source} \\\n"
+            "  /bin/tool /bin/tool\n",
+            "COPY --chown=65532:65532 \\\n"
+            "  --from={source} \\\n"
+            "  /bin/tool /bin/tool\n",
+            "COPY --from={source} \\\n"
+            "  --chown=65532:65532 \\\n"
+            "  /bin/tool /bin/tool\n",
+            "COPY --chown=65532:65532 \\\n"
+            "  # The source option remains part of this instruction.\n"
+            "  --from={source} \\\n"
+            "  /bin/tool /bin/tool\n",
+        )
+        failure = (
+            "COPY --from source is not a declared stage or reviewed named "
+            "build context"
+        )
+        for source in sources:
+            for instruction in instructions:
+                with self.subTest(source=source, instruction=instruction):
+                    root = self.fixture()
+                    target = root / relative
+                    text = target.read_text(encoding="utf-8")
+                    target.write_text(
+                        text + "\n" + instruction.format(source=source),
+                        encoding="utf-8",
+                    )
+                    failures = self.module.check_repository(root)
+                    self.assertTrue(
+                        any(failure in item for item in failures),
+                        failures,
+                    )
+                    self.assertNotIn(source, "\n".join(failures))
+
+    def test_dockerfile_copy_normalization_fails_closed(self) -> None:
+        relative = Path("crates/registry-relay/Dockerfile")
+        cases = (
+            (
+                "unterminated",
+                "",
+                "\nCOPY --chown=65532:65532 \\\n"
+                "  # No continued instruction follows.\n",
+                "unterminated Dockerfile line continuation",
+            ),
+            (
+                "alternate-escape",
+                "# escape=`\n",
+                "\nCOPY --chown=65532:65532 `\n"
+                "  --from=alpine:3.22 `\n"
+                "  /bin/tool /bin/tool\n",
+                "unsupported Dockerfile escape directive",
+            ),
+        )
+        for name, prefix, suffix, failure in cases:
+            with self.subTest(name=name):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                target.write_text(prefix + text + suffix, encoding="utf-8")
+                self.assert_has_failure(root, failure)
+
+    def test_multiline_copy_source_tokens_cannot_shadow_reviewed_names(
+        self,
+    ) -> None:
+        relative = Path("crates/registry-relay/Dockerfile")
+        for reviewed in ("builder", "registry-platform"):
+            with self.subTest(reviewed=reviewed):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                target.write_text(
+                    text
+                    + f"\nCOPY --from={reviewed}\\\n"
+                    "-external \\\n"
+                    "  /bin/tool /bin/tool\n",
+                    encoding="utf-8",
+                )
+                self.assert_has_failure(
+                    root,
+                    f"{relative}: COPY --from source is not a declared stage "
+                    "or reviewed named build context",
+                )
 
     def test_dockerfile_named_context_allowlist_is_path_bounded(self) -> None:
         for relative, contexts in self.module.DOCKERFILE_NAMED_CONTEXTS.items():
