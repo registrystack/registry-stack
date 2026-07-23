@@ -128,28 +128,79 @@ class Debian13ImageCheckTest(unittest.TestCase):
         cases = [
             ("Dockerfile", f"FROM {PINNED_RUST}\n", None),
             ("compose.yaml", f"services:\n  app:\n    image: {PINNED_RUST}\n", None),
-            ("script.sh", "docker run --rm rust:1.95-trixie true\n", "not pinned by immutable digest"),
-            ("workflow.yml", f"env:\n  BUILDER_IMAGE: rust:1.95@sha256:{DIGEST}\n", "does not declare Trixie/Debian 13"),
-            ("images.py", "BUILDER_IMAGE: str = 'python:3.13-slim-trixie'\n", "not pinned by immutable digest"),
-            ("images.ts", "const builderImage = 'golang:1.25-trixie';\n", "not pinned by immutable digest"),
+            (
+                "script.sh",
+                "docker run --rm rust:1.95-trixie true\n",
+                "not pinned by immutable digest",
+            ),
+            (
+                "workflow.yml",
+                f"env:\n  BUILDER_IMAGE: rust:1.95@sha256:{DIGEST}\n",
+                "does not declare Trixie/Debian 13",
+            ),
+            (
+                "images.py",
+                "BUILDER_IMAGE: str = 'python:3.13-slim-trixie'\n",
+                "not pinned by immutable digest",
+            ),
+            (
+                "images.ts",
+                "const builderImage = 'golang:1.25-trixie';\n",
+                "not pinned by immutable digest",
+            ),
             ("module.js", "import path from 'node:path';\n", None),
             ("data.yaml", "identifier: did:web\nport: 65532:65532\n", None),
         ]
-        for family, version in (("rust", "1.95"), ("node", "22"), ("python", "3.13"),
-                                ("golang", "1.25"), ("postgres", "16")):
-            cases.extend((
-                ("compose.yaml", f"{'container' if family == 'node' else 'image'}: {family}\n", "bare Debian-default"),
-                ("build.sh", f"BUILDER_IMAGE='{family}'\n", "bare Debian-default"),
-                ("script.sh", f"docker run --rm {family} true\n", "bare Debian-default"),
-                ("script.sh", f"docker run --rm {family}:{version}\n", "not pinned"),
-                ("script.sh", f"docker run --rm {family}:{version}-slim\n", "not pinned"),
-                ("workflow.yml", f"container: {family}@sha256:{DIGEST}\n", "does not declare"),
-                ("compose.yaml", f"image: registry.test:5000/team/{family}\n", "bare Debian-default"),
-                ("workflow.yml", f"container: registry.test/team/{family}@sha256:{DIGEST}\n", "does not declare"),
-                ("script.sh", f"docker run {family}:{version}-alpine\n", None),
-                ("script.sh", f"docker run {family}:{version}-windows\n", None),
-                ("guide.md", f"The {family} image is available.\n", None),
-            ))
+        for family, version in (
+            ("rust", "1.95"),
+            ("node", "22"),
+            ("python", "3.13"),
+            ("golang", "1.25"),
+            ("postgres", "16"),
+        ):
+            cases.extend(
+                (
+                    (
+                        "compose.yaml",
+                        f"{'container' if family == 'node' else 'image'}: {family}\n",
+                        "bare Debian-default",
+                    ),
+                    ("build.sh", f"BUILDER_IMAGE='{family}'\n", "bare Debian-default"),
+                    (
+                        "script.sh",
+                        f"docker run --rm {family} true\n",
+                        "bare Debian-default",
+                    ),
+                    (
+                        "script.sh",
+                        f"docker run --rm {family}:{version}\n",
+                        "not pinned",
+                    ),
+                    (
+                        "script.sh",
+                        f"docker run --rm {family}:{version}-slim\n",
+                        "not pinned",
+                    ),
+                    (
+                        "workflow.yml",
+                        f"container: {family}@sha256:{DIGEST}\n",
+                        "does not declare",
+                    ),
+                    (
+                        "compose.yaml",
+                        f"image: registry.test:5000/team/{family}\n",
+                        "bare Debian-default",
+                    ),
+                    (
+                        "workflow.yml",
+                        f"container: registry.test/team/{family}@sha256:{DIGEST}\n",
+                        "does not declare",
+                    ),
+                    ("script.sh", f"docker run {family}:{version}-alpine\n", None),
+                    ("script.sh", f"docker run {family}:{version}-windows\n", None),
+                    ("guide.md", f"The {family} image is available.\n", None),
+                )
+            )
         for relative, text, expected in cases:
             with self.subTest(relative=relative, text=text):
                 failures = self.scan(relative, text)
@@ -160,6 +211,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
                         any(expected in failure for failure in failures),
                         failures,
                     )
+
     def test_retired_markers_are_global_with_markdown_prose_exemptions(self) -> None:
         for text in (
             "Historical book" + "worm base\n",
@@ -176,14 +228,14 @@ class Debian13ImageCheckTest(unittest.TestCase):
         self.assert_clean(
             "design.md",
             "The book"
-            'worm comparison remains historical. '
-            '<!-- debian13-policy: allow-prose '
+            "worm comparison remains historical. "
+            "<!-- debian13-policy: allow-prose "
             'reason="historical comparison only" -->\n',
         )
         invalid = (
             "```sh\n"
             "# book"
-            'worm <!-- debian13-policy: allow-prose '
+            "worm <!-- debian13-policy: allow-prose "
             'reason="historical comparison only" -->\n'
             "```\n"
         )
@@ -196,7 +248,10 @@ class Debian13ImageCheckTest(unittest.TestCase):
             any("retired Debian image" in item for item in failures),
             failures,
         )
-    def test_wrappers_options_operators_and_malformed_shell_still_scan_literals(self) -> None:
+
+    def test_wrappers_options_operators_and_malformed_shell_still_scan_literals(
+        self,
+    ) -> None:
         commands = (
             "docker --tlsverify pull -a rust:1.95-trixie",
             "podman --remote pull --all-tags rust:1.95-trixie",
@@ -225,6 +280,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assert_clean("script.sh", command + "\n")
+
     def test_bare_debian_is_finite_to_image_code_contexts(self) -> None:
         cases = (
             ("Dockerfile", "FROM debian\n"),
@@ -254,6 +310,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
         ):
             with self.subTest(relative=relative, text=text):
                 self.assert_clean(relative, text)
+
     def test_image_assignments_resolve_literals_and_reject_computation(self) -> None:
         clean = (
             f'DEFAULT_BUILDER_IMAGE="{PINNED_RUST}"\n'
@@ -267,8 +324,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
         )
         self.assert_clean(
             "local.sh",
-            'RELAY_IMAGE="registryctl-relay:$RUN_ID"\n'
-            'docker run "$RELAY_IMAGE"\n',
+            'RELAY_IMAGE="registryctl-relay:$RUN_ID"\ndocker run "$RELAY_IMAGE"\n',
         )
 
         cases = (
@@ -284,8 +340,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
             ),
             (
                 "cycle.sh",
-                'BASE_IMAGE="$BUILDER_IMAGE"\n'
-                'BUILDER_IMAGE="$BASE_IMAGE"\n',
+                'BASE_IMAGE="$BUILDER_IMAGE"\nBUILDER_IMAGE="$BASE_IMAGE"\n',
                 "computed or unresolved image assignment",
             ),
             (
@@ -328,7 +383,10 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 "        unused_image: [rust:1.95-trixie]\n"
                 "    container: ${{ matrix.image }}\n",
             ),
-            ("pod.yaml", "apiVersion: v1\nkind: Pod\nspec:\n  containers:\n    - image: rust:1.95-trixie\n"),
+            (
+                "pod.yaml",
+                "apiVersion: v1\nkind: Pod\nspec:\n  containers:\n    - image: rust:1.95-trixie\n",
+            ),
             ("malformed.yaml", "jobs: [\nimage: rust:1.95-trixie\n"),
             ("documents.yaml", "description: first\n---\nimage: rust:1.95-trixie\n"),
         )
@@ -343,9 +401,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
     def test_markdown_scans_only_executable_fences(self) -> None:
         self.assert_failure(
             "guide.md",
-            "```sh\n"
-            "docker run --rm rust:1.95-trixie\n"
-            "```\n",
+            "```sh\ndocker run --rm rust:1.95-trixie\n```\n",
             "not pinned by immutable digest",
         )
         self.assert_clean(
@@ -356,7 +412,9 @@ class Debian13ImageCheckTest(unittest.TestCase):
             "```\n",
         )
 
-    def test_repository_dockerfile_discovery_checks_external_and_internal_stages(self) -> None:
+    def test_repository_dockerfile_discovery_checks_external_and_internal_stages(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.copy_required(root)
@@ -396,13 +454,48 @@ class Debian13ImageCheckTest(unittest.TestCase):
 
     def test_product_contract_mutations_are_reported(self) -> None:
         mutations = (
-            (Path("crates/registry-relay/Dockerfile"), "/usr/local/bin/registry-relay-rhai-worker", "/usr/local/bin/removed-worker", "Relay worker binary"),
-            (Path("products/notary/Dockerfile"), "registry-notary-cel-worker", "removed-cel-worker", "Notary CEL worker binary"),
-            (Path("release/docker/Dockerfile.registry-relay"), "# syntax=", "# moved-syntax=", "frontend must be the first line"),
-            (Path("release/scripts/build-release-binaries.sh"), "--features registry-notary/registry-notary-cel,registry-notary/pkcs11", "--features registry-notary/registry-notary-cel", "PKCS#11-enabled release build"),
-            (Path("docs/site/scripts/check-registryctl-tutorials.sh"), 'LINUX_TARGET="$REPO_ROOT/target/registryctl-tutorial-linux-amd64"', 'LINUX_TARGET="$REPO_ROOT/target/other"', "registryctl tutorial linux target path"),
-            (Path(".github/workflows/ci.yml"), "hashFiles('docs/site/scripts/check-registryctl-tutorials.sh')", "hashFiles('Cargo.lock')", "registryctl tutorial cache builder identity"),
-            (Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"), "postgres:16-trixie@sha256:", "postgres:16@", "pinned Debian 13 live-journey PostgreSQL"),
+            (
+                Path("crates/registry-relay/Dockerfile"),
+                "/usr/local/bin/registry-relay-rhai-worker",
+                "/usr/local/bin/removed-worker",
+                "Relay worker binary",
+            ),
+            (
+                Path("products/notary/Dockerfile"),
+                "registry-notary-cel-worker",
+                "removed-cel-worker",
+                "Notary CEL worker binary",
+            ),
+            (
+                Path("release/docker/Dockerfile.registry-relay"),
+                "# syntax=",
+                "# moved-syntax=",
+                "frontend must be the first line",
+            ),
+            (
+                Path("release/scripts/build-release-binaries.sh"),
+                "--features registry-notary/registry-notary-cel,registry-notary/pkcs11",
+                "--features registry-notary/registry-notary-cel",
+                "PKCS#11-enabled release build",
+            ),
+            (
+                Path("docs/site/scripts/check-registryctl-tutorials.sh"),
+                'LINUX_TARGET="$REPO_ROOT/target/registryctl-tutorial-linux-amd64"',
+                'LINUX_TARGET="$REPO_ROOT/target/other"',
+                "registryctl tutorial linux target path",
+            ),
+            (
+                Path(".github/workflows/ci.yml"),
+                "hashFiles('docs/site/scripts/check-registryctl-tutorials.sh')",
+                "hashFiles('Cargo.lock')",
+                "registryctl tutorial cache builder identity",
+            ),
+            (
+                Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
+                "postgres:16-trixie@sha256:",
+                "postgres:16@",
+                "pinned Debian 13 live-journey PostgreSQL",
+            ),
         )
         for path, old, new, expected in mutations:
             with self.subTest(path=path), tempfile.TemporaryDirectory() as directory:
