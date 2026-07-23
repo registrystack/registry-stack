@@ -27,14 +27,41 @@ DOCKERFILE_FRONTEND = (
     "a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
 )
 TUTORIAL_CACHE_STEP = "Cache source-under-test Cargo build"
-TUTORIAL_CACHE_KEY = (
-    "          key: registryctl-tutorial-${{ runner.os }}-"
+TUTORIAL_CACHE_VALUE = (
+    "registryctl-tutorial-${{ runner.os }}-"
     "${{ hashFiles('docs/site/scripts/check-registryctl-tutorials.sh') }}-"
     "${{ hashFiles('Cargo.lock') }}"
 )
+TUTORIAL_CACHE_KEYS = tuple(
+    f"          {key}: {TUTORIAL_CACHE_VALUE}"
+    for key in ("key", "'key'", '"key"')
+)
+TUTORIAL_CACHE_KEY = TUTORIAL_CACHE_KEYS[0]
 RELEASE_BUILDER_HANDOFF = 'release_builder_image="${default_builder_image}"'
 RELEASE_BUILDER_CONSUMER = '  "${release_builder_image}" \\'
 TUTORIAL_BUILDER_CONSUMER = '\t\t"$BUILDER_IMAGE" \\'
+LIVE_JOURNEY_BUILDER = f"    {RUST_BUILDER} \\"
+RELEASE_BUILDER_TAIL = "\n".join(
+    (
+        '  --env RELEASE_RUSTFLAGS="${release_rustflags}" \\',
+        RELEASE_BUILDER_CONSUMER,
+        "  bash -c 'set -euo pipefail",
+    )
+)
+TUTORIAL_BUILDER_TAIL = "\n".join(
+    (
+        "\t\t--env HOME=/tmp/registryctl-tutorial-home \\",
+        TUTORIAL_BUILDER_CONSUMER,
+        "\t\tbash -c 'set -euo pipefail",
+    )
+)
+LIVE_JOURNEY_BUILDER_TAIL = "\n".join(
+    (
+        "    --workdir /workspace \\",
+        LIVE_JOURNEY_BUILDER,
+        "    sh -eu -c \\",
+    )
+)
 
 DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile"),
@@ -81,6 +108,10 @@ RELAY_RUNTIME_DIRECTIVES = (
         "absolute Relay entrypoint",
     ),
     ("WORKDIR /var/lib/registry-relay", "Relay working directory"),
+    (
+        'CMD ["--config", "/etc/registry-relay/config.yaml"]',
+        "Relay default command",
+    ),
 )
 NOTARY_RUNTIME_DIRECTIVES = (
     (
@@ -93,6 +124,10 @@ NOTARY_RUNTIME_DIRECTIVES = (
         "absolute Notary entrypoint",
     ),
     ("WORKDIR /var/lib/registry-notary", "Notary working directory"),
+    (
+        'CMD ["--config", "/etc/registry-notary/config.yaml"]',
+        "Notary default command",
+    ),
 )
 
 FROM_RE = re.compile(
@@ -108,7 +143,8 @@ RETIRED_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 RUNTIME_DIRECTIVE_RE = re.compile(
-    r"^[ \t]*(?P<name>HEALTHCHECK|ENTRYPOINT|WORKDIR|USER)(?:[ \t]+|$)",
+    r"^[ \t]*(?P<name>HEALTHCHECK|ENTRYPOINT|WORKDIR|CMD|USER|VOLUME)"
+    r"(?:[ \t]+|$)",
     re.IGNORECASE,
 )
 RELEASE_BUILDER_KEY_RE = re.compile(
@@ -123,17 +159,12 @@ TUTORIAL_BUILDER_ASSIGNMENT_RE = re.compile(
 RELEASE_BUILDER_HANDOFF_RE = re.compile(
     r"^[ \t]*(?:(?:export|readonly)[ \t]+)?release_builder_image[ \t]*="
 )
-RELEASE_BUILDER_CONSUMER_RE = re.compile(
-    r'^[ \t]+(?:"?\$\{release_builder_image\}"?|"?rust:[^" \t#]+"?)'
-    r"[ \t]+\\[ \t]*$"
-)
-TUTORIAL_BUILDER_CONSUMER_RE = re.compile(
-    r'^[ \t]+(?:"?\$BUILDER_IMAGE"?|"?rust:[^" \t#]+"?)[ \t]+\\[ \t]*$'
-)
 LIVE_JOURNEY_BUILDER_RE = re.compile(
     r"^[ \t]+rust:[^ \t#]+[ \t]+\\[ \t]*$"
 )
-CACHE_KEY_RE = re.compile(r"^[ \t]*key[ \t]*:")
+CACHE_KEY_RE = re.compile(
+    r"""^[ \t]*(?:key|'key'|"key")[ \t]*:"""
+)
 RESTORE_KEYS_RE = re.compile(
     r"""^[ \t]*(?:restore-keys|'restore-keys'|"restore-keys")[ \t]*:""",
     re.MULTILINE,
@@ -180,6 +211,21 @@ def require_unique_active_line(
         )
 
 
+def require_unique_text(
+    text: str,
+    expected: str,
+    relative: Path,
+    detail: str,
+    failures: list[str],
+) -> None:
+    count = text.count(expected)
+    if count != 1:
+        failures.append(
+            f"{relative}: missing {detail}: expected exactly one exact "
+            f"block {expected!r}; found {count}"
+        )
+
+
 def workflow_step(text: str, name: str) -> str:
     lines = text.splitlines()
     header = f"      - name: {name}"
@@ -198,20 +244,30 @@ def workflow_step(text: str, name: str) -> str:
     return "\n".join(lines[start:end])
 
 
-def shell_continuation_command(text: str, command: str) -> str:
+def shell_continuation_command(
+    text: str,
+    command: str,
+    required_line: str | None = None,
+) -> str:
     lines = text.splitlines()
-    matches = [
+    starts = [
         index
         for index, line in enumerate(lines)
         if line.lstrip() == f"{command} \\"
     ]
-    if len(matches) != 1:
-        return ""
-    start = matches[0]
-    end = start + 1
-    while end < len(lines) and lines[end - 1].rstrip().endswith("\\"):
-        end += 1
-    return "\n".join(lines[start:end])
+    commands = []
+    for start in starts:
+        end = start + 1
+        while end < len(lines) and lines[end - 1].rstrip().endswith("\\"):
+            end += 1
+        commands.append("\n".join(lines[start:end]))
+    if required_line is not None:
+        commands = [
+            candidate
+            for candidate in commands
+            if required_line in candidate.splitlines()
+        ]
+    return commands[0] if len(commands) == 1 else ""
 
 
 def check_repository(root: Path = ROOT) -> list[str]:
@@ -294,12 +350,16 @@ def check_repository(root: Path = ROOT) -> list[str]:
                     f"expected exactly one active {name} directive "
                     f"{directive!r}; found {active_lines!r}"
                 )
-        active_users = active_runtime_directives.get("user", [])
-        if active_users:
-            failures.append(
-                f"{relative}: final Distroless runtime must inherit the "
-                f"nonroot base user; found active USER directives {active_users!r}"
-            )
+        for name, invariant in (
+            ("user", "inherit the nonroot base user"),
+            ("volume", "declare no writable VOLUME mount surfaces"),
+        ):
+            active_lines = active_runtime_directives.get(name, [])
+            if active_lines:
+                failures.append(
+                    f"{relative}: final Distroless runtime must {invariant}; "
+                    f"found active {name.upper()} directives {active_lines!r}"
+                )
 
     for relative in PREPARATION_DOCKERFILES:
         text = texts[relative]
@@ -397,7 +457,10 @@ def check_repository(root: Path = ROOT) -> list[str]:
     )
     require_unique_active_line(
         binary_recipe,
-        (RELEASE_BUILDER_HANDOFF,),
+        tuple(
+            f"{prefix}{RELEASE_BUILDER_HANDOFF}"
+            for prefix in ("", "readonly ", "export ")
+        ),
         RELEASE_BUILDER_HANDOFF_RE,
         Path("release/scripts/build-release-binaries.sh"),
         "release builder handoff",
@@ -407,12 +470,11 @@ def check_repository(root: Path = ROOT) -> list[str]:
         binary_recipe,
         "docker run --rm",
     )
-    require_unique_active_line(
+    require_unique_text(
         release_builder_command,
-        (RELEASE_BUILDER_CONSUMER,),
-        RELEASE_BUILDER_CONSUMER_RE,
+        RELEASE_BUILDER_TAIL,
         Path("release/scripts/build-release-binaries.sh"),
-        "release Docker builder consumer",
+        "release Docker builder command tail",
         failures,
     )
     require(
@@ -437,12 +499,11 @@ def check_repository(root: Path = ROOT) -> list[str]:
         tutorial_check,
         "docker run --rm",
     )
-    require_unique_active_line(
+    require_unique_text(
         tutorial_builder_command,
-        (TUTORIAL_BUILDER_CONSUMER,),
-        TUTORIAL_BUILDER_CONSUMER_RE,
+        TUTORIAL_BUILDER_TAIL,
         Path("docs/site/scripts/check-registryctl-tutorials.sh"),
-        "registryctl tutorial Docker builder consumer",
+        "registryctl tutorial Docker builder command tail",
         failures,
     )
 
@@ -451,10 +512,22 @@ def check_repository(root: Path = ROOT) -> list[str]:
     ]
     require_unique_active_line(
         live_journey,
-        (f"    {RUST_BUILDER} \\",),
+        (LIVE_JOURNEY_BUILDER,),
         LIVE_JOURNEY_BUILDER_RE,
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
         "pinned Debian 13 live-journey builder",
+        failures,
+    )
+    live_builder_command = shell_continuation_command(
+        live_journey,
+        "docker run --rm",
+        LIVE_JOURNEY_BUILDER,
+    )
+    require_unique_text(
+        live_builder_command,
+        LIVE_JOURNEY_BUILDER_TAIL,
+        Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
+        "live-journey Docker builder command tail",
         failures,
     )
 
@@ -466,7 +539,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
     else:
         require_unique_active_line(
             tutorial_cache,
-            (TUTORIAL_CACHE_KEY,),
+            TUTORIAL_CACHE_KEYS,
             CACHE_KEY_RE,
             Path(".github/workflows/ci.yml"),
             "registryctl tutorial builder cache key",

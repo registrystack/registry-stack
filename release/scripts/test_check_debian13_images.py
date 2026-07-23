@@ -71,7 +71,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
             failures,
         )
 
-    def runtime_directives(self, relative: Path) -> tuple[str, str, str]:
+    def runtime_directives(self, relative: Path) -> tuple[str, ...]:
         product = "relay" if relative in self.module.RELAY_DOCKERFILES else "notary"
         binary = f"/usr/local/bin/registry-{product}"
         return (
@@ -79,6 +79,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
             f'--start-period=10s --retries=3 CMD ["{binary}", "healthcheck"]',
             f'ENTRYPOINT ["{binary}"]',
             f"WORKDIR /var/lib/registry-{product}",
+            f'CMD ["--config", "/etc/registry-{product}/config.yaml"]',
         )
 
     def test_current_repository_follows_contract(self) -> None:
@@ -270,6 +271,12 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 "BUILDER_IMAGE",
                 "missing pinned Debian 13 registryctl tutorial builder",
             ),
+            (
+                RELEASE_BINARY_RECIPE,
+                self.module.RELEASE_BUILDER_HANDOFF,
+                "release_builder_image",
+                "missing release builder handoff",
+            ),
         )
         for relative, exact, variable, failure in cases:
             for prefix in ("readonly ", "export "):
@@ -319,13 +326,13 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 RELEASE_BINARY_RECIPE,
                 self.module.RELEASE_BUILDER_CONSUMER,
                 '  "rust:1.95-trixie" \\',
-                "missing release Docker builder consumer",
+                "missing release Docker builder command tail",
             ),
             (
                 TUTORIAL_CHECK,
                 self.module.TUTORIAL_BUILDER_CONSUMER,
                 '\t\t"rust:1.95-trixie" \\',
-                "missing registryctl tutorial Docker builder consumer",
+                "missing registryctl tutorial Docker builder command tail",
             ),
         )
         for relative, exact, unpinned, failure in cases:
@@ -340,6 +347,47 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     self.assertIn(exact, text)
                     target.write_text(
                         text.replace(exact, replacement, 1),
+                        encoding="utf-8",
+                    )
+                    self.assert_has_failure(root, failure)
+
+    def test_docker_builder_tails_reject_preceding_positional_images(
+        self,
+    ) -> None:
+        cases = (
+            (
+                RELEASE_BINARY_RECIPE,
+                self.module.RELEASE_BUILDER_CONSUMER,
+                "  ",
+                "missing release Docker builder command tail",
+            ),
+            (
+                TUTORIAL_CHECK,
+                self.module.TUTORIAL_BUILDER_CONSUMER,
+                "\t\t",
+                "missing registryctl tutorial Docker builder command tail",
+            ),
+            (
+                LIVE_JOURNEY,
+                self.module.LIVE_JOURNEY_BUILDER,
+                "    ",
+                "missing live-journey Docker builder command tail",
+            ),
+        )
+        for relative, approved, indentation, failure in cases:
+            for image in ("alpine:3.22", "debian:trixie-slim"):
+                with self.subTest(relative=relative, image=image):
+                    root = self.fixture()
+                    target = root / relative
+                    text = target.read_text(encoding="utf-8")
+                    self.assertIn(approved, text)
+                    positional = f"{indentation}{image} \\"
+                    target.write_text(
+                        text.replace(
+                            approved,
+                            positional + "\n" + approved,
+                            1,
+                        ),
                         encoding="utf-8",
                     )
                     self.assert_has_failure(root, failure)
@@ -472,14 +520,24 @@ class Debian13ImageCheckTest(unittest.TestCase):
             ("  healthcheck NONE", "exactly one active HEALTHCHECK"),
             ('  entrypoint ["/tmp/override"]', "exactly one active ENTRYPOINT"),
             ("  workdir /tmp", "exactly one active WORKDIR"),
+            (
+                '  cmd ["--config", "/tmp/override.yaml"]',
+                "exactly one active CMD",
+            ),
             ("USER 0", "must inherit the nonroot base user"),
+            (
+                "  volume /var/lib/registry",
+                "declare no writable VOLUME mount surfaces",
+            ),
         )
         comments = "\n".join(
             (
                 "# HEALTHCHECK NONE",
                 '# ENTRYPOINT ["/tmp/override"]',
                 "# WORKDIR /tmp",
+                '# CMD ["--config", "/tmp/override.yaml"]',
                 "# USER 0",
+                "# VOLUME /var/lib/registry",
             )
         )
         for relative in self.module.DOCKERFILES:
@@ -493,6 +551,21 @@ class Debian13ImageCheckTest(unittest.TestCase):
                         encoding="utf-8",
                     )
                     self.assert_has_failure(root, failure)
+
+            with self.subTest(relative=relative, replaced_cmd=True):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                canonical_cmd = self.runtime_directives(relative)[-1]
+                target.write_text(
+                    text.replace(
+                        canonical_cmd,
+                        'CMD ["/tmp/override"]',
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_has_failure(root, "exactly one active CMD")
 
             with self.subTest(relative=relative, comments=True):
                 root = self.fixture()
@@ -508,6 +581,21 @@ class Debian13ImageCheckTest(unittest.TestCase):
         self,
     ) -> None:
         exact = self.module.TUTORIAL_CACHE_KEY
+        for allowed in self.module.TUTORIAL_CACHE_KEYS[1:]:
+            with self.subTest(allowed=allowed):
+                root = self.fixture()
+                target = root / CI_WORKFLOW
+                text = target.read_text(encoding="utf-8")
+                target.write_text(
+                    text.replace(exact, allowed, 1),
+                    encoding="utf-8",
+                )
+                self.assertEqual([], self.module.check_repository(root))
+
+        wrong_value = (
+            "registryctl-tutorial-${{ runner.os }}-"
+            "${{ hashFiles('Cargo.lock') }}"
+        )
         cases = (
             ("", "missing registryctl tutorial builder cache key"),
             (
@@ -515,8 +603,19 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 "missing registryctl tutorial builder cache key",
             ),
             (
-                "          key: registryctl-tutorial-${{ runner.os }}-"
-                "${{ hashFiles('Cargo.lock') }}",
+                f"          key: {wrong_value}",
+                "missing registryctl tutorial builder cache key",
+            ),
+            (
+                f"          'key': {wrong_value}",
+                "missing registryctl tutorial builder cache key",
+            ),
+            (
+                f'          "key": {wrong_value}',
+                "missing registryctl tutorial builder cache key",
+            ),
+            (
+                exact + "\n" + self.module.TUTORIAL_CACHE_KEYS[1],
                 "missing registryctl tutorial builder cache key",
             ),
             (
