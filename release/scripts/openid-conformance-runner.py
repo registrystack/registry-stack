@@ -348,12 +348,36 @@ def wait_for_suite(base_url: str, timeout_seconds: int) -> None:
 
 
 def read_offer(path: Path, issuer_url: str) -> str:
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
-        raise RunnerError("offer input must be an owner-only regular file")
-    if not 0 < info.st_size <= 65_536:
-        raise RunnerError("offer input has an invalid size")
-    offer_uri = path.read_text(encoding="utf-8").strip()
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    cloexec = getattr(os, "O_CLOEXEC", None)
+    if nofollow is None or cloexec is None or not hasattr(os, "geteuid"):
+        raise RunnerError("secure offer input handling is unavailable")
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | cloexec | nofollow)
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_mode & 0o077
+        ):
+            raise RunnerError("offer input must be an owner-only regular file")
+        if not 0 < info.st_size <= 65_536:
+            raise RunnerError("offer input has an invalid size")
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = None
+            raw = handle.read(65_537)
+    except OSError:
+        raise RunnerError("offer input could not be opened securely") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if len(raw) != info.st_size:
+        raise RunnerError("offer input changed while it was read")
+    try:
+        offer_uri = raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise RunnerError("offer input is not valid UTF-8") from None
     parsed = urllib.parse.urlsplit(offer_uri)
     try:
         query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)

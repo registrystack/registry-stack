@@ -36,6 +36,21 @@ class OpenIdConformanceRunnerTest(TestCase):
         cls.runner = load_runner()
         cls.plan_map = cls.runner.load_plan_map()
 
+    def offer_uri(
+        self, issuer: str = "https://issuer.example.test"
+    ) -> tuple[str, str]:
+        grant = "urn:ietf:params:oauth:grant-type:pre-authorized_code"
+        inline = json.dumps(
+            {
+                "credential_issuer": issuer,
+                "credential_configuration_ids": ["person_is_alive_sd_jwt"],
+                "grants": {grant: {"pre-authorized_code": "owner-only-code"}},
+            }
+        )
+        return inline, "openid-credential-offer://?" + urllib.parse.urlencode(
+            {"credential_offer": inline}
+        )
+
     def test_plan_map_has_unique_scenarios_and_pinned_suite_ref(self) -> None:
         scenarios = self.plan_map["scenarios"]
         self.assertEqual(len(scenarios), len({scenario["id"] for scenario in scenarios}))
@@ -102,17 +117,7 @@ class OpenIdConformanceRunnerTest(TestCase):
         self,
     ) -> None:
         issuer = "https://issuer.example.test"
-        grant = "urn:ietf:params:oauth:grant-type:pre-authorized_code"
-        inline = json.dumps(
-            {
-                "credential_issuer": issuer,
-                "credential_configuration_ids": ["person_is_alive_sd_jwt"],
-                "grants": {grant: {"pre-authorized_code": "owner-only-code"}},
-            }
-        )
-        offer_uri = "openid-credential-offer://?" + urllib.parse.urlencode(
-            {"credential_offer": inline}
-        )
+        inline, offer_uri = self.offer_uri(issuer)
         with tempfile.TemporaryDirectory() as tmp:
             offer_file = Path(tmp) / "offer.txt"
             offer_file.write_text(offer_uri, encoding="utf-8")
@@ -156,6 +161,43 @@ class OpenIdConformanceRunnerTest(TestCase):
                 ) as caught:
                     self.runner.cmd_submit_offer(args)
             self.assertNotIn("owner-only-code", str(caught.exception))
+
+    def test_read_offer_uses_one_no_follow_descriptor(self) -> None:
+        issuer = "https://issuer.example.test"
+        inline, offer_uri = self.offer_uri(issuer)
+        with tempfile.TemporaryDirectory() as tmp:
+            offer_file = Path(tmp) / "offer.txt"
+            offer_file.write_text(offer_uri, encoding="utf-8")
+            offer_file.chmod(0o600)
+            real_open = self.runner.os.open
+            with patch.object(Path, "read_text", side_effect=AssertionError):
+                with patch.object(
+                    self.runner.os, "open", wraps=real_open
+                ) as secure_open:
+                    self.assertEqual(
+                        inline, self.runner.read_offer(offer_file, issuer)
+                    )
+
+        secure_open.assert_called_once_with(
+            offer_file,
+            self.runner.os.O_RDONLY
+            | self.runner.os.O_CLOEXEC
+            | self.runner.os.O_NOFOLLOW,
+        )
+
+    def test_read_offer_rejects_symlink(self) -> None:
+        issuer = "https://issuer.example.test"
+        _, offer_uri = self.offer_uri(issuer)
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "offer.txt"
+            target.write_text(offer_uri, encoding="utf-8")
+            target.chmod(0o600)
+            link = Path(tmp) / "offer-link.txt"
+            link.symlink_to(target)
+            with self.assertRaisesRegex(
+                self.runner.RunnerError, "could not be opened securely"
+            ):
+                self.runner.read_offer(link, issuer)
 
     def test_builder_override_pins_maven_image_by_digest(self) -> None:
         override = self.runner.BUILDER_COMPOSE_OVERRIDE_PATH.read_text(
