@@ -26,6 +26,12 @@ DOCKERFILE_FRONTEND = (
     "docker/dockerfile:1.7@sha256:"
     "a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
 )
+TUTORIAL_CACHE_STEP = "Cache source-under-test Cargo build"
+TUTORIAL_CACHE_KEY = (
+    "          key: registryctl-tutorial-${{ runner.os }}-"
+    "${{ hashFiles('docs/site/scripts/check-registryctl-tutorials.sh') }}-"
+    "${{ hashFiles('Cargo.lock') }}"
+)
 
 DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile"),
@@ -38,6 +44,7 @@ DOCKERFILES = (
 # These are the maintained image and image-policy surfaces. Historical release
 # notes are immutable evidence and intentionally are not rewritten by this gate.
 MAINTAINED_TEXT_PATHS = DOCKERFILES + (
+    Path(".github/workflows/ci.yml"),
     Path(".github/workflows/release.yml"),
     Path("release/scripts/build-release-binaries.sh"),
     Path("docs/site/scripts/check-registryctl-tutorials.sh"),
@@ -62,6 +69,10 @@ NOTARY_DOCKERFILES = (
 
 FROM_RE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", re.MULTILINE)
 DIGEST_PIN_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+RETIRED_MARKER_RE = re.compile(
+    r"\b(?:bookworm|debian[ \t_:-]*12)\b",
+    re.IGNORECASE,
+)
 
 
 def read(root: Path, relative: Path, failures: list[str]) -> str:
@@ -84,6 +95,35 @@ def require(
         failures.append(f"{relative}: missing {detail}: {needle!r}")
 
 
+def require_exact_line(
+    text: str,
+    line: str,
+    relative: Path,
+    detail: str,
+    failures: list[str],
+) -> None:
+    if line not in text.splitlines():
+        failures.append(f"{relative}: missing {detail}: exact line {line!r}")
+
+
+def workflow_step(text: str, name: str) -> str:
+    lines = text.splitlines()
+    header = f"      - name: {name}"
+    matches = [index for index, line in enumerate(lines) if line == header]
+    if len(matches) != 1:
+        return ""
+    start = matches[0]
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index].startswith("      - name: ")
+        ),
+        len(lines),
+    )
+    return "\n".join(lines[start:end])
+
+
 def runtime_stage(text: str) -> str:
     marker = f"FROM {DISTROLESS_RUNTIME} AS runtime"
     offset = text.find(marker)
@@ -97,14 +137,13 @@ def check_repository(root: Path = ROOT) -> list[str]:
         for relative in MAINTAINED_TEXT_PATHS
     }
 
-    retired_markers = ("book" + "worm", "debian" + "12")
     for relative, text in texts.items():
-        lowered = text.casefold()
-        for marker in retired_markers:
-            if marker in lowered:
-                failures.append(
-                    f"{relative}: retired Debian image generation marker remains: {marker}"
-                )
+        marker = RETIRED_MARKER_RE.search(text)
+        if marker:
+            failures.append(
+                f"{relative}: retired Debian image generation marker remains: "
+                f"{marker.group(0).casefold()}"
+            )
 
     for relative in DOCKERFILES:
         text = texts[relative]
@@ -117,6 +156,11 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 failures.append(
                     f"{relative}: upstream base is not pinned by immutable digest: {base}"
                 )
+        if bases[-1] != DISTROLESS_RUNTIME:
+            failures.append(
+                f"{relative}: final Dockerfile stage must use pinned "
+                f"Distroless Debian 13 runtime: {bases[-1]}"
+            )
 
         require(
             text,
@@ -248,13 +292,21 @@ def check_repository(root: Path = ROOT) -> list[str]:
             )
 
     workflow = texts[Path(".github/workflows/release.yml")]
+    ci_workflow = texts[Path(".github/workflows/ci.yml")]
     binary_recipe = texts[Path("release/scripts/build-release-binaries.sh")]
     tutorial_check = texts[Path("docs/site/scripts/check-registryctl-tutorials.sh")]
-    require(
+    require_exact_line(
         workflow,
-        f"RELEASE_BUILDER_IMAGE: {RUST_BUILDER}",
+        f"  RELEASE_BUILDER_IMAGE: {RUST_BUILDER}",
         Path(".github/workflows/release.yml"),
         "pinned Debian 13 release builder",
+        failures,
+    )
+    require_exact_line(
+        binary_recipe,
+        f'default_builder_image="{RUST_BUILDER}"',
+        Path("release/scripts/build-release-binaries.sh"),
+        "pinned Debian 13 release recipe builder",
         failures,
     )
     require(
@@ -264,7 +316,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
         "PKCS#11-enabled release build",
         failures,
     )
-    require(
+    require_exact_line(
         tutorial_check,
         f'BUILDER_IMAGE="{RUST_BUILDER}"',
         Path("docs/site/scripts/check-registryctl-tutorials.sh"),
@@ -275,13 +327,32 @@ def check_repository(root: Path = ROOT) -> list[str]:
     live_journey = texts[
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh")
     ]
-    require(
+    require_exact_line(
         live_journey,
-        RUST_BUILDER,
+        f"    {RUST_BUILDER} \\",
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
         "pinned Debian 13 live-journey builder",
         failures,
     )
+
+    tutorial_cache = workflow_step(ci_workflow, TUTORIAL_CACHE_STEP)
+    if not tutorial_cache:
+        failures.append(
+            f".github/workflows/ci.yml: missing unique {TUTORIAL_CACHE_STEP!r} step"
+        )
+    else:
+        require_exact_line(
+            tutorial_cache,
+            TUTORIAL_CACHE_KEY,
+            Path(".github/workflows/ci.yml"),
+            "registryctl tutorial builder cache key",
+            failures,
+        )
+        if re.search(r"^\s*restore-keys\s*:", tutorial_cache, re.MULTILINE):
+            failures.append(
+                ".github/workflows/ci.yml: registryctl tutorial builder cache "
+                "must not use restore-keys fallback"
+            )
 
     return failures
 

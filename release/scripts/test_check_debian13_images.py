@@ -11,21 +11,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release/scripts/check-debian13-images.py"
 TUTORIAL_CHECK = Path("docs/site/scripts/check-registryctl-tutorials.sh")
+RELEASE_WORKFLOW = Path(".github/workflows/release.yml")
+RELEASE_BINARY_RECIPE = Path("release/scripts/build-release-binaries.sh")
+LIVE_JOURNEY = Path(
+    "crates/registry-relay/scripts/run-live-consultation-journey.sh"
+)
+CI_WORKFLOW = Path(".github/workflows/ci.yml")
 
 EXPECTED_SURFACES = {
-    Path(".github/workflows/release.yml"),
+    CI_WORKFLOW,
+    RELEASE_WORKFLOW,
     Path("crates/registry-relay/Dockerfile"),
     Path("crates/registry-relay/Dockerfile.demo"),
     Path("crates/registry-relay/docs/ops.md"),
     Path("crates/registry-relay/docs/security-assurance.md"),
     Path("crates/registry-relay/scripts/check_docker_build_contract.py"),
-    Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
+    LIVE_JOURNEY,
     TUTORIAL_CHECK,
     Path("products/notary/Dockerfile"),
     Path("products/notary/docs/security-assurance.md"),
     Path("release/docker/Dockerfile.registry-notary"),
     Path("release/docker/Dockerfile.registry-relay"),
-    Path("release/scripts/build-release-binaries.sh"),
+    RELEASE_BINARY_RECIPE,
 }
 
 
@@ -85,6 +92,10 @@ class Debian13ImageCheckTest(unittest.TestCase):
         cases = (
             "# historical book" + "worm image\n",
             'IMAGE="debian' + '12"\n',
+            "base: Debian 12\n",
+            "base: debian-12\n",
+            "base: debian_12\n",
+            "base: debian:12\n",
             '{"base": "BOOK' + 'WORM"}\n',
         )
         for suffix in cases:
@@ -122,6 +133,48 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     "missing pinned Debian 13 registryctl tutorial builder",
                 )
 
+    def test_builder_contract_lines_cannot_be_shadowed_by_comments(self) -> None:
+        pin = self.module.RUST_BUILDER
+        cases = (
+            (
+                RELEASE_WORKFLOW,
+                f"  RELEASE_BUILDER_IMAGE: {pin}",
+                f"  # RELEASE_BUILDER_IMAGE: {pin}\n"
+                "  RELEASE_BUILDER_IMAGE: rust:1.95-trixie",
+                "missing pinned Debian 13 release builder",
+            ),
+            (
+                RELEASE_BINARY_RECIPE,
+                f'default_builder_image="{pin}"',
+                f'# default_builder_image="{pin}"\n'
+                'default_builder_image="rust:1.95-trixie"',
+                "missing pinned Debian 13 release recipe builder",
+            ),
+            (
+                TUTORIAL_CHECK,
+                f'BUILDER_IMAGE="{pin}"',
+                f'# BUILDER_IMAGE="{pin}"\nBUILDER_IMAGE="rust:1.95-trixie"',
+                "missing pinned Debian 13 registryctl tutorial builder",
+            ),
+            (
+                LIVE_JOURNEY,
+                f"    {pin} \\",
+                f"    # {pin} \\\n    rust:1.95-trixie \\",
+                "missing pinned Debian 13 live-journey builder",
+            ),
+        )
+        for relative, exact, replacement, failure in cases:
+            with self.subTest(relative=relative):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(exact, text)
+                target.write_text(
+                    text.replace(exact, replacement, 1),
+                    encoding="utf-8",
+                )
+                self.assert_has_failure(root, failure)
+
     def test_every_dockerfile_base_requires_an_immutable_digest(self) -> None:
         for relative in self.module.DOCKERFILES:
             with self.subTest(relative=relative):
@@ -138,6 +191,60 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     root,
                     f"{relative}: upstream base is not pinned by immutable digest",
                 )
+
+    def test_distroless_runtime_is_the_final_dockerfile_stage(self) -> None:
+        pinned_alpine = "alpine:3.22@sha256:" + "a" * 64
+        for relative in self.module.DOCKERFILES:
+            additions = (
+                f"\nFROM {pinned_alpine} AS debug\n",
+                f"\n# FROM {self.module.DISTROLESS_RUNTIME} AS runtime\n"
+                f"FROM {self.module.DEBIAN_PREPARATION} AS debug\n",
+            )
+            for addition in additions:
+                with self.subTest(relative=relative, addition=addition):
+                    root = self.fixture()
+                    target = root / relative
+                    text = target.read_text(encoding="utf-8")
+                    target.write_text(text + addition, encoding="utf-8")
+                    self.assert_has_failure(
+                        root,
+                        f"{relative}: final Dockerfile stage must use pinned "
+                        "Distroless Debian 13 runtime",
+                    )
+
+    def test_tutorial_cache_is_bound_to_the_builder_script_without_fallback(
+        self,
+    ) -> None:
+        exact = self.module.TUTORIAL_CACHE_KEY
+        cases = (
+            ("", "missing registryctl tutorial builder cache key"),
+            (
+                f"          # {exact.strip()}",
+                "missing registryctl tutorial builder cache key",
+            ),
+            (
+                "          key: registryctl-tutorial-${{ runner.os }}-"
+                "${{ hashFiles('Cargo.lock') }}",
+                "missing registryctl tutorial builder cache key",
+            ),
+            (
+                exact
+                + "\n          restore-keys: |\n"
+                "            registryctl-tutorial-${{ runner.os }}-",
+                "must not use restore-keys fallback",
+            ),
+        )
+        for replacement, failure in cases:
+            with self.subTest(replacement=replacement):
+                root = self.fixture()
+                target = root / CI_WORKFLOW
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(exact, text)
+                target.write_text(
+                    text.replace(exact, replacement, 1),
+                    encoding="utf-8",
+                )
+                self.assert_has_failure(root, failure)
 
     def test_every_runtime_stays_distroless_and_shell_free(self) -> None:
         marker = f"FROM {self.module.DISTROLESS_RUNTIME} AS runtime"
