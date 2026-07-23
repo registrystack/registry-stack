@@ -706,6 +706,7 @@ outputs:
                 .iter()
                 .map(|claim| ((*claim).to_string(), "1.0.0".to_string()))
                 .collect(),
+            notary_service_id: "registry-notary".to_string(),
         }
     }
 
@@ -1157,7 +1158,7 @@ outputs:
 
     #[test]
     fn governed_live_result_claim_version_matches_authored_request() {
-        let loaded = load_registry_project(&project_golden("openspp-exact"), None)
+        let loaded = load_registry_project(&project_golden("openspp-exact"), Some("local"))
             .expect("OpenSPP golden project loads");
         let request = validate_live_request(
             &loaded,
@@ -1187,6 +1188,8 @@ outputs:
         });
         response["results"][0]["claim_version"] = json!("1");
         response["results"][0]["provenance"]["generated_by"]["claim_version"] = json!("1");
+        response["results"][0]["provenance"]["generated_by"]["service_id"] =
+            json!("social-registry-notary");
         assert_eq!(
             validate_live_response(&response, &request, &expected)
                 .expect("authored claim version passes"),
@@ -1203,6 +1206,56 @@ outputs:
                 .to_string()
                 .contains("does not match the authored project")
         );
+    }
+
+    #[test]
+    fn governed_live_result_service_matches_selected_environment() {
+        let loaded = load_registry_project(&project_golden("openspp-exact"), Some("local"))
+            .expect("OpenSPP golden project and environment load");
+        let request = validate_live_request(
+            &loaded,
+            &json!({
+                "purpose": "social-programme-verification",
+                "claims": ["social-registry-record-exists"],
+                "disclosure": "predicate",
+            }),
+        )
+        .expect("authored request validates");
+        assert_eq!(request.notary_service_id, "social-registry-notary");
+        let expected = json!({
+            "claims": {
+                "social-registry-record-exists": {
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        });
+        let mut response = json!({
+            "results": [governed_live_claim_result(
+                "social-registry-record-exists",
+                json!(true),
+                Some(true),
+                "predicate",
+            )],
+        });
+        response["results"][0]["claim_version"] = json!("1");
+        response["results"][0]["provenance"]["generated_by"]["claim_version"] = json!("1");
+        response["results"][0]["provenance"]["generated_by"]["service_id"] =
+            json!("social-registry-notary");
+        assert_eq!(
+            validate_live_response(&response, &request, &expected)
+                .expect("selected Notary service passes"),
+            request.claims
+        );
+
+        response["results"][0]["provenance"]["generated_by"]["service_id"] =
+            json!("stale-notary");
+        let error = validate_live_response(&response, &request, &expected)
+            .expect_err("wrong Notary service must fail closed")
+            .to_string();
+        assert!(error.contains("does not identify the selected Notary service"));
+        assert!(!error.contains("stale-notary"));
     }
 
     #[test]
@@ -1539,7 +1592,7 @@ outputs:
 
     #[test]
     fn live_request_requires_one_compatible_disclosure_profile() {
-        let loaded = load_registry_project(&project_golden("openspp-exact"), None)
+        let loaded = load_registry_project(&project_golden("openspp-exact"), Some("local"))
             .expect("OpenSPP golden project loads");
 
         for (disclosure, claims) in [
@@ -1581,7 +1634,7 @@ outputs:
 
     #[test]
     fn live_request_claim_version_must_match_the_authored_service() {
-        let loaded = load_registry_project(&project_golden("openspp-exact"), None)
+        let loaded = load_registry_project(&project_golden("openspp-exact"), Some("local"))
             .expect("OpenSPP golden project loads");
         let request = |version| {
             json!({
@@ -1614,7 +1667,8 @@ outputs:
     #[test]
     fn live_request_resolves_claims_across_services_with_the_same_purpose() {
         let project = project_golden("custom-system");
-        let mut loaded = load_registry_project(&project, None).expect("golden project loads");
+        let mut loaded =
+            load_registry_project(&project, Some("local")).expect("golden project loads");
         let original_id = "household-eligibility";
         let mut second: ServiceDeclaration = serde_json::from_value(
             serde_json::to_value(&loaded.project.services[original_id])

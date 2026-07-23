@@ -758,6 +758,9 @@ fn validate_live_response(
                 "governed Notary result provenance does not identify the returned claim result"
             );
         }
+        if generated_by.service_id != request.notary_service_id {
+            bail!("governed Notary result provenance does not identify the selected Notary service");
+        }
         if evaluation_id
             .as_ref()
             .is_some_and(|evaluation_id| evaluation_id != &result_view.evaluation_id)
@@ -1015,6 +1018,7 @@ mod external_request_reader_tests {
 struct ValidatedLiveRequest {
     claims: Vec<String>,
     claim_versions: BTreeMap<String, String>,
+    notary_service_id: String,
 }
 
 fn validate_live_request(
@@ -1027,6 +1031,12 @@ fn validate_live_request(
     if contains_sensitive_request_key(request) {
         bail!("live request contains a forbidden credential-like field");
     }
+    let notary_service_id = loaded
+        .environment
+        .as_ref()
+        .and_then(|environment| environment.deployment.notary.as_ref())
+        .map(|notary| notary.service.clone())
+        .ok_or_else(|| anyhow!("live request environment does not declare a Notary service"))?;
     let purpose = object
         .get("purpose")
         .and_then(Value::as_str)
@@ -1104,6 +1114,7 @@ fn validate_live_request(
     Ok(ValidatedLiveRequest {
         claims: ids,
         claim_versions,
+        notary_service_id,
     })
 }
 
