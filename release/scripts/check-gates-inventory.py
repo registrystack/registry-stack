@@ -182,8 +182,8 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_validate_upgrade_exercise.py",
     ),
     (
-        "Upgrade exercise template validation",
-        "python3 release/scripts/validate-upgrade-exercise.py --template",
+        "Upgrade exercise record discovery",
+        "python3 release/scripts/validate-upgrade-exercise.py --discover release/exercises",
     ),
     (
         "Base-reference compatibility input",

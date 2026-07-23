@@ -558,10 +558,8 @@ jobs:
       - name: Test upgrade exercise validator
         run: python3 -m unittest release/scripts/test_validate_upgrade_exercise.py
 
-      - name: Validate upgrade exercise template
-        run: >-
-          python3 release/scripts/validate-upgrade-exercise.py --template
-          release/exercises/upgrade-exercise-v1.template.json
+      - name: Validate committed upgrade exercise records
+        run: python3 release/scripts/validate-upgrade-exercise.py --discover release/exercises
 
       - name: Stable surface compatibility
         env:
