@@ -153,26 +153,25 @@ MAINTAINED_TEXT_PATHS = DOCKERFILES + (
     NOTARY_POSTGRES_CONFORMANCE_SCRIPT,
 )
 
-NOTARY_POSTGRES_WORKFLOW_SOURCE_TARGET_IMAGES = (
+NOTARY_POSTGRES_WORKFLOW_SOURCE_IMAGES = (
     "postgres:16.13-alpine",
-    "postgres:16.14-alpine",
     "postgres:17.9-alpine",
-    "postgres:17.10-alpine",
     "postgres:18.3-alpine",
+)
+NOTARY_POSTGRES_WORKFLOW_TARGET_IMAGES = (
+    "postgres:16.14-alpine",
+    "postgres:17.10-alpine",
     "postgres:18.4-alpine",
 )
 NOTARY_POSTGRES_WORKFLOW_RESTORE_IMAGES = (
     "postgres:17.10-alpine",
     "postgres:18.4-alpine",
 )
-NOTARY_POSTGRES_WORKFLOW_IMAGES = tuple(
-    dict.fromkeys(
-        (
-            *NOTARY_POSTGRES_WORKFLOW_SOURCE_TARGET_IMAGES,
-            *NOTARY_POSTGRES_WORKFLOW_RESTORE_IMAGES,
-        )
-    )
-)
+NOTARY_POSTGRES_WORKFLOW_IMAGES_BY_ROLE = {
+    "source_image": NOTARY_POSTGRES_WORKFLOW_SOURCE_IMAGES,
+    "target_image": NOTARY_POSTGRES_WORKFLOW_TARGET_IMAGES,
+    "restore_image": NOTARY_POSTGRES_WORKFLOW_RESTORE_IMAGES,
+}
 NOTARY_POSTGRES_WORKFLOW_RATIONALE = (
     "External Alpine PostgreSQL migration conformance, not a "
     "project-owned Debian image."
@@ -180,6 +179,7 @@ NOTARY_POSTGRES_WORKFLOW_RATIONALE = (
 WORKFLOW_IMAGE_ALLOWLIST = {
     (
         Path(".github/workflows/relay-postgres-conformance.yml"),
+        "image",
         "postgres:${{ matrix.postgresql }}-alpine",
     ): (
         "External Alpine PostgreSQL state-plane conformance, not a "
@@ -188,13 +188,18 @@ WORKFLOW_IMAGE_ALLOWLIST = {
     **{
         (
             Path(".github/workflows/notary-postgres-conformance.yml"),
+            role,
             image,
         ): NOTARY_POSTGRES_WORKFLOW_RATIONALE
-        for image in NOTARY_POSTGRES_WORKFLOW_IMAGES
+        for role, images in NOTARY_POSTGRES_WORKFLOW_IMAGES_BY_ROLE.items()
+        for image in images
     },
 }
 WORKFLOW_IMAGE_KEYS = frozenset(
     ("image", "source_image", "target_image", "restore_image")
+)
+WORKFLOW_DEFAULT_IMAGE_KEYS = frozenset(
+    ("default_source_image", "default_target_image", "default_restore_image")
 )
 NOTARY_POSTGRES_IMAGE_ASSIGNMENTS = (
     ("default_source_image", '"postgres:16.13-alpine"'),
@@ -632,7 +637,7 @@ def collect_workflow_image_references(
     text: str,
     relative: Path,
     failures: list[str],
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, str]]:
     try:
         document = yaml.safe_load(text)
     except yaml.YAMLError as error:
@@ -647,17 +652,17 @@ def collect_workflow_image_references(
         )
         return []
 
-    references: list[tuple[str, str]] = []
+    references: list[tuple[str, str, str]] = []
     active_nodes: set[int] = set()
 
-    def add_image(value: object, location: str) -> None:
+    def add_image(value: object, role: str, location: str) -> None:
         if not isinstance(value, str) or not value.strip():
             failures.append(
                 f"{relative}: unsupported workflow image value at {location}: "
                 f"expected a non-empty string, found {type(value).__name__}"
             )
             return
-        references.append((location, value))
+        references.append((role, location, value))
 
     def visit(value: object, location: str) -> None:
         if not isinstance(value, (dict, list)):
@@ -674,21 +679,41 @@ def collect_workflow_image_references(
                 child_location = f"{location}.{key}"
                 if key == "container":
                     if isinstance(child, str):
-                        add_image(child, child_location)
-                    elif not isinstance(child, dict) or "image" not in child:
+                        add_image(child, "container", child_location)
+                    elif isinstance(child, dict) and "image" in child:
+                        add_image(
+                            child["image"],
+                            "container",
+                            f"{child_location}.image",
+                        )
+                    else:
                         failures.append(
                             f"{relative}: unsupported workflow image value at "
                             f"{child_location}: container must be a non-empty "
                             "string or a mapping with an image key"
                         )
-                elif key in WORKFLOW_IMAGE_KEYS:
-                    add_image(child, child_location)
+                    if isinstance(child, dict):
+                        for nested_key, nested_child in child.items():
+                            if nested_key != "image":
+                                visit(
+                                    nested_child,
+                                    f"{child_location}.{nested_key}",
+                                )
+                    elif isinstance(child, list):
+                        visit(child, child_location)
+                    continue
+                elif key in WORKFLOW_IMAGE_KEYS or key in WORKFLOW_DEFAULT_IMAGE_KEYS:
+                    add_image(child, str(key), child_location)
                 elif (
                     key == "uses"
                     and isinstance(child, str)
                     and child.startswith("docker://")
                 ):
-                    add_image(child.removeprefix("docker://"), child_location)
+                    add_image(
+                        child.removeprefix("docker://"),
+                        "uses",
+                        child_location,
+                    )
                 visit(child, child_location)
         else:
             for index, child in enumerate(value):
@@ -834,8 +859,8 @@ def check_repository(root: Path = ROOT) -> list[str]:
             relative,
             failures,
         )
-        for location, value in references:
-            if (relative, value) not in WORKFLOW_IMAGE_ALLOWLIST:
+        for role, location, value in references:
+            if (relative, role, value) not in WORKFLOW_IMAGE_ALLOWLIST:
                 failures.append(
                     f"{relative}: workflow image reference is not allowlisted "
                     f"at {location}"

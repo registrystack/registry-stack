@@ -98,6 +98,27 @@ class Debian13ImageCheckTest(unittest.TestCase):
             f'CMD ["--config", "/etc/registry-{product}/config.yaml"]',
         )
 
+    def notary_workflow_with_restore_images(self) -> str:
+        source = (ROOT / NOTARY_POSTGRES_WORKFLOW).read_text(encoding="utf-8")
+        additions = (
+            (
+                "            target_image: postgres:16.14-alpine",
+                "            restore_image: postgres:17.10-alpine",
+            ),
+            (
+                "            target_image: postgres:17.10-alpine",
+                "            restore_image: postgres:18.4-alpine",
+            ),
+            (
+                "            target_image: postgres:18.4-alpine",
+                "            restore_image: postgres:18.4-alpine",
+            ),
+        )
+        for target, restore in additions:
+            self.assertIn(target, source)
+            source = source.replace(target, f"{target}\n{restore}", 1)
+        return source
+
     def test_current_repository_follows_contract(self) -> None:
         self.assertEqual([], self.module.check_repository(ROOT))
 
@@ -161,17 +182,31 @@ class Debian13ImageCheckTest(unittest.TestCase):
         self,
     ) -> None:
         relay_image = "postgres:${{ matrix.postgresql }}-alpine"
-        notary_images = {
+        source_images = (
             "postgres:16.13-alpine",
-            "postgres:16.14-alpine",
             "postgres:17.9-alpine",
-            "postgres:17.10-alpine",
             "postgres:18.3-alpine",
+        )
+        target_images = (
+            "postgres:16.14-alpine",
+            "postgres:17.10-alpine",
             "postgres:18.4-alpine",
-        }
+        )
+        restore_images = (
+            "postgres:17.10-alpine",
+            "postgres:18.4-alpine",
+        )
         self.assertEqual(
-            {(RELAY_POSTGRES_WORKFLOW, relay_image)}
-            | {(NOTARY_POSTGRES_WORKFLOW, image) for image in notary_images},
+            {(RELAY_POSTGRES_WORKFLOW, "image", relay_image)}
+            | {
+                (NOTARY_POSTGRES_WORKFLOW, role, image)
+                for role, images in (
+                    ("source_image", source_images),
+                    ("target_image", target_images),
+                    ("restore_image", restore_images),
+                )
+                for image in images
+            },
             set(self.module.WORKFLOW_IMAGE_ALLOWLIST),
         )
         self.assertEqual(
@@ -179,7 +214,23 @@ class Debian13ImageCheckTest(unittest.TestCase):
             set(self.module.WORKFLOW_IMAGE_KEYS),
         )
         self.assertEqual(
-            ("postgres:17.10-alpine", "postgres:18.4-alpine"),
+            {
+                "default_source_image",
+                "default_target_image",
+                "default_restore_image",
+            },
+            set(self.module.WORKFLOW_DEFAULT_IMAGE_KEYS),
+        )
+        self.assertEqual(
+            source_images,
+            self.module.NOTARY_POSTGRES_WORKFLOW_SOURCE_IMAGES,
+        )
+        self.assertEqual(
+            target_images,
+            self.module.NOTARY_POSTGRES_WORKFLOW_TARGET_IMAGES,
+        )
+        self.assertEqual(
+            restore_images,
             self.module.NOTARY_POSTGRES_WORKFLOW_RESTORE_IMAGES,
         )
         for rationale in self.module.WORKFLOW_IMAGE_ALLOWLIST.values():
@@ -284,63 +335,30 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     f"{relative}: workflow image reference is not allowlisted",
                 )
 
-    def test_notary_matrix_images_are_bound_to_the_owning_workflow(
+    def test_notary_matrix_images_match_exact_roles(
         self,
     ) -> None:
-        source = (ROOT / NOTARY_POSTGRES_WORKFLOW).read_text(encoding="utf-8")
-        for key, reviewed, replacement in (
-            ("source_image", "postgres:16.13-alpine", "postgres:16-alpine"),
-            ("target_image", "postgres:16.14-alpine", "postgres:17-alpine"),
-        ):
-            with self.subTest(key=key):
-                root = self.fixture()
-                self.write_workflow(
-                    root,
-                    NOTARY_POSTGRES_WORKFLOW.name,
-                    source.replace(
-                        f"{key}: {reviewed}",
-                        f"{key}: {replacement}",
-                        1,
-                    ),
-                )
-                failures = self.module.check_repository(root)
-                self.assertTrue(
-                    any(
-                        f"{NOTARY_POSTGRES_WORKFLOW}: workflow image "
-                        "reference is not allowlisted" in failure
-                        for failure in failures
-                    ),
-                    failures,
-                )
-                self.assertNotIn(replacement, "\n".join(failures))
-
-    def test_notary_matrix_restore_images_are_exact_and_path_bounded(
-        self,
-    ) -> None:
-        source = (ROOT / NOTARY_POSTGRES_WORKFLOW).read_text(
-            encoding="utf-8"
+        source = self.notary_workflow_with_restore_images()
+        failures: list[str] = []
+        references = self.module.collect_workflow_image_references(
+            source,
+            NOTARY_POSTGRES_WORKFLOW,
+            failures,
         )
-        additions = (
-            (
-                "            target_image: postgres:16.14-alpine",
-                "            restore_image: postgres:17.10-alpine",
-            ),
-            (
-                "            target_image: postgres:17.10-alpine",
-                "            restore_image: postgres:18.4-alpine",
-            ),
-            (
-                "            target_image: postgres:18.4-alpine",
-                "            restore_image: postgres:18.4-alpine",
-            ),
+        self.assertEqual([], failures)
+        self.assertEqual(
+            {
+                ("source_image", "postgres:16.13-alpine"),
+                ("source_image", "postgres:17.9-alpine"),
+                ("source_image", "postgres:18.3-alpine"),
+                ("target_image", "postgres:16.14-alpine"),
+                ("target_image", "postgres:17.10-alpine"),
+                ("target_image", "postgres:18.4-alpine"),
+                ("restore_image", "postgres:17.10-alpine"),
+                ("restore_image", "postgres:18.4-alpine"),
+            },
+            {(role, value) for role, _location, value in references},
         )
-        for target, restore in additions:
-            self.assertIn(target, source)
-            source = source.replace(
-                target,
-                f"{target}\n{restore}",
-                1,
-            )
 
         root = self.fixture()
         self.write_workflow(
@@ -350,27 +368,104 @@ class Debian13ImageCheckTest(unittest.TestCase):
         )
         self.assertEqual([], self.module.check_repository(root))
 
-        replacement = "            restore_image: postgres:17"
-        root = self.fixture()
-        self.write_workflow(
-            root,
-            NOTARY_POSTGRES_WORKFLOW.name,
-            source.replace(
-                "            restore_image: postgres:17.10-alpine",
-                replacement,
-                1,
+    def test_notary_matrix_images_reject_cross_role_and_mutable_values(
+        self,
+    ) -> None:
+        source = self.notary_workflow_with_restore_images()
+        cases = (
+            (
+                "target-as-source",
+                "source_image: postgres:16.13-alpine",
+                "source_image: postgres:16.14-alpine",
+                "postgres:16.14-alpine",
+            ),
+            (
+                "source-as-target",
+                "target_image: postgres:16.14-alpine",
+                "target_image: postgres:16.13-alpine",
+                "postgres:16.13-alpine",
+            ),
+            (
+                "source-as-restore",
+                "restore_image: postgres:17.10-alpine",
+                "restore_image: postgres:16.13-alpine",
+                "postgres:16.13-alpine",
+            ),
+            (
+                "target-only-as-restore",
+                "restore_image: postgres:17.10-alpine",
+                "restore_image: postgres:16.14-alpine",
+                "postgres:16.14-alpine",
+            ),
+            (
+                "mutable-source",
+                "source_image: postgres:16.13-alpine",
+                "source_image: postgres:16-alpine",
+                "postgres:16-alpine",
+            ),
+            (
+                "mutable-target",
+                "target_image: postgres:16.14-alpine",
+                "target_image: postgres:16-alpine",
+                "postgres:16-alpine",
+            ),
+            (
+                "mutable-restore",
+                "restore_image: postgres:17.10-alpine",
+                "restore_image: postgres:17",
+                "postgres:17",
             ),
         )
-        failures = self.module.check_repository(root)
-        self.assertTrue(
-            any(
-                f"{NOTARY_POSTGRES_WORKFLOW}: workflow image reference "
-                "is not allowlisted" in failure
-                for failure in failures
-            ),
-            failures,
+        failure = (
+            f"{NOTARY_POSTGRES_WORKFLOW}: workflow image reference "
+            "is not allowlisted"
         )
-        self.assertNotIn(replacement, "\n".join(failures))
+        for name, exact, replacement, leaked_value in cases:
+            with self.subTest(name=name):
+                self.assertIn(exact, source)
+                root = self.fixture()
+                self.write_workflow(
+                    root,
+                    NOTARY_POSTGRES_WORKFLOW.name,
+                    source.replace(exact, replacement, 1),
+                )
+                failures = self.module.check_repository(root)
+                self.assertTrue(
+                    any(failure in item for item in failures),
+                    failures,
+                )
+                self.assertNotIn(leaked_value, "\n".join(failures))
+
+    def test_relay_image_exception_does_not_authorize_other_roles(self) -> None:
+        source = (ROOT / RELAY_POSTGRES_WORKFLOW).read_text(encoding="utf-8")
+        relay_image = "postgres:${{ matrix.postgresql }}-alpine"
+        exact = f"        image: {relay_image}"
+        replacements = (
+            f"        container: {relay_image}",
+            "        container:\n"
+            f"          image: {relay_image}",
+            f"        uses: docker://{relay_image}",
+            f"        default_source_image: {relay_image}",
+        )
+        self.assertIn(exact, source)
+        for replacement in replacements:
+            with self.subTest(replacement=replacement):
+                root = self.fixture()
+                self.write_workflow(
+                    root,
+                    RELAY_POSTGRES_WORKFLOW.name,
+                    source.replace(exact, replacement, 1),
+                )
+                failures = self.module.check_repository(root)
+                self.assertTrue(
+                    any(
+                        f"{RELAY_POSTGRES_WORKFLOW}: workflow image reference "
+                        "is not allowlisted" in item
+                        for item in failures
+                    ),
+                    failures,
+                )
+                self.assertNotIn(relay_image, "\n".join(failures))
 
     def test_workflow_image_inventory_fails_closed(self) -> None:
         cases = (
