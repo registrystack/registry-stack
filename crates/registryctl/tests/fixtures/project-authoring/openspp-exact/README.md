@@ -218,12 +218,17 @@ provenance structures, including `pack_id` and `pack_version`; validates
 public `redacted_fields` against either that owner-approved canonical field set
 or the default claim-id marker, without exposing a listed field value; requires
 `target_ref` and optional `requester_ref` handles to use the Notary `rnref:v1`
-pseudonymous SHA-256 shape; rejects nulls for optional public fields; requires
-one evaluation id, the canonical claim-result format, and RFC3339 timestamps;
-binds each provenance record and claim version to the returned result and
-authored project; requires exact `value`, `satisfied`, and `disclosure` matches;
-requires an empty `derived_from` array; and requires a non-zero Relay
-consultation count.
+pseudonymous SHA-256 shape; requires every result in the evaluation to carry
+the same complete target and optional requester references; rejects nulls for
+optional public fields; requires one evaluation id and the canonical
+claim-result format; requires RFC3339 timestamps and binds `issued_at` to the
+current POST and response-read window with a 30-second remote-clock allowance
+in either direction; requires a non-null `expires_at` to remain strictly after
+both response receipt and issuance while accepting the schema's explicit null;
+rejects named-policy provenance on this API-key flow; binds each provenance
+record and claim version to the returned result and authored project; requires
+exact `value`, `satisfied`, and `disclosure` matches; requires an empty
+`derived_from` array; and requires a non-zero Relay consultation count.
 The runner validates the public pseudonym shape but cannot recompute its keyed
 digest from the private owner record.
 These examples reflect only the committed synthetic fixture and must be

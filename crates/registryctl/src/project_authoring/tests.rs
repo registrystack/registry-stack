@@ -733,6 +733,26 @@ outputs:
         )
     }
 
+    fn governed_live_validation_window() -> GovernedLiveValidationWindow {
+        GovernedLiveValidationWindow {
+            request_started_at: time::macros::datetime!(2026-07-23 0:00 UTC),
+            response_received_at: time::macros::datetime!(2026-07-23 0:00:01 UTC),
+        }
+    }
+
+    fn validate_live_response(
+        response: &Value,
+        request: &ValidatedLiveRequest,
+        expected: &Value,
+    ) -> Result<Vec<String>> {
+        super::validate_live_response(
+            response,
+            request,
+            expected,
+            governed_live_validation_window(),
+        )
+    }
+
     fn set_governed_live_result_pointer(response: &mut Value, pointer: &str, value: Value) {
         let result = response
             .pointer_mut("/results/0")
@@ -1014,6 +1034,76 @@ outputs:
     }
 
     #[test]
+    fn governed_live_result_timestamps_bind_to_the_current_request_window() {
+        let (request, expected, response) = governed_live_eligible_fixture();
+        let validation_window = GovernedLiveValidationWindow {
+            request_started_at: time::macros::datetime!(2026-07-23 0:00 UTC),
+            response_received_at: time::macros::datetime!(2026-07-23 0:00:10 UTC),
+        };
+
+        for issued_at in ["2026-07-22T23:59:30Z", "2026-07-23T00:00:40Z"] {
+            let mut boundary = response.clone();
+            set_governed_live_result_pointer(&mut boundary, "/issued_at", json!(issued_at));
+            assert_eq!(
+                super::validate_live_response(
+                    &boundary,
+                    &request,
+                    &expected,
+                    validation_window,
+                )
+                .expect("inclusive remote clock-skew boundary passes"),
+                request.claims
+            );
+        }
+
+        let mut unexpired = response.clone();
+        set_governed_live_result_pointer(
+            &mut unexpired,
+            "/expires_at",
+            json!("2026-07-23T00:00:11Z"),
+        );
+        assert_eq!(
+            super::validate_live_response(&unexpired, &request, &expected, validation_window)
+                .expect("expiry strictly after response receipt passes"),
+            request.claims
+        );
+
+        for (issued_at, expires_at) in [
+            ("2026-07-22T23:59:29Z", None),
+            ("2026-07-23T00:00:41Z", None),
+            (
+                "2026-07-23T00:00:00Z",
+                Some("2026-07-23T00:00:10Z"),
+            ),
+            (
+                "2026-07-23T00:00:40Z",
+                Some("2026-07-23T00:00:20Z"),
+            ),
+            (
+                "2026-07-23T00:00:20Z",
+                Some("2026-07-23T00:00:20Z"),
+            ),
+        ] {
+            let mut invalid = response.clone();
+            set_governed_live_result_pointer(&mut invalid, "/issued_at", json!(issued_at));
+            if let Some(expires_at) = expires_at {
+                set_governed_live_result_pointer(
+                    &mut invalid,
+                    "/expires_at",
+                    json!(expires_at),
+                );
+            }
+            let error =
+                super::validate_live_response(&invalid, &request, &expected, validation_window)
+                    .expect_err("stale, future, or expired result must fail closed")
+                    .to_string();
+            assert!(error.contains("current live evaluation"));
+            assert!(!error.contains(issued_at));
+            assert!(expires_at.is_none_or(|expires_at| !error.contains(expires_at)));
+        }
+    }
+
+    #[test]
     fn governed_live_result_accepts_runtime_redaction_evidence() {
         let request = governed_live_validated_request(&["household-reference"]);
         let expected = json!({
@@ -1261,6 +1351,51 @@ outputs:
             request.claim_versions.keys().cloned().collect::<Vec<_>>()
         );
 
+        for (pointer, value, sensitive_value) in [
+            (
+                "/results/1/target_ref/handle",
+                json!(format!("rnref:v1:hmac-sha256:{}", "3".repeat(64))),
+                "33333333",
+            ),
+            (
+                "/results/1/requester_ref/handle",
+                json!(format!("rnref:v1:hmac-sha256:{}", "4".repeat(64))),
+                "44444444",
+            ),
+            (
+                "/results/1/target_ref/profile",
+                json!("IND-AB12CD34"),
+                "IND-AB12CD34",
+            ),
+            (
+                "/results/1/target_ref/identifier_schemes",
+                json!(["sensitive_scheme"]),
+                "sensitive_scheme",
+            ),
+        ] {
+            let mut inconsistent = response.clone();
+            *inconsistent
+                .pointer_mut(pointer)
+                .expect("second result reference field exists") = value;
+            let error = validate_live_response(&inconsistent, &request, &expected)
+                .expect_err("inconsistent multi-claim reference must fail closed")
+                .to_string();
+            assert!(error.contains("inconsistent evaluation references"));
+            assert!(!error.contains(sensitive_value));
+        }
+
+        let mut missing_requester = response.clone();
+        missing_requester["results"][1]
+            .as_object_mut()
+            .expect("second result is an object")
+            .remove("requester_ref");
+        assert!(
+            validate_live_response(&missing_requester, &request, &expected)
+                .expect_err("mixed requester presence must fail closed")
+                .to_string()
+                .contains("inconsistent evaluation references")
+        );
+
         let mut mixed = response;
         mixed["results"][1]["evaluation_id"] = json!("eval-live-2");
         mixed["results"][1]["provenance"]["generated_by"]["evaluation_id"] =
@@ -1428,26 +1563,12 @@ outputs:
         for (pointer, value) in [
             ("/requester_ref/identifier_schemes", json!([])),
             ("/requester_ref/profile", json!("requester")),
-            ("/provenance/generated_by/policy_id", json!("eligibility")),
-            ("/provenance/generated_by/policy_version", json!("1.0.0")),
-            (
-                "/provenance/generated_by/policy_hash",
-                json!(format!("sha256:{}", "0".repeat(64))),
-            ),
         ] {
             set_governed_live_result_pointer(&mut response, pointer, value);
         }
-        for pointer in LIVE_RESULT_OPTIONAL_NON_NULL_PATHS {
-            assert!(
-                response
-                    .pointer(&format!("/results/0{pointer}"))
-                    .is_some_and(|value| !value.is_null()),
-                "canonical optional public field {pointer} is absent or null"
-            );
-        }
         assert_eq!(
             validate_live_response(&response, &request, &expected)
-                .expect("non-null optional public fields pass"),
+                .expect("canonical optional public fields pass"),
             request.claims
         );
 
@@ -1462,6 +1583,52 @@ outputs:
                     .contains("optional public field cannot be null"),
                 "null optional public field {pointer} was accepted"
             );
+        }
+    }
+
+    #[test]
+    fn governed_live_api_key_result_rejects_named_policy_provenance() {
+        let (request, expected, response) = governed_live_eligible_fixture();
+        for field in ["policy_id", "policy_version", "policy_hash"] {
+            assert!(
+                response
+                    .pointer(&format!(
+                        "/results/0/provenance/generated_by/{field}"
+                    ))
+                    .is_none(),
+                "machine-client runtime fixture unexpectedly carries {field}"
+            );
+        }
+        assert_eq!(
+            validate_live_response(&response, &request, &expected)
+                .expect("API-key result without named policy provenance passes"),
+            request.claims
+        );
+
+        for (pointer, value, sensitive_value) in [
+            (
+                "/provenance/generated_by/policy_id",
+                json!("IND-AB12CD34"),
+                "IND-AB12CD34",
+            ),
+            (
+                "/provenance/generated_by/policy_version",
+                json!("secret-policy-v1"),
+                "secret-policy-v1",
+            ),
+            (
+                "/provenance/generated_by/policy_hash",
+                json!("sha256:sensitive-policy-hash"),
+                "sha256:sensitive-policy-hash",
+            ),
+        ] {
+            let mut invalid = response.clone();
+            set_governed_live_result_pointer(&mut invalid, pointer, value);
+            let error = validate_live_response(&invalid, &request, &expected)
+                .expect_err("API-key result with named policy provenance must fail closed")
+                .to_string();
+            assert!(error.contains("unexpected named policy provenance"));
+            assert!(!error.contains(sensitive_value));
         }
     }
 

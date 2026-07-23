@@ -563,6 +563,17 @@ fn offline_private_path(
         .to_owned())
 }
 
+// A remote candidate can have a small NTP offset from the operator host. Thirty
+// seconds accommodates that offset without accepting evidence outside this
+// single governed request.
+const GOVERNED_LIVE_REMOTE_CLOCK_SKEW: time::Duration = time::Duration::seconds(30);
+
+#[derive(Clone, Copy)]
+struct GovernedLiveValidationWindow {
+    request_started_at: OffsetDateTime,
+    response_received_at: OffsetDateTime,
+}
+
 fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureReport> {
     let environment = loaded
         .environment_name
@@ -601,7 +612,9 @@ fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureR
     let endpoint = origin
         .join("v1/evaluations")
         .map_err(|_| anyhow!("failed to construct the governed Notary endpoint"))?;
-    let response = governed_live_evaluation_request(&endpoint, &api_key)
+    let evaluation_request = governed_live_evaluation_request(&endpoint, &api_key);
+    let request_started_at = OffsetDateTime::now_utc();
+    let response = evaluation_request
         .send_bytes(&request_bytes)
         .map_err(|_| anyhow!("governed Notary evaluation failed"))?;
     let mut response_bytes = Vec::new();
@@ -610,12 +623,21 @@ fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureR
         .take(MAX_LIVE_RESPONSE_BYTES + 1)
         .read_to_end(&mut response_bytes)
         .context("failed to read the governed Notary response")?;
+    let response_received_at = OffsetDateTime::now_utc();
     if response_bytes.len() as u64 > MAX_LIVE_RESPONSE_BYTES {
         bail!("governed Notary response exceeded the configured bound");
     }
     let response = parse_json_strict(&response_bytes)
         .context("governed Notary response was not strict JSON")?;
-    let returned_claims = validate_live_response(&response, &validated_request, &expected)?;
+    let returned_claims = validate_live_response(
+        &response,
+        &validated_request,
+        &expected,
+        GovernedLiveValidationWindow {
+            request_started_at,
+            response_received_at,
+        },
+    )?;
     Ok(governed_live_fixture_report(returned_claims))
 }
 
@@ -698,6 +720,7 @@ fn validate_live_response(
     response: &Value,
     request: &ValidatedLiveRequest,
     expected: &Value,
+    validation_window: GovernedLiveValidationWindow,
 ) -> Result<Vec<String>> {
     let object = response
         .as_object()
@@ -727,6 +750,8 @@ fn validate_live_response(
     }
     let mut returned = BTreeSet::new();
     let mut evaluation_id = None;
+    let mut target_ref = None;
+    let mut requester_ref = None;
     for result in results {
         let result_object = result
             .as_object()
@@ -759,6 +784,12 @@ fn validate_live_response(
         if generated_by.service_id != request.notary_service_id {
             bail!("governed Notary result provenance does not identify the selected Notary service");
         }
+        if generated_by.policy_id.is_some()
+            || generated_by.policy_version.is_some()
+            || generated_by.policy_hash.is_some()
+        {
+            bail!("governed Notary API-key result carries unexpected named policy provenance");
+        }
         if evaluation_id
             .as_ref()
             .is_some_and(|evaluation_id| evaluation_id != &result_view.evaluation_id)
@@ -769,17 +800,29 @@ fn validate_live_response(
         if result_view.format != registry_notary_core::FORMAT_CLAIM_RESULT_JSON {
             bail!("governed Notary result has an invalid claim-result format");
         }
-        if OffsetDateTime::parse(&result_view.issued_at, &Rfc3339).is_err()
-            || result_view.expires_at.as_deref().is_some_and(|expires_at| {
-                OffsetDateTime::parse(expires_at, &Rfc3339).is_err()
-            })
-        {
-            bail!("governed Notary result timestamps do not match the public date-time schema");
-        }
+        validate_live_result_timestamps(&result_view, validation_window)?;
         if !result_view.provenance.derived_from.is_empty() {
             bail!("governed Notary result provenance derived_from must remain empty");
         }
         validate_live_result_reference_handles(&result_view)?;
+        let result_target_ref = result_object
+            .get("target_ref")
+            .ok_or_else(|| anyhow!("governed Notary result lacks its target reference"))?;
+        if target_ref
+            .as_ref()
+            .is_some_and(|target_ref| target_ref != result_target_ref)
+        {
+            bail!("governed Notary response combines inconsistent evaluation references");
+        }
+        target_ref.get_or_insert_with(|| result_target_ref.clone());
+        let result_requester_ref = result_object.get("requester_ref").cloned();
+        if requester_ref
+            .as_ref()
+            .is_some_and(|requester_ref| requester_ref != &result_requester_ref)
+        {
+            bail!("governed Notary response combines inconsistent evaluation references");
+        }
+        requester_ref.get_or_insert(result_requester_ref);
         let claim_id = result_view.claim_id.as_str();
         if !requested.contains(claim_id) || !returned.insert(claim_id.to_string()) {
             bail!("governed Notary response contains an unknown or duplicate claim result");
@@ -819,6 +862,41 @@ fn validate_live_response(
         }
     }
     Ok(returned.into_iter().collect())
+}
+
+fn validate_live_result_timestamps(
+    result: &registry_notary_core::ClaimResultView,
+    validation_window: GovernedLiveValidationWindow,
+) -> Result<()> {
+    let issued_at = OffsetDateTime::parse(&result.issued_at, &Rfc3339)
+        .map_err(|_| anyhow!("governed Notary result timestamps do not match the public date-time schema"))?;
+    let expires_at = result
+        .expires_at
+        .as_deref()
+        .map(|expires_at| {
+            OffsetDateTime::parse(expires_at, &Rfc3339).map_err(|_| {
+                anyhow!(
+                    "governed Notary result timestamps do not match the public date-time schema"
+                )
+            })
+        })
+        .transpose()?;
+    if validation_window.response_received_at < validation_window.request_started_at {
+        bail!("governed Notary validation window is invalid");
+    }
+    let earliest_issued_at =
+        validation_window.request_started_at - GOVERNED_LIVE_REMOTE_CLOCK_SKEW;
+    let latest_issued_at =
+        validation_window.response_received_at + GOVERNED_LIVE_REMOTE_CLOCK_SKEW;
+    if issued_at < earliest_issued_at || issued_at > latest_issued_at {
+        bail!("governed Notary result timestamps do not bind to the current live evaluation");
+    }
+    if expires_at.is_some_and(|expires_at| {
+        expires_at <= validation_window.response_received_at || expires_at <= issued_at
+    }) {
+        bail!("governed Notary result timestamps do not bind to the current live evaluation");
+    }
+    Ok(())
 }
 
 // These properties are optional in the public OpenAPI schema, but their types
