@@ -261,6 +261,10 @@ fn posture_schema_summary_acceptance_does_not_replace_semantic_validation() {
     for summary in [
         "Authorization: ＂Bearer abcdef＂",
         concat!("accidentally pasted -----BEGIN PRIVATE ", "KEY-----"),
+        concat!(
+            "accidentally pasted -----BEGIN PGP PRIVATE KEY ",
+            "BLOCK-----"
+        ),
     ] {
         assert_eq!(
             validate_deployment_waiver_metadata("OPS-42", Some(summary)),

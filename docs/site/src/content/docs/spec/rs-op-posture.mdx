@@ -32,10 +32,12 @@ source of secrets.
 
 The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2.
 Defined terms are used per [RS-TERMS](../rs-terms/).
-The [Registry Ops Posture v1 JSON Schema](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/schemas/registry.ops.posture.v1.schema.json)
-is the source of truth for portable structural validation. This specification defines the
-operational meaning, semantic producer validation, and evolution rules that JSON Schema alone
-does not express.
+{/* TODO[evidence]: Add a release-tagged Registry Ops Posture v1 JSON Schema source link after
+    the waiver definitions and shared portable metadata constraints merge. The earlier pinned
+    schema predates those definitions and is not evidence for this draft revision. */}
+Portable structural validation is defined by the in-tree draft schema; release-tagged source
+evidence for this revision is pending. This specification defines the operational meaning,
+semantic producer validation, and evolution rules that JSON Schema alone does not express.
 
 ## Version history
 
@@ -276,9 +278,8 @@ handles omissions as unreported, and does not elevate posture observations into 
 This specification is `verified`: its document shape, examples, component pairing, and tier
 filter are shipped in Registry Platform and exercised by contract tests.
 
-- The [v1 JSON Schema](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/schemas/registry.ops.posture.v1.schema.json)
-  defines the closed envelope, schema constant, and Relay/Notary component pairing
-  (Sections 2 and 5).
+- Release-tagged source evidence for the v1 JSON Schema's waiver definitions and shared portable
+  metadata constraints is pending. The source pack will be linked after those changes merge.
 - The [posture contract tests](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/tests/posture_contract.rs)
   validate both examples, the default allowlist projection, the sensitive fixture, and exclusion
   of restricted fields from default output (Sections 3, 4, and 6).

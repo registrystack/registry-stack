@@ -381,6 +381,10 @@ fn deployment_waiver_schema_matches_shared_portable_metadata_contract() {
     for summary in [
         "Authorization: ＂Bearer abcdef＂",
         concat!("accidentally pasted -----BEGIN PRIVATE ", "KEY-----"),
+        concat!(
+            "accidentally pasted -----BEGIN PGP PRIVATE KEY ",
+            "BLOCK-----"
+        ),
     ] {
         assert_eq!(
             validate_deployment_waiver_metadata("OPS-42", Some(summary)),

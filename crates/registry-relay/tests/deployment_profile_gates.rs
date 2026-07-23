@@ -187,6 +187,7 @@ fn invalid_waiver_summary_is_rejected() {
         "Basic credential-value",
         "rotated leaked Bearer abcdef",
         "-----BEGIN PRIVATE KEY-----",
+        concat!("-----BEGIN PGP PRIVATE KEY ", "BLOCK-----"),
         &"x".repeat(257),
     ] {
         let yaml = format!(

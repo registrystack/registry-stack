@@ -1378,9 +1378,11 @@ fn contains_high_confidence_credential_literal(summary: &str) -> bool {
         .iter()
         .any(|scheme| contains_authorization_value(summary, scheme))
         || summary.split("-----BEGIN ").skip(1).any(|suffix| {
-            suffix
-                .split_once("-----")
-                .is_some_and(|(label, _)| label == "PRIVATE KEY" || label.ends_with(" PRIVATE KEY"))
+            suffix.split_once("-----").is_some_and(|(label, _)| {
+                label == "PRIVATE KEY"
+                    || label.ends_with(" PRIVATE KEY")
+                    || label == "PGP PRIVATE KEY BLOCK"
+            })
         })
 }
 
@@ -4129,6 +4131,13 @@ mod tests {
                 concat!(
                     "accidentally pasted -----BEGIN ED25519 PRIVATE ",
                     "KEY-----"
+                ),
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                concat!(
+                    "accidentally pasted -----BEGIN PGP PRIVATE KEY ",
+                    "BLOCK-----"
                 ),
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),

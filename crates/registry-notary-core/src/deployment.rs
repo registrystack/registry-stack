@@ -923,6 +923,7 @@ mod tests {
             "Basic credential-value",
             "rotated leaked Bearer abcdef",
             "-----BEGIN OPENSSH PRIVATE KEY-----",
+            concat!("-----BEGIN PGP PRIVATE KEY ", "BLOCK-----"),
         ] {
             let mut waiver_config = waiver(FINDING_OPENAPI_PUBLIC, "2099-01-01");
             waiver_config.summary = Some(summary.to_string());
