@@ -224,7 +224,11 @@ def is_untagged_debian_derived(reference: str) -> bool:
 
 def is_image_assignment(name: str) -> bool:
     tokens = re.split(r"[_-]+", name.casefold())
-    return "image" in tokens or ("base" in tokens and len(tokens) > 1)
+    return (
+        name.casefold() == "container"
+        or "image" in tokens
+        or ("base" in tokens and len(tokens) > 1)
+    )
 
 
 def logical_lines(text: str) -> list[tuple[int, str]]:

@@ -170,11 +170,37 @@ class Debian13ImageCheckTest(unittest.TestCase):
             metadata.parent.mkdir(parents=True, exist_ok=True)
             metadata.write_text(
                 'description: "docker run --rm debian is an unsafe example"\n'
-                "base: debian\n",
+                "base: debian\n"
+                "container_note: debian\n",
                 encoding="utf-8",
             )
 
             self.assertEqual([], self.module.check_repository(root))
+
+    def test_discovered_workflow_rejects_untagged_container_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            workflow = root / ".github/workflows/example.yml"
+            workflow.parent.mkdir(parents=True, exist_ok=True)
+            workflow.write_text(
+                "jobs:\n"
+                "  test:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    container: debian\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    ".github/workflows/example.yml:4" in failure
+                    and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
 
     def test_dockerfile_internal_stage_reference_needs_no_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
