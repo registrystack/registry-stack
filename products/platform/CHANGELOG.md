@@ -6,7 +6,10 @@
   required `reference` plus optional omitted `summary` in the shared posture
   contract. It now owns the common 128-byte reference and 256-character summary
   validation authority used by Relay and Notary. The default posture allowlist
-  continues to exclude all waiver metadata.
+  continues to exclude all waiver metadata. Relay, Notary, and posture schemas
+  now share the portable structural reference and summary constraints;
+  contextual credential and private-key marker checks remain in the shared
+  semantic validator.
 
 ## v0.12.2 - 2026-07-20
 

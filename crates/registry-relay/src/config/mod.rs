@@ -124,10 +124,10 @@ pub struct DeploymentConfig {
 #[schemars(!from)]
 pub struct DeploymentWaiverConfig {
     pub finding: String,
-    #[schemars(length(min = 1, max = 128), pattern(r"^(?!.*\.\.)[A-Za-z0-9._:-]+$"))]
+    #[schemars(with = "schema::DeploymentWaiverReferenceSchema")]
     pub reference: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "String", length(min = 1, max = 256))]
+    #[schemars(with = "schema::DeploymentWaiverSummarySchema")]
     pub summary: Option<String>,
     pub expires: String,
 }

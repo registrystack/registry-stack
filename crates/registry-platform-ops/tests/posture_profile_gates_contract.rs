@@ -1,8 +1,10 @@
 use registry_platform_ops::{
-    AuditAnchoring, AuditAssurance, AuditCheckpoints, AuditHashChain, AuditKeyedIntegrity,
-    AuditRedactionMode, AuditRetentionOwner, AuditSinkClass, AuditWritePolicy, DeploymentFinding,
-    DeploymentFindingStatus, DeploymentFindingWaiver, DeploymentProfile, DeploymentWaiver,
-    GateSeverity, POSTURE_SCHEMA_V1,
+    deployment_waiver_reference_schema_fragment, deployment_waiver_summary_schema_fragment,
+    validate_deployment_waiver_metadata, AuditAnchoring, AuditAssurance, AuditCheckpoints,
+    AuditHashChain, AuditKeyedIntegrity, AuditRedactionMode, AuditRetentionOwner, AuditSinkClass,
+    AuditWritePolicy, DeploymentFinding, DeploymentFindingStatus, DeploymentFindingWaiver,
+    DeploymentProfile, DeploymentWaiver, DeploymentWaiverMetadataError, GateSeverity,
+    POSTURE_SCHEMA_V1,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -85,6 +87,18 @@ fn posture_with_profile_gates() -> Value {
     posture
 }
 
+const WAIVER_POINTERS: [&str; 2] = ["/deployment/findings/1/waiver", "/deployment/waivers/0"];
+
+fn posture_with_waiver_field(waiver_pointer: &str, field: &str, value: Value) -> Value {
+    let mut posture = posture_with_profile_gates();
+    posture
+        .pointer_mut(waiver_pointer)
+        .and_then(Value::as_object_mut)
+        .unwrap_or_else(|| panic!("waiver object exists at {waiver_pointer}"))
+        .insert(field.to_string(), value);
+    posture
+}
+
 #[test]
 fn posture_schema_accepts_profile_gates_and_undeclared_profile() {
     let validator = posture_validator();
@@ -92,6 +106,173 @@ fn posture_schema_accepts_profile_gates_and_undeclared_profile() {
 
     let undeclared = parse(registry_platform_ops::RELAY_POSTURE_EXAMPLE_V1);
     assert_valid(&validator, &undeclared);
+}
+
+#[test]
+fn posture_waiver_definitions_share_structural_metadata_contracts() {
+    let schema = parse(POSTURE_SCHEMA_V1);
+    assert_eq!(
+        schema.pointer("/$defs/waiver_reference"),
+        Some(&deployment_waiver_reference_schema_fragment())
+    );
+    assert_eq!(
+        schema.pointer("/$defs/waiver_summary"),
+        Some(&deployment_waiver_summary_schema_fragment())
+    );
+    for waiver_definition in ["deployment_finding_waiver", "deployment_waiver"] {
+        assert_eq!(
+            schema.pointer(&format!(
+                "/$defs/{waiver_definition}/properties/reference/$ref"
+            )),
+            Some(&json!("#/$defs/waiver_reference"))
+        );
+        assert_eq!(
+            schema.pointer(&format!(
+                "/$defs/{waiver_definition}/properties/summary/$ref"
+            )),
+            Some(&json!("#/$defs/waiver_summary"))
+        );
+    }
+}
+
+#[test]
+fn posture_schema_waiver_reference_matches_runtime_prefix_contract() {
+    let validator = posture_validator();
+
+    for reference in [
+        "OPS-42",
+        "Bearer:",
+        "Basic:",
+        "Authorization:Bearer:",
+        "authorization:bAsIc:",
+    ] {
+        validate_deployment_waiver_metadata(reference, None).unwrap_or_else(|error| {
+            panic!("runtime rejected valid reference {reference:?}: {error}")
+        });
+        for waiver_pointer in WAIVER_POINTERS {
+            assert_valid(
+                &validator,
+                &posture_with_waiver_field(waiver_pointer, "reference", json!(reference)),
+            );
+        }
+    }
+
+    for reference in [
+        "Bearer:abcdef",
+        "bAsIc:credential-value",
+        "Authorization:Bearer:abc123",
+        "authorization:bAsIc:abc123",
+        "Bearer::",
+    ] {
+        assert_eq!(
+            validate_deployment_waiver_metadata(reference, None),
+            Err(DeploymentWaiverMetadataError::ReferenceCredentialLiteral),
+            "runtime must reject credential-shaped reference {reference:?}"
+        );
+        for waiver_pointer in WAIVER_POINTERS {
+            assert_invalid(
+                &validator,
+                &posture_with_waiver_field(waiver_pointer, "reference", json!(reference)),
+            );
+        }
+    }
+}
+
+#[test]
+fn posture_schema_waiver_summary_matches_runtime_structural_contract() {
+    let validator = posture_validator();
+
+    for summary in [
+        "Ordinary operator summary".to_string(),
+        "\u{feff}summary\u{feff}".to_string(),
+        "summary\u{2028}continued".to_string(),
+        "é".repeat(256),
+    ] {
+        validate_deployment_waiver_metadata("OPS-42", Some(&summary))
+            .unwrap_or_else(|error| panic!("runtime rejected valid summary {summary:?}: {error}"));
+        for waiver_pointer in WAIVER_POINTERS {
+            assert_valid(
+                &validator,
+                &posture_with_waiver_field(waiver_pointer, "summary", json!(summary)),
+            );
+        }
+    }
+
+    for summary in [String::new(), "é".repeat(257)] {
+        assert!(
+            validate_deployment_waiver_metadata("OPS-42", Some(&summary)).is_err(),
+            "runtime must reject structurally invalid summary {summary:?}"
+        );
+        for waiver_pointer in WAIVER_POINTERS {
+            assert_invalid(
+                &validator,
+                &posture_with_waiver_field(waiver_pointer, "summary", json!(summary)),
+            );
+        }
+    }
+
+    for whitespace in (0..=char::MAX as u32)
+        .filter_map(char::from_u32)
+        .filter(|character| character.is_whitespace())
+    {
+        for summary in [
+            format!("{whitespace}summary"),
+            format!("summary{whitespace}"),
+        ] {
+            assert!(
+                validate_deployment_waiver_metadata("OPS-42", Some(&summary)).is_err(),
+                "runtime must reject edge whitespace U+{:04X}",
+                whitespace as u32
+            );
+            for waiver_pointer in WAIVER_POINTERS {
+                assert_invalid(
+                    &validator,
+                    &posture_with_waiver_field(waiver_pointer, "summary", json!(summary)),
+                );
+            }
+        }
+    }
+
+    for value in (0..=0x1f).chain(0x7f..=0x9f) {
+        let control = char::from_u32(value).expect("C0/C1 value is a Unicode scalar");
+        assert!(control.is_control());
+        let summary = format!("summary{control}continued");
+        assert_eq!(
+            validate_deployment_waiver_metadata("OPS-42", Some(&summary)),
+            Err(DeploymentWaiverMetadataError::SummaryControlCharacter),
+            "runtime must reject control U+{value:04X}"
+        );
+        for waiver_pointer in WAIVER_POINTERS {
+            assert_invalid(
+                &validator,
+                &posture_with_waiver_field(waiver_pointer, "summary", json!(summary)),
+            );
+        }
+    }
+}
+
+#[test]
+fn posture_schema_summary_acceptance_does_not_replace_semantic_validation() {
+    let validator = posture_validator();
+
+    // JSON Schema stops at portable structural rules. Producers must also use
+    // validate_deployment_waiver_metadata for contextual credential and
+    // private-key marker rejection before emitting either waiver shape.
+    for summary in [
+        "Authorization: ＂Bearer abcdef＂",
+        concat!("accidentally pasted -----BEGIN PRIVATE ", "KEY-----"),
+    ] {
+        assert_eq!(
+            validate_deployment_waiver_metadata("OPS-42", Some(summary)),
+            Err(DeploymentWaiverMetadataError::SummaryCredentialLiteral)
+        );
+        for waiver_pointer in WAIVER_POINTERS {
+            assert_valid(
+                &validator,
+                &posture_with_waiver_field(waiver_pointer, "summary", json!(summary)),
+            );
+        }
+    }
 }
 
 #[test]

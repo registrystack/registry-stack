@@ -25,6 +25,56 @@ use rustix::fs::{Mode, OFlags};
 
 pub const POSTURE_SCHEMA_V1: &str = include_str!("../schemas/registry.ops.posture.v1.schema.json");
 
+/// Return the portable JSON Schema fragment for deployment-waiver references.
+///
+/// Runtime validation remains authoritative, including the deliberate
+/// acceptance of an empty suffix after a reserved authorization scheme.
+#[must_use]
+pub fn deployment_waiver_reference_schema_fragment() -> Value {
+    serde_json::json!({
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": r"^(?!.*\.\.)[A-Za-z0-9._:-]+$",
+        "not": {
+            "pattern": r"^(?:[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]:)?(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc]):[A-Za-z0-9._:-]+$"
+        }
+    })
+}
+
+/// Return the portable structural JSON Schema fragment for waiver summaries.
+///
+/// Contextual authorization-value and private-key marker exclusions require
+/// [`validate_deployment_waiver_metadata`]; schema acceptance alone is not
+/// sufficient semantic producer validation.
+#[must_use]
+pub fn deployment_waiver_summary_schema_fragment() -> Value {
+    serde_json::json!({
+        "description": "Structurally valid deployment-waiver summary. Contextual authorization-value and private-key marker exclusions require semantic producer validation.",
+        "$comment": "Schema acceptance does not replace validate_deployment_waiver_metadata.",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "allOf": [
+            {
+                "not": {
+                    "pattern": r"[\u0000-\u001F\u007F-\u009F]"
+                }
+            },
+            {
+                "not": {
+                    "pattern": r"^[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]"
+                }
+            },
+            {
+                "not": {
+                    "pattern": r"[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]$"
+                }
+            }
+        ]
+    })
+}
+
 pub const ADMIN_ERROR_SCHEMA_V1: &str =
     include_str!("../schemas/registry.admin.error.v1.schema.json");
 

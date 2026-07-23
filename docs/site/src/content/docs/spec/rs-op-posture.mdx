@@ -33,8 +33,9 @@ source of secrets.
 The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2.
 Defined terms are used per [RS-TERMS](../rs-terms/).
 The [Registry Ops Posture v1 JSON Schema](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/schemas/registry.ops.posture.v1.schema.json)
-is the source of truth for validation; this specification defines the operational meaning and
-evolution rules that JSON Schema alone does not express.
+is the source of truth for portable structural validation. This specification defines the
+operational meaning, semantic producer validation, and evolution rules that JSON Schema alone
+does not express.
 
 ## Version history
 
@@ -44,6 +45,7 @@ evolution rules that JSON Schema alone does not express.
 | 0.1.1 | 2026-07-19 | draft | Added restricted Relay per-resource refresh health before the 1.0 schema freeze. |
 | 0.1.2 | 2026-07-20 | draft | Replaced waiver reason text with validated operator references and optional summaries before the 1.0 schema freeze. |
 | 0.1.3 | 2026-07-23 | draft | Reserved credential-shaped waiver-reference prefixes before the 1.0 schema freeze. |
+| 0.1.4 | 2026-07-24 | draft | Separated portable waiver-schema checks from contextual semantic validation before the 1.0 schema freeze. |
 
 ## 1. Scope and surface
 
@@ -136,6 +138,13 @@ Unicode-character string without control characters, an authorization value, or 
 begin marker.
 The producer MUST omit `summary` when no summary was configured and MUST NOT emit the retired
 `reason` property.
+The JSON Schema enforces the reference syntax and reserved prefixes. It also enforces the
+summary length, C0 and C1 control-character exclusion, and leading or trailing whitespace
+exclusion.
+The schema does not encode context-sensitive authorization-value or private-key marker detection.
+Before emitting either waiver shape, a producer MUST apply semantic validation equivalent to
+`validate_deployment_waiver_metadata`.
+Schema acceptance alone does not satisfy the contextual exclusions in REQ-OP-POSTURE-011.
 These metadata rules do not alter expiry behavior: an expired waiver stops suppressing its
 finding.
 They also do not alter the hard-gate boundary: `startup_fail` and `readiness_fail` findings

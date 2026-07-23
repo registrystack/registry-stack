@@ -11,6 +11,10 @@ use registry_notary_core::{
     ClaimEvidenceMode, SigningKeyProviderConfig, SigningKeyStatus, StandaloneRegistryNotaryConfig,
 };
 use registry_platform_authcommon::CredentialFingerprintProvider;
+use registry_platform_ops::{
+    deployment_waiver_reference_schema_fragment, deployment_waiver_summary_schema_fragment,
+    validate_deployment_waiver_metadata, DeploymentWaiverMetadataError,
+};
 use serde_json::{json, Value};
 
 const SCHEMA_ARTIFACT: &str = "schemas/registry-notary.config.schema.json";
@@ -94,6 +98,23 @@ fn example_config() -> Value {
     parse_yaml(&stack_root().join(
         "crates/registry-relay/profiles/dhis2-2.41.9-enrollment-status/notary-config.example.yaml",
     ))
+}
+
+fn config_with_deployment_waiver(reference: &str, summary: Option<&str>) -> Value {
+    let mut config = example_config();
+    let mut waiver = json!({
+        "finding": "notary.openapi.public",
+        "reference": reference,
+        "expires": "2999-01-01"
+    });
+    if let Some(summary) = summary {
+        waiver["summary"] = json!(summary);
+    }
+    config["deployment"] = json!({
+        "profile": "hosted_lab",
+        "waivers": [waiver]
+    });
+    config
 }
 
 fn with_authorization_details(mut config: Value) -> Value {
@@ -334,6 +355,93 @@ fn deployment_waiver_schema_rejects_retired_and_noncanonical_metadata() {
     config["deployment"]["waivers"][0]["reason"] = json!("retired waiver text");
     assert_invalid(&schema, &config, "retired deployment waiver reason");
     assert_runtime_load_rejects(&config, "retired deployment waiver reason");
+}
+
+#[test]
+fn deployment_waiver_schema_matches_shared_portable_metadata_contract() {
+    let schema = document();
+    assert_eq!(
+        schema.pointer("/$defs/DeploymentWaiverReference"),
+        Some(&deployment_waiver_reference_schema_fragment())
+    );
+    assert_eq!(
+        schema.pointer("/$defs/DeploymentWaiverSummary"),
+        Some(&deployment_waiver_summary_schema_fragment())
+    );
+
+    for reference in ["OPS-42", "Bearer:", "Authorization:Basic:"] {
+        validate_deployment_waiver_metadata(reference, None).unwrap_or_else(|error| {
+            panic!("runtime rejected valid reference {reference:?}: {error}")
+        });
+        assert_valid(
+            &schema,
+            &config_with_deployment_waiver(reference, None),
+            &format!("portable deployment waiver reference {reference:?}"),
+        );
+    }
+    for reference in ["Bearer:abcdef", "authorization:bAsIc:abc123", "Bearer::"] {
+        assert_eq!(
+            validate_deployment_waiver_metadata(reference, None),
+            Err(DeploymentWaiverMetadataError::ReferenceCredentialLiteral)
+        );
+        assert_invalid(
+            &schema,
+            &config_with_deployment_waiver(reference, None),
+            &format!("credential-shaped deployment waiver reference {reference:?}"),
+        );
+    }
+
+    for summary in [
+        "Ordinary operator summary".to_string(),
+        "\u{feff}summary\u{feff}".to_string(),
+        "summary\u{2028}continued".to_string(),
+        "é".repeat(256),
+    ] {
+        validate_deployment_waiver_metadata("OPS-42", Some(&summary))
+            .unwrap_or_else(|error| panic!("runtime rejected valid summary {summary:?}: {error}"));
+        assert_valid(
+            &schema,
+            &config_with_deployment_waiver("OPS-42", Some(&summary)),
+            "structurally valid deployment waiver summary",
+        );
+    }
+    for summary in [
+        String::new(),
+        " summary".to_string(),
+        "summary\u{3000}".to_string(),
+        "summary\u{001f}continued".to_string(),
+        "é".repeat(257),
+    ] {
+        assert!(
+            validate_deployment_waiver_metadata("OPS-42", Some(&summary)).is_err(),
+            "runtime must reject structurally invalid summary {summary:?}"
+        );
+        assert_invalid(
+            &schema,
+            &config_with_deployment_waiver("OPS-42", Some(&summary)),
+            "structurally invalid deployment waiver summary",
+        );
+    }
+
+    for summary in [
+        "Authorization: ＂Bearer abcdef＂",
+        concat!("accidentally pasted -----BEGIN PRIVATE ", "KEY-----"),
+    ] {
+        assert_eq!(
+            validate_deployment_waiver_metadata("OPS-42", Some(summary)),
+            Err(DeploymentWaiverMetadataError::SummaryCredentialLiteral)
+        );
+        let config = config_with_deployment_waiver("OPS-42", Some(summary));
+        assert_valid(
+            &schema,
+            &config,
+            "contextual waiver summary left to semantic validation",
+        );
+        assert_runtime_load_rejects(
+            &config,
+            "contextual waiver summary rejected by semantic validation",
+        );
+    }
 }
 
 #[test]
