@@ -3,8 +3,10 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -102,6 +104,35 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             self.candidate(), allow_template=False, require_all_passed=True
         )
 
+    def test_candidate_tag_must_resolve_to_exact_target_commit(self) -> None:
+        record = self.candidate()
+        tag_ref = f"refs/tags/{record['target_release']['version']}^{{commit}}"
+        run = self.module.subprocess.run
+
+        def mismatched_tag(arguments, **kwargs):
+            if arguments == ["git", "rev-parse", "--verify", tag_ref]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=record["target_release"]["source_ref"] + "\n",
+                )
+            return run(arguments, **kwargs)
+
+        with mock.patch.object(
+            self.module.subprocess, "run", side_effect=mismatched_tag
+        ) as git_run:
+            with self.assertRaisesRegex(
+                self.module.ExerciseError,
+                "release tag v0.12.2 does not resolve to target_release.source_commit",
+            ):
+                self.module.validate_record(record, allow_template=False)
+        git_run.assert_any_call(
+            ["git", "rev-parse", "--verify", "refs/tags/v0.12.2^{commit}"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
     def test_candidate_must_be_a_forward_version_upgrade(self) -> None:
         record = self.candidate()
         record["source_release"]["version"] = record["target_release"]["version"]
@@ -143,6 +174,52 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             self.module.validate_record(
                 record, allow_template=False, require_all_passed=True
             )
+
+    def test_discovery_requires_candidate_passes_but_preserves_templates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            records = Path(temporary)
+            (records / "template.json").write_text(
+                json.dumps(self.template), encoding="utf-8"
+            )
+            with mock.patch.object(
+                sys,
+                "argv",
+                [str(SCRIPT), "--discover", str(records), "--require-pass"],
+            ), mock.patch("sys.stdout", new=io.StringIO()):
+                self.assertEqual(self.module.main(), 0)
+
+            candidate = self.candidate()
+            candidate["results"][0]["outcome"] = "failed"
+            (records / "candidate.json").write_text(
+                json.dumps(candidate), encoding="utf-8"
+            )
+            stderr = io.StringIO()
+            with mock.patch.object(
+                sys,
+                "argv",
+                [str(SCRIPT), "--discover", str(records), "--require-pass"],
+            ), mock.patch("sys.stderr", new=stderr):
+                self.assertEqual(self.module.main(), 1)
+            self.assertIn(
+                "--require-pass requires every check to pass", stderr.getvalue()
+            )
+
+    def test_promotion_rejects_product_oci_layout_drift(self) -> None:
+        for product in ("notary", "relay"):
+            with self.subTest(product=product):
+                record = self.candidate()
+                artifacts = record["candidate_artifact_set"]["artifacts"]
+                artifacts[f"t_{product}_layouts"] = "sha256:" + "0" * 64
+                record["candidate_artifact_set"]["sha256"] = (
+                    self.module.canonical_sha256(artifacts)
+                )
+                with self.assertRaisesRegex(
+                    self.module.ExerciseError,
+                    f"--require-pass rejects P/T {product} OCI layout drift",
+                ):
+                    self.module.validate_record(
+                        record, allow_template=False, require_all_passed=True
+                    )
 
     def test_complete_release_specific_recovery_set_is_required(self) -> None:
         record = self.candidate()

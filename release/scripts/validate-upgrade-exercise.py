@@ -381,6 +381,15 @@ def validate_target_binding(record: dict[str, Any], root: Path) -> None:
     target = record["target_release"]
     source_ref = target["source_ref"]
     target_commit = target["source_commit"]
+    tag_ref = f"refs/tags/{target['version']}^{{commit}}"
+    tag_target = subprocess.run(
+        ["git", "rev-parse", "--verify", tag_ref],
+        cwd=root, capture_output=True, text=True, check=False,
+    )
+    if tag_target.returncode != 0 or tag_target.stdout.strip() != target_commit:
+        raise ExerciseError(
+            f"release tag {target['version']} does not resolve to target_release.source_commit"
+        )
     for value, label in ((source_ref, "source_ref"), (target_commit, "source_commit")):
         resolved = subprocess.run(
             ["git", "rev-parse", "--verify", f"{value}^{{commit}}"],
@@ -435,6 +444,9 @@ def require_pass(record: dict[str, Any]) -> None:
     for kind in ("binaries", "image_inputs"):
         if len({artifacts[f"{phase}{run}_{kind}"] for phase in ("p", "t") for run in (1, 2)}) != 1:
             raise ExerciseError(f"--require-pass rejects P/T {kind} drift")
+    for product in ("notary", "relay"):
+        if artifacts[f"p_{product}_layouts"] != artifacts[f"t_{product}_layouts"]:
+            raise ExerciseError(f"--require-pass rejects P/T {product} OCI layout drift")
     if artifacts["p_release_inputs"] != artifacts["t_release_inputs"]:
         raise ExerciseError("--require-pass rejects P/T release-input drift")
 
@@ -529,7 +541,12 @@ def main() -> int:
                 raise ExerciseError("--discover found no JSON records")
             for path in records:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                validate_record(data, allow_template=data.get("record_kind") == "template")
+                template = data.get("record_kind") == "template"
+                validate_record(
+                    data,
+                    allow_template=template,
+                    require_all_passed=args.require_pass and not template,
+                )
             print(f"upgrade exercise discovery passed: {len(records)} record(s)")
             return 0
         if args.record is None:
