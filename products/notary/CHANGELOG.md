@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- BREAKING: The closed Relay-result decoder now matches the reduced pre-1.0
+  `registry.relay.consultation-result.v1` contract and rejects the retired
+  `provenance.consent` member as unknown. Registry-backed issuance still
+  requires compiler-pinned Relay evidence; source-free declarations remain
+  evaluation-only and cannot be issued as credentials. Consent verification,
+  policy enforcement, legal-basis handling, and authorization are unchanged.
+
 ## [0.12.2] - 2026-07-20
 
 - No new Notary product features or public API contract changes. This release

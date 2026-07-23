@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- BREAKING: Remove the inert six-field `provenance.consent` member from the
+  pre-1.0 `registry.relay.consultation-result.v1` response and its closed
+  batch-terminal replay representation. The PostgreSQL terminal constraint is
+  replaced with the reduced exact shape, so earlier terminal payloads are not
+  accepted. Consent verification, policy enforcement, legal-basis handling,
+  evidence commitments, scopes, and trust headers are unchanged. A Relay
+  consultation state plane initialized with the earlier pre-release constraint
+  must be cleanly re-bootstrapped before running the updated binary. This is not
+  a rolling-compatible change: stop new consultations and let the old binary
+  serve retained terminal replays for their 15-minute retention window before
+  re-bootstrapping, or re-bootstrap immediately if discarding those pre-1.0
+  terminal results is acceptable. Do not run old and updated binaries against
+  one state plane.
+
 ## 0.12.2 - 2026-07-20
 
 ### Security

@@ -7327,11 +7327,11 @@ CREATE TABLE IF NOT EXISTS relay_state_private.consultation_batch_child_replay (
             AND jsonb_typeof(terminal_payload -> 'provenance') = 'object'
             AND (terminal_payload -> 'provenance') ?& ARRAY[
                 'acquired_at', 'source_observed_at', 'source_revision',
-                'acquisition_class', 'integration', 'consent'
+                'acquisition_class', 'integration'
             ]::text[]
             AND ((terminal_payload -> 'provenance') - ARRAY[
                 'acquired_at', 'source_observed_at', 'source_revision',
-                'acquisition_class', 'integration', 'snapshot', 'consent'
+                'acquisition_class', 'integration', 'snapshot'
             ]::text[]) = '{}'::jsonb
             AND jsonb_typeof(terminal_payload #> '{provenance,acquired_at}') = 'string'
             AND jsonb_typeof(terminal_payload #> '{provenance,source_observed_at}')
@@ -7353,25 +7353,6 @@ CREATE TABLE IF NOT EXISTS relay_state_private.consultation_batch_child_replay (
                 trunc((terminal_payload #>> '{provenance,integration,revision}')::numeric)
             AND (terminal_payload #>> '{provenance,integration,revision}')::numeric
                 BETWEEN 1 AND 9999999999
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent}') = 'object'
-            AND (terminal_payload #> '{provenance,consent}') ?& ARRAY[
-                'outcome', 'verifier_id', 'verifier_revision', 'checked_at', 'expires_at',
-                'revocation_status'
-            ]::text[]
-            AND ((terminal_payload #> '{provenance,consent}') - ARRAY[
-                'outcome', 'verifier_id', 'verifier_revision', 'checked_at', 'expires_at',
-                'revocation_status'
-            ]::text[]) = '{}'::jsonb
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent,outcome}') = 'string'
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent,verifier_id}')
-                IN ('string', 'null')
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent,verifier_revision}')
-                IN ('string', 'null')
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent,checked_at}')
-                IN ('string', 'null')
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent,expires_at}')
-                IN ('string', 'null')
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent,revocation_status}') = 'string'
             AND (
                 (terminal_payload #>> '{provenance,acquisition_class}' IN (
                     'source_projected_exact', 'bounded_full_record'
@@ -7559,11 +7540,11 @@ BEGIN
            OR jsonb_typeof(v_terminal -> 'provenance') <> 'object'
            OR NOT (v_terminal -> 'provenance') ?& ARRAY[
                'acquired_at', 'source_observed_at', 'source_revision',
-               'acquisition_class', 'integration', 'consent'
+               'acquisition_class', 'integration'
            ]::text[]
            OR ((v_terminal -> 'provenance') - ARRAY[
                'acquired_at', 'source_observed_at', 'source_revision',
-               'acquisition_class', 'integration', 'snapshot', 'consent'
+               'acquisition_class', 'integration', 'snapshot'
            ]::text[]) <> '{}'::jsonb
            OR jsonb_typeof(v_terminal #> '{provenance,acquired_at}') <> 'string'
            OR jsonb_typeof(v_terminal #> '{provenance,source_observed_at}')
@@ -7585,25 +7566,6 @@ BEGIN
                 trunc((v_terminal #>> '{provenance,integration,revision}')::numeric)
            OR (v_terminal #>> '{provenance,integration,revision}')::numeric
                 NOT BETWEEN 1 AND 9999999999
-           OR jsonb_typeof(v_terminal #> '{provenance,consent}') <> 'object'
-           OR NOT (v_terminal #> '{provenance,consent}') ?& ARRAY[
-               'outcome', 'verifier_id', 'verifier_revision', 'checked_at', 'expires_at',
-               'revocation_status'
-           ]::text[]
-           OR ((v_terminal #> '{provenance,consent}') - ARRAY[
-               'outcome', 'verifier_id', 'verifier_revision', 'checked_at', 'expires_at',
-               'revocation_status'
-           ]::text[]) <> '{}'::jsonb
-           OR jsonb_typeof(v_terminal #> '{provenance,consent,outcome}') <> 'string'
-           OR jsonb_typeof(v_terminal #> '{provenance,consent,verifier_id}')
-                NOT IN ('string', 'null')
-           OR jsonb_typeof(v_terminal #> '{provenance,consent,verifier_revision}')
-                NOT IN ('string', 'null')
-           OR jsonb_typeof(v_terminal #> '{provenance,consent,checked_at}')
-                NOT IN ('string', 'null')
-           OR jsonb_typeof(v_terminal #> '{provenance,consent,expires_at}')
-                NOT IN ('string', 'null')
-           OR jsonb_typeof(v_terminal #> '{provenance,consent,revocation_status}') <> 'string'
            OR (
                (v_terminal #>> '{provenance,acquisition_class}' IN (
                     'source_projected_exact', 'bounded_full_record'
@@ -8658,7 +8620,7 @@ mod tests {
                 "'schema', 'consultation_id', 'outcome', 'outputs', 'profile', 'provenance'",
                 "'id', 'contract_hash'",
                 "'acquired_at', 'source_observed_at', 'source_revision'",
-                "'acquisition_class', 'integration', 'snapshot', 'consent'",
+                "'acquisition_class', 'integration', 'snapshot'",
                 "ARRAY['id', 'revision']::text[]",
                 "ARRAY['generation_id', 'published_at']::text[]",
                 "'outputs'",
@@ -8675,6 +8637,7 @@ mod tests {
                 "integration_pack",
                 "policy_hash",
                 "snapshot_generation_id",
+                "'consent'",
             ] {
                 assert!(
                     !section.contains(obsolete),
