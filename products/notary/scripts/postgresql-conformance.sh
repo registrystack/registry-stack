@@ -28,9 +28,9 @@ case "${postgresql_major}" in
     ;;
 esac
 
-source_image="${default_source_image}"
-target_image="${default_target_image}"
-restore_image="${default_restore_image}"
+source_image="${NOTARY_POSTGRES_SOURCE_IMAGE:-${default_source_image}}"
+target_image="${NOTARY_POSTGRES_TARGET_IMAGE:-${default_target_image}}"
+restore_image="${NOTARY_POSTGRES_RESTORE_IMAGE:-${default_restore_image}}"
 notary_bin="${NOTARY_BIN:-target/debug/registry-notary}"
 run_id="${GITHUB_RUN_ID:-local}-$$"
 postgres_container="notary-postgres-conformance-${run_id}"
