@@ -24,4 +24,4 @@ GET /v1/datasets/{dataset_id}/measures/{item_id} added the new path request para
 
 # One-time accepted diff for issue #362 on 2026-07-20: remove the inert
 # provenance.consent member from the pre-1.0 consultation result.
-POST /v1/consultations/{profile_id}/execute added `subschema #1, subschema #2, subschema #3` to the response body `oneOf` list for the response status `200`
+POST /v1/consultations/{profile_id}/execute added 'subschema #1, subschema #2, subschema #3' to the response body 'oneOf' list for the response status '200'
