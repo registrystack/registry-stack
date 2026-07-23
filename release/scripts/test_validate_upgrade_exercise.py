@@ -34,7 +34,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
         self.template = json.loads(TEMPLATE.read_text(encoding="utf-8"))
-        self.candidate_asset_dir = Path("/authenticated-candidate-assets")
+        self.candidate_asset_root = Path("/authenticated-candidate-assets")
         self.real_load_candidate = self.module.load_candidate
         self.load_candidate = mock.patch.object(
             self.module,
@@ -58,7 +58,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         self.addCleanup(self.load_candidate.stop)
 
     def validate_record(self, data, **kwargs):
-        kwargs.setdefault("candidate_asset_dir", self.candidate_asset_dir)
+        kwargs.setdefault("candidate_asset_root", self.candidate_asset_root)
         return self.module.validate_record(data, **kwargs)
 
     def candidate(self):
@@ -133,7 +133,11 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         )
         self.module.load_candidate.assert_called_once_with(
             ROOT / TARGET_MANIFEST,
-            self.candidate_asset_dir / "registryctl-v0.12.2-image-lock.json",
+            (
+                self.candidate_asset_root
+                / "v0.12.2"
+                / "registryctl-v0.12.2-image-lock.json"
+            ),
         )
 
     def test_candidate_tag_must_resolve_to_exact_target_commit(self) -> None:
@@ -233,8 +237,8 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                     str(SCRIPT),
                     "--discover",
                     str(records),
-                    "--candidate-asset-dir",
-                    str(self.candidate_asset_dir),
+                    "--candidate-asset-root",
+                    str(self.candidate_asset_root),
                 ],
             ), mock.patch("sys.stderr", new=stderr):
                 self.assertEqual(self.module.main(), 1)
@@ -322,7 +326,9 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            asset_dir = Path(temporary)
+            asset_root = Path(temporary)
+            asset_dir = asset_root / "v0.12.2"
+            asset_dir.mkdir()
             image_lock = asset_dir / "registryctl-v0.12.2-image-lock.json"
             image_lock.write_bytes(b'{"authenticated":"release image lock"}')
             record = self.candidate()
@@ -350,7 +356,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                 self.validate_record(
                     record,
                     allow_template=False,
-                    candidate_asset_dir=asset_dir,
+                    candidate_asset_root=asset_root,
                 )
                 image_lock.write_bytes(image_lock.read_bytes() + b"\n")
                 with self.assertRaisesRegex(
@@ -360,26 +366,47 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                     self.validate_record(
                         record,
                         allow_template=False,
-                        candidate_asset_dir=asset_dir,
+                        candidate_asset_root=asset_root,
                     )
 
     def test_candidate_evidence_requires_release_asset_directory(self) -> None:
         with self.assertRaisesRegex(
-            self.module.ExerciseError, "--candidate-asset-dir"
+            self.module.ExerciseError, "--candidate-asset-root"
         ):
             self.module.validate_record(
                 self.candidate(),
                 allow_template=False,
-                candidate_asset_dir=None,
+                candidate_asset_root=None,
             )
 
+    def test_missing_authentication_tools_or_assets_fail_closed(self) -> None:
+        for detail in (
+            "candidate authenticity verification requires installed cosign",
+            "required file is unavailable: image lock",
+        ):
+            with self.subTest(detail=detail):
+                with mock.patch.object(
+                    self.module,
+                    "load_candidate",
+                    side_effect=self.module.CandidateError(detail),
+                ):
+                    with self.assertRaisesRegex(
+                        self.module.ExerciseError,
+                        "could not be authenticated",
+                    ) as caught:
+                        self.validate_record(
+                            self.candidate(), allow_template=False
+                        )
+                self.assertNotIn(detail, str(caught.exception))
+
     def test_real_v0122_release_image_lock_authenticates(self) -> None:
-        asset_dir_value = os.environ.get("REGISTRY_TEST_V0122_ASSET_DIR")
-        if not asset_dir_value:
+        asset_root_value = os.environ.get("REGISTRY_TEST_UPGRADE_ASSET_ROOT")
+        if not asset_root_value:
             self.skipTest(
-                "REGISTRY_TEST_V0122_ASSET_DIR is required for real release assets"
+                "REGISTRY_TEST_UPGRADE_ASSET_ROOT is required for real release assets"
             )
-        asset_dir = Path(asset_dir_value)
+        asset_root = Path(asset_root_value)
+        asset_dir = asset_root / "v0.12.2"
         image_lock = asset_dir / "registryctl-v0.12.2-image-lock.json"
         lock = json.loads(image_lock.read_text(encoding="utf-8"))
         record = self.candidate()
@@ -408,7 +435,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                 record,
                 allow_template=False,
                 require_all_passed=True,
-                candidate_asset_dir=asset_dir,
+                candidate_asset_root=asset_root,
             )
 
     def test_topology_requires_one_dedicated_notary_per_relay(self) -> None:

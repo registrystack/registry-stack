@@ -445,16 +445,16 @@ def validate_target_binding(record: dict[str, Any], root: Path) -> None:
 def validate_image_lock_binding(
     record: dict[str, Any],
     root: Path,
-    candidate_asset_dir: Path | None,
+    candidate_asset_root: Path | None,
 ) -> None:
-    if candidate_asset_dir is None:
+    if candidate_asset_root is None:
         raise ExerciseError(
-            "candidate evidence requires --candidate-asset-dir for image-lock authentication"
+            "candidate evidence requires --candidate-asset-root for image-lock authentication"
         )
     target = record["target_release"]
+    candidate_asset_dir = candidate_asset_root.expanduser() / target["version"]
     image_lock_path = (
-        candidate_asset_dir.expanduser()
-        / f"registryctl-{target['version']}-image-lock.json"
+        candidate_asset_dir / f"registryctl-{target['version']}-image-lock.json"
     )
     manifest_path = root / record["target_release_manifest"]["path"]
     try:
@@ -520,7 +520,7 @@ def validate_record(
     allow_template: bool,
     require_all_passed: bool = False,
     root: Path = ROOT,
-    candidate_asset_dir: Path | None = None,
+    candidate_asset_root: Path | None = None,
 ) -> None:
     record = require_object(
         data,
@@ -583,7 +583,7 @@ def validate_record(
     validate_results(record["results"], template=template)
     if not template:
         validate_target_binding(record, root)
-        validate_image_lock_binding(record, root, candidate_asset_dir)
+        validate_image_lock_binding(record, root, candidate_asset_root)
     if require_all_passed:
         require_pass(record)
 
@@ -599,11 +599,11 @@ def main() -> int:
     parser.add_argument("--require-pass", action="store_true")
     parser.add_argument("--discover", type=Path)
     parser.add_argument(
-        "--candidate-asset-dir",
+        "--candidate-asset-root",
         type=Path,
         help=(
-            "directory containing the downloaded image lock, SHA256SUMS, "
-            "release capsule, signatures, certificates, and provenance"
+            "root containing one downloaded and authenticated asset directory "
+            "per target version"
         ),
     )
     args = parser.parse_args()
@@ -619,7 +619,7 @@ def main() -> int:
                     data,
                     allow_template=template,
                     require_all_passed=not template,
-                    candidate_asset_dir=args.candidate_asset_dir,
+                    candidate_asset_root=args.candidate_asset_root,
                 )
             print(f"upgrade exercise discovery passed: {len(records)} record(s)")
             return 0
@@ -630,7 +630,7 @@ def main() -> int:
             data,
             allow_template=args.template,
             require_all_passed=args.require_pass,
-            candidate_asset_dir=args.candidate_asset_dir,
+            candidate_asset_root=args.candidate_asset_root,
         )
     except (ExerciseError, OSError, json.JSONDecodeError) as error:
         print(f"upgrade exercise validation failed: {error}", file=sys.stderr)

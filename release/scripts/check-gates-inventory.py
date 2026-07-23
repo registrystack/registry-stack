@@ -182,8 +182,20 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_validate_upgrade_exercise.py",
     ),
     (
+        "Upgrade exercise asset preparation tests",
+        "run: python3 -m unittest release/scripts/test_prepare_upgrade_exercise_assets.py",
+    ),
+    (
+        "Upgrade exercise candidate asset preparation",
+        "python3 release/scripts/prepare-upgrade-exercise-assets.py\n"
+        "          --discover release/exercises\n"
+        "          --asset-root target/upgrade-exercise-assets",
+    ),
+    (
         "Upgrade exercise record discovery",
-        "python3 release/scripts/validate-upgrade-exercise.py --discover release/exercises",
+        "python3 release/scripts/validate-upgrade-exercise.py --discover "
+        "release/exercises --candidate-asset-root "
+        "target/upgrade-exercise-assets",
     ),
     (
         "Base-reference compatibility input",

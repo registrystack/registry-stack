@@ -38,11 +38,12 @@ release are frozen and independently verified:
    images, manifest, image lock, and P/T release-input identities. Its
    `sha256` is the SHA-256 of canonical compact JSON for the `artifacts` object
    (`sort_keys=True`, separators `,` and `:`).
-   Keep the downloaded `registryctl-<target-version>-image-lock.json` beside
-   its `SHA256SUMS`, signed release capsule, Cosign signatures and
-   certificates, and shared SLSA provenance. The validator authenticates that
-   exact release asset and requires its byte digest and image pins to match the
-   record.
+   Under a private candidate-asset root, keep one directory named for each
+   target version. Each version directory contains the downloaded
+   `registryctl-<target-version>-image-lock.json` beside its `SHA256SUMS`,
+   signed release capsule, Cosign signatures and certificates, and shared SLSA
+   provenance. The validator authenticates each exact release asset and
+   requires its byte digest and image pins to match the corresponding record.
 6. Exercise every required check against the pinned standalone Solmara
    topology. Record `passed` only when the retained evidence proves the check.
    Honest `failed` and `not_run` records remain structurally valid; a `not_run`
@@ -51,11 +52,14 @@ release are frozen and independently verified:
 8. Validate the record structure, then require every promotion check to pass:
 
    ```sh
+   python3 release/scripts/prepare-upgrade-exercise-assets.py \
+     --discover release/exercises \
+     --asset-root /private/path/candidate-release-assets
    python3 release/scripts/validate-upgrade-exercise.py \
-     --candidate-asset-dir /private/path/candidate-release-assets \
+     --candidate-asset-root /private/path/candidate-release-assets \
      release/exercises/<candidate-upgrade-record.json>
    python3 release/scripts/validate-upgrade-exercise.py --require-pass \
-     --candidate-asset-dir /private/path/candidate-release-assets \
+     --candidate-asset-root /private/path/candidate-release-assets \
      release/exercises/<candidate-upgrade-record.json>
    ```
 

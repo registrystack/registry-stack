@@ -376,6 +376,25 @@ class GateInventoryTest(unittest.TestCase):
             "Upgrade exercise record discovery", self.module.missing_gates(text)
         )
 
+    def test_missing_upgrade_exercise_asset_preparation_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "python3 release/scripts/prepare-upgrade-exercise-assets.py",
+            "python3 release/scripts/skip-upgrade-exercise-assets.py",
+        )
+        self.assertIn(
+            "Upgrade exercise candidate asset preparation",
+            self.module.missing_gates(text),
+        )
+
+    def test_missing_upgrade_exercise_asset_root_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "--candidate-asset-root target/upgrade-exercise-assets",
+            "--candidate-asset-root target/unauthenticated-assets",
+        )
+        self.assertIn(
+            "Upgrade exercise record discovery", self.module.missing_gates(text)
+        )
+
     def test_missing_stable_error_registry_path_filter_is_reported(self) -> None:
         text = self.workflow.replace(
             "docs/site/src/content/docs/reference/errors.mdx)",

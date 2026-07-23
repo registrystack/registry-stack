@@ -558,8 +558,42 @@ jobs:
       - name: Test upgrade exercise validator
         run: python3 -m unittest release/scripts/test_validate_upgrade_exercise.py
 
+      - name: Test upgrade exercise asset preparation
+        run: python3 -m unittest release/scripts/test_prepare_upgrade_exercise_assets.py
+
+      - name: Prepare committed upgrade candidate assets
+        id: upgrade-assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 release/scripts/prepare-upgrade-exercise-assets.py
+          --discover release/exercises
+          --asset-root target/upgrade-exercise-assets
+          --github-output "${GITHUB_OUTPUT}"
+
+      - name: Install cosign for committed upgrade evidence
+        if: steps.upgrade-assets.outputs.has_candidates == 'true'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Install SLSA verifier for committed upgrade evidence
+        if: steps.upgrade-assets.outputs.has_candidates == 'true'
+        env:
+          SLSA_VERIFIER_SHA256: 946dbec729094195e88ef78e1734324a27869f03e2c6bd2f61cbc06bd5350339
+          SLSA_VERIFIER_VERSION: v2.7.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools_dir="${RUNNER_TEMP}/upgrade-evidence-tools"
+          mkdir -p "${tools_dir}"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 \
+            --output "${tools_dir}/slsa-verifier" \
+            "https://github.com/slsa-framework/slsa-verifier/releases/download/${SLSA_VERIFIER_VERSION}/slsa-verifier-linux-amd64"
+          echo "${SLSA_VERIFIER_SHA256}  ${tools_dir}/slsa-verifier" | sha256sum --check
+          chmod 0755 "${tools_dir}/slsa-verifier"
+          echo "${tools_dir}" >> "${GITHUB_PATH}"
+
       - name: Validate committed upgrade exercise records
-        run: python3 release/scripts/validate-upgrade-exercise.py --discover release/exercises
+        run: python3 release/scripts/validate-upgrade-exercise.py --discover release/exercises --candidate-asset-root target/upgrade-exercise-assets
 
       - name: Stable surface compatibility
         env:
