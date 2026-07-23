@@ -23,10 +23,15 @@ evidence. One completed pilot is not proof of broad production readiness.
 - Supported topology and journey: [safe public summary]
 - Generated Registry YAML edited by hand: [no, or explain why the pilot does
   not close]
+- Maintainer comparison of public hashes and flags with restricted evidence:
+  [confirmed or not confirmed; do not identify the maintainer or expose
+  restricted evidence]
 - Overall outcome: [passed, failed, or incomplete]
 
 Issue closure still requires a frozen published candidate, an independent
-operator, and an owner-approved source. A plan or maintainer-run substitute
+operator, an owner-approved source, and a confirmed maintainer comparison of
+the public hashes and flags with the generated project, source audit records,
+redaction report, and teardown evidence. A plan or maintainer-run substitute
 cannot satisfy any of these requirements.
 
 ## What the pilot did and did not prove
@@ -74,5 +79,6 @@ Do not use this section to waive a blocker silently.
 ## Conclusion
 
 [State whether the bounded pilot closes the external-pilot gate, remains
-blocked, or requires a narrower support claim. Reiterate any unexercised area
-that affects the conclusion.]
+blocked, or requires a narrower support claim. It cannot close unless the
+maintainer comparison above is confirmed. Reiterate any unexercised area that
+affects the conclusion.]

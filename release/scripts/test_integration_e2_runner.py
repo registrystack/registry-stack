@@ -287,6 +287,18 @@ class IntegrationE2RunnerTest(TestCase):
             normalized_template,
         )
         self.assertNotIn("schema-valid public result", normalized_template)
+        self.assertIn(
+            "Issue closure still requires a frozen published candidate, an "
+            "independent operator, an owner-approved source, and a confirmed "
+            "maintainer comparison of the public hashes and flags with the "
+            "generated project, source audit records, redaction report, and "
+            "teardown evidence.",
+            normalized_template,
+        )
+        self.assertIn(
+            "It cannot close unless the maintainer comparison above is confirmed.",
+            normalized_template,
+        )
         for text in (
             "Sanitized run result:",
             "Plans, dry runs",
@@ -294,6 +306,8 @@ class IntegrationE2RunnerTest(TestCase):
             "Frozen Registry Stack candidate:",
             "Independent operator:",
             "Owner-approved non-production source:",
+            "Maintainer comparison of public hashes and flags with restricted "
+            "evidence:",
             "### Blocking findings",
             "### Accepted limitations and narrowed support",
             "Operator handoff and independence",
