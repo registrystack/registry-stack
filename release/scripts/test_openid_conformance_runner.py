@@ -418,6 +418,7 @@ class OpenIdConformanceRunnerTest(TestCase):
                     self.assertEqual(0, self.runner.cmd_export_suite_ca(export_args))
 
             self.assertEqual(certificate.read_bytes(), exported.read_bytes())
+            self.assertEqual(0o600, exported.stat().st_mode & 0o777)
             self.assertEqual(
                 f"nginx:{self.runner.SUITE_CA_CONTAINER_PATH}",
                 compose_commands[0][-2],
@@ -428,6 +429,7 @@ class OpenIdConformanceRunnerTest(TestCase):
             offer_file.chmod(0o600)
             server = ThreadingHTTPServer(("127.0.0.1", 0), EmptyHttpsHandler)
             server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            server_context.minimum_version = ssl.TLSVersion.TLSv1_2
             server_context.load_cert_chain(certificate, private_key)
             server.socket = server_context.wrap_socket(
                 server.socket, server_side=True

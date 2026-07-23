@@ -514,7 +514,7 @@ def write_new_file(path: Path, content: bytes) -> Path:
     flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
     descriptor: int | None = None
     try:
-        descriptor = os.open(path, flags, 0o644)
+        descriptor = os.open(path, flags, 0o600)
         with os.fdopen(descriptor, "wb", closefd=True) as handle:
             descriptor = None
             handle.write(content)
