@@ -545,7 +545,7 @@ def main() -> int:
                 validate_record(
                     data,
                     allow_template=template,
-                    require_all_passed=args.require_pass and not template,
+                    require_all_passed=not template,
                 )
             print(f"upgrade exercise discovery passed: {len(records)} record(s)")
             return 0

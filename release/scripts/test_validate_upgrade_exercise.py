@@ -175,7 +175,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                 record, allow_template=False, require_all_passed=True
             )
 
-    def test_discovery_requires_candidate_passes_but_preserves_templates(self) -> None:
+    def test_discovery_requires_candidate_passes_and_preserves_templates(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             records = Path(temporary)
             (records / "template.json").write_text(
@@ -184,7 +184,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             with mock.patch.object(
                 sys,
                 "argv",
-                [str(SCRIPT), "--discover", str(records), "--require-pass"],
+                [str(SCRIPT), "--discover", str(records)],
             ), mock.patch("sys.stdout", new=io.StringIO()):
                 self.assertEqual(self.module.main(), 0)
 
@@ -197,7 +197,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             with mock.patch.object(
                 sys,
                 "argv",
-                [str(SCRIPT), "--discover", str(records), "--require-pass"],
+                [str(SCRIPT), "--discover", str(records)],
             ), mock.patch("sys.stderr", new=stderr):
                 self.assertEqual(self.module.main(), 1)
             self.assertIn(
