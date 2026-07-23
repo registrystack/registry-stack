@@ -139,6 +139,41 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 "does not declare Trixie/Debian 13",
             ),
             (
+                "compose.yaml",
+                "image: registry.local/team_name/debian:trixie\n",
+                "not pinned by immutable digest",
+            ),
+            (
+                "script.sh",
+                "docker run registry.local/first_team/second_team/rust:1.95-trixie\n",
+                "not pinned by immutable digest",
+            ),
+            (
+                "compose.yaml",
+                "image: registry.local/team_name/rust\n",
+                "bare Debian-default",
+            ),
+            (
+                "compose.yaml",
+                "image: registry.local/first_team/second_team/postgres\n",
+                "bare Debian-default",
+            ),
+            (
+                "Dockerfile",
+                f"FROM rust:1.95-trixie@sha256:{DIGEST.upper()}\n",
+                None,
+            ),
+            (
+                "guide.md",
+                "Use registry.local/team_name/debian:trixie in prose.\n",
+                None,
+            ),
+            (
+                "guide.md",
+                "Mirror registry.local/first_team/second_team/rust in prose.\n",
+                None,
+            ),
+            (
                 "images.py",
                 "BUILDER_IMAGE: str = 'python:3.13-slim-trixie'\n",
                 "not pinned by immutable digest",

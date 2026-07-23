@@ -79,16 +79,16 @@ RETIRED_MARKERS = (
 DEFAULT_DEBIAN_FAMILIES = {"golang", "node", "postgres", "python", "rust"}
 OCI_RE = re.compile(
     r"(?<![A-Za-z0-9._/@+-])(?P<ref>(?:docker://)?"
-    r"(?:[A-Za-z0-9.-]+(?::[0-9]+)?/)*[A-Za-z0-9._-]+"
+    r"(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*[A-Za-z0-9._-]+"
     r"(?::[A-Za-z0-9_][A-Za-z0-9._-]*|@sha256:[0-9a-fA-F]{64})"
     r"(?:@sha256:[0-9a-fA-F]{64})?)(?![A-Za-z0-9._/@+-])"
 )
 BARE_DEFAULT_FAMILY_RE = re.compile(
-    rf"(?<![A-Za-z0-9._@+-])(?P<ref>(?:[A-Za-z0-9.-]+(?::[0-9]+)?/)*"
+    rf"(?<![A-Za-z0-9._@+-])(?P<ref>(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*"
     rf"(?P<name>debian|{'|'.join(sorted(DEFAULT_DEBIAN_FAMILIES))}))"
     r"(?![A-Za-z0-9._/@+:-])"
 )
-DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$", re.IGNORECASE)
 FROM_RE = re.compile(
     r"^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?",
     re.IGNORECASE | re.MULTILINE,
