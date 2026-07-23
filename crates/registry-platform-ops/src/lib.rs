@@ -1336,6 +1336,8 @@ fn contains_high_confidence_credential_literal(summary: &str) -> bool {
 
 fn contains_authorization_value(summary: &str, scheme: &str) -> bool {
     let mut value_follows = false;
+    let mut authorization_context = false;
+    let mut authorization_colon_follows = false;
     for word in summary.split_whitespace() {
         if value_follows {
             if is_authorization_separator_token(word) {
@@ -1347,19 +1349,51 @@ fn contains_authorization_value(summary: &str, scheme: &str) -> bool {
             }
         }
 
-        let Some(inline_value) = authorization_value_in_word(word, scheme) else {
+        if is_authorization_separator_token(word) {
+            if authorization_colon_follows {
+                authorization_context = word.chars().any(is_authorization_colon);
+                authorization_colon_follows = false;
+            }
+            continue;
+        }
+
+        let authorization_label = authorization_value_in_word(word, "Authorization");
+        if let Some(label) = authorization_label {
+            authorization_context = label.has_colon;
+            authorization_colon_follows = !label.has_colon;
+        } else {
+            authorization_colon_follows = false;
+        }
+
+        let Some(authorization_value) = authorization_value_in_word(word, scheme) else {
+            if authorization_label.is_none() {
+                authorization_context = false;
+            }
             continue;
         };
-        if inline_value.is_empty() {
+        if authorization_value.standalone_wrapped && !authorization_context {
+            authorization_context = false;
+            continue;
+        }
+
+        authorization_context = false;
+        if authorization_value.value.is_empty() {
             value_follows = true;
-        } else if is_credential_like_authorization_value(inline_value) {
+        } else if is_credential_like_authorization_value(authorization_value.value) {
             return true;
         }
     }
     false
 }
 
-fn authorization_value_in_word<'a>(word: &'a str, scheme: &str) -> Option<&'a str> {
+#[derive(Clone, Copy)]
+struct AuthorizationValue<'a> {
+    value: &'a str,
+    has_colon: bool,
+    standalone_wrapped: bool,
+}
+
+fn authorization_value_in_word<'a>(word: &'a str, scheme: &str) -> Option<AuthorizationValue<'a>> {
     let mut segment_start = 0;
     for (segment_end, delimiter_len) in word
         .char_indices()
@@ -1369,16 +1403,27 @@ fn authorization_value_in_word<'a>(word: &'a str, scheme: &str) -> Option<&'a st
         .chain(std::iter::once((word.len(), 0)))
     {
         let segment = word.get(segment_start..segment_end)?;
-        // Normalize punctuation surrounding a scheme segment while retaining
-        // internal punctuation, so prose such as "Bearer-based" stays valid.
-        let normalized_scheme = segment.trim_matches(is_authorization_separator);
+        // Normalize only boundaries around ASCII auth tokens. This covers
+        // Unicode punctuation without changing internal characters or
+        // maintaining a partial list of quote and bracket code points.
+        let normalized_scheme = segment.trim_matches(is_authorization_boundary);
         if normalized_scheme.eq_ignore_ascii_case(scheme) {
-            if delimiter_len == 0 {
-                return Some("");
-            }
-            return word
-                .get(segment_end + delimiter_len..)
-                .map(|value| value.trim_start_matches(is_authorization_colon));
+            let has_colon = delimiter_len != 0;
+            let standalone_wrapped = !has_colon
+                && normalized_scheme.len() < segment.len()
+                && segment.starts_with(is_authorization_boundary)
+                && segment.ends_with(is_authorization_boundary);
+            let value = if has_colon {
+                word.get(segment_end + delimiter_len..)?
+                    .trim_start_matches(is_authorization_colon)
+            } else {
+                ""
+            };
+            return Some(AuthorizationValue {
+                value,
+                has_colon,
+                standalone_wrapped,
+            });
         }
         segment_start = segment_end + delimiter_len;
     }
@@ -1386,7 +1431,7 @@ fn authorization_value_in_word<'a>(word: &'a str, scheme: &str) -> Option<&'a st
 }
 
 fn is_credential_like_authorization_value(candidate: &str) -> bool {
-    let prose_word = candidate.trim_matches(is_authorization_separator);
+    let prose_word = candidate.trim_matches(is_authorization_boundary);
     !prose_word.is_empty()
         && ![
             "access",
@@ -1407,40 +1452,15 @@ fn is_credential_like_authorization_value(candidate: &str) -> bool {
 }
 
 fn is_authorization_separator_token(candidate: &str) -> bool {
-    !candidate.is_empty() && candidate.chars().all(is_authorization_separator)
+    !candidate.is_empty() && candidate.chars().all(is_authorization_boundary)
 }
 
 fn is_authorization_colon(character: char) -> bool {
     matches!(character, ':' | '\u{fe55}' | '\u{ff1a}')
 }
 
-fn is_authorization_separator(character: char) -> bool {
-    character.is_ascii_punctuation()
-        || matches!(
-            character,
-            // Common quotation marks copied from rich-text systems.
-            '\u{00ab}'
-                | '\u{00bb}'
-                | '\u{2018}'..='\u{201f}'
-                | '\u{2039}'
-                | '\u{203a}'
-                // Common standalone separators.
-                | '\u{2010}'..='\u{2015}'
-                | '\u{2022}'
-                | '\u{2026}'
-                // CJK quotation and bracket marks.
-                | '\u{3008}'..='\u{3011}'
-                | '\u{3014}'..='\u{301b}'
-                // Small and full-width forms used around copied header syntax.
-                | '\u{fe55}'
-                | '\u{ff08}'
-                | '\u{ff09}'
-                | '\u{ff1a}'
-                | '\u{ff3b}'
-                | '\u{ff3d}'
-                | '\u{ff5b}'
-                | '\u{ff5d}'
-        )
+fn is_authorization_boundary(character: char) -> bool {
+    !character.is_alphanumeric() && !character.is_whitespace() && !character.is_control()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -3998,6 +4018,22 @@ mod tests {
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),
             (
+                "Authorization: ＂Bearer abcdef＂",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: 「Basic Zm9vOmJhcg==」",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: “Bearer” abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization ： «Basic» Zm9vOmJhcg==",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
                 "Bearer : abcdef",
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),
@@ -4083,6 +4119,9 @@ mod tests {
             "Bearer … token handling review",
             "“Bearer-based” authentication review",
             "Basic：authentication migration review",
+            "Use “Bearer” for API authentication",
+            "Document «Basic» for operators",
+            "Compare ＂Bearer＂ and 「Basic」 schemes",
         ] {
             validate_deployment_waiver_metadata("OPS-42", Some(summary))
                 .unwrap_or_else(|error| panic!("ordinary summary rejected: {summary:?}: {error}"));
