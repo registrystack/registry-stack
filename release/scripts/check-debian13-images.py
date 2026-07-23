@@ -32,6 +32,9 @@ TUTORIAL_CACHE_KEY = (
     "${{ hashFiles('docs/site/scripts/check-registryctl-tutorials.sh') }}-"
     "${{ hashFiles('Cargo.lock') }}"
 )
+RELEASE_BUILDER_HANDOFF = 'release_builder_image="${default_builder_image}"'
+RELEASE_BUILDER_CONSUMER = '  "${release_builder_image}" \\'
+TUTORIAL_BUILDER_CONSUMER = '\t\t"$BUILDER_IMAGE" \\'
 
 DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile"),
@@ -93,7 +96,7 @@ NOTARY_RUNTIME_DIRECTIVES = (
 )
 
 FROM_RE = re.compile(
-    r"^[ \t]*FROM[ \t]+(?:--platform=\S+[ \t]+)?"
+    r"^[ \t]*FROM[ \t]+(?:--platform=(?P<platform>\S+)[ \t]+)?"
     r"(?P<base>[^\s#]+)"
     r"(?:[ \t]+AS[ \t]+(?P<alias>[^\s#]+))?"
     r"[ \t]*(?:#.*)?$",
@@ -101,7 +104,11 @@ FROM_RE = re.compile(
 )
 DIGEST_PIN_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 RETIRED_MARKER_RE = re.compile(
-    r"\b(?:bookworm|debian[ \t_:-]*12)\b",
+    r"\b(?:bookworm|debian[ \t_:-]*v?[ \t_:-]*12)\b",
+    re.IGNORECASE,
+)
+RUNTIME_DIRECTIVE_RE = re.compile(
+    r"^[ \t]*(?P<name>HEALTHCHECK|ENTRYPOINT|WORKDIR|USER)(?:[ \t]+|$)",
     re.IGNORECASE,
 )
 RELEASE_BUILDER_KEY_RE = re.compile(
@@ -113,10 +120,24 @@ DEFAULT_BUILDER_ASSIGNMENT_RE = re.compile(
 TUTORIAL_BUILDER_ASSIGNMENT_RE = re.compile(
     r"^[ \t]*(?:(?:export|readonly)[ \t]+)?BUILDER_IMAGE[ \t]*="
 )
+RELEASE_BUILDER_HANDOFF_RE = re.compile(
+    r"^[ \t]*(?:(?:export|readonly)[ \t]+)?release_builder_image[ \t]*="
+)
+RELEASE_BUILDER_CONSUMER_RE = re.compile(
+    r'^[ \t]+(?:"?\$\{release_builder_image\}"?|"?rust:[^" \t#]+"?)'
+    r"[ \t]+\\[ \t]*$"
+)
+TUTORIAL_BUILDER_CONSUMER_RE = re.compile(
+    r'^[ \t]+(?:"?\$BUILDER_IMAGE"?|"?rust:[^" \t#]+"?)[ \t]+\\[ \t]*$'
+)
 LIVE_JOURNEY_BUILDER_RE = re.compile(
     r"^[ \t]+rust:[^ \t#]+[ \t]+\\[ \t]*$"
 )
 CACHE_KEY_RE = re.compile(r"^[ \t]*key[ \t]*:")
+RESTORE_KEYS_RE = re.compile(
+    r"""^[ \t]*(?:restore-keys|'restore-keys'|"restore-keys")[ \t]*:""",
+    re.MULTILINE,
+)
 
 
 def read(root: Path, relative: Path, failures: list[str]) -> str:
@@ -177,6 +198,22 @@ def workflow_step(text: str, name: str) -> str:
     return "\n".join(lines[start:end])
 
 
+def shell_continuation_command(text: str, command: str) -> str:
+    lines = text.splitlines()
+    matches = [
+        index
+        for index, line in enumerate(lines)
+        if line.lstrip() == f"{command} \\"
+    ]
+    if len(matches) != 1:
+        return ""
+    start = matches[0]
+    end = start + 1
+    while end < len(lines) and lines[end - 1].rstrip().endswith("\\"):
+        end += 1
+    return "\n".join(lines[start:end])
+
+
 def check_repository(root: Path = ROOT) -> list[str]:
     failures: list[str] = []
     texts = {
@@ -199,18 +236,22 @@ def check_repository(root: Path = ROOT) -> list[str]:
             failures.append(f"{relative}: no FROM instruction found")
             continue
         stages = tuple(
-            (match.group("base"), match.group("alias"))
+            (
+                match.group("base"),
+                match.group("alias"),
+                match.group("platform"),
+            )
             for match in stage_matches
         )
         expected_stages = (
             (
-                (RUST_BUILDER, "builder"),
-                (DISTROLESS_RUNTIME, "runtime"),
+                (RUST_BUILDER, "builder", None),
+                (DISTROLESS_RUNTIME, "runtime", None),
             )
             if relative in RUST_BUILDER_DOCKERFILES
             else (
-                (DEBIAN_PREPARATION, "runtime-root"),
-                (DISTROLESS_RUNTIME, "runtime"),
+                (DEBIAN_PREPARATION, "runtime-root", None),
+                (DISTROLESS_RUNTIME, "runtime", None),
             )
         )
         if stages != expected_stages:
@@ -218,7 +259,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 f"{relative}: Dockerfile stage sequence must be exactly "
                 f"{expected_stages!r}; found {stages!r}"
             )
-        for base, _alias in stages:
+        for base, _alias, _platform in stages:
             if not DIGEST_PIN_RE.search(base):
                 failures.append(
                     f"{relative}: upstream base is not pinned by immutable digest: {base}"
@@ -238,12 +279,27 @@ def check_repository(root: Path = ROOT) -> list[str]:
             if relative in RELAY_DOCKERFILES
             else NOTARY_RUNTIME_DIRECTIVES
         )
+        active_runtime_directives: dict[str, list[str]] = {}
+        for line in runtime.splitlines():
+            directive_match = RUNTIME_DIRECTIVE_RE.match(line)
+            if directive_match:
+                name = directive_match.group("name").casefold()
+                active_runtime_directives.setdefault(name, []).append(line)
         for directive, detail in runtime_directives:
-            if directive not in runtime.splitlines():
+            name = directive.partition(" ")[0]
+            active_lines = active_runtime_directives.get(name.casefold(), [])
+            if active_lines != [directive]:
                 failures.append(
                     f"{relative}: missing {detail} in final runtime stage: "
-                    f"{directive!r}"
+                    f"expected exactly one active {name} directive "
+                    f"{directive!r}; found {active_lines!r}"
                 )
+        active_users = active_runtime_directives.get("user", [])
+        if active_users:
+            failures.append(
+                f"{relative}: final Distroless runtime must inherit the "
+                f"nonroot base user; found active USER directives {active_users!r}"
+            )
 
     for relative in PREPARATION_DOCKERFILES:
         text = texts[relative]
@@ -339,6 +395,26 @@ def check_repository(root: Path = ROOT) -> list[str]:
         "pinned Debian 13 release recipe builder",
         failures,
     )
+    require_unique_active_line(
+        binary_recipe,
+        (RELEASE_BUILDER_HANDOFF,),
+        RELEASE_BUILDER_HANDOFF_RE,
+        Path("release/scripts/build-release-binaries.sh"),
+        "release builder handoff",
+        failures,
+    )
+    release_builder_command = shell_continuation_command(
+        binary_recipe,
+        "docker run --rm",
+    )
+    require_unique_active_line(
+        release_builder_command,
+        (RELEASE_BUILDER_CONSUMER,),
+        RELEASE_BUILDER_CONSUMER_RE,
+        Path("release/scripts/build-release-binaries.sh"),
+        "release Docker builder consumer",
+        failures,
+    )
     require(
         binary_recipe,
         "--features registry-notary/registry-notary-cel,registry-notary/pkcs11",
@@ -355,6 +431,18 @@ def check_repository(root: Path = ROOT) -> list[str]:
         TUTORIAL_BUILDER_ASSIGNMENT_RE,
         Path("docs/site/scripts/check-registryctl-tutorials.sh"),
         "pinned Debian 13 registryctl tutorial builder",
+        failures,
+    )
+    tutorial_builder_command = shell_continuation_command(
+        tutorial_check,
+        "docker run --rm",
+    )
+    require_unique_active_line(
+        tutorial_builder_command,
+        (TUTORIAL_BUILDER_CONSUMER,),
+        TUTORIAL_BUILDER_CONSUMER_RE,
+        Path("docs/site/scripts/check-registryctl-tutorials.sh"),
+        "registryctl tutorial Docker builder consumer",
         failures,
     )
 
@@ -384,7 +472,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
             "registryctl tutorial builder cache key",
             failures,
         )
-        if re.search(r"^\s*restore-keys\s*:", tutorial_cache, re.MULTILINE):
+        if RESTORE_KEYS_RE.search(tutorial_cache):
             failures.append(
                 ".github/workflows/ci.yml: registryctl tutorial builder cache "
                 "must not use restore-keys fallback"

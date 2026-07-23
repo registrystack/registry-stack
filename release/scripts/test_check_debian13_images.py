@@ -106,6 +106,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
             "base: debian-12\n",
             "base: debian_12\n",
             "base: debian:12\n",
+            "base: Debian v12\n",
             '{"base": "BOOK' + 'WORM"}\n',
         )
         for suffix in cases:
@@ -120,6 +121,24 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     root,
                     f"{TUTORIAL_CHECK}: retired Debian image generation marker remains",
                 )
+
+    def test_retired_marker_does_not_expand_to_slash_or_dot_separators(
+        self,
+    ) -> None:
+        for suffix in (
+            "base: Debian/12\n",
+            "base: Debian.12\n",
+            "base: Debian/v12\n",
+            "base: Debian.v12\n",
+        ):
+            with self.subTest(suffix=suffix):
+                root = self.fixture()
+                target = root / TUTORIAL_CHECK
+                target.write_text(
+                    target.read_text(encoding="utf-8") + suffix,
+                    encoding="utf-8",
+                )
+                self.assertEqual([], self.module.check_repository(root))
 
     def test_tutorial_builder_must_match_the_exact_pinned_image(self) -> None:
         exact = f'BUILDER_IMAGE="{self.module.RUST_BUILDER}"'
@@ -288,6 +307,43 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     )
                     self.assert_has_failure(root, failure)
 
+    def test_builder_handoffs_and_docker_consumers_remain_exact(self) -> None:
+        cases = (
+            (
+                RELEASE_BINARY_RECIPE,
+                self.module.RELEASE_BUILDER_HANDOFF,
+                'release_builder_image="rust:1.95-trixie"',
+                "missing release builder handoff",
+            ),
+            (
+                RELEASE_BINARY_RECIPE,
+                self.module.RELEASE_BUILDER_CONSUMER,
+                '  "rust:1.95-trixie" \\',
+                "missing release Docker builder consumer",
+            ),
+            (
+                TUTORIAL_CHECK,
+                self.module.TUTORIAL_BUILDER_CONSUMER,
+                '\t\t"rust:1.95-trixie" \\',
+                "missing registryctl tutorial Docker builder consumer",
+            ),
+        )
+        for relative, exact, unpinned, failure in cases:
+            for replacement in (unpinned, f"{exact}\n{exact}"):
+                with self.subTest(
+                    relative=relative,
+                    replacement=replacement,
+                ):
+                    root = self.fixture()
+                    target = root / relative
+                    text = target.read_text(encoding="utf-8")
+                    self.assertIn(exact, text)
+                    target.write_text(
+                        text.replace(exact, replacement, 1),
+                        encoding="utf-8",
+                    )
+                    self.assert_has_failure(root, failure)
+
     def test_every_dockerfile_base_requires_an_immutable_digest(self) -> None:
         for relative in self.module.DOCKERFILES:
             with self.subTest(relative=relative):
@@ -304,6 +360,32 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     root,
                     f"{relative}: upstream base is not pinned by immutable digest",
                 )
+
+    def test_dockerfile_stages_reject_forced_platforms(self) -> None:
+        for relative in self.module.DOCKERFILES:
+            for stage_index in (0, 1):
+                with self.subTest(
+                    relative=relative,
+                    stage_index=stage_index,
+                ):
+                    root = self.fixture()
+                    target = root / relative
+                    text = target.read_text(encoding="utf-8")
+                    stage = list(self.module.FROM_RE.finditer(text))[stage_index]
+                    original = stage.group(0)
+                    forced = original.replace(
+                        "FROM ",
+                        "FROM --platform=linux/amd64 ",
+                        1,
+                    )
+                    target.write_text(
+                        text[: stage.start()] + forced + text[stage.end() :],
+                        encoding="utf-8",
+                    )
+                    self.assert_has_failure(
+                        root,
+                        f"{relative}: Dockerfile stage sequence must be exactly",
+                    )
 
     def test_distroless_runtime_is_the_final_dockerfile_stage(self) -> None:
         pinned_alpine = "alpine:3.22@sha256:" + "a" * 64
@@ -385,6 +467,43 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     )
                     self.assert_has_failure(root, f"{relative}: missing")
 
+    def test_runtime_directive_overrides_and_users_are_rejected(self) -> None:
+        overrides = (
+            ("  healthcheck NONE", "exactly one active HEALTHCHECK"),
+            ('  entrypoint ["/tmp/override"]', "exactly one active ENTRYPOINT"),
+            ("  workdir /tmp", "exactly one active WORKDIR"),
+            ("USER 0", "must inherit the nonroot base user"),
+        )
+        comments = "\n".join(
+            (
+                "# HEALTHCHECK NONE",
+                '# ENTRYPOINT ["/tmp/override"]',
+                "# WORKDIR /tmp",
+                "# USER 0",
+            )
+        )
+        for relative in self.module.DOCKERFILES:
+            for override, failure in overrides:
+                with self.subTest(relative=relative, override=override):
+                    root = self.fixture()
+                    target = root / relative
+                    text = target.read_text(encoding="utf-8")
+                    target.write_text(
+                        text + f"\n{override}\n",
+                        encoding="utf-8",
+                    )
+                    self.assert_has_failure(root, failure)
+
+            with self.subTest(relative=relative, comments=True):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                target.write_text(
+                    text + f"\n{comments}\n",
+                    encoding="utf-8",
+                )
+                self.assertEqual([], self.module.check_repository(root))
+
     def test_tutorial_cache_is_bound_to_the_builder_script_without_fallback(
         self,
     ) -> None:
@@ -403,6 +522,18 @@ class Debian13ImageCheckTest(unittest.TestCase):
             (
                 exact
                 + "\n          restore-keys: |\n"
+                "            registryctl-tutorial-${{ runner.os }}-",
+                "must not use restore-keys fallback",
+            ),
+            (
+                exact
+                + "\n          'restore-keys': |\n"
+                "            registryctl-tutorial-${{ runner.os }}-",
+                "must not use restore-keys fallback",
+            ),
+            (
+                exact
+                + '\n          "restore-keys": |\n'
                 "            registryctl-tutorial-${{ runner.os }}-",
                 "must not use restore-keys fallback",
             ),
