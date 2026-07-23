@@ -101,23 +101,118 @@ ASSIGN_RE = re.compile(
 YAML_KEY_RE = re.compile(
     r"^\s*(?:-\s*)?(?P<name>[A-Za-z_][A-Za-z0-9_$-]*)\s*:\s*(?P<value>.+)$"
 )
+YAML_FIELD_RE = re.compile(
+    r"^(?P<indent>\s*)(?P<item>-\s*)?"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_$-]*)\s*:\s*(?P<value>.*)$"
+)
 IMAGE_VAR_RE = re.compile(
     r"\b(?P<name>[A-Za-z_][A-Za-z0-9_$-]*(?:_image|Image)|IMAGE)\b",
     re.IGNORECASE,
 )
 CLI_RE = re.compile(r"(?:^|[\s;&|({])(?:\S*/)?(?:docker|podman)\b(?P<tail>[^\n]*)")
-ACTION_RE = re.compile(r"\b(?:create|pull|run)\b")
 NON_IMAGE_NAMESPACES = set("build buildx compose exec network volume".split())
-SHELL_VAR_RE = re.compile(
-    r"\$(?:\{[A-Za-z_][A-Za-z0-9_]*(?::-[^{}]*)?\}|[A-Za-z_][A-Za-z0-9_]*)"
+IMAGE_ALIAS_NAME = r"(?:[A-Za-z_][A-Za-z0-9_]*(?:_IMAGE|Image)|IMAGE)"
+DIRECT_IMAGE_ALIAS_RE = re.compile(
+    rf"""^["']?\$(?:{IMAGE_ALIAS_NAME}|\{{{IMAGE_ALIAS_NAME}\}})["']?;?$""",
+    re.IGNORECASE,
+)
+IMAGE_FALLBACK_RE = re.compile(
+    rf"""^["']?\$\{{{IMAGE_ALIAS_NAME}:-(?:\${IMAGE_ALIAS_NAME}|"""
+    rf"""\$\{{{IMAGE_ALIAS_NAME}\}})\}}["']?;?$""",
+    re.IGNORECASE,
+)
+SIMPLE_SHELL_VAR = r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})"
+SAFE_TAG_TEMPLATE_RE = re.compile(
+    rf"""^["']?(?P<repository>(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*"""
+    rf"""[A-Za-z0-9._-]+):(?:[A-Za-z0-9_.-]|{SIMPLE_SHELL_VAR})+["']?;?$"""
 )
 COMPUTED_VALUE_RE = re.compile(r"[+%]|`|\$\(|\.format\(|\bf[\"']")
+CLI_TOKEN_RE = re.compile(r""""[^"\n]*"|'[^'\n]*'|[^\s,;\[\]]+""")
+CONTAINER_VALUE_OPTIONS = {
+    "--add-host",
+    "--annotation",
+    "--attach",
+    "--cap-add",
+    "--cap-drop",
+    "--cgroupns",
+    "--cidfile",
+    "--cpus",
+    "--device",
+    "--dns",
+    "--dns-search",
+    "--entrypoint",
+    "--env",
+    "--env-file",
+    "--expose",
+    "--gpus",
+    "--group-add",
+    "--health-cmd",
+    "--health-interval",
+    "--health-retries",
+    "--health-timeout",
+    "--hostname",
+    "--ipc",
+    "--label",
+    "--link",
+    "--log-driver",
+    "--log-opt",
+    "--mac-address",
+    "--memory",
+    "--mount",
+    "--name",
+    "--network",
+    "--pid",
+    "--platform",
+    "--publish",
+    "--pull",
+    "--restart",
+    "--runtime",
+    "--security-opt",
+    "--shm-size",
+    "--stop-signal",
+    "--stop-timeout",
+    "--tmpfs",
+    "--ulimit",
+    "--user",
+    "--volume",
+    "--workdir",
+    "-a",
+    "-e",
+    "-h",
+    "-l",
+    "-m",
+    "-p",
+    "-u",
+    "-v",
+    "-w",
+}
+CONTAINER_FLAG_OPTIONS = {
+    "--detach",
+    "--init",
+    "--interactive",
+    "--privileged",
+    "--quiet",
+    "--read-only",
+    "--rm",
+    "--tty",
+    "-d",
+    "-i",
+    "-it",
+    "-q",
+    "-t",
+}
+PULL_FLAG_OPTIONS = {"--all-tags", "--disable-content-trust", "-a", "-q"}
+SHORT_VALUE_OPTIONS = ("-e", "-h", "-l", "-m", "-p", "-u", "-v", "-w")
+DOCKER_CONTEXT_RE = re.compile(
+    r"docker-image://(?P<ref>(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*"
+    r"[A-Za-z0-9._-]+(?:\:[A-Za-z0-9_][A-Za-z0-9._-]*)?"
+    r"(?:@sha256:[0-9a-fA-F]{64})?)(?![A-Za-z0-9._/@+-])"
+)
 EXEMPTION_RE = re.compile(
     r'<!--\s*debian13-policy:\s*allow-prose\s+reason="[^"]{8,}"\s*-->'
 )
 MARKDOWN_SUFFIXES = {".md", ".mdx"}
 CODE_SUFFIXES = set(".bash .js .mjs .py .sh .ts .yaml .yml".split())
-STRICT_ASSIGNMENT_SUFFIXES = CODE_SUFFIXES - {".yaml", ".yml"}
 FENCE_LANGS = set(
     "bash console dockerfile javascript js python sh shell terminal "
     "ts typescript yaml yml zsh".split()
@@ -211,6 +306,15 @@ def references(text: str) -> list[str]:
     ]
 
 
+def exact_reference(value: str) -> str | None:
+    candidate = value.strip().removesuffix(";").strip()
+    if len(candidate) >= 2 and candidate[0] == candidate[-1] and candidate[0] in "\"'":
+        candidate = candidate[1:-1]
+    found = references(candidate)
+    normalized = candidate.removeprefix("docker://")
+    return found[0] if len(found) == 1 and found[0] == normalized else None
+
+
 def repository_and_tag(reference: str) -> tuple[str, str | None]:
     value = reference.split("@", 1)[0]
     slash, colon = value.rfind("/"), value.rfind(":")
@@ -241,6 +345,9 @@ def assignment(path: Path, line: str) -> tuple[str, str] | None:
     if match is None:
         return None
     name = match.group("name")
+    value = match.group("value").strip()
+    if value.rstrip(",") in {"(", "[", "{"} or value.endswith(","):
+        return None
     normalized = re.sub("[^A-Za-z0-9]", "", name).casefold()
     return (
         (name, match.group("value"))
@@ -249,16 +356,78 @@ def assignment(path: Path, line: str) -> tuple[str, str] | None:
     )
 
 
-def is_container_consumer(line: str) -> bool:
+def command_tokens(value: str) -> list[str]:
+    command = re.split(r"\s*(?:&&|\|\||[;|])\s*", value, maxsplit=1)[0]
+    return [
+        token[1:-1]
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'"
+        else token.strip("\"'()")
+        for token in CLI_TOKEN_RE.findall(command)
+    ]
+
+
+def container_image_values(line: str) -> list[str]:
+    values = []
     for command in CLI_RE.finditer(line):
-        tail = command.group("tail")
-        action = ACTION_RE.search(tail)
-        if action is None:
+        tokens = command_tokens(command.group("tail"))
+        action_index = next(
+            (
+                index
+                for index, token in enumerate(tokens)
+                if token.casefold() in {"create", "pull", "run"}
+            ),
+            None,
+        )
+        if action_index is None:
             continue
-        prefix = set(re.findall(r"[A-Za-z][A-Za-z0-9-]*", tail[: action.start()]))
+        prefix = {token.casefold().lstrip("-") for token in tokens[:action_index]}
         if not prefix & NON_IMAGE_NAMESPACES:
-            return True
-    return False
+            action = tokens[action_index].casefold()
+            value_options = CONTAINER_VALUE_OPTIONS - (
+                {"-a", "--attach"} if action == "pull" else set()
+            )
+            flag_options = CONTAINER_FLAG_OPTIONS | (
+                PULL_FLAG_OPTIONS if action == "pull" else set()
+            )
+            ambiguous, index = False, action_index + 1
+            while index < len(tokens):
+                token = tokens[index]
+                if token == "\\":
+                    index += 1
+                    continue
+                if token == "--":
+                    index += 1
+                    break
+                if not token.startswith("-"):
+                    break
+                option = token.split("=", 1)[0]
+                attached = (
+                    option in SHORT_VALUE_OPTIONS
+                    and token != option
+                    and not token.startswith("--")
+                )
+                if option in value_options:
+                    index += 1 if "=" in token or attached else 2
+                elif option in flag_options:
+                    index += 1
+                else:
+                    ambiguous = True
+                    index += 1
+            if index >= len(tokens):
+                values.append("")
+            elif ambiguous:
+                values.extend(
+                    token
+                    for token in tokens[index:]
+                    if token != "\\" and not token.startswith("-")
+                )
+            else:
+                values.append(tokens[index])
+    return values
+
+
+def is_container_consumer(line: str) -> bool:
+    return bool(container_image_values(line))
 
 
 def policy_image_name(name: str) -> bool:
@@ -273,12 +442,53 @@ def policy_image_name(name: str) -> bool:
     )
 
 
+def is_image_alias(value: str) -> bool:
+    return (
+        DIRECT_IMAGE_ALIAS_RE.fullmatch(value.strip()) is not None
+        or IMAGE_FALLBACK_RE.fullmatch(value.strip()) is not None
+    )
+
+
 def has_safe_image_template(value: str) -> bool:
-    if COMPUTED_VALUE_RE.search(value):
+    match = SAFE_TAG_TEMPLATE_RE.fullmatch(value)
+    if COMPUTED_VALUE_RE.search(value) or match is None:
         return False
-    expanded = SHELL_VAR_RE.sub("dynamic", value)
-    found = references(expanded)
-    return bool(found) and all(not is_debian_family(reference) for reference in found)
+    return not is_debian_family(match.group("repository"))
+
+
+def build_context_references(text: str) -> list[str]:
+    return [match.group("ref") for match in DOCKER_CONTEXT_RE.finditer(text)]
+
+
+def append_reference_failures(
+    path: Path,
+    number: int,
+    reference: str,
+    failures: list[str],
+    kind: str = "Debian-derived image reference",
+) -> None:
+    if not is_debian_family(reference):
+        return
+    prefix = f"{path}:{number}: {kind}"
+    if not DIGEST_RE.search(reference):
+        failures.append(f"{prefix} is not pinned by immutable digest: {reference}")
+    if (
+        "trixie" not in reference.casefold()
+        and re.search(r"debian-?13", reference, re.IGNORECASE) is None
+    ):
+        failures.append(f"{prefix} does not declare Trixie/Debian 13: {reference}")
+
+
+def append_bare_failures(
+    path: Path, number: int, value: str, failures: list[str]
+) -> None:
+    for bare in BARE_DEFAULT_FAMILY_RE.finditer(value):
+        family = bare.group("name")
+        label = "Debian" if family == "debian" else f"Debian-default {family}"
+        failures.append(
+            f"{path}:{number}: bare {label} image reference is not pinned "
+            f"and does not declare Trixie/Debian 13: {bare.group('ref')}"
+        )
 
 
 def markdown_code_flags(path: Path, lines: list[str]) -> list[bool]:
@@ -316,26 +526,40 @@ def logical_lines(lines: list[str], flags: list[bool]) -> list[tuple[int, str, b
 
 
 def yaml_container_consumers(lines: list[str]) -> dict[int, str]:
-    fields: dict[int, dict[str, tuple[int, str]]] = {}
+    parents: list[tuple[int, int]] = []
+    fields: dict[tuple[int, str], tuple[int, str]] = {}
     consumers = {}
-    for number, line in enumerate(lines, 1):
+    for offset, line in enumerate(lines):
+        number = offset + 1
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         indent = len(line) - len(line.lstrip())
-        for depth in tuple(fields):
-            if depth > indent:
-                del fields[depth]
-        match = YAML_KEY_RE.match(line)
-        if match is None or match.group("name").casefold() not in {
-            "entrypoint",
-            "command",
-        }:
+        while parents and parents[-1][0] >= indent:
+            parents.pop()
+        match = YAML_FIELD_RE.match(line)
+        if match is None:
+            parents.append((indent, number))
             continue
-        name, value = match.group("name").casefold(), match.group("value")
-        fields.setdefault(indent, {})[name] = (number, value)
-        if {"entrypoint", "command"} <= fields[indent].keys():
-            command_number, command = fields[indent]["command"]
-            entrypoint = fields[indent]["entrypoint"][1]
+        name = match.group("name").casefold()
+        scope = number if match.group("item") else parents[-1][1] if parents else 0
+        if name in {"entrypoint", "command"}:
+            value = match.group("value").strip()
+            if not value:
+                parts = []
+                for following in lines[offset + 1 :]:
+                    if not following.strip() or following.lstrip().startswith("#"):
+                        continue
+                    following_indent = len(following) - len(following.lstrip())
+                    if following_indent <= indent:
+                        break
+                    item = re.match(r"^\s*-\s*(?P<value>.+)$", following)
+                    if item:
+                        parts.append(item.group("value"))
+                value = " ".join(parts)
+            fields[(scope, name)] = (number, value)
+        if (scope, "entrypoint") in fields and (scope, "command") in fields:
+            command_number, command = fields[(scope, "command")]
+            entrypoint = fields[(scope, "entrypoint")][1]
             engine = re.match(
                 r"^\s*\[?\s*[\"']?(?P<engine>(?:[^\s,\"'\]]*/)?(?:docker|podman))"
                 r"[\"']?(?=$|[\s,\]])",
@@ -345,17 +569,24 @@ def yaml_container_consumers(lines: list[str]) -> dict[int, str]:
                 combined = f"{engine.group('engine')} {command}"
                 if is_container_consumer(combined):
                     consumers[command_number] = combined
+        parents.append((indent, number))
     return consumers
 
 
-def scan_surface(path: Path, text: str) -> list[str]:
+def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
     if len(text.encode()) > MAX_TEXT_FILE_BYTES:
         raise ImageSurfaceError(
             f"{path}: text file exceeds {MAX_TEXT_FILE_BYTES} bytes"
         )
     lines, failures = text.splitlines(), []
     markdown_flags = markdown_code_flags(path, text.splitlines())
-    code_file = is_dockerfile(path) or path.suffix in CODE_SUFFIXES
+    shebang = bool(lines and lines[0].startswith("#!"))
+    code_file = (
+        is_dockerfile(path) or path.suffix in CODE_SUFFIXES or executable or shebang
+    )
+    strict_assignments = (
+        code_file and not is_dockerfile(path) and path.suffix not in {".yaml", ".yml"}
+    )
     yaml_consumers = (
         yaml_container_consumers(lines) if path.suffix in {".yaml", ".yml"} else {}
     )
@@ -383,7 +614,7 @@ def scan_surface(path: Path, text: str) -> list[str]:
                 failures.append(
                     f"{path}:{number}: retired Debian image generation marker remains: {marker}"
                 )
-        item = assignment(path, line) if path.suffix in CODE_SUFFIXES else None
+        item = assignment(path, line) if code_file else None
         consumer_line = yaml_consumers.get(number, line)
         consumer = (
             is_container_consumer(consumer_line)
@@ -392,69 +623,61 @@ def scan_surface(path: Path, text: str) -> list[str]:
         )
         reference_context = not comment and (
             is_dockerfile(path)
-            or path.suffix in {".yaml", ".yml"}
+            or path.suffix in {".yaml", ".yml", ".sh", ".bash"}
             or markdown_code
-            or path.suffix in {".sh", ".bash"}
             or item is not None
             or consumer
         )
-        if reference_context:
+        context_references = build_context_references(line)
+        if reference_context and not consumer:
             for reference in references(line):
-                if not is_debian_family(reference):
-                    continue
-                prefix = f"{path}:{number}: Debian-derived image reference"
-                if not DIGEST_RE.search(reference):
-                    failures.append(
-                        f"{prefix} is not pinned by immutable digest: {reference}"
-                    )
-                if (
-                    "trixie" not in reference.casefold()
-                    and re.search(r"debian-?13", reference, re.IGNORECASE) is None
-                ):
-                    failures.append(
-                        f"{prefix} does not declare Trixie/Debian 13: {reference}"
-                    )
+                if reference not in context_references:
+                    append_reference_failures(path, number, reference, failures)
+        if reference_context:
+            for reference in context_references:
+                append_reference_failures(
+                    path,
+                    number,
+                    reference,
+                    failures,
+                    "Docker build context",
+                )
         if item:
             name, value = item
             canonical = name.casefold()
             dependencies = {
                 found.group("name").casefold() for found in IMAGE_VAR_RE.finditer(value)
             }
-            has_literal = bool(references(value))
+            has_literal = exact_reference(value) is not None
+            alias = is_image_alias(value)
             has_template = (
                 not has_literal and not dependencies and has_safe_image_template(value)
             )
             positional = canonical == "image" and re.fullmatch(
-                r"""["']?\$(?:\{)?[1-9](?:\})?["']?;?""", value.strip()
+                r"""["']?\$(?:[1-9]|\{[1-9](?::-[^{}]+)?\})["']?;?""",
+                value.strip(),
             )
             computed = not positional and (
-                (not has_literal and not has_template and not dependencies)
+                (not has_literal and not alias and not has_template)
                 or COMPUTED_VALUE_RE.search(value) is not None
             )
-            strict = path.suffix in STRICT_ASSIGNMENT_SUFFIXES and policy_image_name(
-                name
-            )
+            strict = strict_assignments and policy_image_name(name)
             records.append((number, canonical, value, dependencies, computed, strict))
             if ((has_literal or has_template) and not computed) or positional:
                 resolved.add(canonical)
-        bare = BARE_DEFAULT_FAMILY_RE.search(line)
         bare_assignment = item is not None and (
             path.suffix in {".yaml", ".yml"}
             and re.sub("[^A-Za-z0-9]", "", item[0]).casefold() in {"image", "container"}
-            or path.suffix in STRICT_ASSIGNMENT_SUFFIXES
+            or strict_assignments
             and policy_image_name(item[0])
         )
         if (
             not comment
-            and bare
-            and (is_dockerfile(path) or consumer or bare_assignment)
+            and not consumer
+            and BARE_DEFAULT_FAMILY_RE.search(line)
+            and (is_dockerfile(path) or bare_assignment)
         ):
-            family = bare.group("name")
-            label = "Debian" if family == "debian" else f"Debian-default {family}"
-            failures.append(
-                f"{path}:{number}: bare {label} image reference is not pinned "
-                f"and does not declare Trixie/Debian 13: {bare.group('ref')}"
-            )
+            append_bare_failures(path, number, line, failures)
     changed = True
     while changed:
         changed = False
@@ -478,22 +701,28 @@ def scan_surface(path: Path, text: str) -> list[str]:
         (number, line, False) for number, line in yaml_consumers.items()
     )
     for number, line, markdown_code in consumer_records:
+        image_values = container_image_values(line)
         if (
             line.lstrip().startswith(("#", "//"))
             or not (code_file or markdown_code)
-            or not is_container_consumer(line)
+            or not image_values
         ):
             continue
+        image_text = " ".join(image_values)
+        for reference in references(image_text):
+            append_reference_failures(path, number, reference, failures)
+        append_bare_failures(path, number, image_text, failures)
         variables = {
-            match.group("name").casefold() for match in IMAGE_VAR_RE.finditer(line)
+            match.group("name").casefold()
+            for match in IMAGE_VAR_RE.finditer(image_text)
         }
         unresolved = sorted(variables - resolved)
         if (
             not any(
                 re.search("[A-Za-z]", repository_and_tag(item)[0])
-                for item in references(line)
+                for item in references(image_text)
             )
-            and not BARE_DEFAULT_FAMILY_RE.search(line)
+            and not BARE_DEFAULT_FAMILY_RE.search(image_text)
             and (not variables or unresolved)
         ):
             detail = (
@@ -505,7 +734,7 @@ def scan_surface(path: Path, text: str) -> list[str]:
                 f"{path}:{number}: Docker/Podman image consumer must use a "
                 f"literal or a statically resolved *_IMAGE assignment{detail}"
             )
-    return failures
+    return list(dict.fromkeys(failures))
 
 
 def require(
@@ -723,7 +952,8 @@ def check_repository(root: Path = ROOT) -> list[str]:
             return [f"maintained text exceeds {MAX_TOTAL_TEXT_BYTES} total bytes"]
         texts[path] = text
         try:
-            failures.extend(scan_surface(path, text))
+            executable = bool((root / path).stat().st_mode & 0o111)
+            failures.extend(scan_surface(path, text, executable=executable))
         except ImageSurfaceError as error:
             failures.append(str(error))
     dockerfiles = [path for path in discovered if is_dockerfile(path)]

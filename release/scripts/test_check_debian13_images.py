@@ -433,6 +433,32 @@ class Debian13ImageCheckTest(unittest.TestCase):
             with self.subTest(relative=relative):
                 self.assert_failure(relative, text, expected)
 
+    def test_image_templates_use_only_bounded_static_forms(self) -> None:
+        cases = (
+            'APP_IMAGE="${UNSAFE_IMAGE:-alpine:3.22}"\n',
+            'APP_IMAGE="${BASE_IMAGE/alpine/$TARGET}"\n',
+            'APP_IMAGE="${REPOSITORY}:${TAG}"\n',
+            'APP_IMAGE="rust:$TAG"\n',
+        )
+        for assignment in cases:
+            with self.subTest(assignment=assignment):
+                self.assert_failure(
+                    "template.sh",
+                    assignment + 'docker run --rm "$APP_IMAGE"\n',
+                    "unresolved image variables: app_image",
+                )
+
+        self.assert_clean(
+            "aliases.sh",
+            'FIRST_IMAGE="alpine:3.22"\nSECOND_IMAGE="busybox:1.37"\n'
+            'APP_IMAGE="${FIRST_IMAGE:-$SECOND_IMAGE}"\n'
+            'docker run --rm "$APP_IMAGE"\n',
+        )
+        self.assert_clean(
+            "tag.sh",
+            'APP_IMAGE="registryctl-relay:$RUN_ID"\ndocker run --rm "$APP_IMAGE"\n',
+        )
+
     def test_yaml_literals_cover_compose_merges_matrices_and_kubernetes(self) -> None:
         cases = (
             (
@@ -484,6 +510,111 @@ class Debian13ImageCheckTest(unittest.TestCase):
             "compose.yaml",
             "services:\n  app:\n    entrypoint: [echo, docker]\n"
             "    command: [run, --rm, debian]\n",
+        )
+
+    def test_compose_block_sequences_preserve_mapping_and_list_scope(self) -> None:
+        self.assert_failure(
+            "compose.yaml",
+            "services:\n  app:\n    entrypoint:\n      - docker\n"
+            "    command:\n      - run\n      - --rm\n      - debian\n",
+            "bare Debian image reference",
+        )
+        self.assert_clean(
+            "compose.yaml",
+            "services:\n  app:\n    entrypoint:\n      - docker\n"
+            f"    command:\n      - run\n      - --rm\n      - {PINNED_RUST}\n",
+        )
+        self.assert_clean(
+            "compose.yaml",
+            "items:\n  - entrypoint: [docker]\n  - command: [run, --rm, debian]\n",
+        )
+        self.assert_failure(
+            "compose.yaml",
+            "items:\n  - name: app\n    entrypoint: [docker]\n"
+            "    command: [run, --rm, debian]\n",
+            "bare Debian image reference",
+        )
+
+    def test_container_cli_scans_only_the_bounded_image_operand(self) -> None:
+        for command in (
+            "docker run --name postgres alpine:3.22 true\n",
+            "docker run alpine:3.22 python -V\n",
+            "docker create --env NAME=postgres busybox:1.37 python\n",
+        ):
+            with self.subTest(command=command):
+                self.assert_clean("helper.sh", command)
+
+        for command, family in (
+            ("docker run --name app postgres true\n", "postgres"),
+            ("docker run python -V\n", "python"),
+            ("docker pull --platform linux/amd64 rust:1.95\n", "rust:1.95"),
+        ):
+            with self.subTest(command=command):
+                self.assert_failure("helper.sh", command, family)
+
+    def test_multiline_container_commands_scan_the_joined_operand(self) -> None:
+        self.assert_failure(
+            "helper.sh",
+            "docker run --rm \\\n  debian true\n",
+            "bare Debian image reference",
+        )
+        self.assert_clean(
+            "helper.sh",
+            f"docker run --rm \\\n  {PINNED_RUST} true\n",
+        )
+
+    def test_extensionless_executable_and_shebang_helpers_are_code(self) -> None:
+        text = "#!/bin/sh\ndocker run --rm debian\n"
+        self.assert_failure(
+            "release/scripts/registry-release",
+            text,
+            "bare Debian image reference",
+        )
+        failures = self.module.scan_surface(
+            Path("tools/runner"),
+            "docker run --rm debian\n",
+            executable=True,
+        )
+        self.assertTrue(
+            any("bare Debian image reference" in failure for failure in failures),
+            failures,
+        )
+        self.assert_clean(
+            "notes/helper",
+            "This prose says docker run --rm debian without a shebang.\n",
+        )
+
+    def test_docker_image_build_contexts_follow_the_image_policy(self) -> None:
+        self.assert_failure(
+            "build.sh",
+            "docker buildx build --build-context base=docker-image://debian .\n",
+            "Docker build context",
+        )
+        self.assert_failure(
+            "build.sh",
+            "docker build --build-context base=docker-image://rust:1.95-trixie .\n",
+            "Docker build context",
+        )
+        failures = self.scan(
+            "build.sh",
+            "docker build --build-context base=docker-image://rust:1.95-trixie .\n",
+        )
+        self.assertFalse(
+            any("Debian-derived image reference" in failure for failure in failures),
+            failures,
+        )
+        self.assert_clean(
+            "build.sh",
+            "docker buildx build --build-context "
+            f"base=docker-image://{PINNED_RUST} .\n",
+        )
+        self.assert_clean(
+            "build.sh",
+            "docker buildx build --build-context base=docker-image://alpine:3.22 .\n",
+        )
+        self.assert_clean(
+            "guide.md",
+            "Prose mentions --build-context base=docker-image://debian.\n",
         )
 
     def test_postgresql_conformance_workflow_selects_static_images(self) -> None:
