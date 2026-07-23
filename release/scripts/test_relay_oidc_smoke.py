@@ -625,10 +625,18 @@ class RelayOidcSmokeTest(TestCase):
             candidate_module.verify_closeout_manifest_transition(
                 {"status": "released"}, released, tagged
             )
+            with self.assertRaisesRegex(
+                candidate_module.CandidateError, "Git binding"
+            ):
+                candidate_module.verify_closeout_manifest_transition(
+                    {"status": "released"}, released, released
+                )
 
             real_git_output = candidate_module.git_output
 
             def released_tag(arguments, max_bytes):
+                if arguments[0] == "cat-file":
+                    return str(len(released)).encode("ascii")
                 if arguments[0] == "show":
                     return released
                 return real_git_output(arguments, max_bytes)
