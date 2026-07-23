@@ -226,6 +226,41 @@ def require_unique_text(
         )
 
 
+def require_option_lines_before_image(
+    command: str,
+    approved_image: str,
+    relative: Path,
+    detail: str,
+    failures: list[str],
+) -> None:
+    lines = command.splitlines()
+    image_indexes = [
+        index for index, line in enumerate(lines) if line == approved_image
+    ]
+    if (
+        not lines
+        or lines[0].lstrip() != "docker run --rm \\"
+        or len(image_indexes) != 1
+    ):
+        failures.append(
+            f"{relative}: missing {detail}: expected one approved image "
+            "inside the selected docker run --rm command"
+        )
+        return
+    invalid_lines = [
+        line
+        for line in lines[1 : image_indexes[0]]
+        if line.strip()
+        and not line.lstrip().startswith("#")
+        and not line.lstrip().startswith("--")
+    ]
+    if invalid_lines:
+        failures.append(
+            f"{relative}: {detail} contains non-option lines before the "
+            f"approved image: {invalid_lines!r}"
+        )
+
+
 def workflow_step(text: str, name: str) -> str:
     lines = text.splitlines()
     header = f"      - name: {name}"
@@ -477,6 +512,13 @@ def check_repository(root: Path = ROOT) -> list[str]:
         "release Docker builder command tail",
         failures,
     )
+    require_option_lines_before_image(
+        release_builder_command,
+        RELEASE_BUILDER_CONSUMER,
+        Path("release/scripts/build-release-binaries.sh"),
+        "release Docker builder command",
+        failures,
+    )
     require(
         binary_recipe,
         "--features registry-notary/registry-notary-cel,registry-notary/pkcs11",
@@ -506,6 +548,13 @@ def check_repository(root: Path = ROOT) -> list[str]:
         "registryctl tutorial Docker builder command tail",
         failures,
     )
+    require_option_lines_before_image(
+        tutorial_builder_command,
+        TUTORIAL_BUILDER_CONSUMER,
+        Path("docs/site/scripts/check-registryctl-tutorials.sh"),
+        "registryctl tutorial Docker builder command",
+        failures,
+    )
 
     live_journey = texts[
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh")
@@ -528,6 +577,13 @@ def check_repository(root: Path = ROOT) -> list[str]:
         LIVE_JOURNEY_BUILDER_TAIL,
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
         "live-journey Docker builder command tail",
+        failures,
+    )
+    require_option_lines_before_image(
+        live_builder_command,
+        LIVE_JOURNEY_BUILDER,
+        Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
+        "live-journey Docker builder command",
         failures,
     )
 

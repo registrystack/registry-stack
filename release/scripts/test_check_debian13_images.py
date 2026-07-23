@@ -357,40 +357,72 @@ class Debian13ImageCheckTest(unittest.TestCase):
         cases = (
             (
                 RELEASE_BINARY_RECIPE,
+                "docker run --rm \\",
+                self.module.RELEASE_BUILDER_TAIL.splitlines()[0],
                 self.module.RELEASE_BUILDER_CONSUMER,
                 "  ",
-                "missing release Docker builder command tail",
+                "release Docker builder command contains non-option lines",
             ),
             (
                 TUTORIAL_CHECK,
+                "\tdocker run --rm \\",
+                self.module.TUTORIAL_BUILDER_TAIL.splitlines()[0],
                 self.module.TUTORIAL_BUILDER_CONSUMER,
                 "\t\t",
-                "missing registryctl tutorial Docker builder command tail",
+                "registryctl tutorial Docker builder command contains "
+                "non-option lines",
             ),
             (
                 LIVE_JOURNEY,
+                "  docker run --rm \\",
+                self.module.LIVE_JOURNEY_BUILDER_TAIL.splitlines()[0],
                 self.module.LIVE_JOURNEY_BUILDER,
                 "    ",
-                "missing live-journey Docker builder command tail",
+                "live-journey Docker builder command contains non-option lines",
             ),
         )
-        for relative, approved, indentation, failure in cases:
+        for (
+            relative,
+            command_start,
+            last_option,
+            approved,
+            indentation,
+            failure,
+        ) in cases:
             for image in ("alpine:3.22", "debian:trixie-slim"):
-                with self.subTest(relative=relative, image=image):
-                    root = self.fixture()
-                    target = root / relative
-                    text = target.read_text(encoding="utf-8")
-                    self.assertIn(approved, text)
-                    positional = f"{indentation}{image} \\"
-                    target.write_text(
-                        text.replace(
-                            approved,
-                            positional + "\n" + approved,
-                            1,
-                        ),
-                        encoding="utf-8",
-                    )
-                    self.assert_has_failure(root, failure)
+                positional = f"{indentation}{image} \\"
+                positions = (
+                    (
+                        "before-first-option",
+                        command_start,
+                        command_start + "\n" + positional,
+                    ),
+                    (
+                        "before-last-option",
+                        last_option,
+                        positional + "\n" + last_option,
+                    ),
+                    (
+                        "before-approved-image",
+                        approved,
+                        positional + "\n" + approved,
+                    ),
+                )
+                for position, anchor, replacement in positions:
+                    with self.subTest(
+                        relative=relative,
+                        image=image,
+                        position=position,
+                    ):
+                        root = self.fixture()
+                        target = root / relative
+                        text = target.read_text(encoding="utf-8")
+                        self.assertIn(anchor, text)
+                        target.write_text(
+                            text.replace(anchor, replacement, 1),
+                            encoding="utf-8",
+                        )
+                        self.assert_has_failure(root, failure)
 
     def test_every_dockerfile_base_requires_an_immutable_digest(self) -> None:
         for relative in self.module.DOCKERFILES:
