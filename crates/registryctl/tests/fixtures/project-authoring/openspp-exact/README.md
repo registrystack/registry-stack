@@ -115,11 +115,12 @@ The expected-result file must contain only a `claims` object.
 Its keys must exactly match the request's claim ids.
 Each claim value must contain exactly `value`, `satisfied`, and `disclosure`,
 using `null` when the Notary result has no value or satisfaction decision.
-The live runner parses each complete result through the recursively closed
-public `ClaimResultView`, compares all three disclosure fields, rejects
-unrecognized nested fields, and requires the reserved provenance
-`derived_from` array to remain empty. An over-disclosed response cannot pass
-as evidence.
+The live runner rejects keys outside its accepted result, reference, and
+provenance structures; rejects non-null provenance `pack_id` and
+`pack_version`; requires exact `value`, `satisfied`, and `disclosure` matches;
+requires an empty `derived_from` array; and requires a non-zero Relay
+consultation count. It does not judge whether an otherwise allowed handle or
+identifier value is semantically appropriate.
 This example reflects only the committed synthetic fixture and must be replaced
 with reviewed expectations for the owner-approved record:
 

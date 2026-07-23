@@ -870,6 +870,42 @@ outputs:
     }
 
     #[test]
+    fn governed_live_result_rejects_provenance_fields_outside_public_schema() {
+        let claims = vec!["eligible".to_string()];
+        let expected = json!({
+            "claims": {
+                "eligible": {
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        });
+        let response = json!({
+            "results": [governed_live_claim_result(
+                "eligible",
+                json!(true),
+                Some(true),
+                "predicate",
+            )],
+        });
+
+        for field in ["pack_id", "pack_version"] {
+            let mut unsupported = response.clone();
+            unsupported["results"][0]["provenance"]["generated_by"][field] =
+                json!("unsupported");
+
+            assert!(
+                validate_live_response(&unsupported, &claims, &expected)
+                    .expect_err("fields outside the public schema must fail closed")
+                    .to_string()
+                    .contains("exceeds the closed public claim-result schema"),
+                "provenance field {field} was accepted"
+            );
+        }
+    }
+
+    #[test]
     fn governed_live_request_negotiates_the_claim_result_media_type() {
         let endpoint =
             url::Url::parse("http://127.0.0.1:8080/v1/evaluations").expect("endpoint parses");

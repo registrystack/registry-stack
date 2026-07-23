@@ -730,6 +730,11 @@ fn validate_live_response(
         if !result_view.provenance.derived_from.is_empty() {
             bail!("governed Notary result provenance derived_from must remain empty");
         }
+        if result_view.provenance.generated_by.pack_id.is_some()
+            || result_view.provenance.generated_by.pack_version.is_some()
+        {
+            bail!("governed Notary result exceeds the closed public claim-result schema");
+        }
         let claim_id = result_view.claim_id.as_str();
         if !requested.contains(claim_id) || !returned.insert(claim_id.to_string()) {
             bail!("governed Notary response contains an unknown or duplicate claim result");
