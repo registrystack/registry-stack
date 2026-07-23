@@ -40,7 +40,10 @@ For a standalone local project generated from your own data, use the `registryct
 [evaluate a claim with Registry Notary](../verify-claim-registry-api/). Clone Solmara Lab when you
 want the full multi-service country demo. The planned final 1.0 release-candidate reader run in
 [GH#198](https://github.com/registrystack/registry-stack/issues/198) requires a tagged Registry
-Stack candidate and a Solmara Lab release pinned atomically to that candidate.
+Stack candidate and a Solmara Lab release that atomically pins the matching `registryctl`, Registry
+Relay, Registry Notary, and image digests. Where Registry Notary applies, the run must also prove
+one Registry Notary instance and one Notary-owned PostgreSQL database per Registry Relay authority,
+including restart persistence.
 {/* TODO[evidence]: Replace this issue-tracked plan with a stable public run artifact and
     immutable Solmara Lab release link before presenting the gate as completed evidence. */}
 
