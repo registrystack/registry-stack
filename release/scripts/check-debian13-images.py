@@ -153,13 +153,25 @@ MAINTAINED_TEXT_PATHS = DOCKERFILES + (
     NOTARY_POSTGRES_CONFORMANCE_SCRIPT,
 )
 
-NOTARY_POSTGRES_WORKFLOW_IMAGES = (
+NOTARY_POSTGRES_WORKFLOW_SOURCE_TARGET_IMAGES = (
     "postgres:16.13-alpine",
     "postgres:16.14-alpine",
     "postgres:17.9-alpine",
     "postgres:17.10-alpine",
     "postgres:18.3-alpine",
     "postgres:18.4-alpine",
+)
+NOTARY_POSTGRES_WORKFLOW_RESTORE_IMAGES = (
+    "postgres:17.10-alpine",
+    "postgres:18.4-alpine",
+)
+NOTARY_POSTGRES_WORKFLOW_IMAGES = tuple(
+    dict.fromkeys(
+        (
+            *NOTARY_POSTGRES_WORKFLOW_SOURCE_TARGET_IMAGES,
+            *NOTARY_POSTGRES_WORKFLOW_RESTORE_IMAGES,
+        )
+    )
 )
 NOTARY_POSTGRES_WORKFLOW_RATIONALE = (
     "External Alpine PostgreSQL migration conformance, not a "
@@ -181,7 +193,9 @@ WORKFLOW_IMAGE_ALLOWLIST = {
         for image in NOTARY_POSTGRES_WORKFLOW_IMAGES
     },
 }
-WORKFLOW_IMAGE_KEYS = frozenset(("image", "source_image", "target_image"))
+WORKFLOW_IMAGE_KEYS = frozenset(
+    ("image", "source_image", "target_image", "restore_image")
+)
 NOTARY_POSTGRES_IMAGE_ASSIGNMENTS = (
     ("default_source_image", '"postgres:16.13-alpine"'),
     ("default_target_image", '"postgres:16.14-alpine"'),
@@ -262,6 +276,125 @@ FINAL_STAGE_COPY_INSTRUCTIONS = {
         "COPY --from=runtime-root /workspace/runtime-root/ /",
     ),
 }
+DOCKERFILE_RUN_INSTRUCTIONS = {
+    Path("crates/registry-relay/Dockerfile"): (
+        (
+            "RUN --mount=type=cache,target=/usr/local/cargo/registry "
+            "--mount=type=cache,target=/workspace/registry_relay/target "
+            "find src benches resources -type f -exec touch {} + && "
+            'if [ -n "$REGISTRY_RELAY_FEATURES" ]; then '
+            "cargo build --release --locked --features "
+            '"$REGISTRY_RELAY_FEATURES"; '
+            "else cargo build --release --locked; fi && "
+            "cp /workspace/registry_relay/target/release/registry-relay "
+            "/usr/local/bin/registry-relay && "
+            "cp /workspace/registry_relay/target/release/"
+            "registry-relay-rhai-worker "
+            "/usr/local/bin/registry-relay-rhai-worker && "
+            "mkdir -p /workspace/runtime-root/etc/registry-relay "
+            "/workspace/runtime-root/var/lib/registry-relay/cache "
+            "/workspace/runtime-root/var/lib/registry-relay/data "
+            "/workspace/runtime-root/var/log/registry-relay && "
+            "chown -R 65532:65532 /workspace/runtime-root"
+        ),
+    ),
+    Path("crates/registry-relay/Dockerfile.demo"): (
+        (
+            "RUN --mount=type=cache,target=/usr/local/cargo/registry "
+            "--mount=type=cache,target=/workspace/registry_relay/target "
+            "cargo build --release --locked --features "
+            "spdci-api-standards,standards-cel-mapping,"
+            "attribute-release && "
+            "cp /workspace/registry_relay/target/release/registry-relay "
+            "/usr/local/bin/registry-relay && "
+            "cp /workspace/registry_relay/target/release/"
+            "registry-relay-rhai-worker "
+            "/usr/local/bin/registry-relay-rhai-worker && "
+            "mkdir -p /workspace/runtime-root/etc/registry-relay "
+            "/workspace/runtime-root/var/lib/registry-relay/cache "
+            "/workspace/runtime-root/var/lib/registry-relay/data "
+            "/workspace/runtime-root/var/log/registry-relay && "
+            "chown -R 65532:65532 /workspace/runtime-root"
+        ),
+    ),
+    Path("products/notary/Dockerfile"): (
+        (
+            "RUN --mount=type=cache,target=/usr/local/cargo/registry "
+            "--mount=type=cache,target=/workspace/target "
+            'if [ -n "$REGISTRY_NOTARY_FEATURES" ]; then '
+            "CARGO_TARGET_DIR=/workspace/target cargo build --release "
+            "--locked -p registry-notary --features "
+            '"$REGISTRY_NOTARY_FEATURES"; '
+            "else CARGO_TARGET_DIR=/workspace/target cargo build --release "
+            "--locked -p registry-notary; fi && "
+            "mkdir -p /workspace/out && "
+            "cp /workspace/target/release/registry-notary "
+            "/workspace/out/registry-notary && "
+            'case ",$REGISTRY_NOTARY_FEATURES," in '
+            "*,registry-notary-cel,*) "
+            "CARGO_TARGET_DIR=/workspace/target cargo build --release "
+            "--locked -p registry-notary-server "
+            "--bin registry-notary-cel-worker --features "
+            '"$REGISTRY_NOTARY_FEATURES" && '
+            "cp /workspace/target/release/registry-notary-cel-worker "
+            "/workspace/out/registry-notary-cel-worker ;; "
+            "*) true ;; esac && "
+            "mkdir -p /workspace/runtime-root/etc/registry-notary "
+            "/workspace/runtime-root/var/lib/registry-notary "
+            "/workspace/runtime-root/var/log/registry-notary && "
+            "chown -R 65532:65532 /workspace/runtime-root"
+        ),
+    ),
+    Path("release/docker/Dockerfile.registry-notary"): (
+        (
+            "RUN --mount=type=bind,source=dist/image-bin,"
+            "target=/workspace/image-bin "
+            "mkdir -p /workspace/runtime-root/etc/registry-notary "
+            "/workspace/runtime-root/usr/local/bin "
+            "/workspace/runtime-root/var/lib/registry-notary "
+            "/workspace/runtime-root/var/log/registry-notary && "
+            "install -m 0755 /workspace/image-bin/registry-notary "
+            "/workspace/runtime-root/usr/local/bin/registry-notary && "
+            "install -m 0755 "
+            "/workspace/image-bin/registry-notary-cel-worker "
+            "/workspace/runtime-root/usr/local/bin/"
+            "registry-notary-cel-worker && "
+            "chown -R 65532:65532 "
+            "/workspace/runtime-root/etc/registry-notary "
+            "/workspace/runtime-root/var/lib/registry-notary "
+            "/workspace/runtime-root/var/log/registry-notary && "
+            'find /workspace/runtime-root -exec touch -h '
+            '--date="@${SOURCE_DATE_EPOCH}" {} +'
+        ),
+    ),
+    Path("release/docker/Dockerfile.registry-relay"): (
+        (
+            "RUN --mount=type=bind,source=dist/image-bin,"
+            "target=/workspace/image-bin "
+            "--mount=type=bind,source=LICENSE,target=/workspace/LICENSE "
+            "mkdir -p /workspace/runtime-root/etc/registry-relay "
+            "/workspace/runtime-root/licenses/registry-relay "
+            "/workspace/runtime-root/usr/local/bin "
+            "/workspace/runtime-root/var/lib/registry-relay/cache "
+            "/workspace/runtime-root/var/lib/registry-relay/data "
+            "/workspace/runtime-root/var/log/registry-relay && "
+            "install -m 0755 /workspace/image-bin/registry-relay "
+            "/workspace/runtime-root/usr/local/bin/registry-relay && "
+            "install -m 0755 "
+            "/workspace/image-bin/registry-relay-rhai-worker "
+            "/workspace/runtime-root/usr/local/bin/"
+            "registry-relay-rhai-worker && "
+            "install -m 0644 /workspace/LICENSE "
+            "/workspace/runtime-root/licenses/registry-relay/LICENSE && "
+            "chown -R 65532:65532 "
+            "/workspace/runtime-root/etc/registry-relay "
+            "/workspace/runtime-root/var/lib/registry-relay "
+            "/workspace/runtime-root/var/log/registry-relay && "
+            'find /workspace/runtime-root -exec touch -h '
+            '--date="@${SOURCE_DATE_EPOCH}" {} +'
+        ),
+    ),
+}
 
 RELAY_RUNTIME_DIRECTIVES = (
     (
@@ -313,21 +446,13 @@ COPY_INSTRUCTION_RE = re.compile(
     re.IGNORECASE,
 )
 COPY_OPTION_NAMES = frozenset(("from", "chown"))
-LEADING_OPTION_RE = re.compile(
+COPY_OPTION_RE = re.compile(
     r"--(?P<name>[a-z][a-z0-9-]*)=(?P<value>[^\s\\\"']+)"
 )
 RUN_INSTRUCTION_RE = re.compile(
     r"^[ \t]*RUN[ \t]+(?P<arguments>.*)$",
     re.IGNORECASE,
 )
-RUN_OPTION_NAMES = frozenset(("mount",))
-RUN_MOUNT_FIELD_RE = re.compile(
-    r"(?P<name>[a-z][a-z0-9-]*)=(?P<value>[^,\s\\\"']+)"
-)
-RUN_MOUNT_FIELDS = {
-    "cache": ("type", "target"),
-    "bind": ("type", "source", "target"),
-}
 DIGEST_PIN_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 RETIRED_MARKER_RE = re.compile(
     r"\b(?:bookworm|debian[ \t_:-]*v?[ \t_:-]*12)\b",
@@ -476,7 +601,7 @@ def collect_dockerfile_copy_sources(
         tokens = instruction_match.group("arguments").split()
         seen_options = set()
         while tokens and tokens[0].startswith("--"):
-            option_match = LEADING_OPTION_RE.fullmatch(tokens.pop(0))
+            option_match = COPY_OPTION_RE.fullmatch(tokens.pop(0))
             if option_match is None:
                 failures.append(
                     f"{relative}: unsupported COPY option syntax prevents "
@@ -501,58 +626,6 @@ def collect_dockerfile_copy_sources(
             )
             return []
     return sources
-
-
-def check_dockerfile_run_options(
-    instructions: tuple[str, ...],
-    relative: Path,
-    failures: list[str],
-) -> None:
-    for instruction in instructions:
-        instruction_match = RUN_INSTRUCTION_RE.match(instruction)
-        if instruction_match is None:
-            continue
-        tokens = instruction_match.group("arguments").split()
-        while tokens and tokens[0].startswith("--"):
-            option_match = LEADING_OPTION_RE.fullmatch(tokens.pop(0))
-            if (
-                option_match is None
-                or option_match.group("name") not in RUN_OPTION_NAMES
-            ):
-                failures.append(
-                    f"{relative}: unsupported RUN option syntax prevents "
-                    "bounded mount inspection"
-                )
-                return
-
-            fields = []
-            for field in option_match.group("value").split(","):
-                field_match = RUN_MOUNT_FIELD_RE.fullmatch(field)
-                if field_match is None:
-                    failures.append(
-                        f"{relative}: unsupported RUN mount syntax prevents "
-                        "bounded mount inspection"
-                    )
-                    return
-                fields.append(
-                    (field_match.group("name"), field_match.group("value"))
-                )
-
-            field_names = tuple(name for name, _value in fields)
-            mount_type = fields[0][1] if fields else ""
-            if RUN_MOUNT_FIELDS.get(mount_type) != field_names:
-                failures.append(
-                    f"{relative}: unsupported RUN mount syntax prevents "
-                    "bounded mount inspection"
-                )
-                return
-
-        if not tokens or tokens[0].startswith(("-", "'", '"', "\\")):
-            failures.append(
-                f"{relative}: unsupported RUN operand prefix prevents "
-                "bounded mount inspection"
-            )
-            return
 
 
 def collect_workflow_image_references(
@@ -807,7 +880,16 @@ def check_repository(root: Path = ROOT) -> list[str]:
             relative,
             failures,
         )
-        check_dockerfile_run_options(instructions, relative, failures)
+        run_instructions = tuple(
+            " ".join(instruction.split())
+            for instruction in instructions
+            if RUN_INSTRUCTION_RE.match(instruction)
+        )
+        if run_instructions != DOCKERFILE_RUN_INSTRUCTIONS[relative]:
+            failures.append(
+                f"{relative}: RUN instructions must match the exact "
+                "reviewed inventory"
+            )
         stage_matches = list(FROM_RE.finditer(text))
         if not stage_matches:
             failures.append(f"{relative}: no FROM instruction found")

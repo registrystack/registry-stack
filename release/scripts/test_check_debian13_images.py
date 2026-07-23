@@ -175,8 +175,12 @@ class Debian13ImageCheckTest(unittest.TestCase):
             set(self.module.WORKFLOW_IMAGE_ALLOWLIST),
         )
         self.assertEqual(
-            {"image", "source_image", "target_image"},
+            {"image", "source_image", "target_image", "restore_image"},
             set(self.module.WORKFLOW_IMAGE_KEYS),
+        )
+        self.assertEqual(
+            ("postgres:17.10-alpine", "postgres:18.4-alpine"),
+            self.module.NOTARY_POSTGRES_WORKFLOW_RESTORE_IMAGES,
         )
         for rationale in self.module.WORKFLOW_IMAGE_ALLOWLIST.values():
             self.assertIn("not a project-owned Debian image", rationale)
@@ -309,6 +313,64 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     failures,
                 )
                 self.assertNotIn(replacement, "\n".join(failures))
+
+    def test_notary_matrix_restore_images_are_exact_and_path_bounded(
+        self,
+    ) -> None:
+        source = (ROOT / NOTARY_POSTGRES_WORKFLOW).read_text(
+            encoding="utf-8"
+        )
+        additions = (
+            (
+                "            target_image: postgres:16.14-alpine",
+                "            restore_image: postgres:17.10-alpine",
+            ),
+            (
+                "            target_image: postgres:17.10-alpine",
+                "            restore_image: postgres:18.4-alpine",
+            ),
+            (
+                "            target_image: postgres:18.4-alpine",
+                "            restore_image: postgres:18.4-alpine",
+            ),
+        )
+        for target, restore in additions:
+            self.assertIn(target, source)
+            source = source.replace(
+                target,
+                f"{target}\n{restore}",
+                1,
+            )
+
+        root = self.fixture()
+        self.write_workflow(
+            root,
+            NOTARY_POSTGRES_WORKFLOW.name,
+            source,
+        )
+        self.assertEqual([], self.module.check_repository(root))
+
+        replacement = "            restore_image: postgres:17"
+        root = self.fixture()
+        self.write_workflow(
+            root,
+            NOTARY_POSTGRES_WORKFLOW.name,
+            source.replace(
+                "            restore_image: postgres:17.10-alpine",
+                replacement,
+                1,
+            ),
+        )
+        failures = self.module.check_repository(root)
+        self.assertTrue(
+            any(
+                f"{NOTARY_POSTGRES_WORKFLOW}: workflow image reference "
+                "is not allowlisted" in failure
+                for failure in failures
+            ),
+            failures,
+        )
+        self.assertNotIn(replacement, "\n".join(failures))
 
     def test_workflow_image_inventory_fails_closed(self) -> None:
         cases = (
@@ -1220,16 +1282,12 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     "or reviewed named build context",
                 )
 
-    def test_dockerfile_run_mounts_use_the_reviewed_canonical_shapes(
+    def test_dockerfile_run_inventories_match_current_instructions(
         self,
     ) -> None:
-        self.assertEqual({"mount"}, set(self.module.RUN_OPTION_NAMES))
         self.assertEqual(
-            {
-                "cache": ("type", "target"),
-                "bind": ("type", "source", "target"),
-            },
-            self.module.RUN_MOUNT_FIELDS,
+            set(self.module.DOCKERFILES),
+            set(self.module.DOCKERFILE_RUN_INSTRUCTIONS),
         )
         for relative in self.module.DOCKERFILES:
             with self.subTest(relative=relative):
@@ -1239,71 +1297,68 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     relative,
                     failures,
                 )
-                self.module.check_dockerfile_run_options(
-                    instructions,
-                    relative,
-                    failures,
+                actual = tuple(
+                    " ".join(instruction.split())
+                    for instruction in instructions
+                    if self.module.RUN_INSTRUCTION_RE.match(instruction)
                 )
                 self.assertEqual([], failures)
+                self.assertEqual(
+                    self.module.DOCKERFILE_RUN_INSTRUCTIONS[relative],
+                    actual,
+                )
 
-    def test_dockerfile_run_mounts_reject_unreviewed_sources_and_syntax(
+    def test_dockerfile_run_inventories_reject_any_command_change(
         self,
     ) -> None:
-        relative = Path("release/docker/Dockerfile.registry-relay")
-        exact = (
-            "--mount=type=bind,source=dist/image-bin,"
-            "target=/workspace/image-bin"
-        )
+        release_relay = Path("release/docker/Dockerfile.registry-relay")
+        product_relay = Path("crates/registry-relay/Dockerfile")
+        runtime_marker = f"FROM {self.module.DISTROLESS_RUNTIME} AS runtime"
         cases = (
             (
-                "external-from",
-                "--mount=type=bind,from=debian:trixie-slim,"
-                "source=dist/image-bin,target=/workspace/image-bin",
-                "unsupported RUN mount syntax",
+                "runtime-root-shell",
+                product_relay,
+                "    chown -R 65532:65532 /workspace/runtime-root",
+                "    mkdir -p /workspace/runtime-root/bin && \\\n"
+                "    cp /bin/bash /workspace/runtime-root/bin/bash && \\\n"
+                "    chown -R 65532:65532 /workspace/runtime-root",
             ),
             (
-                "escaped-mount-key",
-                r"--mount=type=bind,fr\om=debian:trixie-slim,"
-                "source=dist/image-bin,target=/workspace/image-bin",
-                "unsupported RUN option syntax",
+                "bind-source-drift",
+                release_relay,
+                "source=dist/image-bin",
+                "source=dist/other-bin",
             ),
             (
-                "quoted-mount-key",
-                '--mount=type=bind,fr"om"=debian:trixie-slim,'
-                "source=dist/image-bin,target=/workspace/image-bin",
-                "unsupported RUN option syntax",
-            ),
-            (
-                "escaped-option-name",
-                r"--mo\unt=type=bind,source=dist/image-bin,"
+                "bind-target-drift",
+                release_relay,
                 "target=/workspace/image-bin",
-                "unsupported RUN option syntax",
+                "target=/workspace/other-bin",
             ),
             (
-                "quoted-option-name",
-                '--mo"unt"=type=bind,source=dist/image-bin,'
+                "external-mount-from",
+                release_relay,
+                "type=bind,source=dist/image-bin",
+                "type=bind,from=debian:trixie-slim,"
+                "source=dist/image-bin",
+            ),
+            (
+                "quoted-mount",
+                release_relay,
+                "--mount=type=bind,source=dist/image-bin,"
                 "target=/workspace/image-bin",
-                "unsupported RUN option syntax",
-            ),
-            (
-                "quoted-mount-value",
                 '--mount="type=bind,source=dist/image-bin,'
                 'target=/workspace/image-bin"',
-                "unsupported RUN option syntax",
             ),
             (
-                "unknown-option",
-                "--network=none",
-                "unsupported RUN option syntax",
-            ),
-            (
-                "cache-with-source",
-                "--mount=type=cache,source=dist/image-bin,"
-                "target=/workspace/image-bin",
-                "unsupported RUN mount syntax",
+                "extra-run",
+                product_relay,
+                runtime_marker,
+                f"RUN true\n\n{runtime_marker}",
             ),
         )
-        for name, replacement, failure in cases:
+        failure = "RUN instructions must match the exact reviewed inventory"
+        for name, relative, exact, replacement in cases:
             with self.subTest(name=name):
                 root = self.fixture()
                 target = root / relative
