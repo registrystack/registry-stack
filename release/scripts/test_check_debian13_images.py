@@ -319,6 +319,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
     def test_bare_debian_is_finite_to_image_code_contexts(self) -> None:
         cases = (
             ("Dockerfile", "FROM debian\n"),
+            ("images/relay.dockerfile", "FROM debian\n"),
             ("Dockerfile", "COPY --from=localhost:5000/debian /x /x\n"),
             ("Dockerfile", "RUN --mount=from=debian,target=/x true\n"),
             ("compose.yaml", "services:\n  app:\n    image: debian\n"),
@@ -336,6 +337,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 )
 
         for relative, text in (
+            ("images/relay.dockerfile", f"FROM {PINNED_RUST}\n"),
             ("guide.md", "Debian is the supported distribution.\n"),
             ("guide.md", "```text\ndocker run debian\n```\n"),
             ("script.sh", "# docker run --rm debian\n"),
@@ -361,8 +363,36 @@ class Debian13ImageCheckTest(unittest.TestCase):
             "local.sh",
             'RELAY_IMAGE="registryctl-relay:$RUN_ID"\ndocker run "$RELAY_IMAGE"\n',
         )
+        self.assert_clean(
+            "static.sh",
+            'APP_IMAGE="alpine:3.22"\ndocker run --rm "$APP_IMAGE"\n',
+        )
+        self.assert_clean(
+            "fallback.sh",
+            'FIRST_IMAGE="alpine:3.22"\nSECOND_IMAGE="busybox:1.37"\n'
+            'APP_IMAGE="${FIRST_IMAGE:-$SECOND_IMAGE}"\n'
+            'docker run --rm "$APP_IMAGE"\n',
+        )
 
         cases = (
+            (
+                "computed.sh",
+                'APP_IMAGE="$(select-image)"\ndocker run --rm "$APP_IMAGE"\n',
+                "unresolved image variables: app_image",
+            ),
+            (
+                "alias.sh",
+                'OTHER_IMAGE="$(select-image)"\nAPP_IMAGE="$OTHER_IMAGE"\n'
+                'docker run --rm "$APP_IMAGE"\n',
+                "unresolved image variables: app_image",
+            ),
+            (
+                "multi.sh",
+                'GOOD_IMAGE="alpine:3.22"\nBAD_IMAGE="$(select-image)"\n'
+                'APP_IMAGE="${GOOD_IMAGE:-$BAD_IMAGE}"\n'
+                'docker run --rm "$APP_IMAGE"\n',
+                "unresolved image variables: app_image",
+            ),
             (
                 "images.py",
                 "BUILDER_IMAGE = make_image()\n",
@@ -381,12 +411,12 @@ class Debian13ImageCheckTest(unittest.TestCase):
             (
                 "build.sh",
                 'docker run --rm "$OTHER_IMAGE"\n',
-                "must use a literal or a resolved *_IMAGE assignment",
+                "must use a literal or a statically resolved *_IMAGE assignment",
             ),
             (
                 "build.sh",
                 'docker run --publish 127.0.0.1:8080 "$OTHER_IMAGE"\n',
-                "must use a literal or a resolved *_IMAGE assignment",
+                "must use a literal or a statically resolved *_IMAGE assignment",
             ),
             (
                 "build.sh",
@@ -396,7 +426,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
             (
                 "build.sh",
                 'docker pull "$container"\n',
-                "must use a literal or a resolved *_IMAGE assignment",
+                "must use a literal or a statically resolved *_IMAGE assignment",
             ),
         )
         for relative, text, expected in cases:
@@ -432,6 +462,77 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     text,
                     "not pinned by immutable digest",
                 )
+
+    def test_compose_entrypoint_and_command_form_one_image_consumer(self) -> None:
+        self.assert_failure(
+            "compose.yaml",
+            "services:\n  app:\n    entrypoint: [docker]\n"
+            "    command: [run, --rm, debian]\n",
+            "bare Debian image reference",
+        )
+        self.assert_clean(
+            "compose.yaml",
+            "services:\n  app:\n    entrypoint: [docker]\n"
+            f"    command: [run, --rm, {PINNED_RUST}]\n",
+        )
+        self.assert_clean(
+            "compose.yaml",
+            "services:\n  first:\n    entrypoint: [docker]\n"
+            "  second:\n    command: [run, --rm, debian]\n",
+        )
+        self.assert_clean(
+            "compose.yaml",
+            "services:\n  app:\n    entrypoint: [echo, docker]\n"
+            "    command: [run, --rm, debian]\n",
+        )
+
+    def test_postgresql_conformance_workflow_selects_static_images(self) -> None:
+        script_path = Path("products/notary/scripts/postgresql-conformance.sh")
+        script = (ROOT / script_path).read_text()
+        workflow = (
+            ROOT / ".github/workflows/notary-postgres-conformance.yml"
+        ).read_text()
+        selections = {
+            "16": (
+                "postgres:16.13-alpine",
+                "postgres:16.14-alpine",
+                "postgres:17.10-alpine",
+            ),
+            "17": (
+                "postgres:17.9-alpine",
+                "postgres:17.10-alpine",
+                "postgres:18.4-alpine",
+            ),
+            "18": (
+                "postgres:18.3-alpine",
+                "postgres:18.4-alpine",
+                "postgres:18.4-alpine",
+            ),
+        }
+        for major, (source, target, restore) in selections.items():
+            with self.subTest(major=major):
+                self.assertIn(f'- postgresql: "{major}"', workflow)
+                self.assertIn(
+                    f'  {major})\n    default_source_image="{source}"\n'
+                    f'    default_target_image="{target}"\n'
+                    f'    default_restore_image="{restore}"\n',
+                    script,
+                )
+        self.assertNotIn("NOTARY_POSTGRES_SOURCE_IMAGE", script + workflow)
+        self.assertNotIn("NOTARY_POSTGRES_TARGET_IMAGE", script + workflow)
+        self.assertNotIn("NOTARY_POSTGRES_RESTORE_IMAGE", script + workflow)
+        self.assert_clean(script_path.as_posix(), script)
+
+        override = (
+            'source_image="${NOTARY_POSTGRES_SOURCE_IMAGE:-${default_source_image}}"'
+        )
+        mutated = script.replace('source_image="${default_source_image}"', override)
+        self.assertNotEqual(script, mutated)
+        self.assert_failure(
+            script_path.as_posix(),
+            mutated,
+            "unresolved image variables: source_image",
+        )
 
     def test_markdown_scans_only_executable_fences(self) -> None:
         self.assert_failure(

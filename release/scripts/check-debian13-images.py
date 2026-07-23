@@ -108,6 +108,10 @@ IMAGE_VAR_RE = re.compile(
 CLI_RE = re.compile(r"(?:^|[\s;&|({])(?:\S*/)?(?:docker|podman)\b(?P<tail>[^\n]*)")
 ACTION_RE = re.compile(r"\b(?:create|pull|run)\b")
 NON_IMAGE_NAMESPACES = set("build buildx compose exec network volume".split())
+SHELL_VAR_RE = re.compile(
+    r"\$(?:\{[A-Za-z_][A-Za-z0-9_]*(?::-[^{}]*)?\}|[A-Za-z_][A-Za-z0-9_]*)"
+)
+COMPUTED_VALUE_RE = re.compile(r"[+%]|`|\$\(|\.format\(|\bf[\"']")
 EXEMPTION_RE = re.compile(
     r'<!--\s*debian13-policy:\s*allow-prose\s+reason="[^"]{8,}"\s*-->'
 )
@@ -125,10 +129,11 @@ class ImageSurfaceError(RuntimeError):
 
 
 def is_dockerfile(path: Path) -> bool:
+    name = path.name.casefold()
     return (
-        path.name == "Dockerfile"
-        or path.name.startswith("Dockerfile.")
-        or path.name.endswith(".Dockerfile")
+        name == "dockerfile"
+        or name.startswith("dockerfile.")
+        or name.endswith(".dockerfile")
     )
 
 
@@ -268,6 +273,14 @@ def policy_image_name(name: str) -> bool:
     )
 
 
+def has_safe_image_template(value: str) -> bool:
+    if COMPUTED_VALUE_RE.search(value):
+        return False
+    expanded = SHELL_VAR_RE.sub("dynamic", value)
+    found = references(expanded)
+    return bool(found) and all(not is_debian_family(reference) for reference in found)
+
+
 def markdown_code_flags(path: Path, lines: list[str]) -> list[bool]:
     if path.suffix not in MARKDOWN_SUFFIXES:
         return [False] * len(lines)
@@ -302,6 +315,39 @@ def logical_lines(lines: list[str], flags: list[bool]) -> list[tuple[int, str, b
     return result
 
 
+def yaml_container_consumers(lines: list[str]) -> dict[int, str]:
+    fields: dict[int, dict[str, tuple[int, str]]] = {}
+    consumers = {}
+    for number, line in enumerate(lines, 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        for depth in tuple(fields):
+            if depth > indent:
+                del fields[depth]
+        match = YAML_KEY_RE.match(line)
+        if match is None or match.group("name").casefold() not in {
+            "entrypoint",
+            "command",
+        }:
+            continue
+        name, value = match.group("name").casefold(), match.group("value")
+        fields.setdefault(indent, {})[name] = (number, value)
+        if {"entrypoint", "command"} <= fields[indent].keys():
+            command_number, command = fields[indent]["command"]
+            entrypoint = fields[indent]["entrypoint"][1]
+            engine = re.match(
+                r"^\s*\[?\s*[\"']?(?P<engine>(?:[^\s,\"'\]]*/)?(?:docker|podman))"
+                r"[\"']?(?=$|[\s,\]])",
+                entrypoint,
+            )
+            if engine:
+                combined = f"{engine.group('engine')} {command}"
+                if is_container_consumer(combined):
+                    consumers[command_number] = combined
+    return consumers
+
+
 def scan_surface(path: Path, text: str) -> list[str]:
     if len(text.encode()) > MAX_TEXT_FILE_BYTES:
         raise ImageSurfaceError(
@@ -310,8 +356,11 @@ def scan_surface(path: Path, text: str) -> list[str]:
     lines, failures = text.splitlines(), []
     markdown_flags = markdown_code_flags(path, text.splitlines())
     code_file = is_dockerfile(path) or path.suffix in CODE_SUFFIXES
+    yaml_consumers = (
+        yaml_container_consumers(lines) if path.suffix in {".yaml", ".yml"} else {}
+    )
     records: list[tuple[int, str, str, set[str], bool, bool]] = []
-    resolved, declared = set(), set()
+    resolved = set()
     for number, line in enumerate(lines, 1):
         if len(line) > MAX_LINE_CHARS:
             raise ImageSurfaceError(
@@ -335,8 +384,11 @@ def scan_surface(path: Path, text: str) -> list[str]:
                     f"{path}:{number}: retired Debian image generation marker remains: {marker}"
                 )
         item = assignment(path, line) if path.suffix in CODE_SUFFIXES else None
+        consumer_line = yaml_consumers.get(number, line)
         consumer = (
-            is_container_consumer(line) and (code_file or markdown_code) and not comment
+            is_container_consumer(consumer_line)
+            and (code_file or markdown_code)
+            and not comment
         )
         reference_context = not comment and (
             is_dockerfile(path)
@@ -369,20 +421,21 @@ def scan_surface(path: Path, text: str) -> list[str]:
                 found.group("name").casefold() for found in IMAGE_VAR_RE.finditer(value)
             }
             has_literal = bool(references(value))
+            has_template = (
+                not has_literal and not dependencies and has_safe_image_template(value)
+            )
             positional = canonical == "image" and re.fullmatch(
                 r"""["']?\$(?:\{)?[1-9](?:\})?["']?;?""", value.strip()
             )
             computed = not positional and (
-                not has_literal
-                and not dependencies
-                or re.search(r"\s[+%]\s|`|\$\(|\.format\(|\bf[\"']", value) is not None
+                (not has_literal and not has_template and not dependencies)
+                or COMPUTED_VALUE_RE.search(value) is not None
             )
             strict = path.suffix in STRICT_ASSIGNMENT_SUFFIXES and policy_image_name(
                 name
             )
             records.append((number, canonical, value, dependencies, computed, strict))
-            declared.add(canonical)
-            if has_literal and not computed or positional:
+            if ((has_literal or has_template) and not computed) or positional:
                 resolved.add(canonical)
         bare = BARE_DEFAULT_FAMILY_RE.search(line)
         bare_assignment = item is not None and (
@@ -406,7 +459,12 @@ def scan_surface(path: Path, text: str) -> list[str]:
     while changed:
         changed = False
         for _, name, _, dependencies, computed, strict in records:
-            if name not in resolved and not computed and dependencies & resolved:
+            if (
+                name not in resolved
+                and not computed
+                and dependencies
+                and dependencies <= resolved
+            ):
                 resolved.add(name)
                 changed = True
     for number, name, value, _, computed, strict in records:
@@ -415,7 +473,11 @@ def scan_surface(path: Path, text: str) -> list[str]:
                 f"{path}:{number}: computed or unresolved image assignment "
                 f"is not allowed: {value.strip()}"
             )
-    for number, line, markdown_code in logical_lines(lines, markdown_flags):
+    consumer_records = logical_lines(lines, markdown_flags)
+    consumer_records.extend(
+        (number, line, False) for number, line in yaml_consumers.items()
+    )
+    for number, line, markdown_code in consumer_records:
         if (
             line.lstrip().startswith(("#", "//"))
             or not (code_file or markdown_code)
@@ -425,17 +487,23 @@ def scan_surface(path: Path, text: str) -> list[str]:
         variables = {
             match.group("name").casefold() for match in IMAGE_VAR_RE.finditer(line)
         }
+        unresolved = sorted(variables - resolved)
         if (
             not any(
                 re.search("[A-Za-z]", repository_and_tag(item)[0])
                 for item in references(line)
             )
             and not BARE_DEFAULT_FAMILY_RE.search(line)
-            and not variables & (resolved | declared)
+            and (not variables or unresolved)
         ):
+            detail = (
+                f"; unresolved image variables: {', '.join(unresolved)}"
+                if unresolved
+                else ""
+            )
             failures.append(
                 f"{path}:{number}: Docker/Podman image consumer must use a "
-                "literal or a resolved *_IMAGE assignment"
+                f"literal or a statically resolved *_IMAGE assignment{detail}"
             )
     return failures
 
