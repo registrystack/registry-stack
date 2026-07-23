@@ -934,14 +934,10 @@ fn validate_live_result_redaction(
                 .map(String::as_str)
                 .collect::<BTreeSet<_>>();
             if result.satisfied.is_some()
+                || result.redacted_fields.len() > MAX_OUTPUTS
                 || unique.len() != result.redacted_fields.len()
                 || unique.iter().any(|field| {
-                    field.is_empty()
-                        || *field == "value"
-                        || field.contains('.')
-                        || field.contains('[')
-                        || field.contains(']')
-                        || value.contains_key(*field)
+                    !is_live_top_level_redaction_field(field) || value.contains_key(*field)
                 })
             {
                 bail!("governed Notary result has invalid field-redaction semantics");

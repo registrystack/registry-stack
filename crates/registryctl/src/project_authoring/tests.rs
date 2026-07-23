@@ -1175,6 +1175,44 @@ outputs:
         assert!(error.contains("field-redaction semantics"));
         assert!(!error.contains("private source value"));
 
+        for (invalid_markers, sensitive_marker) in [
+            (json!(["ssn=123"]), "ssn=123"),
+            (json!(["IND-AB12CD34"]), "IND-AB12CD34"),
+            (json!(["profile.ssn"]), "profile.ssn"),
+            (json!(["profile/ssn"]), "profile/ssn"),
+            (
+                json!(["private_field", "private_field"]),
+                "private_field",
+            ),
+        ] {
+            let mut invalid = response.clone();
+            set_governed_live_result_pointer(
+                &mut invalid,
+                "/redacted_fields",
+                invalid_markers,
+            );
+            let error = validate_live_response(&invalid, &request, &expected)
+                .expect_err("invalid runtime field-redaction marker must fail closed")
+                .to_string();
+            assert!(error.contains("field-redaction semantics"));
+            assert!(!error.contains(sensitive_marker));
+        }
+
+        let excessive_markers = (0..=MAX_OUTPUTS)
+            .map(|index| format!("private_field_{index}"))
+            .collect::<Vec<_>>();
+        let mut excessive = response.clone();
+        set_governed_live_result_pointer(
+            &mut excessive,
+            "/redacted_fields",
+            json!(excessive_markers),
+        );
+        let error = validate_live_response(&excessive, &request, &expected)
+            .expect_err("runtime field-redaction markers must stay bounded")
+            .to_string();
+        assert!(error.contains("field-redaction semantics"));
+        assert!(!error.contains("private_field_64"));
+
         let (predicate_request, predicate_expected, mut predicate_response) =
             governed_live_eligible_fixture();
         set_governed_live_result_pointer(
