@@ -1409,8 +1409,7 @@ fn authorization_value_in_word<'a>(word: &'a str, scheme: &str) -> Option<Author
         let normalized_scheme = segment.trim_matches(is_authorization_boundary);
         if normalized_scheme.eq_ignore_ascii_case(scheme) {
             let has_colon = delimiter_len != 0;
-            let standalone_wrapped = !has_colon
-                && normalized_scheme.len() < segment.len()
+            let standalone_wrapped = normalized_scheme.len() < segment.len()
                 && segment.starts_with(is_authorization_boundary)
                 && segment.ends_with(is_authorization_boundary);
             let value = if has_colon {
@@ -4002,7 +4001,7 @@ mod tests {
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),
             (
-                "(bearer): abcdef after config apply",
+                "Authorization: (bearer): abcdef after config apply",
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),
             (
@@ -4031,6 +4030,18 @@ mod tests {
             ),
             (
                 "Authorization ： «Basic» Zm9vOmJhcg==",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: “Bearer”: supported by the gateway",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: «Basic»: enabled",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: (Bearer): API authentication mode",
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),
             (
@@ -4122,6 +4133,9 @@ mod tests {
             "Use “Bearer” for API authentication",
             "Document «Basic» for operators",
             "Compare ＂Bearer＂ and 「Basic」 schemes",
+            "Document “Bearer”: supported by the gateway",
+            "Compare «Basic»: enabled",
+            "Use (Bearer): API authentication mode",
         ] {
             validate_deployment_waiver_metadata("OPS-42", Some(summary))
                 .unwrap_or_else(|error| panic!("ordinary summary rejected: {summary:?}: {error}"));
