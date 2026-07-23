@@ -771,7 +771,7 @@ class Debian13ImageCheckTest(unittest.TestCase):
             "docker build --build-context base=docker-image://rust:1.95-trixie .\n",
             "Docker build context",
         )
-        for value in ("$RUST_IMAGE", "${RUST_IMAGE}"):
+        for value in ("$RUST_IMAGE", "${RUST_IMAGE}", "`resolve-image`"):
             with self.subTest(value=value):
                 self.assert_failure(
                     "build.sh",

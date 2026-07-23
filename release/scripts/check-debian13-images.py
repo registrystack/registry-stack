@@ -223,7 +223,7 @@ DOCKER_CONTEXT_RE = re.compile(
     r"(?:@sha256:[0-9a-fA-F]{64})?)(?![A-Za-z0-9._/@+-])"
 )
 DOCKER_CONTEXT_TOKEN_RE = re.compile(
-    r"""docker-image://(?P<value>[^\s,;"']+)""",
+    r"""docker-image://(?P<value>[^\s,;"'\]\}]+)""",
 )
 EXEMPTION_RE = re.compile(
     r'<!--\s*debian13-policy:\s*allow-prose\s+reason="[^"]{8,}"\s*-->'
@@ -563,7 +563,7 @@ def computed_build_contexts(text: str) -> list[str]:
     return [
         match.group("value")
         for match in DOCKER_CONTEXT_TOKEN_RE.finditer(text)
-        if "$" in match.group("value") or "{" in match.group("value")
+        if DOCKER_CONTEXT_RE.fullmatch(f"docker-image://{match.group('value')}") is None
     ]
 
 
