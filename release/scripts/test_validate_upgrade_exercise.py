@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -33,6 +34,32 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
         self.template = json.loads(TEMPLATE.read_text(encoding="utf-8"))
+        self.candidate_asset_dir = Path("/authenticated-candidate-assets")
+        self.real_load_candidate = self.module.load_candidate
+        self.load_candidate = mock.patch.object(
+            self.module,
+            "load_candidate",
+            return_value={
+                "release_id": "beta-16",
+                "version": "0.12.2",
+                "source_ref": "0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8",
+                "source_tag": "v0.12.2",
+                "tag_target": TARGET_COMMIT,
+                "image_lock_sha256": "sha256:" + "b" * 64,
+                "relay_image": (
+                    "ghcr.io/registrystack/registry-relay@sha256:" + "b" * 64
+                ),
+                "notary_image": (
+                    "ghcr.io/registrystack/registry-notary@sha256:" + "b" * 64
+                ),
+            },
+        )
+        self.load_candidate.start()
+        self.addCleanup(self.load_candidate.stop)
+
+    def validate_record(self, data, **kwargs):
+        kwargs.setdefault("candidate_asset_dir", self.candidate_asset_dir)
+        return self.module.validate_record(data, **kwargs)
 
     def candidate(self):
         def replace(value):
@@ -95,13 +122,18 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         return record
 
     def test_template_is_valid_preparation_but_not_candidate_evidence(self) -> None:
-        self.module.validate_record(self.template, allow_template=True)
+        self.validate_record(self.template, allow_template=True)
         with self.assertRaisesRegex(self.module.ExerciseError, "not candidate evidence"):
-            self.module.validate_record(self.template, allow_template=False)
+            self.validate_record(self.template, allow_template=False)
 
     def test_complete_candidate_record_is_valid(self) -> None:
-        self.module.validate_record(
+        self.module.load_candidate.reset_mock()
+        self.validate_record(
             self.candidate(), allow_template=False, require_all_passed=True
+        )
+        self.module.load_candidate.assert_called_once_with(
+            ROOT / TARGET_MANIFEST,
+            self.candidate_asset_dir / "registryctl-v0.12.2-image-lock.json",
         )
 
     def test_candidate_tag_must_resolve_to_exact_target_commit(self) -> None:
@@ -124,7 +156,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                 self.module.ExerciseError,
                 "release tag v0.12.2 does not resolve to target_release.source_commit",
             ):
-                self.module.validate_record(record, allow_template=False)
+                self.validate_record(record, allow_template=False)
         git_run.assert_any_call(
             ["git", "rev-parse", "--verify", "refs/tags/v0.12.2^{commit}"],
             cwd=ROOT,
@@ -137,7 +169,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record = self.candidate()
         record["source_release"]["version"] = record["target_release"]["version"]
         with self.assertRaisesRegex(self.module.ExerciseError, "must be newer"):
-            self.module.validate_record(record, allow_template=False)
+            self.validate_record(record, allow_template=False)
 
     def test_candidate_release_identifiers_are_strict(self) -> None:
         for field, value in (
@@ -149,19 +181,19 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                 record = self.candidate()
                 record["target_release"][field] = value
                 with self.assertRaisesRegex(self.module.ExerciseError, "invalid or unsafe"):
-                    self.module.validate_record(record, allow_template=False)
+                    self.validate_record(record, allow_template=False)
 
     def test_unknown_field_is_rejected_to_prevent_raw_evidence(self) -> None:
         record = self.candidate()
         record["results"][0]["raw_output"] = "Authorization: Bearer secret"
         with self.assertRaisesRegex(self.module.ExerciseError, "unknown raw_output"):
-            self.module.validate_record(record, allow_template=False)
+            self.validate_record(record, allow_template=False)
 
     def test_authority_identifier_cannot_contain_a_url_or_subject_data(self) -> None:
         record = self.candidate()
         record["topology"]["relay_authorities"][0] = "https://registry.example.test/subject/1"
         with self.assertRaisesRegex(self.module.ExerciseError, "invalid or unsafe"):
-            self.module.validate_record(record, allow_template=False)
+            self.validate_record(record, allow_template=False)
 
     def test_failed_and_not_run_results_are_recordable_but_fail_promotion(self) -> None:
         record = self.candidate()
@@ -169,9 +201,9 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record["results"][1].update(
             {"outcome": "not_run", "observed_at": None, "evidence_label": None, "evidence_sha256": None}
         )
-        self.module.validate_record(record, allow_template=False)
+        self.validate_record(record, allow_template=False)
         with self.assertRaisesRegex(self.module.ExerciseError, "--require-pass"):
-            self.module.validate_record(
+            self.validate_record(
                 record, allow_template=False, require_all_passed=True
             )
 
@@ -197,7 +229,13 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             with mock.patch.object(
                 sys,
                 "argv",
-                [str(SCRIPT), "--discover", str(records)],
+                [
+                    str(SCRIPT),
+                    "--discover",
+                    str(records),
+                    "--candidate-asset-dir",
+                    str(self.candidate_asset_dir),
+                ],
             ), mock.patch("sys.stderr", new=stderr):
                 self.assertEqual(self.module.main(), 1)
             self.assertIn(
@@ -217,7 +255,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                     self.module.ExerciseError,
                     f"--require-pass rejects P/T {product} OCI layout drift",
                 ):
-                    self.module.validate_record(
+                    self.validate_record(
                         record, allow_template=False, require_all_passed=True
                     )
 
@@ -225,7 +263,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record = self.candidate()
         record["recovery_set"].pop()
         with self.assertRaisesRegex(self.module.ExerciseError, "complete release-specific"):
-            self.module.validate_record(record, allow_template=False)
+            self.validate_record(record, allow_template=False)
 
     def test_candidate_uses_historical_schema_not_ambient_checkout(self) -> None:
         record = self.candidate()
@@ -264,7 +302,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             record["candidate_artifact_set"]["artifacts"]
         )
         with self.assertRaisesRegex(self.module.ExerciseError, "does not match exact target"):
-            self.module.validate_record(record, allow_template=False)
+            self.validate_record(record, allow_template=False)
         record = self.candidate()
         record["target_release"]["source_ref"] = TARGET_COMMIT
         record["candidate_artifact_set"]["artifacts"]["p_release_inputs"] = (
@@ -274,11 +312,104 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             record["candidate_artifact_set"]["artifacts"]
         )
         with self.assertRaisesRegex(self.module.ExerciseError, "identity does not match"):
-            self.module.validate_record(record, allow_template=False)
+            self.validate_record(record, allow_template=False)
         record = self.candidate()
         record["candidate_artifact_set"]["artifacts"]["t2_binaries"] = "sha256:" + "0" * 64
         with self.assertRaisesRegex(self.module.ExerciseError, "does not match its artifacts"):
-            self.module.validate_record(record, allow_template=False)
+            self.validate_record(record, allow_template=False)
+
+    def test_candidate_image_lock_digest_matches_authenticated_asset_bytes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            asset_dir = Path(temporary)
+            image_lock = asset_dir / "registryctl-v0.12.2-image-lock.json"
+            image_lock.write_bytes(b'{"authenticated":"release image lock"}')
+            record = self.candidate()
+            artifacts = record["candidate_artifact_set"]["artifacts"]
+            artifacts["image_lock"] = self.module.sha256_bytes(
+                image_lock.read_bytes()
+            )
+            record["candidate_artifact_set"]["sha256"] = (
+                self.module.canonical_sha256(artifacts)
+            )
+            candidate = self.module.load_candidate.return_value.copy()
+
+            def authenticated_candidate(_manifest_path, lock_path):
+                metadata = candidate.copy()
+                metadata["image_lock_sha256"] = self.module.sha256_bytes(
+                    lock_path.read_bytes()
+                )
+                return metadata
+
+            with mock.patch.object(
+                self.module,
+                "load_candidate",
+                side_effect=authenticated_candidate,
+            ):
+                self.validate_record(
+                    record,
+                    allow_template=False,
+                    candidate_asset_dir=asset_dir,
+                )
+                image_lock.write_bytes(image_lock.read_bytes() + b"\n")
+                with self.assertRaisesRegex(
+                    self.module.ExerciseError,
+                    "exact authenticated release image-lock",
+                ):
+                    self.validate_record(
+                        record,
+                        allow_template=False,
+                        candidate_asset_dir=asset_dir,
+                    )
+
+    def test_candidate_evidence_requires_release_asset_directory(self) -> None:
+        with self.assertRaisesRegex(
+            self.module.ExerciseError, "--candidate-asset-dir"
+        ):
+            self.module.validate_record(
+                self.candidate(),
+                allow_template=False,
+                candidate_asset_dir=None,
+            )
+
+    def test_real_v0122_release_image_lock_authenticates(self) -> None:
+        asset_dir_value = os.environ.get("REGISTRY_TEST_V0122_ASSET_DIR")
+        if not asset_dir_value:
+            self.skipTest(
+                "REGISTRY_TEST_V0122_ASSET_DIR is required for real release assets"
+            )
+        asset_dir = Path(asset_dir_value)
+        image_lock = asset_dir / "registryctl-v0.12.2-image-lock.json"
+        lock = json.loads(image_lock.read_text(encoding="utf-8"))
+        record = self.candidate()
+        artifacts = record["candidate_artifact_set"]["artifacts"]
+        record["target_release"]["relay_image_digest"] = lock["images"][
+            "registry-relay"
+        ].split("@", 1)[1]
+        record["target_release"]["notary_image_digest"] = lock["images"][
+            "registry-notary"
+        ].split("@", 1)[1]
+        artifacts["relay_image"] = record["target_release"]["relay_image_digest"]
+        artifacts["notary_image"] = record["target_release"][
+            "notary_image_digest"
+        ]
+        artifacts["image_lock"] = self.module.sha256_bytes(
+            image_lock.read_bytes()
+        )
+        record["candidate_artifact_set"]["sha256"] = (
+            self.module.canonical_sha256(artifacts)
+        )
+
+        with mock.patch.object(
+            self.module, "load_candidate", self.real_load_candidate
+        ):
+            self.validate_record(
+                record,
+                allow_template=False,
+                require_all_passed=True,
+                candidate_asset_dir=asset_dir,
+            )
 
     def test_topology_requires_one_dedicated_notary_per_relay(self) -> None:
         record = self.candidate()
@@ -287,7 +418,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             {"relay": "relay-authority-b", "notary": "notary-authority-a"}
         )
         with self.assertRaisesRegex(self.module.ExerciseError, "dedicated Notary"):
-            self.module.validate_record(record, allow_template=False)
+            self.validate_record(record, allow_template=False)
 
 
 if __name__ == "__main__":

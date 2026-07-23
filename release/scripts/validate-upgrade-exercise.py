@@ -16,6 +16,13 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from conformance_candidate import CandidateError, load_candidate  # noqa: E402
+
+
 SCHEMA = "registry-stack.upgrade-exercise/v1"
 SOLMARA_REPOSITORY = "registrystack/solmara-lab"
 STACK_REPOSITORY = "registrystack/registry-stack"
@@ -435,6 +442,62 @@ def validate_target_binding(record: dict[str, Any], root: Path) -> None:
             raise ExerciseError(f"candidate_artifact_set.artifacts.{field} does not match exact Git object")
 
 
+def validate_image_lock_binding(
+    record: dict[str, Any],
+    root: Path,
+    candidate_asset_dir: Path | None,
+) -> None:
+    if candidate_asset_dir is None:
+        raise ExerciseError(
+            "candidate evidence requires --candidate-asset-dir for image-lock authentication"
+        )
+    target = record["target_release"]
+    image_lock_path = (
+        candidate_asset_dir.expanduser()
+        / f"registryctl-{target['version']}-image-lock.json"
+    )
+    manifest_path = root / record["target_release_manifest"]["path"]
+    try:
+        candidate = load_candidate(manifest_path, image_lock_path)
+    except (CandidateError, OSError):
+        raise ExerciseError(
+            "candidate release image lock could not be authenticated"
+        ) from None
+    artifacts = record["candidate_artifact_set"]["artifacts"]
+    expected = {
+        "release_id": target["release_id"],
+        "version": target["version"].removeprefix("v"),
+        "source_ref": target["source_ref"],
+        "source_tag": target["version"],
+        "tag_target": target["source_commit"],
+        "image_lock_sha256": artifacts["image_lock"],
+        "relay_image": "ghcr.io/registrystack/registry-relay@sha256:"
+        + target["relay_image_digest"].removeprefix("sha256:"),
+        "notary_image": "ghcr.io/registrystack/registry-notary@sha256:"
+        + target["notary_image_digest"].removeprefix("sha256:"),
+    }
+    if candidate["image_lock_sha256"].removeprefix(
+        "sha256:"
+    ) != expected["image_lock_sha256"].removeprefix("sha256:"):
+        raise ExerciseError(
+            "candidate_artifact_set.artifacts.image_lock does not match "
+            "the exact authenticated release image-lock asset"
+        )
+    for field in (
+        "release_id",
+        "version",
+        "source_ref",
+        "source_tag",
+        "tag_target",
+        "relay_image",
+        "notary_image",
+    ):
+        if candidate[field] != expected[field]:
+            raise ExerciseError(
+                "authenticated release image lock does not match target release coordinates"
+            )
+
+
 def require_pass(record: dict[str, Any]) -> None:
     if not record["candidate_frozen"] or not record["candidate_independently_verified"]:
         raise ExerciseError("--require-pass requires both candidate attestations")
@@ -457,6 +520,7 @@ def validate_record(
     allow_template: bool,
     require_all_passed: bool = False,
     root: Path = ROOT,
+    candidate_asset_dir: Path | None = None,
 ) -> None:
     record = require_object(
         data,
@@ -519,6 +583,7 @@ def validate_record(
     validate_results(record["results"], template=template)
     if not template:
         validate_target_binding(record, root)
+        validate_image_lock_binding(record, root, candidate_asset_dir)
     if require_all_passed:
         require_pass(record)
 
@@ -533,6 +598,14 @@ def main() -> int:
     )
     parser.add_argument("--require-pass", action="store_true")
     parser.add_argument("--discover", type=Path)
+    parser.add_argument(
+        "--candidate-asset-dir",
+        type=Path,
+        help=(
+            "directory containing the downloaded image lock, SHA256SUMS, "
+            "release capsule, signatures, certificates, and provenance"
+        ),
+    )
     args = parser.parse_args()
     try:
         if args.discover:
@@ -546,6 +619,7 @@ def main() -> int:
                     data,
                     allow_template=template,
                     require_all_passed=not template,
+                    candidate_asset_dir=args.candidate_asset_dir,
                 )
             print(f"upgrade exercise discovery passed: {len(records)} record(s)")
             return 0
@@ -556,6 +630,7 @@ def main() -> int:
             data,
             allow_template=args.template,
             require_all_passed=args.require_pass,
+            candidate_asset_dir=args.candidate_asset_dir,
         )
     except (ExerciseError, OSError, json.JSONDecodeError) as error:
         print(f"upgrade exercise validation failed: {error}", file=sys.stderr)
