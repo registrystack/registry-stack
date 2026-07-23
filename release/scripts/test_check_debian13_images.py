@@ -17,6 +17,12 @@ LIVE_JOURNEY = Path(
     "crates/registry-relay/scripts/run-live-consultation-journey.sh"
 )
 CI_WORKFLOW = Path(".github/workflows/ci.yml")
+NOTARY_POSTGRES_WORKFLOW = Path(
+    ".github/workflows/notary-postgres-conformance.yml"
+)
+RELAY_POSTGRES_WORKFLOW = Path(
+    ".github/workflows/relay-postgres-conformance.yml"
+)
 
 EXPECTED_SURFACES = {
     CI_WORKFLOW,
@@ -147,21 +153,29 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 )
                 self.assertEqual([], self.module.check_repository(root))
 
-    def test_workflow_image_allowlist_has_one_bounded_exception(self) -> None:
-        allowed_path = Path(
-            ".github/workflows/relay-postgres-conformance.yml"
-        )
-        allowed_image = "postgres:${{ matrix.postgresql }}-alpine"
+    def test_workflow_image_allowlist_has_only_reviewed_postgres_images(
+        self,
+    ) -> None:
+        relay_image = "postgres:${{ matrix.postgresql }}-alpine"
+        notary_images = {
+            "postgres:16.13-alpine",
+            "postgres:16.14-alpine",
+            "postgres:17.9-alpine",
+            "postgres:17.10-alpine",
+            "postgres:18.3-alpine",
+            "postgres:18.4-alpine",
+        }
         self.assertEqual(
-            {(allowed_path, allowed_image)},
+            {(RELAY_POSTGRES_WORKFLOW, relay_image)}
+            | {(NOTARY_POSTGRES_WORKFLOW, image) for image in notary_images},
             set(self.module.WORKFLOW_IMAGE_ALLOWLIST),
         )
-        self.assertIn(
-            "not a project-owned Debian image",
-            self.module.WORKFLOW_IMAGE_ALLOWLIST[
-                (allowed_path, allowed_image)
-            ],
+        self.assertEqual(
+            {"image", "source_image", "target_image"},
+            set(self.module.WORKFLOW_IMAGE_KEYS),
         )
+        for rationale in self.module.WORKFLOW_IMAGE_ALLOWLIST.values():
+            self.assertIn("not a project-owned Debian image", rationale)
 
         workflow = (
             "name: External PostgreSQL conformance\n"
@@ -169,10 +183,12 @@ class Debian13ImageCheckTest(unittest.TestCase):
             "  state-plane:\n"
             "    services:\n"
             "      postgres:\n"
-            f'        image: "{allowed_image}"\n'
+            f'        image: "{relay_image}"\n'
         )
         root = self.fixture()
-        self.write_workflow(root, allowed_path.name, workflow)
+        self.write_workflow(root, RELAY_POSTGRES_WORKFLOW.name, workflow)
+        notary_target = root / NOTARY_POSTGRES_WORKFLOW
+        shutil.copyfile(ROOT / NOTARY_POSTGRES_WORKFLOW, notary_target)
         self.assertEqual([], self.module.check_repository(root))
 
         root = self.fixture()
@@ -232,6 +248,22 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 "    steps:\n"
                 "      - uses: docker://alpine:3.22\n",
             ),
+            (
+                "matrix-source-image.yml",
+                "name: Migration source\n"
+                "jobs:\n"
+                "  build:\n"
+                "    strategy:\n"
+                "      matrix:\n"
+                "        include:\n"
+                "          - source_image: postgres:16.13-alpine\n",
+            ),
+            (
+                "flow-target-image.yml",
+                "name: Migration target\n"
+                "jobs: {build: {strategy: {matrix: {include: "
+                '[{target_image: "postgres:16.14-alpine"}]}}}}\n',
+            ),
         )
         for name, workflow in cases:
             with self.subTest(name=name):
@@ -243,6 +275,36 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     root,
                     f"{relative}: workflow image reference is not allowlisted",
                 )
+
+    def test_notary_matrix_images_are_bound_to_the_owning_workflow(
+        self,
+    ) -> None:
+        source = (ROOT / NOTARY_POSTGRES_WORKFLOW).read_text(encoding="utf-8")
+        for key, reviewed, replacement in (
+            ("source_image", "postgres:16.13-alpine", "postgres:16-alpine"),
+            ("target_image", "postgres:16.14-alpine", "postgres:17-alpine"),
+        ):
+            with self.subTest(key=key):
+                root = self.fixture()
+                self.write_workflow(
+                    root,
+                    NOTARY_POSTGRES_WORKFLOW.name,
+                    source.replace(
+                        f"{key}: {reviewed}",
+                        f"{key}: {replacement}",
+                        1,
+                    ),
+                )
+                failures = self.module.check_repository(root)
+                self.assertTrue(
+                    any(
+                        f"{NOTARY_POSTGRES_WORKFLOW}: workflow image "
+                        "reference is not allowlisted" in failure
+                        for failure in failures
+                    ),
+                    failures,
+                )
+                self.assertNotIn(replacement, "\n".join(failures))
 
     def test_workflow_image_inventory_fails_closed(self) -> None:
         cases = (
@@ -288,6 +350,16 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 "  build:\n"
                 "    steps:\n"
                 "      - uses: docker://\n",
+                "unsupported workflow image value",
+            ),
+            (
+                "invalid-source-image.yml",
+                "jobs:\n"
+                "  build:\n"
+                "    strategy:\n"
+                "      matrix:\n"
+                "        include:\n"
+                "          - source_image: []\n",
                 "unsupported workflow image value",
             ),
         )
@@ -485,6 +557,73 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     )
                     self.assert_has_failure(root, failure)
 
+    def test_live_journey_uses_the_reviewed_postgres_alpine_image(
+        self,
+    ) -> None:
+        exact = self.module.LIVE_JOURNEY_POSTGRES_ASSIGNMENT
+        self.assertEqual(
+            'readonly POSTGRES_IMAGE="postgres:16.13-alpine"',
+            exact,
+        )
+        cases = (
+            'readonly POSTGRES_IMAGE="postgres:16"',
+            'readonly POSTGRES_IMAGE="postgres:16-alpine"',
+            'readonly POSTGRES_IMAGE="postgres:17.9-alpine"',
+            f"{exact}\n" + 'POSTGRES_IMAGE="postgres:16"',
+            f"# {exact}\n" + 'POSTGRES_IMAGE="postgres:16"',
+        )
+        failure = (
+            "live-journey PostgreSQL image assignment must remain the "
+            "single reviewed value"
+        )
+        for replacement in cases:
+            with self.subTest(replacement=replacement):
+                root = self.fixture()
+                target = root / LIVE_JOURNEY
+                text = target.read_text(encoding="utf-8")
+                self.assertIn(exact, text)
+                target.write_text(
+                    text.replace(exact, replacement, 1),
+                    encoding="utf-8",
+                )
+                failures = self.module.check_repository(root)
+                self.assertTrue(
+                    any(failure in item for item in failures),
+                    failures,
+                )
+                for line in replacement.splitlines():
+                    if line != exact:
+                        self.assertNotIn(line, "\n".join(failures))
+
+    def test_live_journey_postgres_consumers_are_bound_to_both_commands(
+        self,
+    ) -> None:
+        consumer = self.module.LIVE_JOURNEY_POSTGRES_CONSUMER
+        replacement = '  "postgres:17.9-alpine" \\'
+        failure_fragments = (
+            "live-journey PostgreSQL certificate setup command",
+            "live-journey PostgreSQL server command",
+        )
+        source = (ROOT / LIVE_JOURNEY).read_text(encoding="utf-8")
+        self.assertEqual(2, source.splitlines().count(consumer))
+        indexes = [
+            index for index, line in enumerate(source.splitlines()) if line == consumer
+        ]
+        for occurrence, failure in zip(indexes, failure_fragments):
+            with self.subTest(occurrence=occurrence):
+                root = self.fixture()
+                target = root / LIVE_JOURNEY
+                lines = source.splitlines()
+                lines[occurrence] = replacement
+                lines.append(consumer)
+                target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                failures = self.module.check_repository(root)
+                self.assertTrue(
+                    any(failure in item for item in failures),
+                    failures,
+                )
+                self.assertNotIn(replacement, "\n".join(failures))
+
     def test_builder_handoffs_and_docker_consumers_remain_exact(self) -> None:
         cases = (
             (
@@ -648,6 +787,86 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     root,
                     f"{relative}: upstream base is not pinned by immutable digest",
                 )
+
+    def test_dockerfile_copy_sources_are_reviewed_stages_or_contexts(
+        self,
+    ) -> None:
+        self.assertEqual(
+            set(self.module.DOCKERFILES),
+            set(self.module.DOCKERFILE_NAMED_CONTEXTS),
+        )
+        for relative in self.module.DOCKERFILES:
+            with self.subTest(relative=relative):
+                text = (ROOT / relative).read_text(encoding="utf-8")
+                aliases = {
+                    match.group("alias").casefold()
+                    for match in self.module.FROM_RE.finditer(text)
+                    if match.group("alias") is not None
+                }
+                sources = {
+                    match.group("source")
+                    for match in self.module.COPY_FROM_RE.finditer(text)
+                }
+                external_sources = {
+                    source for source in sources if source.casefold() not in aliases
+                }
+                self.assertEqual(
+                    self.module.DOCKERFILE_NAMED_CONTEXTS[relative],
+                    external_sources,
+                )
+
+    def test_dockerfile_copy_sources_reject_external_images_and_contexts(
+        self,
+    ) -> None:
+        sources = (
+            "unreviewed-context",
+            "alpine:3.22",
+            "ghcr.io/example/tool@sha256:" + "a" * 64,
+        )
+        failure = (
+            "COPY --from source is not a declared stage or reviewed named "
+            "build context"
+        )
+        for relative in self.module.DOCKERFILES:
+            for source in sources:
+                with self.subTest(relative=relative, source=source):
+                    root = self.fixture()
+                    target = root / relative
+                    text = target.read_text(encoding="utf-8")
+                    target.write_text(
+                        text + f"\n  copy --chown=65532:65532 --from={source} "
+                        "/bin/tool /bin/tool\n",
+                        encoding="utf-8",
+                    )
+                    failures = self.module.check_repository(root)
+                    self.assertTrue(
+                        any(failure in item for item in failures),
+                        failures,
+                    )
+                    self.assertNotIn(source, "\n".join(failures))
+
+    def test_dockerfile_named_context_allowlist_is_path_bounded(self) -> None:
+        for relative, contexts in self.module.DOCKERFILE_NAMED_CONTEXTS.items():
+            for context in contexts:
+                with self.subTest(relative=relative, context=context):
+                    root = self.fixture()
+                    target = root / relative
+                    text = target.read_text(encoding="utf-8")
+                    exact = f"--from={context}"
+                    self.assertIn(exact, text)
+                    target.write_text(
+                        text.replace(
+                            exact,
+                            f"--from={context}-copy",
+                            1,
+                        ),
+                        encoding="utf-8",
+                    )
+                    self.assert_has_failure(
+                        root,
+                        f"{relative}: COPY --from source is not a declared "
+                        "stage or reviewed named build context",
+                    )
 
     def test_dockerfile_stages_reject_forced_platforms(self) -> None:
         for relative in self.module.DOCKERFILES:

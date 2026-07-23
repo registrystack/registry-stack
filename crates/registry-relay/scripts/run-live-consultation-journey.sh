@@ -6,7 +6,7 @@ set +v
 set -euo pipefail
 umask 077
 
-readonly POSTGRES_IMAGE="postgres:16"
+readonly POSTGRES_IMAGE="postgres:16.13-alpine"
 
 [[ "$#" -le 1 ]] || {
   printf '%s\n' "usage: $0 [dhis2|rhai|synthetic]" >&2

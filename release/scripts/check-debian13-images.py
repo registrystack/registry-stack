@@ -43,6 +43,11 @@ RELEASE_BUILDER_HANDOFF = 'release_builder_image="${default_builder_image}"'
 RELEASE_BUILDER_CONSUMER = '  "${release_builder_image}" \\'
 TUTORIAL_BUILDER_CONSUMER = '\t\t"$BUILDER_IMAGE" \\'
 LIVE_JOURNEY_BUILDER = f"    {RUST_BUILDER} \\"
+LIVE_JOURNEY_POSTGRES_IMAGE = "postgres:16.13-alpine"
+LIVE_JOURNEY_POSTGRES_ASSIGNMENT = (
+    f'readonly POSTGRES_IMAGE="{LIVE_JOURNEY_POSTGRES_IMAGE}"'
+)
+LIVE_JOURNEY_POSTGRES_CONSUMER = '  "$POSTGRES_IMAGE" \\'
 RELEASE_BUILDER_PREFIX = (
     "docker run --rm \\",
     "  --platform linux/amd64 \\",
@@ -86,6 +91,23 @@ LIVE_JOURNEY_BUILDER_PREFIX = (
     "    --workdir /workspace \\",
     LIVE_JOURNEY_BUILDER,
 )
+LIVE_JOURNEY_POSTGRES_SETUP_PREFIX = (
+    "docker run --rm \\",
+    "  --user 0:0 \\",
+    '  --volume "$certificate_volume:/certificates" \\',
+    '  --volume "$certificate_input:/input:ro" \\',
+    LIVE_JOURNEY_POSTGRES_CONSUMER,
+    "  sh -eu -c \\",
+)
+LIVE_JOURNEY_POSTGRES_SERVER_PREFIX = (
+    "docker run --detach \\",
+    '  --name "$container_name" \\',
+    '  --env-file "$docker_env_file" \\',
+    "  --publish 127.0.0.1::5432 \\",
+    '  --volume "$certificate_volume:/certificates:ro" \\',
+    LIVE_JOURNEY_POSTGRES_CONSUMER,
+    "  -c ssl=on \\",
+)
 RELEASE_BUILDER_TAIL = "\n".join(
     (
         *RELEASE_BUILDER_PREFIX[-2:],
@@ -127,6 +149,18 @@ MAINTAINED_TEXT_PATHS = DOCKERFILES + (
     Path("products/notary/docs/security-assurance.md"),
 )
 
+NOTARY_POSTGRES_WORKFLOW_IMAGES = (
+    "postgres:16.13-alpine",
+    "postgres:16.14-alpine",
+    "postgres:17.9-alpine",
+    "postgres:17.10-alpine",
+    "postgres:18.3-alpine",
+    "postgres:18.4-alpine",
+)
+NOTARY_POSTGRES_WORKFLOW_RATIONALE = (
+    "External Alpine PostgreSQL migration conformance, not a "
+    "project-owned Debian image."
+)
 WORKFLOW_IMAGE_ALLOWLIST = {
     (
         Path(".github/workflows/relay-postgres-conformance.yml"),
@@ -135,7 +169,15 @@ WORKFLOW_IMAGE_ALLOWLIST = {
         "External Alpine PostgreSQL state-plane conformance, not a "
         "project-owned Debian image."
     ),
+    **{
+        (
+            Path(".github/workflows/notary-postgres-conformance.yml"),
+            image,
+        ): NOTARY_POSTGRES_WORKFLOW_RATIONALE
+        for image in NOTARY_POSTGRES_WORKFLOW_IMAGES
+    },
 }
+WORKFLOW_IMAGE_KEYS = frozenset(("image", "source_image", "target_image"))
 
 RUST_BUILDER_DOCKERFILES = DOCKERFILES[:3]
 PREPARATION_DOCKERFILES = DOCKERFILES[3:]
@@ -148,6 +190,19 @@ NOTARY_DOCKERFILES = (
     Path("products/notary/Dockerfile"),
     Path("release/docker/Dockerfile.registry-notary"),
 )
+DOCKERFILE_NAMED_CONTEXTS = {
+    Path("crates/registry-relay/Dockerfile"): frozenset(
+        ("registry-platform", "registry-manifest", "crosswalk")
+    ),
+    Path("crates/registry-relay/Dockerfile.demo"): frozenset(
+        ("registry-platform",)
+    ),
+    Path("products/notary/Dockerfile"): frozenset(
+        ("registry-platform", "crosswalk")
+    ),
+    Path("release/docker/Dockerfile.registry-notary"): frozenset(),
+    Path("release/docker/Dockerfile.registry-relay"): frozenset(),
+}
 
 RELAY_RUNTIME_DIRECTIVES = (
     (
@@ -189,6 +244,12 @@ FROM_RE = re.compile(
     r"[ \t]*(?:#.*)?$",
     re.IGNORECASE | re.MULTILINE,
 )
+COPY_FROM_RE = re.compile(
+    r"^[ \t]*COPY[ \t]+"
+    r"(?:--[^\s=]+(?:=[^\s]+)?[ \t]+)*"
+    r"--from=(?P<source>[^\s#]+)",
+    re.IGNORECASE | re.MULTILINE,
+)
 DIGEST_PIN_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 RETIRED_MARKER_RE = re.compile(
     r"\b(?:bookworm|debian[ \t_:-]*v?[ \t_:-]*12)\b",
@@ -213,6 +274,9 @@ RELEASE_BUILDER_HANDOFF_RE = re.compile(
 )
 LIVE_JOURNEY_BUILDER_RE = re.compile(
     r"^[ \t]+rust:[^ \t#]+[ \t]+\\[ \t]*$"
+)
+LIVE_JOURNEY_POSTGRES_ASSIGNMENT_RE = re.compile(
+    r"^[ \t]*(?:(?:export|readonly)[ \t]+)?POSTGRES_IMAGE[ \t]*="
 )
 CACHE_KEY_RE = re.compile(
     r"""^[ \t]*(?:key|'key'|"key")[ \t]*:"""
@@ -303,7 +367,7 @@ def collect_workflow_image_references(
                             f"{child_location}: container must be a non-empty "
                             "string or a mapping with an image key"
                         )
-                elif key == "image":
+                elif key in WORKFLOW_IMAGE_KEYS:
                     add_image(child, child_location)
                 elif (
                     key == "uses"
@@ -373,14 +437,18 @@ def require_exact_command_prefix(
     relative: Path,
     detail: str,
     failures: list[str],
+    *,
+    report_values: bool = True,
 ) -> None:
     actual_lines = tuple(command.splitlines()[: len(expected_lines)])
     if actual_lines != expected_lines:
-        failures.append(
+        failure = (
             f"{relative}: {detail} does not match the exact expected "
-            f"header/options/image prefix: expected {expected_lines!r}; "
-            f"found {actual_lines!r}"
+            "header/options/image prefix"
         )
+        if report_values:
+            failure += f": expected {expected_lines!r}; found {actual_lines!r}"
+        failures.append(failure)
 
 
 def workflow_step(text: str, name: str) -> str:
@@ -456,7 +524,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
             if (relative, value) not in WORKFLOW_IMAGE_ALLOWLIST:
                 failures.append(
                     f"{relative}: workflow image reference is not allowlisted "
-                    f"at {location}: {value!r}"
+                    f"at {location}"
                 )
 
     for relative in DOCKERFILES:
@@ -489,6 +557,22 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 f"{relative}: Dockerfile stage sequence must be exactly "
                 f"{expected_stages!r}; found {stages!r}"
             )
+        stage_aliases = {
+            alias.casefold()
+            for _base, alias, _platform in stages
+            if alias is not None
+        }
+        named_contexts = DOCKERFILE_NAMED_CONTEXTS[relative]
+        for match in COPY_FROM_RE.finditer(text):
+            source = match.group("source")
+            if (
+                source.casefold() not in stage_aliases
+                and source not in named_contexts
+            ):
+                failures.append(
+                    f"{relative}: COPY --from source is not a declared stage "
+                    "or reviewed named build context"
+                )
         for base, _alias, _platform in stages:
             if not DIGEST_PIN_RE.search(base):
                 failures.append(
@@ -698,11 +782,50 @@ def check_repository(root: Path = ROOT) -> list[str]:
     live_journey = texts[
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh")
     ]
+    live_journey_path = Path(
+        "crates/registry-relay/scripts/run-live-consultation-journey.sh"
+    )
+    postgres_assignments = [
+        line
+        for line in live_journey.splitlines()
+        if LIVE_JOURNEY_POSTGRES_ASSIGNMENT_RE.match(line)
+    ]
+    if postgres_assignments != [LIVE_JOURNEY_POSTGRES_ASSIGNMENT]:
+        failures.append(
+            f"{live_journey_path}: live-journey PostgreSQL image assignment "
+            "must remain the single reviewed value"
+        )
+    postgres_setup_command = shell_continuation_command(
+        live_journey,
+        "docker run --rm",
+        LIVE_JOURNEY_POSTGRES_CONSUMER,
+    )
+    require_exact_command_prefix(
+        postgres_setup_command,
+        LIVE_JOURNEY_POSTGRES_SETUP_PREFIX,
+        live_journey_path,
+        "live-journey PostgreSQL certificate setup command",
+        failures,
+        report_values=False,
+    )
+    postgres_server_command = shell_continuation_command(
+        live_journey,
+        "docker run --detach",
+        LIVE_JOURNEY_POSTGRES_CONSUMER,
+    )
+    require_exact_command_prefix(
+        postgres_server_command,
+        LIVE_JOURNEY_POSTGRES_SERVER_PREFIX,
+        live_journey_path,
+        "live-journey PostgreSQL server command",
+        failures,
+        report_values=False,
+    )
     require_unique_active_line(
         live_journey,
         (LIVE_JOURNEY_BUILDER,),
         LIVE_JOURNEY_BUILDER_RE,
-        Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
+        live_journey_path,
         "pinned Debian 13 live-journey builder",
         failures,
     )
@@ -714,14 +837,14 @@ def check_repository(root: Path = ROOT) -> list[str]:
     require_unique_text(
         live_builder_command,
         LIVE_JOURNEY_BUILDER_TAIL,
-        Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
+        live_journey_path,
         "live-journey Docker builder command tail",
         failures,
     )
     require_exact_command_prefix(
         live_builder_command,
         LIVE_JOURNEY_BUILDER_PREFIX,
-        Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
+        live_journey_path,
         "live-journey Docker builder command",
         failures,
     )
