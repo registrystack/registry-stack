@@ -175,6 +175,50 @@ class RelayOidcSmokeTest(TestCase):
                 with self.assertRaises(self.runner.SmokeError):
                     self.runner.validate_relay_image(image)
 
+    def test_execute_live_binds_validated_argument_over_ambient_image(self) -> None:
+        requested = "ghcr.io/registrystack/registry-relay@sha256:" + "a" * 64
+        ambient = "ghcr.io/registrystack/registry-relay@sha256:" + "b" * 64
+        image_variable = "REGISTRY_RELAY_OIDC_SMOKE_RELAY_IMAGE"
+        captured_environments: list[dict[str, str]] = []
+
+        def run_checked(
+            command: list[str], *, env: dict[str, str], **_kwargs: object
+        ) -> None:
+            captured_environments.append(dict(env))
+            if "up" in command:
+                raise self.runner.SmokeError("stop after environment capture")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = self.runner.argparse.Namespace(
+                relay_image=requested,
+                candidate_source_ref="c" * 40,
+                release_id="1.0.0-rc.1",
+                output_dir=str(root / "output"),
+                host_port=19191,
+            )
+            with (
+                patch.object(self.runner, "DEFAULT_WORK_ROOT", root / "work"),
+                patch.object(self.runner, "validate_assets", return_value={}),
+                patch.object(
+                    self.runner.shutil, "which", return_value="/usr/bin/docker"
+                ),
+                patch.object(self.runner, "run_checked", side_effect=run_checked),
+                patch.dict(
+                    self.runner.os.environ,
+                    {image_variable: ambient},
+                    clear=False,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    self.runner.SmokeError, "stop after environment capture"
+                ):
+                    self.runner.execute_live(args)
+
+        self.assertEqual(2, len(captured_environments))
+        for environment in captured_environments:
+            self.assertEqual(requested, environment[image_variable])
+
     def test_plan_is_offline_and_does_not_claim_live_evidence(self) -> None:
         plan = self.runner.plan_document(
             "ghcr.io/registrystack/registry-relay@sha256:" + "a" * 64,

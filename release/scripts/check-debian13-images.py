@@ -144,15 +144,34 @@ CONTAINER_VALUE_OPTIONS = {
     "--add-host",
     "--annotation",
     "--attach",
+    "--blkio-weight",
+    "--blkio-weight-device",
     "--cap-add",
     "--cap-drop",
+    "--cgroup-parent",
     "--cgroupns",
     "--cidfile",
+    "--cpu-count",
+    "--cpu-percent",
+    "--cpu-period",
+    "--cpu-quota",
+    "--cpu-rt-period",
+    "--cpu-rt-runtime",
+    "--cpu-shares",
     "--cpus",
     "--cpuset-cpus",
+    "--cpuset-mems",
+    "--detach-keys",
     "--device",
+    "--device-cgroup-rule",
+    "--device-read-bps",
+    "--device-read-iops",
+    "--device-write-bps",
+    "--device-write-iops",
     "--dns",
+    "--dns-option",
     "--dns-search",
+    "--domainname",
     "--entrypoint",
     "--env",
     "--env-file",
@@ -162,20 +181,34 @@ CONTAINER_VALUE_OPTIONS = {
     "--health-cmd",
     "--health-interval",
     "--health-retries",
+    "--health-start-interval",
+    "--health-start-period",
     "--health-timeout",
     "--hostname",
+    "--io-maxbandwidth",
+    "--io-maxiops",
+    "--ip",
+    "--ip6",
     "--ipc",
+    "--isolation",
     "--label",
+    "--label-file",
     "--link",
+    "--link-local-ip",
     "--log-driver",
     "--log-opt",
     "--mac-address",
     "--memory",
+    "--memory-reservation",
+    "--memory-swap",
+    "--memory-swappiness",
     "--mount",
     "--name",
     "--network",
     "--network-alias",
+    "--oom-score-adj",
     "--pid",
+    "--pids-limit",
     "--platform",
     "--publish",
     "--pull",
@@ -185,12 +218,19 @@ CONTAINER_VALUE_OPTIONS = {
     "--shm-size",
     "--stop-signal",
     "--stop-timeout",
+    "--storage-opt",
+    "--sysctl",
     "--tmpfs",
     "--ulimit",
     "--user",
+    "--userns",
+    "--uts",
     "--volume",
+    "--volume-driver",
+    "--volumes-from",
     "--workdir",
     "-a",
+    "-c",
     "-e",
     "-h",
     "-l",
@@ -204,11 +244,17 @@ CONTAINER_FLAG_OPTIONS = {
     "--detach",
     "--init",
     "--interactive",
+    "--no-healthcheck",
+    "--oom-kill-disable",
     "--privileged",
+    "--publish-all",
     "--quiet",
     "--read-only",
     "--rm",
+    "--sig-proxy",
     "--tty",
+    "--use-api-socket",
+    "-P",
     "-d",
     "-i",
     "-it",
@@ -216,7 +262,7 @@ CONTAINER_FLAG_OPTIONS = {
     "-t",
 }
 PULL_FLAG_OPTIONS = {"--all-tags", "--disable-content-trust", "-a", "-q"}
-SHORT_VALUE_OPTIONS = ("-e", "-h", "-l", "-m", "-p", "-u", "-v", "-w")
+SHORT_VALUE_OPTIONS = ("-c", "-e", "-h", "-l", "-m", "-p", "-u", "-v", "-w")
 DOCKER_CONTEXT_RE = re.compile(
     r"docker-image://(?P<ref>(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*"
     r"[A-Za-z0-9._-]+(?:\:[A-Za-z0-9_][A-Za-z0-9._-]*)?"
@@ -243,6 +289,11 @@ VALIDATED_IMAGE_CONTRACTS = {
             ),
             (
                 Path("crates/registryctl/src/lib.rs"),
+                'include_str!("templates/compose.yaml")'
+                '.replace("{{relay_image}}", image_lock.relay_image())',
+            ),
+            (
+                Path("crates/registryctl/src/lib.rs"),
                 "fn image_lock_rejects_mutable_or_noncanonical_image_references()",
             ),
             (
@@ -265,8 +316,16 @@ VALIDATED_IMAGE_CONTRACTS = {
                 "relay_image = validate_relay_image(args.relay_image)",
             ),
             (
+                Path("release/scripts/relay-oidc-smoke.py"),
+                '"REGISTRY_RELAY_OIDC_SMOKE_RELAY_IMAGE": relay_image,',
+            ),
+            (
                 Path("release/scripts/test_relay_oidc_smoke.py"),
                 "def test_relay_image_requires_exact_repository_and_lowercase_digest",
+            ),
+            (
+                Path("release/scripts/test_relay_oidc_smoke.py"),
+                "def test_execute_live_binds_validated_argument_over_ambient_image",
             ),
         ),
     ),
@@ -400,18 +459,23 @@ def is_debian_family(reference: str) -> bool:
     )
 
 
-def assignment(path: Path, line: str) -> tuple[str, str] | None:
-    match = (YAML_KEY_RE if path.suffix in {".yaml", ".yml"} else ASSIGN_RE).match(line)
-    if match is None:
-        return None
-    name = match.group("name")
-    value = match.group("value").strip()
-    if value.rstrip(",") in {"(", "[", "{"} or value.endswith(","):
+def image_assignment(name: str, value: str) -> tuple[str, str] | None:
+    stripped = value.strip()
+    if stripped.rstrip(",") in {"(", "[", "{"} or stripped.endswith(","):
         return None
     normalized = re.sub("[^A-Za-z0-9]", "", name).casefold()
     return (
-        (name, match.group("value"))
+        (name, value)
         if normalized.endswith("image") or normalized == "container"
+        else None
+    )
+
+
+def assignment(path: Path, line: str) -> tuple[str, str] | None:
+    match = (YAML_KEY_RE if path.suffix in {".yaml", ".yml"} else ASSIGN_RE).match(line)
+    return (
+        image_assignment(match.group("name"), match.group("value"))
+        if match is not None
         else None
     )
 
@@ -426,10 +490,10 @@ def split_flow_commas(value: str, nested: bool) -> list[str]:
         elif character in "\"'":
             quote = character
             current.append(character)
-        elif character == "[":
+        elif character in "([{":
             depth += 1
             current.append(character)
-        elif character == "]":
+        elif character in ")]}":
             depth = max(0, depth - 1)
             current.append(character)
         elif character == "," and bool(depth) == nested:
@@ -455,8 +519,8 @@ def command_tokens(value: str) -> list[str]:
     ]
 
 
-def container_image_values(line: str) -> list[str]:
-    values = []
+def container_image_operands(line: str) -> tuple[list[str], list[str]]:
+    values, errors = [], []
     for command in CLI_RE.finditer(line):
         tokens = command_tokens(command.group("tail"))
         action_index = next(
@@ -478,7 +542,7 @@ def container_image_values(line: str) -> list[str]:
             flag_options = CONTAINER_FLAG_OPTIONS | (
                 PULL_FLAG_OPTIONS if action == "pull" else set()
             )
-            ambiguous, index = False, action_index + 1
+            unknown_option, index = False, action_index + 1
             while index < len(tokens):
                 token = tokens[index]
                 if token == "\\":
@@ -500,23 +564,23 @@ def container_image_values(line: str) -> list[str]:
                 elif option in flag_options or re.fullmatch(r"-[diqt]+", option):
                     index += 1
                 else:
-                    ambiguous = True
-                    index += 1
+                    errors.append(
+                        f"unsupported Docker/Podman option has unknown arity: {option}"
+                    )
+                    unknown_option = True
+                    break
+            if unknown_option:
+                continue
             if index >= len(tokens):
                 values.append("")
-            elif ambiguous:
-                values.extend(
-                    token
-                    for token in tokens[index:]
-                    if token != "\\" and not token.startswith("-")
-                )
             else:
                 values.append(tokens[index])
-    return values
+    return values, errors
 
 
 def is_container_consumer(line: str) -> bool:
-    return bool(container_image_values(line))
+    values, errors = container_image_operands(line)
+    return bool(values or errors)
 
 
 def policy_image_name(name: str) -> bool:
@@ -632,17 +696,62 @@ def logical_lines(lines: list[str], flags: list[bool]) -> list[tuple[int, str, b
     return result
 
 
+def flow_mapping_bodies(line: str) -> list[str]:
+    bodies, starts, quote, escaped = [], [], "", False
+    for index, character in enumerate(line):
+        if quote:
+            if character == quote and not escaped:
+                quote = ""
+            escaped = character == "\\" and not escaped
+            if character != "\\":
+                escaped = False
+        elif character in "\"'":
+            quote = character
+        elif character == "{":
+            starts.append(index + 1)
+        elif character == "}" and starts:
+            bodies.append(line[starts.pop() : index])
+    return bodies
+
+
 def flow_mapping_fields(line: str) -> list[dict[str, str]]:
     mappings = []
-    for mapping in re.finditer(r"\{(?P<body>[^{}]*)\}", line):
+    for body in flow_mapping_bodies(line):
         fields = {}
-        for part in split_flow_commas(mapping.group("body"), nested=False):
+        for part in split_flow_commas(body, nested=False):
             name, separator, value = part.partition(":")
             if separator and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", name.strip()):
                 fields[name.strip().casefold()] = value.strip()
         if fields:
             mappings.append(fields)
     return mappings
+
+
+def flow_mapping_image_assignments(line: str) -> list[tuple[str, str]]:
+    return [
+        item
+        for fields in flow_mapping_fields(line)
+        for name, value in fields.items()
+        if (item := image_assignment(name, value)) is not None
+    ]
+
+
+def yaml_block_scalar_flags(lines: list[str]) -> list[bool]:
+    flags, scalar_indent = [], None
+    scalar = re.compile(
+        r"^\s*(?:-\s*)?[A-Za-z_][A-Za-z0-9_-]*\s*:\s*[>|][+-]?(?:\s+#.*)?$"
+    )
+    for line in lines:
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+        inside = scalar_indent is not None and (not stripped or indent > scalar_indent)
+        if scalar_indent is not None and stripped and indent <= scalar_indent:
+            scalar_indent = None
+            inside = False
+        flags.append(inside)
+        if not inside and scalar.fullmatch(line):
+            scalar_indent = indent
+    return flags
 
 
 def yaml_container_consumers(
@@ -791,6 +900,11 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
         if path.suffix in {".yaml", ".yml"}
         else ({}, [])
     )
+    yaml_scalar_flags = (
+        yaml_block_scalar_flags(lines)
+        if path.suffix in {".yaml", ".yml"}
+        else [False] * len(lines)
+    )
     failures.extend(f"{path}:{number}: {message}" for number, message in yaml_errors)
     exemption_comments, exempt_assignments = yaml_image_exemptions(path, lines)
     records: list[tuple[int, str, str, set[str], bool, bool]] = []
@@ -826,7 +940,13 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
                 failures.append(
                     f"{path}:{number}: retired Debian image generation marker remains: {marker}"
                 )
-        item = assignment(path, line) if code_file else None
+        items = []
+        if code_file:
+            item = assignment(path, line)
+            if item is not None:
+                items.append(item)
+            if path.suffix in {".yaml", ".yml"} and not yaml_scalar_flags[number - 1]:
+                items.extend(flow_mapping_image_assignments(line))
         consumer_line = yaml_consumers.get(number, line)
         consumer = (
             is_container_consumer(consumer_line)
@@ -837,7 +957,7 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
             is_dockerfile(path)
             or path.suffix in {".yaml", ".yml", ".sh", ".bash"}
             or markdown_code
-            or item is not None
+            or bool(items)
             or consumer
         )
         context_references = build_context_references(line)
@@ -860,8 +980,7 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
                     f"docker-image://{context}; use a literal static "
                     "docker-image:// reference"
                 )
-        if item:
-            name, value = item
+        for name, value in items:
             canonical = name.casefold()
             dependencies = {
                 found.group("name").casefold() for found in IMAGE_VAR_RE.finditer(value)
@@ -887,11 +1006,12 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
             records.append((number, canonical, value, dependencies, computed, strict))
             if ((has_literal or has_template) and not computed) or positional:
                 resolved.add(canonical)
-        bare_assignment = item is not None and (
+        bare_assignment = any(
             path.suffix in {".yaml", ".yml"}
-            and yaml_policy_image_name(item[0])
+            and yaml_policy_image_name(name)
             or strict_code_assignments
-            and policy_image_name(item[0])
+            and policy_image_name(name)
+            for name, _ in items
         )
         if (
             not comment
@@ -924,12 +1044,15 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
         (number, line, False) for number, line in yaml_consumers.items()
     )
     for number, line, markdown_code in consumer_records:
-        image_values = container_image_values(line)
+        image_values, option_errors = container_image_operands(line)
         if (
             line.lstrip().startswith(("#", "//"))
             or not (code_file or markdown_code)
-            or not image_values
+            or not (image_values or option_errors)
         ):
+            continue
+        failures.extend(f"{path}:{number}: {message}" for message in option_errors)
+        if not image_values:
             continue
         image_text = " ".join(image_values)
         for reference in references(image_text):

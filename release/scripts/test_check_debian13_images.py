@@ -296,7 +296,6 @@ class Debian13ImageCheckTest(unittest.TestCase):
             "sudo -s /usr/bin/docker run --rm rust:1.95-trixie",
             "bash --noprofile -c 'docker run --rm rust:1.95-trixie'",
             "if ! time -p docker run --rm rust:1.95-trixie; then true; fi",
-            "echo ok; podman run --unknown value rust:1.95-trixie",
             "docker unknown rust:1.95-trixie",
             "docker run 'rust:1.95-trixie",
         )
@@ -309,7 +308,17 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 )
 
         for command in (
+            "echo ok; podman run --unknown value rust:1.95-trixie",
             f"docker run --unknown value {PINNED_RUST}",
+        ):
+            with self.subTest(command=command):
+                self.assert_failure(
+                    "script.sh",
+                    command + "\n",
+                    "unsupported Docker/Podman option has unknown arity: --unknown",
+                )
+
+        for command in (
             f"sudo --unknown docker unknown {PINNED_RUST}",
             f"bash --unknown -c 'docker run {PINNED_RUST}'",
         ):
@@ -501,6 +510,45 @@ class Debian13ImageCheckTest(unittest.TestCase):
         self.assert_clean(
             "metadata.yaml",
             "metadata_image: rust:$TAG\nartifact_image: postgres:$PG_TAG\n",
+        )
+
+    def test_yaml_flow_mapping_image_keys_use_assignment_policy(self) -> None:
+        cases = (
+            "services:\n  app: {image: rust:$TAG}\n",
+            'services:\n  app: {image: "rust:${TAG}"}\n',
+            "jobs:\n  test: {container: postgres:$PG_TAG}\n",
+            "images: {builder_image: rust:$TAG}\n",
+            "x-service: &defaults {image: rust:$TAG}\n"
+            "services:\n  app:\n    <<: *defaults\n",
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                self.assert_failure(
+                    "compose.yaml",
+                    text,
+                    "computed or unresolved image assignment",
+                )
+
+        self.assert_clean(
+            "compose.yaml",
+            f"services:\n  app: {{image: {PINNED_RUST}}}\n",
+        )
+        self.assert_clean(
+            "compose.yaml",
+            "services:\n  app: {image: registryctl-relay:$TAG}\n",
+        )
+        self.assert_clean(
+            "metadata.yaml",
+            "metadata: {metadata_image: rust:$TAG}\n",
+        )
+        self.assert_clean(
+            ".github/workflows/example.yml",
+            "steps:\n  - run: |\n      jq '{image: $builder_image}' input.json\n",
+        )
+        self.assert_clean(
+            "compose.yaml",
+            f"x-service: &defaults {{image: {PINNED_RUST}}}\n"
+            "services:\n  app:\n    <<: *defaults\n",
         )
 
     def test_validated_image_annotations_are_path_and_contract_scoped(self) -> None:
@@ -727,6 +775,88 @@ class Debian13ImageCheckTest(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assert_failure("helper.sh", command, family)
+
+    def test_documented_container_options_preserve_the_image_operand(self) -> None:
+        value_options = (
+            ("--blkio-weight", "500"),
+            ("--blkio-weight-device", "/dev/sda:500"),
+            ("--cgroup-parent", "registry.slice"),
+            ("--cpu-count", "2"),
+            ("--cpu-percent", "50"),
+            ("--cpu-period", "100000"),
+            ("--cpu-quota", "50000"),
+            ("--cpu-rt-period", "1000000"),
+            ("--cpu-rt-runtime", "950000"),
+            ("--cpu-shares", "512"),
+            ("-c", "512"),
+            ("--cpuset-mems", "0"),
+            ("--detach-keys", "ctrl-x"),
+            ("--device-cgroup-rule", "c 42:* rmw"),
+            ("--device-read-bps", "/dev/sda:1mb"),
+            ("--device-read-iops", "/dev/sda:1000"),
+            ("--device-write-bps", "/dev/sda:1mb"),
+            ("--device-write-iops", "/dev/sda:1000"),
+            ("--dns-option", "ndots:2"),
+            ("--domainname", "example.test"),
+            ("--health-start-interval", "1s"),
+            ("--health-start-period", "5s"),
+            ("--io-maxbandwidth", "10mb"),
+            ("--io-maxiops", "1000"),
+            ("--ip", "172.30.100.104"),
+            ("--ip6", "2001:db8::33"),
+            ("--isolation", "process"),
+            ("--label-file", "labels.txt"),
+            ("--link-local-ip", "169.254.1.2"),
+            ("--memory-reservation", "256m"),
+            ("--memory-swap", "1g"),
+            ("--memory-swappiness", "60"),
+            ("--oom-score-adj", "100"),
+            ("--pids-limit", "100"),
+            ("--storage-opt", "size=10G"),
+            ("--sysctl", "net.ipv4.ip_forward=1"),
+            ("--userns", "host"),
+            ("--uts", "host"),
+            ("--volume-driver", "local"),
+            ("--volumes-from", "data"),
+        )
+        for option, value in value_options:
+            with self.subTest(option=option, image="alpine"):
+                self.assert_clean(
+                    "helper.sh",
+                    f"docker run {option} {value!r} alpine:3.22 true\n",
+                )
+            with self.subTest(option=option, image="postgres"):
+                self.assert_failure(
+                    "helper.sh",
+                    f"docker create {option} {value!r} postgres true\n",
+                    "postgres",
+                )
+
+        for option in (
+            "--no-healthcheck",
+            "--oom-kill-disable",
+            "--publish-all",
+            "-P",
+            "--sig-proxy",
+            "--use-api-socket",
+        ):
+            with self.subTest(option=option, image="alpine"):
+                self.assert_clean(
+                    "helper.sh",
+                    f"docker run {option} alpine:3.22 true\n",
+                )
+            with self.subTest(option=option, image="postgres"):
+                self.assert_failure(
+                    "helper.sh",
+                    f"docker run {option} postgres true\n",
+                    "postgres",
+                )
+
+        self.assert_failure(
+            "helper.sh",
+            "docker run --future-option value alpine:3.22 true\n",
+            "unsupported Docker/Podman option has unknown arity: --future-option",
+        )
 
     def test_multiline_container_commands_scan_the_joined_operand(self) -> None:
         self.assert_failure(
