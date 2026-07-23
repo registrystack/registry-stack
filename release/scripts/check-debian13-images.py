@@ -103,12 +103,22 @@ ASSIGN_RE = re.compile(
     r"(?P<name>[A-Za-z_][A-Za-z0-9_$-]*)(?:\s*:[^=]+)?"
     r"\s*=\s*(?P<value>.+)$"
 )
+YAML_PLAIN_KEY = r"[A-Za-z_][A-Za-z0-9_$-]*"
+YAML_SIMPLE_KEY = rf"""(?:{YAML_PLAIN_KEY}|"{YAML_PLAIN_KEY}"|'{YAML_PLAIN_KEY}')"""
 YAML_KEY_RE = re.compile(
-    r"^\s*(?:-\s*)?(?P<name>[A-Za-z_][A-Za-z0-9_$-]*)\s*:\s*(?P<value>.+)$"
+    rf"^\s*(?:-\s*)?(?P<name>{YAML_SIMPLE_KEY})\s*:\s*(?P<value>.+)$"
 )
 YAML_FIELD_RE = re.compile(
     r"^(?P<indent>\s*)(?P<item>-\s*)?"
-    r"(?P<name>[A-Za-z_][A-Za-z0-9_$-]*)\s*:\s*(?P<value>.*)$"
+    rf"(?P<name>{YAML_SIMPLE_KEY})\s*:\s*(?P<value>.*)$"
+)
+YAML_EMPTY_KEY_RE = re.compile(rf"^\s*(?:-\s*)?(?P<name>{YAML_SIMPLE_KEY})\s*:\s*$")
+YAML_EXPLICIT_KEY_RE = re.compile(
+    rf"^\s*(?:-\s*)?\?\s*(?P<name>{YAML_SIMPLE_KEY})(?:\s*:\s*.*)?$"
+)
+YAML_SCALAR_ANCHOR_RE = re.compile(
+    rf"^\s*(?:-\s*)?{YAML_SIMPLE_KEY}\s*:\s*"
+    r"&(?P<anchor>[A-Za-z0-9_-]+)\s+(?P<value>.+)$"
 )
 IMAGE_VAR_RE = re.compile(
     r"\b(?P<name>[A-Za-z_][A-Za-z0-9_$-]*(?:_image|Image)|IMAGE)\b",
@@ -257,12 +267,11 @@ CONTAINER_FLAG_OPTIONS = {
     "-P",
     "-d",
     "-i",
-    "-it",
     "-q",
     "-t",
 }
 PULL_FLAG_OPTIONS = {"--all-tags", "--disable-content-trust", "-a", "-q"}
-SHORT_VALUE_OPTIONS = ("-c", "-e", "-h", "-l", "-m", "-p", "-u", "-v", "-w")
+CONTAINER_TERMINAL_OPTIONS = {"--help"}
 DOCKER_CONTEXT_RE = re.compile(
     r"docker-image://(?P<ref>(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*"
     r"[A-Za-z0-9._-]+(?:\:[A-Za-z0-9_][A-Za-z0-9._-]*)?"
@@ -459,22 +468,31 @@ def is_debian_family(reference: str) -> bool:
     )
 
 
+def image_assignment_name(name: str) -> bool:
+    normalized = re.sub("[^A-Za-z0-9]", "", name).casefold()
+    return normalized.endswith("image") or normalized == "container"
+
+
 def image_assignment(name: str, value: str) -> tuple[str, str] | None:
     stripped = value.strip()
     if stripped.rstrip(",") in {"(", "[", "{"} or stripped.endswith(","):
         return None
-    normalized = re.sub("[^A-Za-z0-9]", "", name).casefold()
-    return (
-        (name, value)
-        if normalized.endswith("image") or normalized == "container"
-        else None
-    )
+    return (name, value) if image_assignment_name(name) else None
+
+
+def yaml_key_name(value: str) -> str:
+    return value[1:-1] if value[:1] in "\"'" and value[-1:] == value[:1] else value
 
 
 def assignment(path: Path, line: str) -> tuple[str, str] | None:
     match = (YAML_KEY_RE if path.suffix in {".yaml", ".yml"} else ASSIGN_RE).match(line)
     return (
-        image_assignment(match.group("name"), match.group("value"))
+        image_assignment(
+            yaml_key_name(match.group("name"))
+            if path.suffix in {".yaml", ".yml"}
+            else match.group("name"),
+            match.group("value"),
+        )
         if match is not None
         else None
     )
@@ -519,8 +537,27 @@ def command_tokens(value: str) -> list[str]:
     ]
 
 
-def container_image_operands(line: str) -> tuple[list[str], list[str]]:
-    values, errors = [], []
+def short_option_consumption(
+    token: str, value_options: set[str], flag_options: set[str]
+) -> tuple[int, str | None]:
+    if len(token) == 1:
+        return 0, "unsupported Docker/Podman short-option cluster: -"
+    for index, character in enumerate(token[1:]):
+        option = f"-{character}"
+        if option in flag_options:
+            continue
+        if option in value_options:
+            return (1 if index + 2 < len(token) else 2), None
+        return (
+            0,
+            "unsupported Docker/Podman short-option cluster: "
+            f"{token}; unknown option: {option}",
+        )
+    return 1, None
+
+
+def container_image_operands(line: str) -> tuple[list[str], list[str], bool]:
+    values, errors, recognized = [], [], False
     for command in CLI_RE.finditer(line):
         tokens = command_tokens(command.group("tail"))
         action_index = next(
@@ -535,6 +572,7 @@ def container_image_operands(line: str) -> tuple[list[str], list[str]]:
             continue
         prefix = {token.casefold().lstrip("-") for token in tokens[:action_index]}
         if not prefix & NON_IMAGE_NAMESPACES:
+            recognized = True
             action = tokens[action_index].casefold()
             value_options = CONTAINER_VALUE_OPTIONS - (
                 {"-a", "--attach"} if action == "pull" else set()
@@ -542,7 +580,7 @@ def container_image_operands(line: str) -> tuple[list[str], list[str]]:
             flag_options = CONTAINER_FLAG_OPTIONS | (
                 PULL_FLAG_OPTIONS if action == "pull" else set()
             )
-            unknown_option, index = False, action_index + 1
+            terminal_option, unknown_option, index = False, False, action_index + 1
             while index < len(tokens):
                 token = tokens[index]
                 if token == "\\":
@@ -553,34 +591,46 @@ def container_image_operands(line: str) -> tuple[list[str], list[str]]:
                     break
                 if not token.startswith("-"):
                     break
-                option = token.split("=", 1)[0]
-                attached = (
-                    option in SHORT_VALUE_OPTIONS
-                    and token != option
-                    and not token.startswith("--")
-                )
-                if option in value_options:
-                    index += 1 if "=" in token or attached else 2
-                elif option in flag_options or re.fullmatch(r"-[diqt]+", option):
-                    index += 1
+                if token.startswith("--"):
+                    option = token.split("=", 1)[0]
+                    if token in CONTAINER_TERMINAL_OPTIONS:
+                        terminal_option = True
+                        index = len(tokens)
+                        break
+                    if option in value_options:
+                        index += 1 if "=" in token else 2
+                    elif option in flag_options:
+                        index += 1
+                    else:
+                        errors.append(
+                            "unsupported Docker/Podman option has unknown arity: "
+                            f"{option}"
+                        )
+                        unknown_option = True
+                        break
                 else:
-                    errors.append(
-                        f"unsupported Docker/Podman option has unknown arity: {option}"
+                    consumed, error = short_option_consumption(
+                        token, value_options, flag_options
                     )
-                    unknown_option = True
-                    break
+                    if error is not None:
+                        errors.append(error)
+                        unknown_option = True
+                        break
+                    index += consumed
             if unknown_option:
+                continue
+            if terminal_option:
                 continue
             if index >= len(tokens):
                 values.append("")
             else:
                 values.append(tokens[index])
-    return values, errors
+    return values, errors, recognized
 
 
 def is_container_consumer(line: str) -> bool:
-    values, errors = container_image_operands(line)
-    return bool(values or errors)
+    _, _, recognized = container_image_operands(line)
+    return recognized
 
 
 def policy_image_name(name: str) -> bool:
@@ -696,7 +746,23 @@ def logical_lines(lines: list[str], flags: list[bool]) -> list[tuple[int, str, b
     return result
 
 
-def flow_mapping_bodies(line: str) -> list[str]:
+def yaml_code(line: str) -> str:
+    quote, escaped = "", False
+    for index, character in enumerate(line):
+        if quote:
+            if character == quote and not escaped:
+                quote = ""
+            escaped = quote == '"' and character == "\\" and not escaped
+            if character != "\\":
+                escaped = False
+        elif character in "\"'":
+            quote = character
+        elif character == "#" and (index == 0 or line[index - 1].isspace()):
+            return line[:index].rstrip()
+    return line
+
+
+def flow_mapping_parts(line: str) -> tuple[list[str], list[str]]:
     bodies, starts, quote, escaped = [], [], "", False
     for index, character in enumerate(line):
         if quote:
@@ -711,35 +777,127 @@ def flow_mapping_bodies(line: str) -> list[str]:
             starts.append(index + 1)
         elif character == "}" and starts:
             bodies.append(line[starts.pop() : index])
-    return bodies
+    return bodies, [line[start:] for start in starts]
 
 
-def flow_mapping_fields(line: str) -> list[dict[str, str]]:
+def flow_mapping_pairs(line: str) -> list[list[tuple[str, str]]]:
     mappings = []
-    for body in flow_mapping_bodies(line):
-        fields = {}
+    for body in flow_mapping_parts(line)[0]:
+        fields = []
         for part in split_flow_commas(body, nested=False):
             name, separator, value = part.partition(":")
-            if separator and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", name.strip()):
-                fields[name.strip().casefold()] = value.strip()
+            raw_name = name.strip()
+            if separator and re.fullmatch(YAML_SIMPLE_KEY, raw_name):
+                fields.append((yaml_key_name(raw_name), value.strip()))
         if fields:
             mappings.append(fields)
     return mappings
 
 
+def flow_mapping_fields(line: str) -> list[dict[str, str]]:
+    return [
+        {name.casefold(): value for name, value in pairs}
+        for pairs in flow_mapping_pairs(line)
+    ]
+
+
 def flow_mapping_image_assignments(line: str) -> list[tuple[str, str]]:
     return [
         item
-        for fields in flow_mapping_fields(line)
-        for name, value in fields.items()
+        for pairs in flow_mapping_pairs(line)
+        for name, value in pairs
+        if value
         if (item := image_assignment(name, value)) is not None
     ]
+
+
+def flow_explicit_policy_key(body: str) -> str | None:
+    for part in split_flow_commas(body, nested=False):
+        match = re.match(rf"^\s*\?\s*(?P<name>{YAML_SIMPLE_KEY})(?:\s|:|$)", part)
+        if match is not None:
+            name = yaml_key_name(match.group("name"))
+            if image_assignment_name(name):
+                return name
+    return None
+
+
+def unsupported_yaml_policy_keys(line: str) -> list[str]:
+    names = []
+    for pattern in (YAML_EMPTY_KEY_RE, YAML_EXPLICIT_KEY_RE):
+        match = pattern.match(line)
+        if match is not None:
+            name = yaml_key_name(match.group("name"))
+            if image_assignment_name(name):
+                names.append(name)
+    closed, opened = flow_mapping_parts(line)
+    for body in closed:
+        explicit = flow_explicit_policy_key(body)
+        if explicit is not None:
+            names.append(explicit)
+        for pairs in flow_mapping_pairs(f"{{{body}}}"):
+            names.extend(
+                name
+                for name, value in pairs
+                if not value and image_assignment_name(name)
+            )
+    for body in opened:
+        explicit = flow_explicit_policy_key(body)
+        if explicit is not None:
+            names.append(explicit)
+        for part in split_flow_commas(body, nested=False):
+            raw_name, separator, _ = part.partition(":")
+            raw_name = raw_name.strip()
+            if separator and re.fullmatch(YAML_SIMPLE_KEY, raw_name):
+                name = yaml_key_name(raw_name)
+                if image_assignment_name(name):
+                    names.append(name)
+    return list(dict.fromkeys(names))
+
+
+def compliant_scalar_anchor(line: str) -> tuple[str, str] | None:
+    match = YAML_SCALAR_ANCHOR_RE.match(line)
+    if match is None:
+        return None
+    reference = exact_reference(match.group("value"))
+    if reference is None:
+        return None
+    if is_debian_family(reference) and (
+        DIGEST_RE.search(reference) is None
+        or "trixie" not in reference.casefold()
+        and re.search(r"debian-?13", reference, re.IGNORECASE) is None
+    ):
+        return None
+    return match.group("anchor"), reference
+
+
+def yaml_anchor_declarations(line: str) -> list[str]:
+    names, quote, escaped, index = [], "", False, 0
+    while index < len(line):
+        character = line[index]
+        if quote:
+            if character == quote and not escaped:
+                quote = ""
+            escaped = quote == '"' and character == "\\" and not escaped
+            if character != "\\":
+                escaped = False
+        elif character in "\"'":
+            quote = character
+        elif character == "&" and (
+            index == 0 or line[index - 1].isspace() or line[index - 1] in "[{,:-"
+        ):
+            match = re.match(r"[A-Za-z0-9_-]+", line[index + 1 :])
+            if match is not None:
+                names.append(match.group())
+                index += len(match.group())
+        index += 1
+    return names
 
 
 def yaml_block_scalar_flags(lines: list[str]) -> list[bool]:
     flags, scalar_indent = [], None
     scalar = re.compile(
-        r"^\s*(?:-\s*)?[A-Za-z_][A-Za-z0-9_-]*\s*:\s*[>|][+-]?(?:\s+#.*)?$"
+        rf"^\s*(?:-\s*)?{YAML_SIMPLE_KEY}\s*:\s*"
+        r"[>|](?:[1-9][+-]?|[+-][1-9]?)?(?:\s+#.*)?$"
     )
     for line in lines:
         stripped = line.strip()
@@ -812,25 +970,26 @@ def yaml_container_consumers(
 
     for offset, line in enumerate(lines):
         number = offset + 1
-        if not line.strip() or line.lstrip().startswith("#"):
+        source = yaml_code(line)
+        if not source.strip():
             continue
         for anchor in re.finditer(
             r"&(?P<name>[A-Za-z0-9_-]+)\s+"
             r"(?P<value>\[[^\]\n]+\]|[\"']?(?:docker|podman)[\"']?)",
-            line,
+            source,
         ):
             anchors[anchor.group("name")] = anchor.group("value")
-        for mapping in flow_mapping_fields(line):
+        for mapping in flow_mapping_fields(source):
             if {"entrypoint", "command"} <= mapping.keys():
                 combine(number, mapping["entrypoint"], mapping["command"])
-        indent = len(line) - len(line.lstrip())
+        indent = len(source) - len(source.lstrip())
         while parents and parents[-1][0] >= indent:
             parents.pop()
-        match = YAML_FIELD_RE.match(line)
+        match = YAML_FIELD_RE.match(source)
         if match is None:
             parents.append((indent, number))
             continue
-        name = match.group("name").casefold()
+        name = yaml_key_name(match.group("name")).casefold()
         scope = number if match.group("item") else parents[-1][1] if parents else 0
         if name in {"entrypoint", "command"}:
             value = match.group("value").strip()
@@ -908,7 +1067,7 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
     failures.extend(f"{path}:{number}: {message}" for number, message in yaml_errors)
     exemption_comments, exempt_assignments = yaml_image_exemptions(path, lines)
     records: list[tuple[int, str, str, set[str], bool, bool]] = []
-    resolved = set()
+    resolved, yaml_anchors = set(), {}
     for number, line in enumerate(lines, 1):
         if len(line) > MAX_LINE_CHARS:
             raise ImageSurfaceError(
@@ -934,6 +1093,7 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
             )
         if exemption:
             continue
+        yaml_source = yaml_code(line) if path.suffix in {".yaml", ".yml"} else line
         lowered = line.casefold()
         for marker in RETIRED_MARKERS:
             if marker in lowered:
@@ -942,12 +1102,32 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
                 )
         items = []
         if code_file:
-            item = assignment(path, line)
+            scalar_yaml = (
+                path.suffix in {".yaml", ".yml"} and yaml_scalar_flags[number - 1]
+            )
+            if (
+                path.suffix in {".yaml", ".yml"}
+                and not scalar_yaml
+                and re.fullmatch(r"\s*(?:---|\.\.\.)\s*", yaml_source)
+            ):
+                yaml_anchors.clear()
+            item = assignment(path, yaml_source) if not scalar_yaml else None
             if item is not None:
                 items.append(item)
-            if path.suffix in {".yaml", ".yml"} and not yaml_scalar_flags[number - 1]:
-                items.extend(flow_mapping_image_assignments(line))
-        consumer_line = yaml_consumers.get(number, line)
+            if path.suffix in {".yaml", ".yml"} and not scalar_yaml:
+                items.extend(flow_mapping_image_assignments(yaml_source))
+                for name in unsupported_yaml_policy_keys(yaml_source):
+                    failures.append(
+                        f"{path}:{number}: unsupported YAML image policy-key "
+                        f"syntax: {name}; use a simple block key or a single-line "
+                        "flow mapping"
+                    )
+                for anchor_name in yaml_anchor_declarations(yaml_source):
+                    yaml_anchors.pop(anchor_name, None)
+                anchor = compliant_scalar_anchor(yaml_source)
+                if anchor is not None:
+                    yaml_anchors[anchor[0]] = anchor[1]
+        consumer_line = yaml_consumers.get(number, yaml_source)
         consumer = (
             is_container_consumer(consumer_line)
             and (code_file or markdown_code)
@@ -960,9 +1140,9 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
             or bool(items)
             or consumer
         )
-        context_references = build_context_references(line)
+        context_references = build_context_references(yaml_source)
         if reference_context and not consumer:
-            for reference in references(line):
+            for reference in references(yaml_source):
                 if reference not in context_references:
                     append_reference_failures(path, number, reference, failures)
         if reference_context:
@@ -974,7 +1154,7 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
                     failures,
                     "Docker build context",
                 )
-            for context in computed_build_contexts(line):
+            for context in computed_build_contexts(yaml_source):
                 failures.append(
                     f"{path}:{number}: computed Docker build context is not allowed: "
                     f"docker-image://{context}; use a literal static "
@@ -982,10 +1162,18 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
                 )
         for name, value in items:
             canonical = name.casefold()
+            anchor = re.fullmatch(r"\*(?P<name>[A-Za-z0-9_-]+)", value.strip())
+            anchored_reference = (
+                yaml_anchors.get(anchor.group("name"))
+                if anchor is not None and path.suffix in {".yaml", ".yml"}
+                else None
+            )
             dependencies = {
                 found.group("name").casefold() for found in IMAGE_VAR_RE.finditer(value)
             }
-            has_literal = exact_reference(value) is not None
+            has_literal = (
+                exact_reference(value) is not None or anchored_reference is not None
+            )
             alias = is_image_alias(value)
             has_template = (
                 not has_literal and not dependencies and has_safe_image_template(value)
@@ -1016,10 +1204,10 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
         if (
             not comment
             and not consumer
-            and BARE_DEFAULT_FAMILY_RE.search(line)
+            and BARE_DEFAULT_FAMILY_RE.search(yaml_source)
             and (is_dockerfile(path) or bare_assignment)
         ):
-            append_bare_failures(path, number, line, failures)
+            append_bare_failures(path, number, yaml_source, failures)
     changed = True
     while changed:
         changed = False
@@ -1039,12 +1227,17 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
                 f"is not allowed: {value.strip()}; use a literal static repository "
                 "and digest, or a reviewed allow-validated-image validator contract"
             )
-    consumer_records = logical_lines(lines, markdown_flags)
+    source_lines = (
+        [yaml_code(line) for line in lines]
+        if path.suffix in {".yaml", ".yml"}
+        else lines
+    )
+    consumer_records = logical_lines(source_lines, markdown_flags)
     consumer_records.extend(
         (number, line, False) for number, line in yaml_consumers.items()
     )
     for number, line, markdown_code in consumer_records:
-        image_values, option_errors = container_image_operands(line)
+        image_values, option_errors, _ = container_image_operands(line)
         if (
             line.lstrip().startswith(("#", "//"))
             or not (code_file or markdown_code)

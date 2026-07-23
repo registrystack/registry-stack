@@ -516,9 +516,12 @@ class Debian13ImageCheckTest(unittest.TestCase):
         cases = (
             "services:\n  app: {image: rust:$TAG}\n",
             'services:\n  app: {image: "rust:${TAG}"}\n',
+            'services:\n  app: {"image": rust:$TAG}\n',
             "jobs:\n  test: {container: postgres:$PG_TAG}\n",
             "images: {builder_image: rust:$TAG}\n",
             "x-service: &defaults {image: rust:$TAG}\n"
+            "services:\n  app:\n    <<: *defaults\n",
+            'x-service: &defaults {"image": rust:$TAG}\n'
             "services:\n  app:\n    <<: *defaults\n",
         )
         for text in cases:
@@ -532,6 +535,10 @@ class Debian13ImageCheckTest(unittest.TestCase):
         self.assert_clean(
             "compose.yaml",
             f"services:\n  app: {{image: {PINNED_RUST}}}\n",
+        )
+        self.assert_clean(
+            "compose.yaml",
+            f'services:\n  app: {{"image": {PINNED_RUST}}}\n',
         )
         self.assert_clean(
             "compose.yaml",
@@ -550,6 +557,101 @@ class Debian13ImageCheckTest(unittest.TestCase):
             f"x-service: &defaults {{image: {PINNED_RUST}}}\n"
             "services:\n  app:\n    <<: *defaults\n",
         )
+        self.assert_clean(
+            "compose.yaml",
+            f'x-service: &defaults {{"image": {PINNED_RUST}}}\n'
+            "services:\n  app:\n    <<: *defaults\n",
+        )
+
+    def test_yaml_quoted_and_unsupported_policy_key_syntax_fails_closed(
+        self,
+    ) -> None:
+        for text in (
+            'services:\n  app:\n    "image": rust:$TAG\n',
+            "services:\n  app:\n    'container': postgres:$PG_TAG\n",
+        ):
+            with self.subTest(text=text):
+                self.assert_failure(
+                    "compose.yaml",
+                    text,
+                    "computed or unresolved image assignment",
+                )
+
+        for text in (
+            "services:\n  app: {image:\n    rust:$TAG}\n",
+            "services:\n  app:\n    ? image\n    : rust:$TAG\n",
+            "services:\n  app:\n    image:\n      rust:$TAG\n",
+        ):
+            with self.subTest(text=text):
+                self.assert_failure(
+                    "compose.yaml",
+                    text,
+                    "unsupported YAML image policy-key syntax",
+                )
+
+        self.assert_clean(
+            "compose.yaml",
+            f'services:\n  app:\n    "image": {PINNED_RUST}\n',
+        )
+        self.assert_clean(
+            "compose.yaml",
+            f"jobs:\n  test:\n    'container': {PINNED_RUST}\n",
+        )
+
+    def test_yaml_policy_flow_text_inside_comments_is_ignored(self) -> None:
+        self.assert_clean(
+            "compose.yaml",
+            "# app: {image: rust:$TAG}\n"
+            "services:\n"
+            f"  app: {{image: {PINNED_RUST}}} # ignored: {{image: rust:$TAG}}\n",
+        )
+
+    def test_yaml_scalar_image_aliases_require_local_literal_anchors(self) -> None:
+        self.assert_clean(
+            "compose.yaml",
+            f"x-image: &runtime {PINNED_RUST}\n"
+            "services:\n  app:\n    image: *runtime\n",
+        )
+        self.assert_clean(
+            "compose.yaml",
+            f'"x-image": &runtime {PINNED_RUST}\n'
+            'services:\n  app: {"image": *runtime}\n',
+        )
+        for text, expected in (
+            (
+                "x-image: &runtime rust:$TAG\nservices:\n  app:\n    image: *runtime\n",
+                "computed or unresolved image assignment",
+            ),
+            (
+                "x-image: &runtime rust:1.95-trixie\n"
+                "services:\n  app:\n    image: *runtime\n",
+                "not pinned by immutable digest",
+            ),
+            (
+                f"services:\n  app:\n    image: *runtime\n"
+                f"x-image: &runtime {PINNED_RUST}\n",
+                "computed or unresolved image assignment",
+            ),
+            (
+                f"x-image: &runtime {PINNED_RUST}\n---\n"
+                "services:\n  app:\n    image: *runtime\n",
+                "computed or unresolved image assignment",
+            ),
+            (
+                f"x-image: &runtime {PINNED_RUST}\n"
+                "replacement: &runtime rust:$TAG\n"
+                "services:\n  app:\n    image: *runtime\n",
+                "computed or unresolved image assignment",
+            ),
+            (
+                f"x-image: &runtime {PINNED_RUST}\n"
+                "replacement: {value: &runtime rust:$TAG}\n"
+                "services:\n  app:\n    image: *runtime\n",
+                "computed or unresolved image assignment",
+            ),
+        ):
+            with self.subTest(text=text):
+                self.assert_failure("compose.yaml", text, expected)
 
     def test_validated_image_annotations_are_path_and_contract_scoped(self) -> None:
         registryctl_path = "crates/registryctl/src/templates/compose.yaml"
@@ -775,6 +877,38 @@ class Debian13ImageCheckTest(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assert_failure("helper.sh", command, family)
+
+    def test_container_short_option_grammar_and_help_are_bounded(self) -> None:
+        for command in (
+            "docker run --help\n",
+            "docker run --help rust:1.95-trixie\n",
+            "docker run -c512 alpine:3.22 true\n",
+            "docker run -itv/tmp:/tmp alpine:3.22 true\n",
+            "docker run -itp8080:80 alpine:3.22 true\n",
+            "docker run -itc512 alpine:3.22 true\n",
+        ):
+            with self.subTest(command=command):
+                self.assert_clean("helper.sh", command)
+
+        for command in (
+            "docker run -c512 postgres true\n",
+            "docker run -itv/tmp:/tmp postgres true\n",
+            "docker run -itp8080:80 postgres true\n",
+            "docker run -itc512 postgres true\n",
+        ):
+            with self.subTest(command=command):
+                self.assert_failure("helper.sh", command, "postgres")
+
+        for command in (
+            "docker run -itxvalue alpine:3.22 true\n",
+            "docker run -Z alpine:3.22 true\n",
+        ):
+            with self.subTest(command=command):
+                self.assert_failure(
+                    "helper.sh",
+                    command,
+                    "unsupported Docker/Podman short-option cluster",
+                )
 
     def test_documented_container_options_preserve_the_image_operand(self) -> None:
         value_options = (
