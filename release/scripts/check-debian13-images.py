@@ -7,6 +7,8 @@ import re
 import sys
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -125,6 +127,16 @@ MAINTAINED_TEXT_PATHS = DOCKERFILES + (
     Path("products/notary/docs/security-assurance.md"),
 )
 
+WORKFLOW_IMAGE_ALLOWLIST = {
+    (
+        Path(".github/workflows/relay-postgres-conformance.yml"),
+        "postgres:${{ matrix.postgresql }}-alpine",
+    ): (
+        "External Alpine PostgreSQL state-plane conformance, not a "
+        "project-owned Debian image."
+    ),
+}
+
 RUST_BUILDER_DOCKERFILES = DOCKERFILES[:3]
 PREPARATION_DOCKERFILES = DOCKERFILES[3:]
 RELAY_DOCKERFILES = (
@@ -218,6 +230,95 @@ def read(root: Path, relative: Path, failures: list[str]) -> str:
     except FileNotFoundError:
         failures.append(f"missing maintained image surface: {relative}")
         return ""
+
+
+def discover_workflow_paths(root: Path) -> tuple[Path, ...]:
+    directory = root / ".github" / "workflows"
+    if not directory.is_dir():
+        return ()
+    return tuple(
+        path.relative_to(root)
+        for path in sorted(
+            (
+                path
+                for pattern in ("*.yml", "*.yaml")
+                for path in directory.glob(pattern)
+                if path.is_file()
+            ),
+            key=lambda path: path.name,
+        )
+    )
+
+
+def collect_workflow_image_references(
+    text: str,
+    relative: Path,
+    failures: list[str],
+) -> list[tuple[str, str]]:
+    try:
+        document = yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        failures.append(
+            f"{relative}: workflow YAML parse failed: {type(error).__name__}"
+        )
+        return []
+    if not isinstance(document, dict):
+        failures.append(
+            f"{relative}: workflow YAML root must be a mapping, "
+            f"found {type(document).__name__}"
+        )
+        return []
+
+    references: list[tuple[str, str]] = []
+    active_nodes: set[int] = set()
+
+    def add_image(value: object, location: str) -> None:
+        if not isinstance(value, str) or not value.strip():
+            failures.append(
+                f"{relative}: unsupported workflow image value at {location}: "
+                f"expected a non-empty string, found {type(value).__name__}"
+            )
+            return
+        references.append((location, value))
+
+    def visit(value: object, location: str) -> None:
+        if not isinstance(value, (dict, list)):
+            return
+        identity = id(value)
+        if identity in active_nodes:
+            failures.append(
+                f"{relative}: unsupported recursive YAML alias at {location}"
+            )
+            return
+        active_nodes.add(identity)
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_location = f"{location}.{key}"
+                if key == "container":
+                    if isinstance(child, str):
+                        add_image(child, child_location)
+                    elif not isinstance(child, dict) or "image" not in child:
+                        failures.append(
+                            f"{relative}: unsupported workflow image value at "
+                            f"{child_location}: container must be a non-empty "
+                            "string or a mapping with an image key"
+                        )
+                elif key == "image":
+                    add_image(child, child_location)
+                elif (
+                    key == "uses"
+                    and isinstance(child, str)
+                    and child.startswith("docker://")
+                ):
+                    add_image(child.removeprefix("docker://"), child_location)
+                visit(child, child_location)
+        else:
+            for index, child in enumerate(value):
+                visit(child, f"{location}[{index}]")
+        active_nodes.remove(identity)
+
+    visit(document, "$")
+    return references
 
 
 def require(
@@ -328,9 +429,13 @@ def shell_continuation_command(
 
 def check_repository(root: Path = ROOT) -> list[str]:
     failures: list[str] = []
+    workflow_paths = discover_workflow_paths(root)
+    maintained_paths = tuple(
+        dict.fromkeys((*MAINTAINED_TEXT_PATHS, *workflow_paths))
+    )
     texts = {
         relative: read(root, relative, failures)
-        for relative in MAINTAINED_TEXT_PATHS
+        for relative in maintained_paths
     }
 
     for relative, text in texts.items():
@@ -340,6 +445,19 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 f"{relative}: retired Debian image generation marker remains: "
                 f"{marker.group(0).casefold()}"
             )
+
+    for relative in workflow_paths:
+        references = collect_workflow_image_references(
+            texts[relative],
+            relative,
+            failures,
+        )
+        for location, value in references:
+            if (relative, value) not in WORKFLOW_IMAGE_ALLOWLIST:
+                failures.append(
+                    f"{relative}: workflow image reference is not allowlisted "
+                    f"at {location}: {value!r}"
+                )
 
     for relative in DOCKERFILES:
         text = texts[relative]

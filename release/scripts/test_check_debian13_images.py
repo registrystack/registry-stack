@@ -60,6 +60,12 @@ class Debian13ImageCheckTest(unittest.TestCase):
             shutil.copyfile(ROOT / relative, destination)
         return root
 
+    def write_workflow(self, root: Path, name: str, text: str) -> Path:
+        target = root / ".github" / "workflows" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        return target
+
     def assert_has_failure(
         self,
         root: Path,
@@ -140,6 +146,171 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     encoding="utf-8",
                 )
                 self.assertEqual([], self.module.check_repository(root))
+
+    def test_workflow_image_allowlist_has_one_bounded_exception(self) -> None:
+        allowed_path = Path(
+            ".github/workflows/relay-postgres-conformance.yml"
+        )
+        allowed_image = "postgres:${{ matrix.postgresql }}-alpine"
+        self.assertEqual(
+            {(allowed_path, allowed_image)},
+            set(self.module.WORKFLOW_IMAGE_ALLOWLIST),
+        )
+        self.assertIn(
+            "not a project-owned Debian image",
+            self.module.WORKFLOW_IMAGE_ALLOWLIST[
+                (allowed_path, allowed_image)
+            ],
+        )
+
+        workflow = (
+            "name: External PostgreSQL conformance\n"
+            "jobs:\n"
+            "  state-plane:\n"
+            "    services:\n"
+            "      postgres:\n"
+            f'        image: "{allowed_image}"\n'
+        )
+        root = self.fixture()
+        self.write_workflow(root, allowed_path.name, workflow)
+        self.assertEqual([], self.module.check_repository(root))
+
+        root = self.fixture()
+        self.write_workflow(root, "copied-postgres.yml", workflow)
+        self.assert_has_failure(
+            root,
+            "copied-postgres.yml: workflow image reference is not allowlisted",
+        )
+
+    def test_dynamic_workflow_images_are_denied_from_structured_forms(
+        self,
+    ) -> None:
+        digest_image = "ghcr.io/example/tool@sha256:" + "a" * 64
+        cases = (
+            (
+                "scalar-container.yaml",
+                "name: Scalar container\n"
+                "jobs:\n"
+                "  build:\n"
+                "    container: rust:1.95-trixie\n",
+            ),
+            (
+                "flow-container.yml",
+                'name: Flow container\njobs: {build: {container: "'
+                + digest_image
+                + '"}}\n',
+            ),
+            (
+                "anchored-container.yml",
+                "name: Anchored container\n"
+                "x-builder: &builder rust:1.95-trixie\n"
+                "jobs:\n"
+                "  build:\n"
+                "    container: *builder\n",
+            ),
+            (
+                "mapping-container.yml",
+                "name: Mapping container\n"
+                "jobs:\n"
+                "  build:\n"
+                f'    container: {{image: "{digest_image}"}}\n',
+            ),
+            (
+                "service-image.yml",
+                "name: Service image\n"
+                "jobs:\n"
+                "  build:\n"
+                "    services:\n"
+                "      database:\n"
+                f'        image: "{digest_image}"\n',
+            ),
+            (
+                "docker-uses.yml",
+                "name: Docker action\n"
+                "jobs:\n"
+                "  build:\n"
+                "    steps:\n"
+                "      - uses: docker://alpine:3.22\n",
+            ),
+        )
+        for name, workflow in cases:
+            with self.subTest(name=name):
+                root = self.fixture()
+                relative = Path(".github/workflows") / name
+                self.assertNotIn(relative, self.module.MAINTAINED_TEXT_PATHS)
+                self.write_workflow(root, name, workflow)
+                self.assert_has_failure(
+                    root,
+                    f"{relative}: workflow image reference is not allowlisted",
+                )
+
+    def test_workflow_image_inventory_fails_closed(self) -> None:
+        cases = (
+            (
+                "malformed.yml",
+                "jobs: [\n",
+                "workflow YAML parse failed",
+            ),
+            (
+                "root-list.yml",
+                "- jobs\n",
+                "workflow YAML root must be a mapping",
+            ),
+            (
+                "container-list.yml",
+                "jobs:\n"
+                "  build:\n"
+                "    container:\n"
+                "      - rust:1.95-trixie\n",
+                "unsupported workflow image value",
+            ),
+            (
+                "container-without-image.yml",
+                "jobs:\n"
+                "  build:\n"
+                "    container:\n"
+                "      options: --read-only\n",
+                "unsupported workflow image value",
+            ),
+            (
+                "mapping-image.yml",
+                "jobs:\n"
+                "  build:\n"
+                "    services:\n"
+                "      database:\n"
+                "        image:\n"
+                "          name: rust:1.95-trixie\n",
+                "unsupported workflow image value",
+            ),
+            (
+                "empty-docker-uses.yml",
+                "jobs:\n"
+                "  build:\n"
+                "    steps:\n"
+                "      - uses: docker://\n",
+                "unsupported workflow image value",
+            ),
+        )
+        for name, workflow, failure in cases:
+            with self.subTest(name=name):
+                root = self.fixture()
+                self.write_workflow(root, name, workflow)
+                self.assert_has_failure(root, failure)
+
+    def test_retired_markers_cover_dynamically_discovered_workflows(
+        self,
+    ) -> None:
+        root = self.fixture()
+        relative = Path(".github/workflows/dynamic-policy.yaml")
+        self.write_workflow(
+            root,
+            relative.name,
+            "name: Debian v12 compatibility\njobs: {}\n",
+        )
+        self.assert_has_failure(
+            root,
+            f"{relative}: retired Debian image generation marker remains",
+        )
 
     def test_tutorial_builder_must_match_the_exact_pinned_image(self) -> None:
         exact = f'BUILDER_IMAGE="{self.module.RUST_BUILDER}"'
