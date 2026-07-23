@@ -721,6 +721,11 @@ fn validate_live_response(
         let result_object = result
             .as_object()
             .ok_or_else(|| anyhow!("governed Notary result must be an object"))?;
+        if !result_object.contains_key("expires_at") {
+            bail!(
+                "governed Notary result does not match the closed public claim-result schema: expires_at is required"
+            );
+        }
         let result_view: registry_notary_core::ClaimResultView =
             serde_json::from_value(result.clone()).map_err(|_| {
                 anyhow!(

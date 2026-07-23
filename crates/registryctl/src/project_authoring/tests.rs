@@ -736,6 +736,53 @@ outputs:
     }
 
     #[test]
+    fn governed_live_result_requires_explicit_expires_at() {
+        let claims = vec!["eligible".to_string()];
+        let expected = json!({
+            "claims": {
+                "eligible": {
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        });
+        let response = json!({
+            "results": [governed_live_claim_result(
+                "eligible",
+                json!(true),
+                Some(true),
+                "predicate",
+            )],
+        });
+
+        assert_eq!(
+            response.pointer("/results/0/expires_at"),
+            Some(&Value::Null)
+        );
+        assert_eq!(
+            validate_live_response(&response, &claims, &expected)
+                .expect("explicit null expires_at passes"),
+            claims
+        );
+
+        let mut missing_expires_at = response;
+        assert_eq!(
+            missing_expires_at["results"][0]
+                .as_object_mut()
+                .expect("actual result is an object")
+                .remove("expires_at"),
+            Some(Value::Null)
+        );
+        assert!(
+            validate_live_response(&missing_expires_at, &claims, &expected)
+                .expect_err("missing expires_at must fail closed")
+                .to_string()
+                .contains("expires_at is required")
+        );
+    }
+
+    #[test]
     fn governed_live_result_rejects_partial_disclosure_expectations() {
         let claims = vec!["eligible".to_string()];
         let expected = json!({
