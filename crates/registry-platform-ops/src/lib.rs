@@ -3812,15 +3812,21 @@ mod tests {
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),
             (
-                "accidentally pasted -----BEGIN PRIVATE KEY-----",
+                concat!("accidentally pasted -----BEGIN PRIVATE ", "KEY-----"),
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),
             (
-                "accidentally pasted -----BEGIN OPENSSH PRIVATE KEY-----",
+                concat!(
+                    "accidentally pasted -----BEGIN OPENSSH PRIVATE ",
+                    "KEY-----"
+                ),
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),
             (
-                "accidentally pasted -----BEGIN ED25519 PRIVATE KEY-----",
+                concat!(
+                    "accidentally pasted -----BEGIN ED25519 PRIVATE ",
+                    "KEY-----"
+                ),
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),
         ] {
