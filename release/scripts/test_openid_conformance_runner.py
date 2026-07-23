@@ -5,10 +5,16 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import shlex
 import shutil
+import socket
+import ssl
+import subprocess
 import sys
 import tempfile
+import threading
 import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import TestCase, main
 from unittest.mock import MagicMock, patch
@@ -16,6 +22,7 @@ from unittest.mock import MagicMock, patch
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 RUNNER_PATH = SCRIPT_DIR / "openid-conformance-runner.py"
+NGINX_DOCKERFILE = SCRIPT_DIR.parent / "conformance" / "openid" / "nginx.Dockerfile"
 
 
 def load_runner():
@@ -28,6 +35,24 @@ def load_runner():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def nginx_certificate_command(certificate: Path, private_key: Path) -> list[str]:
+    dockerfile = NGINX_DOCKERFILE.read_text(encoding="utf-8")
+    recipe = dockerfile.split("RUN ", 1)[1].split("\nCOPY ", 1)[0]
+    command = shlex.split(recipe.replace("\\\n", " "))
+    command[command.index("-out") + 1] = str(certificate)
+    command[command.index("-keyout") + 1] = str(private_key)
+    return command
+
+
+class EmptyHttpsHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(204)
+        self.end_headers()
+
+    def log_message(self, _format: str, *_args) -> None:
+        return
 
 
 class OpenIdConformanceRunnerTest(TestCase):
@@ -163,7 +188,7 @@ class OpenIdConformanceRunnerTest(TestCase):
                 [inline],
                 urllib.parse.parse_qs(submitted.query)["credential_offer"],
             )
-            create_context.assert_called_once_with(cafile=None)
+            create_context.assert_called_once_with()
             https_handler = next(
                 handler
                 for handler in build_opener.call_args.args
@@ -246,10 +271,11 @@ class OpenIdConformanceRunnerTest(TestCase):
             response.__enter__.return_value.status = 204
             opener = MagicMock()
             opener.open.return_value = response
+            tls_context = MagicMock()
             with patch.object(
                 self.runner.ssl,
-                "create_default_context",
-                return_value=MagicMock(),
+                "SSLContext",
+                return_value=tls_context,
             ) as create_context:
                 with patch.object(
                     self.runner.urllib.request,
@@ -259,7 +285,191 @@ class OpenIdConformanceRunnerTest(TestCase):
                     with patch("builtins.print"):
                         self.assertEqual(0, self.runner.cmd_submit_offer(args))
 
-            create_context.assert_called_once_with(cafile=str(suite_ca.resolve()))
+            create_context.assert_called_once_with(
+                self.runner.ssl.PROTOCOL_TLS_CLIENT
+            )
+            tls_context.load_verify_locations.assert_called_once_with(
+                cadata=b"local test CA"
+            )
+
+    def test_suite_ca_read_holds_one_descriptor_across_path_replacement(
+        self,
+    ) -> None:
+        original = (
+            b"-----BEGIN CERTIFICATE-----\n"
+            b"captured-original\n"
+            b"-----END CERTIFICATE-----\n"
+        )
+        replacement = (
+            b"-----BEGIN CERTIFICATE-----\n"
+            b"replacement\n"
+            b"-----END CERTIFICATE-----\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            ca_path = Path(tmp) / "suite-ca.pem"
+            replacement_path = Path(tmp) / "replacement.pem"
+            ca_path.write_bytes(original)
+            replacement_path.write_bytes(replacement)
+            real_open = self.runner.os.open
+
+            def open_then_replace(path, flags):
+                descriptor = real_open(path, flags)
+                self.runner.os.replace(replacement_path, ca_path)
+                return descriptor
+
+            tls_context = MagicMock()
+            with patch.object(
+                self.runner.os, "open", side_effect=open_then_replace
+            ) as secure_open:
+                with patch.object(
+                    self.runner.ssl,
+                    "SSLContext",
+                    return_value=tls_context,
+                ):
+                    self.runner.suite_tls_context(ca_path)
+
+            self.assertEqual(replacement, ca_path.read_bytes())
+            secure_open.assert_called_once()
+            flags = secure_open.call_args.args[1]
+            for required_flag in ("O_NOFOLLOW", "O_CLOEXEC"):
+                value = getattr(self.runner.os, required_flag, 0)
+                if value:
+                    self.assertEqual(value, flags & value)
+            tls_context.load_verify_locations.assert_called_once_with(
+                cadata=original.decode("ascii")
+            )
+
+    def test_suite_ca_loader_preserves_der_bytes(self) -> None:
+        tls_context = MagicMock()
+        certificate = b"\x30\x82\x01\x00\xff"
+
+        self.runner.add_suite_ca(tls_context, certificate)
+
+        tls_context.load_verify_locations.assert_called_once_with(
+            cadata=certificate
+        )
+
+    def test_suite_ca_read_rejects_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "suite-ca.pem"
+            target.write_text("certificate", encoding="utf-8")
+            link = Path(tmp) / "suite-ca-link.pem"
+            link.symlink_to(target)
+
+            with self.assertRaisesRegex(
+                self.runner.RunnerError, "opened securely"
+            ):
+                self.runner.read_suite_ca_certificate(link)
+
+    def test_exported_certificate_recipe_authenticates_documented_suite_host(
+        self,
+    ) -> None:
+        openssl = shutil.which("openssl")
+        if not openssl:
+            self.skipTest("openssl is required for the checked-in certificate recipe")
+        issuer = "https://issuer.example.test"
+        _, offer_uri = self.offer_uri(issuer)
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            certificate = work / "recipe.crt"
+            private_key = work / "recipe.key"
+            command = nginx_certificate_command(certificate, private_key)
+            self.assertEqual(openssl, shutil.which(command[0]))
+            self.assertIn(
+                (
+                    "subjectAltName=DNS:localhost.emobix.co.uk,DNS:localhost,"
+                    "IP:127.0.0.1,IP:::1"
+                ),
+                command,
+            )
+            subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            suite_dir = work / "suite"
+            suite_dir.mkdir()
+            exported = work / "conformance-suite-ca.pem"
+            export_args = self.runner.parse_args(
+                [
+                    "export-suite-ca",
+                    "--suite-dir",
+                    str(suite_dir),
+                    "--output",
+                    str(exported),
+                ]
+            )
+            compose_commands: list[list[str]] = []
+
+            def copy_container_certificate(
+                compose_command: list[str], **_kwargs
+            ) -> None:
+                compose_commands.append(compose_command)
+                Path(compose_command[-1]).write_bytes(certificate.read_bytes())
+
+            with patch.object(
+                self.runner,
+                "run_checked",
+                side_effect=copy_container_certificate,
+            ):
+                with patch("builtins.print"):
+                    self.assertEqual(0, self.runner.cmd_export_suite_ca(export_args))
+
+            self.assertEqual(certificate.read_bytes(), exported.read_bytes())
+            self.assertEqual(
+                f"nginx:{self.runner.SUITE_CA_CONTAINER_PATH}",
+                compose_commands[0][-2],
+            )
+
+            offer_file = work / "offer.txt"
+            offer_file.write_text(offer_uri, encoding="utf-8")
+            offer_file.chmod(0o600)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), EmptyHttpsHandler)
+            server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            server_context.load_cert_chain(certificate, private_key)
+            server.socket = server_context.wrap_socket(
+                server.socket, server_side=True
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host = "localhost.emobix.co.uk"
+            port = server.server_port
+            submit_args = self.runner.parse_args(
+                [
+                    "submit-offer",
+                    "--offer-file",
+                    str(offer_file),
+                    "--issuer-url",
+                    issuer,
+                    "--suite-offer-endpoint",
+                    f"https://{host}:{port}/run/credential_offer",
+                    "--conformance-server",
+                    f"https://{host}:{port}",
+                    "--suite-ca-certificate",
+                    str(exported),
+                ]
+            )
+            real_getaddrinfo = socket.getaddrinfo
+
+            def loopback_suite(hostname, *args, **kwargs):
+                if hostname == host:
+                    hostname = "127.0.0.1"
+                return real_getaddrinfo(hostname, *args, **kwargs)
+
+            try:
+                with patch.object(
+                    socket, "getaddrinfo", side_effect=loopback_suite
+                ):
+                    with patch("builtins.print"):
+                        self.assertEqual(
+                            0, self.runner.cmd_submit_offer(submit_args)
+                        )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
 
     def test_submit_offer_rejects_cleartext_suite_endpoint(self) -> None:
         issuer = "https://issuer.example.test"

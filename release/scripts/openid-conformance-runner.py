@@ -14,6 +14,7 @@ import ssl
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -37,6 +38,8 @@ SCHEMA_VERSION = "registry.release.openid_conformance_plan_map.v1"
 SUITE_JAR = "target/fapi-test-suite.jar"
 SUITE_JAR_STAMP = "target/fapi-test-suite.jar.registry-stack-source-ref"
 COMPOSE_CONFIG_DIR_ENV = "REGISTRY_OPENID_CONFORMANCE_CONFIG_DIR"
+SUITE_CA_CONTAINER_PATH = "/etc/ssl/certs/nginx-selfsigned.crt"
+DEFAULT_SUITE_CA_PATH = DEFAULT_WORK_ROOT / "conformance-suite-ca.pem"
 
 
 class RunnerError(RuntimeError):
@@ -407,6 +410,68 @@ def read_offer(path: Path, issuer_url: str) -> str:
     return inline
 
 
+def read_suite_ca_certificate(path: Path) -> bytes:
+    path = path.expanduser()
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    descriptor: int | None = None
+    before: os.stat_result | None = None
+    try:
+        if not nofollow:
+            before = path.lstat()
+            if stat.S_ISLNK(before.st_mode):
+                raise RunnerError(
+                    "suite CA certificate could not be opened securely"
+                )
+        descriptor = os.open(path, os.O_RDONLY | nofollow | cloexec)
+        info = os.fstat(descriptor)
+        if before is not None and (
+            before.st_dev != info.st_dev or before.st_ino != info.st_ino
+        ):
+            raise RunnerError("suite CA certificate changed while it was opened")
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or not 0 < info.st_size <= 1024 * 1024
+        ):
+            raise RunnerError(
+                "suite CA certificate must be a bounded regular file"
+            )
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = None
+            certificate = handle.read(1024 * 1024 + 1)
+    except OSError:
+        raise RunnerError(
+            "suite CA certificate could not be opened securely"
+        ) from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if len(certificate) != info.st_size:
+        raise RunnerError("suite CA certificate changed while it was read")
+    return certificate
+
+
+def add_suite_ca(context: ssl.SSLContext, certificate: bytes) -> None:
+    try:
+        text = certificate.decode("ascii")
+    except UnicodeDecodeError:
+        cadata: str | bytes = certificate
+    else:
+        cadata = text if "-----BEGIN CERTIFICATE-----" in text else certificate
+    try:
+        context.load_verify_locations(cadata=cadata)
+    except (OSError, ValueError):
+        raise RunnerError("suite CA certificate could not be loaded") from None
+
+
+def suite_tls_context(ca_certificate: Path | None) -> ssl.SSLContext:
+    if ca_certificate is None:
+        return ssl.create_default_context()
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    add_suite_ca(context, read_suite_ca_certificate(ca_certificate))
+    return context
+
+
 def cmd_submit_offer(args: argparse.Namespace) -> int:
     inline = read_offer(args.offer_file, args.issuer_url)
     base = urllib.parse.urlsplit(args.conformance_server)
@@ -424,30 +489,7 @@ def cmd_submit_offer(args: argparse.Namespace) -> int:
     url = urllib.parse.urlunsplit(
         endpoint._replace(query=urllib.parse.urlencode({"credential_offer": inline}))
     )
-    ca_certificate = args.suite_ca_certificate
-    if ca_certificate is not None:
-        ca_certificate = ca_certificate.expanduser()
-        try:
-            info = ca_certificate.lstat()
-        except OSError:
-            raise RunnerError(
-                "suite CA certificate could not be opened securely"
-            ) from None
-        if (
-            stat.S_ISLNK(info.st_mode)
-            or not stat.S_ISREG(info.st_mode)
-            or not 0 < info.st_size <= 1024 * 1024
-        ):
-            raise RunnerError(
-                "suite CA certificate must be a bounded regular file"
-            )
-        ca_certificate = ca_certificate.resolve()
-    try:
-        context = ssl.create_default_context(
-            cafile=str(ca_certificate) if ca_certificate is not None else None
-        )
-    except OSError:
-        raise RunnerError("suite CA certificate could not be loaded") from None
+    context = suite_tls_context(args.suite_ca_certificate)
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         urllib.request.HTTPSHandler(context=context),
@@ -462,6 +504,55 @@ def cmd_submit_offer(args: argparse.Namespace) -> int:
     except (OSError, urllib.error.URLError):
         raise RunnerError("suite offer submission failed") from None
     print("credential offer submitted")
+    return 0
+
+
+def write_new_file(path: Path, content: bytes) -> Path:
+    path = path.expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags, 0o644)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            descriptor = None
+            handle.write(content)
+    except OSError:
+        raise RunnerError("suite CA output could not be created") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    return path
+
+
+def cmd_export_suite_ca(args: argparse.Namespace) -> int:
+    checkout = suite_dir(args)
+    if not checkout.is_dir():
+        raise RunnerError("suite checkout is unavailable; run prepare first")
+    output = Path(args.output).expanduser()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env[COMPOSE_CONFIG_DIR_ENV] = str(CONFIG_DIR)
+    with tempfile.TemporaryDirectory(
+        prefix=".openid-suite-ca-", dir=output.parent
+    ) as tmp:
+        copied = Path(tmp) / "nginx-selfsigned.crt"
+        run_checked(
+            compose_command(
+                checkout,
+                args,
+                "cp",
+                f"nginx:{SUITE_CA_CONTAINER_PATH}",
+                str(copied),
+            ),
+            env=env,
+        )
+        certificate = read_suite_ca_certificate(copied)
+        validation_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        add_suite_ca(validation_context, certificate)
+        write_new_file(output, certificate)
+    print(output)
     return 0
 
 
@@ -623,6 +714,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_common(down_parser)
     down_parser.set_defaults(func=cmd_down)
 
+    export_ca_parser = subparsers.add_parser("export-suite-ca")
+    export_ca_parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
+    export_ca_parser.add_argument("--suite-dir")
+    export_ca_parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_SUITE_CA_PATH,
+        help="new file that receives the running suite's generated certificate",
+    )
+    export_ca_parser.set_defaults(func=cmd_export_suite_ca)
+
     render_parser = subparsers.add_parser("render-config")
     add_common(render_parser)
     add_config_args(render_parser)
@@ -645,7 +747,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--conformance-server",
         default=load_plan_map()["suite"]["base_url"],
     )
-    offer_parser.add_argument("--suite-ca-certificate", type=Path)
+    offer_parser.add_argument(
+        "--suite-ca-certificate",
+        type=Path,
+        help="PEM or DER trust anchor captured from the local suite",
+    )
     offer_parser.add_argument("--timeout-seconds", type=int, default=10)
     offer_parser.set_defaults(func=cmd_submit_offer)
 

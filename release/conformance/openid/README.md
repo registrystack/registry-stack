@@ -95,23 +95,30 @@ it does not turn their output into release evidence.
 
 For an issuer-initiated suite module, store the exact
 `openid-credential-offer` URI rendered after Notary completes its authenticated
-`/oid4vci/offer/callback` in an owner-only file, then submit it:
+`/oid4vci/offer/callback` in an owner-only file. After `up`, export the exact
+self-signed certificate generated for the suite's Nginx service from
+`/etc/ssl/certs/nginx-selfsigned.crt`, then submit the offer:
 
 ```bash
+release/scripts/openid-conformance-runner.py export-suite-ca \
+  --output target/openid-conformance/conformance-suite-ca.pem
+
 chmod 600 /private/path/notary-offer.txt
 release/scripts/openid-conformance-runner.py submit-offer \
   --offer-file /private/path/notary-offer.txt \
   --issuer-url https://issuer.example.test \
   --suite-offer-endpoint 'https://localhost.emobix.co.uk:8443/<module>/credential_offer' \
-  --suite-ca-certificate /private/path/conformance-suite-ca.pem
+  --suite-ca-certificate target/openid-conformance/conformance-suite-ca.pem
 ```
 
 The adapter accepts only an inline Notary offer with the pre-authorized-code
 grant, sends it once to the pinned suite origin without proxies or redirects,
 and prints no offer content. TLS uses normal hostname and certificate
-validation. The optional CA file adds only an explicitly supplied local trust
-anchor for the suite's self-signed development certificate. A fabricated offer
-is not candidate evidence.
+validation. The checked-in certificate recipe covers
+`localhost.emobix.co.uk`, `localhost`, `127.0.0.1`, and `::1`. The optional CA
+file is read once without following symlinks and adds only that explicitly
+captured local trust anchor. The export command refuses to overwrite an
+existing output. A fabricated offer is not candidate evidence.
 
 Set `REGISTRY_OPENID_CONFORMANCE_AUTHORIZATION_SERVER` when the authorization
 server differs from the issuer. Set
