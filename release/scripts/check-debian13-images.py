@@ -249,12 +249,13 @@ DOCKERFILE_PARSER_DIRECTIVE_RE = re.compile(
     r"[ \t]*(?P<value>\S+)[ \t]*$",
     re.IGNORECASE,
 )
-COPY_INSTRUCTION_RE = re.compile(r"^[ \t]*COPY(?:[ \t]|$)", re.IGNORECASE)
-COPY_FROM_RE = re.compile(
-    r"^[ \t]*COPY[ \t]+"
-    r"(?:--[^\s=]+(?:=[^\s]+)?[ \t]+)*"
-    r"--from=(?P<source>[^\s#]+)",
+COPY_INSTRUCTION_RE = re.compile(
+    r"^[ \t]*COPY[ \t]+(?P<arguments>.*)$",
     re.IGNORECASE,
+)
+COPY_OPTION_NAMES = frozenset(("from", "chown"))
+COPY_OPTION_RE = re.compile(
+    r"--(?P<name>[a-z][a-z0-9-]*)=(?P<value>[^\s\\\"']+)"
 )
 DIGEST_PIN_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
 RETIRED_MARKER_RE = re.compile(
@@ -378,12 +379,36 @@ def collect_dockerfile_copy_sources(
                 )
                 return []
 
-        instruction = "".join(parts)
-        if not COPY_INSTRUCTION_RE.match(instruction):
+        instruction_match = COPY_INSTRUCTION_RE.match("".join(parts))
+        if instruction_match is None:
             continue
-        match = COPY_FROM_RE.match(instruction)
-        if match:
-            sources.append(match.group("source"))
+        tokens = instruction_match.group("arguments").split()
+        seen_options = set()
+        while tokens and tokens[0].startswith("--"):
+            option_match = COPY_OPTION_RE.fullmatch(tokens.pop(0))
+            if option_match is None:
+                failures.append(
+                    f"{relative}: unsupported COPY option syntax prevents "
+                    "bounded source inspection"
+                )
+                return []
+            name = option_match.group("name")
+            if name not in COPY_OPTION_NAMES or name in seen_options:
+                failures.append(
+                    f"{relative}: unsupported COPY option syntax prevents "
+                    "bounded source inspection"
+                )
+                return []
+            seen_options.add(name)
+            if name == "from":
+                sources.append(option_match.group("value"))
+
+        if not tokens or tokens[0].startswith(("-", "'", '"', "\\")):
+            failures.append(
+                f"{relative}: unsupported COPY operand prefix prevents "
+                "bounded source inspection"
+            )
+            return []
     return sources
 
 

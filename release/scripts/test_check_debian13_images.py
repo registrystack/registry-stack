@@ -792,6 +792,10 @@ class Debian13ImageCheckTest(unittest.TestCase):
         self,
     ) -> None:
         self.assertEqual(
+            {"from", "chown"},
+            set(self.module.COPY_OPTION_NAMES),
+        )
+        self.assertEqual(
             set(self.module.DOCKERFILES),
             set(self.module.DOCKERFILE_NAMED_CONTEXTS),
         )
@@ -849,6 +853,68 @@ class Debian13ImageCheckTest(unittest.TestCase):
                         failures,
                     )
                     self.assertNotIn(source, "\n".join(failures))
+
+    def test_dockerfile_copy_options_require_canonical_reviewed_syntax(
+        self,
+    ) -> None:
+        relative = Path("crates/registry-relay/Dockerfile")
+        cases = (
+            ("escaped-from-name", r"--fr\om=alpine:3.22"),
+            ("quoted-from-name", '--fr"om"=alpine:3.22'),
+            ("unknown-chmod", "--chmod=0755"),
+            ("unknown-link", "--link=true"),
+            ("valueless-from", "--from"),
+            ("quoted-from-value", '--from="builder"'),
+            ("escaped-from-value", r"--from=buil\der"),
+            ("uppercase-from", "--FROM=builder"),
+            (
+                "duplicate-from",
+                "--from=builder --from=registry-platform",
+            ),
+        )
+        failure = "unsupported COPY option syntax"
+        for name, options in cases:
+            with self.subTest(name=name):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                target.write_text(
+                    text + f"\nCOPY {options} /bin/tool /bin/tool\n",
+                    encoding="utf-8",
+                )
+                failures = self.module.check_repository(root)
+                self.assertTrue(
+                    any(failure in item for item in failures),
+                    failures,
+                )
+                self.assertNotIn(options, "\n".join(failures))
+
+    def test_dockerfile_copy_rejects_encoded_option_like_operands(
+        self,
+    ) -> None:
+        relative = Path("crates/registry-relay/Dockerfile")
+        for prefix in (
+            r'-\-from=alpine:3.22',
+            r'\--from=alpine:3.22',
+            '"--from"=alpine:3.22',
+        ):
+            with self.subTest(prefix=prefix):
+                root = self.fixture()
+                target = root / relative
+                text = target.read_text(encoding="utf-8")
+                target.write_text(
+                    text + f"\nCOPY {prefix} /bin/tool /bin/tool\n",
+                    encoding="utf-8",
+                )
+                failures = self.module.check_repository(root)
+                self.assertTrue(
+                    any(
+                        "unsupported COPY operand prefix" in item
+                        for item in failures
+                    ),
+                    failures,
+                )
+                self.assertNotIn(prefix, "\n".join(failures))
 
     def test_multiline_dockerfile_copy_sources_allow_reviewed_sources(
         self,
