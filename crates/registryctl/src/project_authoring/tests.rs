@@ -659,11 +659,21 @@ outputs:
     #[test]
     fn governed_live_result_requires_exact_disclosure_and_source_provenance() {
         let claims = vec!["eligible".to_string()];
-        let expected = json!({ "claims": { "eligible": { "satisfied": true } } });
+        let expected = json!({
+            "claims": {
+                "eligible": {
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        });
         let response = json!({
             "results": [{
                 "claim_id": "eligible",
+                "value": true,
                 "satisfied": true,
+                "disclosure": "predicate",
                 "provenance": { "used": { "relay_consultation_count": 1 } },
             }],
         });
@@ -680,6 +690,66 @@ outputs:
                 .expect_err("source-free result must fail")
                 .to_string()
                 .contains("source-backed provenance")
+        );
+    }
+
+    #[test]
+    fn governed_live_result_rejects_partial_disclosure_expectations() {
+        let claims = vec!["eligible".to_string()];
+        let expected = json!({
+            "claims": {
+                "eligible": {
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        });
+        let response = json!({
+            "results": [{
+                "claim_id": "eligible",
+                "value": "unexpected source value",
+                "satisfied": true,
+                "disclosure": "predicate",
+                "provenance": { "used": { "relay_consultation_count": 1 } },
+            }],
+        });
+
+        assert!(
+            validate_live_response(&response, &claims, &expected)
+                .expect_err("partial expected disclosure must fail closed")
+                .to_string()
+                .contains("must contain exactly value, satisfied, and disclosure")
+        );
+    }
+
+    #[test]
+    fn governed_live_result_rejects_unknown_result_fields() {
+        let claims = vec!["eligible".to_string()];
+        let expected = json!({
+            "claims": {
+                "eligible": {
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        });
+        let response = json!({
+            "results": [{
+                "claim_id": "eligible",
+                "value": true,
+                "satisfied": true,
+                "disclosure": "predicate",
+                "raw_value": "unexpected source value",
+                "provenance": { "used": { "relay_consultation_count": 1 } },
+            }],
+        });
+
+        assert!(
+            validate_live_response(&response, &claims, &expected)
+                .expect_err("unknown result fields must fail closed")
+                .to_string()
+                .contains("result has an unsupported field")
         );
     }
 
@@ -702,6 +772,7 @@ outputs:
         let expected = json!({
             "claims": {
                 "record-exists": {
+                    "value": false,
                     "satisfied": false,
                     "disclosure": "predicate",
                 },
@@ -710,6 +781,7 @@ outputs:
         let response = json!({
             "results": [{
                 "claim_id": "record-exists",
+                "value": false,
                 "satisfied": false,
                 "disclosure": "predicate",
                 "provenance": { "used": { "relay_consultation_count": 1 } },

@@ -282,6 +282,11 @@ class IntegrationE2RunnerTest(TestCase):
             normalized_template,
         )
         self.assertNotIn("Solmara", template)
+        self.assertIn(
+            "python3 release/scripts/integration-e2-runner.py validate",
+            normalized_template,
+        )
+        self.assertNotIn("schema-valid public result", normalized_template)
         for text in (
             "Sanitized run result:",
             "Plans, dry runs",

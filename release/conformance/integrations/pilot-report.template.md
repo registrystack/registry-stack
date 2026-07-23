@@ -11,7 +11,8 @@ evidence. One completed pilot is not proof of broad production readiness.
 
 ## Closing evidence
 
-- Sanitized run result: [link to the schema-valid public result]
+- Sanitized run result: [link to the public result accepted by
+  `python3 release/scripts/integration-e2-runner.py validate`]
 - Frozen Registry Stack candidate: [link to the published release]
 - Independent operator: [confirmed or not confirmed; do not identify the
   operator]

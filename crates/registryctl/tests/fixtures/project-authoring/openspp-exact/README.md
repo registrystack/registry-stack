@@ -113,8 +113,10 @@ request's `format`, and validates that claim-result envelope.
 
 The expected-result file must contain only a `claims` object.
 Its keys must exactly match the request's claim ids.
-Each claim value must be a non-empty object containing only the exact `value`,
-`satisfied`, or `disclosure` fields that the owner intends to verify.
+Each claim value must contain exactly `value`, `satisfied`, and `disclosure`,
+using `null` when the Notary result has no value or satisfaction decision.
+The live runner compares all three fields and rejects unrecognized result
+fields so an over-disclosed response cannot pass as evidence.
 This example reflects only the committed synthetic fixture and must be replaced
 with reviewed expectations for the owner-approved record:
 
@@ -122,18 +124,23 @@ with reviewed expectations for the owner-approved record:
 {
   "claims": {
     "social-registry-record-exists": {
+      "value": true,
       "satisfied": true,
       "disclosure": "predicate"
     },
     "social-registry-active": {
+      "value": true,
       "satisfied": true,
       "disclosure": "predicate"
     },
     "programme-code": {
       "value": "SUPPORT",
+      "satisfied": null,
       "disclosure": "value"
     },
     "household-reference": {
+      "value": null,
+      "satisfied": null,
       "disclosure": "redacted"
     }
   }

@@ -721,6 +721,27 @@ fn validate_live_response(
         let result = result
             .as_object()
             .ok_or_else(|| anyhow!("governed Notary result must be an object"))?;
+        if result.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "evaluation_id"
+                    | "claim_id"
+                    | "claim_version"
+                    | "subject_type"
+                    | "requester_ref"
+                    | "target_ref"
+                    | "value"
+                    | "satisfied"
+                    | "disclosure"
+                    | "redacted_fields"
+                    | "format"
+                    | "issued_at"
+                    | "expires_at"
+                    | "provenance"
+            )
+        }) {
+            bail!("governed Notary result has an unsupported field");
+        }
         let claim_id = result
             .get("claim_id")
             .and_then(Value::as_str)
@@ -733,12 +754,15 @@ fn validate_live_response(
             .ok_or_else(|| anyhow!("live expected claim result must be an object"))?;
         if expected_result
             .keys()
-            .any(|key| !matches!(key.as_str(), "value" | "satisfied" | "disclosure"))
-            || expected_result.is_empty()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+            != BTreeSet::from(["disclosure", "satisfied", "value"])
         {
-            bail!("live expected claim result has an unsupported field");
+            bail!(
+                "live expected claim result must contain exactly value, satisfied, and disclosure"
+            );
         }
-        for field in expected_result.keys() {
+        for field in ["value", "satisfied", "disclosure"] {
             if result.get(field) != expected_result.get(field) {
                 bail!("governed Notary disclosed claim result did not match the expected fixture");
             }
