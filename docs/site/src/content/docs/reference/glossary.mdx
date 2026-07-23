@@ -111,8 +111,8 @@ Product names are always in English, including on future translated pages.
   <dt>evidence offering</dt>
   <dd>Metadata entry that describes a verification capability and the access path a client uses to reach it. In the current stack it points a client from Registry Relay metadata to Registry Notary or another evidence service; Relay describes the offering but does not evaluate the claim.</dd>
 
-  <dt>evidence claim</dt>
-  <dd>Registry Stack product term for a verifiable claim, attestation, credential claim, or status assertion that Registry Notary evaluates from Relay outputs or permitted self-attestation.</dd>
+  <dt>Notary evidence claim</dt>
+  <dd>An atomic, precise, reusable evidence statement that Registry Notary evaluates from Relay outputs or permitted self-attestation. Notary owns the claim's evidence semantics, authorization, and disclosure policy. A claim does not import a consuming programme's eligibility or action rules.</dd>
 
   <dt>evidence type list</dt>
   <dd>CCCEV list of evidence types that satisfy a requirement. In Registry Manifest, one list is one grouped option; multiple lists on the same requirement are alternatives.</dd>
@@ -135,11 +135,11 @@ Product names are always in English, including on future translated pages.
   <dt>integration</dt>
   <dd>A product-neutral source adaptation authored in a Registry Stack project. An integration declares reviewed metadata and one source capability such as `http`, `script`, or `snapshot`. Product and version labels do not select compiler or runtime behavior.</dd>
 
-  <dt>output</dt>
-  <dd>A typed, minimized scalar returned by Registry Relay on a matching consultation.</dd>
+  <dt>Relay output</dt>
+  <dd>A declared typed value returned by Registry Relay after source-specific acquisition and normalization on a matching consultation. A Relay output carries source evidence, not a consuming programme consequence. `true`, `false`, `null`, `no_match`, `ambiguous`, and source failure retain distinct meanings under the reviewed integration contract.</dd>
 
   <dt>claim</dt>
-  <dd>A Registry Notary-owned, purpose-specific value or predicate derived from consultation outcome and outputs.</dd>
+  <dd>Short form for a Notary evidence claim: a Registry Notary-owned evidence value or predicate derived from a consultation outcome and typed Relay outputs, or from permitted self-attestation. Purpose-bound authorization limits use of the claim without turning the claim into programme policy.</dd>
 
   <dt>JSON-LD</dt>
   <dd>JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog, policy, and CCCEV render output.</dd>
@@ -192,6 +192,9 @@ Product names are always in English, including on future translated pages.
   <dt>policy hash</dt>
   <dd>Lowercase `sha256:` digest that binds a governed evidence policy identity to canonical policy bytes or an externally supplied policy artifact. Manifest verifies it when an inline evidence pack policy object is present; Relay records the selected hash in governed PDP audit provenance.</dd>
 
+  <dt>programme decision</dt>
+  <dd>An eligibility, prioritization, workflow, or action decision made by a consuming programme from evidence and its own rules. Registry Relay and Registry Notary do not own this policy or decision.</dd>
+
   <dt>Protected Registry APIs</dt>
   <dd>Registry Stack runtime pattern for exposing existing registry source data through scoped, read-only HTTP routes with authentication, authorization, metadata, and audit. Registry Relay implements this pattern.</dd>
 
@@ -239,6 +242,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>source</dt>
   <dd>The one logical registry data interface available to Registry Relay, when present, inside a project trust domain. An OAuth or JSON Web Key Set endpoint used by a protocol is not another data source.</dd>
+
+  <dt>source-owned decision</dt>
+  <dd>A decision already made and owned by an authoritative source system. Registry Notary may attest this fact only when the claim identifier and its review documentation identify it as source-owned; Notary does not recompute the decision or claim ownership of its policy.</dd>
 
   <dt>`registry-manifest/v1`</dt>
   <dd>Schema version string for portable metadata manifests.</dd>

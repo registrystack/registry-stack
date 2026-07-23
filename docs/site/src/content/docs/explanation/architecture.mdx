@@ -64,6 +64,30 @@ updated policy documents without touching deployment config.
             topologies." />
 </figure>
 
+## Evidence and programme decisions
+
+The following responsibility flow is normative for 1.0 project authoring:
+
+1. A source system owns its operational data and any decisions made inside that source.
+2. Registry Relay owns source-specific acquisition, source-access policy, and typed normalization.
+   Relay returns only the declared consultation outcome and typed outputs. It does not assign a
+   programme consequence to those outputs.
+3. Registry Notary owns atomic, precise, reusable evidence statements plus the authorization and
+   disclosure policy for evaluating and releasing them. Purpose-bound authorization controls who
+   can request evidence and what can be disclosed. It does not turn the evidence statement into a
+   programme rule.
+4. A consuming programme owns eligibility, prioritization, workflow, and action. It combines the
+   evidence with its own rules and remains accountable for the resulting decision.
+
+These are three different policy categories: Relay source-access and adaptation policy, Notary
+evidence authorization and disclosure policy, and consuming programme decision and action policy.
+Project authors must keep them separate even when one deployment operates every component.
+
+Registry Notary can attest a decision already made by an authoritative source system. The claim
+identifier and its review documentation must identify that fact as a source-owned decision.
+Notary attests what the source decided; it does not recompute the decision or take ownership of
+the source's policy.
+
 ## Data and contract flow
 
 1. Registry Platform provides reusable security and operational primitives consumed by runtime services.
@@ -78,12 +102,15 @@ updated policy documents without touching deployment config.
    endpoints through configured auth.
 5. Registry Relay executes compiler-pinned consultations. Its product-neutral `http`, `script`,
    and `snapshot` capabilities adapt reviewed source contracts and return only declared typed
-   outputs. Registry Notary evaluates registry-backed claims from those Relay outputs, or evaluates
-   source-free and self-attested claims without Relay. It renders evaluation results as
+   outputs. Registry Notary evaluates registry-backed evidence claims from those Relay outputs, or
+   evaluates source-free and self-attested evidence claims without Relay. It renders evaluation
+   results as
    `application/vnd.registry-notary.claim-result+json`
-   or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), and it materializes eligible
-   stored evaluations into SD-JWT VC credentials (`application/dc+sd-jwt`).
-6. A trusted Registry Notary can call another trusted Registry Notary through
+   or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), and it materializes stored
+   evaluations that pass issuance checks into SD-JWT VC credentials (`application/dc+sd-jwt`).
+6. A consuming programme evaluates eligibility, priority, workflow, and action from the returned
+   evidence. Those programme decisions are outside Relay and Notary.
+7. A trusted Registry Notary can call another trusted Registry Notary through
    `POST /federation/v1/evaluations` for signed delegated evaluation. Registry Manifest can publish
    discovery metadata for that relationship, but local Notary peer policy grants access.
 For what each project does and does not own, refer to the product overview pages linked in the capabilities table.

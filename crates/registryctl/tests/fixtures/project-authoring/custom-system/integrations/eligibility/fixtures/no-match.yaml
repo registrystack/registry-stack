@@ -10,4 +10,7 @@ interactions:
 expect:
   outcome: no_match
   outputs: {}
-  claims: { household-record-exists: false, household-category: null, household-eligible: false }
+  claims:
+    household-record-exists: false
+    household-category: null
+    source-household-approval-decision: null

@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The maintained project-authoring fixtures now keep Relay source adaptation,
+  Notary evidence policy, and consuming programme decisions separate. The
+  DHIS2 Tracker starter retains its bounded health-evidence contract while
+  distinguishing positive, negative, unknown, no-match, ambiguity, and source
+  failure. Snapshot and custom-system examples now model reusable evidence or
+  explicitly source-owned decisions instead of Notary-owned eligibility.
+
 ## [0.12.2] - 2026-07-20
 
 - No user-visible Registryctl changes. This release fixes forward from the

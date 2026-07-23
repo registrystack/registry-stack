@@ -29,6 +29,33 @@ evidence only; any reviewed source system can use the same script capability and
 
 <ProjectStarterSequence starter="dhis2-tracker" />
 
+## Keep DHIS2 evidence separate from programme action
+
+The bundled health-evidence journey follows one responsibility flow:
+
+1. DHIS2 remains the system of record.
+2. Registry Relay performs bounded, same-origin DHIS2 acquisition and preserves the starter's
+   declared typed health outputs. The child-program and dose outputs use nullable booleans so an
+   unknown source value does not become a negative fact.
+3. Registry Notary exposes those outputs as atomic evidence claims under evidence authorization
+   and disclosure policy.
+4. The consuming programme combines the evidence with its own rules and case state to decide
+   whether outreach, follow-up, or another action is required.
+
+Do not add claims such as `outreach-required` or `follow-up-priority` to the evidence service.
+Those names describe consuming programme decisions. A source-owned decision is the exception: a
+claim can attest it only when the claim id and its review evidence identify the decision as
+source-owned.
+
+The adapter and fixtures must preserve source meaning. For a matched subject, a completed DHIS2
+programme-stage event maps to `true`, an existing non-completed event maps to `false`, and an
+absent enrollment or stage maps to `null`. A `404` maps to `no_match`, not to negative health
+evidence. Source rejection and subject mismatch are failures and produce no claims. Ambiguity is
+explicitly not applicable to this singleton DHIS2 resource; another adapter must prove ambiguity
+or handle it separately. Missing evidence is not a negative fact.
+
+{/* Evidence: crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker/. */}
+
 ## Declare source authority
 
 The public integration declares input schemas, authentication interface, allowed source paths,
@@ -194,6 +221,10 @@ registryctl check --project-dir <project> --environment <environment> --explain
 Offline tests are portable and use no real credentials or network. Production activation remains
 Linux-only while the process controls are code-owned. Fixture success proves the adapter against
 synthetic observations, not production source interoperability or deployment approval.
+Keep the offline fixtures as the deterministic acceptance path. A live DHIS2 compatibility check
+is optional and requires a reachable instance, dedicated credentials, reviewed source authority,
+and separate evidence recording. Public demo availability does not determine whether the project
+passes its offline acceptance checks.
 
 ## Troubleshooting
 

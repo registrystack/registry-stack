@@ -2,7 +2,7 @@ version: 1
 starter:
   id: dhis2-tracker
   release: 0.12.2
-  content_digest: sha256:406356fab5814d45f8cce64d85840031da0a87288778572e392e218dea0886f7
+  content_digest: sha256:0f1f5fb710c5490d92346120d0cd791bac4bbd617033f03b9402ba3174caff19
 registry: { id: fictional-health-registry }
 integrations:
   health-record: { file: integrations/health-record/integration.yaml }
@@ -25,12 +25,7 @@ services:
     claims:
       tracked-entity-first-name: { output: health.first_name, disclosure: value }
       tracked-entity-last-name: { output: health.last_name, disclosure: value }
-      child-program-active:
-        cel: >-
-          health.child_program_active != null
-            ? health.matched && health.child_program_active
-            : false
-        disclosure: predicate
+      child-program-active: { output: health.child_program_active, disclosure: predicate }
       child-age-band:
         cel: >-
           health.matched && health.date_of_birth != null
@@ -41,24 +36,12 @@ services:
         disclosure: value
       programme-code: { output: health.programme_code, disclosure: value }
       reconciliation-reference: { output: health.reconciliation_reference, disclosure: redacted }
-      maternal-postnatal-care-active:
-        cel: >-
-          health.maternal_postnatal_active != null
-            ? health.matched && health.maternal_postnatal_active
-            : false
-        disclosure: predicate
-      child-health-visit-recorded:
-        cel: >-
-          health.child_health_visit_recorded != null
-            ? health.matched && health.child_health_visit_recorded
-            : false
-        disclosure: predicate
-      tb-program-active:
-        cel: >-
-          health.tb_program_active != null
-            ? health.matched && health.tb_program_active
-            : false
-        disclosure: predicate
+      maternal-postnatal-care-active: { output: health.maternal_postnatal_active, disclosure: predicate }
+      child-health-visit-recorded: { output: health.child_health_visit_recorded, disclosure: predicate }
+      tb-program-active: { output: health.tb_program_active, disclosure: predicate }
+      bcg-birth-dose-recorded: { output: health.bcg_birth_dose_recorded, disclosure: predicate }
+      opv-birth-dose-recorded: { output: health.opv_birth_dose_recorded, disclosure: predicate }
+      measles-dose-recorded: { output: health.measles_dose_recorded, disclosure: predicate }
     credential_profiles:
       health-status:
         format: dc+sd-jwt
@@ -75,3 +58,8 @@ services:
         type: https://credentials.invalid/programme-participation/v1
         validity: 10m
         claims: [programme-code, reconciliation-reference, child-program-active]
+      child-health-evidence:
+        format: dc+sd-jwt
+        type: https://credentials.invalid/child-health-evidence/v1
+        validity: 10m
+        claims: [child-program-active, bcg-birth-dose-recorded, opv-birth-dose-recorded, measles-dose-recorded]

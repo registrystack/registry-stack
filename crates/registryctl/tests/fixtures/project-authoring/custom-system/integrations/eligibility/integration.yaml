@@ -38,4 +38,4 @@ outputs:
 not_applicable:
   subject_mismatch:
     rationale: The selected response projection contains no identifier that can be compared with the requested household reference.
-    request_fixture: eligible-household
+    request_fixture: source-approved-household
