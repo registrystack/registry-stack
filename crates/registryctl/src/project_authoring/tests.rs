@@ -669,13 +669,13 @@ outputs:
             subject_type: "Person".to_string(),
             requester_ref: Some(registry_notary_core::EvidenceEntityRef {
                 entity_type: "Organisation".to_string(),
-                handle: "rnref:v1:requester".to_string(),
+                handle: format!("rnref:v1:hmac-sha256:{}", "1".repeat(64)),
                 identifier_schemes: Vec::new(),
                 profile: None,
             }),
             target_ref: registry_notary_core::TargetRefView {
                 entity_type: "Person".to_string(),
-                handle: "rnref:v1:target".to_string(),
+                handle: format!("rnref:v1:hmac-sha256:{}", "2".repeat(64)),
                 identifier_schemes: vec!["openspp_individual_id".to_string()],
                 profile: Some("openspp".to_string()),
             },
@@ -760,6 +760,11 @@ outputs:
             "production-us",
             "us-prod",
             "us-production",
+            "prod_us",
+            "production.eu",
+            "eu_prod",
+            "eu.production",
+            "owner-prod-copy",
         ] {
             assert!(
                 governed_live_environment_is_production(
@@ -774,6 +779,8 @@ outputs:
             "preproduction",
             "productionish",
             "product-copy-us",
+            "owner-productionish-copy",
+            "eu_product",
         ] {
             assert!(
                 !governed_live_environment_is_production(
@@ -1044,7 +1051,7 @@ outputs:
             request.claims
         );
 
-        let mut missing_evidence = response;
+        let mut missing_evidence = response.clone();
         missing_evidence["results"][0]
             .as_object_mut()
             .expect("actual result is an object")
@@ -1055,6 +1062,26 @@ outputs:
                 .to_string()
                 .contains("full-redaction semantics")
         );
+
+        for invalid_markers in [
+            json!([]),
+            json!([""]),
+            json!(["household-reference", "household-reference"]),
+            json!(["other-claim"]),
+            json!(["IND-AB12CD34"]),
+        ] {
+            let mut invalid = response.clone();
+            set_governed_live_result_pointer(
+                &mut invalid,
+                "/redacted_fields",
+                invalid_markers.clone(),
+            );
+            let error = validate_live_response(&invalid, &request, &expected)
+                .expect_err("invalid full-redaction marker set must fail closed")
+                .to_string();
+            assert!(error.contains("full-redaction semantics"));
+            assert!(!error.contains("IND-AB12CD34"));
+        }
     }
 
     #[test]
@@ -1256,6 +1283,52 @@ outputs:
             .to_string();
         assert!(error.contains("does not identify the selected Notary service"));
         assert!(!error.contains("stale-notary"));
+    }
+
+    #[test]
+    fn governed_live_result_requires_notary_pseudonymous_reference_handles() {
+        let (request, expected, response) = governed_live_eligible_fixture();
+        assert_eq!(
+            validate_live_response(&response, &request, &expected)
+                .expect("keyed Notary pseudonymous references pass"),
+            request.claims
+        );
+
+        let mut local = response.clone();
+        for pointer in ["/target_ref/handle", "/requester_ref/handle"] {
+            set_governed_live_result_pointer(
+                &mut local,
+                pointer,
+                json!(format!("rnref:v1:sha256:{}", "a".repeat(64))),
+            );
+        }
+        assert_eq!(
+            validate_live_response(&local, &request, &expected)
+                .expect("local-development Notary pseudonymous references pass"),
+            request.claims
+        );
+
+        for pointer in ["/target_ref/handle", "/requester_ref/handle"] {
+            for invalid_handle in [
+                "person-123".to_string(),
+                "rnref:v1:hmac-sha256:abcd".to_string(),
+                format!("rnref:v1:hmac-sha256:{}", "A".repeat(64)),
+                format!("rnref:v1:sha512:{}", "a".repeat(64)),
+                "rnref:v1:IND-AB12CD34".to_string(),
+            ] {
+                let mut invalid = response.clone();
+                set_governed_live_result_pointer(
+                    &mut invalid,
+                    pointer,
+                    json!(invalid_handle.clone()),
+                );
+                let error = validate_live_response(&invalid, &request, &expected)
+                    .expect_err("invalid Notary reference handle must fail closed")
+                    .to_string();
+                assert!(error.contains("invalid pseudonymous reference handle"));
+                assert!(!error.contains("IND-AB12CD34"));
+            }
+        }
     }
 
     #[test]

@@ -209,14 +209,16 @@ Each claim value must contain exactly `value`, `satisfied`, and `disclosure`,
 using `null` when the Notary result has no value or satisfaction decision.
 The live runner rejects keys outside its accepted result, reference, and
 provenance structures, including `pack_id` and `pack_version`; validates
-public `redacted_fields` without exposing a listed field value; rejects nulls
-for optional public fields; requires one evaluation id, the canonical
-claim-result format, and RFC3339 timestamps; binds each provenance record and
-claim version to the returned result and authored project; requires exact
-`value`, `satisfied`, and `disclosure` matches; requires an empty
-`derived_from` array; and requires a non-zero Relay consultation count. It does
-not judge whether an otherwise allowed handle or identifier value is
-semantically appropriate.
+public `redacted_fields`, including the current claim-id marker for full
+redaction, without exposing a listed field value; requires `target_ref` and
+optional `requester_ref` handles to use the Notary `rnref:v1` pseudonymous
+SHA-256 shape; rejects nulls for optional public fields; requires one evaluation
+id, the canonical claim-result format, and RFC3339 timestamps; binds each
+provenance record and claim version to the returned result and authored
+project; requires exact `value`, `satisfied`, and `disclosure` matches; requires
+an empty `derived_from` array; and requires a non-zero Relay consultation count.
+The runner validates the public pseudonym shape but cannot recompute its keyed
+digest from the private owner record.
 These examples reflect only the committed synthetic fixture and must be
 replaced with reviewed expectations for the owner-approved record.
 
@@ -236,8 +238,8 @@ other three variables, and run:
 registryctl test --project-dir . --environment <owner-environment> --live
 ```
 
-The command refuses environment names `prod`, `production`, `prod-*`,
-`production-*`, `*-prod`, and `*-production`, plus environments whose
+The command refuses environment names containing an exact `prod` or
+`production` segment separated by `.`, `_`, or `-`, plus environments whose
 `deployment.profile` is `production` or `evidence_grade`.
 This guard classifies the selected environment name and profile; it does not
 infer deployment classification from the operator-supplied Notary origin.

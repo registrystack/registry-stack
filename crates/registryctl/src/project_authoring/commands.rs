@@ -623,11 +623,9 @@ fn governed_live_environment_is_production(
     environment: &str,
     deployment_profile: Option<DeploymentProfile>,
 ) -> bool {
-    matches!(environment, "prod" | "production")
-        || environment.starts_with("prod-")
-        || environment.starts_with("production-")
-        || environment.ends_with("-prod")
-        || environment.ends_with("-production")
+    environment
+        .split(['-', '_', '.'])
+        .any(|segment| matches!(segment, "prod" | "production"))
         || matches!(
             deployment_profile,
             Some(DeploymentProfile::Production | DeploymentProfile::EvidenceGrade)
@@ -781,7 +779,7 @@ fn validate_live_response(
         if !result_view.provenance.derived_from.is_empty() {
             bail!("governed Notary result provenance derived_from must remain empty");
         }
-        validate_live_result_redaction(&result_view)?;
+        validate_live_result_reference_handles(&result_view)?;
         let claim_id = result_view.claim_id.as_str();
         if !requested.contains(claim_id) || !returned.insert(claim_id.to_string()) {
             bail!("governed Notary response contains an unknown or duplicate claim result");
@@ -791,6 +789,7 @@ fn validate_live_response(
         {
             bail!("governed Notary result claim version does not match the authored project");
         }
+        validate_live_result_redaction(&result_view)?;
         let expected_result = expected[claim_id]
             .as_object()
             .ok_or_else(|| anyhow!("live expected claim result must be an object"))?;
@@ -861,6 +860,32 @@ fn validate_live_result_raw_schema(
     Ok(())
 }
 
+fn validate_live_result_reference_handles(
+    result: &registry_notary_core::ClaimResultView,
+) -> Result<()> {
+    if !is_notary_pseudonymous_handle(&result.target_ref.handle)
+        || result
+            .requester_ref
+            .as_ref()
+            .is_some_and(|requester| !is_notary_pseudonymous_handle(&requester.handle))
+    {
+        bail!("governed Notary result contains an invalid pseudonymous reference handle");
+    }
+    Ok(())
+}
+
+fn is_notary_pseudonymous_handle(value: &str) -> bool {
+    let digest = value
+        .strip_prefix("rnref:v1:hmac-sha256:")
+        .or_else(|| value.strip_prefix("rnref:v1:sha256:"));
+    digest.is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
 fn validate_live_result_redaction(result: &registry_notary_core::ClaimResultView) -> Result<()> {
     let disclosure = registry_notary_core::DisclosureProfile::parse(&result.disclosure)
         .ok_or_else(|| anyhow!("governed Notary result has an invalid disclosure profile"))?;
@@ -868,7 +893,8 @@ fn validate_live_result_redaction(result: &registry_notary_core::ClaimResultView
         registry_notary_core::DisclosureProfile::Redacted => {
             if result.value.is_some()
                 || result.satisfied.is_some()
-                || result.redacted_fields.is_empty()
+                || result.redacted_fields.len() != 1
+                || result.redacted_fields[0] != result.claim_id
             {
                 bail!("governed Notary result violates full-redaction semantics");
             }
