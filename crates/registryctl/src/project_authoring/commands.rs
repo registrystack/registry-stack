@@ -732,6 +732,15 @@ fn validate_live_response(
                     "governed Notary result does not match the closed public claim-result schema"
                 )
             })?;
+        if result_view.provenance.schema_version
+            != registry_notary_core::CLAIM_PROVENANCE_SCHEMA_VERSION
+            || result_view.provenance.generated_by.entry_type
+                != registry_notary_core::PROVENANCE_GENERATED_BY_CLAIM_EVALUATION
+        {
+            bail!(
+                "governed Notary result provenance constants do not match the closed public claim-result schema"
+            );
+        }
         if !result_view.provenance.derived_from.is_empty() {
             bail!("governed Notary result provenance derived_from must remain empty");
         }

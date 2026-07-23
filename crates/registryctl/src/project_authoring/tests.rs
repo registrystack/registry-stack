@@ -783,6 +783,70 @@ outputs:
     }
 
     #[test]
+    fn governed_live_result_requires_canonical_provenance_constants() {
+        let claims = vec!["eligible".to_string()];
+        let expected = json!({
+            "claims": {
+                "eligible": {
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        });
+        let response = json!({
+            "results": [governed_live_claim_result(
+                "eligible",
+                json!(true),
+                Some(true),
+                "predicate",
+            )],
+        });
+
+        assert_eq!(
+            response.pointer("/results/0/provenance/schema_version"),
+            Some(&json!(
+                registry_notary_core::CLAIM_PROVENANCE_SCHEMA_VERSION
+            ))
+        );
+        assert_eq!(
+            response.pointer("/results/0/provenance/generated_by/type"),
+            Some(&json!(
+                registry_notary_core::PROVENANCE_GENERATED_BY_CLAIM_EVALUATION
+            ))
+        );
+        assert_eq!(
+            validate_live_response(&response, &claims, &expected)
+                .expect("canonical provenance constants pass"),
+            claims
+        );
+
+        for (pointer, value) in [
+            (
+                "/results/0/provenance/schema_version",
+                json!("registry-notary-claim-provenance/v1"),
+            ),
+            (
+                "/results/0/provenance/generated_by/type",
+                json!("stale_evaluation"),
+            ),
+        ] {
+            let mut invalid = response.clone();
+            *invalid
+                .pointer_mut(pointer)
+                .expect("actual provenance constant exists") = value;
+
+            assert!(
+                validate_live_response(&invalid, &claims, &expected)
+                    .expect_err("non-canonical provenance constant must fail closed")
+                    .to_string()
+                    .contains("provenance constants"),
+                "provenance constant {pointer} was accepted"
+            );
+        }
+    }
+
+    #[test]
     fn governed_live_result_rejects_partial_disclosure_expectations() {
         let claims = vec!["eligible".to_string()];
         let expected = json!({
