@@ -730,9 +730,11 @@ fn validate_live_response(
         if !result_view.provenance.derived_from.is_empty() {
             bail!("governed Notary result provenance derived_from must remain empty");
         }
-        if result_view.provenance.generated_by.pack_id.is_some()
-            || result_view.provenance.generated_by.pack_version.is_some()
-        {
+        let generated_by = result
+            .pointer("/provenance/generated_by")
+            .and_then(Value::as_object)
+            .ok_or_else(|| anyhow!("governed Notary result has invalid provenance"))?;
+        if generated_by.contains_key("pack_id") || generated_by.contains_key("pack_version") {
             bail!("governed Notary result exceeds the closed public claim-result schema");
         }
         let claim_id = result_view.claim_id.as_str();

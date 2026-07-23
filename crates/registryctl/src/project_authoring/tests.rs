@@ -891,17 +891,18 @@ outputs:
         });
 
         for field in ["pack_id", "pack_version"] {
-            let mut unsupported = response.clone();
-            unsupported["results"][0]["provenance"]["generated_by"][field] =
-                json!("unsupported");
+            for value in [json!("unsupported"), Value::Null] {
+                let mut unsupported = response.clone();
+                unsupported["results"][0]["provenance"]["generated_by"][field] = value;
 
-            assert!(
-                validate_live_response(&unsupported, &claims, &expected)
-                    .expect_err("fields outside the public schema must fail closed")
-                    .to_string()
-                    .contains("exceeds the closed public claim-result schema"),
-                "provenance field {field} was accepted"
-            );
+                assert!(
+                    validate_live_response(&unsupported, &claims, &expected)
+                        .expect_err("fields outside the public schema must fail closed")
+                        .to_string()
+                        .contains("exceeds the closed public claim-result schema"),
+                    "provenance field {field} was accepted"
+                );
+            }
         }
     }
 

@@ -116,11 +116,11 @@ Its keys must exactly match the request's claim ids.
 Each claim value must contain exactly `value`, `satisfied`, and `disclosure`,
 using `null` when the Notary result has no value or satisfaction decision.
 The live runner rejects keys outside its accepted result, reference, and
-provenance structures; rejects non-null provenance `pack_id` and
-`pack_version`; requires exact `value`, `satisfied`, and `disclosure` matches;
-requires an empty `derived_from` array; and requires a non-zero Relay
-consultation count. It does not judge whether an otherwise allowed handle or
-identifier value is semantically appropriate.
+provenance structures; does not accept provenance `pack_id` or `pack_version`
+keys; requires exact `value`, `satisfied`, and `disclosure` matches; requires
+an empty `derived_from` array; and requires a non-zero Relay consultation
+count. It does not judge whether an otherwise allowed handle or identifier
+value is semantically appropriate.
 This example reflects only the committed synthetic fixture and must be replaced
 with reviewed expectations for the owner-approved record:
 
