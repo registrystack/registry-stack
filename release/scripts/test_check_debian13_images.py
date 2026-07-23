@@ -459,6 +459,128 @@ class Debian13ImageCheckTest(unittest.TestCase):
             'APP_IMAGE="registryctl-relay:$RUN_ID"\ndocker run --rm "$APP_IMAGE"\n',
         )
 
+    def test_yaml_policy_image_keys_fail_closed_for_dynamic_default_families(
+        self,
+    ) -> None:
+        cases = (
+            ("compose.yaml", "services:\n  app:\n    image: rust:$TAG\n"),
+            ("compose.yaml", "services:\n  app:\n    image: rust:${TAG}\n"),
+            ("compose.yaml", "services:\n  app:\n    image: debian:${TAG}\n"),
+            ("compose.yaml", "services:\n  app:\n    image: postgres:$PG_TAG\n"),
+            (
+                "compose.yaml",
+                "services:\n  app:\n    image: postgres:$PG_TAG-notalpine\n",
+            ),
+            (
+                ".github/workflows/example.yml",
+                "jobs:\n  test:\n    container: rust:$TAG\n",
+            ),
+            ("images.yaml", "builder_image: rust:$TAG\n"),
+        )
+        for relative, text in cases:
+            with self.subTest(relative=relative, text=text):
+                self.assert_failure(
+                    relative,
+                    text,
+                    "computed or unresolved image assignment",
+                )
+
+        self.assert_clean(
+            "compose.yaml",
+            f"services:\n  app:\n    image: {PINNED_RUST}\n",
+        )
+        self.assert_clean(
+            "compose.yaml",
+            "services:\n  app:\n    image: registryctl-relay:$TAG\n",
+        )
+        self.assert_clean(
+            ".github/workflows/example.yml",
+            "jobs:\n  test:\n    services:\n      postgres:\n"
+            "        image: postgres:${{ matrix.postgresql }}-alpine\n",
+        )
+        self.assert_clean(
+            "metadata.yaml",
+            "metadata_image: rust:$TAG\nartifact_image: postgres:$PG_TAG\n",
+        )
+
+    def test_validated_image_annotations_are_path_and_contract_scoped(self) -> None:
+        registryctl_path = "crates/registryctl/src/templates/compose.yaml"
+        registryctl_annotation = (
+            "# debian13-policy: allow-validated-image "
+            'validator="registryctl-image-lock" '
+            'reason="registryctl renders a validated digest image lock here"\n'
+        )
+        relay_path = "release/conformance/relay-oidc/docker-compose.yml"
+        relay_annotation = (
+            "# debian13-policy: allow-validated-image "
+            'validator="relay-oidc-smoke" '
+            'reason="the runner validates the fixed repository and digest"\n'
+        )
+        self.assert_clean(
+            registryctl_path,
+            registryctl_annotation + "image: {{relay_image}}\n",
+        )
+        self.assert_clean(
+            relay_path,
+            relay_annotation + "image: ${REGISTRY_RELAY_OIDC_SMOKE_RELAY_IMAGE:"
+            "?runner must provide digest-pinned Registry Relay image}\n",
+        )
+        self.assert_failure(
+            "other/compose.yaml",
+            registryctl_annotation + "image: {{relay_image}}\n",
+            "invalid Debian image policy annotation",
+        )
+        for value in ("rust:$TAG", "rust:{{relay_image}}"):
+            with self.subTest(value=value):
+                self.assert_failure(
+                    registryctl_path,
+                    registryctl_annotation + f"image: {value}\n",
+                    "computed or unresolved image assignment",
+                )
+        relay_value = (
+            "${REGISTRY_RELAY_OIDC_SMOKE_RELAY_IMAGE:"
+            "?runner must provide digest-pinned Registry Relay image}"
+        )
+        for relative, annotation, value in (
+            (registryctl_path, registryctl_annotation, relay_value),
+            (relay_path, relay_annotation, "{{relay_image}}"),
+            (
+                registryctl_path,
+                registryctl_annotation,
+                "${EVIL_IMAGE:?unreviewed image input}",
+            ),
+        ):
+            with self.subTest(relative=relative, value=value):
+                self.assert_failure(
+                    relative,
+                    annotation + f"image: {value}\n",
+                    "invalid Debian image policy annotation",
+                )
+
+        texts = {
+            path: (ROOT / path).read_text()
+            for _, _, requirements in self.module.VALIDATED_IMAGE_CONTRACTS.values()
+            for path, _ in requirements
+        }
+        failures: list[str] = []
+        self.module.validated_image_contracts(texts, failures)
+        self.assertEqual([], failures)
+        for validator, (
+            _,
+            _,
+            requirements,
+        ) in self.module.VALIDATED_IMAGE_CONTRACTS.items():
+            for path, needle in requirements:
+                with self.subTest(validator=validator, path=path):
+                    mutated = dict(texts)
+                    mutated[path] = mutated[path].replace(needle, "", 1)
+                    failures = []
+                    self.module.validated_image_contracts(mutated, failures)
+                    self.assertTrue(
+                        any(validator in failure for failure in failures),
+                        failures,
+                    )
+
     def test_yaml_literals_cover_compose_merges_matrices_and_kubernetes(self) -> None:
         cases = (
             (
@@ -535,17 +657,71 @@ class Debian13ImageCheckTest(unittest.TestCase):
             "bare Debian image reference",
         )
 
+    def test_compose_bounded_flow_folded_and_anchored_consumers(self) -> None:
+        self.assert_failure(
+            "compose.yaml",
+            "services:\n  app: {entrypoint: [docker], command: [run, --rm, debian]}\n",
+            "bare Debian image reference",
+        )
+        self.assert_failure(
+            "compose.yaml",
+            "services:\n  app:\n    entrypoint: [docker]\n"
+            "    command: >-\n      run\n      --rm\n      debian\n",
+            "bare Debian image reference",
+        )
+        self.assert_failure(
+            "compose.yaml",
+            "x-engine: &container-engine [docker]\nservices:\n  app:\n"
+            "    entrypoint: *container-engine\n"
+            "    command: [run, --rm, debian]\n",
+            "bare Debian image reference",
+        )
+        self.assert_failure(
+            "compose.yaml",
+            "services:\n  app:\n    entrypoint: *unknown-engine\n"
+            "    command: [run, --rm, debian]\n",
+            "cannot statically resolve container entrypoint",
+        )
+        self.assert_failure(
+            "compose.yaml",
+            "services:\n  app:\n    entrypoint: ${CONTAINER_ENGINE}\n"
+            "    command: [run, --rm, debian]\n",
+            "cannot statically resolve container entrypoint",
+        )
+        self.assert_failure(
+            "compose.yaml",
+            "services:\n  app:\n    entrypoint: [docker]\n"
+            "    command: *container-command\n",
+            "cannot statically resolve container command",
+        )
+        self.assert_clean(
+            "compose.yaml",
+            "services:\n"
+            f"  app: {{entrypoint: [docker], command: [run, --rm, {PINNED_RUST}]}}\n",
+        )
+
     def test_container_cli_scans_only_the_bounded_image_operand(self) -> None:
         for command in (
             "docker run --name postgres alpine:3.22 true\n",
             "docker run alpine:3.22 python -V\n",
             "docker create --env NAME=postgres busybox:1.37 python\n",
+            "docker run --network-alias postgres alpine:3.22 true\n",
+            "docker run --mount type=bind,source=/tmp,target=/mnt alpine:3.22\n",
+            "docker run --cpuset-cpus 0 alpine:3.22\n",
+            "docker run -dit alpine:3.22\n",
         ):
             with self.subTest(command=command):
                 self.assert_clean("helper.sh", command)
 
         for command, family in (
             ("docker run --name app postgres true\n", "postgres"),
+            ("docker run --network-alias app postgres true\n", "postgres"),
+            (
+                "docker run --mount type=bind,source=/tmp,target=/mnt postgres\n",
+                "postgres",
+            ),
+            ("docker run --cpuset-cpus 0 postgres\n", "postgres"),
+            ("docker run -dit postgres\n", "postgres"),
             ("docker run python -V\n", "python"),
             ("docker pull --platform linux/amd64 rust:1.95\n", "rust:1.95"),
         ):
@@ -595,6 +771,14 @@ class Debian13ImageCheckTest(unittest.TestCase):
             "docker build --build-context base=docker-image://rust:1.95-trixie .\n",
             "Docker build context",
         )
+        for value in ("$RUST_IMAGE", "${RUST_IMAGE}"):
+            with self.subTest(value=value):
+                self.assert_failure(
+                    "build.sh",
+                    "docker buildx build --build-context "
+                    f"base=docker-image://{value} .\n",
+                    "computed Docker build context is not allowed",
+                )
         failures = self.scan(
             "build.sh",
             "docker build --build-context base=docker-image://rust:1.95-trixie .\n",

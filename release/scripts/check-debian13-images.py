@@ -89,6 +89,11 @@ BARE_DEFAULT_FAMILY_RE = re.compile(
     r"(?![A-Za-z0-9._/@+:-])"
 )
 DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$", re.IGNORECASE)
+NON_DEBIAN_TAG_RE = re.compile(
+    r"(?:^|[._-])(?:alpine(?:[0-9]+(?:\.[0-9]+)*)?"
+    r"|windows(?:servercore|nanoserver)?)(?:$|[._-])",
+    re.IGNORECASE,
+)
 FROM_RE = re.compile(
     r"^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?",
     re.IGNORECASE | re.MULTILINE,
@@ -122,12 +127,19 @@ IMAGE_FALLBACK_RE = re.compile(
     re.IGNORECASE,
 )
 SIMPLE_SHELL_VAR = r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})"
+SIMPLE_GITHUB_EXPRESSION = (
+    r"\$\{\{\s*[A-Za-z_][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z_][A-Za-z0-9_-]*)*\s*\}\}"
+)
+SIMPLE_DYNAMIC_VALUE = rf"(?:{SIMPLE_SHELL_VAR}|{SIMPLE_GITHUB_EXPRESSION})"
+SIMPLE_DYNAMIC_VALUE_RE = re.compile(SIMPLE_DYNAMIC_VALUE)
 SAFE_TAG_TEMPLATE_RE = re.compile(
     rf"""^["']?(?P<repository>(?:[A-Za-z0-9._-]+(?::[0-9]+)?/)*"""
-    rf"""[A-Za-z0-9._-]+):(?:[A-Za-z0-9_.-]|{SIMPLE_SHELL_VAR})+["']?;?$"""
+    rf"""[A-Za-z0-9._-]+):(?P<tag>(?:[A-Za-z0-9_.-]|"""
+    rf"""{SIMPLE_DYNAMIC_VALUE})+)["']?;?$"""
 )
 COMPUTED_VALUE_RE = re.compile(r"[+%]|`|\$\(|\.format\(|\bf[\"']")
-CLI_TOKEN_RE = re.compile(r""""[^"\n]*"|'[^'\n]*'|[^\s,;\[\]]+""")
+CLI_TOKEN_RE = re.compile(r""""[^"\n]*"|'[^'\n]*'|[^\s;\[\]]+""")
 CONTAINER_VALUE_OPTIONS = {
     "--add-host",
     "--annotation",
@@ -137,6 +149,7 @@ CONTAINER_VALUE_OPTIONS = {
     "--cgroupns",
     "--cidfile",
     "--cpus",
+    "--cpuset-cpus",
     "--device",
     "--dns",
     "--dns-search",
@@ -161,6 +174,7 @@ CONTAINER_VALUE_OPTIONS = {
     "--mount",
     "--name",
     "--network",
+    "--network-alias",
     "--pid",
     "--platform",
     "--publish",
@@ -208,9 +222,55 @@ DOCKER_CONTEXT_RE = re.compile(
     r"[A-Za-z0-9._-]+(?:\:[A-Za-z0-9_][A-Za-z0-9._-]*)?"
     r"(?:@sha256:[0-9a-fA-F]{64})?)(?![A-Za-z0-9._/@+-])"
 )
+DOCKER_CONTEXT_TOKEN_RE = re.compile(
+    r"""docker-image://(?P<value>[^\s,;"']+)""",
+)
 EXEMPTION_RE = re.compile(
     r'<!--\s*debian13-policy:\s*allow-prose\s+reason="[^"]{8,}"\s*-->'
 )
+VALIDATED_IMAGE_EXEMPTION_RE = re.compile(
+    r"^\s*#\s*debian13-policy:\s*allow-validated-image\s+"
+    r'validator="(?P<validator>[a-z0-9-]+)"\s+reason="[^"]{12,}"\s*$'
+)
+VALIDATED_IMAGE_CONTRACTS = {
+    "registryctl-image-lock": (
+        Path("crates/registryctl/src/templates/compose.yaml"),
+        "{{relay_image}}",
+        (
+            (
+                Path("crates/registryctl/src/lib.rs"),
+                'validate_locked_image_ref(\n        "images.registry-relay"',
+            ),
+            (
+                Path("crates/registryctl/src/lib.rs"),
+                "fn image_lock_rejects_mutable_or_noncanonical_image_references()",
+            ),
+            (
+                Path("crates/registryctl/tests/image_lock.rs"),
+                "assert!(compose.contains(RELAY_IMAGE));",
+            ),
+        ),
+    ),
+    "relay-oidc-smoke": (
+        Path("release/conformance/relay-oidc/docker-compose.yml"),
+        "${REGISTRY_RELAY_OIDC_SMOKE_RELAY_IMAGE:"
+        "?runner must provide digest-pinned Registry Relay image}",
+        (
+            (
+                Path("release/scripts/relay-oidc-smoke.py"),
+                "def validate_relay_image(value: str) -> str:",
+            ),
+            (
+                Path("release/scripts/relay-oidc-smoke.py"),
+                "relay_image = validate_relay_image(args.relay_image)",
+            ),
+            (
+                Path("release/scripts/test_relay_oidc_smoke.py"),
+                "def test_relay_image_requires_exact_repository_and_lowercase_digest",
+            ),
+        ),
+    ),
+}
 MARKDOWN_SUFFIXES = {".md", ".mdx"}
 CODE_SUFFIXES = set(".bash .js .mjs .py .sh .ts .yaml .yml".split())
 FENCE_LANGS = set(
@@ -325,7 +385,7 @@ def is_debian_family(reference: str) -> bool:
     repository, tag = repository_and_tag(reference)
     name, tag = repository.rsplit("/", 1)[-1].casefold(), (tag or "").casefold()
     default = name in DEFAULT_DEBIAN_FAMILIES
-    excluded = default and ("alpine" in tag or "windows" in tag)
+    excluded = default and NON_DEBIAN_TAG_RE.search(tag) is not None
     return not excluded and (
         "debian" in name
         or name == "buildpack-deps"
@@ -356,12 +416,41 @@ def assignment(path: Path, line: str) -> tuple[str, str] | None:
     )
 
 
+def split_flow_commas(value: str, nested: bool) -> list[str]:
+    parts, current, depth, quote = [], [], 0, ""
+    for character in value:
+        if quote:
+            current.append(character)
+            if character == quote:
+                quote = ""
+        elif character in "\"'":
+            quote = character
+            current.append(character)
+        elif character == "[":
+            depth += 1
+            current.append(character)
+        elif character == "]":
+            depth = max(0, depth - 1)
+            current.append(character)
+        elif character == "," and bool(depth) == nested:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(character)
+    parts.append("".join(current))
+    return parts
+
+
 def command_tokens(value: str) -> list[str]:
-    command = re.split(r"\s*(?:&&|\|\||[;|])\s*", value, maxsplit=1)[0]
+    command = re.split(
+        r"\s*(?:&&|\|\||[;|])\s*",
+        " ".join(split_flow_commas(value, nested=True)),
+        maxsplit=1,
+    )[0]
     return [
         token[1:-1]
         if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'"
-        else token.strip("\"'()")
+        else token.strip("\"'(),")
         for token in CLI_TOKEN_RE.findall(command)
     ]
 
@@ -408,7 +497,7 @@ def container_image_values(line: str) -> list[str]:
                 )
                 if option in value_options:
                     index += 1 if "=" in token or attached else 2
-                elif option in flag_options:
+                elif option in flag_options or re.fullmatch(r"-[diqt]+", option):
                     index += 1
                 else:
                     ambiguous = True
@@ -442,6 +531,11 @@ def policy_image_name(name: str) -> bool:
     )
 
 
+def yaml_policy_image_name(name: str) -> bool:
+    normalized = re.sub("[^A-Za-z0-9]", "", name).casefold()
+    return normalized in {"image", "container"} or policy_image_name(name)
+
+
 def is_image_alias(value: str) -> bool:
     return (
         DIRECT_IMAGE_ALIAS_RE.fullmatch(value.strip()) is not None
@@ -453,11 +547,24 @@ def has_safe_image_template(value: str) -> bool:
     match = SAFE_TAG_TEMPLATE_RE.fullmatch(value)
     if COMPUTED_VALUE_RE.search(value) or match is None:
         return False
-    return not is_debian_family(match.group("repository"))
+    repository = match.group("repository")
+    name = repository.rsplit("/", 1)[-1].casefold()
+    if name not in DEFAULT_DEBIAN_FAMILIES:
+        return not is_debian_family(repository)
+    static_tag = SIMPLE_DYNAMIC_VALUE_RE.sub("dynamic", match.group("tag")).casefold()
+    return NON_DEBIAN_TAG_RE.search(static_tag) is not None
 
 
 def build_context_references(text: str) -> list[str]:
     return [match.group("ref") for match in DOCKER_CONTEXT_RE.finditer(text)]
+
+
+def computed_build_contexts(text: str) -> list[str]:
+    return [
+        match.group("value")
+        for match in DOCKER_CONTEXT_TOKEN_RE.finditer(text)
+        if "$" in match.group("value") or "{" in match.group("value")
+    ]
 
 
 def append_reference_failures(
@@ -525,14 +632,88 @@ def logical_lines(lines: list[str], flags: list[bool]) -> list[tuple[int, str, b
     return result
 
 
-def yaml_container_consumers(lines: list[str]) -> dict[int, str]:
+def flow_mapping_fields(line: str) -> list[dict[str, str]]:
+    mappings = []
+    for mapping in re.finditer(r"\{(?P<body>[^{}]*)\}", line):
+        fields = {}
+        for part in split_flow_commas(mapping.group("body"), nested=False):
+            name, separator, value = part.partition(":")
+            if separator and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", name.strip()):
+                fields[name.strip().casefold()] = value.strip()
+        if fields:
+            mappings.append(fields)
+    return mappings
+
+
+def yaml_container_consumers(
+    lines: list[str],
+) -> tuple[dict[int, str], list[tuple[int, str]]]:
     parents: list[tuple[int, int]] = []
     fields: dict[tuple[int, str], tuple[int, str]] = {}
-    consumers = {}
+    anchors: dict[str, str] = {}
+    consumers, unresolved = {}, []
+
+    def combine(number: int, entrypoint: str, command: str) -> None:
+        tokens = command_tokens(command)
+        action = tokens[0].casefold() if tokens else ""
+        alias = re.fullmatch(r"\*(?P<name>[A-Za-z0-9_-]+)", entrypoint.strip())
+        if alias:
+            resolved = anchors.get(alias.group("name"))
+            if resolved is None:
+                if action in {"create", "pull", "run"}:
+                    unresolved.append(
+                        (
+                            number,
+                            "cannot statically resolve container entrypoint; "
+                            "use a literal docker/podman entrypoint",
+                        )
+                    )
+                return
+            entrypoint = resolved
+        elif entrypoint.strip().startswith(("$", "{{")) and action in {
+            "create",
+            "pull",
+            "run",
+        }:
+            unresolved.append(
+                (
+                    number,
+                    "cannot statically resolve container entrypoint; "
+                    "use a literal docker/podman entrypoint",
+                )
+            )
+            return
+        engine = re.match(
+            r"^\s*\[?\s*[\"']?(?P<engine>(?:[^\s,\"'\]]*/)?(?:docker|podman))"
+            r"[\"']?(?=$|[\s,\]])",
+            entrypoint,
+        )
+        if engine:
+            combined = f"{engine.group('engine')} {command}"
+            if is_container_consumer(combined):
+                consumers[number] = combined
+            elif command.strip().startswith(("*", "$", "{{")):
+                unresolved.append(
+                    (
+                        number,
+                        "cannot statically resolve container command; "
+                        "use a literal create/pull/run command",
+                    )
+                )
+
     for offset, line in enumerate(lines):
         number = offset + 1
         if not line.strip() or line.lstrip().startswith("#"):
             continue
+        for anchor in re.finditer(
+            r"&(?P<name>[A-Za-z0-9_-]+)\s+"
+            r"(?P<value>\[[^\]\n]+\]|[\"']?(?:docker|podman)[\"']?)",
+            line,
+        ):
+            anchors[anchor.group("name")] = anchor.group("value")
+        for mapping in flow_mapping_fields(line):
+            if {"entrypoint", "command"} <= mapping.keys():
+                combine(number, mapping["entrypoint"], mapping["command"])
         indent = len(line) - len(line.lstrip())
         while parents and parents[-1][0] >= indent:
             parents.pop()
@@ -544,7 +725,8 @@ def yaml_container_consumers(lines: list[str]) -> dict[int, str]:
         scope = number if match.group("item") else parents[-1][1] if parents else 0
         if name in {"entrypoint", "command"}:
             value = match.group("value").strip()
-            if not value:
+            block_scalar = re.fullmatch(r"[>|][+-]?", value) is not None
+            if not value or block_scalar:
                 parts = []
                 for following in lines[offset + 1 :]:
                     if not following.strip() or following.lstrip().startswith("#"):
@@ -552,25 +734,42 @@ def yaml_container_consumers(lines: list[str]) -> dict[int, str]:
                     following_indent = len(following) - len(following.lstrip())
                     if following_indent <= indent:
                         break
-                    item = re.match(r"^\s*-\s*(?P<value>.+)$", following)
-                    if item:
-                        parts.append(item.group("value"))
+                    if block_scalar:
+                        parts.append(following.strip())
+                    else:
+                        item = re.match(r"^\s*-\s*(?P<value>.+)$", following)
+                        if item:
+                            parts.append(item.group("value"))
                 value = " ".join(parts)
             fields[(scope, name)] = (number, value)
         if (scope, "entrypoint") in fields and (scope, "command") in fields:
             command_number, command = fields[(scope, "command")]
             entrypoint = fields[(scope, "entrypoint")][1]
-            engine = re.match(
-                r"^\s*\[?\s*[\"']?(?P<engine>(?:[^\s,\"'\]]*/)?(?:docker|podman))"
-                r"[\"']?(?=$|[\s,\]])",
-                entrypoint,
-            )
-            if engine:
-                combined = f"{engine.group('engine')} {command}"
-                if is_container_consumer(combined):
-                    consumers[command_number] = combined
+            combine(command_number, entrypoint, command)
         parents.append((indent, number))
-    return consumers
+    return consumers, unresolved
+
+
+def yaml_image_exemptions(path: Path, lines: list[str]) -> tuple[set[int], set[int]]:
+    if path.suffix not in {".yaml", ".yml"}:
+        return set(), set()
+    comments, assignments = set(), set()
+    for offset, line in enumerate(lines[:-1]):
+        exemption = VALIDATED_IMAGE_EXEMPTION_RE.fullmatch(line)
+        if exemption is None:
+            continue
+        contract = VALIDATED_IMAGE_CONTRACTS.get(exemption.group("validator"))
+        if contract is None or contract[0] != path:
+            continue
+        item = assignment(path, lines[offset + 1])
+        if (
+            item is not None
+            and yaml_policy_image_name(item[0])
+            and item[1].strip() == contract[1]
+        ):
+            comments.add(offset + 1)
+            assignments.add(offset + 2)
+    return comments, assignments
 
 
 def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
@@ -584,12 +783,16 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
     code_file = (
         is_dockerfile(path) or path.suffix in CODE_SUFFIXES or executable or shebang
     )
-    strict_assignments = (
+    strict_code_assignments = (
         code_file and not is_dockerfile(path) and path.suffix not in {".yaml", ".yml"}
     )
-    yaml_consumers = (
-        yaml_container_consumers(lines) if path.suffix in {".yaml", ".yml"} else {}
+    yaml_consumers, yaml_errors = (
+        yaml_container_consumers(lines)
+        if path.suffix in {".yaml", ".yml"}
+        else ({}, [])
     )
+    failures.extend(f"{path}:{number}: {message}" for number, message in yaml_errors)
+    exemption_comments, exempt_assignments = yaml_image_exemptions(path, lines)
     records: list[tuple[int, str, str, set[str], bool, bool]] = []
     resolved = set()
     for number, line in enumerate(lines, 1):
@@ -599,13 +802,22 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
             )
         markdown_code = markdown_flags[number - 1]
         comment = line.lstrip().startswith(("#", "//")) and not markdown_code
-        exemption = (
+        exemption = number in exemption_comments or (
             path.suffix in MARKDOWN_SUFFIXES
             and not markdown_code
             and EXEMPTION_RE.search(line) is not None
         )
         if "debian13-policy:" in line and not exemption:
-            failures.append(f"{path}:{number}: invalid Debian image prose exemption")
+            kind = (
+                "prose exemption"
+                if path.suffix in MARKDOWN_SUFFIXES
+                else "policy annotation"
+            )
+            failures.append(
+                f"{path}:{number}: invalid Debian image {kind}; use a literal "
+                "static repository and digest unless an exact reviewed validator "
+                "contract is allowlisted"
+            )
         if exemption:
             continue
         lowered = line.casefold()
@@ -642,6 +854,12 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
                     failures,
                     "Docker build context",
                 )
+            for context in computed_build_contexts(line):
+                failures.append(
+                    f"{path}:{number}: computed Docker build context is not allowed: "
+                    f"docker-image://{context}; use a literal static "
+                    "docker-image:// reference"
+                )
         if item:
             name, value = item
             canonical = name.casefold()
@@ -661,14 +879,18 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
                 (not has_literal and not alias and not has_template)
                 or COMPUTED_VALUE_RE.search(value) is not None
             )
-            strict = strict_assignments and policy_image_name(name)
+            strict = (strict_code_assignments and policy_image_name(name)) or (
+                path.suffix in {".yaml", ".yml"}
+                and yaml_policy_image_name(name)
+                and number not in exempt_assignments
+            )
             records.append((number, canonical, value, dependencies, computed, strict))
             if ((has_literal or has_template) and not computed) or positional:
                 resolved.add(canonical)
         bare_assignment = item is not None and (
             path.suffix in {".yaml", ".yml"}
-            and re.sub("[^A-Za-z0-9]", "", item[0]).casefold() in {"image", "container"}
-            or strict_assignments
+            and yaml_policy_image_name(item[0])
+            or strict_code_assignments
             and policy_image_name(item[0])
         )
         if (
@@ -694,7 +916,8 @@ def scan_surface(path: Path, text: str, executable: bool = False) -> list[str]:
         if strict and (computed or name not in resolved):
             failures.append(
                 f"{path}:{number}: computed or unresolved image assignment "
-                f"is not allowed: {value.strip()}"
+                f"is not allowed: {value.strip()}; use a literal static repository "
+                "and digest, or a reviewed allow-validated-image validator contract"
             )
     consumer_records = logical_lines(lines, markdown_flags)
     consumer_records.extend(
@@ -928,6 +1151,18 @@ def product_contracts(texts: dict[Path, str], failures: list[str]) -> None:
         )
 
 
+def validated_image_contracts(texts: dict[Path, str], failures: list[str]) -> None:
+    for validator, (_, _, requirements) in VALIDATED_IMAGE_CONTRACTS.items():
+        for path, needle in requirements:
+            require(
+                texts.get(path, ""),
+                needle,
+                path,
+                f"{validator} validated dynamic image contract",
+                failures,
+            )
+
+
 def check_repository(root: Path = ROOT) -> list[str]:
     failures: list[str] = []
     try:
@@ -973,6 +1208,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
             if stage:
                 stages.add(stage.casefold())
     product_contracts(texts, failures)
+    validated_image_contracts(texts, failures)
     return failures
 
 

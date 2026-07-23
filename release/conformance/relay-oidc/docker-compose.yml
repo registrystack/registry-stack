@@ -87,6 +87,7 @@ services:
       - zitadel-seed:/seed:ro
 
   relay:
+    # debian13-policy: allow-validated-image validator="relay-oidc-smoke" reason="the smoke runner validates the fixed Relay repository and lowercase digest"
     image: ${REGISTRY_RELAY_OIDC_SMOKE_RELAY_IMAGE:?runner must provide digest-pinned Registry Relay image}
     platform: linux/amd64
     network_mode: service:zitadel
