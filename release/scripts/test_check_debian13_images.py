@@ -81,6 +81,30 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 failures,
             )
 
+    def test_discovered_dockerfile_rejects_external_copy_from_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            dockerfile = root / "products/example/Dockerfile"
+            dockerfile.parent.mkdir(parents=True, exist_ok=True)
+            dockerfile.write_text(
+                "FROM scratch\n"
+                "COPY --from=debian:book" + "worm@sha256:" + "a" * 64
+                + " /etc/os-release /os-release\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "products/example/Dockerfile:2" in failure
+                    and "retired Debian image generation marker" in failure
+                    for failure in failures
+                ),
+                failures,
+            )
+
     def test_discovered_script_rejects_unpinned_debian_derived_image(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -163,7 +187,8 @@ class Debian13ImageCheckTest(unittest.TestCase):
             script.parent.mkdir(parents=True, exist_ok=True)
             script.write_text(
                 "#!/usr/bin/env bash\n"
-                "docker run --rm --init --no-healthcheck --oom-kill-disable debian true\n",
+                "docker run --rm --init --no-healthcheck "
+                "--oom-kill-disable --sig-proxy debian true\n",
                 encoding="utf-8",
             )
 
@@ -173,6 +198,107 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 any(
                     "docs/site/scripts/build-example.sh:2" in failure
                     and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_discovered_script_rejects_private_registry_untagged_debian_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            script = root / "docs/site/scripts/build-example.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(
+                "#!/usr/bin/env bash\n"
+                "docker run --rm localhost:5000/debian true\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "docs/site/scripts/build-example.sh:2" in failure
+                    and failure.endswith(": localhost:5000/debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_discovered_script_strips_same_line_shell_separator_after_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            script = root / "docs/site/scripts/build-example.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(
+                "#!/usr/bin/env bash\n"
+                "docker run --rm debian; echo ok\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "docs/site/scripts/build-example.sh:2" in failure
+                    and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_discovered_script_parses_docker_global_options(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            script = root / "docs/site/scripts/build-example.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(
+                "#!/usr/bin/env bash\n"
+                "docker --context ci run --rm debian true\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "docs/site/scripts/build-example.sh:2" in failure
+                    and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_discovered_script_scans_after_shell_list_operators(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            script = root / "docs/site/scripts/build-example.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(
+                "#!/usr/bin/env bash\n"
+                'cd "$PWD" && docker run --rm debian true\n'
+                "echo ok; podman run --rm node:22 true\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "docs/site/scripts/build-example.sh:2" in failure
+                    and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+            self.assertTrue(
+                any(
+                    "docs/site/scripts/build-example.sh:3" in failure
+                    and failure.endswith(": node:22")
                     for failure in failures
                 ),
                 failures,
@@ -229,6 +355,29 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 failures,
             )
 
+    def test_discovered_yaml_rejects_list_item_image_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            compose = root / "products/example/compose.yaml"
+            compose.parent.mkdir(parents=True, exist_ok=True)
+            compose.write_text(
+                "containers:\n"
+                "  - image: debian\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "products/example/compose.yaml:2" in failure
+                    and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+
     def test_untagged_detection_ignores_comments_and_yaml_prose(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -273,6 +422,31 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 any(
                     ".github/workflows/example.yml:4" in failure
                     and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_discovered_workflow_rejects_docker_image_action(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            workflow = root / ".github/workflows/example.yml"
+            workflow.parent.mkdir(parents=True, exist_ok=True)
+            workflow.write_text(
+                "jobs:\n"
+                "  test:\n"
+                "    steps:\n"
+                "      - uses: docker://debian:book" + "worm@sha256:" + "a" * 64 + "\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    ".github/workflows/example.yml:4" in failure
+                    and "retired Debian image generation marker" in failure
                     for failure in failures
                 ),
                 failures,
@@ -330,6 +504,38 @@ class Debian13ImageCheckTest(unittest.TestCase):
             self.assertTrue(
                 any(
                     "images.ts:3" in failure and failure.endswith(": python:3.12")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_discovered_shell_rejects_prefixed_image_declarations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            script = root / "docs/site/scripts/build-example.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(
+                "#!/usr/bin/env bash\n"
+                "local BUILDER_IMAGE=debian\n"
+                "readonly RUNTIME_IMAGE=rust:1.95-book" + "worm\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "docs/site/scripts/build-example.sh:2" in failure
+                    and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+            self.assertTrue(
+                any(
+                    "docs/site/scripts/build-example.sh:3" in failure
+                    and "retired Debian image generation marker" in failure
                     for failure in failures
                 ),
                 failures,
@@ -416,13 +622,19 @@ class Debian13ImageCheckTest(unittest.TestCase):
             self.copy_required_surfaces(root)
             tutorial = root / self.module.REGISTRYCTL_TUTORIAL_SCRIPT
             text = tutorial.read_text(encoding="utf-8")
+            linux_target = (
+                'LINUX_TARGET="$REPO_ROOT/target/registryctl-tutorial-linux-amd64"'
+            )
+            cargo_home = (
+                'CARGO_HOME_DIR="$REPO_ROOT/target/registryctl-tutorial-cargo-home"'
+            )
             tutorial.write_text(
                 text.replace(
-                    'LINUX_TARGET="$REPO_ROOT/target/registryctl-tutorial-linux-amd64"',
-                    'LINUX_TARGET="$REPO_ROOT/target/registryctl-tutorial-linux-amd64-$BUILDER_CACHE_KEY"',
+                    linux_target,
+                    linux_target.removesuffix('"') + '-$BUILDER_CACHE_KEY"',
                 ).replace(
-                    'CARGO_HOME_DIR="$REPO_ROOT/target/registryctl-tutorial-cargo-home"',
-                    'CARGO_HOME_DIR="$REPO_ROOT/target/registryctl-tutorial-cargo-home-$BUILDER_CACHE_KEY"',
+                    cargo_home,
+                    cargo_home.removesuffix('"') + '-$BUILDER_CACHE_KEY"',
                 ),
                 encoding="utf-8",
             )
@@ -452,7 +664,8 @@ class Debian13ImageCheckTest(unittest.TestCase):
             dockerfile.parent.mkdir(parents=True, exist_ok=True)
             dockerfile.write_text(
                 f"FROM {self.module.RUST_BUILDER} AS builder\n"
-                "FROM builder AS runtime\n",
+                "FROM builder AS runtime\n"
+                "COPY --from=builder /usr/local/bin/tool /usr/local/bin/tool\n",
                 encoding="utf-8",
             )
 
@@ -480,6 +693,58 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 ),
                 failures,
             )
+
+    def test_discovered_markdown_rejects_executable_code_block_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            doc = root / "crates/registry-relay/docs/example.md"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text(
+                "Run the example:\n"
+                "```bash\n"
+                "docker run --rm debian true\n"
+                "```\n"
+                "```console\n"
+                "$ docker run --rm node:22 true\n"
+                "```\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "crates/registry-relay/docs/example.md:3" in failure
+                    and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+            self.assertTrue(
+                any(
+                    "crates/registry-relay/docs/example.md:6" in failure
+                    and failure.endswith(": node:22")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_markdown_scan_ignores_prose_and_nonexecutable_fences(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            doc = root / "crates/registry-relay/docs/example.md"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text(
+                "A sentence can discuss docker run --rm debian true.\n"
+                "```text\n"
+                "docker run --rm debian true\n"
+                "```\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual([], self.module.check_repository(root))
 
     def test_history_and_research_are_outside_the_maintained_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
