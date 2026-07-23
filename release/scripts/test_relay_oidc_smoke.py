@@ -625,6 +625,48 @@ class RelayOidcSmokeTest(TestCase):
             candidate_module.verify_closeout_manifest_transition(
                 {"status": "released"}, released, tagged
             )
+
+            real_git_output = candidate_module.git_output
+
+            def released_tag(arguments, max_bytes):
+                if arguments[0] == "show":
+                    return released
+                return real_git_output(arguments, max_bytes)
+
+            with patch.object(
+                candidate_module,
+                "git_output",
+                side_effect=released_tag,
+            ), patch.object(
+                candidate_module, "verify_release_authenticity"
+            ) as authenticate:
+                with self.assertRaisesRegex(
+                    candidate_module.CandidateError, "Git binding"
+                ):
+                    self.runner.candidate_from_args(args)
+            authenticate.assert_not_called()
+
+            real_read = candidate_module.read_regular_file_no_follow
+            drifted = released + b"# Invalid post-tag manifest drift.\n"
+
+            def drifted_manifest(path, *, max_bytes):
+                if path == manifest:
+                    return drifted
+                return real_read(path, max_bytes=max_bytes)
+
+            with patch.object(
+                candidate_module,
+                "read_regular_file_no_follow",
+                side_effect=drifted_manifest,
+            ), patch.object(
+                candidate_module, "verify_release_authenticity"
+            ) as authenticate:
+                with self.assertRaisesRegex(
+                    candidate_module.CandidateError, "Git binding"
+                ):
+                    self.runner.candidate_from_args(args)
+            authenticate.assert_not_called()
+
             with self.assertRaisesRegex(
                 candidate_module.CandidateError, "Git binding"
             ):

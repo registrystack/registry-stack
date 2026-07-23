@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import contextlib
 import hashlib
 import importlib.util
 import io
@@ -398,6 +399,107 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                             self.candidate(), allow_template=False
                         )
                 self.assertNotIn(detail, str(caught.exception))
+
+    def test_upgrade_consumer_enforces_candidate_to_released_closeout(
+        self,
+    ) -> None:
+        candidate_module = sys.modules["conformance_candidate"]
+        tagged_candidate = self.module.git_bytes(
+            ROOT, TARGET_COMMIT, TARGET_MANIFEST
+        )
+        local_released = (ROOT / TARGET_MANIFEST).read_bytes()
+        cases = (
+            ("valid closeout", tagged_candidate, local_released, True),
+            ("released at tag", local_released, local_released, False),
+            (
+                "post-tag drift",
+                tagged_candidate,
+                local_released + b"# Invalid post-tag manifest drift.\n",
+                False,
+            ),
+        )
+        for label, tagged, local, valid in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temporary:
+                asset_root = Path(temporary)
+                asset_dir = asset_root / "v0.12.2"
+                asset_dir.mkdir()
+                image_lock = asset_dir / "registryctl-v0.12.2-image-lock.json"
+                lock = {
+                    "schema_version": "registryctl.release_image_lock.v1",
+                    "release_tag": "v0.12.2",
+                    "manifest_source_ref": (
+                        "0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8"
+                    ),
+                    "tag_target": TARGET_COMMIT,
+                    "platform": "linux/amd64",
+                    "images": {
+                        "registry-notary": (
+                            "ghcr.io/registrystack/registry-notary@sha256:"
+                            + "b" * 64
+                        ),
+                        "registry-relay": (
+                            "ghcr.io/registrystack/registry-relay@sha256:"
+                            + "b" * 64
+                        ),
+                    },
+                }
+                lock_bytes = json.dumps(lock).encode("utf-8")
+                image_lock.write_bytes(lock_bytes)
+                record = self.candidate()
+                artifacts = record["candidate_artifact_set"]["artifacts"]
+                artifacts["image_lock"] = self.module.sha256_bytes(lock_bytes)
+                record["candidate_artifact_set"]["sha256"] = (
+                    self.module.canonical_sha256(artifacts)
+                )
+
+                @contextlib.contextmanager
+                def snapshot(_image_lock_path):
+                    yield asset_dir, lock_bytes
+
+                real_git_output = candidate_module.git_output
+
+                def git_output(arguments, max_bytes):
+                    if arguments[0] == "cat-file":
+                        return str(len(tagged)).encode("ascii")
+                    if arguments[0] == "show":
+                        return tagged
+                    return real_git_output(arguments, max_bytes)
+
+                with mock.patch.object(
+                    self.module, "load_candidate", self.real_load_candidate
+                ), mock.patch.object(
+                    candidate_module,
+                    "candidate_asset_snapshot",
+                    snapshot,
+                ), mock.patch.object(
+                    candidate_module,
+                    "read_regular_file_no_follow",
+                    return_value=local,
+                ), mock.patch.object(
+                    candidate_module,
+                    "git_output",
+                    side_effect=git_output,
+                ), mock.patch.object(
+                    candidate_module,
+                    "verify_release_asset_binding",
+                    return_value="c" * 64,
+                ):
+                    if valid:
+                        self.validate_record(
+                            record,
+                            allow_template=False,
+                            candidate_asset_root=asset_root,
+                        )
+                    else:
+                        with self.assertRaisesRegex(
+                            self.module.ExerciseError,
+                            "could not be authenticated",
+                        ):
+                            self.validate_record(
+                                record,
+                                allow_template=False,
+                                candidate_asset_root=asset_root,
+                            )
 
     def test_real_v0122_release_image_lock_authenticates(self) -> None:
         asset_root_value = os.environ.get("REGISTRY_TEST_UPGRADE_ASSET_ROOT")
