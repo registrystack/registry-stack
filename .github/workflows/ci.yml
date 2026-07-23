@@ -650,9 +650,7 @@ jobs:
           path: |
             target/registryctl-tutorial-cargo-home
             target/registryctl-tutorial-linux-amd64
-          key: registryctl-tutorial-${{ runner.os }}-rust-1.95.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            registryctl-tutorial-${{ runner.os }}-rust-1.95.0-
+          key: registryctl-tutorial-${{ runner.os }}-${{ hashFiles('docs/site/scripts/check-registryctl-tutorials.sh') }}-${{ hashFiles('Cargo.lock') }}
 
       - name: Execute registryctl tutorials from source
         working-directory: docs/site

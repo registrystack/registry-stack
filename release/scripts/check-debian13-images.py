@@ -28,6 +28,7 @@ DOCKERFILE_FRONTEND = (
     "docker/dockerfile:1.7@sha256:"
     "a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
 )
+CI_WORKFLOW = Path(".github/workflows/ci.yml")
 REGISTRYCTL_TUTORIAL_SCRIPT = Path("docs/site/scripts/check-registryctl-tutorials.sh")
 
 PRODUCT_DOCKERFILES = (
@@ -42,6 +43,7 @@ PRODUCT_DOCKERFILES = (
 # generation and immutable-pin boundary is broader and is discovered from the
 # repository instead of relying on this tuple.
 REQUIRED_PRODUCT_SURFACES = PRODUCT_DOCKERFILES + (
+    CI_WORKFLOW,
     Path(".github/workflows/release.yml"),
     Path("release/scripts/build-release-binaries.sh"),
     Path("crates/registry-relay/docs/ops.md"),
@@ -227,6 +229,14 @@ def is_debian_derived(reference: str) -> bool:
         or re.search(r"(?:^|[-_.])debian-?1[0-9](?:$|[-_.])", lowered_tag)
         is not None
     )
+
+
+def retired_generation_marker(reference: str) -> str | None:
+    lowered = reference.casefold()
+    for marker in ("book" + "worm", "debian" + "12"):
+        if marker in lowered:
+            return marker
+    return None
 
 
 def is_debian_default_version_only(reference: str) -> bool:
@@ -451,6 +461,14 @@ def runtime_stage(text: str) -> str:
     return text[offset:] if offset >= 0 else ""
 
 
+def registryctl_tutorial_cache_step(text: str) -> str:
+    start = text.find("- name: Cache source-under-test Cargo build")
+    if start < 0:
+        return ""
+    end = text.find("\n      - name: Execute registryctl tutorials from source", start)
+    return text[start:] if end < 0 else text[start:end]
+
+
 def check_repository(root: Path = ROOT) -> list[str]:
     failures: list[str] = []
     maintained_paths = discover_maintained_surfaces(root)
@@ -497,6 +515,12 @@ def check_repository(root: Path = ROOT) -> list[str]:
             continue
         text = texts[relative]
         for line, reference in image_references(relative, text):
+            marker = retired_generation_marker(reference)
+            if marker is not None:
+                failures.append(
+                    f"{relative}:{line}: retired Debian image generation marker "
+                    f"remains in image reference: {marker}: {reference}"
+                )
             if not reference_requires_digest(reference):
                 continue
             failures.append(
@@ -635,6 +659,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 f"{relative}: vendor PKCS#11 modules must remain external read-only mounts"
             )
 
+    ci_workflow = texts[CI_WORKFLOW]
     workflow = texts[Path(".github/workflows/release.yml")]
     binary_recipe = texts[Path("release/scripts/build-release-binaries.sh")]
     require(
@@ -663,27 +688,47 @@ def check_repository(root: Path = ROOT) -> list[str]:
         failures,
     )
     tutorial_checker = texts[REGISTRYCTL_TUTORIAL_SCRIPT]
+    tutorial_cache = registryctl_tutorial_cache_step(ci_workflow)
     require(
         tutorial_checker,
-        'BUILDER_CACHE_KEY="${BUILDER_IMAGE##*@sha256:}"',
+        'LINUX_TARGET="$REPO_ROOT/target/registryctl-tutorial-linux-amd64"',
         REGISTRYCTL_TUTORIAL_SCRIPT,
-        "Debian 13 builder identity cache key",
+        "registryctl tutorial linux target path matching container target",
         failures,
     )
     require(
         tutorial_checker,
-        'registryctl-tutorial-linux-amd64-$BUILDER_CACHE_KEY',
+        'CARGO_HOME_DIR="$REPO_ROOT/target/registryctl-tutorial-cargo-home"',
         REGISTRYCTL_TUTORIAL_SCRIPT,
-        "builder-keyed linux target cache",
+        "registryctl tutorial Cargo home path matching container Cargo home",
         failures,
     )
     require(
-        tutorial_checker,
-        'registryctl-tutorial-cargo-home-$BUILDER_CACHE_KEY',
-        REGISTRYCTL_TUTORIAL_SCRIPT,
-        "builder-keyed Cargo home cache",
+        tutorial_cache,
+        "hashFiles('docs/site/scripts/check-registryctl-tutorials.sh')",
+        CI_WORKFLOW,
+        "registryctl tutorial cache key including builder-bearing script",
         failures,
     )
+    require(
+        tutorial_cache,
+        "target/registryctl-tutorial-linux-amd64",
+        CI_WORKFLOW,
+        "registryctl tutorial linux target cache path",
+        failures,
+    )
+    require(
+        tutorial_cache,
+        "target/registryctl-tutorial-cargo-home",
+        CI_WORKFLOW,
+        "registryctl tutorial Cargo home cache path",
+        failures,
+    )
+    if "restore-keys:" in tutorial_cache:
+        failures.append(
+            f"{CI_WORKFLOW}: registryctl tutorial cache must not restore from "
+            "pre-builder-identity keys"
+        )
 
     return failures
 

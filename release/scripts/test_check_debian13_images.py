@@ -241,8 +241,11 @@ class Debian13ImageCheckTest(unittest.TestCase):
             )
             metadata = root / "products/example/metadata.yaml"
             metadata.parent.mkdir(parents=True, exist_ok=True)
+            retired_bookworm = f"rust:1.95-{'book' + 'worm'}@sha256:{'a' * 64}"
             metadata.write_text(
                 'description: "docker run --rm debian is an unsafe example"\n'
+                f"# docker run --rm {retired_bookworm} cargo build\n"
+                f"notes: {retired_bookworm}\n"
                 "base: debian\n"
                 "container_note: debian\n",
                 encoding="utf-8",
@@ -270,6 +273,32 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 any(
                     ".github/workflows/example.yml:4" in failure
                     and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_discovered_script_rejects_retired_digest_pinned_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            script = root / "docs/site/scripts/build-example.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            retired_bookworm = f"rust:1.95-{'book' + 'worm'}@sha256:{'a' * 64}"
+            script.write_text(
+                "#!/usr/bin/env bash\n"
+                f"docker run --rm {retired_bookworm} cargo build --locked\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "retired Debian image generation marker remains in image reference"
+                    in failure
+                    and "docs/site/scripts/build-example.sh:2" in failure
+                    and "bookworm" in failure
                     for failure in failures
                 ),
                 failures,
@@ -349,18 +378,17 @@ class Debian13ImageCheckTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.copy_required_surfaces(root)
-            tutorial = root / self.module.REGISTRYCTL_TUTORIAL_SCRIPT
-            text = tutorial.read_text(encoding="utf-8")
-            tutorial.write_text(
+            workflow = root / self.module.CI_WORKFLOW
+            text = workflow.read_text(encoding="utf-8")
+            workflow.write_text(
                 text.replace(
-                    'BUILDER_CACHE_KEY="${BUILDER_IMAGE##*@sha256:}"\n',
-                    "",
-                ).replace(
-                    "registryctl-tutorial-linux-amd64-$BUILDER_CACHE_KEY",
-                    "registryctl-tutorial-linux-amd64",
-                ).replace(
-                    "registryctl-tutorial-cargo-home-$BUILDER_CACHE_KEY",
-                    "registryctl-tutorial-cargo-home",
+                    "key: registryctl-tutorial-${{ runner.os }}-${{ "
+                    "hashFiles('docs/site/scripts/check-registryctl-tutorials.sh') "
+                    "}}-${{ hashFiles('Cargo.lock') }}",
+                    "key: registryctl-tutorial-${{ runner.os }}-rust-1.95.0-"
+                    "${{ hashFiles('Cargo.lock') }}\n"
+                    "          restore-keys: |\n"
+                    "            registryctl-tutorial-${{ runner.os }}-rust-1.95.0-",
                 ),
                 encoding="utf-8",
             )
@@ -368,15 +396,51 @@ class Debian13ImageCheckTest(unittest.TestCase):
             failures = self.module.check_repository(root)
 
             self.assertTrue(
-                any("Debian 13 builder identity cache key" in failure for failure in failures),
+                any(
+                    "cache key including builder-bearing script" in failure
+                    for failure in failures
+                ),
                 failures,
             )
             self.assertTrue(
-                any("builder-keyed linux target cache" in failure for failure in failures),
+                any(
+                    "must not restore from pre-builder-identity keys" in failure
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_registryctl_tutorial_host_paths_must_match_container_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            tutorial = root / self.module.REGISTRYCTL_TUTORIAL_SCRIPT
+            text = tutorial.read_text(encoding="utf-8")
+            tutorial.write_text(
+                text.replace(
+                    'LINUX_TARGET="$REPO_ROOT/target/registryctl-tutorial-linux-amd64"',
+                    'LINUX_TARGET="$REPO_ROOT/target/registryctl-tutorial-linux-amd64-$BUILDER_CACHE_KEY"',
+                ).replace(
+                    'CARGO_HOME_DIR="$REPO_ROOT/target/registryctl-tutorial-cargo-home"',
+                    'CARGO_HOME_DIR="$REPO_ROOT/target/registryctl-tutorial-cargo-home-$BUILDER_CACHE_KEY"',
+                ),
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "linux target path matching container target" in failure
+                    for failure in failures
+                ),
                 failures,
             )
             self.assertTrue(
-                any("builder-keyed Cargo home cache" in failure for failure in failures),
+                any(
+                    "Cargo home path matching container Cargo home" in failure
+                    for failure in failures
+                ),
                 failures,
             )
 
