@@ -699,6 +699,94 @@ outputs:
         .expect("actual claim result serializes")
     }
 
+    fn governed_live_eligible_fixture() -> (Vec<String>, Value, Value) {
+        (
+            vec!["eligible".to_string()],
+            json!({
+                "claims": {
+                    "eligible": {
+                        "value": true,
+                        "satisfied": true,
+                        "disclosure": "predicate",
+                    },
+                },
+            }),
+            json!({
+                "results": [governed_live_claim_result(
+                    "eligible",
+                    json!(true),
+                    Some(true),
+                    "predicate",
+                )],
+            }),
+        )
+    }
+
+    fn set_governed_live_result_pointer(response: &mut Value, pointer: &str, value: Value) {
+        let result = response
+            .pointer_mut("/results/0")
+            .expect("actual claim result exists");
+        let (parent_pointer, field) = pointer
+            .rsplit_once('/')
+            .expect("result field pointer has a parent");
+        let parent = if parent_pointer.is_empty() {
+            result.as_object_mut()
+        } else {
+            result
+                .pointer_mut(parent_pointer)
+                .and_then(Value::as_object_mut)
+        }
+        .expect("actual result field parent exists");
+        parent.insert(field.to_string(), value);
+    }
+
+    #[test]
+    fn governed_live_production_guard_covers_name_and_profile_symmetry() {
+        for environment in [
+            "prod",
+            "production",
+            "prod-us",
+            "production-us",
+            "us-prod",
+            "us-production",
+        ] {
+            assert!(
+                governed_live_environment_is_production(
+                    environment,
+                    Some(DeploymentProfile::Local)
+                ),
+                "production-shaped environment name {environment} was accepted"
+            );
+        }
+        for environment in [
+            "owner-pilot",
+            "preproduction",
+            "productionish",
+            "product-copy-us",
+        ] {
+            assert!(
+                !governed_live_environment_is_production(
+                    environment,
+                    Some(DeploymentProfile::Local)
+                ),
+                "non-production-shaped environment name {environment} was rejected"
+            );
+        }
+        for (profile, rejected) in [
+            (DeploymentProfile::Local, false),
+            (DeploymentProfile::HostedLab, false),
+            (DeploymentProfile::Production, true),
+            (DeploymentProfile::EvidenceGrade, true),
+        ] {
+            assert_eq!(
+                governed_live_environment_is_production("owner-pilot", Some(profile)),
+                rejected,
+                "unexpected live classification for deployment profile {}",
+                profile.as_str()
+            );
+        }
+    }
+
     #[test]
     fn governed_live_result_accepts_actual_shape_and_requires_source_provenance() {
         let claims = vec!["eligible".to_string()];
@@ -844,6 +932,155 @@ outputs:
                 "provenance constant {pointer} was accepted"
             );
         }
+    }
+
+    #[test]
+    fn governed_live_result_binds_provenance_to_returned_result() {
+        let (claims, expected, response) = governed_live_eligible_fixture();
+        assert_eq!(
+            validate_live_response(&response, &claims, &expected)
+                .expect("canonical provenance binding passes"),
+            claims
+        );
+
+        for (pointer, value) in [
+            (
+                "/provenance/generated_by/evaluation_id",
+                json!("eval-other"),
+            ),
+            ("/provenance/generated_by/claim_id", json!("other-claim")),
+            (
+                "/provenance/generated_by/claim_version",
+                json!("0.9.0"),
+            ),
+        ] {
+            let mut invalid = response.clone();
+            set_governed_live_result_pointer(&mut invalid, pointer, value);
+
+            assert!(
+                validate_live_response(&invalid, &claims, &expected)
+                    .expect_err("misbound provenance must fail closed")
+                    .to_string()
+                    .contains("does not identify the returned claim result"),
+                "provenance binding {pointer} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn governed_live_result_requires_public_date_time_timestamps() {
+        let (claims, expected, mut response) = governed_live_eligible_fixture();
+        set_governed_live_result_pointer(
+            &mut response,
+            "/expires_at",
+            json!("2026-07-24T07:30:00+07:00"),
+        );
+        assert_eq!(
+            validate_live_response(&response, &claims, &expected)
+                .expect("canonical RFC3339 timestamps pass"),
+            claims
+        );
+
+        for pointer in ["/issued_at", "/expires_at"] {
+            let mut invalid = response.clone();
+            set_governed_live_result_pointer(&mut invalid, pointer, json!("not-rfc3339"));
+
+            assert!(
+                validate_live_response(&invalid, &claims, &expected)
+                    .expect_err("invalid public timestamp must fail closed")
+                    .to_string()
+                    .contains("public date-time schema"),
+                "invalid timestamp {pointer} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn governed_live_result_rejects_schema_excluded_redacted_fields() {
+        let (claims, expected, mut response) = governed_live_eligible_fixture();
+        assert!(
+            response
+                .pointer("/results/0/redacted_fields")
+                .is_none(),
+            "canonical public result omits redacted_fields"
+        );
+        set_governed_live_result_pointer(
+            &mut response,
+            "/redacted_fields",
+            json!(["private_field"]),
+        );
+
+        assert!(
+            validate_live_response(&response, &claims, &expected)
+                .expect_err("schema-excluded redacted_fields must fail closed")
+                .to_string()
+                .contains("exceeds the closed public claim-result schema")
+        );
+    }
+
+    #[test]
+    fn governed_live_result_rejects_null_optional_public_fields_recursively() {
+        let (claims, expected, mut response) = governed_live_eligible_fixture();
+        for (pointer, value) in [
+            ("/requester_ref/identifier_schemes", json!([])),
+            ("/requester_ref/profile", json!("requester")),
+            ("/provenance/generated_by/policy_id", json!("eligibility")),
+            ("/provenance/generated_by/policy_version", json!("1.0.0")),
+            (
+                "/provenance/generated_by/policy_hash",
+                json!(format!("sha256:{}", "0".repeat(64))),
+            ),
+        ] {
+            set_governed_live_result_pointer(&mut response, pointer, value);
+        }
+        for pointer in LIVE_RESULT_OPTIONAL_NON_NULL_PATHS {
+            assert!(
+                response
+                    .pointer(&format!("/results/0{pointer}"))
+                    .is_some_and(|value| !value.is_null()),
+                "canonical optional public field {pointer} is absent or null"
+            );
+        }
+        assert_eq!(
+            validate_live_response(&response, &claims, &expected)
+                .expect("non-null optional public fields pass"),
+            claims
+        );
+
+        for pointer in LIVE_RESULT_OPTIONAL_NON_NULL_PATHS {
+            let mut invalid = response.clone();
+            set_governed_live_result_pointer(&mut invalid, pointer, Value::Null);
+
+            assert!(
+                validate_live_response(&invalid, &claims, &expected)
+                    .expect_err("null optional public field must fail closed")
+                    .to_string()
+                    .contains("optional public field cannot be null"),
+                "null optional public field {pointer} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn governed_live_result_requires_claim_result_format() {
+        let (claims, expected, mut response) = governed_live_eligible_fixture();
+        assert_eq!(
+            response.pointer("/results/0/format"),
+            Some(&json!(registry_notary_core::FORMAT_CLAIM_RESULT_JSON))
+        );
+        assert_eq!(
+            validate_live_response(&response, &claims, &expected)
+                .expect("canonical claim-result format passes"),
+            claims
+        );
+
+        set_governed_live_result_pointer(&mut response, "/format", json!("application/json"));
+        assert!(
+            validate_live_response(&response, &claims, &expected)
+                .expect_err("wrong result format must fail closed")
+                .to_string()
+                .contains("invalid claim-result format")
+        );
     }
 
     #[test]

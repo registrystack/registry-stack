@@ -568,17 +568,12 @@ fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureR
         .environment_name
         .as_deref()
         .ok_or_else(|| anyhow!("live project tests require an environment"))?;
-    if matches!(environment, "prod" | "production")
-        || environment.starts_with("prod-")
-        || environment.ends_with("-prod")
-        || loaded.environment.as_ref().is_some_and(|environment| {
-            matches!(
-                environment.deployment.profile,
-                DeploymentProfile::Production | DeploymentProfile::EvidenceGrade
-            )
-        })
-    {
-        bail!("live project tests refuse production environments");
+    let deployment_profile = loaded
+        .environment
+        .as_ref()
+        .map(|environment| environment.deployment.profile);
+    if governed_live_environment_is_production(environment, deployment_profile) {
+        bail!("live project tests refuse production-classified environment names or profiles");
     }
     let origin = std::env::var("REGISTRY_STACK_LIVE_NOTARY_ORIGIN")
         .context("live Notary origin is absent from the process environment")?;
@@ -622,6 +617,21 @@ fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureR
         .context("governed Notary response was not strict JSON")?;
     let returned_claims = validate_live_response(&response, &claims, &expected)?;
     Ok(governed_live_fixture_report(returned_claims))
+}
+
+fn governed_live_environment_is_production(
+    environment: &str,
+    deployment_profile: Option<DeploymentProfile>,
+) -> bool {
+    matches!(environment, "prod" | "production")
+        || environment.starts_with("prod-")
+        || environment.starts_with("production-")
+        || environment.ends_with("-prod")
+        || environment.ends_with("-production")
+        || matches!(
+            deployment_profile,
+            Some(DeploymentProfile::Production | DeploymentProfile::EvidenceGrade)
+        )
 }
 
 fn governed_live_evaluation_request(endpoint: &url::Url, api_key: &str) -> ureq::Request {
@@ -721,11 +731,7 @@ fn validate_live_response(
         let result_object = result
             .as_object()
             .ok_or_else(|| anyhow!("governed Notary result must be an object"))?;
-        if !result_object.contains_key("expires_at") {
-            bail!(
-                "governed Notary result does not match the closed public claim-result schema: expires_at is required"
-            );
-        }
+        validate_live_result_raw_schema(result, result_object)?;
         let result_view: registry_notary_core::ClaimResultView =
             serde_json::from_value(result.clone()).map_err(|_| {
                 anyhow!(
@@ -741,15 +747,27 @@ fn validate_live_response(
                 "governed Notary result provenance constants do not match the closed public claim-result schema"
             );
         }
+        let generated_by = &result_view.provenance.generated_by;
+        if generated_by.evaluation_id != result_view.evaluation_id
+            || generated_by.claim_id != result_view.claim_id
+            || generated_by.claim_version != result_view.claim_version
+        {
+            bail!(
+                "governed Notary result provenance does not identify the returned claim result"
+            );
+        }
+        if result_view.format != registry_notary_core::FORMAT_CLAIM_RESULT_JSON {
+            bail!("governed Notary result has an invalid claim-result format");
+        }
+        if OffsetDateTime::parse(&result_view.issued_at, &Rfc3339).is_err()
+            || result_view.expires_at.as_deref().is_some_and(|expires_at| {
+                OffsetDateTime::parse(expires_at, &Rfc3339).is_err()
+            })
+        {
+            bail!("governed Notary result timestamps do not match the public date-time schema");
+        }
         if !result_view.provenance.derived_from.is_empty() {
             bail!("governed Notary result provenance derived_from must remain empty");
-        }
-        let generated_by = result
-            .pointer("/provenance/generated_by")
-            .and_then(Value::as_object)
-            .ok_or_else(|| anyhow!("governed Notary result has invalid provenance"))?;
-        if generated_by.contains_key("pack_id") || generated_by.contains_key("pack_version") {
-            bail!("governed Notary result exceeds the closed public claim-result schema");
         }
         let claim_id = result_view.claim_id.as_str();
         if !requested.contains(claim_id) || !returned.insert(claim_id.to_string()) {
@@ -778,6 +796,53 @@ fn validate_live_response(
         }
     }
     Ok(returned.into_iter().collect())
+}
+
+// These properties are optional in the public OpenAPI schema, but their types
+// exclude null when present. `expires_at` is intentionally not listed because
+// the public schema requires that key and permits an explicit null.
+const LIVE_RESULT_OPTIONAL_NON_NULL_PATHS: &[&str] = &[
+    "/requester_ref",
+    "/requester_ref/identifier_schemes",
+    "/requester_ref/profile",
+    "/target_ref/type",
+    "/target_ref/identifier_schemes",
+    "/target_ref/profile",
+    "/provenance/generated_by/policy_id",
+    "/provenance/generated_by/policy_version",
+    "/provenance/generated_by/policy_hash",
+];
+
+// The transport model carries these fields, but the closed public
+// ClaimResultView schema does not expose them.
+const LIVE_RESULT_SCHEMA_EXCLUDED_PATHS: &[&str] = &[
+    "/redacted_fields",
+    "/provenance/generated_by/pack_id",
+    "/provenance/generated_by/pack_version",
+];
+
+fn validate_live_result_raw_schema(
+    result: &Value,
+    result_object: &Map<String, Value>,
+) -> Result<()> {
+    if !result_object.contains_key("expires_at") {
+        bail!(
+            "governed Notary result does not match the closed public claim-result schema: expires_at is required"
+        );
+    }
+    if LIVE_RESULT_OPTIONAL_NON_NULL_PATHS
+        .iter()
+        .any(|pointer| result.pointer(pointer).is_some_and(Value::is_null))
+    {
+        bail!("governed Notary result optional public field cannot be null");
+    }
+    if LIVE_RESULT_SCHEMA_EXCLUDED_PATHS
+        .iter()
+        .any(|pointer| result.pointer(pointer).is_some())
+    {
+        bail!("governed Notary result exceeds the closed public claim-result schema");
+    }
+    Ok(())
 }
 
 fn validate_live_notary_origin(value: &str) -> Result<url::Url> {

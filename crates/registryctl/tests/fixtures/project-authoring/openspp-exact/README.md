@@ -116,11 +116,13 @@ Its keys must exactly match the request's claim ids.
 Each claim value must contain exactly `value`, `satisfied`, and `disclosure`,
 using `null` when the Notary result has no value or satisfaction decision.
 The live runner rejects keys outside its accepted result, reference, and
-provenance structures; does not accept provenance `pack_id` or `pack_version`
-keys; requires exact `value`, `satisfied`, and `disclosure` matches; requires
-an empty `derived_from` array; and requires a non-zero Relay consultation
-count. It does not judge whether an otherwise allowed handle or identifier
-value is semantically appropriate.
+provenance structures, including `redacted_fields`, `pack_id`, and
+`pack_version`; rejects nulls for optional public fields; requires the canonical
+claim-result format and RFC3339 timestamps; binds each provenance record to its
+returned evaluation, claim, and version; requires exact `value`, `satisfied`,
+and `disclosure` matches; requires an empty `derived_from` array; and requires a
+non-zero Relay consultation count. It does not judge whether an otherwise
+allowed handle or identifier value is semantically appropriate.
 This example reflects only the committed synthetic fixture and must be replaced
 with reviewed expectations for the owner-approved record:
 
@@ -167,7 +169,11 @@ other three variables, and run:
 registryctl test --project-dir . --environment <owner-environment> --live
 ```
 
-The command refuses a production environment.
+The command refuses environment names `prod`, `production`, `prod-*`,
+`production-*`, `*-prod`, and `*-production`, plus environments whose
+`deployment.profile` is `production` or `evidence_grade`.
+This guard classifies the selected environment name and profile; it does not
+infer deployment classification from the operator-supplied Notary origin.
 It first reruns the offline fixtures, checks the candidate Notary's Relay
 readiness, and then sends one request to the governed Notary evaluation path.
 It requires the returned claim fields to match the expected file and requires
