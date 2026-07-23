@@ -105,6 +105,79 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 failures,
             )
 
+    def test_discovered_script_rejects_version_only_debian_default_image(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            script = root / "docs/site/scripts/build-example.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(
+                "#!/usr/bin/env bash\n"
+                "docker run --rm node:22 npm test\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "Debian-derived image reference is not pinned by immutable digest"
+                    in failure
+                    and "docs/site/scripts/build-example.sh:2" in failure
+                    and failure.endswith(": node:22")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_discovered_script_parses_docker_container_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            script = root / "docs/site/scripts/build-example.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(
+                "#!/usr/bin/env bash\n"
+                "docker container run --rm rust:1.95-trixie cargo build --locked\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "Debian-derived image reference is not pinned by immutable digest"
+                    in failure
+                    and "docs/site/scripts/build-example.sh:2" in failure
+                    and failure.endswith(": rust:1.95-trixie")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_discovered_script_treats_docker_boolean_run_flags_as_valueless(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            script = root / "docs/site/scripts/build-example.sh"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(
+                "#!/usr/bin/env bash\n"
+                "docker run --rm --init --no-healthcheck --oom-kill-disable debian true\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "docs/site/scripts/build-example.sh:2" in failure
+                    and failure.endswith(": debian")
+                    for failure in failures
+                ),
+                failures,
+            )
+
     def test_discovered_script_rejects_untagged_debian_image(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -199,6 +272,111 @@ class Debian13ImageCheckTest(unittest.TestCase):
                     and failure.endswith(": debian")
                     for failure in failures
                 ),
+                failures,
+            )
+
+    def test_discovered_js_ts_rejects_bare_image_declarations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            script = root / "docs/site/scripts/images.ts"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(
+                'const image = "debian";\n'
+                "let builderImage: string = 'node:22';\n"
+                'var container = "python:3.12";\n',
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(any("images.ts:1" in failure for failure in failures), failures)
+            self.assertTrue(
+                any(
+                    "images.ts:2" in failure and failure.endswith(": node:22")
+                    for failure in failures
+                ),
+                failures,
+            )
+            self.assertTrue(
+                any(
+                    "images.ts:3" in failure and failure.endswith(": python:3.12")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_wrapped_python_and_ts_image_assignments_keep_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            python_script = root / "products/example/scripts/build_image.py"
+            python_script.parent.mkdir(parents=True, exist_ok=True)
+            python_script.write_text(
+                "BUILDER_IMAGE = (\n"
+                "    'rust:1.95-trixie'\n"
+                ")\n",
+                encoding="utf-8",
+            )
+            ts_script = root / "docs/site/scripts/images.ts"
+            ts_script.parent.mkdir(parents=True, exist_ok=True)
+            ts_script.write_text(
+                "const builderImage =\n"
+                "  'node:22';\n",
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "products/example/scripts/build_image.py:2" in failure
+                    and failure.endswith(": rust:1.95-trixie")
+                    for failure in failures
+                ),
+                failures,
+            )
+            self.assertTrue(
+                any(
+                    "docs/site/scripts/images.ts:2" in failure
+                    and failure.endswith(": node:22")
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_registryctl_tutorial_cache_key_must_include_builder_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_required_surfaces(root)
+            tutorial = root / self.module.REGISTRYCTL_TUTORIAL_SCRIPT
+            text = tutorial.read_text(encoding="utf-8")
+            tutorial.write_text(
+                text.replace(
+                    'BUILDER_CACHE_KEY="${BUILDER_IMAGE##*@sha256:}"\n',
+                    "",
+                ).replace(
+                    "registryctl-tutorial-linux-amd64-$BUILDER_CACHE_KEY",
+                    "registryctl-tutorial-linux-amd64",
+                ).replace(
+                    "registryctl-tutorial-cargo-home-$BUILDER_CACHE_KEY",
+                    "registryctl-tutorial-cargo-home",
+                ),
+                encoding="utf-8",
+            )
+
+            failures = self.module.check_repository(root)
+
+            self.assertTrue(
+                any("Debian 13 builder identity cache key" in failure for failure in failures),
+                failures,
+            )
+            self.assertTrue(
+                any("builder-keyed linux target cache" in failure for failure in failures),
+                failures,
+            )
+            self.assertTrue(
+                any("builder-keyed Cargo home cache" in failure for failure in failures),
                 failures,
             )
 

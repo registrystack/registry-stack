@@ -28,6 +28,7 @@ DOCKERFILE_FRONTEND = (
     "docker/dockerfile:1.7@sha256:"
     "a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
 )
+REGISTRYCTL_TUTORIAL_SCRIPT = Path("docs/site/scripts/check-registryctl-tutorials.sh")
 
 PRODUCT_DOCKERFILES = (
     Path("crates/registry-relay/Dockerfile"),
@@ -47,6 +48,7 @@ REQUIRED_PRODUCT_SURFACES = PRODUCT_DOCKERFILES + (
     Path("crates/registry-relay/docs/security-assurance.md"),
     Path("crates/registry-relay/scripts/check_docker_build_contract.py"),
     Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
+    REGISTRYCTL_TUTORIAL_SCRIPT,
     Path("products/notary/docs/security-assurance.md"),
 )
 
@@ -63,7 +65,10 @@ EXCLUDED_DIRECTORY_NAMES = {
 # Historical release notes and .research preserve observations, not active policy.
 EXCLUDED_PATH_PREFIXES = (Path("release/notes"),)
 MARKDOWN_SUFFIXES = {".md", ".mdx"}
-SCRIPT_SUFFIXES = {".bash", ".js", ".mjs", ".py", ".sh", ".ts"}
+SHELL_SUFFIXES = {".bash", ".sh"}
+PYTHON_SUFFIXES = {".py"}
+JS_TS_SUFFIXES = {".js", ".mjs", ".ts"}
+SCRIPT_SUFFIXES = SHELL_SUFFIXES | PYTHON_SUFFIXES | JS_TS_SUFFIXES
 YAML_SUFFIXES = {".yaml", ".yml"}
 
 RUST_BUILDER_DOCKERFILES = PRODUCT_DOCKERFILES[:3]
@@ -93,19 +98,26 @@ CONTAINER_REFERENCE_RE = re.compile(
     r"(?![A-Za-z0-9._/@+-])",
     re.IGNORECASE,
 )
-SCRIPT_IMAGE_CONTEXT_RE = re.compile(
-    r"\b(?:docker|podman|container|image)\b"
-    r"|\b[A-Za-z_][A-Za-z0-9_]*(?:image|base)[A-Za-z0-9_]*\s*=",
-    re.IGNORECASE,
-)
 IMAGE_ASSIGNMENT_RE = re.compile(
     r"^\s*(?:export\s+)?"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_-]*)\s*(?:=|:)\s*"
     r"(?P<reference>[^#\s]+)",
 )
+PY_IMAGE_ASSIGNMENT_RE = re.compile(
+    r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=\s*(?P<value>.*)$"
+)
+JS_TS_IMAGE_ASSIGNMENT_RE = re.compile(
+    r"^\s*(?:export\s+)?(?:const|let|var)\s+"
+    r"(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)"
+    r"\s*(?::[^=]+)?=\s*(?P<value>.*)$"
+)
+STRING_LITERAL_RE = re.compile(
+    r"\"(?P<double>(?:\\.|[^\"\\])*)\"|'(?P<single>(?:\\.|[^'\\])*)'"
+)
 UNTAGGED_IMAGE_REFERENCE_RE = re.compile(
     r"(?:[A-Za-z0-9.-]+(?::[0-9]+)?/)*[A-Za-z0-9._-]+",
 )
+VERSION_ONLY_TAG_RE = re.compile(r"^[0-9]+(?:[._][0-9]+)*$")
 DEBIAN_DEFAULT_IMAGE_NAMES = {
     "buildpack-deps",
     "debian",
@@ -119,6 +131,8 @@ CONTAINER_BOOLEAN_OPTIONS = {
     "--detach",
     "--init",
     "--interactive",
+    "--no-healthcheck",
+    "--oom-kill-disable",
     "--privileged",
     "--publish-all",
     "--quiet",
@@ -215,20 +229,30 @@ def is_debian_derived(reference: str) -> bool:
     )
 
 
+def is_debian_default_version_only(reference: str) -> bool:
+    unpinned = reference.split("@", 1)[0]
+    if ":" not in unpinned:
+        return False
+    repository, tag = unpinned.rsplit(":", 1)
+    image_name = repository.rsplit("/", 1)[-1].casefold()
+    return (
+        image_name in DEBIAN_DEFAULT_IMAGE_NAMES
+        and VERSION_ONLY_TAG_RE.fullmatch(tag) is not None
+    )
+
+
 def is_untagged_debian_derived(reference: str) -> bool:
     if UNTAGGED_IMAGE_REFERENCE_RE.fullmatch(reference) is None:
+        return False
+    if ":" in reference or "@" in reference:
         return False
     image_name = reference.rsplit("/", 1)[-1].casefold()
     return "debian" in image_name or image_name in DEBIAN_DEFAULT_IMAGE_NAMES
 
 
 def is_image_assignment(name: str) -> bool:
-    tokens = re.split(r"[_-]+", name.casefold())
-    return (
-        name.casefold() == "container"
-        or "image" in tokens
-        or ("base" in tokens and len(tokens) > 1)
-    )
+    lowered = name.casefold().replace("$", "")
+    return lowered in {"container", "image"} or lowered.endswith("image")
 
 
 def logical_lines(text: str) -> list[tuple[int, str]]:
@@ -259,7 +283,9 @@ def command_image_reference(command: str) -> str | None:
             continue
         prefix = tokens[:container_index]
         if any(
-            item not in {"-", "command", "env", "sudo"} and "=" not in item
+            item not in {"-", "command", "env", "sudo"}
+            and "=" not in item
+            and not item.endswith(":")
             for item in prefix
         ):
             continue
@@ -267,7 +293,7 @@ def command_image_reference(command: str) -> str | None:
         if action_index >= len(tokens):
             continue
         action = tokens[action_index]
-        if action == "image" and action_index + 1 < len(tokens):
+        if action in {"container", "image"} and action_index + 1 < len(tokens):
             action_index += 1
             action = tokens[action_index]
         if action not in CONTAINER_COMMANDS:
@@ -289,39 +315,111 @@ def command_image_reference(command: str) -> str | None:
     return None
 
 
-def untagged_debian_references(
-    relative: Path,
-    text: str,
-) -> list[tuple[int, str]]:
-    references: set[tuple[int, str]] = set()
-    for line_number, line in enumerate(text.splitlines(), 1):
-        assignment = IMAGE_ASSIGNMENT_RE.match(line)
-        if assignment is None or not is_image_assignment(assignment.group("name")):
-            continue
-        reference = assignment.group("reference").strip("\"'")
-        if is_untagged_debian_derived(reference):
-            references.add((line_number, reference))
+def decode_string_literal(value: str) -> str:
+    return value.replace(r"\/", "/").replace(r"\"", '"').replace(r"\'", "'")
 
-    if relative.suffix in {".bash", ".sh", ".yaml", ".yml"} or not relative.suffix:
-        for line_number, command in logical_lines(text):
-            reference = command_image_reference(command)
-            if reference is not None and is_untagged_debian_derived(reference):
+
+def string_literals(line: str) -> list[str]:
+    values: list[str] = []
+    for match in STRING_LITERAL_RE.finditer(line):
+        raw = match.group("double") if match.group("double") is not None else match.group("single")
+        values.append(decode_string_literal(raw))
+    return values
+
+
+def reference_candidates(value: str) -> list[str]:
+    stripped = value.strip().strip(";").strip(",").strip("\"'")
+    candidates = [match.group("reference") for match in CONTAINER_REFERENCE_RE.finditer(value)]
+    if stripped and is_untagged_debian_derived(stripped):
+        candidates.append(stripped)
+    return candidates
+
+
+def assignment_match(relative: Path, line: str) -> tuple[str, str] | None:
+    if relative.suffix in PYTHON_SUFFIXES:
+        match = PY_IMAGE_ASSIGNMENT_RE.match(line)
+        if match is None:
+            return None
+        return match.group("name"), match.group("value")
+    if relative.suffix in JS_TS_SUFFIXES:
+        match = JS_TS_IMAGE_ASSIGNMENT_RE.match(line)
+        if match is None:
+            return None
+        return match.group("name"), match.group("value")
+    match = IMAGE_ASSIGNMENT_RE.match(line)
+    if match is None:
+        return None
+    return match.group("name"), match.group("reference")
+
+
+def assignment_continues(relative: Path, value: str) -> bool:
+    stripped = value.strip()
+    if relative.suffix not in PYTHON_SUFFIXES | JS_TS_SUFFIXES:
+        return False
+    if stripped.endswith("\\") or stripped in {"", "(", "["}:
+        return True
+    if stripped.count("(") > stripped.count(")"):
+        return True
+    if relative.suffix in JS_TS_SUFFIXES and not stripped.endswith(";"):
+        return not string_literals(stripped)
+    return False
+
+
+def image_assignment_references(relative: Path, text: str) -> list[tuple[int, str]]:
+    references: set[tuple[int, str]] = set()
+    active = False
+    for line_number, line in enumerate(text.splitlines(), 1):
+        if active:
+            for literal in string_literals(line):
+                for reference in reference_candidates(literal):
+                    references.add((line_number, reference))
+            stripped = line.strip()
+            if stripped.endswith((")", "];", ";")) or stripped == ")":
+                active = False
+            continue
+
+        matched = assignment_match(relative, line)
+        if matched is None:
+            continue
+        name, value = matched
+        if not is_image_assignment(name):
+            continue
+        literals = string_literals(value)
+        if literals:
+            for literal in literals:
+                for reference in reference_candidates(literal):
+                    references.add((line_number, reference))
+        else:
+            for reference in reference_candidates(value):
                 references.add((line_number, reference))
+        active = assignment_continues(relative, value)
     return sorted(references)
 
 
-def script_reference_is_consumed(
-    relative: Path,
-    text: str,
-    match: re.Match[str],
-) -> bool:
-    if relative.suffix not in {".js", ".mjs", ".py", ".ts"}:
-        return True
-    line_start = text.rfind("\n", 0, match.start()) + 1
-    line_end = text.find("\n", match.end())
-    if line_end < 0:
-        line_end = len(text)
-    return SCRIPT_IMAGE_CONTEXT_RE.search(text[line_start:line_end]) is not None
+def command_image_references(relative: Path, text: str) -> list[tuple[int, str]]:
+    if relative.suffix not in SHELL_SUFFIXES | YAML_SUFFIXES and relative.suffix:
+        return []
+    references: set[tuple[int, str]] = set()
+    for line_number, command in logical_lines(text):
+        reference = command_image_reference(command)
+        if reference is not None:
+            references.add((line_number, reference))
+    return sorted(references)
+
+
+def image_references(relative: Path, text: str) -> list[tuple[int, str]]:
+    return sorted(
+        set(image_assignment_references(relative, text))
+        | set(command_image_references(relative, text))
+    )
+
+
+def reference_requires_digest(reference: str) -> bool:
+    if DIGEST_PIN_RE.search(reference):
+        return False
+    if ":" in reference:
+        return is_debian_derived(reference) or is_debian_default_version_only(reference)
+    return is_untagged_debian_derived(reference)
 
 
 def read(root: Path, relative: Path, failures: list[str]) -> str:
@@ -362,16 +460,6 @@ def check_repository(root: Path = ROOT) -> list[str]:
         for relative in all_paths
     }
 
-    retired_markers = ("book" + "worm", "debian" + "12")
-    for relative in maintained_paths:
-        text = texts[relative]
-        lowered = text.casefold()
-        for marker in retired_markers:
-            if marker in lowered:
-                failures.append(
-                    f"{relative}: retired Debian image generation marker remains: {marker}"
-                )
-
     dockerfiles = tuple(
         relative for relative in maintained_paths if is_dockerfile(relative)
     )
@@ -387,6 +475,12 @@ def check_repository(root: Path = ROOT) -> list[str]:
         stage_names: set[str] = set()
         for base, stage_name in bases:
             internal_stage = base.casefold() in stage_names
+            lowered_base = base.casefold()
+            for marker in ("book" + "worm", "debian" + "12"):
+                if not internal_stage and marker in lowered_base:
+                    failures.append(
+                        f"{relative}: retired Debian image generation marker remains: {marker}"
+                    )
             if (
                 base.casefold() != "scratch"
                 and not internal_stage
@@ -402,20 +496,9 @@ def check_repository(root: Path = ROOT) -> list[str]:
         if not is_image_reference_surface(relative):
             continue
         text = texts[relative]
-        for match in CONTAINER_REFERENCE_RE.finditer(text):
-            reference = match.group("reference")
-            if (
-                not script_reference_is_consumed(relative, text, match)
-                or not is_debian_derived(reference)
-                or DIGEST_PIN_RE.search(reference)
-            ):
+        for line, reference in image_references(relative, text):
+            if not reference_requires_digest(reference):
                 continue
-            line = text.count("\n", 0, match.start()) + 1
-            failures.append(
-                f"{relative}:{line}: Debian-derived image reference is not pinned "
-                f"by immutable digest: {reference}"
-            )
-        for line, reference in untagged_debian_references(relative, text):
             failures.append(
                 f"{relative}:{line}: Debian-derived image reference is not pinned "
                 f"by immutable digest: {reference}"
@@ -577,6 +660,28 @@ def check_repository(root: Path = ROOT) -> list[str]:
         RUST_BUILDER,
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
         "pinned Debian 13 live-journey builder",
+        failures,
+    )
+    tutorial_checker = texts[REGISTRYCTL_TUTORIAL_SCRIPT]
+    require(
+        tutorial_checker,
+        'BUILDER_CACHE_KEY="${BUILDER_IMAGE##*@sha256:}"',
+        REGISTRYCTL_TUTORIAL_SCRIPT,
+        "Debian 13 builder identity cache key",
+        failures,
+    )
+    require(
+        tutorial_checker,
+        'registryctl-tutorial-linux-amd64-$BUILDER_CACHE_KEY',
+        REGISTRYCTL_TUTORIAL_SCRIPT,
+        "builder-keyed linux target cache",
+        failures,
+    )
+    require(
+        tutorial_checker,
+        'registryctl-tutorial-cargo-home-$BUILDER_CACHE_KEY',
+        REGISTRYCTL_TUTORIAL_SCRIPT,
+        "builder-keyed Cargo home cache",
         failures,
     )
 
