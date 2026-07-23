@@ -56,9 +56,11 @@ impl ActivatedRelayConsultations for FixedRelayConsultation {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct MixedCompletionRelay {
     calls: AtomicU64,
+    failed_target: &'static str,
+    error: crate::relay_client::RelayClientError,
 }
 
 #[async_trait::async_trait]
@@ -84,8 +86,8 @@ impl ActivatedRelayConsultations for MixedCompletionRelay {
             .get("tracked_entity")
             .map(|value| value.as_str())
             .ok_or(crate::relay_client::RelayClientError::InvalidRequest)?;
-        if target == "person-2" {
-            return Err(crate::relay_client::RelayClientError::TransportUnavailable);
+        if target == self.failed_target {
+            return Err(self.error);
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         RuntimeRelayConsultationResult::new(
@@ -1500,6 +1502,36 @@ fn enable_registry_batch(claim: &mut ClaimDefinition) {
     claim.operations.batch_evaluate.max_subjects = 4;
 }
 
+fn enrollment_status_batch_evidence() -> Arc<EvidenceConfig> {
+    let mut claim = registry_claim(
+        "enrollment-status",
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
+        },
+        "string",
+    );
+    enable_registry_batch(&mut claim);
+    let mut evidence = (*test_evidence(vec![claim])).clone();
+    evidence.allowed_purposes = vec!["test".to_string()];
+    evidence.inline_batch_limit = 4;
+    Arc::new(evidence)
+}
+
+fn registry_evidence_principal() -> EvidencePrincipal {
+    let mut principal = machine_principal();
+    principal.scopes = vec!["registry:evidence".to_string()];
+    principal
+}
+
+fn runtime_with_test_relay<T>(relay: Arc<T>) -> RegistryNotaryRuntime
+where
+    T: ActivatedRelayConsultations + 'static,
+{
+    let relay: Arc<dyn ActivatedRelayConsultations> = relay;
+    RegistryNotaryRuntime::new().with_activated_relay(Some(relay))
+}
+
 #[tokio::test]
 async fn typed_target_attributes_are_canonical_in_single_and_batch_plans() {
     let mut claim = registry_claim(
@@ -1929,7 +1961,11 @@ async fn registry_batch_returns_ordered_mixed_member_outcomes_after_admission() 
     let mut evidence = (*test_evidence(vec![claim])).clone();
     evidence.allowed_purposes = vec!["test".to_string()];
     evidence.inline_batch_limit = 4;
-    let activated = Arc::new(MixedCompletionRelay::default());
+    let activated = Arc::new(MixedCompletionRelay {
+        calls: AtomicU64::new(0),
+        failed_target: "person-2",
+        error: crate::relay_client::RelayClientError::TransportUnavailable,
+    });
     let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
     let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
     let mut principal = machine_principal();
@@ -1981,6 +2017,264 @@ async fn registry_batch_returns_ordered_mixed_member_outcomes_after_admission() 
         .runtime_audit
         .relay_consultation_ids
         .is_empty());
+}
+
+async fn assert_registry_batch_mixed_closed_failure(
+    failed_target: &'static str,
+    relay_error: crate::relay_client::RelayClientError,
+    idempotency_key: &'static str,
+) {
+    let evidence = enrollment_status_batch_evidence();
+    let activated = Arc::new(MixedCompletionRelay {
+        calls: AtomicU64::new(0),
+        failed_target,
+        error: relay_error,
+    });
+    let runtime = runtime_with_test_relay(Arc::clone(&activated));
+    let principal = registry_evidence_principal();
+    let mut request = registry_batch_request(vec![ClaimRef::from("enrollment-status")]);
+    request.items[1] = registry_notary_core::BatchEvaluateItemRequest::from(
+        registry_notary_core::BatchSubjectRequest {
+            id: failed_target.to_string(),
+            id_type: None,
+            purpose: None,
+        },
+    );
+
+    let response = runtime
+        .batch_evaluate(
+            evidence,
+            &EvidenceStore::default(),
+            &principal,
+            request,
+            BatchEvaluateOptions {
+                idempotency_key: Some(idempotency_key),
+                ..BatchEvaluateOptions::default()
+            },
+        )
+        .await
+        .expect("an admitted Relay failure remains a member-level outcome");
+
+    assert_eq!(activated.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(response.summary.succeeded, 1);
+    assert_eq!(response.summary.failed, 1);
+    assert_eq!(response.items[0].input_index, 0);
+    assert!(matches!(
+        response.items[0].status,
+        BatchItemStatus::Succeeded
+    ));
+    assert_eq!(response.items[1].input_index, 1);
+    assert!(matches!(
+        response.items[1].status,
+        BatchItemStatus::Failed
+    ));
+    assert_eq!(response.items[1].errors.len(), 1);
+    assert_eq!(response.items[1].errors[0].code, "evidence.not_available");
+    assert_eq!(
+        response.items[1].errors[0].audit_code.as_deref(),
+        Some("evidence.not_available")
+    );
+    assert!(!response.items[1].errors[0].retryable);
+    assert!(response.items[1].claim_results.is_empty());
+    assert_eq!(
+        response.items[1].runtime_audit.relay_forwarded_count,
+        1
+    );
+    assert!(response.items[1]
+        .runtime_audit
+        .relay_consultation_ids
+        .is_empty());
+
+    let public_response = serde_json::to_string(&response).expect("batch response serializes");
+    assert!(!public_response.contains(failed_target));
+    assert!(!public_response.contains("runtime_audit"));
+}
+
+#[tokio::test]
+async fn registry_batch_preserves_mixed_policy_denial_as_ordered_value_free_item_error() {
+    assert_registry_batch_mixed_closed_failure(
+        "person-policy-denied",
+        crate::relay_client::RelayClientError::Denied,
+        "mixed-policy-denial-key",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn registry_batch_preserves_mixed_relay_timeout_as_ordered_value_free_item_error() {
+    assert_registry_batch_mixed_closed_failure(
+        "person-relay-timeout",
+        crate::relay_client::RelayClientError::TransportUnavailable,
+        "mixed-relay-timeout-key",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn single_and_batch_equivalence_matrix_pins_security_and_disclosure_surfaces() {
+    let evidence = enrollment_status_batch_evidence();
+    let authorization_relay = Arc::new(FixedRelayConsultation {
+        calls: AtomicU64::new(0),
+        outcome: RuntimeRelayOutcome::Match,
+    });
+    let authorization_runtime = runtime_with_test_relay(Arc::clone(&authorization_relay));
+    let unauthorized_principal = machine_principal();
+    let single_authorization = authorization_runtime
+        .evaluate(
+            Arc::clone(&evidence),
+            &EvidenceStore::default(),
+            &unauthorized_principal,
+            test_request("enrollment-status"),
+            None,
+        )
+        .await;
+    let mut authorization_batch =
+        registry_batch_request(vec![ClaimRef::from("enrollment-status")]);
+    authorization_batch.items.truncate(1);
+    let batch_authorization = authorization_runtime
+        .batch_evaluate(
+            Arc::clone(&evidence),
+            &EvidenceStore::default(),
+            &unauthorized_principal,
+            authorization_batch,
+            BatchEvaluateOptions {
+                idempotency_key: Some("equivalence-authorization"),
+                ..BatchEvaluateOptions::default()
+            },
+        )
+        .await;
+    let authorization_equivalent = matches!(
+        single_authorization,
+        Err(EvidenceError::ScopeDenied { required }) if required == "registry:evidence"
+    ) && matches!(
+        batch_authorization,
+        Err(EvidenceError::ScopeDenied { required }) if required == "registry:evidence"
+    ) && authorization_relay.calls.load(Ordering::SeqCst) == 0;
+
+    // Consent and policy enforcement remain Relay-owned. Notary must preserve
+    // the same closed denial boundary in single and batch transport shapes.
+    let consent_relay = Arc::new(MixedCompletionRelay {
+        calls: AtomicU64::new(0),
+        failed_target: "person-1",
+        error: crate::relay_client::RelayClientError::Denied,
+    });
+    let consent_runtime = runtime_with_test_relay(Arc::clone(&consent_relay));
+    let authorized_principal = registry_evidence_principal();
+    let (single_consent, single_consent_audit) = consent_runtime
+        .evaluate_for_api(
+            Arc::clone(&evidence),
+            &EvidenceStore::default(),
+            &authorized_principal,
+            test_request("enrollment-status"),
+            None,
+        )
+        .await;
+    let mut consent_batch = registry_batch_request(vec![ClaimRef::from("enrollment-status")]);
+    consent_batch.items.truncate(1);
+    let batch_consent = consent_runtime
+        .batch_evaluate(
+            Arc::clone(&evidence),
+            &EvidenceStore::default(),
+            &authorized_principal,
+            consent_batch,
+            BatchEvaluateOptions {
+                idempotency_key: Some("equivalence-consent"),
+                ..BatchEvaluateOptions::default()
+            },
+        )
+        .await
+        .expect("Relay policy or consent denial is a closed batch member outcome");
+    let consent_equivalent = matches!(
+        single_consent,
+        Err(EvidenceError::EvidenceNotAvailable)
+    ) && matches!(batch_consent.items[0].status, BatchItemStatus::Failed)
+        && batch_consent.items[0].errors[0].code == "evidence.not_available"
+        && single_consent_audit.relay_forwarded_count() == 1
+        && batch_consent.items[0]
+            .runtime_audit
+            .relay_forwarded_count
+            == 1
+        && consent_relay.calls.load(Ordering::SeqCst) == 2;
+
+    let success_relay = Arc::new(UniqueRelayConsultation::default());
+    let success_runtime = runtime_with_test_relay(Arc::clone(&success_relay));
+    let (single_result, single_audit) = success_runtime
+        .evaluate_for_api(
+            Arc::clone(&evidence),
+            &EvidenceStore::default(),
+            &authorized_principal,
+            test_request("enrollment-status"),
+            None,
+        )
+        .await;
+    let single_result = single_result.expect("single evaluation succeeds");
+    let mut success_batch = registry_batch_request(vec![ClaimRef::from("enrollment-status")]);
+    success_batch.items.truncate(1);
+    let batch_result = success_runtime
+        .batch_evaluate(
+            Arc::clone(&evidence),
+            &EvidenceStore::default(),
+            &authorized_principal,
+            success_batch,
+            BatchEvaluateOptions {
+                idempotency_key: Some("equivalence-success"),
+                ..BatchEvaluateOptions::default()
+            },
+        )
+        .await
+        .expect("batch evaluation succeeds");
+    let single_claim = &single_result[0];
+    let batch_claim = &batch_result.items[0].claim_results[0];
+
+    let mut single_provenance =
+        serde_json::to_value(&single_claim.provenance).expect("single provenance serializes");
+    let mut batch_provenance =
+        serde_json::to_value(&batch_claim.provenance).expect("batch provenance serializes");
+    single_provenance["generated_by"]
+        .as_object_mut()
+        .expect("single generated_by is an object")
+        .remove("evaluation_id");
+    batch_provenance["generated_by"]
+        .as_object_mut()
+        .expect("batch generated_by is an object")
+        .remove("evaluation_id");
+    let provenance_equivalent = single_provenance == batch_provenance
+        && single_claim.provenance.used.relay_consultation_count == 1
+        && batch_claim.provenance.used.relay_consultation_count == 1;
+
+    let public_single =
+        serde_json::to_string(&single_result).expect("single response serializes");
+    let public_batch = serde_json::to_string(&batch_result).expect("batch response serializes");
+    let minimization_equivalent = single_claim.value == batch_claim.value
+        && single_claim.satisfied == batch_claim.satisfied
+        && single_claim.disclosure == batch_claim.disclosure
+        && !public_single.contains("person-1")
+        && !public_single.contains("tracked_entity")
+        && !public_batch.contains("person-1")
+        && !public_batch.contains("tracked_entity")
+        && !public_batch.contains("runtime_audit")
+        && !public_batch.contains("relay_consultation_ids");
+
+    let single_forwarded_count = single_audit.relay_forwarded_count();
+    let (_, single_consultation_ids) = single_audit.into_parts();
+    let batch_runtime_audit = &batch_result.items[0].runtime_audit;
+    let audit_equivalent = single_forwarded_count == 1
+        && single_consultation_ids.len() == 1
+        && batch_runtime_audit.relay_consultation_ids.len() == 1
+        && batch_runtime_audit.relay_forwarded_count == 1
+        && success_relay.calls.load(Ordering::SeqCst) == 2;
+
+    let equivalence_matrix = BTreeMap::from([
+        ("authorization", authorization_equivalent),
+        ("consent", consent_equivalent),
+        ("provenance", provenance_equivalent),
+        ("minimization", minimization_equivalent),
+        ("audit", audit_equivalent),
+    ]);
+    assert!(
+        equivalence_matrix.values().all(|equivalent| *equivalent),
+        "single/batch equivalence matrix failed: {equivalence_matrix:?}"
+    );
 }
 
 #[tokio::test]
