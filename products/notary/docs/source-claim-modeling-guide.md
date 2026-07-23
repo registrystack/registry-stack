@@ -1,7 +1,7 @@
 # Source and claim modeling guide
 
 Use this guide to keep source adaptation in Relay, reusable evidence in
-Notary, and programme decisions in the consuming system.
+Notary, and consumer decisions in the consuming system.
 
 ## Choose the topology
 
@@ -15,7 +15,7 @@ A Registry Stack project has one registry trust domain and one logical source
 available to Relay. Separate independent registries require separate projects.
 Do not join them inside one Notary claim.
 
-## Keep evidence separate from programme decisions
+## Keep evidence separate from consumer decisions
 
 This evidence-versus-decision boundary is normative for 1.0 project
 authoring. Use it for every registry-backed flow:
@@ -24,16 +24,23 @@ authoring. Use it for every registry-backed flow:
 Source system
   -> Registry Relay: source-specific acquisition and typed normalization
   -> Registry Notary: atomic, precise, reusable evidence statements
-  -> Consuming programme: eligibility, prioritization, workflow, and action
+  -> Evidence consumer: use evidence under consumer-owned policy
+  -> Decision owner: remain accountable for requirements and outcomes
 ```
 
-The three stages use different policy:
+The caller, evidence consumer, and decision owner can be the same component or
+separate components. The caller is the technical client that invokes Notary.
+The evidence consumer uses the returned evidence. The decision owner is the
+institution accountable for the requirements, rules, decisions, and actions.
 
-| Owner | Policy it owns |
+The products and consuming roles have different responsibilities:
+
+| Role | Responsibility |
 | --- | --- |
 | Registry Relay | Source access, bounded acquisition, and source-specific adaptation |
 | Registry Notary | Evidence meaning, caller authorization, disclosure, and credential issuance |
-| Consuming programme | Eligibility, entitlement, prioritization, referral, payment, and case workflow |
+| Evidence consumer | Evidence use, presentation, routing, and workflow integration |
+| Decision owner | Requirements, eligibility, qualification, prioritization, approval, referral, payment, and action |
 
 Registry Notary may attest a decision already made by an authoritative source.
 Name and document that claim as a source-owned decision, such as
@@ -58,7 +65,7 @@ destinations, private networks, trust roots, and secrets belong to the private
 environment binding.
 
 Relay outputs describe the source response in a stable typed form. They do not
-encode a consuming programme's eligibility or action rules.
+encode an evidence consumer's decision or action rules.
 
 ## Model the Notary service
 
@@ -68,13 +75,15 @@ one named use of a Relay integration. It may feed several direct or CEL claims.
 
 Use a direct output claim for a single Relay output. Use CEL for evidence
 predicates or derived evidence values. CEL is not a source adapter, cannot
-perform I/O, and is not a general-purpose programme eligibility engine.
+perform I/O, and is not a general-purpose consumer eligibility or decision
+engine.
 Credential profile membership has one authored direction: the profile lists
 its claims.
 
 A claim can be evaluated under purpose-bound authorization while retaining
-evidence semantics that several programmes can reuse. The consuming programme
-combines those claims with its own policy after Notary returns the evidence.
+evidence semantics that several services or procedures can reuse. The evidence
+consumer determines how the claims are used after Notary returns them, while
+the decision owner remains accountable for any resulting outcome.
 
 ## Test each claim design
 
@@ -83,8 +92,8 @@ Before accepting a claim, confirm that:
 - The claim states evidence, not an entitlement, payment, referral, outreach,
   or workflow action.
 - Its `true`, `false`, `null`, and unavailable cases have reviewed meanings.
-- Another programme can reuse the statement without importing the first
-  programme's decision rules.
+- Another service or procedure can reuse the statement without importing the
+  first consumer's decision rules.
 - A claim that reports an authoritative source's decision is named and
   documented as source-owned.
 

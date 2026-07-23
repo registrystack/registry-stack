@@ -22,7 +22,8 @@ through Relay's governed records API.
 Relay normalizes the source fields as `registration_status` and
 `residency_confirmed`. Notary exposes the reusable
 `population-registration-status` and `residency-confirmed` evidence claims.
-The consuming programme, not this project, combines that evidence with its own
-eligibility, prioritization, payment, or workflow rules. A no-match keeps both
-evidence values unknown rather than silently converting missing evidence to a
-negative fact.
+The evidence consumer, not this project, determines how those claims are used.
+The decision owner remains accountable for eligibility, qualification,
+prioritization, approval, payment, workflow, and action rules. A no-match keeps
+both evidence values unknown rather than silently converting missing evidence
+to a negative fact.

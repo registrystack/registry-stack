@@ -145,8 +145,9 @@ declared request identifier. This Notary-owned service defines its service polic
 disclosure, and optional credential profiles. Claims can select only the integration's closed
 outputs through their authored `output` field.
 Name those claims for reusable evidence, such as `population-registration-status` and
-`residency-confirmed`, rather than for a consuming programme decision such as
-`benefits-eligible`. The consuming programme owns the eligibility and action rules.
+`residency-confirmed`, rather than for a consumer decision such as `benefits-eligible`. The
+evidence consumer determines how the evidence is used, and the decision owner retains
+accountability for eligibility and action rules.
 
 Preserve the distinction between an explicit `false`, a matched `null`, `no_match`, `ambiguous`,
 and an unavailable or stale materialization. Missing evidence is not a negative fact, so a claim

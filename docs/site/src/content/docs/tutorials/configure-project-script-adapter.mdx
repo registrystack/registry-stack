@@ -29,7 +29,7 @@ evidence only; any reviewed source system can use the same script capability and
 
 <ProjectStarterSequence starter="dhis2-tracker" />
 
-## Keep DHIS2 evidence separate from programme action
+## Keep DHIS2 evidence separate from consumer action
 
 The bundled health-evidence journey follows one responsibility flow:
 
@@ -39,11 +39,12 @@ The bundled health-evidence journey follows one responsibility flow:
    unknown source value does not become a negative fact.
 3. Registry Notary exposes those outputs as atomic evidence claims under evidence authorization
    and disclosure policy.
-4. The consuming programme combines the evidence with its own rules and case state to decide
-   whether outreach, follow-up, or another action is required.
+4. In this example, a public-health programme is both the evidence consumer and decision owner. It
+   combines the evidence with its own rules and case state to decide whether outreach, follow-up,
+   or another action is required.
 
 Do not add claims such as `outreach-required` or `follow-up-priority` to the evidence service.
-Those names describe consuming programme decisions. A source-owned decision is the exception: a
+Those names describe consumer decisions. A source-owned decision is the exception: a
 claim can attest it only when the claim id and its review evidence identify the decision as
 source-owned.
 

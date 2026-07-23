@@ -26,7 +26,8 @@ guarantee.
 
 The combined Relay and Notary mental model is one sentence: **a scoped evidence question crosses
 into the institution, Relay reads and normalizes the source, Notary returns a governed evidence
-answer, and the consuming programme decides what to do.**
+answer, an evidence consumer uses it, and the decision owner remains accountable for what happens
+next.**
 
 A Notary caller never sends the value it is asking about and never receives the
 underlying record as the answer.
@@ -51,7 +52,7 @@ flowchart LR
         notary -. records .-> audit
         key -. signs .-> notary
     end
-    caller["Consuming programme / verifier"]
+    caller["Caller / evidence consumer"]
     holder(["Subject / wallet"])
     caller == "request: claim id + subject inputs + scope" ==> notary
     notary == "evidence: yes/no · value · evaluation result" ==> caller
@@ -77,9 +78,12 @@ Relay record reads are scoped and audited, not open data.
 
 The policy boundary remains separate across the two products and their consumers. Relay owns
 source access and adaptation policy. Notary owns evidence authorization and disclosure policy.
-The consuming programme owns eligibility, prioritization, workflow, and action policy.
+The evidence consumer determines how evidence is used, and the decision owner remains accountable
+for requirements, eligibility, qualification, prioritization, approval, routing, payment,
+workflow, and action policy.
 Purpose-bound authorization can restrict an evidence request without changing which component owns
-the programme decision.
+the consumer decision. The caller that invokes Notary can be the evidence consumer or a technical
+intermediary acting for it.
 
 ## What stays home
 
@@ -156,8 +160,9 @@ rather than a `false`, which hides the reason matching failed. An authorized cal
 still distinguish a resolved record from a not-available response, so use this pattern for
 minimization, not for hiding whether a requested subject matched.
 To report whether a source records a vaccination dose, derive that evidence predicate from the
-declared typed source output. The consuming programme can combine the result with other evidence
-and its own case state to decide whether outreach or follow-up is required.
+declared typed source output. A public-health programme, acting as evidence consumer and decision
+owner, can combine the result with other evidence and its own case state to decide whether outreach
+or follow-up is required.
 Registry Notary can attest an eligibility or other decision already made by an authoritative
 source only when the claim identifier and its review documentation identify the fact as a
 source-owned decision. Notary does not recompute that decision.
@@ -226,9 +231,10 @@ Security material:
   must not collapse `null`, unavailable evidence, or failures to `false`. An explicitly named
   existence predicate can map `matched == false` to `false` when its reviewed meaning is exactly
   whether one admissible match exists; ambiguity and failure remain unavailable.
-- Notary is not a programme decision engine: Notary returns governed evidence. The consuming
-  programme owns eligibility, prioritization, workflow, and action unless Notary is attesting a
-  decision explicitly owned by the authoritative source.
+- Notary is not a consumer decision engine: Notary returns governed evidence. The evidence consumer
+  determines how that evidence is used, and the decision owner remains accountable for requirements,
+  decisions, workflow, and actions unless Notary is attesting a decision explicitly owned by the
+  authoritative source.
 - This is not zero-knowledge: A `predicate` answer is a policy-enforced boolean computed
   inside the service; SD-JWT selective disclosure is digest omission. Neither is a
   zero-knowledge proof.

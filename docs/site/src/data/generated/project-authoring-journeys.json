@@ -76,7 +76,7 @@
   {
     "id": "dhis2-tracker",
     "label": "DHIS2 Tracker",
-    "summary": "Bounded DHIS2 Tracker acquisition normalized into reusable health evidence for downstream programme decisions.",
+    "summary": "Bounded DHIS2 Tracker acquisition normalized into reusable health evidence for consumer-owned decisions.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker",
     "classification": "maintained",
     "topology": "combined",

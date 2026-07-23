@@ -58,15 +58,16 @@ caller-supplied identity context is rejected before claim evaluation.
 Use self-attestation when:
 
 - A citizen portal evaluates allowed evidence claims for the token-bound
-  subject before the programme applies its own eligibility policy.
+  subject before the evidence consumer applies its own eligibility or
+  decision policy.
 - A wallet flow issues a credential for the token-bound subject from a
   compiler-pinned Relay-backed evaluation.
 - The identity provider can provide a stable, reviewed subject-binding claim.
 - The evidence service accepts token-bound subject access for the configured purpose.
 
 Self-attestation authorizes subject-bound access to configured evidence. The
-identity token is not evidence of programme eligibility, and Registry Notary
-does not turn it into an eligibility decision.
+identity token is not evidence of consumer eligibility, and Registry Notary
+does not turn it into a consumer-owned outcome.
 
 Do not use it when:
 
@@ -333,8 +334,10 @@ Confirm that:
 - caller scopes, client ids, audiences, formats, disclosures, and any
   registry-backed credential profiles are narrowly allow-listed; and
 - the evidence service does not present self-attestation as registry-verified evidence; and
-- the consuming programme, not Registry Notary, owns eligibility, entitlement,
-  prioritization, referral, payment, and workflow decisions.
+- the evidence consumer determines how evidence is used, and the decision
+  owner, not Registry Notary, remains accountable for eligibility,
+  qualification, entitlement, prioritization, approval, referral, payment,
+  workflow, and action decisions.
 
 Use [`source-claim-modeling-guide.md`](source-claim-modeling-guide.md) to
 review the evidence boundary.

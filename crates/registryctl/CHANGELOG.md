@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 
 - The maintained project-authoring fixtures now keep Relay source adaptation,
-  Notary evidence policy, and consuming programme decisions separate. The
+  Notary evidence policy, and consumer decisions separate. The
   DHIS2 Tracker starter retains its bounded health-evidence contract while
   distinguishing positive, negative, unknown, no-match, ambiguity, and source
   failure. Snapshot and custom-system examples now model reusable evidence or

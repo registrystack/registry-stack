@@ -45,6 +45,9 @@ Product names are always in English, including on future translated pages.
   <dt>CCCEV</dt>
   <dd>Core Criterion and Core Evidence Vocabulary. Registry Manifest emits CCCEV-shaped requirement, evidence type, and evidence type list metadata. Registry Notary renders CCCEV-shaped JSON-LD for claim evaluation results. Media type: `application/ld+json; profile="cccev"`.</dd>
 
+  <dt>caller</dt>
+  <dd>The technical client that invokes Registry Relay or Registry Notary. A caller can be the evidence consumer or an intermediary, portal, wallet backend, or workflow connector acting for it.</dd>
+
   <dt>claim evaluation</dt>
   <dd>Registry Notary process that evaluates configured evidence rules over compiler-pinned Registry Relay outputs or permitted self-attestation and returns a structured claim result.</dd>
 
@@ -53,6 +56,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>consultation</dt>
   <dd>A named use of one Registry Relay integration by a Registry Notary evidence service. One consultation can supply several Notary claims.</dd>
+
+  <dt>consumer decision</dt>
+  <dd>An eligibility, qualification, prioritization, approval, routing, payment, workflow, or other outcome determined outside Registry Relay and Registry Notary by or for an evidence consumer. The decision owner remains accountable for its rules and consequences.</dd>
 
   <dt>DCAT</dt>
   <dd>Data Catalog Vocabulary. W3C recommendation. Registry Relay and Registry Manifest emit DCAT-shaped JSON-LD catalogs. Spell out on first use per page: "Data Catalog Vocabulary (DCAT)".</dd>
@@ -71,6 +77,9 @@ Product names are always in English, including on future translated pages.
 
   <dt>deployment</dt>
   <dd>One activated deployment-bundle generation. Replicas of that generation are one logical deployment.</dd>
+
+  <dt>decision owner</dt>
+  <dd>The institution accountable for the requirements, rules, decisions, and actions that use evidence. The decision owner can operate the evidence consumer directly or rely on a separate caller or intermediary.</dd>
 
   <dt>DPI</dt>
   <dd>Digital Public Infrastructure. Shared, interoperable digital systems (identity, payments, data exchange) deployed at population scale to support public service delivery. These projects cover the registry-consultation slice of a DPI deployment.</dd>
@@ -99,6 +108,9 @@ Product names are always in English, including on future translated pages.
   <dt>Evidence Gateway</dt>
   <dd>Governed runtime path for evidence responses. A Relay read or consultation and a Notary claim evaluation pass trusted request and evidence context through configured authorization and disclosure policy before returning or denying a response. Registry-backed Notary claims consume compiler-pinned Relay results.</dd>
 
+  <dt>evidence consumer</dt>
+  <dd>A service or process that uses returned evidence. Examples include a social-protection programme, admissions service, licensing authority, healthcare workflow, lender, insurer, or credential verifier. The evidence consumer, caller, and decision owner can be the same component or separate components.</dd>
+
   <dt>evidence service</dt>
   <dd>A Registry Notary-owned service containing service policy, claims, disclosure, optional Registry Relay consultations, and optional credential profiles.</dd>
 
@@ -112,7 +124,7 @@ Product names are always in English, including on future translated pages.
   <dd>Metadata entry that describes a verification capability and the access path a client uses to reach it. In the current stack it points a client from Registry Relay metadata to Registry Notary or another evidence service; Relay describes the offering but does not evaluate the claim.</dd>
 
   <dt>Notary evidence claim</dt>
-  <dd>An atomic, precise, reusable evidence statement that Registry Notary evaluates from Relay outputs or permitted self-attestation. Notary owns the claim's evidence semantics, authorization, and disclosure policy. A claim does not import a consuming programme's eligibility or action rules.</dd>
+  <dd>An atomic, precise, reusable evidence statement that Registry Notary evaluates from Relay outputs or permitted self-attestation. Notary owns the claim's evidence semantics, authorization, and disclosure policy. A claim does not import an evidence consumer's decision or action rules.</dd>
 
   <dt>evidence type list</dt>
   <dd>CCCEV list of evidence types that satisfy a requirement. In Registry Manifest, one list is one grouped option; multiple lists on the same requirement are alternatives.</dd>
@@ -136,10 +148,10 @@ Product names are always in English, including on future translated pages.
   <dd>A product-neutral source adaptation authored in a Registry Stack project. An integration declares reviewed metadata and one source capability such as `http`, `script`, or `snapshot`. Product and version labels do not select compiler or runtime behavior.</dd>
 
   <dt>Relay output</dt>
-  <dd>A declared typed value returned by Registry Relay after source-specific acquisition and normalization on a matching consultation. A Relay output carries source evidence, not a consuming programme consequence. `true`, `false`, `null`, `no_match`, `ambiguous`, and source failure retain distinct meanings under the reviewed integration contract.</dd>
+  <dd>A declared typed value returned by Registry Relay after source-specific acquisition and normalization on a matching consultation. A Relay output carries source evidence, not a consumer consequence. `true`, `false`, `null`, `no_match`, `ambiguous`, and source failure retain distinct meanings under the reviewed integration contract.</dd>
 
   <dt>claim</dt>
-  <dd>Short form for a Notary evidence claim: a Registry Notary-owned evidence value or predicate derived from a consultation outcome and typed Relay outputs, or from permitted self-attestation. Purpose-bound authorization limits use of the claim without turning the claim into programme policy.</dd>
+  <dd>Short form for a Notary evidence claim: a Registry Notary-owned evidence value or predicate derived from a consultation outcome and typed Relay outputs, or from permitted self-attestation. Purpose-bound authorization limits use of the claim without turning the claim into consumer policy.</dd>
 
   <dt>JSON-LD</dt>
   <dd>JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog, policy, and CCCEV render output.</dd>
@@ -191,9 +203,6 @@ Product names are always in English, including on future translated pages.
 
   <dt>policy hash</dt>
   <dd>Lowercase `sha256:` digest that binds a governed evidence policy identity to canonical policy bytes or an externally supplied policy artifact. Manifest verifies it when an inline evidence pack policy object is present; Relay records the selected hash in governed PDP audit provenance.</dd>
-
-  <dt>programme decision</dt>
-  <dd>An eligibility, prioritization, workflow, or action decision made by a consuming programme from evidence and its own rules. Registry Relay and Registry Notary do not own this policy or decision.</dd>
 
   <dt>Protected Registry APIs</dt>
   <dd>Registry Stack runtime pattern for exposing existing registry source data through scoped, read-only HTTP routes with authentication, authorization, metadata, and audit. Registry Relay implements this pattern.</dd>

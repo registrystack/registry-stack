@@ -29,7 +29,7 @@ scenario patterns](notary-scenario-patterns.md).
 | --- | --- | --- |
 | Citizen or resident | Share only the proof needed to access a service | Parent applying for child support, farmer applying for a voucher |
 | Case worker | Make an evidence-backed decision without seeing unnecessary registry data | Benefits officer, enrollment officer |
-| Programme administrator | Define eligibility policy, evidence requirements, and acceptable issuers | Social protection ministry, agriculture programme team |
+| Service or procedure owner | Define requirements, decision policy, and acceptable issuers | Social protection ministry, university admissions office, licensing authority |
 | Registry steward | Protect source registry data while answering authorized evidence questions | Civil registry, farmer registry, health facility registry |
 | Auditor or oversight body | Verify evidence evaluations and data exchanges were lawful, minimized, and replay-protected | Internal audit, data protection authority |
 | Wallet or client app operator | Help users present proofs or receive credentials | Mobile wallet, service portal, case-management app |
@@ -43,17 +43,18 @@ scenario patterns](notary-scenario-patterns.md).
 | Registry Notary | Evaluates reusable Relay-backed or source-free evidence claims, signs results, issues credentials only from exact Relay-backed evaluation provenance, enforces evidence policy, and emits audit. Source-free results cannot authorize issuance |
 | Registry Manifest | Public metadata and discovery artifact for capabilities, profiles, and evidence offerings |
 | Registry Platform | Shared crypto, HTTP, OIDC, SD-JWT, DID/JWK, replay, and audit primitives |
-| Service portal or case system | Consumes evidence and owns eligibility, prioritization, workflow, and action decisions |
+| Service portal or case system | Acts as an evidence consumer; the operating institution remains the decision owner |
 | Holder wallet or client app | Stores credentials, presents proofs, and receives issued credentials |
 | Trust bundle or trust registry | Signed trust metadata; not yet supported. Peer trust today is a static allowlist |
 | Audit store | Local audit trail for evaluations, issuance, denials, and federation exchanges |
 
 ## Scenario matrix
 
-The supported scenarios return evidence. The consuming programme makes any
-eligibility, entitlement, payment, referral, or workflow decision. A Notary
-claim may attest a source-owned decision, but Notary does not recompute that
-decision as programme policy.
+The supported scenarios return evidence. The evidence consumer determines how
+the evidence is used, and the decision owner remains accountable for any
+eligibility, qualification, entitlement, payment, referral, workflow, or
+action decision. A Notary claim may attest a source-owned decision, but Notary
+does not recompute that decision as consumer policy.
 
 | # | Scenario | Pattern | Status | Main gap |
 | --- | --- | --- | --- | --- |

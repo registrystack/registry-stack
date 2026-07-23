@@ -20,7 +20,7 @@ You will see one product term used throughout: an **evidence claim**, which is o
 precisely defined evidence statement or extracted value, such as "is this person registered?" or
 "what is this person's registration date?".
 A claim is deliberately narrow and reusable. A claim that returned a whole record would
-over-collect, and a claim that embedded one programme's eligibility or action rules could not be
+over-collect, and a claim that embedded one consumer's eligibility or action rules could not be
 reused as neutral evidence.
 
 ## How Registry Notary controls what leaves the service
@@ -63,17 +63,19 @@ A **`cel`** rule derives an evidence value from typed outputs, request variables
 results through a hardened expression.
 Each kind produces an answer about the subject without that answer being a copy of the source row.
 
-## Evidence is not a programme decision
+## Evidence is not a consumer decision
 
 Registry Relay source-access and adaptation policy controls how an authoritative source is read
 and normalized. Registry Notary evidence policy controls which evidence statement is evaluated,
-who can request it, and how much can be disclosed. The consuming programme separately owns
-eligibility, prioritization, workflow, and action policy.
+who can request it, and how much can be disclosed. The evidence consumer determines how the
+evidence is used, while the decision owner remains accountable for requirements, decisions, and
+actions.
 
 A Common Expression Language (CEL) rule can derive an evidence predicate, such as whether the
 source records an active programme enrollment or a measles dose. It is not a general-purpose
-programme eligibility engine. The consuming programme can combine those evidence claims with its
-own thresholds, priorities, and case state to decide whether outreach or follow-up is required.
+consumer eligibility or decision engine. A public-health programme, for example, can act as both
+evidence consumer and decision owner when it combines those evidence claims with its own
+thresholds, priorities, and case state to decide whether outreach or follow-up is required.
 
 Registry Notary can also attest a decision that an authoritative source already owns. The claim
 identifier and its review documentation must say that it is a source-owned decision. Notary does

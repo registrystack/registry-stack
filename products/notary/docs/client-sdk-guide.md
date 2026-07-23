@@ -485,8 +485,8 @@ workflow cares about. The Python and Node raw helpers preserve canonical
 snake_case JSON.
 
 In these examples, `benefits_eligibility` identifies the authorized purpose
-for evidence access and audit. It does not define the consuming programme's
-eligibility rule.
+for evidence access and audit. It does not define the evidence consumer's
+eligibility rule or transfer decision ownership to Notary.
 
 ```python
 result = client.evaluate_request(

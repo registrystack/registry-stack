@@ -30,10 +30,10 @@ The authored layers remain separate:
    `null` distinct, including BCG, OPV, and measles dose evidence.
 2. Notary discloses those outputs as atomic evidence claims. It does not decide
    outreach, follow-up priority, eligibility, entitlement, or case action.
-3. A consuming programme applies its own reviewed rules. For example, a
-   programme might first route any `null` evidence to resolution, then derive
-   `outreach_required` only from known enrollment and dose evidence. That
-   downstream rule is illustrative and is not part of this Registry Stack
+3. In this example, a public-health programme is both the evidence consumer and
+   decision owner. It might first route any `null` evidence to resolution, then
+   derive `outreach_required` only from known enrollment and dose evidence.
+   That downstream rule is illustrative and is not part of this Registry Stack
    project.
 
 For a matched tracked entity, a completed DHIS2 programme-stage event maps to
