@@ -178,14 +178,14 @@ class RelayOidcSmokeTest(TestCase):
         candidate_module = sys.modules["conformance_candidate"]
         with tempfile.TemporaryDirectory() as tmp:
             manifest = (
-                self.runner.REPO_ROOT / "release/manifests/registry-stack-beta-16.yaml"
+                self.runner.REPO_ROOT / "release/manifests/registry-stack-beta-15.yaml"
             )
-            image_lock = Path(tmp) / "registryctl-v0.12.2-image-lock.json"
+            image_lock = Path(tmp) / "registryctl-v0.12.1-image-lock.json"
             lock = {
                 "schema_version": "registryctl.release_image_lock.v1",
-                "release_tag": "v0.12.2",
-                "manifest_source_ref": "0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8",
-                "tag_target": "b" * 40,
+                "release_tag": "v0.12.1",
+                "manifest_source_ref": "a6f409259158f44c9fdbe99242ec0f9ac10d9373",
+                "tag_target": "567fb93704d25855238e11fd43c7cb9bf8a2f28e",
                 "platform": "linux/amd64",
                 "images": {
                     "registry-notary": (
@@ -204,7 +204,7 @@ class RelayOidcSmokeTest(TestCase):
                 solmara_source_ref=None,
             )
             candidate = self.runner.candidate_from_args(args)
-            self.assertEqual("beta-16", candidate["release_id"])
+            self.assertEqual("beta-15", candidate["release_id"])
             self.assertEqual(lock["images"]["registry-relay"], candidate["relay_image"])
 
             lock["manifest_source_ref"] = "e" * 40
@@ -214,10 +214,60 @@ class RelayOidcSmokeTest(TestCase):
             ):
                 self.runner.candidate_from_args(args)
 
-            lock["manifest_source_ref"] = "0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8"
+            lock["manifest_source_ref"] = "a6f409259158f44c9fdbe99242ec0f9ac10d9373"
             lock["images"]["registry-relay"] = "registry-relay:mutable"
             image_lock.write_text(json.dumps(lock), encoding="utf-8")
             with self.assertRaisesRegex(candidate_module.CandidateError, "not pinned"):
+                self.runner.candidate_from_args(args)
+
+            lock["images"]["registry-relay"] = (
+                "ghcr.io/registrystack/registry-relay@sha256:" + "d" * 64
+            )
+            lock["tag_target"] = "b" * 40
+            image_lock.write_text(json.dumps(lock), encoding="utf-8")
+            with self.assertRaisesRegex(candidate_module.CandidateError, "Git binding"):
+                self.runner.candidate_from_args(args)
+
+    def test_candidate_binding_rejects_promoted_manifest_not_present_at_tag(
+        self,
+    ) -> None:
+        candidate_module = sys.modules["conformance_candidate"]
+        with tempfile.TemporaryDirectory() as tmp:
+            image_lock = Path(tmp) / "registryctl-v0.12.2-image-lock.json"
+            image_lock.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "registryctl.release_image_lock.v1",
+                        "release_tag": "v0.12.2",
+                        "manifest_source_ref": (
+                            "0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8"
+                        ),
+                        "tag_target": "e25f081ce800ade13e892503cc19b96588e081ef",
+                        "platform": "linux/amd64",
+                        "images": {
+                            "registry-notary": (
+                                "ghcr.io/registrystack/registry-notary@sha256:"
+                                + "c" * 64
+                            ),
+                            "registry-relay": (
+                                "ghcr.io/registrystack/registry-relay@sha256:"
+                                + "d" * 64
+                            ),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = Namespace(
+                release_manifest=(
+                    self.runner.REPO_ROOT
+                    / "release/manifests/registry-stack-beta-16.yaml"
+                ),
+                image_lock=image_lock,
+                topology="release-owned",
+                solmara_source_ref=None,
+            )
+            with self.assertRaisesRegex(candidate_module.CandidateError, "Git binding"):
                 self.runner.candidate_from_args(args)
 
     def test_native_zitadel_role_claim_drives_scope_profile(self) -> None:

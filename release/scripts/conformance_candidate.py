@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import stat
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,50 @@ IMAGE_REPOSITORIES = {
 
 class CandidateError(RuntimeError):
     """Candidate inputs are mutable, malformed, or disagree."""
+
+
+def git_output(arguments: list[str], max_bytes: int) -> bytes:
+    try:
+        result = subprocess.run(
+            ["git", *arguments],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise CandidateError("candidate Git binding could not be verified") from None
+    if result.returncode != 0 or len(result.stdout) > max_bytes:
+        raise CandidateError("candidate Git binding could not be verified")
+    return result.stdout
+
+
+def verify_git_binding(
+    stack: dict[str, Any],
+    lock: dict[str, Any],
+    manifest_path: Path,
+    manifest_bytes: bytes,
+) -> None:
+    tag_target = lock["tag_target"]
+    tag_ref = f"refs/tags/{stack['source_tag']}^{{commit}}"
+    resolved = git_output(["rev-parse", "--verify", tag_ref], 41)
+    if resolved.strip() != tag_target.encode("ascii"):
+        raise CandidateError("candidate Git binding could not be verified")
+    git_output(
+        ["merge-base", "--is-ancestor", stack["source_ref"], tag_target],
+        0,
+    )
+    relative_path = manifest_path.relative_to(REPO_ROOT).as_posix()
+    object_name = f"{tag_target}:{relative_path}"
+    try:
+        object_size = int(git_output(["cat-file", "-s", object_name], 16))
+    except ValueError:
+        raise CandidateError("candidate Git binding could not be verified") from None
+    if object_size != len(manifest_bytes):
+        raise CandidateError("candidate Git binding could not be verified")
+    if git_output(["show", object_name], object_size) != manifest_bytes:
+        raise CandidateError("candidate Git binding could not be verified")
 
 
 def require_regular_file(path: Path, *, max_bytes: int) -> Path:
@@ -123,6 +168,7 @@ def load_candidate(
             is None
         ):
             raise CandidateError(f"{component} is not pinned to its exact digest")
+    verify_git_binding(stack, lock, manifest_path, manifest_bytes)
 
     if topology == "solmara":
         if (
