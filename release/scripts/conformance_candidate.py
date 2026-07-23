@@ -7,10 +7,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import stat
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -23,6 +24,12 @@ IMAGE_REPOSITORIES = {
     "registry-notary": "ghcr.io/registrystack/registry-notary",
     "registry-relay": "ghcr.io/registrystack/registry-relay",
 }
+CAPSULE_REPOSITORY = "registrystack/registry-stack"
+SLSA_SOURCE_URI = "github.com/registrystack/registry-stack"
+RELEASE_WORKFLOW = (
+    "https://github.com/registrystack/registry-stack/.github/workflows/"
+    "release.yml@refs/tags/{tag}"
+)
 
 
 class CandidateError(RuntimeError):
@@ -84,6 +91,207 @@ def require_regular_file(path: Path, *, max_bytes: int) -> Path:
     if not 0 < info.st_size <= max_bytes:
         raise CandidateError(f"required file has an invalid size: {path}")
     return path.resolve()
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def parse_checksums(path: Path) -> dict[str, str]:
+    path = require_regular_file(path, max_bytes=1024 * 1024)
+    checksums: dict[str, str] = {}
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), 1
+    ):
+        match = re.fullmatch(r"([0-9a-f]{64})  \*?([^/\x00]+)", line)
+        if match is None:
+            raise CandidateError(
+                f"SHA256SUMS line {line_number} has an unsafe format"
+            )
+        digest, name = match.groups()
+        if name in checksums:
+            raise CandidateError(f"SHA256SUMS contains duplicate entry {name}")
+        checksums[name] = digest
+    return checksums
+
+
+def find_named(items: Any, name: str, label: str) -> dict[str, Any]:
+    if not isinstance(items, list) or any(
+        not isinstance(item, dict) for item in items
+    ):
+        raise CandidateError(f"release capsule {label} must be an object array")
+    matches = [item for item in items if item.get("name") == name]
+    if len(matches) != 1:
+        raise CandidateError(
+            f"release capsule {label} must contain exactly one {name}"
+        )
+    return matches[0]
+
+
+def run_authenticity_command(command: list[str]) -> None:
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        suffix = f": {detail[-1]}" if detail else ""
+        raise CandidateError(
+            f"candidate authenticity command failed ({command[0]}){suffix}"
+        )
+
+
+def verify_release_authenticity(
+    asset_dir: Path,
+    tag: str,
+    subjects: tuple[str, ...],
+    *,
+    command_runner: Callable[[list[str]], None] = run_authenticity_command,
+) -> None:
+    cosign = shutil.which("cosign")
+    slsa = shutil.which("slsa-verifier")
+    if not cosign or not slsa:
+        missing = [
+            name
+            for name, path in (("cosign", cosign), ("slsa-verifier", slsa))
+            if not path
+        ]
+        raise CandidateError(
+            "candidate authenticity verification requires installed "
+            + " and ".join(missing)
+        )
+    provenance = require_regular_file(
+        asset_dir / f"registry-stack-{tag}-release-provenance.intoto.jsonl",
+        max_bytes=128 * 1024 * 1024,
+    )
+    identity = RELEASE_WORKFLOW.format(tag=tag)
+    for name in subjects:
+        subject = require_regular_file(
+            asset_dir / name, max_bytes=128 * 1024 * 1024
+        )
+        signature = require_regular_file(
+            asset_dir / f"{name}.sig", max_bytes=1024 * 1024
+        )
+        certificate = require_regular_file(
+            asset_dir / f"{name}.pem", max_bytes=1024 * 1024
+        )
+        command_runner(
+            [
+                cosign,
+                "verify-blob",
+                str(subject),
+                "--signature",
+                str(signature),
+                "--certificate",
+                str(certificate),
+                "--certificate-oidc-issuer",
+                "https://token.actions.githubusercontent.com",
+                "--certificate-identity",
+                identity,
+            ]
+        )
+        command_runner(
+            [
+                slsa,
+                "verify-artifact",
+                str(subject),
+                "--provenance-path",
+                str(provenance),
+                "--source-uri",
+                SLSA_SOURCE_URI,
+                "--source-tag",
+                tag,
+            ]
+        )
+
+
+def verify_release_asset_binding(
+    stack: dict[str, Any],
+    lock: dict[str, Any],
+    image_lock_path: Path,
+    image_lock_sha256: str,
+) -> str:
+    tag = lock["release_tag"]
+    asset_dir = image_lock_path.parent
+    lock_name = image_lock_path.name
+    capsule_name = f"registry-stack-{tag}-release-capsule.json"
+    capsule_path = require_regular_file(
+        asset_dir / capsule_name, max_bytes=8 * 1024 * 1024
+    )
+    checksums = parse_checksums(asset_dir / "SHA256SUMS")
+    if checksums.get(lock_name) != image_lock_sha256:
+        raise CandidateError(
+            "release image lock does not match its SHA256SUMS entry"
+        )
+    try:
+        capsule = json.loads(capsule_path.read_bytes())
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CandidateError(f"release capsule is not valid JSON: {exc}") from exc
+    if (
+        not isinstance(capsule, dict)
+        or capsule.get("release_tag") != tag
+        or capsule.get("version") != stack["version"]
+        or capsule.get("repository") != CAPSULE_REPOSITORY
+    ):
+        raise CandidateError("release capsule identity does not match the candidate")
+    source = capsule.get("source")
+    if (
+        not isinstance(source, dict)
+        or source.get("source_tag") != tag
+        or source.get("source_ref") != lock["manifest_source_ref"]
+        or source.get("source_commit") != lock["tag_target"]
+    ):
+        raise CandidateError(
+            "release capsule source lineage does not match the image lock"
+        )
+    lineage = source.get("lineage")
+    lineage_keys = {
+        "tag_matches_source_tag",
+        "head_matches_tag_target",
+        "source_ref_ancestor_or_equal",
+        "default_branch_reachable",
+    }
+    if (
+        not isinstance(lineage, dict)
+        or set(lineage) != lineage_keys
+        or any(value is not True for value in lineage.values())
+    ):
+        raise CandidateError("release capsule does not prove source lineage")
+    lock_entry = find_named(capsule.get("release_files"), lock_name, "release_files")
+    if (
+        lock_entry.get("kind") != "registryctl-release-image-lock"
+        or lock_entry.get("sha256") != image_lock_sha256
+    ):
+        raise CandidateError(
+            "release capsule image-lock classification or hash is invalid"
+        )
+    capsule_images = capsule.get("images")
+    if (
+        not isinstance(capsule_images, list)
+        or len(capsule_images) != len(IMAGE_REPOSITORIES)
+        or {
+            item.get("name")
+            for item in capsule_images
+            if isinstance(item, dict)
+        }
+        != set(IMAGE_REPOSITORIES)
+    ):
+        raise CandidateError(
+            "release capsule must contain exactly the two product images"
+        )
+    for component in IMAGE_REPOSITORIES:
+        if (
+            find_named(capsule_images, component, "images").get("digest_ref")
+            != lock["images"][component]
+        ):
+            raise CandidateError(
+                "release capsule images do not match the release image lock"
+            )
+
+    capsule_sha256 = sha256(capsule_path)
+    verify_release_authenticity(asset_dir, tag, (lock_name, capsule_name))
+    if sha256(image_lock_path) != image_lock_sha256 or sha256(
+        capsule_path
+    ) != capsule_sha256:
+        raise CandidateError("a signed candidate subject changed during verification")
+    return capsule_sha256
 
 
 def load_candidate(
@@ -169,6 +377,10 @@ def load_candidate(
         ):
             raise CandidateError(f"{component} is not pinned to its exact digest")
     verify_git_binding(stack, lock, manifest_path, manifest_bytes)
+    image_lock_sha256 = hashlib.sha256(image_lock_bytes).hexdigest()
+    capsule_sha256 = verify_release_asset_binding(
+        stack, lock, image_lock_path, image_lock_sha256
+    )
 
     if topology == "solmara":
         if (
@@ -187,7 +399,8 @@ def load_candidate(
         "tag_target": lock["tag_target"],
         "manifest_path": manifest_path.relative_to(REPO_ROOT).as_posix(),
         "manifest_sha256": f"sha256:{hashlib.sha256(manifest_bytes).hexdigest()}",
-        "image_lock_sha256": f"sha256:{hashlib.sha256(image_lock_bytes).hexdigest()}",
+        "image_lock_sha256": f"sha256:{image_lock_sha256}",
+        "release_capsule_sha256": f"sha256:{capsule_sha256}",
         "notary_image": images["registry-notary"],
         "relay_image": images["registry-relay"],
         "topology": topology,

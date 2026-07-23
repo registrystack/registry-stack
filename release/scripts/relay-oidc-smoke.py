@@ -171,12 +171,15 @@ def plan_document(candidate: dict[str, Any]) -> dict[str, Any]:
         "candidate": candidate,
         "topology": assets,
         "checks": list(REQUIRED_CHECKS),
-        "plan_network_required": False,
+        "plan_network_required": True,
         "live_run_requires_docker": True,
         "live_run_network_required": True,
         "live_evidence": False,
         "notes": [
-            "This plan validates checked-in inputs only and is not conformance evidence.",
+            (
+                "This plan validates the checked-in harness and authenticated "
+                "candidate inputs, but is not conformance evidence."
+            ),
             (
                 "A live run remains unreviewed until its digest-bound report is "
                 + "reviewed without raw secrets."

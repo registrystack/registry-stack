@@ -9,6 +9,11 @@ The topology uses digest-pinned Zitadel, PostgreSQL, and Python images. The
 runner resolves Relay from the exact release manifest and matching
 `registryctl-<tag>-image-lock.json` release asset. It rejects a source-ref,
 release-tag, product-version, or image-digest mismatch before starting Docker.
+The image lock must remain in its downloaded release asset directory alongside
+`SHA256SUMS`, the release capsule, the shared release provenance, and the
+Cosign signature and certificate files for both the image lock and capsule.
+The runner verifies those bindings with installed `cosign` and `slsa-verifier`
+before using either product image digest.
 
 ## Evidence boundary
 
@@ -66,10 +71,11 @@ HTTP issuer and discovery URL on loopback, which is the only insecure fetch
 form Relay permits for local development. The Relay API is published separately
 on a randomly selected loopback port.
 
-## Offline review
+## Candidate review
 
 Python 3.11 or later is required. Validate the checked-in topology and render a
-candidate-bound plan without Docker or network access:
+candidate-bound plan without Docker. Candidate binding invokes `cosign` and
+`slsa-verifier`, which may use their normal verification network paths:
 
 ```bash
 release/scripts/relay-oidc-smoke.py validate

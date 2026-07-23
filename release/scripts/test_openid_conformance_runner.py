@@ -162,6 +162,34 @@ class OpenIdConformanceRunnerTest(TestCase):
                     self.runner.cmd_submit_offer(args)
             self.assertNotIn("owner-only-code", str(caught.exception))
 
+    def test_submit_offer_rejects_cleartext_suite_endpoint(self) -> None:
+        issuer = "https://issuer.example.test"
+        _, offer_uri = self.offer_uri(issuer)
+        with tempfile.TemporaryDirectory() as tmp:
+            offer_file = Path(tmp) / "offer.txt"
+            offer_file.write_text(offer_uri, encoding="utf-8")
+            offer_file.chmod(0o600)
+            args = self.runner.parse_args(
+                [
+                    "submit-offer",
+                    "--offer-file",
+                    str(offer_file),
+                    "--issuer-url",
+                    issuer,
+                    "--suite-offer-endpoint",
+                    "http://suite.example.test/run/credential_offer",
+                    "--conformance-server",
+                    "http://suite.example.test",
+                ]
+            )
+            with patch.object(
+                self.runner.urllib.request, "build_opener"
+            ) as build_opener:
+                with self.assertRaisesRegex(self.runner.RunnerError, "HTTPS"):
+                    self.runner.cmd_submit_offer(args)
+
+            build_opener.assert_not_called()
+
     def test_read_offer_uses_one_no_follow_descriptor(self) -> None:
         issuer = "https://issuer.example.test"
         inline, offer_uri = self.offer_uri(issuer)

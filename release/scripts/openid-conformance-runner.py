@@ -413,12 +413,14 @@ def cmd_submit_offer(args: argparse.Namespace) -> int:
     endpoint = urllib.parse.urlsplit(args.suite_offer_endpoint)
     if (
         (endpoint.scheme, endpoint.netloc) != (base.scheme, base.netloc)
-        or endpoint.scheme not in {"http", "https"}
+        or endpoint.scheme != "https"
         or not endpoint.path.endswith("/credential_offer")
         or endpoint.query
         or endpoint.fragment
     ):
-        raise RunnerError("suite offer endpoint must use the pinned suite origin")
+        raise RunnerError(
+            "suite offer endpoint must use HTTPS on the pinned suite origin"
+        )
     url = urllib.parse.urlunsplit(
         endpoint._replace(query=urllib.parse.urlencode({"credential_offer": inline}))
     )
