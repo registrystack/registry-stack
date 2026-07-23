@@ -1295,7 +1295,7 @@ pub fn validate_deployment_waiver_metadata(
 fn contains_high_confidence_credential_literal(summary: &str) -> bool {
     ["Bearer", "Basic"]
         .iter()
-        .any(|scheme| contains_authorization_value_suffix(summary, scheme))
+        .any(|scheme| contains_authorization_value(summary, scheme))
         || summary.split("-----BEGIN ").skip(1).any(|suffix| {
             suffix
                 .split_once("-----")
@@ -1303,17 +1303,42 @@ fn contains_high_confidence_credential_literal(summary: &str) -> bool {
         })
 }
 
-fn contains_authorization_value_suffix(summary: &str, scheme: &str) -> bool {
-    let mut words = summary.split_whitespace().rev();
-    let Some(credential) = words.next() else {
+fn contains_authorization_value(summary: &str, scheme: &str) -> bool {
+    let mut words = summary.split_whitespace();
+    let Some(mut candidate_scheme) = words.next() else {
         return false;
     };
-    let Some(candidate_scheme) = words.next() else {
-        return false;
-    };
-    candidate_scheme.eq_ignore_ascii_case(scheme)
-        && !credential.is_empty()
-        && !credential.chars().any(char::is_whitespace)
+
+    for candidate_value in words {
+        if candidate_scheme.eq_ignore_ascii_case(scheme)
+            && is_credential_like_authorization_value(candidate_value)
+        {
+            return true;
+        }
+        candidate_scheme = candidate_value;
+    }
+    false
+}
+
+fn is_credential_like_authorization_value(candidate: &str) -> bool {
+    let prose_word = candidate.trim_matches(|character: char| character.is_ascii_punctuation());
+    !prose_word.is_empty()
+        && ![
+            "access",
+            "auth",
+            "authentication",
+            "authorization",
+            "credential",
+            "credentials",
+            "header",
+            "scheme",
+            "token",
+            "tokens",
+            "value",
+            "values",
+        ]
+        .iter()
+        .any(|word| prose_word.eq_ignore_ascii_case(word))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -3812,6 +3837,18 @@ mod tests {
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),
             (
+                "rotated leaked Bearer abcdef before config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "copied Basic Zm9vOmJhcg== before config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "rotated leaked bearer abcdef before config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
                 concat!("accidentally pasted -----BEGIN PRIVATE ", "KEY-----"),
                 DeploymentWaiverMetadataError::SummaryCredentialLiteral,
             ),
@@ -3862,6 +3899,11 @@ mod tests {
             "basic authentication migration review",
             "Rotated Bearer token handling review",
             "Migrated Basic credential storage",
+            "Bearer credential, handling review before config apply",
+            "Basic authentication: migration review after config apply",
+            "Bearer access token handling review",
+            "Basic auth scheme migration review",
+            "Bearer header value handling review",
         ] {
             validate_deployment_waiver_metadata("OPS-42", Some(summary))
                 .unwrap_or_else(|error| panic!("ordinary summary rejected: {summary:?}: {error}"));
