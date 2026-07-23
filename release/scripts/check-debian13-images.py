@@ -167,6 +167,21 @@ CONTAINER_BOOLEAN_OPTIONS = {
     "-t",
 }
 SHELL_COMMAND_SEPARATORS = {";", "&&", "||", "|"}
+SHELL_COMMAND_CONTROL_PREFIXES = {
+    "!",
+    "(",
+    "{",
+    "do",
+    "elif",
+    "else",
+    "if",
+    "then",
+    "until",
+    "while",
+}
+SHELL_COMMAND_WRAPPER_PREFIXES = {"command", "env", "sudo"}
+SHELL_TIME_OPTIONS = {"--", "-p"}
+YAML_COMMAND_PREFIXES = {"command:", "run:", "script:"}
 MARKDOWN_SHELL_FENCE_LANGS = {"bash", "console", "sh", "shell", "terminal", "zsh"}
 MARKDOWN_YAML_FENCE_LANGS = {"yaml", "yml"}
 MARKDOWN_DOCKERFILE_FENCE_LANGS = {"dockerfile"}
@@ -348,12 +363,29 @@ def shell_command_segments(tokens: list[str]) -> list[list[str]]:
     return segments
 
 
-def is_allowed_command_prefix(token: str) -> bool:
-    return (
-        token in {"$", "-", "command", "env", "sudo"}
-        or "=" in token
-        or token.endswith(":")
-    )
+def is_allowed_command_prefix(tokens: list[str]) -> bool:
+    index = 0
+    if index < len(tokens) and tokens[index] in {"$", "-"}:
+        index += 1
+    if index < len(tokens) and tokens[index].casefold() in YAML_COMMAND_PREFIXES:
+        index += 1
+
+    while index < len(tokens):
+        token = tokens[index]
+        if (
+            token in SHELL_COMMAND_CONTROL_PREFIXES
+            or token in SHELL_COMMAND_WRAPPER_PREFIXES
+            or "=" in token
+        ):
+            index += 1
+            continue
+        if token == "time":
+            index += 1
+            if index < len(tokens) and tokens[index] in SHELL_TIME_OPTIONS:
+                index += 1
+            continue
+        return False
+    return True
 
 
 def skip_options(
@@ -391,7 +423,7 @@ def command_segment_image_reference(tokens: list[str]) -> str | None:
         if token not in {"docker", "podman"}:
             continue
         prefix = tokens[:container_index]
-        if any(not is_allowed_command_prefix(item) for item in prefix):
+        if not is_allowed_command_prefix(prefix):
             continue
         action_index = skip_options(
             tokens,

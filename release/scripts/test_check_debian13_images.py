@@ -304,6 +304,49 @@ class Debian13ImageCheckTest(unittest.TestCase):
                 failures,
             )
 
+    def test_shell_control_prefixes_find_image_references(self) -> None:
+        cases = {
+            "if docker run --rm debian true; then": ["debian"],
+            "while podman run --rm node:22 true; do": ["node:22"],
+            "until docker run --rm python:3.12 true; do": ["python:3.12"],
+            "! docker run --rm rust:1.95-trixie true": ["rust:1.95-trixie"],
+            "time docker run --rm debian true": ["debian"],
+            "time -p docker run --rm node:22 true": ["node:22"],
+            "time -- podman run --rm python:3.12 true": ["python:3.12"],
+            "{ docker run --rm debian true; }": ["debian"],
+            "(podman run --rm node:22 true)": ["node:22"],
+            "if ! time -p docker run --rm rust:1.95-trixie true; then": [
+                "rust:1.95-trixie"
+            ],
+            "if true; then docker run --rm debian true; fi": ["debian"],
+            "while true; do podman run --rm node:22 true; done": ["node:22"],
+            "run: if docker run --rm debian true; then": ["debian"],
+            "- script: time -p podman run --rm node:22 true": ["node:22"],
+        }
+
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(
+                    expected,
+                    self.module.command_image_references_in_command(command),
+                )
+
+    def test_command_scan_ignores_prose_prefixes(self) -> None:
+        commands = (
+            "echo if docker run --rm debian true",
+            "printf '%s\\n' time docker run --rm node:22 true",
+            "description: if docker run --rm debian true",
+            "notes: time -p docker run --rm node:22 true",
+            "a sentence about { docker run --rm debian true; }",
+        )
+
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(
+                    [],
+                    self.module.command_image_references_in_command(command),
+                )
+
     def test_discovered_script_rejects_untagged_debian_image(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
