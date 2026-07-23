@@ -43,6 +43,7 @@ evolution rules that JSON Schema alone does not express.
 | 0.1.0 | 2026-07-19 | draft | Initial posture-document contract for `registry.ops.posture.v1`. |
 | 0.1.1 | 2026-07-19 | draft | Added restricted Relay per-resource refresh health before the 1.0 schema freeze. |
 | 0.1.2 | 2026-07-20 | draft | Replaced waiver reason text with validated operator references and optional summaries before the 1.0 schema freeze. |
+| 0.1.3 | 2026-07-23 | draft | Reserved credential-shaped waiver-reference prefixes before the 1.0 schema freeze. |
 
 ## 1. Scope and surface
 
@@ -126,13 +127,19 @@ waived.
 
 REQ-OP-POSTURE-011: A producer that emits a deployment waiver MUST include `reference` as an
 already canonical 1 to 128 byte string using only ASCII letters, digits, `.`, `_`, `:`, and `-`.
-The reference MUST NOT contain `..`. If the producer emits `summary`, the summary MUST be an
-already trimmed 1 to 256 Unicode-character string without control characters, an authorization
-value, or a private-key begin marker. The producer MUST omit `summary` when no summary was
-configured and
-MUST NOT emit the retired `reason` property. These metadata rules do not alter expiry behavior:
-an expired waiver stops suppressing its finding. They also do not alter the hard-gate boundary:
-`startup_fail` and `readiness_fail` findings remain non-waivable.
+The reference MUST NOT contain `..`.
+It MUST NOT start, case-insensitively, with the credential-shaped prefix `Bearer:<value>` or
+`Basic:<value>`, directly or after `Authorization:`.
+`OPS-2026-0042` is an accepted ticket-style reference.
+If the producer emits `summary`, the summary MUST be an already trimmed 1 to 256
+Unicode-character string without control characters, an authorization value, or a private-key
+begin marker.
+The producer MUST omit `summary` when no summary was configured and MUST NOT emit the retired
+`reason` property.
+These metadata rules do not alter expiry behavior: an expired waiver stops suppressing its
+finding.
+They also do not alter the hard-gate boundary: `startup_fail` and `readiness_fail` findings
+remain non-waivable.
 
 ## 3. Examples
 

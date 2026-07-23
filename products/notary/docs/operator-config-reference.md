@@ -726,10 +726,16 @@ authenticity boundary.
 
 Deployment waivers name one finding, a required operator reference, and a mandatory expiry date.
 The reference is 1 to 128 bytes, has no surrounding whitespace, uses only letters, digits, `.`,
-`_`, `:`, and `-`, and cannot contain `..`. An optional summary is 1 to 256 Unicode characters,
-already trimmed, contains no control characters, and cannot be an authorization value or contain a
-private-key begin marker. Omit `summary` when it is not needed; explicit `null` is invalid. Keep
-credentials and private keys out of both fields.
+`_`, `:`, and `-`, and cannot contain `..`.
+References cannot start, case-insensitively, with `Bearer:<value>` or `Basic:<value>`, directly or
+after `Authorization:`.
+Use a ticket-style reference such as `OPS-2026-0042`.
+An optional summary is 1 to 256 Unicode characters, already trimmed, contains no control
+characters, and cannot be an authorization value or contain a private-key begin marker.
+Omit `summary` when it is not needed; explicit `null` is invalid.
+Keep credentials and private keys out of both fields.
+These rules implement
+[RS-OP-POSTURE](https://docs.registrystack.org/spec/rs-op-posture/) (REQ-OP-POSTURE-011).
 
 ```yaml
 deployment:

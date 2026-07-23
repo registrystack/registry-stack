@@ -1312,7 +1312,24 @@ deployment:
       expires: 2026-09-30
 ```
 
-A waived finding reports status `waived` instead of its severity effect. Once the expiry date passes, the waiver stops suppressing the finding and the posture additionally raises `deployment.waiver_expired`. The `reference` is 1 to 128 bytes, has no surrounding whitespace, uses only letters, digits, `.`, `_`, `:`, and `-`, and cannot contain `..`. The optional `summary` is 1 to 256 Unicode characters when present, is already trimmed, contains no control characters, and cannot be an authorization value or contain a private-key begin marker. Omit `summary` when it is not needed; explicit `null` is invalid. Keep credentials and private keys out of both fields. A waiver naming a hard gate (`startup_fail` or `readiness_fail` severity under the active profile) fails config load instead of being silently accepted and ignored: there is no config-level override for a non-waivable gate.
+A waived finding reports status `waived` instead of its severity effect.
+Once the expiry date passes, the waiver stops suppressing the finding and the posture additionally
+raises `deployment.waiver_expired`.
+The `reference` is 1 to 128 bytes, has no surrounding whitespace, uses only letters, digits, `.`,
+`_`, `:`, and `-`, and cannot contain `..`.
+References cannot start, case-insensitively, with `Bearer:<value>` or `Basic:<value>`, directly or
+after `Authorization:`.
+Use a ticket-style reference such as `OPS-2026-0042`.
+The optional `summary` is 1 to 256 Unicode characters when present, is already trimmed, contains
+no control characters, and cannot be an authorization value or contain a private-key begin
+marker.
+Omit `summary` when it is not needed; explicit `null` is invalid.
+Keep credentials and private keys out of both fields.
+These rules implement
+[RS-OP-POSTURE](https://docs.registrystack.org/spec/rs-op-posture/) (REQ-OP-POSTURE-011).
+A waiver naming a hard gate (`startup_fail` or `readiness_fail` severity under the active profile)
+fails config load instead of being silently accepted and ignored: there is no config-level
+override for a non-waivable gate.
 
 Waiver references and summaries are visible only in the restricted posture tier; the default tier reports finding id, severity, and status without the per-finding waiver object or deployment waivers array.
 
