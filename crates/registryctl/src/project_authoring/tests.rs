@@ -684,6 +684,53 @@ outputs:
     }
 
     #[test]
+    fn governed_live_request_negotiates_the_claim_result_media_type() {
+        let endpoint =
+            url::Url::parse("http://127.0.0.1:8080/v1/evaluations").expect("endpoint parses");
+        let request = governed_live_evaluation_request(&endpoint, "test-api-key");
+
+        assert_eq!(request.header("content-type"), Some("application/json"));
+        assert_eq!(
+            request.header("accept"),
+            Some(registry_notary_core::FORMAT_CLAIM_RESULT_JSON)
+        );
+    }
+
+    #[test]
+    fn governed_live_report_does_not_infer_a_source_outcome() {
+        let claims = vec!["record-exists".to_string()];
+        let expected = json!({
+            "claims": {
+                "record-exists": {
+                    "satisfied": false,
+                    "disclosure": "predicate",
+                },
+            },
+        });
+        let response = json!({
+            "results": [{
+                "claim_id": "record-exists",
+                "satisfied": false,
+                "disclosure": "predicate",
+                "provenance": { "used": { "relay_consultation_count": 1 } },
+            }],
+        });
+        let returned_claims =
+            validate_live_response(&response, &claims, &expected).expect("no-match result passes");
+        let report = governed_live_fixture_report(returned_claims);
+
+        assert_eq!(report.claims, claims);
+        assert_eq!(report.outcome, None);
+        assert!(
+            serde_json::to_value(report)
+                .expect("report serializes")
+                .get("outcome")
+                .is_none(),
+            "neutral live evidence must not serialize a source outcome"
+        );
+    }
+
+    #[test]
     fn cel_consultation_roots_ignore_string_literals() {
         assert_eq!(
             cel_member_roots("'decoy.exists' == 'x' && person.exists").expect("CEL roots parse"),

@@ -606,10 +606,7 @@ fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureR
     let endpoint = origin
         .join("v1/evaluations")
         .map_err(|_| anyhow!("failed to construct the governed Notary endpoint"))?;
-    let response = ureq::post(endpoint.as_str())
-        .set("content-type", "application/json")
-        .set("accept", "application/json")
-        .set("x-api-key", &api_key)
+    let response = governed_live_evaluation_request(&endpoint, &api_key)
         .send_bytes(&request_bytes)
         .map_err(|_| anyhow!("governed Notary evaluation failed"))?;
     let mut response_bytes = Vec::new();
@@ -624,19 +621,32 @@ fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureR
     let response = parse_json_strict(&response_bytes)
         .context("governed Notary response was not strict JSON")?;
     let returned_claims = validate_live_response(&response, &claims, &expected)?;
-    Ok(FixtureReport {
+    Ok(governed_live_fixture_report(returned_claims))
+}
+
+fn governed_live_evaluation_request(endpoint: &url::Url, api_key: &str) -> ureq::Request {
+    ureq::post(endpoint.as_str())
+        .set("content-type", "application/json")
+        .set("accept", registry_notary_core::FORMAT_CLAIM_RESULT_JSON)
+        .set("x-api-key", api_key)
+}
+
+fn governed_live_fixture_report(returned_claims: Vec<String>) -> FixtureReport {
+    FixtureReport {
         integration: "governed-notary-relay".to_string(),
         fixture: "live-evaluation".to_string(),
         inputs: Vec::new(),
         calls: vec!["notary-evaluation".to_string()],
         outputs: Vec::new(),
         claims: returned_claims,
-        outcome: Some("match".to_string()),
+        // Claim expectations prove disclosed values, not the source-level
+        // match or no-match outcome that produced them.
+        outcome: None,
         expected_error: None,
         source_access: None,
         passed: true,
         failure: None,
-    })
+    }
 }
 
 fn validate_live_relay_readiness(origin: &url::Url) -> Result<()> {

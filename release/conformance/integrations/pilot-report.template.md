@@ -13,7 +13,6 @@ evidence. One completed pilot is not proof of broad production readiness.
 
 - Sanitized run result: [link to the schema-valid public result]
 - Frozen Registry Stack candidate: [link to the published release]
-- Immutable Solmara release and release-pin evidence: [link]
 - Independent operator: [confirmed or not confirmed; do not identify the
   operator]
 - Owner-approved non-production source: [confirmed or not confirmed; do not
@@ -25,10 +24,9 @@ evidence. One completed pilot is not proof of broad production readiness.
   not close]
 - Overall outcome: [passed, failed, or incomplete]
 
-Issue closure still requires a frozen published candidate, an immutable Solmara
-release pinned to that candidate, an independent operator, and an
-owner-approved source. A plan or maintainer-run substitute cannot satisfy any
-of these requirements.
+Issue closure still requires a frozen published candidate, an independent
+operator, and an owner-approved source. A plan or maintainer-run substitute
+cannot satisfy any of these requirements.
 
 ## What the pilot did and did not prove
 

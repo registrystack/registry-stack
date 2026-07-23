@@ -107,6 +107,10 @@ changes:
 }
 ```
 
+`registryctl` sends
+`Accept: application/vnd.registry-notary.claim-result+json`, matching the
+request's `format`, and validates that claim-result envelope.
+
 The expected-result file must contain only a `claims` object.
 Its keys must exactly match the request's claim ids.
 Each claim value must be a non-empty object containing only the exact `value`,

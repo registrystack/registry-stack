@@ -281,12 +281,12 @@ class IntegrationE2RunnerTest(TestCase):
             "links to restricted evidence.",
             normalized_template,
         )
+        self.assertNotIn("Solmara", template)
         for text in (
             "Sanitized run result:",
             "Plans, dry runs",
             "One completed pilot is not proof of broad production readiness.",
             "Frozen Registry Stack candidate:",
-            "Immutable Solmara release",
             "Independent operator:",
             "Owner-approved non-production source:",
             "### Blocking findings",
