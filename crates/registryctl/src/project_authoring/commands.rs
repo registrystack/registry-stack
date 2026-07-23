@@ -718,34 +718,19 @@ fn validate_live_response(
     }
     let mut returned = BTreeSet::new();
     for result in results {
-        let result = result
+        let result_object = result
             .as_object()
             .ok_or_else(|| anyhow!("governed Notary result must be an object"))?;
-        if result.keys().any(|key| {
-            !matches!(
-                key.as_str(),
-                "evaluation_id"
-                    | "claim_id"
-                    | "claim_version"
-                    | "subject_type"
-                    | "requester_ref"
-                    | "target_ref"
-                    | "value"
-                    | "satisfied"
-                    | "disclosure"
-                    | "redacted_fields"
-                    | "format"
-                    | "issued_at"
-                    | "expires_at"
-                    | "provenance"
-            )
-        }) {
-            bail!("governed Notary result has an unsupported field");
+        let result_view: registry_notary_core::ClaimResultView =
+            serde_json::from_value(result.clone()).map_err(|_| {
+                anyhow!(
+                    "governed Notary result does not match the closed public claim-result schema"
+                )
+            })?;
+        if !result_view.provenance.derived_from.is_empty() {
+            bail!("governed Notary result provenance derived_from must remain empty");
         }
-        let claim_id = result
-            .get("claim_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("governed Notary result lacks a claim_id"))?;
+        let claim_id = result_view.claim_id.as_str();
         if !requested.contains(claim_id) || !returned.insert(claim_id.to_string()) {
             bail!("governed Notary response contains an unknown or duplicate claim result");
         }
@@ -763,16 +748,11 @@ fn validate_live_response(
             );
         }
         for field in ["value", "satisfied", "disclosure"] {
-            if result.get(field) != expected_result.get(field) {
+            if result_object.get(field) != expected_result.get(field) {
                 bail!("governed Notary disclosed claim result did not match the expected fixture");
             }
         }
-        if result
-            .get("provenance")
-            .and_then(|value| value.pointer("/used/relay_consultation_count"))
-            .and_then(Value::as_u64)
-            .is_none_or(|count| count == 0)
-        {
+        if result_view.provenance.used.relay_consultation_count == 0 {
             bail!("governed Notary result lacks source-backed provenance");
         }
     }

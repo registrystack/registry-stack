@@ -656,8 +656,51 @@ outputs:
         }
     }
 
+    fn governed_live_claim_result(
+        claim_id: &str,
+        value: Value,
+        satisfied: Option<bool>,
+        disclosure: &str,
+    ) -> Value {
+        serde_json::to_value(registry_notary_core::ClaimResultView {
+            evaluation_id: "eval-live-1".to_string(),
+            claim_id: claim_id.to_string(),
+            claim_version: "1.0.0".to_string(),
+            subject_type: "Person".to_string(),
+            requester_ref: Some(registry_notary_core::EvidenceEntityRef {
+                entity_type: "Organisation".to_string(),
+                handle: "rnref:v1:requester".to_string(),
+                identifier_schemes: Vec::new(),
+                profile: None,
+            }),
+            target_ref: registry_notary_core::TargetRefView {
+                entity_type: "Person".to_string(),
+                handle: "rnref:v1:target".to_string(),
+                identifier_schemes: vec!["openspp_individual_id".to_string()],
+                profile: Some("openspp".to_string()),
+            },
+            value: Some(value),
+            satisfied,
+            disclosure: disclosure.to_string(),
+            redacted_fields: Vec::new(),
+            format: registry_notary_core::FORMAT_CLAIM_RESULT_JSON.to_string(),
+            issued_at: "2026-07-23T00:00:00Z".to_string(),
+            expires_at: None,
+            provenance: registry_notary_core::ClaimProvenance::new(
+                "registry-notary".to_string(),
+                "eval-live-1".to_string(),
+                claim_id.to_string(),
+                "1.0.0".to_string(),
+                registry_notary_core::ProvenanceUsed {
+                    relay_consultation_count: 1,
+                },
+            ),
+        })
+        .expect("actual claim result serializes")
+    }
+
     #[test]
-    fn governed_live_result_requires_exact_disclosure_and_source_provenance() {
+    fn governed_live_result_accepts_actual_shape_and_requires_source_provenance() {
         let claims = vec!["eligible".to_string()];
         let expected = json!({
             "claims": {
@@ -669,13 +712,12 @@ outputs:
             },
         });
         let response = json!({
-            "results": [{
-                "claim_id": "eligible",
-                "value": true,
-                "satisfied": true,
-                "disclosure": "predicate",
-                "provenance": { "used": { "relay_consultation_count": 1 } },
-            }],
+            "results": [governed_live_claim_result(
+                "eligible",
+                json!(true),
+                Some(true),
+                "predicate",
+            )],
         });
         assert_eq!(
             validate_live_response(&response, &claims, &expected).expect("exact result passes"),
@@ -705,13 +747,12 @@ outputs:
             },
         });
         let response = json!({
-            "results": [{
-                "claim_id": "eligible",
-                "value": "unexpected source value",
-                "satisfied": true,
-                "disclosure": "predicate",
-                "provenance": { "used": { "relay_consultation_count": 1 } },
-            }],
+            "results": [governed_live_claim_result(
+                "eligible",
+                json!("unexpected source value"),
+                Some(true),
+                "predicate",
+            )],
         });
 
         assert!(
@@ -734,22 +775,97 @@ outputs:
                 },
             },
         });
-        let response = json!({
-            "results": [{
-                "claim_id": "eligible",
-                "value": true,
-                "satisfied": true,
-                "disclosure": "predicate",
-                "raw_value": "unexpected source value",
-                "provenance": { "used": { "relay_consultation_count": 1 } },
-            }],
+        let mut response = json!({
+            "results": [governed_live_claim_result(
+                "eligible",
+                json!(true),
+                Some(true),
+                "predicate",
+            )],
         });
+        response["results"][0]["raw_value"] = json!("unexpected source value");
 
         assert!(
             validate_live_response(&response, &claims, &expected)
                 .expect_err("unknown result fields must fail closed")
                 .to_string()
-                .contains("result has an unsupported field")
+                .contains("closed public claim-result schema")
+        );
+    }
+
+    #[test]
+    fn governed_live_result_rejects_nested_unknown_fields() {
+        let claims = vec!["eligible".to_string()];
+        let expected = json!({
+            "claims": {
+                "eligible": {
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        });
+        let response = json!({
+            "results": [governed_live_claim_result(
+                "eligible",
+                json!(true),
+                Some(true),
+                "predicate",
+            )],
+        });
+
+        for (pointer, field) in [
+            ("/results/0/target_ref", "raw_identifier"),
+            ("/results/0/requester_ref", "raw_principal"),
+            ("/results/0/provenance", "raw_source"),
+            ("/results/0/provenance/generated_by", "raw_policy"),
+            ("/results/0/provenance/used", "raw_source_count"),
+        ] {
+            let mut over_disclosed = response.clone();
+            over_disclosed
+                .pointer_mut(pointer)
+                .and_then(Value::as_object_mut)
+                .expect("actual nested result object exists")
+                .insert(field.to_string(), json!("private"));
+
+            assert!(
+                validate_live_response(&over_disclosed, &claims, &expected)
+                    .expect_err("nested unknown fields must fail closed")
+                    .to_string()
+                    .contains("closed public claim-result schema"),
+                "nested field {pointer}/{field} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn governed_live_result_requires_empty_derived_from() {
+        let claims = vec!["eligible".to_string()];
+        let expected = json!({
+            "claims": {
+                "eligible": {
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        });
+        let mut response = json!({
+            "results": [governed_live_claim_result(
+                "eligible",
+                json!(true),
+                Some(true),
+                "predicate",
+            )],
+        });
+        response["results"][0]["provenance"]["derived_from"] =
+            json!([{ "raw_source_row": "private" }]);
+
+        assert!(
+            validate_live_response(&response, &claims, &expected)
+                .expect_err("non-empty derived_from must fail closed")
+                .to_string()
+                .contains("derived_from must remain empty")
         );
     }
 
@@ -779,13 +895,12 @@ outputs:
             },
         });
         let response = json!({
-            "results": [{
-                "claim_id": "record-exists",
-                "value": false,
-                "satisfied": false,
-                "disclosure": "predicate",
-                "provenance": { "used": { "relay_consultation_count": 1 } },
-            }],
+            "results": [governed_live_claim_result(
+                "record-exists",
+                json!(false),
+                Some(false),
+                "predicate",
+            )],
         });
         let returned_claims =
             validate_live_response(&response, &claims, &expected).expect("no-match result passes");
