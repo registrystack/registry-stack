@@ -24,6 +24,13 @@ service policy, claim evaluation, disclosure, credential issuance, and its own
 audit chain. Relay keeps independent authority over source acquisition,
 normalization, protocol verification, typed outputs, and its audit chain.
 
+The evidence consumer determines how returned evidence is used. The decision
+owner remains accountable for requirements, eligibility, qualification,
+prioritization, approval, referral, payment, workflow, and action policy.
+Notary may attest a decision that an authoritative source already made when
+the claim is named and documented as source-owned, but Notary does not
+recompute consumer policy.
+
 See [`docs/README.md`](docs/README.md) for product documentation. Use
 Registry Stack project authoring and `registryctl` to generate deployable
 Relay and Notary inputs. Do not hand-author source access inside Notary.

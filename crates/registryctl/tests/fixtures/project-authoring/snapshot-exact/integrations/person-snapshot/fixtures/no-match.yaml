@@ -9,7 +9,7 @@ expect:
   outputs: {}
   claims:
     population-record-exists: false
-    benefits-status: null
-    benefits-eligible: null
+    population-registration-status: null
+    residency-confirmed: null
     emergency-record-exists: false
     emergency-status: redacted

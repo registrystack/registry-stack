@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{error::ErrorKind, CommandFactory, Parser, Subcommand, ValueEnum};
 
 use registryctl::{
     AddNotaryReport, AnchorReport, BundleInspectReport, BundleSignOptions, BundleSignReport,
@@ -39,8 +39,7 @@ fn main() -> Result<()> {
         } => {
             let destination = match (&from, command.as_deref()) {
                 (Some(_), None) => Some(project_dir.as_path()),
-                (None, Some(InitCommand::Relay { dir, .. }))
-                | (None, Some(InitCommand::SpreadsheetApi { dir, .. })) => Some(dir.as_path()),
+                (None, Some(InitCommand::Relay { dir, .. })) => Some(dir.as_path()),
                 _ => None,
             };
             if format == OutputFormat::Json
@@ -59,14 +58,20 @@ fn main() -> Result<()> {
                         InitCommand::Relay { dir, sample } => {
                             registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?
                         }
-                        InitCommand::SpreadsheetApi { dir, sample } => {
-                            registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?
-                        }
                     }
                 }
-                _ => anyhow::bail!(
-                    "init requires exactly one of --from or a legacy product subcommand"
-                ),
+                (None, None) => Cli::command()
+                    .error(
+                        ErrorKind::MissingRequiredArgument,
+                        "init requires exactly one of --from or the relay subcommand",
+                    )
+                    .exit(),
+                (Some(_), Some(_)) => Cli::command()
+                    .error(
+                        ErrorKind::ArgumentConflict,
+                        "init accepts only one of --from or the relay subcommand",
+                    )
+                    .exit(),
             };
             match format {
                 OutputFormat::Human => println!("{}", render_init_report(&report)?),
@@ -2162,15 +2167,6 @@ mod tests {
 enum InitCommand {
     /// Create a local Relay-backed spreadsheet API project.
     Relay {
-        /// Directory to create.
-        dir: PathBuf,
-        /// Sample project to generate.
-        #[arg(long, value_enum, default_value_t = Sample::Benefits)]
-        sample: Sample,
-    },
-    /// Create a local Relay-backed spreadsheet API project.
-    #[command(name = "spreadsheet-api", hide = true)]
-    SpreadsheetApi {
         /// Directory to create.
         dir: PathBuf,
         /// Sample project to generate.

@@ -302,6 +302,28 @@ class IntegrationE2RunnerTest(TestCase):
             any("compatibility probe" in item for item in plan["prerequisites"])
         )
 
+    def test_dhis2_plan_includes_reviewed_child_health_metadata(self) -> None:
+        profile = self.module.load_profile("dhis2-tracker-2.41.9")
+        plan = self.module.plan_document(profile)
+        required = set(plan["required_input_names"])
+        self.assertTrue(
+            {
+                "DHIS2_CHILD_PROGRAM_UID",
+                "DHIS2_CHILD_VISIT_STAGE_UID",
+                "DHIS2_BCG_BIRTH_STAGE_UID",
+                "DHIS2_OPV_BIRTH_STAGE_UID",
+                "DHIS2_MEASLES_STAGE_UID",
+            }.issubset(required)
+        )
+        self.assertTrue(
+            {
+                "DHIS2_MATERNAL_PROGRAM_UID",
+                "DHIS2_TB_PROGRAM_UID",
+                "DHIS2_FIRST_NAME_ATTRIBUTE_UID",
+                "DHIS2_BIRTH_DATE_ATTRIBUTE_UID",
+            }.issubset(required)
+        )
+
     def test_candidate_assets_cross_validate_all_release_bindings(self) -> None:
         candidate = self.make_candidate()
         metadata = self.candidate_metadata(candidate)

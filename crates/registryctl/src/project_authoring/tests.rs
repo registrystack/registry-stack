@@ -2047,20 +2047,23 @@ outputs:
             &loaded,
             &json!({
                 "purpose": "household-support-screening",
-                "claims": ["household-category", "household-eligible"],
+                "claims": ["household-category", "source-household-approval-decision"],
                 "disclosure": "redacted",
             }),
         )
         .expect("claims from both same-purpose services are valid");
         assert_eq!(
             request.claims,
-            ["household-category", "household-eligible"]
+            ["household-category", "source-household-approval-decision"]
         );
         assert_eq!(
             request.claim_versions,
             BTreeMap::from([
                 ("household-category".to_string(), "1".to_string()),
-                ("household-eligible".to_string(), "1".to_string()),
+                (
+                    "source-household-approval-decision".to_string(),
+                    "1".to_string(),
+                ),
             ])
         );
     }

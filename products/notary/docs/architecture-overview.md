@@ -28,18 +28,21 @@ verifies their full semantic contract before serving.
    before source access.
 4. Relay returns `match`, `no_match`, or `ambiguous`, plus typed minimized
    outputs only on `match` and closed acquisition provenance.
-5. Notary derives direct and CEL claims, applies disclosure, and either returns
-   the result or issues an allowed credential.
-6. Each product writes its own redacted audit record. The evaluation id and
+5. Notary derives direct and CEL evidence claims, applies disclosure, and
+   either returns the result or issues an allowed credential.
+6. The evidence consumer determines how the returned evidence is used. The
+   decision owner applies any requirement, decision, workflow, or action
+   policy.
+7. Each product writes its own redacted audit record. The evaluation id and
    consultation id support restricted cross-service reconciliation.
 
 ```mermaid
 flowchart LR
-  Caller[Caller] --> Notary[Registry Notary<br/>policy, claims, disclosure, issuance]
+  Consumer[Evidence consumer<br/>use, decision input, action] --> Notary[Registry Notary<br/>evidence, disclosure, issuance]
   Notary --> Relay[Registry Relay<br/>acquisition, normalization, outputs]
   Relay --> Source[(Registry source)]
   Relay --> Notary
-  Notary --> Caller
+  Notary --> Consumer
 ```
 
 Notary never treats a Relay failure as `no_match`. Ambiguity, denial, source,
@@ -50,14 +53,21 @@ consultation group. Raw Relay errors are not exposed as claim values.
 
 `self_attested` evidence performs no Relay or source I/O. Its rules and
 dependency closure must remain source-free. Delegated authorization is a
-separate Notary policy decision. Where a delegated relationship is proved by
-Relay, Notary still pins the exact consultation and performs all authorization
-checks before invoking it.
+separate Notary authorization decision, not a consumer decision. Where a
+delegated relationship is proved by Relay, Notary still pins the exact
+consultation and performs all authorization checks before invoking it.
 
 ## Product boundaries
 
 Relay owns source authentication, network policy, HTTP and protocol helpers,
 Rhai source adaptation, typed outputs, and acquisition provenance. Notary owns
-caller authentication, purpose and legal basis, consent policy, claims, CEL,
-disclosure, credential profiles, signing, and issuance. Their state and audit
-authority remain separate.
+caller authentication, purpose and legal basis, consent policy, reusable
+evidence claims, CEL evidence derivation, disclosure, credential profiles,
+signing, and issuance. The evidence consumer determines how returned evidence is
+used, and the decision owner remains accountable for requirements, eligibility,
+qualification, prioritization, approval, referral, payment, workflow, and
+action policy. Their state and audit authority remain separate.
+
+Notary may attest a decision that an authoritative source has already made.
+That claim is a source-owned decision and must be named and documented as such;
+Notary does not recompute it as consumer policy.

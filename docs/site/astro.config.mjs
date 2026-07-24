@@ -390,6 +390,7 @@ export default defineConfig({
             { label: 'RS-TERMS · Terms', slug: 'spec/rs-terms' },
             { label: 'RS-ARC-G · Architecture', slug: 'spec/rs-arc-g' },
             { label: 'RS-PR-NOTARY · Notary protocol', slug: 'spec/rs-pr-notary' },
+            { label: 'RS-PR-REGISTRYCTL · registryctl contract', slug: 'spec/rs-pr-registryctl' },
             { label: 'RS-PR-RELAY · Relay protocol', slug: 'spec/rs-pr-relay' },
             { label: 'RS-SEC-G · Security model', slug: 'spec/rs-sec-g' },
             { label: 'RS-DM-CLAIM · Claim definition model', slug: 'spec/rs-dm-claim' },

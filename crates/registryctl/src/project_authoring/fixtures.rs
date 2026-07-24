@@ -1737,7 +1737,7 @@ mod fixture_interface_tests {
         let (_, fixture) = loaded.integrations["health-record"]
             .fixtures
             .iter()
-            .find(|(_, fixture)| fixture.name == "complete-health-match")
+            .find(|(_, fixture)| fixture.name == "complete-child-health-evidence")
             .expect("match fixture exists");
         let input = offline_fixture_input(fixture).expect("fixture input is valid");
         let interactions =

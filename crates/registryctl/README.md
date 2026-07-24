@@ -28,9 +28,10 @@ Interactive report commands print concise human-readable results. Add `--format 
 another program needs a versioned report. Artifact and protocol commands, including authoring
 schemas, editor metadata, the language server, and logs, retain their native output formats.
 
-The generated project contains a local Registry Relay configuration, sample
-XLSX workbook, Compose file, project manifest, local demo credentials, and an
-optional Bruno API collection.
+The initialization report identifies the project root and supported generated
+entry points. Automation must use the versioned JSON report rather than
+hard-code the local tutorial's generated directory layout, which remains an
+implementation detail.
 
 Run `registryctl doctor` before starting a generated stack or after editing config. It calls the
 product-owned validators and redacts local secret values. Add `--format json` when another program
@@ -131,10 +132,10 @@ Registryctl never searches the current working directory for a lock, and
 rejects a missing, mismatched, oversized, symlinked, or structurally invalid
 file.
 
-Existing projects do not need the lock for `start`, `stop`, `status`, or other
-runtime commands. They keep using the immutable image references already stored
-in `registryctl.yaml` and `compose.yaml`. A later `init` or `add` is a generation
-operation and requires the lock for that registryctl version.
+Existing local tutorial projects do not need the lock for `start`, `stop`,
+`status`, or other runtime commands. Those commands use the immutable image
+references already written into the project. A later `init` or `add` is a
+generation operation and requires the lock for that registryctl version.
 
 ## Update checks
 

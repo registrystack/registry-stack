@@ -5,11 +5,11 @@ primary_key: person_id
 schema:
   type: object
   additionalProperties: false
-  required: [person_id, registration_status, eligible, guardian_id]
+  required: [person_id, registration_status, residency_confirmed, guardian_id]
   properties:
     person_id: { type: string, maxLength: 64 }
     registration_status: { type: [string, "null"], maxLength: 32 }
-    eligible: { type: [boolean, "null"] }
+    residency_confirmed: { type: [boolean, "null"] }
     guardian_id: { type: [string, "null"], maxLength: 64 }
 materialization:
   max_records: 1000000
