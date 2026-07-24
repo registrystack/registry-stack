@@ -153,6 +153,16 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             record, allow_template=False, require_all_passed=True
         )
 
+    def test_artifact_set_digest_prefixes_are_equivalent(self) -> None:
+        record = self.candidate()
+        record["candidate_artifact_set"]["sha256"] = record[
+            "candidate_artifact_set"
+        ]["sha256"].removeprefix("sha256:")
+
+        self.validate_record(
+            record, allow_template=False, require_all_passed=True
+        )
+
     def test_candidate_tag_must_resolve_to_exact_target_commit(self) -> None:
         record = self.candidate()
         tag_ref = f"refs/tags/{record['target_release']['version']}^{{commit}}"
