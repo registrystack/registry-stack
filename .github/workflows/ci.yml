@@ -167,6 +167,9 @@ jobs:
             echo "registryctl_tutorial=${registryctl_tutorial}"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Check Debian 13 image contract
+        run: python3 release/scripts/check-debian13-images.py
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-24.04
@@ -676,9 +679,7 @@ jobs:
           path: |
             target/registryctl-tutorial-cargo-home
             target/registryctl-tutorial-linux-amd64
-          key: registryctl-tutorial-${{ runner.os }}-rust-1.95.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            registryctl-tutorial-${{ runner.os }}-rust-1.95.0-
+          key: registryctl-tutorial-${{ runner.os }}-${{ hashFiles('docs/site/scripts/check-registryctl-tutorials.sh', 'Cargo.lock') }}
 
       - name: Execute registryctl tutorials from source
         working-directory: docs/site
