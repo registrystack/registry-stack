@@ -5,8 +5,8 @@ import json
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
-from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -56,7 +56,7 @@ class PrepareUpgradeExerciseAssetsTest(unittest.TestCase):
     def test_current_templates_require_no_download_or_asset_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             asset_root = Path(temporary) / "assets"
-            downloader = mock.Mock(side_effect=AssertionError)
+            downloader = unittest.mock.Mock(side_effect=AssertionError)
             versions = self.module.prepare_assets(
                 ROOT / "release" / "exercises",
                 asset_root,
@@ -130,7 +130,7 @@ class PrepareUpgradeExerciseAssetsTest(unittest.TestCase):
                 )
 
     def test_missing_github_cli_is_reported_without_command_output(self) -> None:
-        with mock.patch.object(
+        with unittest.mock.patch.object(
             self.module.subprocess,
             "run",
             side_effect=FileNotFoundError("gh missing"),

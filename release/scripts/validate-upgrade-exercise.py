@@ -242,7 +242,11 @@ def validate_artifact_set(value: Any, record: dict[str, Any], *, template: bool)
         "relay_image": record["target_release"]["relay_image_digest"],
         "notary_image": record["target_release"]["notary_image_digest"],
     }
-    if any(artifacts[name] != digest for name, digest in expected.items()):
+    if any(
+        artifacts[name].removeprefix("sha256:")
+        != digest.removeprefix("sha256:")
+        for name, digest in expected.items()
+    ):
         raise ExerciseError("candidate_artifact_set does not match target release coordinates")
     if artifact_set["sha256"] != canonical_sha256(artifacts):
         raise ExerciseError("candidate_artifact_set.sha256 does not match its artifacts")
