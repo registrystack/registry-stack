@@ -1,0 +1,46 @@
+name: no-child-program-enrollment
+classification: synthetic
+input: { tracked_entity: A0000000001, include_inactive: true }
+variables: { as_of_date: 2026-01-01 }
+interactions:
+  - expect:
+      method: GET
+      path: /api/tracker/trackedEntities/A0000000001
+      query:
+        fields: trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]
+        includeDeleted: true
+    respond:
+      status: 200
+      body:
+        trackedEntity: A0000000001
+        attributes: []
+        enrollments:
+          - { program: DEMO_OTHER_PROGRAM_UID, status: ACTIVE, events: [] }
+expect:
+  outcome: match
+  outputs:
+    first_name: null
+    last_name: null
+    date_of_birth: null
+    child_program_active: null
+    programme_code: null
+    reconciliation_reference: null
+    maternal_postnatal_active: null
+    child_health_visit_recorded: null
+    tb_program_active: null
+    bcg_birth_dose_recorded: null
+    opv_birth_dose_recorded: null
+    measles_dose_recorded: null
+  claims:
+    tracked-entity-first-name: null
+    tracked-entity-last-name: null
+    child-program-active: null
+    child-age-band: null
+    programme-code: null
+    reconciliation-reference: redacted
+    maternal-postnatal-care-active: null
+    child-health-visit-recorded: null
+    tb-program-active: null
+    bcg-birth-dose-recorded: null
+    opv-birth-dose-recorded: null
+    measles-dose-recorded: null

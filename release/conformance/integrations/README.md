@@ -27,8 +27,14 @@ The current starter's synthetic route is not evidence that the real operation
 is compatible.
 
 For DHIS2, the instance owner must attest every metadata UID used by the
-authored adapter. The `DEMO_*` values in the starter are examples and cannot
-appear in a live evidence project.
+authored adapter, including the child programme and BCG, OPV, and measles
+programme-stage UIDs. The `DEMO_*` values in the starter are examples and
+cannot appear in a live evidence project.
+
+The DHIS2 starter's offline fixtures are the deterministic acceptance path for
+claim semantics and failure behavior. Record live public-demo or operator-owned
+compatibility only through this release evidence flow. Public demo uptime,
+credentials, and mutable records are not offline acceptance dependencies.
 
 Do not simulate either prerequisite. Do not convert fixture output, a dry run,
 or application-only logs into candidate evidence.
@@ -162,6 +168,12 @@ and credentials have no public fields. A failed run can remain as honest
 non-closing evidence. The validator accepts `status: passed` only when every
 applicable case and teardown is recorded as passed; maintainer review still
 establishes whether the recorded hashes correspond to the restricted evidence.
+
+After an independent operator completes the frozen journey, use
+[`pilot-report.template.md`](pilot-report.template.md) to publish the bounded
+outcome, findings, and public triage links without copying restricted evidence
+into the repository. A plan or dry run is not evidence, and one pilot is not
+proof of broad production readiness.
 
 ## Review the source packet
 

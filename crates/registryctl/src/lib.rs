@@ -80,6 +80,8 @@ const CONFIG_BUNDLE_SIGNATURE_SCHEMA: &str = "registry.platform.config_bundle_si
 const CONFIG_TRUST_ANCHOR_SCHEMA: &str = "registry.platform.config_trust_anchor.v1";
 const INIT_REPORT_SCHEMA_VERSION: &str = "registryctl.init.v1";
 const ADD_NOTARY_REPORT_SCHEMA_VERSION: &str = "registryctl.add_notary.v1";
+pub const SMOKE_REPORT_SCHEMA_V1: &str =
+    include_str!("../schemas/registryctl.smoke.v1.schema.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -3667,13 +3669,22 @@ fn relay_config(credentials: &LocalCredentials) -> String {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct SmokeReport {
+    schema_version: SmokeReportSchema,
     base_url: String,
     passed: bool,
     checks: Vec<SmokeCheck>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+enum SmokeReportSchema {
+    #[serde(rename = "registryctl.smoke.v1")]
+    V1,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct SmokeCheck {
     name: String,
     method: String,
@@ -3795,6 +3806,7 @@ fn run_smoke_checks(base_url: &str, secrets: &LocalEnv) -> SmokeReport {
     );
 
     SmokeReport {
+        schema_version: SmokeReportSchema::V1,
         base_url: base_url.to_string(),
         passed: checks.iter().all(|check| check.passed),
         checks,
@@ -5416,7 +5428,40 @@ mod tests {
         assert!(!json.contains("row-secret"));
         assert!(!json.contains("identity-secret"));
         assert!(!report.passed);
+        assert_eq!(parsed.schema_version, SmokeReportSchema::V1);
         assert_eq!(parsed.checks.len(), 11);
+    }
+
+    #[test]
+    fn smoke_report_rejects_another_schema_version() {
+        let secrets = LocalEnv {
+            values: BTreeMap::new(),
+        };
+        let report = run_smoke_checks("http://127.0.0.1:1", &secrets);
+        let mut document = serde_json::to_value(report).unwrap();
+        document["schema_version"] = serde_json::json!("registryctl.smoke.v2");
+
+        assert!(parse_smoke_report(&document.to_string()).is_err());
+    }
+
+    #[test]
+    fn smoke_report_json_matches_committed_schema() {
+        let secrets = LocalEnv {
+            values: BTreeMap::new(),
+        };
+        let report = run_smoke_checks("http://127.0.0.1:1", &secrets);
+        let document = serde_json::to_value(report).unwrap();
+        let schema: JsonValue = serde_json::from_str(SMOKE_REPORT_SCHEMA_V1).unwrap();
+        let compiled = jsonschema::JSONSchema::compile(&schema).expect("schema compiles");
+        let validation_errors = match compiled.validate(&document) {
+            Ok(()) => Vec::new(),
+            Err(errors) => errors.map(|error| error.to_string()).collect::<Vec<_>>(),
+        };
+
+        assert!(
+            validation_errors.is_empty(),
+            "registryctl smoke report must satisfy its schema: {validation_errors:?}"
+        );
     }
 
     #[test]
@@ -5435,6 +5480,7 @@ mod tests {
         for (_, secret) in env.lines().filter_map(|line| line.split_once('=')) {
             assert!(!report.contains(secret));
         }
+        assert!(report.contains("\"schema_version\": \"registryctl.smoke.v1\""));
         assert!(report.contains("\"passed\": false"));
     }
 

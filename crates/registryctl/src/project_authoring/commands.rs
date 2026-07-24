@@ -563,22 +563,28 @@ fn offline_private_path(
         .to_owned())
 }
 
+// A remote candidate can have a small NTP offset from the operator host. Thirty
+// seconds accommodates that offset without accepting evidence outside this
+// single governed request.
+const GOVERNED_LIVE_REMOTE_CLOCK_SKEW: time::Duration = time::Duration::seconds(30);
+
+#[derive(Clone, Copy)]
+struct GovernedLiveValidationWindow {
+    request_started_at: OffsetDateTime,
+    response_received_at: OffsetDateTime,
+}
+
 fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureReport> {
     let environment = loaded
         .environment_name
         .as_deref()
         .ok_or_else(|| anyhow!("live project tests require an environment"))?;
-    if matches!(environment, "prod" | "production")
-        || environment.starts_with("prod-")
-        || environment.ends_with("-prod")
-        || loaded.environment.as_ref().is_some_and(|environment| {
-            matches!(
-                environment.deployment.profile,
-                DeploymentProfile::Production | DeploymentProfile::EvidenceGrade
-            )
-        })
-    {
-        bail!("live project tests refuse production environments");
+    let deployment_profile = loaded
+        .environment
+        .as_ref()
+        .map(|environment| environment.deployment.profile);
+    if governed_live_environment_is_production(environment, deployment_profile) {
+        bail!("live project tests refuse production-classified environment names or profiles");
     }
     let origin = std::env::var("REGISTRY_STACK_LIVE_NOTARY_ORIGIN")
         .context("live Notary origin is absent from the process environment")?;
@@ -593,7 +599,7 @@ fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureR
         .ok_or_else(|| anyhow!("live request file is absent from the process environment"))?;
     let request_bytes = read_bounded_external_request(&request_path)?;
     let request = parse_json_strict(&request_bytes).context("live request is not strict JSON")?;
-    let claims = validate_live_request(loaded, &request)?;
+    let validated_request = validate_live_request(loaded, &request)?;
     validate_live_relay_readiness(&origin)?;
     let expected_path = std::env::var_os("REGISTRY_STACK_LIVE_EXPECTED_FILE")
         .map(PathBuf::from)
@@ -606,10 +612,9 @@ fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureR
     let endpoint = origin
         .join("v1/evaluations")
         .map_err(|_| anyhow!("failed to construct the governed Notary endpoint"))?;
-    let response = ureq::post(endpoint.as_str())
-        .set("content-type", "application/json")
-        .set("accept", "application/json")
-        .set("x-api-key", &api_key)
+    let evaluation_request = governed_live_evaluation_request(&endpoint, &api_key);
+    let request_started_at = OffsetDateTime::now_utc();
+    let response = evaluation_request
         .send_bytes(&request_bytes)
         .map_err(|_| anyhow!("governed Notary evaluation failed"))?;
     let mut response_bytes = Vec::new();
@@ -618,25 +623,60 @@ fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureR
         .take(MAX_LIVE_RESPONSE_BYTES + 1)
         .read_to_end(&mut response_bytes)
         .context("failed to read the governed Notary response")?;
+    let response_received_at = OffsetDateTime::now_utc();
     if response_bytes.len() as u64 > MAX_LIVE_RESPONSE_BYTES {
         bail!("governed Notary response exceeded the configured bound");
     }
     let response = parse_json_strict(&response_bytes)
         .context("governed Notary response was not strict JSON")?;
-    let returned_claims = validate_live_response(&response, &claims, &expected)?;
-    Ok(FixtureReport {
+    let returned_claims = validate_live_response(
+        &response,
+        &validated_request,
+        &expected,
+        GovernedLiveValidationWindow {
+            request_started_at,
+            response_received_at,
+        },
+    )?;
+    Ok(governed_live_fixture_report(returned_claims))
+}
+
+fn governed_live_environment_is_production(
+    environment: &str,
+    deployment_profile: Option<DeploymentProfile>,
+) -> bool {
+    environment
+        .split(['-', '_', '.'])
+        .any(|segment| matches!(segment, "prod" | "production"))
+        || matches!(
+            deployment_profile,
+            Some(DeploymentProfile::Production | DeploymentProfile::EvidenceGrade)
+        )
+}
+
+fn governed_live_evaluation_request(endpoint: &url::Url, api_key: &str) -> ureq::Request {
+    ureq::post(endpoint.as_str())
+        .set("content-type", "application/json")
+        .set("accept", registry_notary_core::FORMAT_CLAIM_RESULT_JSON)
+        .set("x-api-key", api_key)
+}
+
+fn governed_live_fixture_report(returned_claims: Vec<String>) -> FixtureReport {
+    FixtureReport {
         integration: "governed-notary-relay".to_string(),
         fixture: "live-evaluation".to_string(),
         inputs: Vec::new(),
         calls: vec!["notary-evaluation".to_string()],
         outputs: Vec::new(),
         claims: returned_claims,
-        outcome: Some("match".to_string()),
+        // Claim expectations prove disclosed values, not the source-level
+        // match or no-match outcome that produced them.
+        outcome: None,
         expected_error: None,
         source_access: None,
         passed: true,
         failure: None,
-    })
+    }
 }
 
 fn validate_live_relay_readiness(origin: &url::Url) -> Result<()> {
@@ -678,8 +718,9 @@ fn validate_live_relay_readiness(origin: &url::Url) -> Result<()> {
 
 fn validate_live_response(
     response: &Value,
-    requested_claims: &[String],
+    request: &ValidatedLiveRequest,
     expected: &Value,
+    validation_window: GovernedLiveValidationWindow,
 ) -> Result<Vec<String>> {
     let object = response
         .as_object()
@@ -690,10 +731,11 @@ fn validate_live_response(
     let results = object["results"]
         .as_array()
         .ok_or_else(|| anyhow!("governed Notary response results must be an array"))?;
-    if results.len() != requested_claims.len() {
+    if results.len() != request.claims.len() {
         bail!("governed Notary response did not return every requested claim exactly once");
     }
-    let requested = requested_claims
+    let requested = request
+        .claims
         .iter()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
@@ -707,42 +749,304 @@ fn validate_live_response(
         bail!("live expected-result claims do not exactly match the governed request");
     }
     let mut returned = BTreeSet::new();
+    let mut evaluation_id = None;
+    let mut target_ref = None;
+    let mut requester_ref = None;
     for result in results {
-        let result = result
+        let result_object = result
             .as_object()
             .ok_or_else(|| anyhow!("governed Notary result must be an object"))?;
-        let claim_id = result
-            .get("claim_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("governed Notary result lacks a claim_id"))?;
+        validate_live_result_raw_schema(result, result_object)?;
+        let result_view: registry_notary_core::ClaimResultView =
+            serde_json::from_value(result.clone()).map_err(|_| {
+                anyhow!(
+                    "governed Notary result does not match the closed public claim-result schema"
+                )
+            })?;
+        if result_view.provenance.schema_version
+            != registry_notary_core::CLAIM_PROVENANCE_SCHEMA_VERSION
+            || result_view.provenance.generated_by.entry_type
+                != registry_notary_core::PROVENANCE_GENERATED_BY_CLAIM_EVALUATION
+        {
+            bail!(
+                "governed Notary result provenance constants do not match the closed public claim-result schema"
+            );
+        }
+        let generated_by = &result_view.provenance.generated_by;
+        if generated_by.evaluation_id != result_view.evaluation_id
+            || generated_by.claim_id != result_view.claim_id
+            || generated_by.claim_version != result_view.claim_version
+        {
+            bail!(
+                "governed Notary result provenance does not identify the returned claim result"
+            );
+        }
+        if generated_by.service_id != request.notary_service_id {
+            bail!("governed Notary result provenance does not identify the selected Notary service");
+        }
+        if generated_by.policy_id.is_some()
+            || generated_by.policy_version.is_some()
+            || generated_by.policy_hash.is_some()
+        {
+            bail!("governed Notary API-key result carries unexpected named policy provenance");
+        }
+        if evaluation_id
+            .as_ref()
+            .is_some_and(|evaluation_id| evaluation_id != &result_view.evaluation_id)
+        {
+            bail!("governed Notary response combines results from different evaluations");
+        }
+        evaluation_id.get_or_insert_with(|| result_view.evaluation_id.clone());
+        if result_view.format != registry_notary_core::FORMAT_CLAIM_RESULT_JSON {
+            bail!("governed Notary result has an invalid claim-result format");
+        }
+        validate_live_result_timestamps(&result_view, validation_window)?;
+        if !result_view.provenance.derived_from.is_empty() {
+            bail!("governed Notary result provenance derived_from must remain empty");
+        }
+        validate_live_result_reference_handles(&result_view)?;
+        let result_target_ref = result_object
+            .get("target_ref")
+            .ok_or_else(|| anyhow!("governed Notary result lacks its target reference"))?;
+        if target_ref
+            .as_ref()
+            .is_some_and(|target_ref| target_ref != result_target_ref)
+        {
+            bail!("governed Notary response combines inconsistent evaluation references");
+        }
+        target_ref.get_or_insert_with(|| result_target_ref.clone());
+        let result_requester_ref = result_object.get("requester_ref").cloned();
+        if requester_ref
+            .as_ref()
+            .is_some_and(|requester_ref| requester_ref != &result_requester_ref)
+        {
+            bail!("governed Notary response combines inconsistent evaluation references");
+        }
+        requester_ref.get_or_insert(result_requester_ref);
+        let claim_id = result_view.claim_id.as_str();
         if !requested.contains(claim_id) || !returned.insert(claim_id.to_string()) {
             bail!("governed Notary response contains an unknown or duplicate claim result");
+        }
+        if request.claim_versions.get(claim_id).map(String::as_str)
+            != Some(result_view.claim_version.as_str())
+        {
+            bail!("governed Notary result claim version does not match the authored project");
         }
         let expected_result = expected[claim_id]
             .as_object()
             .ok_or_else(|| anyhow!("live expected claim result must be an object"))?;
-        if expected_result
+        let expected_keys = expected_result
             .keys()
-            .any(|key| !matches!(key.as_str(), "value" | "satisfied" | "disclosure"))
-            || expected_result.is_empty()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if expected_keys != BTreeSet::from(["disclosure", "satisfied", "value"])
+            && expected_keys
+                != BTreeSet::from(["disclosure", "redacted_fields", "satisfied", "value"])
         {
-            bail!("live expected claim result has an unsupported field");
+            bail!(
+                "live expected claim result must contain value, satisfied, disclosure, and optional redacted_fields"
+            );
         }
-        for field in expected_result.keys() {
-            if result.get(field) != expected_result.get(field) {
+        validate_live_result_redaction(
+            &result_view,
+            expected_result.get("redacted_fields"),
+            expected_result.get("disclosure"),
+        )?;
+        for field in ["value", "satisfied", "disclosure"] {
+            if result_object.get(field) != expected_result.get(field) {
                 bail!("governed Notary disclosed claim result did not match the expected fixture");
             }
         }
-        if result
-            .get("provenance")
-            .and_then(|value| value.pointer("/used/relay_consultation_count"))
-            .and_then(Value::as_u64)
-            .is_none_or(|count| count == 0)
-        {
+        if result_view.provenance.used.relay_consultation_count == 0 {
             bail!("governed Notary result lacks source-backed provenance");
         }
     }
     Ok(returned.into_iter().collect())
+}
+
+fn validate_live_result_timestamps(
+    result: &registry_notary_core::ClaimResultView,
+    validation_window: GovernedLiveValidationWindow,
+) -> Result<()> {
+    let issued_at = OffsetDateTime::parse(&result.issued_at, &Rfc3339)
+        .map_err(|_| anyhow!("governed Notary result timestamps do not match the public date-time schema"))?;
+    let expires_at = result
+        .expires_at
+        .as_deref()
+        .map(|expires_at| {
+            OffsetDateTime::parse(expires_at, &Rfc3339).map_err(|_| {
+                anyhow!(
+                    "governed Notary result timestamps do not match the public date-time schema"
+                )
+            })
+        })
+        .transpose()?;
+    if validation_window.response_received_at < validation_window.request_started_at {
+        bail!("governed Notary validation window is invalid");
+    }
+    let earliest_issued_at =
+        validation_window.request_started_at - GOVERNED_LIVE_REMOTE_CLOCK_SKEW;
+    let latest_issued_at =
+        validation_window.response_received_at + GOVERNED_LIVE_REMOTE_CLOCK_SKEW;
+    if issued_at < earliest_issued_at || issued_at > latest_issued_at {
+        bail!("governed Notary result timestamps do not bind to the current live evaluation");
+    }
+    if expires_at.is_some_and(|expires_at| {
+        expires_at <= validation_window.response_received_at || expires_at <= issued_at
+    }) {
+        bail!("governed Notary result timestamps do not bind to the current live evaluation");
+    }
+    Ok(())
+}
+
+// These properties are optional in the public OpenAPI schema, but their types
+// exclude null when present. `expires_at` is intentionally not listed because
+// the public schema requires that key and permits an explicit null.
+const LIVE_RESULT_OPTIONAL_NON_NULL_PATHS: &[&str] = &[
+    "/redacted_fields",
+    "/requester_ref",
+    "/requester_ref/identifier_schemes",
+    "/requester_ref/profile",
+    "/target_ref/type",
+    "/target_ref/identifier_schemes",
+    "/target_ref/profile",
+    "/provenance/generated_by/policy_id",
+    "/provenance/generated_by/policy_version",
+    "/provenance/generated_by/policy_hash",
+];
+
+const LIVE_RESULT_SCHEMA_EXCLUDED_PATHS: &[&str] = &[
+    "/provenance/generated_by/pack_id",
+    "/provenance/generated_by/pack_version",
+];
+
+fn validate_live_result_raw_schema(
+    result: &Value,
+    result_object: &Map<String, Value>,
+) -> Result<()> {
+    if !result_object.contains_key("expires_at") {
+        bail!(
+            "governed Notary result does not match the closed public claim-result schema: expires_at is required"
+        );
+    }
+    if LIVE_RESULT_OPTIONAL_NON_NULL_PATHS
+        .iter()
+        .any(|pointer| result.pointer(pointer).is_some_and(Value::is_null))
+    {
+        bail!("governed Notary result optional public field cannot be null");
+    }
+    if LIVE_RESULT_SCHEMA_EXCLUDED_PATHS
+        .iter()
+        .any(|pointer| result.pointer(pointer).is_some())
+    {
+        bail!("governed Notary result exceeds the closed public claim-result schema");
+    }
+    Ok(())
+}
+
+fn validate_live_result_reference_handles(
+    result: &registry_notary_core::ClaimResultView,
+) -> Result<()> {
+    if !is_notary_pseudonymous_handle(&result.target_ref.handle)
+        || result
+            .requester_ref
+            .as_ref()
+            .is_some_and(|requester| !is_notary_pseudonymous_handle(&requester.handle))
+    {
+        bail!("governed Notary result contains an invalid pseudonymous reference handle");
+    }
+    Ok(())
+}
+
+fn is_notary_pseudonymous_handle(value: &str) -> bool {
+    let digest = value
+        .strip_prefix("rnref:v1:hmac-sha256:")
+        .or_else(|| value.strip_prefix("rnref:v1:sha256:"));
+    digest.is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
+fn validate_live_result_redaction(
+    result: &registry_notary_core::ClaimResultView,
+    expected_redacted_fields: Option<&Value>,
+    expected_disclosure: Option<&Value>,
+) -> Result<()> {
+    let disclosure = registry_notary_core::DisclosureProfile::parse(&result.disclosure)
+        .ok_or_else(|| anyhow!("governed Notary result has an invalid disclosure profile"))?;
+    match disclosure {
+        registry_notary_core::DisclosureProfile::Redacted => {
+            let expected_markers = match expected_redacted_fields {
+                Some(fields) => validate_live_expected_redaction_fields(fields)?,
+                None => vec![result.claim_id.clone()],
+            };
+            if result.value.is_some()
+                || result.satisfied.is_some()
+                || result.redacted_fields != expected_markers
+                || expected_disclosure.and_then(Value::as_str) != Some("redacted")
+            {
+                bail!("governed Notary result violates full-redaction semantics");
+            }
+        }
+        registry_notary_core::DisclosureProfile::Predicate => {
+            if !result.redacted_fields.is_empty() || expected_redacted_fields.is_some() {
+                bail!("governed Notary result exposes a predicate over redacted fields");
+            }
+        }
+        registry_notary_core::DisclosureProfile::Value => {
+            if expected_redacted_fields.is_some() {
+                bail!("live expected redacted_fields apply only to a fully redacted claim result");
+            }
+            if result.redacted_fields.is_empty() {
+                return Ok(());
+            }
+            let Some(value) = result.value.as_ref().and_then(Value::as_object) else {
+                bail!("governed Notary result has invalid field-redaction semantics");
+            };
+            let unique = result
+                .redacted_fields
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            if result.satisfied.is_some()
+                || result.redacted_fields.len() > MAX_OUTPUTS
+                || unique.len() != result.redacted_fields.len()
+                || unique.iter().any(|field| {
+                    !is_live_top_level_redaction_field(field) || value.contains_key(*field)
+                })
+            {
+                bail!("governed Notary result has invalid field-redaction semantics");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_live_expected_redaction_fields(fields: &Value) -> Result<Vec<String>> {
+    let fields = fields
+        .as_array()
+        .filter(|fields| !fields.is_empty() && fields.len() <= MAX_OUTPUTS)
+        .ok_or_else(|| anyhow!("live expected redacted_fields have an invalid bounded shape"))?;
+    let mut unique = BTreeSet::new();
+    for field in fields {
+        let field = field
+            .as_str()
+            .filter(|field| is_live_top_level_redaction_field(field))
+            .ok_or_else(|| anyhow!("live expected redacted_fields have an invalid bounded shape"))?;
+        if !unique.insert(field.to_string()) {
+            bail!("live expected redacted_fields have an invalid bounded shape");
+        }
+    }
+    Ok(unique.into_iter().collect())
+}
+
+fn is_live_top_level_redaction_field(field: &str) -> bool {
+    field != "value"
+        && !field.contains('.')
+        && validate_stable_id(field, "live expected redacted field").is_ok()
 }
 
 fn validate_live_notary_origin(value: &str) -> Result<url::Url> {
@@ -851,13 +1155,29 @@ mod external_request_reader_tests {
     }
 }
 
-fn validate_live_request(loaded: &LoadedRegistryProject, request: &Value) -> Result<Vec<String>> {
+#[derive(Debug, PartialEq, Eq)]
+struct ValidatedLiveRequest {
+    claims: Vec<String>,
+    claim_versions: BTreeMap<String, String>,
+    notary_service_id: String,
+}
+
+fn validate_live_request(
+    loaded: &LoadedRegistryProject,
+    request: &Value,
+) -> Result<ValidatedLiveRequest> {
     let object = request
         .as_object()
         .ok_or_else(|| anyhow!("live request must be a JSON object"))?;
     if contains_sensitive_request_key(request) {
         bail!("live request contains a forbidden credential-like field");
     }
+    let notary_service_id = loaded
+        .environment
+        .as_ref()
+        .and_then(|environment| environment.deployment.notary.as_ref())
+        .map(|notary| notary.service.clone())
+        .ok_or_else(|| anyhow!("live request environment does not declare a Notary service"))?;
     let purpose = object
         .get("purpose")
         .and_then(Value::as_str)
@@ -879,26 +1199,64 @@ fn validate_live_request(loaded: &LoadedRegistryProject, request: &Value) -> Res
         bail!("live request claim count is outside the project bound");
     }
     let mut ids = Vec::with_capacity(claims.len());
-    let mut unique = BTreeSet::new();
+    let mut claim_versions = BTreeMap::new();
+    let mut selected_claims = Vec::with_capacity(claims.len());
     for claim in claims {
-        let id = match claim {
-            Value::String(id) => id.as_str(),
-            Value::Object(object) => object
-                .get("id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow!("live request claim reference is invalid"))?,
+        let (id, requested_version) = match claim {
+            Value::String(id) => (id.as_str(), None),
+            Value::Object(object) => (
+                object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow!("live request claim reference is invalid"))?,
+                object.get("version"),
+            ),
             _ => bail!("live request claim reference is invalid"),
         };
-        if !services
+        let service = services
             .iter()
-            .any(|service| service.claims.contains_key(id))
-            || !unique.insert(id)
+            .find(|service| service.claims.contains_key(id))
+            .ok_or_else(|| anyhow!("live request contains an unknown project claim"))?;
+        let authored_version = service.version.to_string();
+        if requested_version.is_some_and(|version| {
+            version.as_str() != Some(authored_version.as_str())
+        }) {
+            bail!("live request claim version does not match the authored project");
+        }
+        if claim_versions
+            .insert(id.to_string(), authored_version)
+            .is_some()
         {
             bail!("live request contains an unknown or duplicate project claim");
         }
         ids.push(id.to_string());
+        selected_claims.push(
+            service
+                .claims
+                .get(id)
+                .expect("selected project claim remains present"),
+        );
     }
-    Ok(ids)
+    let disclosure = match object.get("disclosure") {
+        Some(Value::String(disclosure)) => disclosure.as_str(),
+        Some(_) => bail!("live request disclosure profile is invalid"),
+        None => expanded_disclosure(&selected_claims[0].disclosure).0,
+    };
+    if registry_notary_core::DisclosureProfile::parse(disclosure).is_none() {
+        bail!("live request disclosure profile is invalid");
+    }
+    if selected_claims.iter().any(|claim| {
+        !expanded_disclosure(&claim.disclosure)
+            .1
+            .contains(&disclosure)
+    }) {
+        bail!("live request disclosure is not allowed for every selected project claim");
+    }
+    Ok(ValidatedLiveRequest {
+        claims: ids,
+        claim_versions,
+        notary_service_id,
+    })
 }
 
 fn contains_sensitive_request_key(value: &Value) -> bool {

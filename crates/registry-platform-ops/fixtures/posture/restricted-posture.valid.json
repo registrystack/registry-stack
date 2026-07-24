@@ -55,7 +55,8 @@
         "severity": "finding_warn",
         "status": "waived",
         "waiver": {
-          "reason": "temporary maintenance window approved by operations",
+          "reference": "OPS-2026-0042",
+          "summary": "Temporary maintenance window approved by operations",
           "expires": "2026-07-01"
         }
       }
@@ -63,7 +64,8 @@
     "waivers": [
       {
         "finding": "readiness.cache.degraded",
-        "reason": "temporary maintenance window approved by operations",
+        "reference": "OPS-2026-0042",
+        "summary": "Temporary maintenance window approved by operations",
         "expires": "2026-07-01"
       }
     ]

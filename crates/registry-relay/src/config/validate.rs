@@ -383,10 +383,11 @@ fn validate_audit_ack_cursor(config: &Config) -> Result<(), ConfigError> {
 /// Validate the deployment block and evaluate startup gates.
 ///
 /// Waiver finding ids must match the finding id pattern, waiver dates must be
-/// well-formed `YYYY-MM-DD`, reasons must be non-empty, and the deployment must
-/// not omit `deployment.profile` or declare a profile under which any unwaived
-/// `startup_fail` gate triggers. An invalid profile value is rejected earlier by
-/// `serde` (the parse error path); this check covers the conditions that only
+/// well-formed `YYYY-MM-DD`, and waiver references and optional summaries must
+/// pass the shared operations metadata contract. The deployment must not omit
+/// `deployment.profile` or declare a profile under which any unwaived
+/// `startup_fail` gate triggers. An invalid profile value is rejected earlier
+/// by `serde` (the parse error path); this check covers the conditions that only
 /// hold once the whole config is deserialised.
 ///
 /// `source` is the config's real provenance source. The startup path passes
@@ -394,7 +395,7 @@ fn validate_audit_ack_cursor(config: &Config) -> Result<(), ConfigError> {
 /// candidate's real source so a signed bundle is evaluated as such and the
 /// `relay.config.unsigned` gate does not fire for it.
 fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), ConfigError> {
-    for waiver in &config.deployment.waivers {
+    for (index, waiver) in config.deployment.waivers.iter().enumerate() {
         if waiver.finding.trim().is_empty() {
             tracing::error!(
                 code = "config.validation_error",
@@ -410,11 +411,16 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
             );
             return Err(ConfigError::ValidationError);
         }
-        if waiver.reason.trim().is_empty() {
+        if let Err(error) = registry_platform_ops::validate_deployment_waiver_metadata(
+            &waiver.reference,
+            waiver.summary.as_deref(),
+        ) {
             tracing::error!(
                 code = "config.validation_error",
                 finding = %waiver.finding,
-                "deployment waiver is missing a reason"
+                field = %format!("deployment.waivers[{index}].{}", error.field()),
+                error = %error,
+                "deployment waiver metadata is invalid"
             );
             return Err(ConfigError::ValidationError);
         }
@@ -482,27 +488,35 @@ fn validate_deployment(config: &Config, source: ConfigSource) -> Result<(), Conf
 /// profile each get a warn line, so a boot that runs with reduced posture is
 /// loud in the log instead of visible only on the posture surface.
 fn log_deployment_boot_findings(evaluation: &crate::deployment::GateEvaluation) {
-    fn waiver_fields(finding: &registry_platform_ops::DeploymentFinding) -> (&str, &str) {
-        finding.waiver.as_ref().map_or(("", ""), |waiver| {
-            (waiver.reason.as_str(), waiver.expires.as_str())
+    fn waiver_fields(
+        finding: &registry_platform_ops::DeploymentFinding,
+    ) -> (&str, Option<&str>, &str) {
+        finding.waiver.as_ref().map_or(("", None, ""), |waiver| {
+            (
+                waiver.reference.as_str(),
+                waiver.summary.as_deref(),
+                waiver.expires.as_str(),
+            )
         })
     }
 
     for finding in &evaluation.findings {
         if finding.status == registry_platform_ops::DeploymentFindingStatus::Waived {
-            let (reason, expires) = waiver_fields(finding);
+            let (reference, summary, expires) = waiver_fields(finding);
             tracing::warn!(
                 code = "deployment.gate_waived",
                 finding = %finding.id,
-                reason = %reason,
+                reference = %reference,
+                summary = ?summary,
                 expires = %expires,
                 "deployment gate finding is suppressed by an active waiver"
             );
         } else if finding.id == crate::deployment::WAIVER_EXPIRED {
-            let (reason, expires) = waiver_fields(finding);
+            let (reference, summary, expires) = waiver_fields(finding);
             tracing::warn!(
                 code = "deployment.waiver_expired",
-                reason = %reason,
+                reference = %reference,
+                summary = ?summary,
                 expires = %expires,
                 "deployment waiver is expired; its gate binds again"
             );
@@ -5092,7 +5106,7 @@ deployment:
     #[test]
     fn active_waiver_is_loud_in_the_boot_log() {
         let config = parse_deployment_config(
-            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: OPS-TEST-BOOT\n      summary: \"Synthetic waiver summary\"\n      expires: \"2999-01-01\"",
         );
         let (result, rendered) = run_with_captured_logs(&config);
         result.expect("a waived hosted_lab gate must pass validation");
@@ -5105,8 +5119,12 @@ deployment:
             "expected the waived finding id in boot log: {rendered}"
         );
         assert!(
-            rendered.contains("synthetic-waiver-not-a-secret"),
-            "expected the waiver reason in boot log: {rendered}"
+            rendered.contains("OPS-TEST-BOOT"),
+            "expected the waiver reference in boot log: {rendered}"
+        );
+        assert!(
+            rendered.contains("Synthetic waiver summary"),
+            "expected the waiver summary in boot log: {rendered}"
         );
         assert!(
             rendered.contains("2999-01-01"),
@@ -5117,7 +5135,7 @@ deployment:
     #[test]
     fn expired_waiver_is_loud_in_the_boot_log() {
         let config = parse_deployment_config(
-            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2000-01-01\"",
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: relay.config.unsigned\n      reference: OPS-TEST-EXPIRED\n      expires: \"2000-01-01\"",
         );
         let (result, rendered) = run_with_captured_logs(&config);
         result.expect("an expired hosted_lab waiver must still pass validation");
@@ -5206,7 +5224,7 @@ deployment:
         // A malformed finding id is rejected at config load, before it could
         // surface later as restricted-tier posture schema invalidity.
         let config = parse_deployment_config(
-            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: \"Relay.Config.Unsigned\"\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: \"Relay.Config.Unsigned\"\n      reference: OPS-TEST-BAD-ID\n      expires: \"2999-01-01\"",
         );
         assert!(
             run(&config).is_err(),
@@ -5217,7 +5235,7 @@ deployment:
     #[test]
     fn waiver_finding_id_accepts_canonical_dotted_id() {
         let config = parse_deployment_config(
-            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: \"relay.config.unsigned\"\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: \"relay.config.unsigned\"\n      reference: OPS-TEST-VALID-ID\n      expires: \"2999-01-01\"",
         );
         run(&config).expect("a canonical dotted finding id must pass validation");
     }
@@ -5228,10 +5246,10 @@ deployment:
         // cannot be waived. The waiver must be rejected at load, not silently
         // dropped. Evaluate as a signed bundle so the `relay.config.unsigned`
         // startup gate does not fire: the hard-gate waiver is then the only
-        // reason validation can fail (the base config uses a stdout sink, so
+        // validation failure (the base config uses a stdout sink, so
         // the retention condition itself does not even trigger here).
         let config = parse_deployment_config(
-            "deployment:\n  profile: evidence_grade\n  waivers:\n    - finding: relay.audit.retention_local_only\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+            "deployment:\n  profile: evidence_grade\n  waivers:\n    - finding: relay.audit.retention_local_only\n      reference: OPS-TEST-HARD-RETENTION\n      expires: \"2999-01-01\"",
         );
         let (result, rendered) =
             capture_logs(|| run_with_source(&config, ConfigSource::SignedBundleFile));
@@ -5277,7 +5295,7 @@ deployment:
   profile: production
   waivers:
     - finding: relay.audit.retention_local_only
-      reason: "synthetic-waiver-not-a-secret"
+      reference: OPS-TEST-WAIVABLE-RETENTION
       expires: "2999-01-01"
 "#,
         )
@@ -5306,9 +5324,9 @@ deployment:
         // validation error, not silently dropped, even though the condition
         // itself does not hold here. Evaluate as a signed bundle so the
         // `relay.config.unsigned` startup gate does not fire and the readiness
-        // waiver is the only reason validation can fail.
+        // waiver is the only validation failure.
         let config = parse_deployment_config(
-            "deployment:\n  profile: evidence_grade\n  waivers:\n    - finding: relay.audit.best_effort\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+            "deployment:\n  profile: evidence_grade\n  waivers:\n    - finding: relay.audit.best_effort\n      reference: OPS-TEST-HARD-BEST-EFFORT\n      expires: \"2999-01-01\"",
         );
         let (result, rendered) =
             capture_logs(|| run_with_source(&config, ConfigSource::SignedBundleFile));
@@ -5436,7 +5454,7 @@ deployment:
         // does not hold. Evaluate as a signed bundle so the
         // `relay.config.unsigned` startup gate does not fire.
         let config = parse_deployment_config(
-            "deployment:\n  profile: evidence_grade\n  waivers:\n    - finding: relay.audit.shipping_stale\n      reason: \"synthetic-waiver-not-a-secret\"\n      expires: \"2999-01-01\"",
+            "deployment:\n  profile: evidence_grade\n  waivers:\n    - finding: relay.audit.shipping_stale\n      reference: OPS-TEST-HARD-SHIPPING\n      expires: \"2999-01-01\"",
         );
         let (result, rendered) =
             capture_logs(|| run_with_source(&config, ConfigSource::SignedBundleFile));
