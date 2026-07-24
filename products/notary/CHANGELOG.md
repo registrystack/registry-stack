@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- BREAKING: The closed Relay-result decoder now matches the reduced pre-1.0
+  `registry.relay.consultation-result.v1` contract and rejects the retired
+  `provenance.consent` member as unknown. Registry-backed issuance still
+  requires compiler-pinned Relay evidence; source-free declarations remain
+  evaluation-only and cannot be issued as credentials. Consent verification,
+  policy enforcement, legal-basis handling, and authorization are unchanged.
 - BREAKING: Replace deployment-waiver `reason` with a required validated
   `reference` and an optional validated `summary`. Strict configuration parsing
   rejects the retired field. Restricted posture and boot warnings expose only

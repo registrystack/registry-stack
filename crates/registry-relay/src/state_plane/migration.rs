@@ -31,14 +31,14 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "materialization-publication=registry.relay.postgres-materialization-publication/v1\0",
     "materialization-publication-order=attempt-before-access-atomic-completion-pointer-monotonic-generation-v1\0",
     "consultation-completion=atomic-intent-sealed-seed-closed-three-outcomes-script-verification-permit-dynamic-ordinal-call-ack-known-unfinished-recovery-date-schema-v5\0",
-    "consultation-batch-child-replay=authenticated-hmac-binding-reserve-before-quota-atomic-terminal-publication-fixed-retention-v2\0",
+    "consultation-batch-child-replay=authenticated-hmac-binding-reserve-before-quota-atomic-terminal-publication-provenance-without-consent-fixed-retention-v3\0",
     "consultation-authorization=database-expiry-credential-verification-data-order-keyed-request-effect-call-ack-v4\0",
     "consultation-credentials=direct-data-auth-reference-distinct-authored-verification-no-expiry-v3\0",
     "serving-fence-order=fence-row-keyring-intent-permit-audit-head-v1\0",
     "key-order=utf8-bytewise-key-order-v1\0",
 );
 pub(crate) const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "sha256:a70a81bb46e49a97d24d8fec0716938639e760ced8834eba7965aa423dc5431b";
+    "sha256:de5f85061217001d7e37fe5681aec6cdaa36b01072fca97dda609485e8938713";
 
 pub(super) const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
 const SUPPORTED_POSTGRES_MIN_MAJOR: i32 = 16;
@@ -47,16 +47,16 @@ const SUPPORTED_POSTGRES_MAX_MAJOR: i32 = 18;
 // Filled from the semantic catalog descriptor below on disposable supported
 // PostgreSQL majors. Constraint rendering is explicitly versioned because
 // pg_get_constraintdef is not a cross-major wire contract.
-const CONSTRAINT_FINGERPRINT_PG16: &str = "9496b43b708e2f6358200899c00eaca1";
-const CONSTRAINT_FINGERPRINT_PG17: &str = "9496b43b708e2f6358200899c00eaca1";
-const CONSTRAINT_FINGERPRINT_PG18: &str = "50b7c98eb7274c63d10c7b84a41f33f8";
+const CONSTRAINT_FINGERPRINT_PG16: &str = "25dbf98e1e26411436c24a391b534e07";
+const CONSTRAINT_FINGERPRINT_PG17: &str = "25dbf98e1e26411436c24a391b534e07";
+const CONSTRAINT_FINGERPRINT_PG18: &str = "a85469cded76f1f5f72f674c09fc08b3";
 const COLUMN_FINGERPRINT_PG16: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
 const COLUMN_FINGERPRINT_PG17: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
 const COLUMN_FINGERPRINT_PG18: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
-const FUNCTION_FINGERPRINT_PG16: &str = "5c72567f21536f434bfd5f21ab7fddf7";
-const FUNCTION_FINGERPRINT_PG17: &str = "5c72567f21536f434bfd5f21ab7fddf7";
-const FUNCTION_FINGERPRINT_PG18: &str = "5c72567f21536f434bfd5f21ab7fddf7";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "31835c50f5c67b30e888fa8d6b8270a5";
+const FUNCTION_FINGERPRINT_PG16: &str = "974de91ab404047b05d2fbe76ab3bc45";
+const FUNCTION_FINGERPRINT_PG17: &str = "974de91ab404047b05d2fbe76ab3bc45";
+const FUNCTION_FINGERPRINT_PG18: &str = "974de91ab404047b05d2fbe76ab3bc45";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "a16f5fe68a6a6751ecb0f935bf987059";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fingerprint_check CHECK (
         capability_fingerprint =
-        'sha256:a70a81bb46e49a97d24d8fec0716938639e760ced8834eba7965aa423dc5431b'
+        'sha256:de5f85061217001d7e37fe5681aec6cdaa36b01072fca97dda609485e8938713'
     ),
     CONSTRAINT state_plane_metadata_roles_distinct_check CHECK (
         owner_role_oid <> runtime_role_oid
@@ -1547,7 +1547,7 @@ WITH metadata AS (
       AND schema_version = 1
       AND capability_id = 'registry.relay.postgres-durable-audit/v1'
       AND capability_fingerprint =
-        'sha256:a70a81bb46e49a97d24d8fec0716938639e760ced8834eba7965aa423dc5431b'
+        'sha256:de5f85061217001d7e37fe5681aec6cdaa36b01072fca97dda609485e8938713'
       AND serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
       AND serving_fence_lock_key <> 0
       AND serving_fence_lock_key <> 7221091440
@@ -2199,9 +2199,9 @@ SELECT
            )
     )
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '9496b43b708e2f6358200899c00eaca1'
-            WHEN 17 THEN '9496b43b708e2f6358200899c00eaca1'
-            WHEN 18 THEN '50b7c98eb7274c63d10c7b84a41f33f8'
+            WHEN 16 THEN '25dbf98e1e26411436c24a391b534e07'
+            WHEN 17 THEN '25dbf98e1e26411436c24a391b534e07'
+            WHEN 18 THEN 'a85469cded76f1f5f72f674c09fc08b3'
             ELSE '' END FROM constraint_fingerprint, server)
     AND (SELECT value = CASE server.major
             WHEN 16 THEN 'f1cce8b8398fd1b177d3d6b61a112cec'
@@ -2209,9 +2209,9 @@ SELECT
             WHEN 18 THEN 'f1cce8b8398fd1b177d3d6b61a112cec'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '5c72567f21536f434bfd5f21ab7fddf7'
-            WHEN 17 THEN '5c72567f21536f434bfd5f21ab7fddf7'
-            WHEN 18 THEN '5c72567f21536f434bfd5f21ab7fddf7'
+            WHEN 16 THEN '974de91ab404047b05d2fbe76ab3bc45'
+            WHEN 17 THEN '974de91ab404047b05d2fbe76ab3bc45'
+            WHEN 18 THEN '974de91ab404047b05d2fbe76ab3bc45'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
@@ -7327,11 +7327,11 @@ CREATE TABLE IF NOT EXISTS relay_state_private.consultation_batch_child_replay (
             AND jsonb_typeof(terminal_payload -> 'provenance') = 'object'
             AND (terminal_payload -> 'provenance') ?& ARRAY[
                 'acquired_at', 'source_observed_at', 'source_revision',
-                'acquisition_class', 'integration', 'consent'
+                'acquisition_class', 'integration'
             ]::text[]
             AND ((terminal_payload -> 'provenance') - ARRAY[
                 'acquired_at', 'source_observed_at', 'source_revision',
-                'acquisition_class', 'integration', 'snapshot', 'consent'
+                'acquisition_class', 'integration', 'snapshot'
             ]::text[]) = '{}'::jsonb
             AND jsonb_typeof(terminal_payload #> '{provenance,acquired_at}') = 'string'
             AND jsonb_typeof(terminal_payload #> '{provenance,source_observed_at}')
@@ -7353,25 +7353,6 @@ CREATE TABLE IF NOT EXISTS relay_state_private.consultation_batch_child_replay (
                 trunc((terminal_payload #>> '{provenance,integration,revision}')::numeric)
             AND (terminal_payload #>> '{provenance,integration,revision}')::numeric
                 BETWEEN 1 AND 9999999999
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent}') = 'object'
-            AND (terminal_payload #> '{provenance,consent}') ?& ARRAY[
-                'outcome', 'verifier_id', 'verifier_revision', 'checked_at', 'expires_at',
-                'revocation_status'
-            ]::text[]
-            AND ((terminal_payload #> '{provenance,consent}') - ARRAY[
-                'outcome', 'verifier_id', 'verifier_revision', 'checked_at', 'expires_at',
-                'revocation_status'
-            ]::text[]) = '{}'::jsonb
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent,outcome}') = 'string'
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent,verifier_id}')
-                IN ('string', 'null')
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent,verifier_revision}')
-                IN ('string', 'null')
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent,checked_at}')
-                IN ('string', 'null')
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent,expires_at}')
-                IN ('string', 'null')
-            AND jsonb_typeof(terminal_payload #> '{provenance,consent,revocation_status}') = 'string'
             AND (
                 (terminal_payload #>> '{provenance,acquisition_class}' IN (
                     'source_projected_exact', 'bounded_full_record'
@@ -7559,11 +7540,11 @@ BEGIN
            OR jsonb_typeof(v_terminal -> 'provenance') <> 'object'
            OR NOT (v_terminal -> 'provenance') ?& ARRAY[
                'acquired_at', 'source_observed_at', 'source_revision',
-               'acquisition_class', 'integration', 'consent'
+               'acquisition_class', 'integration'
            ]::text[]
            OR ((v_terminal -> 'provenance') - ARRAY[
                'acquired_at', 'source_observed_at', 'source_revision',
-               'acquisition_class', 'integration', 'snapshot', 'consent'
+               'acquisition_class', 'integration', 'snapshot'
            ]::text[]) <> '{}'::jsonb
            OR jsonb_typeof(v_terminal #> '{provenance,acquired_at}') <> 'string'
            OR jsonb_typeof(v_terminal #> '{provenance,source_observed_at}')
@@ -7585,25 +7566,6 @@ BEGIN
                 trunc((v_terminal #>> '{provenance,integration,revision}')::numeric)
            OR (v_terminal #>> '{provenance,integration,revision}')::numeric
                 NOT BETWEEN 1 AND 9999999999
-           OR jsonb_typeof(v_terminal #> '{provenance,consent}') <> 'object'
-           OR NOT (v_terminal #> '{provenance,consent}') ?& ARRAY[
-               'outcome', 'verifier_id', 'verifier_revision', 'checked_at', 'expires_at',
-               'revocation_status'
-           ]::text[]
-           OR ((v_terminal #> '{provenance,consent}') - ARRAY[
-               'outcome', 'verifier_id', 'verifier_revision', 'checked_at', 'expires_at',
-               'revocation_status'
-           ]::text[]) <> '{}'::jsonb
-           OR jsonb_typeof(v_terminal #> '{provenance,consent,outcome}') <> 'string'
-           OR jsonb_typeof(v_terminal #> '{provenance,consent,verifier_id}')
-                NOT IN ('string', 'null')
-           OR jsonb_typeof(v_terminal #> '{provenance,consent,verifier_revision}')
-                NOT IN ('string', 'null')
-           OR jsonb_typeof(v_terminal #> '{provenance,consent,checked_at}')
-                NOT IN ('string', 'null')
-           OR jsonb_typeof(v_terminal #> '{provenance,consent,expires_at}')
-                NOT IN ('string', 'null')
-           OR jsonb_typeof(v_terminal #> '{provenance,consent,revocation_status}') <> 'string'
            OR (
                (v_terminal #>> '{provenance,acquisition_class}' IN (
                     'source_projected_exact', 'bounded_full_record'
@@ -8658,7 +8620,7 @@ mod tests {
                 "'schema', 'consultation_id', 'outcome', 'outputs', 'profile', 'provenance'",
                 "'id', 'contract_hash'",
                 "'acquired_at', 'source_observed_at', 'source_revision'",
-                "'acquisition_class', 'integration', 'snapshot', 'consent'",
+                "'acquisition_class', 'integration', 'snapshot'",
                 "ARRAY['id', 'revision']::text[]",
                 "ARRAY['generation_id', 'published_at']::text[]",
                 "'outputs'",
@@ -8675,6 +8637,7 @@ mod tests {
                 "integration_pack",
                 "policy_hash",
                 "snapshot_generation_id",
+                "'consent'",
             ] {
                 assert!(
                     !section.contains(obsolete),
@@ -8934,7 +8897,7 @@ mod tests {
             AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
             MATERIALIZATION_PUBLICATION_CAPABILITY_V1,
             "atomic-intent-sealed-seed-closed-three-outcomes-script-verification-permit-dynamic-ordinal-call-ack-known-unfinished-recovery-date-schema-v5",
-            "authenticated-hmac-binding-reserve-before-quota-atomic-terminal-publication-fixed-retention-v2",
+            "authenticated-hmac-binding-reserve-before-quota-atomic-terminal-publication-provenance-without-consent-fixed-retention-v3",
             "database-expiry-credential-verification-data-order-keyed-request-effect-call-ack-v4",
             "direct-data-auth-reference-distinct-authored-verification-no-expiry-v3",
             "utf8-bytewise-key-order-v1",

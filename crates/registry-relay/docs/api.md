@@ -153,7 +153,7 @@ A successful response has the closed `registry.relay.consultation-result.v1` env
 only `match`, `no_match`, or `ambiguous`. A `match` includes every declared typed output.
 `no_match` and `ambiguous` omit `outputs`. Every outcome includes the generated consultation id,
 required Notary evaluation id, exact profile id and `contract_hash`, acquisition time and class,
-integration id and revision, snapshot evidence when applicable, and the closed consent result.
+integration id and revision, and snapshot evidence when applicable.
 Raw inputs, source credentials, source URLs, static policy digests, and source diagnostics are never
 returned.
 
