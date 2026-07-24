@@ -367,13 +367,32 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("OpenAPI base-reference input", self.module.missing_gates(text))
 
-    def test_missing_upgrade_exercise_template_validation_is_reported(self) -> None:
+    def test_missing_upgrade_exercise_record_discovery_is_reported(self) -> None:
         text = self.workflow.replace(
-            "python3 release/scripts/validate-upgrade-exercise.py --template",
-            "python3 release/scripts/validate-upgrade-exercise.py --skip-template",
+            "python3 release/scripts/validate-upgrade-exercise.py --discover release/exercises",
+            "python3 release/scripts/validate-upgrade-exercise.py --skip-discovery",
         )
         self.assertIn(
-            "Upgrade exercise template validation", self.module.missing_gates(text)
+            "Upgrade exercise record discovery", self.module.missing_gates(text)
+        )
+
+    def test_missing_upgrade_exercise_asset_preparation_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "python3 release/scripts/prepare-upgrade-exercise-assets.py",
+            "python3 release/scripts/skip-upgrade-exercise-assets.py",
+        )
+        self.assertIn(
+            "Upgrade exercise candidate asset preparation",
+            self.module.missing_gates(text),
+        )
+
+    def test_missing_upgrade_exercise_asset_root_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "--candidate-asset-root target/upgrade-exercise-assets",
+            "--candidate-asset-root target/unauthenticated-assets",
+        )
+        self.assertIn(
+            "Upgrade exercise record discovery", self.module.missing_gates(text)
         )
 
     def test_missing_stable_error_registry_path_filter_is_reported(self) -> None:

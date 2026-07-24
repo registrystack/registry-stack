@@ -25,6 +25,8 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
+from conformance_candidate import CandidateError, load_candidate
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "release" / "conformance" / "relay-oidc"
@@ -34,12 +36,7 @@ FIXTURE_PATH = CONFIG_DIR / "records.csv"
 HELPER_PATH = CONFIG_DIR / "zitadel-helper.py"
 DEFAULT_WORK_ROOT = REPO_ROOT / "target" / "relay-oidc-smoke"
 SCHEMA_VERSION = "registry.release.relay_oidc_smoke.v1"
-RELAY_IMAGE_RE = re.compile(
-    r"^ghcr\.io/registrystack/registry-relay@sha256:[0-9a-f]{64}$"
-)
 DIGEST_IMAGE_RE = re.compile(r"^[^\s@]+:[^\s@]+@sha256:[0-9a-f]{64}$")
-SOURCE_REF_RE = re.compile(r"^[0-9a-f]{40}$")
-RELEASE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
 RUN_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 MAX_HTTP_BODY = 65_536
 REQUIRED_CHECKS = (
@@ -89,29 +86,6 @@ def sha256_bytes(value: bytes) -> str:
 
 def file_sha256(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
-
-
-def validate_relay_image(value: str) -> str:
-    if not RELAY_IMAGE_RE.fullmatch(value):
-        raise SmokeError(
-            "Relay image must be exactly "
-            "ghcr.io/registrystack/registry-relay@sha256:<64 lowercase hex>"
-        )
-    return value
-
-
-def validate_source_ref(value: str) -> str:
-    if not SOURCE_REF_RE.fullmatch(value):
-        raise SmokeError(
-            "candidate source ref must be 40 lowercase hexadecimal characters"
-        )
-    return value
-
-
-def validate_release_id(value: str) -> str:
-    if not RELEASE_ID_RE.fullmatch(value):
-        raise SmokeError("release id contains unsupported characters or is too long")
-    return value
 
 
 def compose_image_entries(text: str) -> list[str]:
@@ -188,23 +162,24 @@ def validate_assets() -> dict[str, Any]:
     }
 
 
-def plan_document(relay_image: str, source_ref: str, release_id: str) -> dict[str, Any]:
+def plan_document(candidate: dict[str, Any]) -> dict[str, Any]:
     assets = validate_assets()
     return {
         "schema_version": SCHEMA_VERSION,
         "operation": "relay-oidc-smoke",
         "classification": "candidate-neutral-harness-plan",
-        "release_id": validate_release_id(release_id),
-        "candidate_source_ref": validate_source_ref(source_ref),
-        "relay_image": validate_relay_image(relay_image),
+        "candidate": candidate,
         "topology": assets,
         "checks": list(REQUIRED_CHECKS),
-        "plan_network_required": False,
+        "plan_network_required": True,
         "live_run_requires_docker": True,
         "live_run_network_required": True,
         "live_evidence": False,
         "notes": [
-            "This plan validates checked-in inputs only and is not conformance evidence.",
+            (
+                "This plan validates the checked-in harness and authenticated "
+                "candidate inputs, but is not conformance evidence."
+            ),
             (
                 "A live run remains unreviewed until its digest-bound report is "
                 + "reviewed without raw secrets."
@@ -602,9 +577,7 @@ def safe_report(
         "classification",
         "review_required",
         "contains_sensitive_material",
-        "release_id",
-        "candidate_source_ref",
-        "relay_image",
+        "candidate",
         "started_at",
         "completed_at",
         "result",
@@ -614,6 +587,7 @@ def safe_report(
         "topology",
         "configuration_digests",
         "checks",
+        "canary_scan",
     }
     unexpected = set(report) - allowed_keys
     if unexpected:
@@ -647,11 +621,19 @@ def default_output_dir() -> Path:
     return DEFAULT_WORK_ROOT / f"run-{stamp}-{secrets.token_hex(3)}"
 
 
+def candidate_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    return load_candidate(
+        args.release_manifest,
+        args.image_lock,
+        topology=args.topology,
+        solmara_source_ref=args.solmara_source_ref,
+    )
+
+
 def execute_live(args: argparse.Namespace) -> Path:
     assets = validate_assets()
-    relay_image = validate_relay_image(args.relay_image)
-    source_ref = validate_source_ref(args.candidate_source_ref)
-    release_id = validate_release_id(args.release_id)
+    candidate = candidate_from_args(args)
+    relay_image = candidate["relay_image"]
     if not shutil.which("docker"):
         raise SmokeError("Docker with Compose is required for a live smoke")
 
@@ -703,9 +685,7 @@ def execute_live(args: argparse.Namespace) -> Path:
         "classification": "unreviewed-live-candidate-output",
         "review_required": True,
         "contains_sensitive_material": False,
-        "release_id": release_id,
-        "candidate_source_ref": source_ref,
-        "relay_image": relay_image,
+        "candidate": candidate,
         "started_at": utc_now(),
         "completed_at": None,
         "result": "error",
@@ -715,6 +695,10 @@ def execute_live(args: argparse.Namespace) -> Path:
         "topology": assets,
         "configuration_digests": {},
         "checks": [],
+        "canary_scan": {
+            "passed": True,
+            "seeded_canaries": 1,
+        },
     }
     stage = "topology-start"
     primary_error: SmokeError | None = None
@@ -947,7 +931,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 def cmd_plan(args: argparse.Namespace) -> int:
     print(
         json.dumps(
-            plan_document(args.relay_image, args.candidate_source_ref, args.release_id),
+            plan_document(candidate_from_args(args)),
             indent=2,
             sort_keys=True,
         )
@@ -961,9 +945,14 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def add_candidate_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--relay-image", required=True)
-    parser.add_argument("--candidate-source-ref", required=True)
-    parser.add_argument("--release-id", required=True)
+    parser.add_argument("--release-manifest", type=Path, required=True)
+    parser.add_argument("--image-lock", type=Path, required=True)
+    parser.add_argument(
+        "--topology",
+        choices=("release-owned", "solmara"),
+        default="release-owned",
+    )
+    parser.add_argument("--solmara-source-ref")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -986,6 +975,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     run_parser.add_argument("--host-port", type=int)
     run_parser.add_argument("--output-dir")
     run_parser.set_defaults(func=cmd_run)
+
     return parser.parse_args(argv)
 
 
@@ -993,7 +983,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
         return int(args.func(args))
-    except (OSError, SmokeError) as exc:
+    except (CandidateError, OSError, SmokeError) as exc:
         print(f"relay-oidc-smoke: {exc}", file=sys.stderr)
         return 2
 

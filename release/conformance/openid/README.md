@@ -22,8 +22,9 @@ themselves:
 
 - The supported Registry Notary topology must use a frozen release-candidate
   image pinned by digest and checked-in non-secret configuration.
-- The full OID4VCI issuer plan needs an adapter that sends the issuer-initiated
-  credential offer to the suite's `/credential_offer` callback.
+- The owner-only `submit-offer` adapter can send the real issuer-initiated
+  pre-authorized offer to the suite's `/credential_offer` callback without
+  exposing it in process arguments or command output.
 - The upstream full-plan shape currently selects DPoP. Registry Notary 1.0 does
   not support or claim DPoP, wallet attestation, PAR, EUDI, HAIP, an
   authorization-code wallet grant, or ES256 holder proof.
@@ -45,9 +46,10 @@ and unmodified result status without retaining secrets.
   Notary's registry-backed OID4VCI issuer. It runs
   `oid4vci-1_0-issuer-test-plan` with only
   `oid4vci-1_0-issuer-metadata-test`.
-- `notary-oid4vci-issuer-full` is mapped but blocked until a topology adapter
-  bridges a Notary pre-authorized offer into the suite callback and the suite
-  path matches the supported Registry Notary profile.
+- `notary-oid4vci-issuer-full` is mapped but blocked until the suite path
+  matches the supported Registry Notary profile. The offer adapter closes only
+  the callback transport gap; it does not add DPoP, attestation, batch,
+  notification, or other unsupported product behavior.
 
 The suite's `sender_constrain=dpop` selector is required by the upstream plan
 shape. The metadata-only module does not exercise DPoP, and the selector must
@@ -91,6 +93,33 @@ Candidate-only scenarios are directly runnable. `--allow-blocked` is reserved
 for deliberate investigation of scenarios whose status is explicitly blocked;
 it does not turn their output into release evidence.
 
+For an issuer-initiated suite module, store the exact
+`openid-credential-offer` URI rendered after Notary completes its authenticated
+`/oid4vci/offer/callback` in an owner-only file. After `up`, export the exact
+self-signed certificate generated for the suite's Nginx service from
+`/etc/ssl/certs/nginx-selfsigned.crt`, then submit the offer:
+
+```bash
+release/scripts/openid-conformance-runner.py export-suite-ca \
+  --output target/openid-conformance/conformance-suite-ca.pem
+
+chmod 600 /private/path/notary-offer.txt
+release/scripts/openid-conformance-runner.py submit-offer \
+  --offer-file /private/path/notary-offer.txt \
+  --issuer-url https://issuer.example.test \
+  --suite-offer-endpoint 'https://localhost.emobix.co.uk:8443/<module>/credential_offer' \
+  --suite-ca-certificate target/openid-conformance/conformance-suite-ca.pem
+```
+
+The adapter accepts only an inline Notary offer with the pre-authorized-code
+grant, sends it once to the pinned suite origin without proxies or redirects,
+and prints no offer content. TLS uses normal hostname and certificate
+validation. The checked-in certificate recipe covers
+`localhost.emobix.co.uk`, `localhost`, `127.0.0.1`, and `::1`. The optional CA
+file is read once without following symlinks and adds only that explicitly
+captured local trust anchor. The export command refuses to overwrite an
+existing output. A fabricated offer is not candidate evidence.
+
 Set `REGISTRY_OPENID_CONFORMANCE_AUTHORIZATION_SERVER` when the authorization
 server differs from the issuer. Set
 `REGISTRY_OPENID_CONFORMANCE_CREDENTIAL_CONFIGURATION_ID` when the topology
@@ -131,7 +160,17 @@ proof JWTs, issued credentials, transaction codes, or seeded civil identifiers.
 Review and redact an export before turning it into release evidence. A failed
 or warned result must remain visible in the reviewed summary.
 
+The current runner keeps raw exports private but does not yet generate the
+candidate-bound allowlisted summary or review promotion required for release
+evidence. Until that source-side gate and a real frozen-candidate exercise
+exist, its output remains candidate-exercise material rather than a completed
+conformance claim.
+
 The first metadata-only run and its known failures are recorded in
 [`initial-report.md`](initial-report.md). It is historical context only. It is
 not evidence for the current candidate, any wallet, any verifier, or the full
 issuer profile.
+
+The Rust SD-JWT verifier is a caller-invoked library, not an OID4VP endpoint.
+Its library and fixture tests therefore do not support an OID4VP verifier
+conformance claim.

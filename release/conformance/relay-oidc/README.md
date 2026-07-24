@@ -6,20 +6,25 @@ resource server with `auth.mode: oidc`. It does not build Relay from the source
 checkout and does not depend on a hosted environment or Solmara Lab.
 
 The topology uses digest-pinned Zitadel, PostgreSQL, and Python images. The
-runner accepts Relay only as the exact image reference
-`ghcr.io/registrystack/registry-relay@sha256:<digest>`. The operator-supplied
-candidate source commit and release identifier are mandatory and recorded for
-later comparison with the release manifest. The runner does not derive or
-cryptographically verify either identifier from the image. A maintainer must
-perform that manifest binding before treating a report as release evidence.
+runner resolves Relay from the exact release manifest and matching
+`registryctl-<tag>-image-lock.json` release asset. It rejects a source-ref,
+release-tag, product-version, or image-digest mismatch before starting Docker.
+The image lock must remain in its downloaded release asset directory alongside
+`SHA256SUMS`, the release capsule, the shared release provenance, and the
+Cosign signature and certificate files for both the image lock and capsule.
+The runner verifies those bindings with installed `cosign` and `slsa-verifier`
+before using either product image digest.
+For a closed release manifest, it accepts only the byte-exact tag manifest with
+the single `stack.status: release-candidate` to `released` closeout transition.
+Any other post-tag manifest drift is rejected.
 
 ## Evidence boundary
 
 The checked-in assets and their offline tests prove that the harness is
 reviewable and candidate-neutral. They are not live release evidence. A live
 run writes a report classified as `unreviewed-live-candidate-output` with
-`review_required: true`. A maintainer must bind that report to the published
-candidate manifest and review it before it can become release evidence.
+`review_required: true`. A maintainer must review the embedded candidate
+binding and results before the report can become release evidence.
 
 The report contains identifiers, configuration and topology digests, bounded
 diagnostics, and assertion results. It never contains the bootstrap PAT, client
@@ -69,21 +74,18 @@ HTTP issuer and discovery URL on loopback, which is the only insecure fetch
 form Relay permits for local development. The Relay API is published separately
 on a randomly selected loopback port.
 
-## Offline review
+## Candidate review
 
 Python 3.11 or later is required. Validate the checked-in topology and render a
-candidate-bound plan without Docker or network access:
+candidate-bound plan without Docker. Candidate binding invokes `cosign` and
+`slsa-verifier`, which may use their normal verification network paths:
 
 ```bash
-RELAY_IMAGE='ghcr.io/registrystack/registry-relay@sha256:'\
-'<64-lowercase-hex>'
-
 release/scripts/relay-oidc-smoke.py validate
 
 release/scripts/relay-oidc-smoke.py plan \
-  --relay-image "$RELAY_IMAGE" \
-  --candidate-source-ref '<40-lowercase-hex-commit>' \
-  --release-id '1.0.0-rc.1'
+  --release-manifest 'release/manifests/registry-stack-<release-id>.yaml' \
+  --image-lock '/private/path/registryctl-v<version>-image-lock.json'
 ```
 
 The plan deliberately records `live_evidence: false`.
@@ -94,19 +96,20 @@ Docker with Docker Compose is required. The Relay image must already be
 published by digest:
 
 ```bash
-RELAY_IMAGE='ghcr.io/registrystack/registry-relay@sha256:'\
-'<64-lowercase-hex>'
-
 release/scripts/relay-oidc-smoke.py run \
-  --relay-image "$RELAY_IMAGE" \
-  --candidate-source-ref '<40-lowercase-hex-commit>' \
-  --release-id '1.0.0-rc.1'
+  --release-manifest 'release/manifests/registry-stack-<release-id>.yaml' \
+  --image-lock '/private/path/registryctl-v<version>-image-lock.json'
 ```
 
 The command prints only the path to the unreviewed report. Use `--output-dir`
 to choose an empty report directory and `--host-port` only when a fixed free
 loopback port is required. The default output is under
 `target/relay-oidc-smoke/`, which Git ignores.
+
+The release-owned topology is the default. An optional Solmara adopter
+exercise must add
+`--topology solmara --solmara-source-ref '<40-lowercase-hex-commit>'`;
+an unpinned Solmara checkout is rejected.
 
 If teardown fails, treat the run as an error. The diagnostic includes the exact
 random Compose project name only in the local command output, so an operator

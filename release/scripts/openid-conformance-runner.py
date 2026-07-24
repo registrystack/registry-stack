@@ -11,10 +11,13 @@ import json
 import os
 import shutil
 import ssl
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from string import Template
@@ -35,10 +38,17 @@ SCHEMA_VERSION = "registry.release.openid_conformance_plan_map.v1"
 SUITE_JAR = "target/fapi-test-suite.jar"
 SUITE_JAR_STAMP = "target/fapi-test-suite.jar.registry-stack-source-ref"
 COMPOSE_CONFIG_DIR_ENV = "REGISTRY_OPENID_CONFORMANCE_CONFIG_DIR"
+SUITE_CA_CONTAINER_PATH = "/etc/ssl/certs/nginx-selfsigned.crt"
+DEFAULT_SUITE_CA_PATH = DEFAULT_WORK_ROOT / "conformance-suite-ca.pem"
 
 
 class RunnerError(RuntimeError):
     """A user-actionable conformance runner failure."""
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, url):
+        return None
 
 
 def load_plan_map(path: Path = PLAN_MAP_PATH) -> dict[str, Any]:
@@ -340,6 +350,212 @@ def wait_for_suite(base_url: str, timeout_seconds: int) -> None:
     raise RunnerError(f"conformance suite did not become ready at {url}: {last_error}")
 
 
+def read_offer(path: Path, issuer_url: str) -> str:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    cloexec = getattr(os, "O_CLOEXEC", None)
+    if nofollow is None or cloexec is None or not hasattr(os, "geteuid"):
+        raise RunnerError("secure offer input handling is unavailable")
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | cloexec | nofollow)
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_mode & 0o077
+        ):
+            raise RunnerError("offer input must be an owner-only regular file")
+        if not 0 < info.st_size <= 65_536:
+            raise RunnerError("offer input has an invalid size")
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = None
+            raw = handle.read(65_537)
+    except OSError:
+        raise RunnerError("offer input could not be opened securely") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if len(raw) != info.st_size:
+        raise RunnerError("offer input changed while it was read")
+    try:
+        offer_uri = raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise RunnerError("offer input is not valid UTF-8") from None
+    parsed = urllib.parse.urlsplit(offer_uri)
+    try:
+        query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
+    except ValueError:
+        raise RunnerError("offer input has a malformed query") from None
+    if (
+        parsed.scheme != "openid-credential-offer"
+        or parsed.netloc
+        or parsed.path
+        or parsed.fragment
+        or set(query) != {"credential_offer"}
+        or len(query["credential_offer"]) != 1
+    ):
+        raise RunnerError("offer input is not one inline credential offer URI")
+    inline = query["credential_offer"][0]
+    offer = json.loads(inline)
+    grant = "urn:ietf:params:oauth:grant-type:pre-authorized_code"
+    if (
+        not isinstance(offer, dict)
+        or offer.get("credential_issuer") != issuer_url.rstrip("/")
+        or not isinstance(offer.get("grants"), dict)
+        or set(offer["grants"]) != {grant}
+        or not isinstance(offer["grants"][grant], dict)
+        or not isinstance(offer["grants"][grant].get("pre-authorized_code"), str)
+    ):
+        raise RunnerError("offer is not the expected Notary pre-authorized offer")
+    return inline
+
+
+def read_suite_ca_certificate(path: Path) -> bytes:
+    path = path.expanduser()
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    descriptor: int | None = None
+    before: os.stat_result | None = None
+    try:
+        if not nofollow:
+            before = path.lstat()
+            if stat.S_ISLNK(before.st_mode):
+                raise RunnerError(
+                    "suite CA certificate could not be opened securely"
+                )
+        descriptor = os.open(path, os.O_RDONLY | nofollow | cloexec)
+        info = os.fstat(descriptor)
+        if before is not None and (
+            before.st_dev != info.st_dev or before.st_ino != info.st_ino
+        ):
+            raise RunnerError("suite CA certificate changed while it was opened")
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or not 0 < info.st_size <= 1024 * 1024
+        ):
+            raise RunnerError(
+                "suite CA certificate must be a bounded regular file"
+            )
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = None
+            certificate = handle.read(1024 * 1024 + 1)
+    except OSError:
+        raise RunnerError(
+            "suite CA certificate could not be opened securely"
+        ) from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if len(certificate) != info.st_size:
+        raise RunnerError("suite CA certificate changed while it was read")
+    return certificate
+
+
+def add_suite_ca(context: ssl.SSLContext, certificate: bytes) -> None:
+    try:
+        text = certificate.decode("ascii")
+    except UnicodeDecodeError:
+        cadata: str | bytes = certificate
+    else:
+        cadata = text if "-----BEGIN CERTIFICATE-----" in text else certificate
+    try:
+        context.load_verify_locations(cadata=cadata)
+    except (OSError, ValueError):
+        raise RunnerError("suite CA certificate could not be loaded") from None
+
+
+def suite_tls_context(ca_certificate: Path | None) -> ssl.SSLContext:
+    if ca_certificate is None:
+        return ssl.create_default_context()
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    add_suite_ca(context, read_suite_ca_certificate(ca_certificate))
+    return context
+
+
+def cmd_submit_offer(args: argparse.Namespace) -> int:
+    inline = read_offer(args.offer_file, args.issuer_url)
+    base = urllib.parse.urlsplit(args.conformance_server)
+    endpoint = urllib.parse.urlsplit(args.suite_offer_endpoint)
+    if (
+        (endpoint.scheme, endpoint.netloc) != (base.scheme, base.netloc)
+        or endpoint.scheme != "https"
+        or not endpoint.path.endswith("/credential_offer")
+        or endpoint.query
+        or endpoint.fragment
+    ):
+        raise RunnerError(
+            "suite offer endpoint must use HTTPS on the pinned suite origin"
+        )
+    url = urllib.parse.urlunsplit(
+        endpoint._replace(query=urllib.parse.urlencode({"credential_offer": inline}))
+    )
+    context = suite_tls_context(args.suite_ca_certificate)
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPSHandler(context=context),
+        NoRedirect(),
+    )
+    try:
+        with opener.open(url, timeout=args.timeout_seconds) as response:
+            if not 200 <= response.status < 300:
+                raise RunnerError(f"suite offer endpoint returned HTTP {response.status}")
+    except urllib.error.HTTPError as exc:
+        raise RunnerError(f"suite offer endpoint returned HTTP {exc.code}") from None
+    except (OSError, urllib.error.URLError):
+        raise RunnerError("suite offer submission failed") from None
+    print("credential offer submitted")
+    return 0
+
+
+def write_new_file(path: Path, content: bytes) -> Path:
+    path = path.expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            descriptor = None
+            handle.write(content)
+    except OSError:
+        raise RunnerError("suite CA output could not be created") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    return path
+
+
+def cmd_export_suite_ca(args: argparse.Namespace) -> int:
+    checkout = suite_dir(args)
+    if not checkout.is_dir():
+        raise RunnerError("suite checkout is unavailable; run prepare first")
+    output = Path(args.output).expanduser()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env[COMPOSE_CONFIG_DIR_ENV] = str(CONFIG_DIR)
+    with tempfile.TemporaryDirectory(
+        prefix=".openid-suite-ca-", dir=output.parent
+    ) as tmp:
+        copied = Path(tmp) / "nginx-selfsigned.crt"
+        run_checked(
+            compose_command(
+                checkout,
+                args,
+                "cp",
+                f"nginx:{SUITE_CA_CONTAINER_PATH}",
+                str(copied),
+            ),
+            env=env,
+        )
+        certificate = read_suite_ca_certificate(copied)
+        validation_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        add_suite_ca(validation_context, certificate)
+        write_new_file(output, certificate)
+    print(output)
+    return 0
+
+
 def output_dir_for(args: argparse.Namespace, scenario_id: str) -> Path:
     if args.output_dir:
         return Path(args.output_dir).expanduser().resolve()
@@ -498,6 +714,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     add_common(down_parser)
     down_parser.set_defaults(func=cmd_down)
 
+    export_ca_parser = subparsers.add_parser("export-suite-ca")
+    export_ca_parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
+    export_ca_parser.add_argument("--suite-dir")
+    export_ca_parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_SUITE_CA_PATH,
+        help="new file that receives the running suite's generated certificate",
+    )
+    export_ca_parser.set_defaults(func=cmd_export_suite_ca)
+
     render_parser = subparsers.add_parser("render-config")
     add_common(render_parser)
     add_config_args(render_parser)
@@ -511,6 +738,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     run_parser.add_argument("--no-prepare", action="store_true")
     run_parser.add_argument("--wait-seconds", type=int, default=180)
     run_parser.set_defaults(func=cmd_run)
+
+    offer_parser = subparsers.add_parser("submit-offer")
+    offer_parser.add_argument("--offer-file", type=Path, required=True)
+    offer_parser.add_argument("--issuer-url", required=True)
+    offer_parser.add_argument("--suite-offer-endpoint", required=True)
+    offer_parser.add_argument(
+        "--conformance-server",
+        default=load_plan_map()["suite"]["base_url"],
+    )
+    offer_parser.add_argument(
+        "--suite-ca-certificate",
+        type=Path,
+        help="PEM or DER trust anchor captured from the local suite",
+    )
+    offer_parser.add_argument("--timeout-seconds", type=int, default=10)
+    offer_parser.set_defaults(func=cmd_submit_offer)
 
     return parser.parse_args(argv)
 

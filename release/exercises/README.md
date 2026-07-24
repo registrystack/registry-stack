@@ -28,16 +28,38 @@ release are frozen and independently verified:
 1. Copy the template to a candidate-specific JSON file.
 2. Change `record_kind` to `candidate_evidence`.
 3. Replace every placeholder with an exact version, commit, digest, timestamp,
-   bounded authority identifier, or evidence label.
+   bounded authority identifier, or evidence label. `target_release.source_ref`
+   is the reviewed prepare commit P and `source_commit` is the finalized target
+   T. The manifest path and hash must identify the manifest stored at T.
 4. Hash each committed configuration schema and every complete recovery-set
    artifact. Do not copy secret values into the record.
-5. Exercise every required check against the pinned standalone Solmara
+5. Fill the canonical artifact set with the two P and T binary inventories,
+   image-input inventories, retained image-layout-pair identities, target
+   images, manifest, image lock, and P/T release-input identities. Its
+   `sha256` is the SHA-256 of canonical compact JSON for the `artifacts` object
+   (`sort_keys=True`, separators `,` and `:`).
+   Under a private candidate-asset root, keep one directory named for each
+   target version. Each version directory contains the downloaded
+   `registryctl-<target-version>-image-lock.json` beside its `SHA256SUMS`,
+   signed release capsule, Cosign signatures and certificates, and shared SLSA
+   provenance. The validator authenticates each exact release asset and
+   requires its byte digest and image pins to match the corresponding record.
+6. Exercise every required check against the pinned standalone Solmara
    topology. Record `passed` only when the retained evidence proves the check.
-6. Set `candidate_frozen` and `candidate_independently_verified` to `true`.
-7. Validate the candidate record without `--template`:
+   Honest `failed` and `not_run` records remain structurally valid; a `not_run`
+   result uses null evidence fields.
+7. Set both candidate attestations to `true` only after independent review.
+8. Validate the record structure, then require every promotion check to pass:
 
    ```sh
+   python3 release/scripts/prepare-upgrade-exercise-assets.py \
+     --discover release/exercises \
+     --asset-root /private/path/candidate-release-assets
    python3 release/scripts/validate-upgrade-exercise.py \
+     --candidate-asset-root /private/path/candidate-release-assets \
+     release/exercises/<candidate-upgrade-record.json>
+   python3 release/scripts/validate-upgrade-exercise.py --require-pass \
+     --candidate-asset-root /private/path/candidate-release-assets \
      release/exercises/<candidate-upgrade-record.json>
    ```
 

@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import hashlib
 import importlib.util
 import json
+import os
+import stat
+import subprocess
 import sys
 import tempfile
 import threading
+from argparse import Namespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import TestCase, main
@@ -18,6 +23,7 @@ from unittest.mock import patch
 SCRIPT_DIR = Path(__file__).resolve().parent
 RUNNER_PATH = SCRIPT_DIR / "relay-oidc-smoke.py"
 HELPER_PATH = SCRIPT_DIR.parent / "conformance" / "relay-oidc" / "zitadel-helper.py"
+sys.path.insert(0, str(SCRIPT_DIR))
 
 
 def load_runner():
@@ -147,6 +153,80 @@ class RelayOidcSmokeTest(TestCase):
             "service_account_org_id": "org-1",
         }
 
+    def write_candidate_evidence(
+        self, image_lock: Path, lock: dict[str, object]
+    ) -> None:
+        lock_bytes = json.dumps(lock).encode("utf-8")
+        image_lock.write_bytes(lock_bytes)
+        lock_sha256 = hashlib.sha256(lock_bytes).hexdigest()
+        tag = str(lock["release_tag"])
+        capsule_name = f"registry-stack-{tag}-release-capsule.json"
+        images = lock["images"]
+        if not isinstance(images, dict):
+            raise AssertionError("test image lock images must be an object")
+        capsule = {
+            "release_tag": tag,
+            "version": tag.removeprefix("v"),
+            "repository": "registrystack/registry-stack",
+            "source": {
+                "source_tag": tag,
+                "source_ref": lock["manifest_source_ref"],
+                "source_commit": lock["tag_target"],
+                "lineage": {
+                    "tag_matches_source_tag": True,
+                    "head_matches_tag_target": True,
+                    "source_ref_ancestor_or_equal": True,
+                    "default_branch_reachable": True,
+                },
+            },
+            "release_files": [
+                {
+                    "name": image_lock.name,
+                    "kind": "registryctl-release-image-lock",
+                    "sha256": lock_sha256,
+                }
+            ],
+            "images": [
+                {"name": name, "digest_ref": digest_ref}
+                for name, digest_ref in images.items()
+            ],
+        }
+        capsule_path = image_lock.parent / capsule_name
+        capsule_path.write_text(json.dumps(capsule), encoding="utf-8")
+        (image_lock.parent / "SHA256SUMS").write_text(
+            f"{lock_sha256}  {image_lock.name}\n", encoding="utf-8"
+        )
+        provenance = (
+            image_lock.parent
+            / f"registry-stack-{tag}-release-provenance.intoto.jsonl"
+        )
+        provenance.write_text("{}\n", encoding="utf-8")
+        for subject in (image_lock, capsule_path):
+            subject.with_name(f"{subject.name}.sig").write_text(
+                "signature", encoding="utf-8"
+            )
+            subject.with_name(f"{subject.name}.pem").write_text(
+                "certificate", encoding="utf-8"
+            )
+
+    def beta_15_lock(self, relay_digest: str = "d") -> dict[str, object]:
+        return {
+            "schema_version": "registryctl.release_image_lock.v1",
+            "release_tag": "v0.12.1",
+            "manifest_source_ref": "a6f409259158f44c9fdbe99242ec0f9ac10d9373",
+            "tag_target": "567fb93704d25855238e11fd43c7cb9bf8a2f28e",
+            "platform": "linux/amd64",
+            "images": {
+                "registry-notary": (
+                    "ghcr.io/registrystack/registry-notary@sha256:" + "c" * 64
+                ),
+                "registry-relay": (
+                    "ghcr.io/registrystack/registry-relay@sha256:"
+                    + relay_digest * 64
+                ),
+            },
+        }
+
     def test_assets_are_candidate_neutral_and_digest_pinned(self) -> None:
         assets = self.runner.validate_assets()
         compose = self.runner.COMPOSE_PATH.read_text(encoding="utf-8")
@@ -160,44 +240,453 @@ class RelayOidcSmokeTest(TestCase):
             self.assertRegex(image, self.runner.DIGEST_IMAGE_RE)
         self.assertNotIn("ghcr.io/registrystack/registry-relay@sha256:", compose)
 
-    def test_relay_image_requires_exact_repository_and_lowercase_digest(self) -> None:
-        valid = "ghcr.io/registrystack/registry-relay@sha256:" + "a" * 64
-        self.assertEqual(valid, self.runner.validate_relay_image(valid))
+    def test_plan_declares_authenticity_network_and_no_live_evidence(self) -> None:
+        candidate = {"release_id": "beta-17", "source_ref": "a" * 40}
+        plan = self.runner.plan_document(candidate)
 
-        invalid = (
-            "ghcr.io/registrystack/registry-relay:1.0.0",
-            "ghcr.io/registrystack/registry-relay:1.0.0@sha256:" + "a" * 64,
-            "example.test/registry-relay@sha256:" + "a" * 64,
-            "ghcr.io/registrystack/registry-relay@sha256:" + "A" * 64,
-        )
-        for image in invalid:
-            with self.subTest(image=image):
-                with self.assertRaises(self.runner.SmokeError):
-                    self.runner.validate_relay_image(image)
-
-    def test_plan_is_offline_and_does_not_claim_live_evidence(self) -> None:
-        plan = self.runner.plan_document(
-            "ghcr.io/registrystack/registry-relay@sha256:" + "a" * 64,
-            "b" * 40,
-            "1.0.0-rc.1",
-        )
-
-        self.assertFalse(plan["plan_network_required"])
+        self.assertTrue(plan["plan_network_required"])
         self.assertTrue(plan["live_run_requires_docker"])
         self.assertTrue(plan["live_run_network_required"])
         self.assertFalse(plan["live_evidence"])
         self.assertEqual(list(self.runner.REQUIRED_CHECKS), plan["checks"])
         self.assertEqual("candidate-neutral-harness-plan", plan["classification"])
+        self.assertEqual(candidate, plan["candidate"])
 
-    def test_candidate_identifiers_are_bounded(self) -> None:
-        self.assertEqual("a" * 40, self.runner.validate_source_ref("a" * 40))
-        self.assertEqual("1.0.0-rc.1", self.runner.validate_release_id("1.0.0-rc.1"))
-        for source_ref in ("a" * 39, "A" * 40, "main"):
-            with self.assertRaises(self.runner.SmokeError):
-                self.runner.validate_source_ref(source_ref)
-        for release_id in ("", "contains space", "a" * 65):
-            with self.assertRaises(self.runner.SmokeError):
-                self.runner.validate_release_id(release_id)
+    def test_candidate_binding_rejects_manifest_lock_and_image_mismatches(self) -> None:
+        candidate_module = sys.modules["conformance_candidate"]
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = (
+                self.runner.REPO_ROOT / "release/manifests/registry-stack-beta-15.yaml"
+            )
+            image_lock = Path(tmp) / "registryctl-v0.12.1-image-lock.json"
+            lock = {
+                "schema_version": "registryctl.release_image_lock.v1",
+                "release_tag": "v0.12.1",
+                "manifest_source_ref": "a6f409259158f44c9fdbe99242ec0f9ac10d9373",
+                "tag_target": "567fb93704d25855238e11fd43c7cb9bf8a2f28e",
+                "platform": "linux/amd64",
+                "images": {
+                    "registry-notary": (
+                        "ghcr.io/registrystack/registry-notary@sha256:" + "c" * 64
+                    ),
+                    "registry-relay": (
+                        "ghcr.io/registrystack/registry-relay@sha256:" + "d" * 64
+                    ),
+                },
+            }
+            self.write_candidate_evidence(image_lock, lock)
+            args = Namespace(
+                release_manifest=manifest,
+                image_lock=image_lock,
+                topology="release-owned",
+                solmara_source_ref=None,
+            )
+            with patch.object(
+                candidate_module, "verify_release_authenticity"
+            ) as authenticate:
+                candidate = self.runner.candidate_from_args(args)
+            self.assertEqual("beta-15", candidate["release_id"])
+            self.assertEqual(lock["images"]["registry-relay"], candidate["relay_image"])
+            authenticate.assert_called_once()
+
+            lock["manifest_source_ref"] = "e" * 40
+            image_lock.write_text(json.dumps(lock), encoding="utf-8")
+            with self.assertRaisesRegex(
+                candidate_module.CandidateError, "does not match"
+            ):
+                self.runner.candidate_from_args(args)
+
+            lock["manifest_source_ref"] = "a6f409259158f44c9fdbe99242ec0f9ac10d9373"
+            lock["images"]["registry-relay"] = "registry-relay:mutable"
+            image_lock.write_text(json.dumps(lock), encoding="utf-8")
+            with self.assertRaisesRegex(candidate_module.CandidateError, "not pinned"):
+                self.runner.candidate_from_args(args)
+
+            lock["images"]["registry-relay"] = (
+                "ghcr.io/registrystack/registry-relay@sha256:" + "d" * 64
+            )
+            lock["tag_target"] = "b" * 40
+            image_lock.write_text(json.dumps(lock), encoding="utf-8")
+            with self.assertRaisesRegex(candidate_module.CandidateError, "Git binding"):
+                self.runner.candidate_from_args(args)
+
+    def test_candidate_binding_rejects_locally_replaced_release_assets(self) -> None:
+        candidate_module = sys.modules["conformance_candidate"]
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = (
+                self.runner.REPO_ROOT / "release/manifests/registry-stack-beta-15.yaml"
+            )
+            image_lock = Path(tmp) / "registryctl-v0.12.1-image-lock.json"
+            lock = {
+                "schema_version": "registryctl.release_image_lock.v1",
+                "release_tag": "v0.12.1",
+                "manifest_source_ref": "a6f409259158f44c9fdbe99242ec0f9ac10d9373",
+                "tag_target": "567fb93704d25855238e11fd43c7cb9bf8a2f28e",
+                "platform": "linux/amd64",
+                "images": {
+                    "registry-notary": (
+                        "ghcr.io/registrystack/registry-notary@sha256:" + "c" * 64
+                    ),
+                    "registry-relay": (
+                        "ghcr.io/registrystack/registry-relay@sha256:" + "d" * 64
+                    ),
+                },
+            }
+            self.write_candidate_evidence(image_lock, lock)
+            args = Namespace(
+                release_manifest=manifest,
+                image_lock=image_lock,
+                topology="release-owned",
+                solmara_source_ref=None,
+            )
+
+            lock["images"]["registry-relay"] = (
+                "ghcr.io/registrystack/registry-relay@sha256:" + "e" * 64
+            )
+            image_lock.write_text(json.dumps(lock), encoding="utf-8")
+            with patch.object(
+                candidate_module, "verify_release_authenticity"
+            ) as authenticate:
+                with self.assertRaisesRegex(
+                    candidate_module.CandidateError, "SHA256SUMS"
+                ):
+                    self.runner.candidate_from_args(args)
+            authenticate.assert_not_called()
+
+            tampered_sha256 = hashlib.sha256(image_lock.read_bytes()).hexdigest()
+            (image_lock.parent / "SHA256SUMS").write_text(
+                f"{tampered_sha256}  {image_lock.name}\n", encoding="utf-8"
+            )
+            with patch.object(
+                candidate_module, "verify_release_authenticity"
+            ) as authenticate:
+                with self.assertRaisesRegex(
+                    candidate_module.CandidateError, "classification or hash"
+                ):
+                    self.runner.candidate_from_args(args)
+            authenticate.assert_not_called()
+
+            self.write_candidate_evidence(image_lock, lock)
+            with patch.object(
+                candidate_module,
+                "verify_release_authenticity",
+                side_effect=candidate_module.CandidateError(
+                    "candidate authenticity rejected"
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    candidate_module.CandidateError, "authenticity rejected"
+                ):
+                    self.runner.candidate_from_args(args)
+
+    def test_candidate_authentication_cannot_swap_parsed_source_assets(
+        self,
+    ) -> None:
+        candidate_module = sys.modules["conformance_candidate"]
+        with tempfile.TemporaryDirectory() as tmp:
+            asset_dir = Path(tmp)
+            image_lock = asset_dir / "registryctl-v0.12.1-image-lock.json"
+            signed_lock = self.beta_15_lock()
+            self.write_candidate_evidence(image_lock, signed_lock)
+            capsule = asset_dir / "registry-stack-v0.12.1-release-capsule.json"
+            signed_lock_bytes = image_lock.read_bytes()
+            signed_capsule_bytes = capsule.read_bytes()
+
+            forged_lock = self.beta_15_lock(relay_digest="e")
+            self.write_candidate_evidence(image_lock, forged_lock)
+            forged_lock_bytes = image_lock.read_bytes()
+            forged_capsule_bytes = capsule.read_bytes()
+            snapshot_paths: list[Path] = []
+
+            def authenticate(
+                snapshot: Path,
+                _tag: str,
+                _subjects: tuple[str, ...],
+            ) -> None:
+                snapshot_paths.append(snapshot)
+                image_lock.write_bytes(signed_lock_bytes)
+                capsule.write_bytes(signed_capsule_bytes)
+                try:
+                    if (
+                        snapshot.joinpath(image_lock.name).read_bytes()
+                        != signed_lock_bytes
+                    ):
+                        raise candidate_module.CandidateError(
+                            "authenticated bytes do not match parsed bytes"
+                        )
+                finally:
+                    image_lock.write_bytes(forged_lock_bytes)
+                    capsule.write_bytes(forged_capsule_bytes)
+
+            manifest = (
+                self.runner.REPO_ROOT
+                / "release/manifests/registry-stack-beta-15.yaml"
+            )
+            with patch.object(
+                candidate_module,
+                "verify_release_authenticity",
+                side_effect=authenticate,
+            ):
+                with self.assertRaisesRegex(
+                    candidate_module.CandidateError,
+                    "authenticated bytes do not match parsed bytes",
+                ):
+                    candidate_module.load_candidate(manifest, image_lock)
+
+            self.assertEqual(forged_lock_bytes, image_lock.read_bytes())
+            self.assertEqual(forged_capsule_bytes, capsule.read_bytes())
+            self.assertEqual(1, len(snapshot_paths))
+            self.assertFalse(snapshot_paths[0].exists())
+
+    def test_candidate_verifiers_receive_private_read_only_snapshot(self) -> None:
+        candidate_module = sys.modules["conformance_candidate"]
+        with tempfile.TemporaryDirectory() as tmp:
+            asset_dir = Path(tmp)
+            image_lock = asset_dir / "registryctl-v0.12.1-image-lock.json"
+            self.write_candidate_evidence(image_lock, self.beta_15_lock())
+            snapshot_paths: list[Path] = []
+
+            def authenticate(
+                snapshot: Path,
+                _tag: str,
+                _subjects: tuple[str, ...],
+            ) -> None:
+                snapshot_paths.append(snapshot)
+                self.assertNotEqual(asset_dir, snapshot)
+                self.assertEqual(
+                    0o500, stat.S_IMODE(snapshot.stat().st_mode)
+                )
+                self.assertEqual(os.geteuid(), snapshot.stat().st_uid)
+                for path in snapshot.iterdir():
+                    self.assertEqual(0o400, stat.S_IMODE(path.stat().st_mode))
+                    self.assertFalse(path.is_symlink())
+
+            manifest = (
+                self.runner.REPO_ROOT
+                / "release/manifests/registry-stack-beta-15.yaml"
+            )
+            with patch.object(
+                candidate_module,
+                "verify_release_authenticity",
+                side_effect=authenticate,
+            ):
+                candidate = candidate_module.load_candidate(manifest, image_lock)
+
+            self.assertEqual("beta-15", candidate["release_id"])
+            self.assertEqual(1, len(snapshot_paths))
+            self.assertFalse(snapshot_paths[0].exists())
+
+    def test_candidate_snapshot_rejects_symlink_asset(self) -> None:
+        candidate_module = sys.modules["conformance_candidate"]
+        with tempfile.TemporaryDirectory() as tmp:
+            asset_dir = Path(tmp)
+            image_lock = asset_dir / "registryctl-v0.12.1-image-lock.json"
+            self.write_candidate_evidence(image_lock, self.beta_15_lock())
+            signature = image_lock.with_name(f"{image_lock.name}.sig")
+            signature_target = asset_dir / "replacement.sig"
+            signature_target.write_text("signature", encoding="utf-8")
+            signature.unlink()
+            signature.symlink_to(signature_target)
+            manifest = (
+                self.runner.REPO_ROOT
+                / "release/manifests/registry-stack-beta-15.yaml"
+            )
+
+            with patch.object(
+                candidate_module, "verify_release_authenticity"
+            ) as authenticate:
+                with self.assertRaisesRegex(
+                    candidate_module.CandidateError,
+                    "read safely",
+                ):
+                    candidate_module.load_candidate(manifest, image_lock)
+            authenticate.assert_not_called()
+
+    def test_candidate_authenticity_command_timeout_is_bounded(self) -> None:
+        candidate_module = sys.modules["conformance_candidate"]
+        with patch.object(
+            candidate_module.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired("cosign", 120),
+        ):
+            with self.assertRaisesRegex(
+                candidate_module.CandidateError,
+                "could not complete",
+            ):
+                candidate_module.run_authenticity_command(
+                    ["/tools/cosign", "verify-blob", "subject"]
+                )
+
+    def test_candidate_authenticity_is_pinned_to_the_tagged_release_workflow(
+        self,
+    ) -> None:
+        candidate_module = sys.modules["conformance_candidate"]
+        with tempfile.TemporaryDirectory() as tmp:
+            asset_dir = Path(tmp)
+            tag = "v0.12.1"
+            subjects = (
+                f"registryctl-{tag}-image-lock.json",
+                f"registry-stack-{tag}-release-capsule.json",
+            )
+            for name in subjects:
+                (asset_dir / name).write_text("subject", encoding="utf-8")
+                (asset_dir / f"{name}.sig").write_text(
+                    "signature", encoding="utf-8"
+                )
+                (asset_dir / f"{name}.pem").write_text(
+                    "certificate", encoding="utf-8"
+                )
+            (
+                asset_dir
+                / f"registry-stack-{tag}-release-provenance.intoto.jsonl"
+            ).write_text("{}\n", encoding="utf-8")
+            commands: list[list[str]] = []
+            tool_paths = {
+                "cosign": "/tools/cosign",
+                "slsa-verifier": "/tools/slsa-verifier",
+            }
+            with patch.object(
+                candidate_module.shutil,
+                "which",
+                side_effect=lambda name: tool_paths.get(name),
+            ):
+                candidate_module.verify_release_authenticity(
+                    asset_dir, tag, subjects, command_runner=commands.append
+                )
+
+        self.assertEqual(4, len(commands))
+        identity = candidate_module.RELEASE_WORKFLOW.format(tag=tag)
+        for command in commands[::2]:
+            self.assertEqual("/tools/cosign", command[0])
+            self.assertIn(identity, command)
+        for command in commands[1::2]:
+            self.assertEqual("/tools/slsa-verifier", command[0])
+            self.assertEqual(tag, command[command.index("--source-tag") + 1])
+            self.assertEqual(
+                candidate_module.SLSA_SOURCE_URI,
+                command[command.index("--source-uri") + 1],
+            )
+
+    def test_candidate_binding_accepts_only_the_manifest_closeout_transition(
+        self,
+    ) -> None:
+        candidate_module = sys.modules["conformance_candidate"]
+        with tempfile.TemporaryDirectory() as tmp:
+            image_lock = Path(tmp) / "registryctl-v0.12.2-image-lock.json"
+            lock = {
+                "schema_version": "registryctl.release_image_lock.v1",
+                "release_tag": "v0.12.2",
+                "manifest_source_ref": (
+                    "0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8"
+                ),
+                "tag_target": "e25f081ce800ade13e892503cc19b96588e081ef",
+                "platform": "linux/amd64",
+                "images": {
+                    "registry-notary": (
+                        "ghcr.io/registrystack/registry-notary@sha256:"
+                        + "c" * 64
+                    ),
+                    "registry-relay": (
+                        "ghcr.io/registrystack/registry-relay@sha256:"
+                        + "d" * 64
+                    ),
+                },
+            }
+            self.write_candidate_evidence(image_lock, lock)
+            manifest = (
+                self.runner.REPO_ROOT
+                / "release/manifests/registry-stack-beta-16.yaml"
+            )
+            args = Namespace(
+                release_manifest=manifest,
+                image_lock=image_lock,
+                topology="release-owned",
+                solmara_source_ref=None,
+            )
+            with patch.object(
+                candidate_module, "verify_release_authenticity"
+            ) as authenticate:
+                candidate = self.runner.candidate_from_args(args)
+
+            self.assertEqual("beta-16", candidate["release_id"])
+            authenticate.assert_called_once()
+
+            tagged = candidate_module.git_output(
+                [
+                    "show",
+                    (
+                        "e25f081ce800ade13e892503cc19b96588e081ef:"
+                        "release/manifests/registry-stack-beta-16.yaml"
+                    ),
+                ],
+                1024 * 1024,
+            )
+            released = manifest.read_bytes()
+            candidate_module.verify_closeout_manifest_transition(
+                {"status": "released"}, released, tagged
+            )
+            with self.assertRaisesRegex(
+                candidate_module.CandidateError, "Git binding"
+            ):
+                candidate_module.verify_closeout_manifest_transition(
+                    {"status": "released"}, released, released
+                )
+
+            real_git_output = candidate_module.git_output
+
+            def released_tag(arguments, max_bytes):
+                if arguments[0] == "cat-file":
+                    return str(len(released)).encode("ascii")
+                if arguments[0] == "show":
+                    return released
+                return real_git_output(arguments, max_bytes)
+
+            with patch.object(
+                candidate_module,
+                "git_output",
+                side_effect=released_tag,
+            ), patch.object(
+                candidate_module, "verify_release_authenticity"
+            ) as authenticate:
+                with self.assertRaisesRegex(
+                    candidate_module.CandidateError, "Git binding"
+                ):
+                    self.runner.candidate_from_args(args)
+            authenticate.assert_not_called()
+
+            real_read = candidate_module.read_regular_file_no_follow
+            drifted = released + b"# Invalid post-tag manifest drift.\n"
+
+            def drifted_manifest(path, *, max_bytes):
+                if path == manifest:
+                    return drifted
+                return real_read(path, max_bytes=max_bytes)
+
+            with patch.object(
+                candidate_module,
+                "read_regular_file_no_follow",
+                side_effect=drifted_manifest,
+            ), patch.object(
+                candidate_module, "verify_release_authenticity"
+            ) as authenticate:
+                with self.assertRaisesRegex(
+                    candidate_module.CandidateError, "Git binding"
+                ):
+                    self.runner.candidate_from_args(args)
+            authenticate.assert_not_called()
+
+            with self.assertRaisesRegex(
+                candidate_module.CandidateError, "Git binding"
+            ):
+                candidate_module.verify_closeout_manifest_transition(
+                    {"status": "released"},
+                    released
+                    + (
+                        b"# Any post-tag change beyond the exact status closeout "
+                        b"is rejected.\n"
+                    ),
+                    tagged,
+                )
 
     def test_native_zitadel_role_claim_drives_scope_profile(self) -> None:
         token = fake_token(role_claim={"registry-smoke-reader": {"org-1": "active"}})
@@ -323,7 +812,9 @@ class RelayOidcSmokeTest(TestCase):
     def test_run_requires_all_candidate_binding_arguments(self) -> None:
         with patch.object(sys, "stderr"):
             with self.assertRaises(SystemExit):
-                self.runner.parse_args(["run", "--release-id", "1.0.0-rc.1"])
+                self.runner.parse_args(
+                    ["run", "--release-manifest", "release/manifests/example.yaml"]
+                )
 
     def test_helper_never_logs_secret_response_fields(self) -> None:
         helper = self.runner.HELPER_PATH.read_text(encoding="utf-8")
@@ -337,7 +828,7 @@ class RelayOidcSmokeTest(TestCase):
 
     def test_readme_states_binding_and_ephemeral_secret_boundaries(self) -> None:
         readme = (self.runner.CONFIG_DIR / "README.md").read_text(encoding="utf-8")
-        self.assertIn("does not derive or\ncryptographically verify", readme)
+        self.assertIn("release-tag, product-version, or image-digest mismatch", readme)
         self.assertIn("container environment metadata", readme)
         self.assertIn("container command metadata", readme)
         self.assertIn("never follow redirects", readme)
