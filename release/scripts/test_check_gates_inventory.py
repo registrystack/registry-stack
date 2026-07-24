@@ -121,6 +121,13 @@ class GateInventoryTest(unittest.TestCase):
         text = self.workflow.replace("name: Relay exposure check", "name: Relay exposure")
         self.assertIn("Relay exposure check", self.module.missing_gates(text))
 
+    def test_missing_debian13_image_contract_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: python3 release/scripts/check-debian13-images.py",
+            "run: true",
+        )
+        self.assertIn("Debian 13 image contract", self.module.missing_gates(text))
+
     def test_missing_pull_request_concurrency_group_is_reported(self) -> None:
         text = self.workflow.replace(
             "format('pr-{0}', github.event.pull_request.number)",

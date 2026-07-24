@@ -32,6 +32,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Other workflow path classification",
         ".github/workflows/*)\n                  mark_all\n                  ;;",
     ),
+    (
+        "Debian 13 image contract",
+        "run: python3 release/scripts/check-debian13-images.py",
+    ),
     ("Cargo metadata", "run: cargo metadata --locked --format-version 1"),
     (
         "Manifest profile validation",

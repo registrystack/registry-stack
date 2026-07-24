@@ -44,6 +44,7 @@ MAINTAINED_TEXT_PATHS = DOCKERFILES + (
     Path("crates/registry-relay/docs/security-assurance.md"),
     Path("crates/registry-relay/scripts/check_docker_build_contract.py"),
     Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
+    Path("docs/site/scripts/check-registryctl-tutorials.sh"),
     Path("products/notary/docs/security-assurance.md"),
 )
 
@@ -61,6 +62,10 @@ NOTARY_DOCKERFILES = (
 
 FROM_RE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)", re.MULTILINE)
 DIGEST_PIN_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+RETIRED_DEBIAN_RE = re.compile(
+    r"\b(?:bookworm|debian[\s_:-]*v?[\s_:-]*12)\b",
+    re.IGNORECASE,
+)
 
 
 def read(root: Path, relative: Path, failures: list[str]) -> str:
@@ -96,14 +101,11 @@ def check_repository(root: Path = ROOT) -> list[str]:
         for relative in MAINTAINED_TEXT_PATHS
     }
 
-    retired_markers = ("book" + "worm", "debian" + "12")
     for relative, text in texts.items():
-        lowered = text.casefold()
-        for marker in retired_markers:
-            if marker in lowered:
-                failures.append(
-                    f"{relative}: retired Debian image generation marker remains: {marker}"
-                )
+        if RETIRED_DEBIAN_RE.search(text):
+            failures.append(
+                f"{relative}: retired Debian image generation marker remains"
+            )
 
     for relative in DOCKERFILES:
         text = texts[relative]
@@ -271,6 +273,15 @@ def check_repository(root: Path = ROOT) -> list[str]:
         RUST_BUILDER,
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
         "pinned Debian 13 live-journey builder",
+        failures,
+    )
+
+    tutorial = texts[Path("docs/site/scripts/check-registryctl-tutorials.sh")]
+    require(
+        tutorial,
+        f'BUILDER_IMAGE="{RUST_BUILDER}"',
+        Path("docs/site/scripts/check-registryctl-tutorials.sh"),
+        "pinned Debian 13 tutorial builder",
         failures,
     )
 
