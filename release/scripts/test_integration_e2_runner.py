@@ -268,6 +268,59 @@ class IntegrationE2RunnerTest(TestCase):
     def test_checked_in_packet_is_closed_and_valid(self) -> None:
         self.module.validate_packet()
 
+    def test_pilot_report_template_preserves_the_public_contract(self) -> None:
+        readme = (self.module.CONFIG_DIR / "README.md").read_text(encoding="utf-8")
+        template = (
+            self.module.CONFIG_DIR / "pilot-report.template.md"
+        ).read_text(encoding="utf-8")
+        normalized_template = " ".join(template.split())
+        self.assertIn("(pilot-report.template.md)", readme)
+        self.assertIn(
+            "Do not include credentials, network origins, operator or source "
+            "identifiers, record identifiers, raw audits, private evidence, or "
+            "links to restricted evidence.",
+            normalized_template,
+        )
+        self.assertNotIn("Solmara", template)
+        self.assertIn(
+            "python3 release/scripts/integration-e2-runner.py validate",
+            normalized_template,
+        )
+        self.assertNotIn("schema-valid public result", normalized_template)
+        self.assertIn(
+            "Issue closure still requires a frozen published candidate, an "
+            "independent operator, an owner-approved source, and a confirmed "
+            "maintainer comparison of the public hashes and flags with the "
+            "generated project, source audit records, redaction report, and "
+            "teardown evidence.",
+            normalized_template,
+        )
+        self.assertIn(
+            "It cannot close unless the maintainer comparison above is confirmed.",
+            normalized_template,
+        )
+        for text in (
+            "Sanitized run result:",
+            "Plans, dry runs",
+            "One completed pilot is not proof of broad production readiness.",
+            "Frozen Registry Stack candidate:",
+            "Independent operator:",
+            "Owner-approved non-production source:",
+            "Maintainer comparison of public hashes and flags with restricted "
+            "evidence:",
+            "### Blocking findings",
+            "### Accepted limitations and narrowed support",
+            "Operator handoff and independence",
+            "Install or deployment",
+            "Configuration and environment binding",
+            "Diagnostics and ordinary source failures",
+            "Upgrade or rollback",
+            "Restart, teardown, and other operations",
+            "Security boundaries and redaction",
+            "Documentation and operator journey",
+        ):
+            self.assertIn(text, template)
+
     def test_nested_result_objects_must_remain_closed(self) -> None:
         schema = self.module.load_json(self.module.SCHEMA_PATH)
         schema["$defs"]["case"]["additionalProperties"] = True

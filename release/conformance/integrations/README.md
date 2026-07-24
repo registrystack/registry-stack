@@ -169,6 +169,12 @@ non-closing evidence. The validator accepts `status: passed` only when every
 applicable case and teardown is recorded as passed; maintainer review still
 establishes whether the recorded hashes correspond to the restricted evidence.
 
+After an independent operator completes the frozen journey, use
+[`pilot-report.template.md`](pilot-report.template.md) to publish the bounded
+outcome, findings, and public triage links without copying restricted evidence
+into the repository. A plan or dry run is not evidence, and one pilot is not
+proof of broad production readiness.
+
 ## Review the source packet
 
 - [`profiles/opencrvs-dci-v1.9.profile.json`](profiles/opencrvs-dci-v1.9.profile.json)
