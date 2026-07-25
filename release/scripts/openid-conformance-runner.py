@@ -5,10 +5,15 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import datetime as dt
 import hashlib
+import hmac
+import io
 import json
 import os
+import re
 import shutil
 import ssl
 import stat
@@ -19,14 +24,21 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
+import zlib
+from collections import Counter
 from pathlib import Path
 from string import Template
 from typing import Any
+
+from closed_json_schema import SchemaValidationError, validate_against_schema
+from conformance_candidate import CandidateError, load_candidate
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "release" / "conformance" / "openid"
 PLAN_MAP_PATH = CONFIG_DIR / "plan-map.json"
+EVIDENCE_SCHEMA_PATH = CONFIG_DIR / "evidence-summary.schema.json"
 COMPOSE_OVERRIDE_PATH = CONFIG_DIR / "docker-compose.override.yaml"
 BUILDER_COMPOSE_OVERRIDE_PATH = CONFIG_DIR / "docker-compose-builder.override.yaml"
 SUITE_REQUIREMENTS_INPUT_PATH = CONFIG_DIR / "python-requirements.in"
@@ -34,12 +46,71 @@ SUITE_REQUIREMENTS_LOCK_PATH = CONFIG_DIR / "python-requirements.txt"
 DEFAULT_WORK_ROOT = REPO_ROOT / "target" / "openid-conformance"
 DEFAULT_CACHE_DIR = DEFAULT_WORK_ROOT / "cache"
 DEFAULT_OUTPUT_ROOT = DEFAULT_WORK_ROOT / "results"
+DEFAULT_SUITE_JWKS_PATH = DEFAULT_WORK_ROOT / "conformance-suite-jwks.json"
 SCHEMA_VERSION = "registry.release.openid_conformance_plan_map.v1"
+EVIDENCE_SCHEMA_VERSION = "registry.release.openid_conformance_evidence.v1"
+EVIDENCE_SCENARIO_ID = "notary-oid4vci-issuer-metadata"
+EVIDENCE_CLASSIFICATION = "unreviewed-candidate-evidence-summary"
+EVIDENCE_ASSOCIATION = "operator-attested-pending-review"
+EVIDENCE_UNSUPPORTED_SCENARIOS = (
+    ("notary-oid4vci-issuer-full", "blocked-by-suite-profile"),
+)
 SUITE_JAR = "target/fapi-test-suite.jar"
 SUITE_JAR_STAMP = "target/fapi-test-suite.jar.registry-stack-source-ref"
 COMPOSE_CONFIG_DIR_ENV = "REGISTRY_OPENID_CONFORMANCE_CONFIG_DIR"
 SUITE_CA_CONTAINER_PATH = "/etc/ssl/certs/nginx-selfsigned.crt"
 DEFAULT_SUITE_CA_PATH = DEFAULT_WORK_ROOT / "conformance-suite-ca.pem"
+MAX_SUITE_EXPORT_BYTES = 64 * 1024 * 1024
+MAX_SUITE_EXPORT_ENTRIES = 2
+MAX_SUITE_EXPORT_COMPRESSION_RATIO = 100
+MAX_SUITE_JWKS_BYTES = 1024 * 1024
+MAX_SUITE_SIGNATURE_BYTES = 16 * 1024
+SUITE_RESULTS = {"PASSED", "FAILED", "WARNING", "REVIEW", "SKIPPED", "UNKNOWN"}
+CONDITION_RESULTS = {"INFO", "SUCCESS", "REVIEW", "WARNING", "FAILURE"}
+KEY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+TEST_ID = re.compile(r"^[A-Za-z0-9]{15}$")
+COMMIT = re.compile(r"^[0-9a-f]{40}$")
+SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+SHA256_DIGEST_INFO_PREFIX = bytes.fromhex(
+    "3031300d060960864801650304020105000420"
+)
+FORBIDDEN_PUBLIC_KEYS = {
+    "access_token",
+    "authorization",
+    "credential",
+    "credentials",
+    "civil_id",
+    "date_of_birth",
+    "family_name",
+    "given_name",
+    "id_token",
+    "logs",
+    "message",
+    "messages",
+    "msg",
+    "national_id",
+    "pre-authorized_code",
+    "pre_authorized_code",
+    "proof",
+    "raw",
+    "refresh_token",
+    "request",
+    "response",
+    "results",
+    "subject_id",
+    "static_tx_code",
+    "token",
+    "transaction_code",
+    "tx_code",
+}
+SENSITIVE_RAW_KEYS = FORBIDDEN_PUBLIC_KEYS - {
+    "logs",
+    "messages",
+    "raw",
+    "request",
+    "response",
+    "results",
+}
 
 
 class RunnerError(RuntimeError):
@@ -125,10 +196,11 @@ def render_config(scenario: dict[str, Any], params: dict[str, str]) -> str:
 def write_rendered_config(
     scenario: dict[str, Any], output_dir: Path, params: dict[str, str]
 ) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{scenario['id']}.config.json"
-    path.write_text(render_config(scenario, params) + "\n", encoding="utf-8")
-    return path
+    return write_new_file(
+        path,
+        (render_config(scenario, params) + "\n").encode("utf-8"),
+    )
 
 
 def suite_settings(plan_map: dict[str, Any], args: argparse.Namespace) -> dict[str, str]:
@@ -230,6 +302,650 @@ def suite_checkout_ref(checkout: Path) -> str:
 
 def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+def read_owner_only_file(path: Path, *, max_bytes: int, label: str) -> bytes:
+    path = path.expanduser()
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    cloexec = getattr(os, "O_CLOEXEC", None)
+    if nofollow is None or cloexec is None or not hasattr(os, "geteuid"):
+        raise RunnerError("secure private result handling is unavailable")
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | cloexec | nofollow)
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_mode & 0o077
+            or not 0 < before.st_size <= max_bytes
+        ):
+            raise RunnerError(f"{label} must be an owner-only, bounded regular file")
+        with os.fdopen(descriptor, "rb", closefd=True) as handle:
+            descriptor = None
+            content = handle.read(max_bytes + 1)
+            after = os.fstat(handle.fileno())
+    except OSError:
+        raise RunnerError(f"{label} could not be opened securely") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if (
+        len(content) != before.st_size
+        or len(content) > max_bytes
+        or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+    ):
+        raise RunnerError(f"{label} changed while it was read")
+    return content
+
+
+def base64url_decode(value: Any, label: str, *, allow_padding: bool) -> bytes:
+    if not isinstance(value, str) or not value or len(value) > 16_384:
+        raise RunnerError(f"{label} is invalid")
+    if allow_padding:
+        if re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", value) is None:
+            raise RunnerError(f"{label} is invalid")
+        unpadded = value.rstrip("=")
+        if len(value) - len(unpadded) != (-len(unpadded)) % 4:
+            raise RunnerError(f"{label} is invalid")
+    else:
+        if re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
+            raise RunnerError(f"{label} is invalid")
+        unpadded = value
+    try:
+        return base64.urlsafe_b64decode(unpadded + "=" * (-len(unpadded) % 4))
+    except (ValueError, binascii.Error):
+        raise RunnerError(f"{label} is invalid") from None
+
+
+def validate_suite_jwks(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {"keys"}:
+        raise RunnerError("suite JWKS has an unsupported shape")
+    keys = value.get("keys")
+    if not isinstance(keys, list) or not 0 < len(keys) <= 8:
+        raise RunnerError("suite JWKS must contain a bounded key list")
+    for key in keys:
+        if (
+            not isinstance(key, dict)
+            or set(key) != {"alg", "e", "kid", "kty", "n", "use"}
+            or key.get("alg") != "RS256"
+            or key.get("kty") != "RSA"
+            or key.get("use") != "sig"
+            or not isinstance(key.get("kid"), str)
+            or KEY_ID.fullmatch(key["kid"]) is None
+        ):
+            raise RunnerError("suite JWKS contains an unsupported signing key")
+        modulus_bytes = base64url_decode(
+            key.get("n"), "suite JWKS RSA modulus", allow_padding=False
+        )
+        exponent_bytes = base64url_decode(
+            key.get("e"), "suite JWKS RSA exponent", allow_padding=False
+        )
+        if (
+            not modulus_bytes
+            or modulus_bytes[0] == 0
+            or not 2048 <= int.from_bytes(modulus_bytes).bit_length() <= 8192
+            or int.from_bytes(modulus_bytes) % 2 == 0
+            or not exponent_bytes
+            or exponent_bytes[0] == 0
+        ):
+            raise RunnerError("suite JWKS contains an invalid RSA signing key")
+        exponent = int.from_bytes(exponent_bytes)
+        if not 3 <= exponent <= 2_147_483_647 or exponent % 2 == 0:
+            raise RunnerError("suite JWKS contains an invalid RSA signing key")
+    return value
+
+
+def parse_suite_jwks(content: bytes) -> dict[str, Any]:
+    try:
+        parsed = json.loads(content)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        raise RunnerError("suite JWKS is not valid JSON") from None
+    return validate_suite_jwks(parsed)
+
+
+def load_suite_jwks(path: Path) -> tuple[dict[str, Any], str]:
+    content = read_owner_only_file(
+        path,
+        max_bytes=MAX_SUITE_JWKS_BYTES,
+        label="suite JWKS",
+    )
+    jwks = parse_suite_jwks(content)
+    return jwks, canonical_sha256(jwks)
+
+
+def rsa_key_verifies(content: bytes, signature: bytes, key: dict[str, Any]) -> bool:
+    modulus = int.from_bytes(
+        base64url_decode(key["n"], "suite JWKS RSA modulus", allow_padding=False)
+    )
+    exponent = int.from_bytes(
+        base64url_decode(key["e"], "suite JWKS RSA exponent", allow_padding=False)
+    )
+    encoded_size = (modulus.bit_length() + 7) // 8
+    if len(signature) != encoded_size:
+        return False
+    signature_number = int.from_bytes(signature)
+    if signature_number <= 0 or signature_number >= modulus:
+        return False
+    digest_info = SHA256_DIGEST_INFO_PREFIX + hashlib.sha256(content).digest()
+    padding_size = encoded_size - len(digest_info) - 3
+    if padding_size < 8:
+        return False
+    expected = b"\x00\x01" + b"\xff" * padding_size + b"\x00" + digest_info
+    recovered = pow(signature_number, exponent, modulus).to_bytes(encoded_size)
+    return hmac.compare_digest(recovered, expected)
+
+
+def verify_suite_export_signature(
+    content: bytes, encoded_signature: bytes, jwks: dict[str, Any]
+) -> None:
+    try:
+        signature_text = encoded_signature.decode("ascii")
+    except UnicodeDecodeError:
+        raise RunnerError("suite export signature is invalid") from None
+    signature = base64url_decode(
+        signature_text, "suite export signature", allow_padding=True
+    )
+    matching_keys = [
+        key for key in jwks["keys"] if rsa_key_verifies(content, signature, key)
+    ]
+    if len(matching_keys) != 1:
+        raise RunnerError(
+            "suite export signature must verify with exactly one trusted suite key"
+        )
+
+
+def load_suite_export(
+    path: Path, module_id: str, suite_jwks: dict[str, Any]
+) -> dict[str, Any]:
+    raw = read_owner_only_file(
+        path,
+        max_bytes=MAX_SUITE_EXPORT_BYTES,
+        label="suite export",
+    )
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        raise RunnerError("suite export is not a valid ZIP archive") from None
+    try:
+        with archive:
+            entries = archive.infolist()
+            names = [entry.filename for entry in entries]
+            if len(entries) != MAX_SUITE_EXPORT_ENTRIES or len(names) != len(
+                set(names)
+            ):
+                raise RunnerError(
+                    "suite export must contain one module JSON and one signature"
+                )
+            json_pattern = re.compile(
+                rf"^test-log-{re.escape(module_id)}-([A-Za-z0-9]{{15}})\.json$"
+            )
+            json_matches = [
+                (name, match)
+                for name in names
+                if (match := json_pattern.fullmatch(name)) is not None
+            ]
+            if len(json_matches) != 1:
+                raise RunnerError("suite export does not contain the expected module")
+            json_name, filename_match = json_matches[0]
+            filename_test_id = filename_match.group(1)
+            signature_name = f"{json_name.removesuffix('.json')}.sig"
+            expected_names = {
+                json_name,
+                signature_name,
+            }
+            if set(names) != expected_names:
+                raise RunnerError("suite export contains unexpected files")
+
+            total_size = 0
+            for entry in entries:
+                mode = entry.external_attr >> 16
+                if (
+                    entry.is_dir()
+                    or "/" in entry.filename
+                    or "\\" in entry.filename
+                    or stat.S_ISLNK(mode)
+                    or entry.flag_bits & 0x1
+                    or entry.compress_type
+                    not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
+                    or entry.file_size <= 0
+                    or entry.file_size > MAX_SUITE_EXPORT_BYTES
+                    or (
+                        entry.filename == signature_name
+                        and entry.file_size > MAX_SUITE_SIGNATURE_BYTES
+                    )
+                ):
+                    raise RunnerError("suite export contains an unsafe ZIP entry")
+                total_size += entry.file_size
+                if total_size > MAX_SUITE_EXPORT_BYTES:
+                    raise RunnerError("suite export uncompressed size is too large")
+                if entry.file_size > 1024 * 1024 and (
+                    entry.compress_size <= 0
+                    or entry.file_size
+                    > entry.compress_size * MAX_SUITE_EXPORT_COMPRESSION_RATIO
+                ):
+                    raise RunnerError(
+                        "suite export contains a suspicious compression ratio"
+                    )
+
+            content: dict[str, bytes] = {}
+            for name in expected_names:
+                entry = archive.getinfo(name)
+                with archive.open(entry) as handle:
+                    content[name] = handle.read(entry.file_size + 1)
+                if len(content[name]) != entry.file_size:
+                    raise RunnerError("suite export ZIP entry has an invalid size")
+    except (EOFError, zipfile.BadZipFile, zlib.error):
+        raise RunnerError("suite export contains invalid compressed data") from None
+    encoded = content[json_name]
+    verify_suite_export_signature(encoded, content[signature_name], suite_jwks)
+    try:
+        exported = json.loads(encoded)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        raise RunnerError("suite export module is not valid JSON") from None
+    if not isinstance(exported, dict):
+        raise RunnerError("suite export module must be a JSON object")
+    expected_keys = {
+        "exportedAt",
+        "exportedBy",
+        "exportedFrom",
+        "exportedVersion",
+        "results",
+        "testInfo",
+    }
+    if set(exported) != expected_keys:
+        raise RunnerError("suite export module has an unsupported shape")
+    results = exported.get("results")
+    if (
+        not isinstance(results, list)
+        or not results
+        or len(results) > 20_000
+        or any(not isinstance(entry, dict) for entry in results)
+    ):
+        raise RunnerError("suite export results have an unsupported shape")
+    test_info = exported.get("testInfo")
+    if (
+        not isinstance(test_info, dict)
+        or test_info.get("_id") != filename_test_id
+        or test_info.get("testId") != filename_test_id
+        or not isinstance(test_info.get("planId"), str)
+        or not 0 < len(test_info["planId"]) <= 128
+    ):
+        raise RunnerError("suite export run identifiers do not match")
+    return exported
+
+
+def validate_suite_timestamp(value: Any) -> tuple[str, dt.datetime]:
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+            r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z",
+            value,
+        )
+        is None
+    ):
+        raise RunnerError("suite run start timestamp is invalid")
+    try:
+        parsed = dt.datetime.fromisoformat(value.removesuffix("Z") + "+00:00")
+    except ValueError:
+        raise RunnerError("suite run start timestamp is invalid") from None
+    return value, parsed
+
+
+def completion_timestamp(
+    results: list[dict[str, Any]],
+    module_id: str,
+    suite_result: str,
+    started: dt.datetime,
+) -> str:
+    terminal = [
+        entry
+        for entry in results
+        if entry.get("src") == module_id
+        and entry.get("result") == "FINISHED"
+        and entry.get("testmodule_result") == suite_result
+    ]
+    if len(terminal) != 1:
+        raise RunnerError(
+            "suite export must contain one matching terminal module record"
+        )
+    epoch_ms = terminal[0].get("time")
+    if (
+        isinstance(epoch_ms, bool)
+        or not isinstance(epoch_ms, int)
+        or not 0 < epoch_ms < 32_503_680_000_000
+    ):
+        raise RunnerError("suite run completion timestamp is invalid")
+    completed = dt.datetime.fromtimestamp(epoch_ms / 1000, tz=dt.UTC)
+    if completed < started:
+        raise RunnerError("suite run completes before it starts")
+    return completed.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def validate_considered_log_bindings(
+    results: list[dict[str, Any]], module_id: str, test_id: str
+) -> None:
+    for entry in results:
+        considered = entry.get("result") in CONDITION_RESULTS or (
+            entry.get("src") == module_id and entry.get("result") == "FINISHED"
+        )
+        if considered and entry.get("testId") != test_id:
+            raise RunnerError("suite export log entry does not match the selected run")
+
+
+def validate_https_url(value: Any, label: str) -> None:
+    if not isinstance(value, str) or len(value) > 2048:
+        raise RunnerError(f"suite runtime configuration {label} is invalid")
+    parsed = urllib.parse.urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RunnerError(f"suite runtime configuration {label} is invalid")
+
+
+def redacted_runtime_configuration_sha256(
+    config: Any, template: dict[str, Any], module_id: str
+) -> str:
+    expected_top_level = {"alias", "description", "vci", "client", "client2"}
+    expected_vci = {
+        "authorization_server",
+        "credential_configuration_id",
+        "credential_issuer_url",
+        "credential_proof_type_hint",
+        "static_tx_code",
+    }
+    if (
+        not isinstance(config, dict)
+        or set(config) != expected_top_level
+        or not isinstance(config.get("vci"), dict)
+        or set(config["vci"]) != expected_vci
+        or not isinstance(config.get("client"), dict)
+        or set(config["client"]) != {"client_id"}
+        or not isinstance(config.get("client2"), dict)
+        or set(config["client2"]) != {"client_id"}
+        or config.get("alias") != template.get("alias")
+        or config.get("description")
+        not in {
+            template.get("description"),
+            f"{template.get('description')} [{module_id}]",
+        }
+    ):
+        raise RunnerError("suite runtime configuration has an unsupported shape")
+    validate_https_url(config["vci"].get("credential_issuer_url"), "issuer URL")
+    validate_https_url(
+        config["vci"].get("authorization_server"), "authorization server"
+    )
+    string_fields = (
+        config["vci"].get("credential_configuration_id"),
+        config["vci"].get("credential_proof_type_hint"),
+        config["vci"].get("static_tx_code"),
+        config["client"].get("client_id"),
+        config["client2"].get("client_id"),
+    )
+    if any(
+        not isinstance(value, str) or not value or len(value) > 256
+        for value in string_fields
+    ):
+        raise RunnerError("suite runtime configuration contains an invalid value")
+    redacted = json.loads(json.dumps(config))
+    redacted["vci"]["static_tx_code"] = "<redacted>"
+    return canonical_sha256(redacted)
+
+
+def condition_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = Counter(
+        entry.get("result")
+        for entry in results
+        if entry.get("result") in CONDITION_RESULTS
+    )
+    return {
+        "counts": {
+            "info": counts["INFO"],
+            "success": counts["SUCCESS"],
+            "review": counts["REVIEW"],
+            "warning": counts["WARNING"],
+            "failure": counts["FAILURE"],
+        }
+    }
+
+
+def collect_sensitive_raw_values(value: Any) -> set[str]:
+    sensitive: set[str] = set()
+
+    def collect_scalars(item: Any) -> None:
+        if isinstance(item, str) and len(item) >= 8:
+            sensitive.add(item)
+        elif isinstance(item, dict):
+            for nested in item.values():
+                collect_scalars(nested)
+        elif isinstance(item, list):
+            for nested in item:
+                collect_scalars(nested)
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            for key, nested in item.items():
+                if key.lower() in SENSITIVE_RAW_KEYS:
+                    collect_scalars(nested)
+                else:
+                    visit(nested)
+        elif isinstance(item, list):
+            for nested in item:
+                visit(nested)
+
+    visit(value)
+    return sensitive
+
+
+def assert_public_summary_safe(
+    summary: dict[str, Any], sensitive_values: set[str]
+) -> bytes:
+    expected_top_level = {
+        "candidate",
+        "classification",
+        "configuration",
+        "contains_sensitive_material",
+        "raw_suite_export_included",
+        "review_required",
+        "run",
+        "scenario",
+        "schema_version",
+        "suite",
+        "unsupported_scenarios",
+    }
+    if set(summary) != expected_top_level:
+        raise RunnerError("evidence summary contains non-allowlisted fields")
+
+    def check_keys(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if key.lower() in FORBIDDEN_PUBLIC_KEYS:
+                    raise RunnerError(
+                        f"evidence summary contains forbidden field {key}"
+                    )
+                check_keys(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                check_keys(nested)
+
+    check_keys(summary)
+    encoded = (
+        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    text = encoded.decode("utf-8")
+    if any(secret in text for secret in sensitive_values):
+        raise RunnerError("evidence summary contains sensitive suite material")
+    if "openid-credential-offer://" in text or re.search(
+        r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{16,}\."
+        r"[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}(?![A-Za-z0-9_-])",
+        text,
+    ):
+        raise RunnerError("evidence summary contains credential or token material")
+    return encoded
+
+
+def candidate_evidence_summary(candidate: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "release_id",
+        "version",
+        "source_repo",
+        "source_ref",
+        "source_tag",
+        "tag_target",
+        "manifest_sha256",
+        "image_lock_sha256",
+        "release_capsule_sha256",
+        "notary_image",
+    )
+    try:
+        selected = {key: candidate[key] for key in keys}
+    except KeyError:
+        raise RunnerError("authenticated candidate result is incomplete") from None
+    selected["release_assets_authenticity_verified"] = True
+    selected["tested_endpoint_association"] = EVIDENCE_ASSOCIATION
+    return selected
+
+
+def build_evidence_summary(
+    plan_map: dict[str, Any],
+    scenario: dict[str, Any],
+    exported: dict[str, Any],
+    candidate: dict[str, Any],
+    suite_jwks_sha256: str,
+) -> tuple[dict[str, Any], set[str]]:
+    modules = scenario.get("suite_modules")
+    if modules != ["oid4vci-1_0-issuer-metadata-test"]:
+        raise RunnerError("evidence scenario must select only the metadata module")
+    suite_ref = plan_map.get("suite", {}).get("ref")
+    if not isinstance(suite_ref, str) or COMMIT.fullmatch(suite_ref) is None:
+        raise RunnerError("evidence suite ref must be one pinned commit")
+    suite_release_tag = plan_map.get("suite", {}).get("release_tag")
+    suite_base_url = plan_map.get("suite", {}).get("base_url")
+    release_match = (
+        re.fullmatch(r"release-v([0-9]+\.[0-9]+\.[0-9]+)", suite_release_tag)
+        if isinstance(suite_release_tag, str)
+        else None
+    )
+    if release_match is None or not isinstance(suite_base_url, str):
+        raise RunnerError("evidence suite release identity is invalid")
+    suite_version = release_match.group(1)
+    if (
+        not isinstance(suite_jwks_sha256, str)
+        or SHA256.fullmatch(suite_jwks_sha256) is None
+    ):
+        raise RunnerError("suite JWKS digest is invalid")
+    test_info = exported.get("testInfo")
+    results = exported["results"]
+    if (
+        not isinstance(test_info, dict)
+        or test_info.get("testName") != modules[0]
+        or test_info.get("variant") != scenario.get("variants")
+        or test_info.get("status") != "FINISHED"
+        or test_info.get("result") not in SUITE_RESULTS
+        or test_info.get("version") != suite_version
+        or exported.get("exportedVersion") != suite_version
+        or exported.get("exportedFrom") != suite_base_url
+    ):
+        raise RunnerError(
+            "suite export identity, version, selection, or terminal status does not match"
+        )
+    started_at, started = validate_suite_timestamp(test_info.get("started"))
+    test_id = test_info["testId"]
+    if not isinstance(test_id, str) or TEST_ID.fullmatch(test_id) is None:
+        raise RunnerError("suite export run identifier is invalid")
+    validate_considered_log_bindings(results, modules[0], test_id)
+    completed_at = completion_timestamp(
+        results, modules[0], test_info["result"], started
+    )
+    template_path = CONFIG_DIR / scenario["config_template"]
+    try:
+        template = json.loads(template_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise RunnerError(
+            "checked-in suite configuration template is invalid"
+        ) from None
+    runtime_config_sha256 = redacted_runtime_configuration_sha256(
+        test_info.get("config"), template, modules[0]
+    )
+    unsupported = [
+        {
+            "scenario_id": item["id"],
+            "status": item["status"],
+        }
+        for item in plan_map["scenarios"]
+        if item.get("status") not in {"applicable", "candidate-only"}
+    ]
+    expected_unsupported = [
+        {"scenario_id": scenario_id, "status": status}
+        for scenario_id, status in EVIDENCE_UNSUPPORTED_SCENARIOS
+    ]
+    if unsupported != expected_unsupported:
+        raise RunnerError("plan map unsupported scenario contract changed")
+    summary = {
+        "schema_version": EVIDENCE_SCHEMA_VERSION,
+        "classification": EVIDENCE_CLASSIFICATION,
+        "review_required": True,
+        "contains_sensitive_material": False,
+        "raw_suite_export_included": False,
+        "candidate": candidate_evidence_summary(candidate),
+        "suite": {
+            "repository": plan_map["suite"]["repo"],
+            "commit": suite_ref,
+            "release_tag": suite_release_tag,
+            "reported_version": suite_version,
+            "exported_from": suite_base_url,
+            "commit_association": EVIDENCE_ASSOCIATION,
+            "jwks_sha256": suite_jwks_sha256,
+            "export_signature_verified": True,
+        },
+        "scenario": {
+            "scenario_id": scenario["id"],
+            "plan": scenario["suite_plan"],
+            "modules": modules,
+            "variants": scenario["variants"],
+        },
+        "configuration": {
+            "plan_map_sha256": f"sha256:{file_sha256(PLAN_MAP_PATH)}",
+            "template_sha256": f"sha256:{file_sha256(template_path)}",
+            "redacted_runtime_configuration_sha256": runtime_config_sha256,
+            "redacted_fields": ["vci.static_tx_code"],
+        },
+        "run": {
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "terminal_status": test_info["status"],
+            "result": test_info["result"],
+            "conditions": condition_summary(results),
+        },
+        "unsupported_scenarios": unsupported,
+    }
+    return summary, collect_sensitive_raw_values(exported)
 
 
 def expected_suite_artifact_stamp(checkout: Path, jar: Path) -> dict[str, str]:
@@ -472,6 +1188,55 @@ def suite_tls_context(ca_certificate: Path | None) -> ssl.SSLContext:
     return context
 
 
+def suite_https_opener(context: ssl.SSLContext):
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPSHandler(context=context),
+        NoRedirect(),
+    )
+
+
+def suite_jwks_url(base_url: str) -> str:
+    parsed = urllib.parse.urlsplit(base_url)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RunnerError("conformance server must be one HTTPS origin")
+    return urllib.parse.urlunsplit(parsed._replace(path="/jwks"))
+
+
+def cmd_export_suite_jwks(args: argparse.Namespace) -> int:
+    url = suite_jwks_url(args.conformance_server)
+    context = suite_tls_context(args.suite_ca_certificate)
+    opener = suite_https_opener(context)
+    try:
+        with opener.open(url, timeout=args.timeout_seconds) as response:
+            if not 200 <= response.status < 300:
+                raise RunnerError(
+                    f"suite JWKS endpoint returned HTTP {response.status}"
+                )
+            content = response.read(MAX_SUITE_JWKS_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        raise RunnerError(f"suite JWKS endpoint returned HTTP {exc.code}") from None
+    except (OSError, urllib.error.URLError):
+        raise RunnerError("suite JWKS fetch failed") from None
+    if not 0 < len(content) <= MAX_SUITE_JWKS_BYTES:
+        raise RunnerError("suite JWKS response has an invalid size")
+    jwks = parse_suite_jwks(content)
+    encoded = (
+        json.dumps(jwks, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    output = write_new_file(args.output, encoded)
+    print(output)
+    return 0
+
+
 def cmd_submit_offer(args: argparse.Namespace) -> int:
     inline = read_offer(args.offer_file, args.issuer_url)
     base = urllib.parse.urlsplit(args.conformance_server)
@@ -490,11 +1255,7 @@ def cmd_submit_offer(args: argparse.Namespace) -> int:
         endpoint._replace(query=urllib.parse.urlencode({"credential_offer": inline}))
     )
     context = suite_tls_context(args.suite_ca_certificate)
-    opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({}),
-        urllib.request.HTTPSHandler(context=context),
-        NoRedirect(),
-    )
+    opener = suite_https_opener(context)
     try:
         with opener.open(url, timeout=args.timeout_seconds) as response:
             if not 200 <= response.status < 300:
@@ -519,7 +1280,7 @@ def write_new_file(path: Path, content: bytes) -> Path:
             descriptor = None
             handle.write(content)
     except OSError:
-        raise RunnerError("suite CA output could not be created") from None
+        raise RunnerError("output could not be created") from None
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -666,6 +1427,44 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_promote_evidence(args: argparse.Namespace) -> int:
+    plan_map = load_plan_map()
+    scenario = find_scenario(plan_map, EVIDENCE_SCENARIO_ID)
+    modules = scenario.get("suite_modules")
+    if not isinstance(modules, list) or len(modules) != 1:
+        raise RunnerError("evidence scenario must select exactly one suite module")
+    suite_jwks, suite_jwks_sha256 = load_suite_jwks(args.suite_jwks)
+    exported = load_suite_export(args.suite_export, modules[0], suite_jwks)
+    candidate = load_candidate(args.release_manifest, args.image_lock)
+    try:
+        summary, sensitive_values = build_evidence_summary(
+            plan_map,
+            scenario,
+            exported,
+            candidate,
+            suite_jwks_sha256,
+        )
+        encoded = assert_public_summary_safe(summary, sensitive_values)
+    except RecursionError:
+        raise RunnerError("suite export is too deeply nested") from None
+    try:
+        schema = json.loads(EVIDENCE_SCHEMA_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise RunnerError("checked-in evidence schema is invalid") from None
+    if (
+        schema.get("properties", {}).get("schema_version", {}).get("const")
+        != EVIDENCE_SCHEMA_VERSION
+    ):
+        raise RunnerError("checked-in evidence schema version is invalid")
+    try:
+        validate_against_schema(summary, schema, schema, "evidence summary")
+    except SchemaValidationError as exc:
+        raise RunnerError(f"evidence summary does not match its schema: {exc}") from None
+    output = write_new_file(args.output, encoded)
+    print(output)
+    return 0
+
+
 def add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--plan-map", type=Path, default=PLAN_MAP_PATH)
     parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
@@ -725,6 +1524,28 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     export_ca_parser.set_defaults(func=cmd_export_suite_ca)
 
+    export_jwks_parser = subparsers.add_parser(
+        "export-suite-jwks",
+        help="capture the suite export-signing keys over authenticated HTTPS",
+    )
+    export_jwks_parser.add_argument(
+        "--conformance-server",
+        default=load_plan_map()["suite"]["base_url"],
+    )
+    export_jwks_parser.add_argument(
+        "--suite-ca-certificate",
+        type=Path,
+        help="PEM or DER trust anchor captured from the local suite",
+    )
+    export_jwks_parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_SUITE_JWKS_PATH,
+        help="new owner-only file that receives the validated suite JWKS",
+    )
+    export_jwks_parser.add_argument("--timeout-seconds", type=int, default=10)
+    export_jwks_parser.set_defaults(func=cmd_export_suite_jwks)
+
     render_parser = subparsers.add_parser("render-config")
     add_common(render_parser)
     add_config_args(render_parser)
@@ -755,6 +1576,42 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     offer_parser.add_argument("--timeout-seconds", type=int, default=10)
     offer_parser.set_defaults(func=cmd_submit_offer)
 
+    promote_parser = subparsers.add_parser(
+        "promote-evidence",
+        help="create a closed candidate-referenced summary from one private suite export",
+    )
+    promote_parser.add_argument(
+        "--suite-export",
+        type=Path,
+        required=True,
+        help="owner-only OIDF plan export ZIP kept outside the repository",
+    )
+    promote_parser.add_argument(
+        "--suite-jwks",
+        type=Path,
+        required=True,
+        help="owner-only JWKS captured from the authenticated suite origin",
+    )
+    promote_parser.add_argument(
+        "--release-manifest",
+        type=Path,
+        required=True,
+        help="checked-in release manifest for the published candidate",
+    )
+    promote_parser.add_argument(
+        "--image-lock",
+        type=Path,
+        required=True,
+        help="downloaded signed registryctl release image lock",
+    )
+    promote_parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="new JSON file for the allowlisted review summary",
+    )
+    promote_parser.set_defaults(func=cmd_promote_evidence)
+
     return parser.parse_args(argv)
 
 
@@ -762,7 +1619,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
         return int(args.func(args))
-    except (OSError, json.JSONDecodeError, KeyError, RunnerError) as exc:
+    except (
+        CandidateError,
+        OSError,
+        json.JSONDecodeError,
+        KeyError,
+        RunnerError,
+    ) as exc:
         print(f"openid-conformance-runner: {exc}", file=sys.stderr)
         return 2
 

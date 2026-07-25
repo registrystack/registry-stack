@@ -24,6 +24,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from closed_json_schema import (
+    SchemaValidationError,
+    validate_against_schema as validate_closed_schema,
+)
+
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = ROOT / "release" / "conformance" / "integrations"
@@ -937,105 +942,13 @@ def verify_candidate_snapshot(
     }
 
 
-def resolve_ref(schema: dict[str, Any], reference: str) -> dict[str, Any]:
-    if not reference.startswith("#/"):
-        raise RunnerError(f"unsupported external schema reference: {reference}")
-    value: Any = schema
-    for component in reference[2:].split("/"):
-        value = value[component]
-    if not isinstance(value, dict):
-        raise RunnerError(
-            f"schema reference does not resolve to an object: {reference}"
-        )
-    return value
-
-
-def json_value_equal(actual: Any, expected: Any) -> bool:
-    """Compare JSON values without Python's bool-as-int equivalence."""
-    if isinstance(actual, bool) or isinstance(expected, bool):
-        return (
-            isinstance(actual, bool)
-            and isinstance(expected, bool)
-            and actual == expected
-        )
-    if actual is None or expected is None:
-        return actual is expected
-    if isinstance(actual, list) or isinstance(expected, list):
-        return (
-            isinstance(actual, list)
-            and isinstance(expected, list)
-            and len(actual) == len(expected)
-            and all(
-                json_value_equal(left, right) for left, right in zip(actual, expected)
-            )
-        )
-    if isinstance(actual, dict) or isinstance(expected, dict):
-        return (
-            isinstance(actual, dict)
-            and isinstance(expected, dict)
-            and set(actual) == set(expected)
-            and all(json_value_equal(actual[key], expected[key]) for key in actual)
-        )
-    return actual == expected
-
-
 def validate_against_schema(
     value: Any, rule: dict[str, Any], schema: dict[str, Any], label: str = "result"
 ) -> None:
-    if "$ref" in rule:
-        validate_against_schema(value, resolve_ref(schema, rule["$ref"]), schema, label)
-        return
-    if "const" in rule and not json_value_equal(value, rule["const"]):
-        raise RunnerError(f"{label} must equal {rule['const']!r}")
-    if "enum" in rule and not any(
-        json_value_equal(value, allowed) for allowed in rule["enum"]
-    ):
-        raise RunnerError(f"{label} is outside the closed allowed set")
-    kind = rule.get("type")
-    if kind == "object":
-        if not isinstance(value, dict):
-            raise RunnerError(f"{label} must be an object")
-        required = set(rule.get("required", []))
-        missing = required - set(value)
-        if missing:
-            raise RunnerError(f"{label} is missing {', '.join(sorted(missing))}")
-        properties = rule.get("properties", {})
-        if rule.get("additionalProperties") is False:
-            unknown = set(value) - set(properties)
-            if unknown:
-                raise RunnerError(
-                    f"{label} has unknown fields: {', '.join(sorted(unknown))}"
-                )
-        for name, item in value.items():
-            if name in properties:
-                validate_against_schema(
-                    item, properties[name], schema, f"{label}.{name}"
-                )
-    elif kind == "array":
-        if not isinstance(value, list):
-            raise RunnerError(f"{label} must be an array")
-        if len(value) < rule.get("minItems", 0) or len(value) > rule.get(
-            "maxItems", sys.maxsize
-        ):
-            raise RunnerError(f"{label} has an invalid item count")
-        if rule.get("uniqueItems") and len(
-            {json.dumps(item, sort_keys=True) for item in value}
-        ) != len(value):
-            raise RunnerError(f"{label} must contain unique values")
-        for index, item in enumerate(value):
-            validate_against_schema(
-                item, rule.get("items", {}), schema, f"{label}[{index}]"
-            )
-    elif kind == "string":
-        if not isinstance(value, str):
-            raise RunnerError(f"{label} must be a string")
-        if "pattern" in rule and re.fullmatch(rule["pattern"], value) is None:
-            raise RunnerError(f"{label} has an invalid or unsafe value")
-    elif kind == "integer":
-        if not isinstance(value, int) or isinstance(value, bool):
-            raise RunnerError(f"{label} must be an integer")
-        if value < rule.get("minimum", value) or value > rule.get("maximum", value):
-            raise RunnerError(f"{label} is outside its allowed range")
+    try:
+        validate_closed_schema(value, rule, schema, label)
+    except SchemaValidationError as exc:
+        raise RunnerError(str(exc)) from None
 
 
 def read_canaries(path: Path) -> list[bytes]:

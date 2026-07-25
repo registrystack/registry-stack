@@ -9,6 +9,7 @@ import os
 import shlex
 import stat
 import subprocess
+import sys
 import tempfile
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -17,6 +18,7 @@ from unittest import TestCase, main, mock
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release" / "scripts" / "integration-e2-runner.py"
+sys.path.insert(0, str(SCRIPT.parent))
 
 
 def load_module():

@@ -2,18 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import base64
+import hashlib
 import importlib.util
+import io
 import json
 import re
 import shlex
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
 import urllib.parse
+import warnings
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import TestCase, main
@@ -23,6 +29,31 @@ from unittest.mock import MagicMock, patch
 SCRIPT_DIR = Path(__file__).resolve().parent
 RUNNER_PATH = SCRIPT_DIR / "openid-conformance-runner.py"
 NGINX_DOCKERFILE = SCRIPT_DIR.parent / "conformance" / "openid" / "nginx.Dockerfile"
+TEST_RSA_N = int(
+    "db2a64f46dd9923ff3b52759ded5af43f36ac62ed1c71e889156ea8359d894"
+    "cb80734c311c42dfac407feb6c2cb34c28e2906dd4c5af7b5ee2146e60eb5"
+    "77f786c5ab5fbbe05171cd5214cb4cc7ac9eed3706c74d376beb4cb1404692"
+    "95ace0d72a1fb8024f9978132e3943142314b8e2ed1f2af28df57f1e48955"
+    "5ff59056637bafe88fe5e77074d61f2e9a7e89b93d765e2ca59b93e1b47c"
+    "6662b2dbb7faf37610102e01fc3560555799785afe3963f63939e8cd2654a"
+    "2587fd4828b54724eb7714830dba1e784cd0729e2d90cc8c54da61771022e"
+    "4af010de8aa45555c9eca47f6b757c358bb5b0e5a0bffe0d26aa17ff1e0f"
+    "571c9ade855064cb9d1bfb3f",
+    16,
+)
+TEST_RSA_D = int(
+    "02cffb75ab87343a3fdd5e40e7fc2400a23a078b08441edf2fc646c222c005"
+    "c0cac82ffd1d58ba581287d1b494aa445aedf55e837179fc024eb2666c35f8"
+    "ec78d6231fdcb82686926725c33f3ab484acdce7bf6c8c5e24ba5b34c98db"
+    "3eb2763c2c9d35964a01352a41d89844c4e27a30e74c141802bc58c241ba3"
+    "0dd52fe1fbe4c0ca9876497f1bf7d623c9dc0f58fd6089b45746c6799b9da"
+    "cb42b01fe5b964127d92e7c1d20bb8fee227a835e5b524d26debd01f5139a"
+    "a8ce3cfa571b5284bf8332df8c94e65ba1173c33113d47f40a653d408f427"
+    "a70573a7e77dbfd31f5c0d1caf1e53acc5cbae17e2de2b36ba7a7382987e7"
+    "3277ad8105aeb575a680c9",
+    16,
+)
+sys.path.insert(0, str(SCRIPT_DIR))
 
 
 def load_runner():
@@ -76,6 +107,181 @@ class OpenIdConformanceRunnerTest(TestCase):
             {"credential_offer": inline}
         )
 
+    def suite_jwks(self) -> dict[str, object]:
+        def encoded_integer(value: int) -> str:
+            raw = value.to_bytes((value.bit_length() + 7) // 8, "big")
+            return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+        return {
+            "keys": [
+                {
+                    "alg": "RS256",
+                    "e": encoded_integer(65_537),
+                    "kid": "suite-test-key",
+                    "kty": "RSA",
+                    "n": encoded_integer(TEST_RSA_N),
+                    "use": "sig",
+                }
+            ]
+        }
+
+    def sign_suite_export(self, content: bytes) -> str:
+        encoded_size = (TEST_RSA_N.bit_length() + 7) // 8
+        digest_info = (
+            self.runner.SHA256_DIGEST_INFO_PREFIX + hashlib.sha256(content).digest()
+        )
+        padding_size = encoded_size - len(digest_info) - 3
+        encoded = b"\x00\x01" + b"\xff" * padding_size + b"\x00" + digest_info
+        signature = pow(int.from_bytes(encoded), TEST_RSA_D, TEST_RSA_N).to_bytes(
+            encoded_size, "big"
+        )
+        return base64.urlsafe_b64encode(signature).decode("ascii")
+
+    def suite_jwks_sha256(self) -> str:
+        return self.runner.canonical_sha256(self.suite_jwks())
+
+    def write_private_jwks(self, directory: Path) -> Path:
+        path = directory / "suite-jwks.json"
+        path.write_text(json.dumps(self.suite_jwks()), encoding="utf-8")
+        path.chmod(0o600)
+        return path
+
+    def candidate(self) -> dict[str, object]:
+        return {
+            "release_id": "beta-17",
+            "version": "1.0.0",
+            "source_repo": "registrystack/registry-stack",
+            "source_ref": "a" * 40,
+            "source_tag": "v1.0.0",
+            "tag_target": "b" * 40,
+            "manifest_sha256": f"sha256:{'c' * 64}",
+            "image_lock_sha256": f"sha256:{'d' * 64}",
+            "release_capsule_sha256": f"sha256:{'e' * 64}",
+            "notary_image": (
+                "ghcr.io/registrystack/registry-notary@sha256:" + "f" * 64
+            ),
+            "relay_image": ("ghcr.io/registrystack/registry-relay@sha256:" + "1" * 64),
+            "topology": "release-owned",
+            "solmara_source_ref": None,
+        }
+
+    def suite_export(
+        self,
+        *,
+        result: str = "FAILED",
+        terminal_result: str | None = None,
+        secret: str = "RS_OPENID_SECRET_CANARY_6d5a1f0bc2",
+        transaction_code: str | None = None,
+        warning_source: str = "CredentialMetadataWarning",
+        test_info_version: str = "5.2.0",
+        exported_version: str = "5.2.0",
+        exported_from: str = "https://localhost.emobix.co.uk:8443",
+    ) -> tuple[str, bytes]:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        module = scenario["suite_modules"][0]
+        test_id = "Ab3dE5fG7hI9jK1"
+        terminal_result = terminal_result or result
+        payload = {
+            "testInfo": {
+                "_id": test_id,
+                "testId": test_id,
+                "testName": module,
+                "variant": scenario["variants"],
+                "started": "2026-07-25T04:00:00.123456Z",
+                "config": {
+                    "alias": "registry-stack-notary-oid4vci-issuer",
+                    "description": (
+                        "Registry Stack Notary OID4VCI issuer conformance slice "
+                        f"[{module}]"
+                    ),
+                    "vci": {
+                        "credential_issuer_url": "https://issuer.example.test",
+                        "authorization_server": "https://issuer.example.test",
+                        "credential_configuration_id": "person_is_alive_sd_jwt",
+                        "credential_proof_type_hint": "jwt",
+                        "static_tx_code": transaction_code or secret,
+                    },
+                    "client": {"client_id": "client-a"},
+                    "client2": {"client_id": "client-b"},
+                },
+                "description": "private suite description",
+                "alias": "registry-stack-notary-oid4vci-issuer",
+                "owner": {"sub": "private-owner"},
+                "planId": "private-plan-id",
+                "status": "FINISHED",
+                "version": test_info_version,
+                "summary": "private suite summary",
+                "publish": "private",
+                "result": result,
+            },
+            "exportedFrom": exported_from,
+            "exportedBy": {"sub": "private-owner"},
+            "exportedVersion": exported_version,
+            "exportedAt": "Jul 25, 2026, 4:01:00 AM",
+            "results": [
+                {
+                    "src": "MetadataCondition",
+                    "result": "SUCCESS",
+                    "testId": test_id,
+                    "time": 1_784_952_001_000,
+                },
+                {
+                    "src": "MetadataContext",
+                    "result": "INFO",
+                    "testId": test_id,
+                    "time": 1_784_952_001_500,
+                },
+                {
+                    "src": "CredentialMetadataFailure",
+                    "result": "FAILURE",
+                    "testId": test_id,
+                    "msg": "private failure message",
+                    "access_token": secret,
+                    "time": 1_784_952_002_000,
+                },
+                {
+                    "src": warning_source,
+                    "result": "WARNING",
+                    "testId": test_id,
+                    "proof": f"{secret}.proof.payload",
+                    "civil_id": secret,
+                    "time": 1_784_952_003_000,
+                },
+                {
+                    "src": "CredentialMetadataReview",
+                    "result": "REVIEW",
+                    "testId": test_id,
+                    "msg": "private review message",
+                    "time": 1_784_952_004_000,
+                },
+                {
+                    "src": module,
+                    "result": "FINISHED",
+                    "testId": test_id,
+                    "testmodule_result": terminal_result,
+                    "time": 1_784_952_060_000,
+                },
+            ],
+        }
+        encoded_payload = json.dumps(payload).encode("utf-8")
+        json_name = f"test-log-{module}-{test_id}.json"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(json_name, encoded_payload)
+            archive.writestr(
+                json_name.removesuffix(".json") + ".sig",
+                self.sign_suite_export(encoded_payload),
+            )
+        return json_name, buffer.getvalue()
+
+    def write_private_export(self, directory: Path, content: bytes) -> Path:
+        path = directory / "suite-export.zip"
+        path.write_bytes(content)
+        path.chmod(0o600)
+        return path
+
     def test_plan_map_has_unique_scenarios_and_pinned_suite_ref(self) -> None:
         scenarios = self.plan_map["scenarios"]
         self.assertEqual(len(scenarios), len({scenario["id"] for scenario in scenarios}))
@@ -103,6 +309,90 @@ class OpenIdConformanceRunnerTest(TestCase):
         self.assertNotIn("REGISTRY_LAB_", serialized)
         self.assertNotIn("blocked-by-lab", serialized)
 
+    def test_readme_documents_the_required_suite_jwks_trust_flow(self) -> None:
+        readme = (
+            self.runner.CONFIG_DIR / "README.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("export-suite-jwks", readme)
+        self.assertIn("--suite-ca-certificate", readme)
+        self.assertIn("--suite-jwks", readme)
+        self.assertIn("/jwks", readme)
+        self.assertIn("canonical", readme)
+        self.assertIn("signature", readme)
+        self.assertIn("--output-dir", readme)
+        self.assertIn("--export-dir", readme)
+        self.assertIn("operator-attested", readme)
+        self.assertIn("no separate\nUI download step", readme)
+
+    def test_evidence_schema_matches_the_builder_contract(self) -> None:
+        schema = json.loads(
+            self.runner.EVIDENCE_SCHEMA_PATH.read_text(encoding="utf-8")
+        )
+        properties = schema["properties"]
+        self.assertEqual(
+            self.runner.EVIDENCE_SCHEMA_VERSION,
+            properties["schema_version"]["const"],
+        )
+        self.assertEqual(
+            self.runner.EVIDENCE_CLASSIFICATION,
+            properties["classification"]["const"],
+        )
+        self.assertEqual(
+            self.runner.SUITE_RESULTS,
+            set(schema["$defs"]["run"]["properties"]["result"]["enum"]),
+        )
+        self.assertEqual(
+            [
+                {"scenario_id": scenario_id, "status": status}
+                for scenario_id, status in self.runner.EVIDENCE_UNSUPPORTED_SCENARIOS
+            ],
+            properties["unsupported_scenarios"]["const"],
+        )
+        scenario = self.runner.find_scenario(
+            self.plan_map, self.runner.EVIDENCE_SCENARIO_ID
+        )
+        scenario_schema = schema["$defs"]["scenario"]["properties"]
+        self.assertEqual(scenario["id"], scenario_schema["scenario_id"]["const"])
+        self.assertEqual(scenario["suite_plan"], scenario_schema["plan"]["const"])
+        self.assertEqual(
+            scenario["suite_modules"], scenario_schema["modules"]["const"]
+        )
+        self.assertEqual(
+            scenario["variants"],
+            {
+                name: definition["const"]
+                for name, definition in scenario_schema["variants"][
+                    "properties"
+                ].items()
+            },
+        )
+        self.assertEqual(
+            self.plan_map["suite"]["repo"],
+            schema["$defs"]["suite"]["properties"]["repository"]["const"],
+        )
+        suite_properties = schema["$defs"]["suite"]["properties"]
+        self.assertEqual(
+            self.plan_map["suite"]["release_tag"],
+            suite_properties["release_tag"]["const"],
+        )
+        self.assertEqual(
+            self.plan_map["suite"]["release_tag"].removeprefix("release-v"),
+            suite_properties["reported_version"]["const"],
+        )
+        self.assertEqual(
+            self.plan_map["suite"]["base_url"],
+            suite_properties["exported_from"]["const"],
+        )
+        self.assertEqual(
+            self.runner.EVIDENCE_ASSOCIATION,
+            schema["$defs"]["candidate"]["properties"][
+                "tested_endpoint_association"
+            ]["const"],
+        )
+        self.assertEqual(
+            self.runner.EVIDENCE_ASSOCIATION,
+            schema["$defs"]["suite"]["properties"]["commit_association"]["const"],
+        )
     def test_notary_mapping_is_candidate_only_and_matches_the_1_0_profile(self) -> None:
         metadata = self.runner.find_scenario(
             self.plan_map, "notary-oid4vci-issuer-metadata"
@@ -127,6 +417,10 @@ class OpenIdConformanceRunnerTest(TestCase):
         full_contract = " ".join(full["requires"] + full["notes"])
         self.assertIn("pre-authorized offer", full_contract)
         self.assertIn("is not a wallet grant", full_contract)
+        self.assertIn("adapter now closes that transport gap", full_contract)
+        self.assertNotIn(
+            "blocked by the suite callback adapter", json.dumps(self.plan_map)
+        )
         self.assertNotIn(
             "policy decision on whether the first full run targets",
             full_contract,
@@ -137,6 +431,702 @@ class OpenIdConformanceRunnerTest(TestCase):
             if item["surface"] == "Registry Notary Rust SD-JWT verifier"
         )
         self.assertIn("not an OID4VP endpoint", verifier["reason"])
+
+    def test_promote_evidence_emits_only_candidate_bound_allowlisted_summary(
+        self,
+    ) -> None:
+        secret = "RS_OPENID_SECRET_CANARY_6d5a1f0bc2"
+        _, raw_export = self.suite_export(secret=secret)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            suite_export = self.write_private_export(root, raw_export)
+            suite_jwks = self.write_private_jwks(root)
+            output = root / "review" / "summary.json"
+            manifest = (
+                self.runner.REPO_ROOT / "release" / "manifests" / "candidate.yaml"
+            )
+            image_lock = root / "registryctl-v1.0.0-image-lock.json"
+            args = self.runner.parse_args(
+                [
+                    "promote-evidence",
+                    "--suite-export",
+                    str(suite_export),
+                    "--suite-jwks",
+                    str(suite_jwks),
+                    "--release-manifest",
+                    str(manifest),
+                    "--image-lock",
+                    str(image_lock),
+                    "--output",
+                    str(output),
+                ]
+            )
+            candidate = self.candidate()
+            with patch.object(
+                self.runner, "load_candidate", return_value=candidate
+            ) as load_candidate:
+                with patch("builtins.print"):
+                    self.assertEqual(0, self.runner.cmd_promote_evidence(args))
+
+            load_candidate.assert_called_once_with(manifest, image_lock)
+            summary_bytes = output.read_bytes()
+            summary = json.loads(summary_bytes)
+            self.assertEqual(0o600, output.stat().st_mode & 0o777)
+            self.assertEqual("FAILED", summary["run"]["result"])
+            self.assertEqual("FINISHED", summary["run"]["terminal_status"])
+            self.assertEqual(
+                "2026-07-25T04:00:00.123456Z", summary["run"]["started_at"]
+            )
+            self.assertEqual("2026-07-25T04:01:00.000Z", summary["run"]["completed_at"])
+            self.assertEqual(
+                {
+                    "info": 1,
+                    "success": 1,
+                    "review": 1,
+                    "warning": 1,
+                    "failure": 1,
+                },
+                summary["run"]["conditions"]["counts"],
+            )
+            self.assertEqual(
+                candidate["tag_target"], summary["candidate"]["tag_target"]
+            )
+            self.assertEqual(
+                candidate["notary_image"], summary["candidate"]["notary_image"]
+            )
+            self.assertTrue(
+                summary["candidate"]["release_assets_authenticity_verified"]
+            )
+            self.assertEqual(
+                self.runner.EVIDENCE_ASSOCIATION,
+                summary["candidate"]["tested_endpoint_association"],
+            )
+            self.assertEqual(self.plan_map["suite"]["ref"], summary["suite"]["commit"])
+            self.assertEqual(
+                self.plan_map["suite"]["release_tag"],
+                summary["suite"]["release_tag"],
+            )
+            self.assertEqual("5.2.0", summary["suite"]["reported_version"])
+            self.assertEqual(
+                self.runner.EVIDENCE_ASSOCIATION,
+                summary["suite"]["commit_association"],
+            )
+            self.assertEqual(
+                self.suite_jwks_sha256(), summary["suite"]["jwks_sha256"]
+            )
+            self.assertTrue(summary["suite"]["export_signature_verified"])
+            self.assertEqual(
+                ["oid4vci-1_0-issuer-metadata-test"],
+                summary["scenario"]["modules"],
+            )
+            self.assertEqual(
+                [
+                    {
+                        "scenario_id": "notary-oid4vci-issuer-full",
+                        "status": "blocked-by-suite-profile",
+                    }
+                ],
+                summary["unsupported_scenarios"],
+            )
+            schema = json.loads(
+                self.runner.EVIDENCE_SCHEMA_PATH.read_text(encoding="utf-8")
+            )
+            self.assertFalse(schema["additionalProperties"])
+            self.assertEqual(set(schema["required"]), set(summary))
+            for definition, field in (
+                ("candidate", "candidate"),
+                ("suite", "suite"),
+                ("scenario", "scenario"),
+                ("configuration", "configuration"),
+                ("run", "run"),
+            ):
+                self.assertEqual(
+                    set(schema["$defs"][definition]["required"]),
+                    set(summary[field]),
+                )
+            self.assertEqual(
+                set(schema["$defs"]["conditions"]["required"]),
+                set(summary["run"]["conditions"]),
+            )
+            self.assertEqual(
+                set(
+                    schema["$defs"]["conditions"]["properties"]["counts"]["required"]
+                ),
+                set(summary["run"]["conditions"]["counts"]),
+            )
+            self.assertEqual(
+                set(
+                    schema["$defs"]["scenario"]["properties"]["variants"][
+                        "required"
+                    ]
+                ),
+                set(summary["scenario"]["variants"]),
+            )
+            self.assertNotIn(secret.encode(), summary_bytes)
+            self.assertNotIn(b"private failure message", summary_bytes)
+            self.assertNotIn(b"private review message", summary_bytes)
+            self.assertNotIn(b"Ab3dE5fG7hI9jK1", summary_bytes)
+            self.assertNotIn(b"private-plan-id", summary_bytes)
+            self.assertFalse(summary["raw_suite_export_included"])
+            self.assertFalse(summary["contains_sensitive_material"])
+
+    def test_promote_evidence_reports_excessive_nesting_as_runner_error(self) -> None:
+        _, raw_export = self.suite_export()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = self.runner.parse_args(
+                [
+                    "promote-evidence",
+                    "--suite-export",
+                    str(self.write_private_export(root, raw_export)),
+                    "--suite-jwks",
+                    str(self.write_private_jwks(root)),
+                    "--release-manifest",
+                    str(root / "candidate.yaml"),
+                    "--image-lock",
+                    str(root / "image-lock.json"),
+                    "--output",
+                    str(root / "summary.json"),
+                ]
+            )
+            with patch.object(
+                self.runner, "load_candidate", return_value=self.candidate()
+            ):
+                with patch.object(
+                    self.runner,
+                    "collect_sensitive_raw_values",
+                    side_effect=RecursionError,
+                ):
+                    with self.assertRaisesRegex(
+                        self.runner.RunnerError, "too deeply nested"
+                    ):
+                        self.runner.cmd_promote_evidence(args)
+
+    def test_promote_evidence_rejects_schema_invalid_generated_summary(
+        self,
+    ) -> None:
+        _, raw_export = self.suite_export()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "summary.json"
+            args = self.runner.parse_args(
+                [
+                    "promote-evidence",
+                    "--suite-export",
+                    str(self.write_private_export(root, raw_export)),
+                    "--suite-jwks",
+                    str(self.write_private_jwks(root)),
+                    "--release-manifest",
+                    str(root / "candidate.yaml"),
+                    "--image-lock",
+                    str(root / "image-lock.json"),
+                    "--output",
+                    str(output),
+                ]
+            )
+            build_summary = self.runner.build_evidence_summary
+
+            def schema_invalid_summary(*arguments):
+                summary, sensitive = build_summary(*arguments)
+                summary["run"]["conditions"]["counts"]["failure"] = -1
+                return summary, sensitive
+
+            with patch.object(
+                self.runner, "load_candidate", return_value=self.candidate()
+            ):
+                with patch.object(
+                    self.runner,
+                    "build_evidence_summary",
+                    side_effect=schema_invalid_summary,
+                ):
+                    with self.assertRaisesRegex(
+                        self.runner.RunnerError, "does not match its schema"
+                    ):
+                        self.runner.cmd_promote_evidence(args)
+            self.assertFalse(output.exists())
+
+    def test_promote_evidence_preserves_each_terminal_suite_result(self) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        for suite_result in sorted(self.runner.SUITE_RESULTS):
+            with self.subTest(suite_result=suite_result):
+                _, raw_export = self.suite_export(result=suite_result)
+                with tempfile.TemporaryDirectory() as tmp:
+                    suite_export = self.write_private_export(Path(tmp), raw_export)
+                    exported = self.runner.load_suite_export(
+                        suite_export,
+                        scenario["suite_modules"][0],
+                        self.suite_jwks(),
+                    )
+                    summary, _ = self.runner.build_evidence_summary(
+                        self.plan_map,
+                        scenario,
+                        exported,
+                        self.candidate(),
+                        self.suite_jwks_sha256(),
+                    )
+                self.assertEqual(suite_result, summary["run"]["result"])
+
+    def test_promote_evidence_rejects_mismatched_suite_provenance(self) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        cases = {
+            "testInfo.version": {"test_info_version": "5.2.1"},
+            "exportedVersion": {"exported_version": "5.2.1"},
+            "exportedFrom": {"exported_from": "https://other.example.test"},
+        }
+        for label, overrides in cases.items():
+            with self.subTest(label=label):
+                _, raw_export = self.suite_export(**overrides)
+                with tempfile.TemporaryDirectory() as tmp:
+                    suite_export = self.write_private_export(Path(tmp), raw_export)
+                    exported = self.runner.load_suite_export(
+                        suite_export,
+                        scenario["suite_modules"][0],
+                        self.suite_jwks(),
+                    )
+                with self.assertRaisesRegex(
+                    self.runner.RunnerError, "version|identity"
+                ):
+                    self.runner.build_evidence_summary(
+                        self.plan_map,
+                        scenario,
+                        exported,
+                        self.candidate(),
+                        self.suite_jwks_sha256(),
+                    )
+
+    def test_promote_evidence_rejects_changed_terminal_result(self) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        _, raw_export = self.suite_export(result="FAILED", terminal_result="PASSED")
+        with tempfile.TemporaryDirectory() as tmp:
+            suite_export = self.write_private_export(Path(tmp), raw_export)
+            exported = self.runner.load_suite_export(
+                suite_export,
+                scenario["suite_modules"][0],
+                self.suite_jwks(),
+            )
+        with self.assertRaisesRegex(
+            self.runner.RunnerError, "matching terminal module record"
+        ):
+            self.runner.build_evidence_summary(
+                self.plan_map,
+                scenario,
+                exported,
+                self.candidate(),
+                self.suite_jwks_sha256(),
+            )
+
+    def test_suite_export_rejects_invalid_signature(self) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        module = scenario["suite_modules"][0]
+        json_name, raw_export = self.suite_export()
+        signature_name = json_name.removesuffix(".json") + ".sig"
+        with zipfile.ZipFile(io.BytesIO(raw_export)) as source:
+            payload = source.read(json_name)
+            signature = bytearray(source.read(signature_name))
+        signature[0] = ord("A") if signature[0] != ord("A") else ord("B")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr(json_name, payload)
+            archive.writestr(signature_name, signature)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write_private_export(Path(tmp), buffer.getvalue())
+            with self.assertRaisesRegex(
+                self.runner.RunnerError, "exactly one trusted suite key"
+            ):
+                self.runner.load_suite_export(path, module, self.suite_jwks())
+
+    def test_suite_jwks_rejects_invalid_rsa_key(self) -> None:
+        jwks = self.suite_jwks()
+        jwks["keys"][0]["e"] = "Ag"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "suite-jwks.json"
+            path.write_text(json.dumps(jwks), encoding="utf-8")
+            path.chmod(0o600)
+            with self.assertRaisesRegex(
+                self.runner.RunnerError, "invalid RSA signing key"
+            ):
+                self.runner.load_suite_jwks(path)
+
+    def test_suite_export_rejects_nonmatching_valid_shape_key(self) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        module = scenario["suite_modules"][0]
+        _, raw_export = self.suite_export()
+        jwks = self.suite_jwks()
+        nonmatching_modulus = TEST_RSA_N - 2
+        raw_modulus = nonmatching_modulus.to_bytes(
+            (nonmatching_modulus.bit_length() + 7) // 8, "big"
+        )
+        jwks["keys"][0]["n"] = (
+            base64.urlsafe_b64encode(raw_modulus).decode("ascii").rstrip("=")
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            export_path = self.write_private_export(root, raw_export)
+            jwks_path = root / "nonmatching-jwks.json"
+            jwks_path.write_text(json.dumps(jwks), encoding="utf-8")
+            jwks_path.chmod(0o600)
+            validated_jwks, _ = self.runner.load_suite_jwks(jwks_path)
+            with self.assertRaisesRegex(
+                self.runner.RunnerError, "exactly one trusted suite key"
+            ):
+                self.runner.load_suite_export(
+                    export_path, module, validated_jwks
+                )
+
+    def test_suite_export_rejects_multiple_matching_jwks_keys(self) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        module = scenario["suite_modules"][0]
+        _, raw_export = self.suite_export()
+        jwks = self.suite_jwks()
+        duplicate = dict(jwks["keys"][0])
+        duplicate["kid"] = "duplicate-suite-test-key"
+        jwks["keys"].append(duplicate)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write_private_export(Path(tmp), raw_export)
+            with self.assertRaisesRegex(
+                self.runner.RunnerError, "exactly one trusted suite key"
+            ):
+                self.runner.load_suite_export(path, module, jwks)
+
+    def test_suite_export_binds_run_identifiers_and_considered_logs(self) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        module = scenario["suite_modules"][0]
+        json_name, raw_export = self.suite_export()
+        signature_name = json_name.removesuffix(".json") + ".sig"
+        with zipfile.ZipFile(io.BytesIO(raw_export)) as source:
+            original = json.loads(source.read(json_name))
+
+        def repack(payload: dict[str, object]) -> bytes:
+            encoded = json.dumps(payload).encode("utf-8")
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(
+                buffer, "w", compression=zipfile.ZIP_DEFLATED
+            ) as archive:
+                archive.writestr(json_name, encoded)
+                archive.writestr(signature_name, self.sign_suite_export(encoded))
+            return buffer.getvalue()
+
+        changed_id = json.loads(json.dumps(original))
+        changed_id["testInfo"]["_id"] = "Zm9xN8pL2rS4tV6"
+        long_plan_id = json.loads(json.dumps(original))
+        long_plan_id["testInfo"]["planId"] = "p" * 129
+        for label, payload in {
+            "mismatched test id": changed_id,
+            "oversized plan id": long_plan_id,
+        }.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                path = self.write_private_export(Path(tmp), repack(payload))
+                with self.assertRaisesRegex(
+                    self.runner.RunnerError, "run identifiers do not match"
+                ):
+                    self.runner.load_suite_export(path, module, self.suite_jwks())
+
+        changed_log = json.loads(json.dumps(original))
+        changed_log["results"][0]["testId"] = "Zm9xN8pL2rS4tV6"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write_private_export(Path(tmp), repack(changed_log))
+            exported = self.runner.load_suite_export(
+                path, module, self.suite_jwks()
+            )
+        with self.assertRaisesRegex(
+            self.runner.RunnerError, "log entry does not match"
+        ):
+            self.runner.build_evidence_summary(
+                self.plan_map,
+                scenario,
+                exported,
+                self.candidate(),
+                self.suite_jwks_sha256(),
+            )
+
+    def test_suite_export_zip_rejects_unsafe_or_unexpected_entries(self) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        module = scenario["suite_modules"][0]
+        json_name, raw_export = self.suite_export()
+
+        def mutate(
+            entries: list[tuple[zipfile.ZipInfo | str, bytes | str]],
+            *,
+            compression: int = zipfile.ZIP_DEFLATED,
+        ) -> bytes:
+            buffer = io.BytesIO()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                with zipfile.ZipFile(buffer, "w", compression=compression) as archive:
+                    for name, content in entries:
+                        archive.writestr(name, content)
+            return buffer.getvalue()
+
+        with zipfile.ZipFile(io.BytesIO(raw_export)) as archive:
+            payload = archive.read(json_name)
+        signature_name = json_name.removesuffix(".json") + ".sig"
+        symlink = zipfile.ZipInfo(signature_name)
+        symlink.create_system = 3
+        symlink.external_attr = stat.S_IFLNK << 16
+        cases = {
+            "path traversal": mutate(
+                [(json_name, payload), ("../" + signature_name, "signature")]
+            ),
+            "symlink": mutate([(json_name, payload), (symlink, "target")]),
+            "duplicate": mutate(
+                [
+                    (json_name, payload),
+                    (json_name, payload),
+                ]
+            ),
+            "unexpected": mutate(
+                [
+                    (json_name, payload),
+                    (signature_name, "signature"),
+                    ("raw.log", "private"),
+                ]
+            ),
+        }
+        encrypted = bytearray(raw_export)
+        local_header = encrypted.find(b"PK\x03\x04")
+        central_header = encrypted.find(b"PK\x01\x02")
+        self.assertNotEqual(-1, local_header)
+        self.assertNotEqual(-1, central_header)
+        encrypted[local_header + 6] |= 0x01
+        encrypted[central_header + 8] |= 0x01
+        cases["encrypted"] = bytes(encrypted)
+
+        for label, content in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as tmp:
+                path = self.write_private_export(Path(tmp), content)
+                with self.assertRaises(self.runner.RunnerError):
+                    self.runner.load_suite_export(path, module, self.suite_jwks())
+
+    def test_suite_export_zip_rejects_corrupt_member_data_as_runner_error(self) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        module = scenario["suite_modules"][0]
+        json_name, raw_export = self.suite_export()
+        signature_name = json_name.removesuffix(".json") + ".sig"
+        with zipfile.ZipFile(io.BytesIO(raw_export)) as source:
+            payload = source.read(json_name)
+            signature = source.read(signature_name)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
+            archive.writestr(json_name, payload)
+            archive.writestr(signature_name, signature)
+        stored = buffer.getvalue()
+        for target_name in (json_name, signature_name):
+            with self.subTest(target_name=target_name):
+                corrupt = bytearray(stored)
+                with zipfile.ZipFile(io.BytesIO(corrupt)) as archive:
+                    entry = archive.getinfo(target_name)
+                name_size = int.from_bytes(
+                    corrupt[
+                        entry.header_offset + 26 : entry.header_offset + 28
+                    ],
+                    "little",
+                )
+                extra_size = int.from_bytes(
+                    corrupt[
+                        entry.header_offset + 28 : entry.header_offset + 30
+                    ],
+                    "little",
+                )
+                data_offset = entry.header_offset + 30 + name_size + extra_size
+                corrupt[data_offset] ^= 0x01
+
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = self.write_private_export(Path(tmp), bytes(corrupt))
+                    with self.assertRaisesRegex(
+                        self.runner.RunnerError, "invalid compressed data"
+                    ):
+                        self.runner.load_suite_export(
+                            path, module, self.suite_jwks()
+                        )
+
+    def test_suite_export_zip_rejects_size_and_compression_bombs(self) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        module = scenario["suite_modules"][0]
+        json_name, _ = self.suite_export()
+        signature_name = json_name.removesuffix(".json") + ".sig"
+
+        aggregate = io.BytesIO()
+        with zipfile.ZipFile(aggregate, "w") as archive:
+            archive.writestr(json_name, "{}" + " " * 70)
+            archive.writestr(signature_name, "s" * 70)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write_private_export(Path(tmp), aggregate.getvalue())
+            with patch.object(
+                self.runner,
+                "read_owner_only_file",
+                return_value=aggregate.getvalue(),
+            ):
+                with patch.object(self.runner, "MAX_SUITE_EXPORT_BYTES", 100):
+                    with self.assertRaisesRegex(
+                        self.runner.RunnerError, "uncompressed size"
+                    ):
+                        self.runner.load_suite_export(path, module, self.suite_jwks())
+
+        compressed = io.BytesIO()
+        with zipfile.ZipFile(
+            compressed, "w", compression=zipfile.ZIP_DEFLATED
+        ) as archive:
+            archive.writestr(json_name, " " * (2 * 1024 * 1024))
+            archive.writestr(signature_name, "signature")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write_private_export(Path(tmp), compressed.getvalue())
+            with self.assertRaisesRegex(
+                self.runner.RunnerError, "suspicious compression ratio"
+            ):
+                self.runner.load_suite_export(path, module, self.suite_jwks())
+
+    def test_evidence_summary_rejects_unsupported_scenario_contract_drift(self) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        _, raw_export = self.suite_export()
+        with tempfile.TemporaryDirectory() as tmp:
+            suite_export = self.write_private_export(Path(tmp), raw_export)
+            exported = self.runner.load_suite_export(
+                suite_export,
+                scenario["suite_modules"][0],
+                self.suite_jwks(),
+            )
+        changed_plan_map = json.loads(json.dumps(self.plan_map))
+        changed_plan_map["scenarios"].append(
+            {"id": "unreviewed-scenario", "status": "blocked"}
+        )
+        with self.assertRaisesRegex(
+            self.runner.RunnerError, "unsupported scenario contract changed"
+        ):
+            self.runner.build_evidence_summary(
+                changed_plan_map,
+                scenario,
+                exported,
+                self.candidate(),
+                self.suite_jwks_sha256(),
+            )
+
+    def test_public_summary_guard_rejects_raw_sensitive_fields(self) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        _, raw_export = self.suite_export()
+        with tempfile.TemporaryDirectory() as tmp:
+            suite_export = self.write_private_export(Path(tmp), raw_export)
+            exported = self.runner.load_suite_export(
+                suite_export,
+                scenario["suite_modules"][0],
+                self.suite_jwks(),
+            )
+        summary, sensitive = self.runner.build_evidence_summary(
+            self.plan_map,
+            scenario,
+            exported,
+            self.candidate(),
+            self.suite_jwks_sha256(),
+        )
+        summary["run"]["access_token"] = "copied-private-token"
+        with self.assertRaisesRegex(self.runner.RunnerError, "forbidden field"):
+            self.runner.assert_public_summary_safe(summary, sensitive)
+
+    def test_public_summary_omits_condition_identifiers_and_transaction_code(
+        self,
+    ) -> None:
+        transaction_code = "LeakyCode123"
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        _, raw_export = self.suite_export(
+            transaction_code=transaction_code,
+            warning_source=transaction_code,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            suite_export = self.write_private_export(Path(tmp), raw_export)
+            exported = self.runner.load_suite_export(
+                suite_export,
+                scenario["suite_modules"][0],
+                self.suite_jwks(),
+            )
+        summary, sensitive = self.runner.build_evidence_summary(
+            self.plan_map,
+            scenario,
+            exported,
+            self.candidate(),
+            self.suite_jwks_sha256(),
+        )
+        self.assertEqual(1, summary["run"]["conditions"]["counts"]["warning"])
+        self.assertNotIn(transaction_code, json.dumps(summary))
+        self.assertIn(transaction_code, sensitive)
+        self.runner.assert_public_summary_safe(summary, sensitive)
+
+    def test_export_suite_jwks_uses_authenticated_origin_and_owner_only_output(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "suite-jwks.json"
+            ca_certificate = root / "suite-ca.pem"
+            args = self.runner.parse_args(
+                [
+                    "export-suite-jwks",
+                    "--conformance-server",
+                    "https://suite.example.test",
+                    "--suite-ca-certificate",
+                    str(ca_certificate),
+                    "--output",
+                    str(output),
+                ]
+            )
+            response = MagicMock()
+            response.status = 200
+            response.read.return_value = json.dumps(self.suite_jwks()).encode("utf-8")
+            response.__enter__.return_value = response
+            opener = MagicMock()
+            opener.open.return_value = response
+            tls_context = MagicMock()
+            with patch.object(
+                self.runner,
+                "suite_tls_context",
+                return_value=tls_context,
+            ) as suite_tls_context:
+                with patch.object(
+                    self.runner.urllib.request,
+                    "build_opener",
+                    return_value=opener,
+                ) as build_opener:
+                    with patch("builtins.print"):
+                        self.assertEqual(0, self.runner.cmd_export_suite_jwks(args))
+
+            suite_tls_context.assert_called_once_with(ca_certificate)
+            opener.open.assert_called_once_with(
+                "https://suite.example.test/jwks", timeout=10
+            )
+            handlers = build_opener.call_args.args
+            self.assertEqual({}, handlers[0].proxies)
+            self.assertIsInstance(handlers[1], self.runner.urllib.request.HTTPSHandler)
+            self.assertIsInstance(handlers[2], self.runner.NoRedirect)
+            response.read.assert_called_once_with(
+                self.runner.MAX_SUITE_JWKS_BYTES + 1
+            )
+            self.assertEqual(self.suite_jwks(), json.loads(output.read_bytes()))
+            self.assertEqual(0o600, output.stat().st_mode & 0o777)
 
     def test_submit_offer_forwards_only_the_real_notary_preauthorized_offer(
         self,
@@ -652,6 +1642,13 @@ class OpenIdConformanceRunnerTest(TestCase):
             self.assertIn("oid4vci-1_0-issuer-metadata-test", " ".join(command))
             self.assertTrue(
                 (output_dir / "notary-oid4vci-issuer-metadata.config.json").exists()
+            )
+            self.assertEqual(
+                0o600,
+                (
+                    output_dir / "notary-oid4vci-issuer-metadata.config.json"
+                ).stat().st_mode
+                & 0o777,
             )
 
     def test_suite_artifact_build_uses_docker_builder_and_maven_cache(self) -> None:
