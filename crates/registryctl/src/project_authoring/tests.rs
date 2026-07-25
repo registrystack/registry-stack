@@ -560,6 +560,106 @@ outputs:
     }
 
     #[test]
+    fn effective_records_api_scopes_must_be_unique() {
+        for (name, change, expected_fields) in [
+            (
+                "effective aggregate default",
+                "aggregate_default",
+                (
+                    "services.nia-population-records.api.scopes.aggregate",
+                    "services.nia-population-records.api.scopes.metadata",
+                ),
+            ),
+            (
+                "evidence verification",
+                "evidence_verification",
+                (
+                    "services.nia-population-records.api.scopes.evidence_verification",
+                    "services.nia-population-records.api.scopes.rows",
+                ),
+            ),
+        ] {
+            let mut loaded = load_registry_project(
+                &project_golden("nia-attribute-release"),
+                Some("local"),
+            )
+            .expect("NIA release project loads");
+            let api = loaded
+                .project
+                .services
+                .get_mut("nia-population-records")
+                .and_then(|service| service.api.as_mut())
+                .expect("records API exists");
+            match change {
+                "aggregate_default" => {
+                    api.scopes.metadata = "population:aggregate".to_string();
+                    api.scopes.aggregate = None;
+                }
+                "evidence_verification" => {
+                    api.scopes.evidence_verification = Some(api.scopes.rows.clone());
+                }
+                _ => unreachable!("unknown scope collision case"),
+            }
+
+            let error = validate_project_entity_links(
+                &loaded.project,
+                &loaded.integrations,
+                &loaded.entities,
+            )
+            .expect_err("colliding effective records scopes must fail closed");
+            let diagnostic = error.to_string();
+            assert!(
+                diagnostic.contains(expected_fields.0)
+                    && diagnostic.contains(expected_fields.1),
+                "unexpected {name} diagnostic: {diagnostic}"
+            );
+        }
+    }
+
+    #[test]
+    fn attribute_release_scope_must_differ_from_every_effective_records_scope() {
+        for record_scope_field in ["metadata", "rows", "aggregate", "evidence_verification"] {
+            let mut loaded = load_registry_project(
+                &project_golden("nia-attribute-release"),
+                Some("local"),
+            )
+            .expect("NIA release project loads");
+            let api = loaded
+                .project
+                .services
+                .get_mut("nia-population-records")
+                .and_then(|service| service.api.as_mut())
+                .expect("records API exists");
+            let release_scope = "population:identity_release".to_string();
+            match record_scope_field {
+                "metadata" => api.scopes.metadata = release_scope,
+                "rows" => api.scopes.rows = release_scope,
+                "aggregate" => api.scopes.aggregate = Some(release_scope),
+                "evidence_verification" => {
+                    api.scopes.evidence_verification = Some(release_scope)
+                }
+                _ => unreachable!("unknown records scope field"),
+            }
+
+            let error = validate_project_entity_links(
+                &loaded.project,
+                &loaded.integrations,
+                &loaded.entities,
+            )
+            .expect_err("attribute release scope collision must fail closed");
+            let diagnostic = error.to_string();
+            assert!(
+                diagnostic.contains(
+                    "services.nia-population-records.api.attribute_release_profiles.solmara-nia-userinfo.release_scope"
+                ) && diagnostic.contains(&format!(
+                    "services.nia-population-records.api.scopes.{record_scope_field}"
+                )),
+                "unexpected {record_scope_field} collision diagnostic: {diagnostic}"
+            );
+        }
+    }
+
+    #[test]
     fn code_owned_rhai_conformance_matches_http_and_is_deterministic() {
         let bounded = run_code_owned_project_conformance(&project_golden("dhis2-tracker"))
             .expect("bounded DHIS2 conformance passes");
