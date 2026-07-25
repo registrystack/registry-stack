@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import urllib.parse
 from typing import Any
 
 
@@ -132,8 +133,22 @@ def validate_against_schema(
     elif kind == "string":
         if not isinstance(value, str):
             raise SchemaValidationError(f"{label} must be a string")
+        if len(value) < rule.get("minLength", 0) or len(value) > rule.get(
+            "maxLength", sys.maxsize
+        ):
+            raise SchemaValidationError(f"{label} has an invalid length")
         if "pattern" in rule and re.fullmatch(rule["pattern"], value) is None:
             raise SchemaValidationError(f"{label} has an invalid or unsafe value")
+        if rule.get("format") == "uri":
+            try:
+                parsed = urllib.parse.urlsplit(value)
+                parsed.port
+            except ValueError:
+                raise SchemaValidationError(
+                    f"{label} has an invalid URI"
+                ) from None
+            if not parsed.scheme or not parsed.netloc:
+                raise SchemaValidationError(f"{label} has an invalid URI")
     elif kind == "integer":
         if not isinstance(value, int) or isinstance(value, bool):
             raise SchemaValidationError(f"{label} must be an integer")

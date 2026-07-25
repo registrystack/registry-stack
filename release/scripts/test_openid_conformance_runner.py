@@ -176,6 +176,7 @@ class OpenIdConformanceRunnerTest(TestCase):
         test_info_version: str = "5.2.0",
         exported_version: str = "5.2.0",
         exported_from: str = "https://localhost.emobix.co.uk:8443",
+        issuer_url: str = "https://issuer.example.test",
     ) -> tuple[str, bytes]:
         scenario = self.runner.find_scenario(
             self.plan_map, "notary-oid4vci-issuer-metadata"
@@ -197,7 +198,7 @@ class OpenIdConformanceRunnerTest(TestCase):
                         f"[{module}]"
                     ),
                     "vci": {
-                        "credential_issuer_url": "https://issuer.example.test",
+                        "credential_issuer_url": issuer_url,
                         "authorization_server": "https://issuer.example.test",
                         "credential_configuration_id": "person_is_alive_sd_jwt",
                         "credential_proof_type_hint": "jwt",
@@ -309,6 +310,18 @@ class OpenIdConformanceRunnerTest(TestCase):
         self.assertNotIn("REGISTRY_LAB_", serialized)
         self.assertNotIn("blocked-by-lab", serialized)
 
+    def test_list_does_not_require_candidate_yaml_dependencies(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-S", str(RUNNER_PATH), "list"],
+            cwd=self.runner.REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("notary-oid4vci-issuer-metadata", result.stdout)
+
     def test_readme_documents_the_required_suite_jwks_trust_flow(self) -> None:
         readme = (
             self.runner.CONFIG_DIR / "README.md"
@@ -353,7 +366,9 @@ class OpenIdConformanceRunnerTest(TestCase):
         )
         scenario_schema = schema["$defs"]["scenario"]["properties"]
         self.assertEqual(scenario["id"], scenario_schema["scenario_id"]["const"])
-        self.assertEqual(scenario["suite_plan"], scenario_schema["plan"]["const"])
+        self.assertEqual(
+            scenario["suite_plan"], scenario_schema["expected_plan"]["const"]
+        )
         self.assertEqual(
             scenario["suite_modules"], scenario_schema["modules"]["const"]
         )
@@ -385,9 +400,13 @@ class OpenIdConformanceRunnerTest(TestCase):
         )
         self.assertEqual(
             self.runner.EVIDENCE_ASSOCIATION,
-            schema["$defs"]["candidate"]["properties"][
-                "tested_endpoint_association"
+            schema["$defs"]["deployment"]["properties"][
+                "candidate_association"
             ]["const"],
+        )
+        self.assertEqual(
+            self.runner.EVIDENCE_ASSOCIATION,
+            scenario_schema["plan_association"]["const"],
         )
         self.assertEqual(
             self.runner.EVIDENCE_ASSOCIATION,
@@ -463,7 +482,7 @@ class OpenIdConformanceRunnerTest(TestCase):
             )
             candidate = self.candidate()
             with patch.object(
-                self.runner, "load_candidate", return_value=candidate
+                self.runner, "load_authenticated_candidate", return_value=candidate
             ) as load_candidate:
                 with patch("builtins.print"):
                     self.assertEqual(0, self.runner.cmd_promote_evidence(args))
@@ -498,8 +517,12 @@ class OpenIdConformanceRunnerTest(TestCase):
                 summary["candidate"]["release_assets_authenticity_verified"]
             )
             self.assertEqual(
+                "https://issuer.example.test",
+                summary["deployment"]["issuer_url"],
+            )
+            self.assertEqual(
                 self.runner.EVIDENCE_ASSOCIATION,
-                summary["candidate"]["tested_endpoint_association"],
+                summary["deployment"]["candidate_association"],
             )
             self.assertEqual(self.plan_map["suite"]["ref"], summary["suite"]["commit"])
             self.assertEqual(
@@ -515,6 +538,14 @@ class OpenIdConformanceRunnerTest(TestCase):
                 self.suite_jwks_sha256(), summary["suite"]["jwks_sha256"]
             )
             self.assertTrue(summary["suite"]["export_signature_verified"])
+            self.assertEqual(
+                "oid4vci-1_0-issuer-test-plan",
+                summary["scenario"]["expected_plan"],
+            )
+            self.assertEqual(
+                self.runner.EVIDENCE_ASSOCIATION,
+                summary["scenario"]["plan_association"],
+            )
             self.assertEqual(
                 ["oid4vci-1_0-issuer-metadata-test"],
                 summary["scenario"]["modules"],
@@ -535,6 +566,7 @@ class OpenIdConformanceRunnerTest(TestCase):
             self.assertEqual(set(schema["required"]), set(summary))
             for definition, field in (
                 ("candidate", "candidate"),
+                ("deployment", "deployment"),
                 ("suite", "suite"),
                 ("scenario", "scenario"),
                 ("configuration", "configuration"),
@@ -590,7 +622,9 @@ class OpenIdConformanceRunnerTest(TestCase):
                 ]
             )
             with patch.object(
-                self.runner, "load_candidate", return_value=self.candidate()
+                self.runner,
+                "load_authenticated_candidate",
+                return_value=self.candidate(),
             ):
                 with patch.object(
                     self.runner,
@@ -632,7 +666,9 @@ class OpenIdConformanceRunnerTest(TestCase):
                 return summary, sensitive
 
             with patch.object(
-                self.runner, "load_candidate", return_value=self.candidate()
+                self.runner,
+                "load_authenticated_candidate",
+                return_value=self.candidate(),
             ):
                 with patch.object(
                     self.runner,
@@ -697,6 +733,78 @@ class OpenIdConformanceRunnerTest(TestCase):
                         self.candidate(),
                         self.suite_jwks_sha256(),
                     )
+
+    def test_issuer_url_runtime_and_schema_reject_the_same_unsafe_shapes(
+        self,
+    ) -> None:
+        scenario = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        schema = json.loads(
+            self.runner.EVIDENCE_SCHEMA_PATH.read_text(encoding="utf-8")
+        )
+        _, valid_raw_export = self.suite_export()
+        with tempfile.TemporaryDirectory() as tmp:
+            exported = self.runner.load_suite_export(
+                self.write_private_export(Path(tmp), valid_raw_export),
+                scenario["suite_modules"][0],
+                self.suite_jwks(),
+            )
+        valid_summary, _ = self.runner.build_evidence_summary(
+            self.plan_map,
+            scenario,
+            exported,
+            self.candidate(),
+            self.suite_jwks_sha256(),
+        )
+
+        for unsafe_url in (
+            "https://user:secret@issuer.example.test",
+            "https://issuer.example.test/path\ninjected",
+            "https://issuer.example.test/path\\confused",
+            "https://issuer.example.test:65536",
+            "https://[:::]/path",
+            "https://issuer.example.test/" + ("a" * 2048),
+        ):
+            with self.subTest(unsafe_url=repr(unsafe_url)):
+                _, raw_export = self.suite_export(issuer_url=unsafe_url)
+                with tempfile.TemporaryDirectory() as tmp:
+                    exported = self.runner.load_suite_export(
+                        self.write_private_export(Path(tmp), raw_export),
+                        scenario["suite_modules"][0],
+                        self.suite_jwks(),
+                    )
+                with self.assertRaisesRegex(
+                    self.runner.RunnerError, "issuer URL is invalid"
+                ):
+                    self.runner.build_evidence_summary(
+                        self.plan_map,
+                        scenario,
+                        exported,
+                        self.candidate(),
+                        self.suite_jwks_sha256(),
+                    )
+
+                invalid_summary = json.loads(json.dumps(valid_summary))
+                invalid_summary["deployment"]["issuer_url"] = unsafe_url
+                with self.assertRaises(self.runner.SchemaValidationError):
+                    self.runner.validate_against_schema(
+                        invalid_summary,
+                        schema,
+                        schema,
+                        "evidence summary",
+                    )
+
+        ipv6_summary = json.loads(json.dumps(valid_summary))
+        ipv6_summary["deployment"]["issuer_url"] = (
+            "https://[2001:db8::1]:443/issuer"
+        )
+        self.runner.validate_against_schema(
+            ipv6_summary,
+            schema,
+            schema,
+            "evidence summary",
+        )
 
     def test_promote_evidence_rejects_changed_terminal_result(self) -> None:
         scenario = self.runner.find_scenario(
