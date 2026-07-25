@@ -759,9 +759,11 @@ purpose, tenant, registry, and source-plan binding.
 
 `state_plane.database_url_env` names the environment variable containing the
 PostgreSQL runtime connection URL. The optional `root_certificate_path` pins a
-private PostgreSQL trust root. The epoch id and advisory-lock keys are stable,
-deployment-owned identifiers and must not collide with another state-plane
-user. Do not place a database URL in YAML.
+private PostgreSQL trust root exclusively: when configured, Relay does not
+also trust system roots. Omit it to use the host's normal system trust store.
+The epoch id and advisory-lock keys are stable, deployment-owned identifiers
+and must not collide with another state-plane user. Do not place a database URL
+in YAML.
 
 `artifacts` is a complete catalog. Every public contract listed there is an
 enabled consultation. Local development pins every file with both its typed

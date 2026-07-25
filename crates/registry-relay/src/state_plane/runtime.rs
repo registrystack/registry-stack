@@ -17,7 +17,7 @@ use std::{
     time::Duration,
 };
 
-use native_tls::TlsConnector;
+use native_tls::{Certificate, TlsConnector, TlsConnectorBuilder};
 use postgres_native_tls::MakeTlsConnector;
 use registry_platform_audit::AuditChainHasher;
 use thiserror::Error;
@@ -461,18 +461,48 @@ fn build_tls_connector(
     config: &ConsultationStatePlaneConfig,
 ) -> Result<TlsConnector, ConsultationStatePlaneRuntimeError> {
     let mut builder = TlsConnector::builder();
-    if let Some(path) = config.root_certificate_path.as_deref() {
+    let root_certificate = if let Some(path) = config.root_certificate_path.as_deref() {
         if path.as_os_str().as_encoded_bytes().len() > MAX_ROOT_CERTIFICATE_PATH_BYTES {
             return Err(ConsultationStatePlaneRuntimeError::InvalidRootCertificatePath);
         }
         let certificate_bytes = read_bounded_root_certificate(path)?;
         let certificate = native_tls::Certificate::from_pem(&certificate_bytes)
             .map_err(|_| ConsultationStatePlaneRuntimeError::InvalidRootCertificate)?;
-        builder.add_root_certificate(certificate);
-    }
+        Some(certificate)
+    } else {
+        None
+    };
+    configure_tls_trust_roots(&mut builder, root_certificate);
     builder
         .build()
         .map_err(|_| ConsultationStatePlaneRuntimeError::InvalidTlsConfiguration)
+}
+
+trait TlsTrustRootBuilder {
+    fn disable_built_in_roots(&mut self, disable: bool);
+    fn add_root_certificate(&mut self, certificate: Certificate);
+}
+
+impl TlsTrustRootBuilder for TlsConnectorBuilder {
+    fn disable_built_in_roots(&mut self, disable: bool) {
+        TlsConnectorBuilder::disable_built_in_roots(self, disable);
+    }
+
+    fn add_root_certificate(&mut self, certificate: Certificate) {
+        TlsConnectorBuilder::add_root_certificate(self, certificate);
+    }
+}
+
+fn configure_tls_trust_roots(
+    builder: &mut impl TlsTrustRootBuilder,
+    root_certificate: Option<Certificate>,
+) {
+    if let Some(certificate) = root_certificate {
+        // A configured root is a trust pin, not an addition to the host's
+        // mutable system trust store.
+        builder.disable_built_in_roots(true);
+        builder.add_root_certificate(certificate);
+    }
 }
 
 fn read_bounded_root_certificate(
@@ -644,6 +674,8 @@ const fn map_takeover_fence_error(_error: ServingFenceError) -> ConsultationStat
 mod tests {
     use std::{fs::OpenOptions, future::pending};
 
+    use rcgen::generate_simple_self_signed;
+
     use super::*;
 
     const SECRET_URL: &str =
@@ -695,6 +727,75 @@ mod tests {
         let rendered = format!("{error:?} {error}");
         assert!(!rendered.contains("sentinel"));
         assert!(!rendered.contains(path.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn configured_root_certificate_is_the_exclusive_trust_anchor() {
+        #[derive(Debug, PartialEq, Eq)]
+        enum TrustRootOperation {
+            DisableBuiltInRoots(bool),
+            AddRootCertificate,
+        }
+
+        #[derive(Default)]
+        struct RecordingBuilder {
+            operations: Vec<TrustRootOperation>,
+        }
+
+        impl TlsTrustRootBuilder for RecordingBuilder {
+            fn disable_built_in_roots(&mut self, disable: bool) {
+                self.operations
+                    .push(TrustRootOperation::DisableBuiltInRoots(disable));
+            }
+
+            fn add_root_certificate(&mut self, _certificate: Certificate) {
+                self.operations.push(TrustRootOperation::AddRootCertificate);
+            }
+        }
+
+        let fixture = generate_simple_self_signed(vec!["state-plane.example.test".to_owned()])
+            .expect("generate root-certificate fixture");
+        let certificate = Certificate::from_der(fixture.cert.der().as_ref())
+            .expect("fixture is a valid certificate");
+        let mut builder = RecordingBuilder::default();
+
+        configure_tls_trust_roots(&mut builder, Some(certificate));
+
+        assert_eq!(
+            builder.operations,
+            [
+                TrustRootOperation::DisableBuiltInRoots(true),
+                TrustRootOperation::AddRootCertificate,
+            ],
+            "the configured root must replace rather than extend system trust"
+        );
+    }
+
+    #[test]
+    fn absent_root_certificate_preserves_system_trust() {
+        #[derive(Default)]
+        struct RecordingBuilder {
+            calls: usize,
+        }
+
+        impl TlsTrustRootBuilder for RecordingBuilder {
+            fn disable_built_in_roots(&mut self, _disable: bool) {
+                self.calls += 1;
+            }
+
+            fn add_root_certificate(&mut self, _certificate: Certificate) {
+                self.calls += 1;
+            }
+        }
+
+        let mut builder = RecordingBuilder::default();
+
+        configure_tls_trust_roots(&mut builder, None);
+
+        assert_eq!(
+            builder.calls, 0,
+            "the native TLS builder default must retain system trust"
+        );
     }
 
     #[tokio::test]
