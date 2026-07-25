@@ -163,6 +163,23 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             record, allow_template=False, require_all_passed=True
         )
 
+    def test_release_input_digest_prefixes_are_equivalent(self) -> None:
+        record = self.candidate()
+        artifacts = record["candidate_artifact_set"]["artifacts"]
+        artifacts["p_release_inputs"] = artifacts["p_release_inputs"].removeprefix(
+            "sha256:"
+        )
+        artifacts["t_release_inputs"] = artifacts["t_release_inputs"].removeprefix(
+            "sha256:"
+        )
+        record["candidate_artifact_set"]["sha256"] = self.module.canonical_sha256(
+            artifacts
+        )
+
+        self.validate_record(
+            record, allow_template=False, require_all_passed=True
+        )
+
     def test_candidate_tag_must_resolve_to_exact_target_commit(self) -> None:
         record = self.candidate()
         tag_ref = f"refs/tags/{record['target_release']['version']}^{{commit}}"

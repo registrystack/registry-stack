@@ -131,6 +131,10 @@ def sha256_bytes(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
+def sha256_hex(value: str) -> str:
+    return value.removeprefix("sha256:")
+
+
 def canonical_sha256(value: Any) -> str:
     return sha256_bytes(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
 
@@ -211,7 +215,7 @@ def validate_config_schemas(
         if not template:
             assert target_commit is not None
             actual = sha256_bytes(git_bytes(root, target_commit, expected_path))
-            if digest.removeprefix("sha256:") != actual.removeprefix("sha256:"):
+            if sha256_hex(digest) != sha256_hex(actual):
                 raise ExerciseError(
                     f"config_schemas.{product}.sha256 does not match the exact target Git object"
                 )
@@ -243,14 +247,11 @@ def validate_artifact_set(value: Any, record: dict[str, Any], *, template: bool)
         "notary_image": record["target_release"]["notary_image_digest"],
     }
     if any(
-        artifacts[name].removeprefix("sha256:")
-        != digest.removeprefix("sha256:")
+        sha256_hex(artifacts[name]) != sha256_hex(digest)
         for name, digest in expected.items()
     ):
         raise ExerciseError("candidate_artifact_set does not match target release coordinates")
-    if artifact_set["sha256"].removeprefix(
-        "sha256:"
-    ) != canonical_sha256(artifacts).removeprefix("sha256:"):
+    if sha256_hex(artifact_set["sha256"]) != sha256_hex(canonical_sha256(artifacts)):
         raise ExerciseError("candidate_artifact_set.sha256 does not match its artifacts")
 
 
@@ -418,9 +419,7 @@ def validate_target_binding(record: dict[str, Any], root: Path) -> None:
 
     coordinate = record["target_release_manifest"]
     manifest_bytes = git_bytes(root, target_commit, Path(coordinate["path"]))
-    if coordinate["sha256"].removeprefix("sha256:") != sha256_bytes(
-        manifest_bytes
-    ).removeprefix("sha256:"):
+    if sha256_hex(coordinate["sha256"]) != sha256_hex(sha256_bytes(manifest_bytes)):
         raise ExerciseError("target_release_manifest.sha256 does not match exact target")
     try:
         manifest = yaml.safe_load(manifest_bytes)
@@ -444,7 +443,9 @@ def validate_target_binding(record: dict[str, Any], root: Path) -> None:
 
     artifact_set = record["candidate_artifact_set"]["artifacts"]
     for field, commit in (("p_release_inputs", source_ref), ("t_release_inputs", target_commit)):
-        if artifact_set[field] != release_inputs_sha256(root, commit):
+        if sha256_hex(artifact_set[field]) != sha256_hex(
+            release_inputs_sha256(root, commit)
+        ):
             raise ExerciseError(f"candidate_artifact_set.artifacts.{field} does not match exact Git object")
 
 
@@ -478,13 +479,13 @@ def validate_image_lock_binding(
         "tag_target": target["source_commit"],
         "image_lock_sha256": artifacts["image_lock"],
         "relay_image": "ghcr.io/registrystack/registry-relay@sha256:"
-        + target["relay_image_digest"].removeprefix("sha256:"),
+        + sha256_hex(target["relay_image_digest"]),
         "notary_image": "ghcr.io/registrystack/registry-notary@sha256:"
-        + target["notary_image_digest"].removeprefix("sha256:"),
+        + sha256_hex(target["notary_image_digest"]),
     }
-    if candidate["image_lock_sha256"].removeprefix(
-        "sha256:"
-    ) != expected["image_lock_sha256"].removeprefix("sha256:"):
+    if sha256_hex(candidate["image_lock_sha256"]) != sha256_hex(
+        expected["image_lock_sha256"]
+    ):
         raise ExerciseError(
             "candidate_artifact_set.artifacts.image_lock does not match "
             "the exact authenticated release image-lock asset"
