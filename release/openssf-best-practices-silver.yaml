@@ -1,0 +1,36 @@
+schema_version: registry-stack.openssf-best-practices-silver.v1
+project:
+  name: Registry Stack
+  repository_url: https://github.com/registrystack/registry-stack
+  badge_project_url: https://www.bestpractices.dev/en/projects/13372/silver
+  badge_project_status: silver
+  verified_at: "2026-07-25"
+  note: The authoritative project page reports a Silver badge. These in-tree answers mirror the selected project-page criteria so documentation drift is testable.
+criteria:
+  - id: build_repeatable
+    level: silver
+    status: Met
+    authoritative_url: https://www.bestpractices.dev/en/projects/13372/silver#build_repeatable
+    definition_url: https://www.bestpractices.dev/en/criteria#1.build_repeatable
+    evidence_urls:
+      - https://github.com/registrystack/registry-stack/blob/main/release/REPEATABLE-BUILDS.md
+      - https://github.com/registrystack/registry-stack/releases/tag/v0.13.0
+    explanation: The documented canonical Linux amd64 binaries and image config plus ordered rootfs layers have repeated bit-for-bit from the tagged source and pinned build inputs. The claim does not cover every generated evidence file or environment independence.
+  - id: signed_releases
+    level: silver
+    status: Met
+    authoritative_url: https://www.bestpractices.dev/en/projects/13372/silver#signed_releases
+    definition_url: https://www.bestpractices.dev/en/criteria#1.signed_releases
+    evidence_urls:
+      - https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md
+      - https://github.com/registrystack/registry-stack/releases/tag/v0.13.0
+    explanation: Current release assets carry keyless cosign signatures and certificates, with public verification commands and tag-bound SLSA provenance.
+  - id: version_tags_signed
+    level: silver
+    status: Unmet
+    authoritative_url: https://www.bestpractices.dev/en/projects/13372/silver#version_tags_signed
+    definition_url: https://www.bestpractices.dev/en/criteria#1.version_tags_signed
+    evidence_urls:
+      - https://github.com/registrystack/registry-stack/blob/main/docs/site/src/content/docs/security/openssf-evidence.mdx
+      - https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml
+    explanation: Release tag objects are not cryptographically signed. Source, candidate, and publication binding does not substitute for a signed Git tag.
