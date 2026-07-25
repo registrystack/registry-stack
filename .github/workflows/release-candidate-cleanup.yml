@@ -1,0 +1,79 @@
+name: Release candidate cleanup
+
+# This package-write workflow stays on repository_dispatch so an operator
+# cannot select branch-controlled workflow code. Manual dry run:
+# gh api --method POST repos/registrystack/registry-stack/dispatches \
+#   -f event_type=release-candidate-cleanup \
+#   -F 'client_payload[apply]=false'
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  repository_dispatch:
+    types: [release-candidate-cleanup]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-candidate-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    name: Delete expired candidate versions
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REQUESTED_APPLY: ${{ github.event.client_payload.apply }}
+    steps:
+      - name: Checkout protected cleanup tooling
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Validate cleanup mode
+        id: mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REPOSITORY}" != "registrystack/registry-stack" ]]; then
+            echo "Candidate cleanup can only run in registrystack/registry-stack" >&2
+            exit 1
+          fi
+          apply=true
+          if [[ "${GITHUB_EVENT_NAME}" == "repository_dispatch" ]]; then
+            apply="${REQUESTED_APPLY:-false}"
+          fi
+          if [[ "${apply}" != "true" && "${apply}" != "false" ]]; then
+            echo "client_payload.apply must be true or false" >&2
+            exit 1
+          fi
+          echo "apply=${apply}" >> "${GITHUB_OUTPUT}"
+
+      - name: Delete candidate versions older than seven days
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLY: ${{ steps.mode.outputs.apply }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          arguments=(
+            --output "${RUNNER_TEMP}/release-candidate-cleanup.json"
+          )
+          if [[ "${APPLY}" == "true" ]]; then
+            arguments+=(--apply)
+          fi
+          python3 release/scripts/cleanup-release-candidates.py "${arguments[@]}"
+
+      - name: Upload cleanup receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-candidate-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-candidate-cleanup.json
+          if-no-files-found: ignore
+          retention-days: 7
