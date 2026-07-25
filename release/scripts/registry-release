@@ -7,15 +7,19 @@ import argparse
 import hashlib
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+import release_candidate
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -61,6 +65,23 @@ PRODUCT_RELEASE_NOTE_GLOBS = (
 OPENAPI_RELEASE_SURFACE_GLOBS = (
     "products/*/openapi/*.openapi.json",
     "crates/*/openapi/*.openapi.json",
+)
+RELEASE_CANDIDATE_WORKFLOW = ".github/workflows/release-candidate.yml"
+RELEASE_CANDIDATE_RECEIPT_ARTIFACT = (
+    "registry-stack-release-candidate-receipt"
+)
+RELEASE_BUILDER_IMAGE = (
+    "rust:1.95-trixie@sha256:"
+    "f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3"
+)
+RELEASE_BUILDX_VERSION = "v0.33.0"
+RELEASE_BUILDKIT_IMAGE = (
+    "moby/buildkit:v0.31.2@sha256:"
+    "2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
+)
+GITHUB_REMOTE = re.compile(
+    r"^(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
+    r"(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$"
 )
 
 
@@ -1404,7 +1425,7 @@ def validate_selected_manifest(repo: Path, record: dict[str, Any]) -> None:
     version = record["version"]
     if stack.get("source_repo") != "registrystack/registry-stack":
         raise ReleasePlanError(
-            f"selected manifest stack.source_repo must be registrystack/registry-stack"
+            "selected manifest stack.source_repo must be registrystack/registry-stack"
         )
     source_ref = stack.get("source_ref")
     status = stack.get("status")
@@ -2139,6 +2160,555 @@ def run_release_plan(
     return 0
 
 
+def trusted_candidate_builders(repo: Path) -> dict[str, str]:
+    binary_recipe = repo / "release/scripts/build-release-binaries.sh"
+    image_recipe = repo / "release/scripts/build-release-image.sh"
+    for path in (binary_recipe, image_recipe):
+        if path.is_symlink() or not path.is_file():
+            raise ReleasePlanError(f"candidate recipe must be a regular file: {path}")
+    return {
+        "binary_image": RELEASE_BUILDER_IMAGE,
+        "binary_fingerprint": hashlib.sha256(
+            RELEASE_BUILDER_IMAGE.encode()
+        ).hexdigest(),
+        "binary_recipe_fingerprint": sha256(binary_recipe),
+        "image_buildkit_image": RELEASE_BUILDKIT_IMAGE,
+        "image_buildx_version": RELEASE_BUILDX_VERSION,
+        "image_recipe_fingerprint": sha256(image_recipe),
+    }
+
+
+def run_checked(command: list[str], *, cwd: Path | None = None) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise ReleasePlanError(f"cannot run {command[0]}: {exc}") from exc
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise ReleasePlanError(
+            f"{' '.join(shlex.quote(part) for part in command)} failed: {detail}"
+        )
+    return result.stdout
+
+
+def verify_origin_repository(repo: Path, repository: str) -> None:
+    remote_url = run_checked(["git", "remote", "get-url", "origin"], cwd=repo).strip()
+    match = GITHUB_REMOTE.fullmatch(remote_url)
+    if match is None or match.group("repository").casefold() != repository.casefold():
+        raise ReleasePlanError(
+            f"origin remote {remote_url!r} is not https://github.com/{repository}.git"
+        )
+
+
+def refresh_protected_main(repo: Path, repository: str) -> str:
+    """Fetch and resolve protected main from the exact expected GitHub remote."""
+
+    verify_origin_repository(repo, repository)
+    run_checked(
+        [
+            "git",
+            "fetch",
+            "--no-tags",
+            "--force",
+            "origin",
+            "refs/heads/main:refs/remotes/origin/main",
+        ],
+        cwd=repo,
+    )
+    return resolve_commit(repo, "refs/remotes/origin/main", "protected main")
+
+
+def download_gh_api_bytes(
+    endpoint: str,
+    destination: Path,
+    *,
+    headers: tuple[str, ...] = (),
+) -> None:
+    command = ["gh", "api", endpoint]
+    for header in headers:
+        command.extend(["--header", header])
+    try:
+        with destination.open("wb") as output:
+            completed = subprocess.run(
+                command,
+                stdout=output,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+    except OSError as exc:
+        raise ReleasePlanError(f"cannot download {endpoint}: {exc}") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.decode(errors="replace").strip()
+        raise ReleasePlanError(f"cannot download {endpoint}: {detail}")
+
+
+def request_release_candidate(
+    repo: Path,
+    version: str,
+    release_id: str,
+    source_sha: str,
+    default_branch: str,
+    proof_level: str,
+    milestone: str,
+    measurement_bootstrap: bool,
+    repository: str,
+    *,
+    print_request: bool,
+) -> int:
+    try:
+        context = prepare_release_context(repo, version, release_id)
+        selected_stack = context["selected"]["data"]["stack"]
+        remote_default = refresh_protected_main(context["repo"], repository)
+        resolved_source = resolve_commit(context["repo"], source_sha, "candidate source")
+        resolved_default = resolve_commit(
+            context["repo"], default_branch, "protected default branch"
+        )
+        if resolved_source != remote_default or resolved_default != remote_default:
+            raise ReleasePlanError(
+                f"candidate source {resolved_source} must equal the current protected "
+                f"default-branch commit {remote_default}"
+            )
+        if selected_stack.get("status") != "release-candidate":
+            raise ReleasePlanError(
+                "candidate dispatch requires the selected manifest to have "
+                "release-candidate status"
+            )
+        manifest_source = selected_stack.get("source_ref")
+        if (
+            not isinstance(manifest_source, str)
+            or HEX40.fullmatch(manifest_source) is None
+            or not is_ancestor(context["repo"], manifest_source, resolved_source)
+        ):
+            raise ReleasePlanError(
+                "candidate dispatch source must descend from the selected manifest source_ref"
+            )
+        if proof_level not in {"auto", "extended"}:
+            raise ReleasePlanError("candidate proof level request must be auto or extended")
+        if milestone not in {"beta", "stable", "audit"}:
+            raise ReleasePlanError("candidate milestone must be beta, stable, or audit")
+        command = [
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            f"repos/{repository}/dispatches",
+            "-f",
+            "event_type=release_candidate",
+            "-F",
+            f"client_payload[version]={version}",
+            "-F",
+            f"client_payload[release_id]={release_id}",
+            "-F",
+            f"client_payload[source_sha]={resolved_source}",
+            "-F",
+            f"client_payload[proof_level]={proof_level}",
+            "-F",
+            f"client_payload[milestone]={milestone}",
+            "-F",
+            "client_payload[measurement_bootstrap]="
+            + ("true" if measurement_bootstrap else "false"),
+        ]
+        if print_request:
+            print(" ".join(shlex.quote(part) for part in command))
+        else:
+            run_checked(command, cwd=context["repo"])
+            print(
+                f"requested {proof_level} release candidate {release_id} "
+                f"v{version} at {resolved_source}"
+            )
+    except (OSError, UnicodeError, ReleasePlanError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def download_candidate_artifact(
+    repository: str,
+    artifact_id: int,
+    destination: Path,
+    *,
+    expected_archive_sha256: str,
+) -> None:
+    archive = destination.parent / f"artifact-{artifact_id}.zip"
+    download_gh_api_bytes(
+        f"repos/{repository}/actions/artifacts/{artifact_id}/zip",
+        archive,
+    )
+    try:
+        release_candidate.extract_artifact_archive(
+            archive,
+            destination,
+            expected_sha256=expected_archive_sha256,
+        )
+    except release_candidate.CandidateError as exc:
+        raise ReleasePlanError(
+            f"cannot verify candidate artifact {artifact_id}: {exc}"
+        ) from exc
+
+
+def verify_candidate_run_for_finalize(
+    repo: Path,
+    *,
+    repository: str,
+    candidate_run: int,
+    version: str,
+    release_id: str,
+    source_sha: str,
+) -> tuple[dict[str, Any], str]:
+    with tempfile.TemporaryDirectory(prefix="registry-candidate-") as directory:
+        temporary = Path(directory)
+        run_path = temporary / "trusted-run.json"
+        artifacts_path = temporary / "artifact-metadata.json"
+        run_document = json.loads(
+            run_checked(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{repository}/actions/runs/{candidate_run}",
+                ]
+            )
+        )
+        run_path.write_text(json.dumps(run_document), encoding="utf-8")
+        artifacts_document = json.loads(
+            run_checked(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{repository}/actions/runs/{candidate_run}/artifacts?per_page=100",
+                ]
+            )
+        )
+        artifacts_path.write_text(json.dumps(artifacts_document), encoding="utf-8")
+        trusted_run = release_candidate.trusted_run_from_json(run_document)
+        run_attempt = trusted_run["run_attempt"]
+        try:
+            attempt_artifacts = release_candidate.validate_attempt_artifact_inventory(
+                artifacts_document,
+                run_id=candidate_run,
+                run_attempt=run_attempt,
+            )
+        except release_candidate.CandidateError as exc:
+            raise ReleasePlanError(
+                f"candidate attempt artifact inventory is invalid: {exc}"
+            ) from exc
+        receipt_artifact_name = (
+            f"{RELEASE_CANDIDATE_RECEIPT_ARTIFACT}-{candidate_run}-{run_attempt}"
+        )
+        receipt_artifact = attempt_artifacts[receipt_artifact_name]
+        receipt_dir = temporary / "receipt"
+        download_candidate_artifact(
+            repository,
+            receipt_artifact["id"],
+            receipt_dir,
+            expected_archive_sha256=receipt_artifact["archive_sha256"],
+        )
+        receipt_path = receipt_dir / "release-candidate-receipt.json"
+        receipt_document = release_candidate.read_json(receipt_path)
+        if not isinstance(receipt_document, dict):
+            raise ReleasePlanError("candidate receipt must be an object")
+        try:
+            artifact_records = receipt_document["artifacts"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ReleasePlanError(f"candidate receipt identity is malformed: {exc}") from exc
+
+        artifact_root = temporary / "payload"
+        if not isinstance(artifact_records, list):
+            raise ReleasePlanError("candidate receipt artifacts must be an array")
+        for record in artifact_records:
+            if not isinstance(record, dict) or not isinstance(record.get("name"), str):
+                raise ReleasePlanError("candidate receipt artifact record is malformed")
+            artifact_id = int(record.get("artifact_id", 0))
+            artifact_name = record["name"]
+            metadata = attempt_artifacts.get(artifact_name)
+            if (
+                metadata is None
+                or metadata["id"] != artifact_id
+                or metadata["archive_sha256"] != record.get("archive_sha256")
+            ):
+                raise ReleasePlanError(
+                    f"candidate artifact {artifact_name!r} does not match the exact "
+                    "current-attempt API inventory"
+                )
+            download_candidate_artifact(
+                repository,
+                artifact_id,
+                artifact_root / artifact_name,
+                expected_archive_sha256=metadata["archive_sha256"],
+            )
+
+        expected_builders_path = temporary / "expected-builders.json"
+        expected_builders = trusted_candidate_builders(repo)
+        expected_builders_path.write_text(
+            json.dumps(expected_builders, sort_keys=True), encoding="utf-8"
+        )
+        promoted_identities: set[str] = set()
+        release_pages = json.loads(
+            run_checked(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{repository}/releases?per_page=100",
+                    "--paginate",
+                    "--slurp",
+                ]
+            )
+        )
+        if not isinstance(release_pages, list) or any(
+            not isinstance(page, list) for page in release_pages
+        ):
+            raise ReleasePlanError("GitHub Releases response is malformed")
+        releases = [release for page in release_pages for release in page]
+        for published_release in releases:
+            assets = (
+                published_release.get("assets")
+                if isinstance(published_release, dict)
+                else None
+            )
+            if not isinstance(assets, list):
+                continue
+            for asset in assets:
+                name = asset.get("name") if isinstance(asset, dict) else None
+                api_url = asset.get("url") if isinstance(asset, dict) else None
+                if (
+                    not isinstance(name, str)
+                    or not name.endswith("-candidate-receipt.json")
+                    or not isinstance(api_url, str)
+                ):
+                    continue
+                prior_path = temporary / f"promoted-{asset.get('id')}.json"
+                download_gh_api_bytes(
+                    api_url,
+                    prior_path,
+                    headers=("Accept: application/octet-stream",),
+                )
+                prior = release_candidate.read_json(prior_path)
+                identity = (
+                    prior.get("promotion", {}).get("identity")
+                    if isinstance(prior, dict)
+                    else None
+                )
+                if not isinstance(identity, str):
+                    raise ReleasePlanError(
+                        f"published candidate receipt {name} has no release identity"
+                    )
+                promoted_identities.add(identity)
+        try:
+            receipt = release_candidate.validate_receipt(
+                receipt_document,
+                artifact_root=artifact_root,
+                artifact_metadata=release_candidate.artifact_metadata_from_json(
+                    artifacts_document
+                ),
+                expected_source_sha=source_sha,
+                expected_version=version,
+                expected_release_id=release_id,
+                expected_run_id=candidate_run,
+                expected_run_attempt=run_attempt,
+                promotion=True,
+                trusted_run=trusted_run,
+                expected_builders=expected_builders,
+                promoted_identities=promoted_identities,
+            )
+        except release_candidate.CandidateError as exc:
+            raise ReleasePlanError(f"candidate verification failed: {exc}") from exc
+
+        signer = f"{repository}/{RELEASE_CANDIDATE_WORKFLOW}"
+        attested_files = [receipt_path]
+        attested_files.extend(
+            artifact_root / file_record["path"]
+            for artifact in receipt["artifacts"]
+            for file_record in artifact["files"]
+        )
+        for path in attested_files:
+            run_checked(
+                [
+                    "gh",
+                    "attestation",
+                    "verify",
+                    str(path),
+                    "--repo",
+                    repository,
+                    "--signer-workflow",
+                    signer,
+                    "--signer-digest",
+                    source_sha,
+                    "--source-ref",
+                    "refs/heads/main",
+                    "--source-digest",
+                    source_sha,
+                    "--deny-self-hosted-runners",
+                ]
+            )
+
+        receipt_sha = release_candidate.sha256_file(receipt_path)
+        binding = release_candidate.render_tag_binding(
+            candidate_run, run_attempt, receipt_sha
+        )
+        return receipt, binding
+
+
+def finalize_with_candidate(
+    repo: Path,
+    version: str,
+    release_id: str,
+    promotion_commit: str,
+    default_branch: str,
+    candidate_run: int,
+    repository: str,
+    plan_output: Path | None,
+) -> int:
+    try:
+        context = prepare_release_context(repo, version, release_id)
+        stack = context["selected"]["data"]["stack"]
+        if stack.get("status") != "release-candidate":
+            raise ReleasePlanError(
+                "candidate finalize requires the selected manifest to have "
+                "release-candidate status"
+            )
+        tag = f"v{version}"
+        remote_main = refresh_protected_main(context["repo"], repository)
+        local_tag = subprocess.run(
+            ["git", "show-ref", "--verify", "--quiet", f"refs/tags/{tag}"],
+            cwd=context["repo"],
+            check=False,
+        )
+        if local_tag.returncode == 0:
+            raise ReleasePlanError(f"local tag {tag} already exists")
+        if local_tag.returncode != 1:
+            raise ReleasePlanError(f"could not prove local tag {tag} is absent")
+        remote_tag = subprocess.run(
+            [
+                "git",
+                "ls-remote",
+                "--exit-code",
+                "--tags",
+                "origin",
+                f"refs/tags/{tag}",
+            ],
+            cwd=context["repo"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if remote_tag.returncode == 0:
+            raise ReleasePlanError(f"remote tag {tag} already exists")
+        if remote_tag.returncode != 2:
+            raise ReleasePlanError(
+                f"could not prove remote tag {tag} is absent: "
+                f"{remote_tag.stderr.strip()}"
+            )
+        release_lookup = subprocess.run(
+            ["gh", "api", f"repos/{repository}/releases/tags/{tag}"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if release_lookup.returncode == 0:
+            raise ReleasePlanError(
+                f"GitHub Release {tag} already exists; fix forward with a new version"
+            )
+        if (
+            "HTTP 404" not in release_lookup.stderr
+            and "Not Found" not in release_lookup.stderr
+        ):
+            raise ReleasePlanError(
+                f"could not prove GitHub Release {tag} is absent: "
+                f"{release_lookup.stderr.strip()}"
+            )
+        source_sha = resolve_commit(context["repo"], promotion_commit, "tag target")
+        default_sha = resolve_commit(context["repo"], default_branch, "default branch")
+        if source_sha != default_sha or default_sha != remote_main:
+            raise ReleasePlanError(
+                f"candidate tag target {source_sha} must equal current {default_branch} "
+                f"and trusted origin/main at {remote_main}"
+            )
+        manifest_source = stack.get("source_ref")
+        if (
+            not isinstance(manifest_source, str)
+            or HEX40.fullmatch(manifest_source) is None
+            or not is_ancestor(context["repo"], manifest_source, source_sha)
+        ):
+            raise ReleasePlanError(
+                "candidate tag target must descend from the exact manifest source_ref"
+            )
+        receipt, binding = verify_candidate_run_for_finalize(
+            repo,
+            repository=repository,
+            candidate_run=candidate_run,
+            version=version,
+            release_id=release_id,
+            source_sha=source_sha,
+        )
+        final_remote_main = refresh_protected_main(context["repo"], repository)
+        if final_remote_main != source_sha:
+            raise ReleasePlanError(
+                "protected main moved while the candidate was being verified; "
+                "dispatch and verify a new candidate"
+            )
+        plan = {
+            "schema_version": RELEASE_PLAN_SCHEMA,
+            "operation": "finalize-candidate",
+            "status": "ready",
+            "requested": {
+                "version": version,
+                "release_id": release_id,
+                "tag_target": source_sha,
+                "default_branch": default_branch,
+                "default_branch_commit": default_sha,
+            },
+            "selected": manifest_plan_identity(context["repo"], context["selected"]),
+            "checks": list(context["checks"])
+            + [
+                passed_check(
+                    "candidate-source",
+                    f"tag target {source_sha} is current protected main and descends "
+                    f"from manifest source_ref {manifest_source}",
+                ),
+                passed_check(
+                    "candidate-receipt",
+                    f"candidate run {receipt['workflow']['run_id']}/"
+                    f"{receipt['workflow']['run_attempt']} passed local verification",
+                ),
+            ],
+            "changes": [],
+            "candidate": {
+                "run_id": receipt["workflow"]["run_id"],
+                "run_attempt": receipt["workflow"]["run_attempt"],
+                "receipt_sha256": hashlib.sha256(
+                    release_candidate.canonical_json(receipt)
+                ).hexdigest(),
+                "verification": "passed",
+            },
+        }
+        command = (
+            f"git tag -a {shlex.quote(tag)} {shlex.quote(source_sha)} "
+            f"-m {shlex.quote(binding.rstrip())}"
+        )
+        plan["tag_command"] = command
+        emit_release_plan(plan, plan_output)
+        print(
+            "Candidate verification passed. Run this exact annotated-tag command:\n"
+            f"{command}",
+            file=sys.stderr,
+        )
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        ReleasePlanError,
+        release_candidate.CandidateError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="registry-release")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2203,6 +2773,23 @@ def main() -> int:
     prepare_parser.add_argument("--release-id", required=True)
     prepare_parser.add_argument("--repo", type=Path, default=ROOT)
     prepare_parser.add_argument("--plan-output", type=Path)
+    candidate_parser = subparsers.add_parser("request-candidate")
+    candidate_parser.add_argument("--version", required=True)
+    candidate_parser.add_argument("--release-id", required=True)
+    candidate_parser.add_argument("--source-sha", required=True)
+    candidate_parser.add_argument(
+        "--proof-level", choices=("auto", "extended"), default="auto"
+    )
+    candidate_parser.add_argument(
+        "--milestone", choices=("beta", "stable", "audit"), default="beta"
+    )
+    candidate_parser.add_argument("--measurement-bootstrap", action="store_true")
+    candidate_parser.add_argument("--default-branch", default="origin/main")
+    candidate_parser.add_argument(
+        "--repository", default="registrystack/registry-stack"
+    )
+    candidate_parser.add_argument("--repo", type=Path, default=ROOT)
+    candidate_parser.add_argument("--print-request", action="store_true")
     finalize_parser = subparsers.add_parser("finalize")
     finalize_parser.add_argument("--version", required=True)
     finalize_parser.add_argument("--release-id", required=True)
@@ -2210,6 +2797,10 @@ def main() -> int:
     finalize_parser.add_argument("--default-branch", default="origin/main")
     finalize_parser.add_argument("--repo", type=Path, default=ROOT)
     finalize_parser.add_argument("--plan-output", type=Path)
+    finalize_parser.add_argument("--candidate-run", type=int)
+    finalize_parser.add_argument(
+        "--repository", default="registrystack/registry-stack"
+    )
     args = parser.parse_args()
 
     if args.command == "validate":
@@ -2264,7 +2855,31 @@ def main() -> int:
             args.release_id,
             args.plan_output,
         )
+    if args.command == "request-candidate":
+        return request_release_candidate(
+            args.repo,
+            args.version,
+            args.release_id,
+            args.source_sha,
+            args.default_branch,
+            args.proof_level,
+            args.milestone,
+            args.measurement_bootstrap,
+            args.repository,
+            print_request=args.print_request,
+        )
     if args.command == "finalize":
+        if args.candidate_run is not None:
+            return finalize_with_candidate(
+                args.repo,
+                args.version,
+                args.release_id,
+                args.promotion_commit,
+                args.default_branch,
+                args.candidate_run,
+                args.repository,
+                args.plan_output,
+            )
         return run_release_plan(
             "finalize",
             args.repo,
