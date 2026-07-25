@@ -1,8 +1,57 @@
 # Repeatable Build Evidence
 
-Registry Stack release builds are intended to be repeatable from the release
-tag, locked dependencies, and the pinned release builder image declared in
-`.github/workflows/release.yml`.
+Registry Stack release builds are repeatable within the scopes recorded on this
+page: canonical Linux amd64 binaries, and each runtime image's config plus
+ordered rootfs layers.
+The inputs are the exact release tag, locked dependencies, pinned release
+builder, pinned BuildKit, and checked-in image recipes.
+
+## Automated proof model
+
+The pre-tag candidate workflow builds the canonical Linux payload twice on
+separate hosted runners, with no shared compiled output.
+One build uses the exact-key Cargo cache and the other builds cold.
+The candidate gate requires byte-identical binaries and identical image config
+and ordered rootfs layer digests.
+That same-run comparison proves build determinism under the declared build
+contract.
+It does not prove environment independence.
+
+The scheduled `.github/workflows/release-repeatability.yml` workflow carries
+the environment-independent part of the public
+[GH#127](https://github.com/registrystack/registry-stack/issues/127) procedure.
+The job selects one exact published tag with a candidate receipt, starts from a
+clean checkout and empty Cargo and target directories, rebuilds on a later
+hosted runner, and compares:
+
+- The six canonical Linux amd64 binaries against published `SHA256SUMS`
+- Registry Notary image config and ordered rootfs layer digests against the
+  published immutable digest
+- Registry Relay image config and ordered rootfs layer digests against the
+  published immutable digest
+- The published candidate receipt against its GitHub build attestation
+- The published image indexes for the expected BuildKit provenance topology
+
+The workflow attests a machine-readable repeatability receipt, retains the
+supporting Actions artifact for seven days, and updates one durable comment on
+GH#127.
+The comment keeps the exact tag, receipt hash, and workflow run URL after the
+short-lived artifact expires.
+
+An external reviewer can run the same job for an exact tag:
+
+```sh
+gh api --method POST repos/registrystack/registry-stack/dispatches \
+  -f event_type=release-repeatability \
+  -f 'client_payload[tag]=v0.14.0'
+```
+
+The automated path applies to releases that include
+`registry-stack-<tag>-candidate-receipt.json`.
+The first end-to-end extended proof remains blocked until the first release
+produced by the candidate and promotion workflows exists.
+The historical evidence on this page remains the authoritative proof for
+earlier tags.
 
 ## v0.13.0 Linux amd64 Binary and OCI Image Proof
 

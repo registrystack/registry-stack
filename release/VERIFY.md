@@ -1,24 +1,39 @@
 # Verify A Registry Stack Release
 
-The release workflow's `github-release` job signs release artifacts using
-keyless cosign. For each signed artifact, it uploads the artifact with a sibling
-`.sig` signature and `.pem` signing certificate. For tag-triggered releases, a
-separate SLSA generator job uploads the release-level provenance asset named
-`registry-stack-${tag}-release-provenance.intoto.jsonl`. The provenance asset
-does not have sibling cosign files. `slsa-verifier` authenticates it and checks
-that the release artifact is one of its subjects.
+The release workflow signs release artifacts using keyless cosign.
+Each signed artifact has a sibling `.sig` signature and `.pem` signing
+certificate.
+A separate SLSA generator uploads the tag-bound release provenance asset named
+`registry-stack-${tag}-release-provenance.intoto.jsonl`.
+`slsa-verifier` authenticates that provenance and checks that a release
+artifact is one of its subjects.
 
+Releases produced by the candidate path also publish
+`registry-stack-${tag}-candidate-receipt.json`.
+The candidate receipt records the exact build workflow, run, attempt, source
+commit, builder fingerprints, artifact hashes, image topology, scans, and
+comparison results.
+GitHub build attestation authenticates the receipt.
+The receipt itself is then included in the signed and reconciled GitHub Release
+asset set.
+
+Release provenance binds the tagged source and published bytes.
+The candidate receipt records the build run identity that compiled those bytes.
+Together they provide the tag to promotion to candidate-build chain without
+claiming that the promotion run recompiled the payload.
+
+`v0.13.0` is the current public evidence example for image locks, signatures,
+provenance, and repeatable Linux amd64 outputs.
+It predates the candidate receipt chain.
 Earlier releases, including `v0.8.2`, may include cosign signatures but no SLSA
-provenance asset. `v0.8.0` is unsigned. The first procedure below truthfully
-describes `v0.8.4`, which ships registryctl as a binary without a release image
-lock. The second procedure describes the additional registryctl image-lock
-assets introduced in `v0.9.0`.
+provenance asset.
+`v0.8.0` is unsigned.
 
 The current lock-bearing release workflow refuses to build or push a release
 below `v0.9.0`. A historical tag rerun uses the workflow committed at that tag.
 
-Repeatable build evidence for the `v0.8.3` Linux amd64 binary assets is
-documented in [`release/REPEATABLE-BUILDS.md`](REPEATABLE-BUILDS.md).
+Repeatable build evidence through `v0.13.0` is documented in
+[`release/REPEATABLE-BUILDS.md`](REPEATABLE-BUILDS.md).
 
 ## Install Verification Tools
 
@@ -31,6 +46,78 @@ Install `slsa-verifier` from the upstream
 For repeatable evidence, pin and record the verifier version you used. As of
 2026-07-09, the current upstream release is
 [`v2.7.1`](https://github.com/slsa-framework/slsa-verifier/releases/tag/v2.7.1).
+
+## Verify A Candidate Receipt
+
+Use this procedure only for a release that contains
+`registry-stack-${tag}-candidate-receipt.json`.
+Set `RELEASE_TAG` to the exact published tag before running the commands.
+
+```bash
+tag="${RELEASE_TAG:?set RELEASE_TAG to an exact published tag}"
+receipt="registry-stack-${tag}-candidate-receipt.json"
+
+mkdir -p "verify-${tag}"
+cd "verify-${tag}"
+
+gh release download "${tag}" \
+  --repo registrystack/registry-stack \
+  --pattern "${receipt}" \
+  --pattern "${receipt}.sig" \
+  --pattern "${receipt}.pem"
+```
+
+Check the receipt's closed identity fields against the selected tag:
+
+```bash
+jq -e \
+  --arg tag "${tag}" \
+  --arg repository registrystack/registry-stack '
+  .schema_version == "registry-stack.release-candidate-receipt.v1" and
+  .repository == $repository and
+  .release.tag == $tag and
+  (.release.source_sha | test("^[0-9a-f]{40}$")) and
+  .workflow.path == ".github/workflows/release-candidate.yml" and
+  .workflow.event == "repository_dispatch" and
+  (.workflow.run_id | type == "number") and
+  (.workflow.run_attempt | type == "number") and
+  .comparisons.binary_bytes == true and
+  .comparisons.image_config_and_layers == true and
+  .promotion.state == "candidate"
+' "${receipt}"
+```
+
+Verify the release signature created by the tag-bound promotion workflow:
+
+```bash
+cosign verify-blob "${receipt}" \
+  --signature "${receipt}.sig" \
+  --certificate "${receipt}.pem" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity \
+    "https://github.com/registrystack/registry-stack/.github/workflows/release.yml@refs/tags/${tag}"
+```
+
+Then authenticate the candidate workflow and exact workflow revision recorded
+by the receipt:
+
+```bash
+workflow_sha="$(jq -er '.workflow.sha' "${receipt}")"
+
+gh attestation verify "${receipt}" \
+  --repo registrystack/registry-stack \
+  --signer-workflow \
+    registrystack/registry-stack/.github/workflows/release-candidate.yml \
+  --signer-digest "${workflow_sha}" \
+  --source-ref refs/heads/main \
+  --source-digest "${workflow_sha}" \
+  --deny-self-hosted-runners
+```
+
+Do not derive the expected workflow path from the receipt.
+The literal trusted path in this command is part of the verification policy.
+The receipt's `release.source_sha`, release tag target, and release provenance
+source must all agree.
 
 ## Verify A v0.8.4 Registryctl Binary
 
@@ -246,32 +333,35 @@ fail before mutation when the matching lock is absent or invalid.
 Registryctl `v0.8.4` predates this lock contract and remains a binary-only
 installation.
 
-## Manual Rebuilds And Current Scope
+## Promotion And Current Scope
 
-If a release was rebuilt manually through `workflow_dispatch`, inspect the
-certificate identity, the release capsule's workflow URL, and the SLSA
-provenance source before accepting the asset. The release workflow only uploads
-SLSA provenance when the run is associated with `refs/tags/${tag}`.
+The candidate workflow compiles the release payload before the tag exists.
+The tag-bound workflow verifies the exact candidate run, attempt, receipt, and
+bytes, then promotes those bytes without rebuilding product binaries.
+It signs binaries, the registryctl image lock, checksums, release file SBOMs,
+image-input binary SBOMs, image evidence files, image SBOMs, Grype reports,
+release capsules, and the candidate receipt before upload.
+The separate SLSA generator publishes tag-bound provenance for those
+non-signature artifacts.
+OCI image signatures are not yet published for the root monorepo release.
 
-The workflow never replaces assets on an existing GitHub Release. If a tag run
-has already created the Release, fix forward with a new version instead of
-rerunning it with `--clobber`. This keeps published payloads, signatures, and
-SLSA provenance immutable as one set.
+The workflow never replaces assets on an existing GitHub Release.
+If a tag run has already created the Release, fix forward with a new version
+instead of rerunning it with `--clobber`.
+This keeps published payloads, signatures, candidate receipt, and SLSA
+provenance immutable as one set.
 
-For `v0.9.0` and later, the `github-release` job signs binaries, the registryctl
-image lock, checksums, release file SBOMs, image-input binary SBOMs, image
-evidence files, image SBOMs, Grype reports, and release capsules before upload.
-When the workflow runs from the release tag ref, the separate SLSA generator
-job publishes provenance for those non-signature artifacts. OCI image
-signatures are not yet published for the root monorepo release.
+For a historical release rebuilt through the earlier `workflow_dispatch` path,
+inspect the certificate identity, release capsule workflow URL, and SLSA
+provenance source before accepting the asset.
 
 Registry-pushed Notary and Relay image indexes retain BuildKit provenance.
 `RELEASE_IMAGE_OCI_LAYOUT` disables timestamped BuildKit provenance only for
-retained local layouts used in exact same-ref reproducibility comparisons. Do
-not publish that comparison layout as the release image. For post-tag
-verification, require the pushed image's Linux amd64 application manifest and
-ordered rootfs layers to match the retained final-target proof, then verify the
-published index's BuildKit provenance separately.
+retained local layouts used in exact same-ref reproducibility comparisons.
+Do not publish that comparison layout as the release image.
+For post-tag verification, require the pushed image's Linux amd64 image config
+and ordered rootfs layers to match the retained candidate proof, then verify
+the published index's BuildKit provenance separately.
 
 The release capsule summarizes binary asset hashes, the image lock under
 `release_files`, file SBOM asset names, image digests, image SBOMs, Grype

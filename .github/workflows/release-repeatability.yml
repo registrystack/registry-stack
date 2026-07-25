@@ -1,0 +1,475 @@
+name: Release repeatability proof
+
+# This issue-write and OIDC workflow stays on repository_dispatch so an
+# operator cannot select branch-controlled workflow code. Manual invocation:
+# gh api --method POST repos/registrystack/registry-stack/dispatches \
+#   -f event_type=release-repeatability \
+#   -f 'client_payload[tag]=v0.14.0'
+on:
+  schedule:
+    - cron: "37 3 * * 1"
+  repository_dispatch:
+    types: [release-repeatability]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-repeatability
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CRANE_VERSION: v0.21.2
+  CRANE_LINUX_AMD64_SHA256: 897e7c342db072ba76531246fc18fbf3e8e298688b6ecf98916770984b263866
+  RELEASE_BUILDX_VERSION: v0.33.0
+  RELEASE_BUILDKIT_IMAGE: moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
+  REQUESTED_TAG: ${{ github.event.client_payload.tag }}
+
+jobs:
+  rebuild:
+    name: Rebuild published tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      issues: write
+    steps:
+      - name: Checkout protected repeatability tooling
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          path: generator
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Resolve exact published tag
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REPOSITORY}" != "registrystack/registry-stack" ]]; then
+            echo "Repeatability proof can only run in registrystack/registry-stack" >&2
+            exit 1
+          fi
+          tag="${REQUESTED_TAG:-}"
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            tag=""
+            mapfile -t release_tags < <(
+              gh release list \
+                --repo "${GITHUB_REPOSITORY}" \
+                --limit 100 \
+                --exclude-drafts \
+                --json tagName \
+                --jq '.[].tagName'
+            )
+            for published_tag in "${release_tags[@]}"; do
+              if [[ ! "${published_tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                continue
+              fi
+              receipt="registry-stack-${published_tag}-candidate-receipt.json"
+              if gh release view "${published_tag}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --json assets \
+                --jq '.assets[].name' | grep -Fxq "${receipt}"; then
+                tag="${published_tag}"
+                break
+              fi
+            done
+            if [[ -z "${tag}" ]]; then
+              echo "No published release carries a candidate receipt yet" >&2
+              exit 1
+            fi
+          fi
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Repeatability tag must be exact vMAJOR.MINOR.PATCH, got ${tag}" >&2
+            exit 1
+          fi
+          if ! gh release view "${tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json isDraft \
+            --jq 'select(.isDraft == false) | true' | grep -Fxq true; then
+            echo "Tag ${tag} has no published GitHub Release" >&2
+            exit 1
+          fi
+          {
+            echo "tag=${tag}"
+            echo "version=${tag#v}"
+            echo "receipt=registry-stack-${tag}-candidate-receipt.json"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout exact release source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+          path: release-source
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Verify exact tag source
+        id: source
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C release-source fetch --force origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/tags/${TAG}:refs/tags/${TAG}"
+          source_sha="$(git -C release-source rev-parse --verify "refs/tags/${TAG}^{}")"
+          if [[ "$(git -C release-source rev-parse HEAD)" != "${source_sha}" ]]; then
+            echo "Release checkout does not match exact tag target" >&2
+            exit 1
+          fi
+          if ! git -C release-source merge-base --is-ancestor \
+            "${source_sha}" refs/remotes/origin/main; then
+            echo "Release tag target is not reachable from protected main" >&2
+            exit 1
+          fi
+          echo "source_sha=${source_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify storage runway
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          python3 generator/release/scripts/check-release-storage.py preflight \
+            --budget generator/release/storage-budget.json \
+            --workspace "${GITHUB_WORKSPACE}" \
+            --output dist/storage-preflight.json
+
+      - name: Download published proof subjects
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+          RECEIPT: ${{ steps.release.outputs.receipt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p published
+          gh release download "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir published \
+            --pattern "SHA256SUMS" \
+            --pattern "*-${TAG}-linux-amd64" \
+            --pattern "registry-notary.digest" \
+            --pattern "registry-relay.digest" \
+            --pattern "${RECEIPT}" \
+            --pattern "${RECEIPT}.sig" \
+            --pattern "${RECEIPT}.pem"
+          for expected in \
+            SHA256SUMS \
+            registry-notary.digest \
+            registry-relay.digest \
+            "${RECEIPT}" \
+            "${RECEIPT}.sig" \
+            "${RECEIPT}.pem"
+          do
+            test -s "published/${expected}"
+          done
+
+      - name: Verify promoted candidate receipt chain
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RECEIPT: ${{ steps.release.outputs.receipt }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          receipt_path="published/${RECEIPT}"
+          jq -e \
+            --arg tag "${TAG}" \
+            --arg source_sha "${SOURCE_SHA}" \
+            --arg repository "${GITHUB_REPOSITORY}" '
+            .schema_version == "registry-stack.release-candidate-receipt.v1" and
+            .repository == $repository and
+            .release.tag == $tag and
+            .release.source_sha == $source_sha and
+            .workflow.path == ".github/workflows/release-candidate.yml" and
+            .workflow.sha == $source_sha and
+            .workflow.event == "repository_dispatch" and
+            (.workflow.run_id | type == "number") and
+            (.workflow.run_attempt | type == "number") and
+            .attestation.receipt_subject == "release-candidate-receipt.json" and
+            .promotion.state == "candidate"
+          ' "${receipt_path}"
+          gh attestation verify "${receipt_path}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow \
+              "registrystack/registry-stack/.github/workflows/release-candidate.yml" \
+            --signer-digest "${SOURCE_SHA}" \
+            --source-ref refs/heads/main \
+            --source-digest "${SOURCE_SHA}" \
+            --deny-self-hosted-runners
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.1
+
+      - name: Verify candidate receipt release signature
+        env:
+          RECEIPT: ${{ steps.release.outputs.receipt }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cosign verify-blob "published/${RECEIPT}" \
+            --signature "published/${RECEIPT}.sig" \
+            --certificate "published/${RECEIPT}.pem" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity \
+              "https://github.com/registrystack/registry-stack/.github/workflows/release.yml@refs/tags/${TAG}"
+
+      - name: Build canonical Linux payload from clean state
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_home="${RUNNER_TEMP}/repeatability-cargo-home"
+          target_dir="${RUNNER_TEMP}/repeatability-target"
+          test ! -e "${cargo_home}"
+          test ! -e "${target_dir}"
+          mkdir -p "${cargo_home}" "${target_dir}"
+          RELEASE_CARGO_HOME="${cargo_home}" \
+            RELEASE_TARGET_DIR="${target_dir}" \
+            release-source/release/scripts/build-release-binaries.sh "${VERSION}"
+
+      - name: Compare published binary hashes
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=(
+            "registry-manifest-${TAG}-linux-amd64"
+            "registry-notary-${TAG}-linux-amd64"
+            "registry-notary-cel-worker-${TAG}-linux-amd64"
+            "registry-relay-${TAG}-linux-amd64"
+            "registry-relay-rhai-worker-${TAG}-linux-amd64"
+            "registryctl-${TAG}-linux-amd64"
+          )
+          for asset in "${expected[@]}"; do
+            test -s "published/${asset}"
+            published_sha="$(sha256sum "published/${asset}" | awk '{print $1}')"
+            rebuilt_sha="$(sha256sum "release-source/dist/bin/${asset}" | awk '{print $1}')"
+            sums_sha="$(awk -v asset="${asset}" '$2 == asset {print $1}' published/SHA256SUMS)"
+            if [[ -z "${sums_sha}" ||
+                  "${published_sha}" != "${rebuilt_sha}" ||
+                  "${published_sha}" != "${sums_sha}" ]]; then
+              echo "Repeatability mismatch for ${asset}" >&2
+              exit 1
+            fi
+          done
+          (
+            cd release-source/dist/bin
+            sha256sum -- "${expected[@]}"
+          ) | sort > dist/rebuilt-linux-amd64.sha256
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v3.11.1
+        with:
+          version: ${{ env.RELEASE_BUILDX_VERSION }}
+          driver-opts: image=${{ env.RELEASE_BUILDKIT_IMAGE }}
+
+      - name: Install pinned crane
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${CRANE_VERSION#v}"
+          archive="${RUNNER_TEMP}/go-containerregistry_Linux_x86_64.tar.gz"
+          curl -sSfL \
+            "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            -o "${archive}"
+          echo "${CRANE_LINUX_AMD64_SHA256}  ${archive}" | sha256sum --check --strict
+          mkdir -p "${HOME}/.local/bin"
+          tar -xzf "${archive}" -C "${HOME}/.local/bin" crane
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+          "${HOME}/.local/bin/crane" version | grep -F "${version}"
+
+      - name: Compare published image config and layers
+        env:
+          BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/image-layouts dist/image-context
+          for name in registry-notary registry-relay; do
+            digest_ref="$(tr -d '\n' < "published/${name}.digest")"
+            if [[ ! "${digest_ref}" =~ ^ghcr\.io/registrystack/${name}@sha256:[0-9a-f]{64}$ ]]; then
+              echo "Published ${name} digest file is malformed" >&2
+              exit 1
+            fi
+            published_layout="dist/image-layouts/${name}-published"
+            rebuilt_layout="${GITHUB_WORKSPACE}/dist/image-layouts/${name}-rebuilt"
+            crane pull "${digest_ref}" "${published_layout}" --format=oci
+            index_digest="${digest_ref##*@}"
+            index_blob="${published_layout}/blobs/sha256/${index_digest#sha256:}"
+            if [[ ! -f "${index_blob}" ||
+                  "$(sha256sum "${index_blob}" | awk '{print "sha256:"$1}')" != "${index_digest}" ]]; then
+              echo "Pulled ${name} layout does not contain the exact published index" >&2
+              exit 1
+            fi
+            # crane's OCI layout index points at the pulled registry index.
+            # Compare the exact registry index itself so the application and
+            # associated BuildKit provenance descriptors are both classified.
+            cp "${index_blob}" "${published_layout}/index.json"
+            RELEASE_BUILDX_BUILDER="${BUILDER_NAME}" \
+              RELEASE_IMAGE_CONTEXT="${GITHUB_WORKSPACE}/release-source" \
+              RELEASE_IMAGE_NO_CACHE=true \
+              RELEASE_IMAGE_OCI_LAYOUT="${rebuilt_layout}" \
+              release-source/release/scripts/build-release-image.sh \
+                "${name}" \
+                "ghcr.io/registrystack/${name}:${TAG}" \
+                "https://github.com/${GITHUB_REPOSITORY}" \
+                "${SOURCE_SHA}" \
+                "${VERSION}" \
+                "${GITHUB_WORKSPACE}/dist/image-layouts/${name}-rebuilt-metadata.json"
+            python3 generator/release/scripts/compare-release-image-layouts.py \
+              "${published_layout}" \
+              "${rebuilt_layout}"
+            python3 generator/release/scripts/compare-release-image-layouts.py \
+              --inspect-layout "${published_layout}" \
+              --require-provenance \
+              > "dist/image-layouts/${name}-published-context.json"
+            python3 generator/release/scripts/compare-release-image-layouts.py \
+              --inspect-layout "${rebuilt_layout}" \
+              > "dist/image-layouts/${name}-rebuilt-context.json"
+          done
+
+      - name: Render repeatability receipt
+        env:
+          CANDIDATE_RECEIPT: ${{ steps.release.outputs.receipt }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_path="published/${CANDIDATE_RECEIPT}"
+          candidate_sha="$(sha256sum "${candidate_path}" | awk '{print $1}')"
+          binary_inventory_sha="$(sha256sum dist/rebuilt-linux-amd64.sha256 | awk '{print $1}')"
+          notary_digest_ref="$(tr -d '\n' < published/registry-notary.digest)"
+          relay_digest_ref="$(tr -d '\n' < published/registry-relay.digest)"
+          jq -n \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg tag "${TAG}" \
+            --arg source_sha "${SOURCE_SHA}" \
+            --argjson candidate_run_id "$(jq -er '.workflow.run_id' "${candidate_path}")" \
+            --argjson candidate_run_attempt "$(jq -er '.workflow.run_attempt' "${candidate_path}")" \
+            --argjson repeatability_run_id "${GITHUB_RUN_ID}" \
+            --argjson repeatability_run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg candidate_receipt_sha256 "${candidate_sha}" \
+            --arg binary_inventory_sha256 "${binary_inventory_sha}" \
+            --arg notary_digest_ref "${notary_digest_ref}" \
+            --arg relay_digest_ref "${relay_digest_ref}" \
+            --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
+            --slurpfile notary dist/image-layouts/registry-notary-published-context.json \
+            --slurpfile relay dist/image-layouts/registry-relay-published-context.json '
+            {
+              schema_version: "registry-stack.release-repeatability-receipt.v1",
+              repository: $repository,
+              tag: $tag,
+              source_sha: $source_sha,
+              result: "passed",
+              proof_scope: {
+                binaries: "byte-identical",
+                images: "config-and-ordered-rootfs-layers-identical",
+                environment_independence: false
+              },
+              candidate: {
+                run_id: $candidate_run_id,
+                run_attempt: $candidate_run_attempt,
+                receipt_sha256: $candidate_receipt_sha256
+              },
+              binary_inventory_sha256: $binary_inventory_sha256,
+              published_images: [
+                {
+                  name: "registry-notary",
+                  digest_ref: $notary_digest_ref,
+                  context: $notary[0]
+                },
+                {
+                  name: "registry-relay",
+                  digest_ref: $relay_digest_ref,
+                  context: $relay[0]
+                }
+              ],
+              workflow: {
+                run_id: $repeatability_run_id,
+                run_attempt: $repeatability_run_attempt,
+                url: $run_url
+              }
+            }
+          ' > dist/release-repeatability-receipt.json
+
+      - name: Attest repeatability receipt
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: dist/release-repeatability-receipt.json
+
+      - name: Upload seven-day repeatability evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-repeatability-${{ steps.release.outputs.tag }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/rebuilt-linux-amd64.sha256
+            dist/release-repeatability-receipt.json
+            dist/image-layouts/*-published-context.json
+            dist/image-layouts/*-rebuilt-context.json
+            dist/storage-preflight.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Refresh durable repeatability evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          marker="<!-- registry-stack-repeatability-proof -->"
+          receipt_sha="$(
+            sha256sum dist/release-repeatability-receipt.json | awk '{print $1}'
+          )"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          body="${RUNNER_TEMP}/repeatability-comment.md"
+          {
+            echo "${marker}"
+            echo "Automated repeatability proof passed for \`${TAG}\`."
+            echo
+            echo "- Clean rebuild: canonical Linux amd64 binaries are byte-identical to published hashes."
+            echo "- OCI comparison: image config and ordered rootfs layer digests match both published images."
+            echo "- Published image indexes carry BuildKit provenance."
+            echo "- Candidate receipt and build attestation were verified."
+            echo "- Repeatability receipt SHA-256: \`${receipt_sha}\`"
+            echo "- Workflow evidence: ${run_url}"
+            echo
+            echo "This proof tests the published tag on a later clean hosted runner. The duplicate builds inside the candidate run prove build determinism, not environment independence."
+          } > "${body}"
+          comment_id="$(
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/issues/127/comments?per_page=100" \
+              --jq ".[] | select(.body | contains(\"${marker}\")) | .id" |
+              tail -n 1
+          )"
+          if [[ -n "${comment_id}" ]]; then
+            jq -n --rawfile body "${body}" '{body: $body}' |
+              gh api --method PATCH \
+                "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
+                --input -
+          else
+            jq -n --rawfile body "${body}" '{body: $body}' |
+              gh api --method POST \
+                "repos/${GITHUB_REPOSITORY}/issues/127/comments" \
+                --input -
+          fi
