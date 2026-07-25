@@ -544,6 +544,7 @@ jobs:
           ref: ${{ needs.verify.outputs.tag_target }}
           fetch-depth: 0
           submodules: false
+          persist-credentials: false
 
       - name: Assert verified source checkout
         shell: bash
@@ -573,12 +574,21 @@ jobs:
           name: registry-stack-registryctl-linux-arm64
           path: dist/bin
 
-      - name: Verify registryctl binary version
+      - name: Validate downloaded binaries without executing them
+        shell: bash
         run: |
-          chmod 0755 "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-linux-amd64"
-          release/scripts/registry-release verify-registryctl-binary-version \
-            "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-linux-amd64" \
-            --version "${{ needs.verify.outputs.version }}"
+          set -euo pipefail
+          for asset in linux-amd64 macos-arm64 linux-arm64; do
+            binary="dist/bin/registryctl-${{ needs.verify.outputs.tag }}-${asset}"
+            if [[ ! -f "${binary}" || -L "${binary}" || ! -s "${binary}" ]]; then
+              echo "Expected a non-empty regular registryctl artifact at ${binary}" >&2
+              exit 1
+            fi
+          done
+          # The read-only build job creates this checksum set and verifies the
+          # Linux registryctl version before upload. Recheck the downloaded
+          # bytes here without executing any artifact in the publication job.
+          (cd dist/bin && sha256sum --check --strict SHA256SUMS)
 
       - name: Download image evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c

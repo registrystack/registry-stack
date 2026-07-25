@@ -1155,7 +1155,116 @@ fn validate_entity_definition(entity: &EntityDefinition) -> Result<()> {
     Ok(())
 }
 
-fn validate_records_service(service: &ServiceDeclaration, entity: &EntityDefinition) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordsScopeCollisionKind {
+    RecordApi,
+    AttributeRelease,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RecordsScopeCollision {
+    kind: RecordsScopeCollisionKind,
+    field: String,
+    conflicts_with: String,
+}
+
+impl std::fmt::Display for RecordsScopeCollision {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} must differ from {}; effective records authorization scopes must be unique",
+            self.field, self.conflicts_with
+        )
+    }
+}
+
+fn effective_records_api_scopes(
+    service_id: &str,
+    api: &RecordsApiDeclaration,
+    entity: &EntityDefinition,
+) -> Vec<(String, String)> {
+    let mut scopes = vec![
+        (
+            format!("services.{service_id}.api.scopes.metadata"),
+            api.scopes.metadata.clone(),
+        ),
+        (
+            format!("services.{service_id}.api.scopes.rows"),
+            api.scopes.rows.clone(),
+        ),
+        (
+            format!("services.{service_id}.api.scopes.aggregate"),
+            api.scopes
+                .aggregate
+                .clone()
+                .unwrap_or_else(|| format!("{}:aggregate", entity.id)),
+        ),
+    ];
+    if let Some(scope) = &api.scopes.evidence_verification {
+        scopes.push((
+            format!("services.{service_id}.api.scopes.evidence_verification"),
+            scope.clone(),
+        ));
+    }
+    scopes
+}
+
+fn records_scope_collision(
+    service_id: &str,
+    api: &RecordsApiDeclaration,
+    entity: &EntityDefinition,
+) -> Option<RecordsScopeCollision> {
+    let effective_scopes = effective_records_api_scopes(service_id, api, entity);
+    let mut fields_by_scope = BTreeMap::new();
+    for (field, scope) in &effective_scopes {
+        if let Some(conflicts_with) = fields_by_scope.insert(scope.as_str(), field.as_str()) {
+            return Some(RecordsScopeCollision {
+                kind: RecordsScopeCollisionKind::RecordApi,
+                field: field.clone(),
+                conflicts_with: conflicts_with.to_string(),
+            });
+        }
+    }
+
+    // Profiles intentionally share the entity-bound identity-release privilege.
+    // That privilege must never alias a record API privilege, or a key granted
+    // metadata, aggregate, row, or verification access could release attributes.
+    for (profile_id, profile) in &api.attribute_release_profiles {
+        if let Some((conflicts_with, _)) = effective_scopes
+            .iter()
+            .find(|(_, scope)| scope == &profile.release_scope)
+        {
+            return Some(RecordsScopeCollision {
+                kind: RecordsScopeCollisionKind::AttributeRelease,
+                field: format!(
+                    "services.{service_id}.api.attribute_release_profiles.{profile_id}.release_scope"
+                ),
+                conflicts_with: conflicts_with.clone(),
+            });
+        }
+    }
+    None
+}
+
+fn project_records_scope_collision(
+    project: &RegistryProject,
+    entities: &BTreeMap<String, LoadedEntityDefinition>,
+) -> Option<RecordsScopeCollision> {
+    project.services.iter().find_map(|(service_id, service)| {
+        if service.kind != ServiceKind::RecordsApi {
+            return None;
+        }
+        let api = service.api.as_ref()?;
+        let entity = entities.get(service.entity.as_deref()?)?;
+        records_scope_collision(service_id, api, &entity.document)
+    })
+}
+
+fn validate_records_service(
+    service_id: &str,
+    service: &ServiceDeclaration,
+    entity: &EntityDefinition,
+) -> Result<()> {
     let api = service
         .api
         .as_ref()
@@ -1177,7 +1286,6 @@ fn validate_records_service(service: &ServiceDeclaration, entity: &EntityDefinit
     for value in &service.conforms_to {
         validate_authored_text(value, "records conforms_to")?;
     }
-    validate_scopes(&[api.scopes.metadata.clone(), api.scopes.rows.clone()])?;
     for scope in [
         Some(&api.scopes.metadata),
         Some(&api.scopes.rows),
@@ -1191,6 +1299,11 @@ fn validate_records_service(service: &ServiceDeclaration, entity: &EntityDefinit
         if scope.split_once(':').map(|(dataset, _)| dataset) != Some(entity.id.as_str()) {
             bail!("records scopes must use their entity id namespace");
         }
+    }
+    if let Some(collision) = records_scope_collision(service_id, api, entity)
+        .filter(|collision| collision.kind == RecordsScopeCollisionKind::RecordApi)
+    {
+        bail!("{collision}");
     }
     if api.pagination.default_limit == 0
         || api.pagination.max_limit == 0
@@ -1234,7 +1347,7 @@ fn validate_records_service(service: &ServiceDeclaration, entity: &EntityDefinit
     {
         bail!("records projection must be a non-empty unique entity field subset");
     }
-    validate_record_attribute_release_profiles(api, entity, &field_names)?;
+    validate_record_attribute_release_profiles(service_id, api, entity, &field_names)?;
     for (field, operators) in &api.filters {
         if !field_names.contains(field.as_str()) || operators.is_empty() {
             bail!("records filters must name declared fields and at least one operator");
@@ -1330,6 +1443,7 @@ fn validate_records_service(service: &ServiceDeclaration, entity: &EntityDefinit
 }
 
 fn validate_record_attribute_release_profiles(
+    service_id: &str,
     api: &RecordsApiDeclaration,
     entity: &EntityDefinition,
     fields: &BTreeSet<&str>,
@@ -1362,8 +1476,16 @@ fn validate_record_attribute_release_profiles(
                 "attribute release profile release_scope must be the entity-bound {expected_scope} scope"
             );
         }
-        if profile.release_scope == api.scopes.rows {
-            bail!("attribute release scope must differ from the records row scope");
+        if let Some(collision) = records_scope_collision(service_id, api, entity).filter(
+            |collision| {
+                collision.kind == RecordsScopeCollisionKind::AttributeRelease
+                    && collision.field
+                        == format!(
+                            "services.{service_id}.api.attribute_release_profiles.{profile_id}.release_scope"
+                        )
+            },
+        ) {
+            bail!("{collision}");
         }
         validate_input_name(&profile.subject.input)
             .context("attribute release subject input is invalid")?;
@@ -1548,10 +1670,10 @@ fn validate_project_entity_links(
     integrations: &BTreeMap<String, LoadedIntegration>,
     entities: &BTreeMap<String, LoadedEntityDefinition>,
 ) -> Result<()> {
-    for service in project
+    for (service_id, service) in project
         .services
-        .values()
-        .filter(|service| service.kind == ServiceKind::RecordsApi)
+        .iter()
+        .filter(|(_, service)| service.kind == ServiceKind::RecordsApi)
     {
         let entity_id = service
             .entity
@@ -1561,7 +1683,7 @@ fn validate_project_entity_links(
             .get(entity_id)
             .ok_or_else(|| anyhow!("records_api service references an unknown entity"))?
             .document;
-        validate_records_service(service, entity)?;
+        validate_records_service(service_id, service, entity)?;
     }
     for loaded in integrations.values() {
         let CapabilityDeclaration::Snapshot { snapshot } = &loaded.document.capability else {

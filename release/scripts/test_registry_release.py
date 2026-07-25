@@ -563,6 +563,49 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertIn(asset, workflow)
             self.assertIn(f"registry-stack-registryctl-{asset}", workflow)
 
+    def test_release_workflow_does_not_execute_downloaded_binaries_when_publishing(
+        self,
+    ) -> None:
+        workflow_path = ROOT / ".github/workflows/release.yml"
+        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        publish_job = workflow["jobs"]["github-release"]
+        publish_steps = publish_job["steps"]
+        publish_script = "\n".join(
+            step.get("run", "") for step in publish_steps if isinstance(step, dict)
+        )
+
+        checkout = next(
+            step for step in publish_steps if step.get("name") == "Checkout"
+        )
+        self.assertFalse(checkout["with"]["persist-credentials"])
+        self.assertEqual(
+            {"contents": "write", "id-token": "write"},
+            publish_job["permissions"],
+        )
+        self.assertNotIn("verify-registryctl-binary-version", publish_script)
+        self.assertNotRegex(
+            publish_script,
+            r"(?m)^\s*[\"']?(?:\./)?dist/bin/registryctl-",
+        )
+        self.assertNotRegex(publish_script, r"(?m)^\s*chmod\b[^\n]*dist/bin")
+        self.assertIn(
+            "sha256sum --check --strict SHA256SUMS",
+            publish_script,
+        )
+
+        build_job = workflow["jobs"]["binaries"]
+        self.assertEqual({"contents": "read"}, build_job["permissions"])
+        build_script = "\n".join(
+            step.get("run", "")
+            for step in build_job["steps"]
+            if isinstance(step, dict)
+        )
+        self.assertIn("verify-registryctl-binary-version", build_script)
+        self.assertEqual(
+            {"contents": "read"},
+            workflow["jobs"]["registryctl-extra-binaries"]["permissions"],
+        )
+
     def test_release_workflow_never_replaces_published_assets(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         verify = workflow[
@@ -609,10 +652,6 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("render-registryctl-image-lock", workflow)
         self.assertIn("verify-registryctl-image-lock-release-version", workflow)
         self.assertIn("verify-registryctl-binary-version", workflow)
-        self.assertIn(
-            'chmod 0755 "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-linux-amd64"',
-            workflow,
-        )
         self.assertLess(
             workflow.index("Verify lock-bearing release version"),
             workflow.index("\n  binaries:"),
@@ -627,7 +666,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("--require-registryctl-image-lock", workflow)
         self.assertIn("registryctl-${{ needs.verify.outputs.tag }}-image-lock.json", workflow)
         self.assertLess(
-            workflow.index("Verify registryctl binary version"),
+            workflow.index("Validate downloaded binaries without executing them"),
             workflow.index("Render registryctl release image lock"),
         )
         self.assertLess(
@@ -663,6 +702,47 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotIn(
             "release-source/release/manifests/registry-stack-beta-6.yaml", backfill
         )
+
+    def test_capsule_backfill_privileged_job_uses_protected_tooling(
+        self,
+    ) -> None:
+        workflow_path = ROOT / ".github/workflows/release-capsule-backfill.yml"
+        backfill = workflow_path.read_text(encoding="utf-8")
+        workflow = yaml.safe_load(backfill)
+        steps = workflow["jobs"]["backfill"]["steps"]
+        triggers = workflow.get("on", workflow.get(True))
+
+        self.assertEqual(
+            {
+                "repository_dispatch": {
+                    "types": ["release-capsule-backfill"],
+                }
+            },
+            triggers,
+        )
+        self.assertNotIn("workflow_dispatch:", backfill)
+        self.assertNotIn("${{ inputs.", backfill)
+        self.assertIn("github.event.client_payload.tag", backfill)
+
+        generator_checkout = next(
+            step
+            for step in steps
+            if step.get("name") == "Checkout protected capsule tooling"
+        )
+        self.assertEqual(
+            "${{ github.sha }}",
+            generator_checkout["with"]["ref"],
+        )
+        self.assertFalse(generator_checkout["with"]["persist-credentials"])
+
+        release_checkout = next(
+            step for step in steps if step.get("name") == "Checkout release source"
+        )
+        self.assertEqual(
+            "${{ github.event.client_payload.tag }}",
+            release_checkout["with"]["ref"],
+        )
+        self.assertFalse(release_checkout["with"]["persist-credentials"])
 
     def test_validate_beta_6_manifest(self) -> None:
         result = run_tool("validate", "release/manifests/registry-stack-beta-6.yaml")
