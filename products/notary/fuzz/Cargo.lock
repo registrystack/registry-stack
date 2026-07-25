@@ -1509,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-core"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "base64",
  "humantime-serde",
@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "serde",
  "sha2 0.11.0",
@@ -1554,7 +1554,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-cache"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "sha2 0.11.0",
@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -1588,7 +1588,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1609,7 +1609,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "base64",
  "bytes",
@@ -1632,7 +1632,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oid4vci"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -1645,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-ops"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "fs2",
  "registry-platform-config",
@@ -1660,7 +1660,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-replay"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "async-trait",
  "getrandom 0.4.3",
@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.12.2"
+version = "0.13.0"
 dependencies = [
  "base64",
  "getrandom 0.4.3",
@@ -1842,9 +1842,9 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "ryu-js"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd29631678d6fb0903b69223673e122c32e9ae559d0960a38d574695ebc0ea15"
+checksum = "04d056b875a9d2e6cb9a61d127afee9ac5999b9f87bcb32079d1318e505be714"
 
 [[package]]
 name = "same-file"

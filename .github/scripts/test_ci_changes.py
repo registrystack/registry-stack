@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+import tomllib
 import unittest
+from pathlib import Path
 
 from ci_changes import SHARDS, Workspace, classify
 from run_cargo_packages import command_args, package_args
@@ -79,6 +82,29 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["release_tool"])
         self.assertTrue(outputs["release_source_proof"])
         self.assertFalse(outputs["docs"])
+
+    def test_nightly_notary_fuzz_inventory_matches_declared_targets(self) -> None:
+        workflow = Path(".github/workflows/nightly-security.yml").read_text(
+            encoding="utf-8"
+        )
+        target_block = re.search(
+            r"name: Run notary fuzz smoke.*?for target in \\\n"
+            r"(?P<targets>.*?)\n\s*do",
+            workflow,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(target_block)
+        configured = re.findall(
+            r"^\s+([a-z][a-z0-9_]*)",
+            target_block["targets"],
+            re.MULTILINE,
+        )
+
+        manifest = tomllib.loads(
+            Path("products/notary/fuzz/Cargo.toml").read_text(encoding="utf-8")
+        )
+        declared = [target["name"] for target in manifest["bin"]]
+        self.assertCountEqual(configured, declared)
 
 
 class RunCargoPackagesTest(unittest.TestCase):

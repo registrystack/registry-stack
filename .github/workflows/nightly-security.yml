@@ -192,9 +192,7 @@ jobs:
         run: |
           set -euo pipefail
           for target in \
-            core_request_bodies \
-            rhai_source_adapter \
-            sidecar_config_manifest
+            core_request_bodies
           do
             mkdir -p "fuzz/artifacts/${target}"
             cargo +nightly fuzz run --fuzz-dir fuzz --target x86_64-unknown-linux-gnu "${target}" -- \

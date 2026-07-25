@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.13.0
+
+- Registry Manifest has no user-visible changes in this release.
+
 ## 0.12.2
 
 - No user-visible Registry Manifest changes. This release fixes forward from

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.13.0 - 2026-07-25
+
 - BREAKING: `registry-platform-ops` replaces deployment-waiver `reason` with
   required `reference` plus optional omitted `summary` in the shared posture
   contract. It now owns the common 128-byte reference and 256-character summary
