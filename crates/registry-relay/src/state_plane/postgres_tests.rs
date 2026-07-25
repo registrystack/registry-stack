@@ -1859,7 +1859,8 @@ async fn exercise_batch_child_replay_reservation_contract(
             "source_observed_at": null,
             "source_revision": null,
             "acquisition_class": "source_projected_exact",
-            "integration": {"id": "synthetic.pack", "revision": 1}
+            "integration": {"id": "synthetic.pack", "revision": 1},
+            "consent": {"outcome": "not_required", "verifier_id": null, "verifier_revision": null, "checked_at": null, "expires_at": null, "revocation_status": "not_applicable"}
         }
     }))?;
     let mismatch = admin
@@ -2073,7 +2074,6 @@ async fn exercise_batch_terminal_publication_contract(
         replay_json["notary_evaluation_id"],
         first_evaluation.to_canonical_string()
     );
-    assert!(replay_json["provenance"].get("consent").is_none());
     set_role(admin, owner_role).await?;
     let after_replay = admin
         .query_one(

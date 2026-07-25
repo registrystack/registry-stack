@@ -65,7 +65,7 @@ test('derives all advertised starter selections from committed workspaces', asyn
       {
         starter: 'dhis2-tracker',
         integration: 'health-record',
-        fixture: 'complete-child-health-evidence',
+        fixture: 'complete-health-match',
       },
       {
         starter: 'opencrvs-dci',

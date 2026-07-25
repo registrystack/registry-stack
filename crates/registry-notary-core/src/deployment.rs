@@ -162,41 +162,14 @@ impl DeploymentEvidenceConfig {
 
 /// One operator-configured waiver.
 ///
-/// A waiver names exactly one finding id, a required operator reference, an
-/// optional summary, and a mandatory expiry date (`YYYY-MM-DD`). The shared
-/// operations contract validates metadata before it can reach posture or logs.
+/// A waiver names exactly one finding id, a free-text reason, and a mandatory
+/// expiry date (`YYYY-MM-DD`). Reasons must not contain secrets.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields, from = "DeploymentWaiverConfigDocument")]
-#[schemars(!from)]
+#[serde(deny_unknown_fields)]
 pub struct DeploymentWaiverConfig {
     pub finding: String,
-    #[schemars(with = "crate::config::schema::DeploymentWaiverReferenceSchema")]
-    pub reference: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "crate::config::schema::DeploymentWaiverSummarySchema")]
-    pub summary: Option<String>,
+    pub reason: String,
     pub expires: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DeploymentWaiverConfigDocument {
-    finding: String,
-    reference: String,
-    #[serde(default)]
-    summary: registry_platform_ops::OptionalDeploymentWaiverSummary,
-    expires: String,
-}
-
-impl From<DeploymentWaiverConfigDocument> for DeploymentWaiverConfig {
-    fn from(value: DeploymentWaiverConfigDocument) -> Self {
-        Self {
-            finding: value.finding,
-            reference: value.reference,
-            summary: value.summary.into(),
-            expires: value.expires,
-        }
-    }
 }
 
 /// Errors raised while validating the deployment block at config load.
@@ -204,12 +177,8 @@ impl From<DeploymentWaiverConfigDocument> for DeploymentWaiverConfig {
 pub enum DeploymentConfigError {
     #[error("deployment.waivers[{index}].finding must not be empty")]
     EmptyWaiverFinding { index: usize },
-    #[error("deployment.waivers[{index}].{field} is invalid: {error}")]
-    InvalidWaiverMetadata {
-        index: usize,
-        field: &'static str,
-        error: registry_platform_ops::DeploymentWaiverMetadataError,
-    },
+    #[error("deployment.waivers[{index}].reason must not be empty")]
+    EmptyWaiverReason { index: usize },
     #[error("deployment.waivers[{index}].expires must be a YYYY-MM-DD date")]
     InvalidWaiverExpiry { index: usize },
     #[error(
@@ -225,25 +194,19 @@ pub enum DeploymentConfigError {
 impl DeploymentConfig {
     /// Validate the deployment block at config load.
     ///
-    /// This checks waiver shape (shared metadata contract, parseable expiry)
-    /// and the hard rule that `startup_fail` and `readiness_fail` gates can
-    /// never be waived under the declared profile. An undeclared profile still
-    /// validates waiver shape here so typos are caught early; startup refusal
-    /// is handled by gate evaluation.
+    /// This checks waiver shape (non-empty fields, parseable expiry) and the
+    /// hard rule that `startup_fail` and `readiness_fail` gates can never be
+    /// waived under the declared profile. An undeclared profile still validates
+    /// waiver shape here so typos are caught early; startup refusal is handled by
+    /// gate evaluation.
     pub fn validate(&self) -> Result<(), DeploymentConfigError> {
         for (index, waiver) in self.waivers.iter().enumerate() {
             if waiver.finding.trim().is_empty() {
                 return Err(DeploymentConfigError::EmptyWaiverFinding { index });
             }
-            registry_platform_ops::validate_deployment_waiver_metadata(
-                &waiver.reference,
-                waiver.summary.as_deref(),
-            )
-            .map_err(|error| DeploymentConfigError::InvalidWaiverMetadata {
-                index,
-                field: error.field(),
-                error,
-            })?;
+            if waiver.reason.trim().is_empty() {
+                return Err(DeploymentConfigError::EmptyWaiverReason { index });
+            }
             if parse_iso_date(&waiver.expires).is_none() {
                 return Err(DeploymentConfigError::InvalidWaiverExpiry { index });
             }
@@ -498,8 +461,7 @@ pub struct EvaluatedFinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluatedWaiver {
     pub finding: String,
-    pub reference: String,
-    pub summary: Option<String>,
+    pub reason: String,
     pub expires: String,
 }
 
@@ -556,8 +518,7 @@ pub fn evaluate_gates(
                 status: DeploymentFindingStatus::Active,
                 waiver: Some(EvaluatedWaiver {
                     finding: waiver.finding.clone(),
-                    reference: waiver.reference.clone(),
-                    summary: waiver.summary.clone(),
+                    reason: waiver.reason.clone(),
                     expires: waiver.expires.clone(),
                 }),
             });
@@ -575,8 +536,7 @@ pub fn evaluate_gates(
             waived_findings.push(waiver);
             evaluation.active_waivers.push(EvaluatedWaiver {
                 finding: waiver.finding.clone(),
-                reference: waiver.reference.clone(),
-                summary: waiver.summary.clone(),
+                reason: waiver.reason.clone(),
                 expires: waiver.expires.clone(),
             });
         }
@@ -608,8 +568,7 @@ pub fn evaluate_gates(
                 status: DeploymentFindingStatus::Waived,
                 waiver: Some(EvaluatedWaiver {
                     finding: waiver.finding.clone(),
-                    reference: waiver.reference.clone(),
-                    summary: waiver.summary.clone(),
+                    reason: waiver.reason.clone(),
                     expires: waiver.expires.clone(),
                 }),
             });
@@ -668,8 +627,7 @@ mod tests {
     fn waiver(finding: &str, expires: &str) -> DeploymentWaiverConfig {
         DeploymentWaiverConfig {
             finding: finding.to_string(),
-            reference: "OPS-TEST-DEPLOYMENT".to_string(),
-            summary: Some("Synthetic test waiver summary".to_string()),
+            reason: "synthetic test waiver reason".to_string(),
             expires: expires.to_string(),
         }
     }
@@ -874,77 +832,6 @@ mod tests {
             error,
             DeploymentConfigError::UnknownWaivedFinding { .. }
         ));
-    }
-
-    #[test]
-    fn validate_accepts_absent_summary_and_ordinary_metadata() {
-        let mut waiver_config = waiver(FINDING_OPENAPI_PUBLIC, "2099-01-01");
-        waiver_config.reference = "OPS-2026:INC_42".to_string();
-        waiver_config.summary = None;
-        let config = DeploymentConfig {
-            profile: Some(DeploymentProfile::HostedLab),
-            multi_instance: false,
-            waivers: vec![waiver_config],
-            evidence: DeploymentEvidenceConfig::default(),
-        };
-        config
-            .validate()
-            .expect("ordinary reference with absent summary is valid");
-
-        let mut waiver_config = waiver(FINDING_OPENAPI_PUBLIC, "2099-01-01");
-        waiver_config.summary =
-            Some("Public API catalog approved in the operations ticket".to_string());
-        let config = DeploymentConfig {
-            profile: Some(DeploymentProfile::HostedLab),
-            multi_instance: false,
-            waivers: vec![waiver_config],
-            evidence: DeploymentEvidenceConfig::default(),
-        };
-        config.validate().expect("ordinary short summary is valid");
-    }
-
-    #[test]
-    fn validate_rejects_invalid_waiver_metadata_with_field_and_limit() {
-        let mut cases = Vec::new();
-        for reference in ["", " OPS-42", "OPS/42"] {
-            let mut waiver_config = waiver(FINDING_OPENAPI_PUBLIC, "2099-01-01");
-            waiver_config.reference = reference.to_string();
-            cases.push((waiver_config, "reference", "128"));
-        }
-        let mut waiver_config = waiver(FINDING_OPENAPI_PUBLIC, "2099-01-01");
-        waiver_config.reference = "x".repeat(129);
-        cases.push((waiver_config, "reference", "128"));
-
-        for summary in [
-            "",
-            " summary",
-            "summary\ncontinued",
-            "Bearer credential-value",
-            "Basic credential-value",
-            "rotated leaked Bearer abcdef",
-            "-----BEGIN OPENSSH PRIVATE KEY-----",
-            concat!("-----BEGIN PGP PRIVATE KEY ", "BLOCK-----"),
-        ] {
-            let mut waiver_config = waiver(FINDING_OPENAPI_PUBLIC, "2099-01-01");
-            waiver_config.summary = Some(summary.to_string());
-            cases.push((waiver_config, "summary", "256"));
-        }
-        let mut waiver_config = waiver(FINDING_OPENAPI_PUBLIC, "2099-01-01");
-        waiver_config.summary = Some("x".repeat(257));
-        cases.push((waiver_config, "summary", "256"));
-
-        for (waiver, field, limit) in cases {
-            let config = DeploymentConfig {
-                profile: Some(DeploymentProfile::HostedLab),
-                multi_instance: false,
-                waivers: vec![waiver],
-                evidence: DeploymentEvidenceConfig::default(),
-            };
-            let error = config.validate().expect_err("invalid metadata rejected");
-            let rendered = error.to_string();
-            assert!(rendered.contains(&format!("deployment.waivers[0].{field}")));
-            assert!(rendered.contains(limit), "limit missing from: {rendered}");
-        }
     }
 
     #[test]

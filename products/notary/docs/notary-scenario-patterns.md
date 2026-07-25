@@ -4,26 +4,23 @@
 
 ```mermaid
 sequenceDiagram
-  participant Consumer as Evidence consumer
+  participant App as Service application
   participant Notary as Registry Notary
   participant Relay as Registry Relay
   participant Source as Registry source
 
-  Consumer->>Notary: Evaluate evidence claims for purpose
+  App->>Notary: Evaluate claims for purpose
   Notary->>Notary: Authenticate and authorize
   Notary->>Relay: Execute pinned consultation
   Relay->>Source: Governed read
   Source-->>Relay: Bounded response
   Relay-->>Notary: Outcome, outputs, provenance
   Notary->>Notary: Claims, disclosure, issuance policy
-  Notary-->>Consumer: Minimized evidence or credential
-  Consumer->>Consumer: Use evidence under applicable policy
+  Notary-->>App: Minimized result or credential
 ```
 
-One consultation can support several direct and CEL evidence claims. Relay
-returns typed outputs, Notary owns evidence meaning and disclosure, and the
-evidence consumer determines how the evidence is used. The decision owner
-remains accountable for requirements, decisions, workflow, and actions.
+One consultation can support several direct and CEL claims. Relay returns
+typed outputs, while Notary owns claim meaning and disclosure.
 
 ## Self-attested Notary-only evaluation
 
@@ -34,13 +31,11 @@ sequenceDiagram
 
   Holder->>Notary: Source-free evidence request
   Notary->>Notary: Validate token and subject binding
-  Notary->>Notary: Evaluate allowed self-attested evidence claim
+  Notary->>Notary: Evaluate self-attested CEL policy
   Notary-->>Holder: Allowed result or credential
 ```
 
-This topology performs no Relay or registry-source call. The identity token
-authorizes subject-bound access; it does not establish consumer eligibility
-or another consumer-owned outcome.
+This topology performs no Relay or registry-source call.
 
 ## Delegated evaluation
 

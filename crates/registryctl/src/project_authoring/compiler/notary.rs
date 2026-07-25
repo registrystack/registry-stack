@@ -1,10 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Registry project compilation currently authors one evidence subject contract.
-// Governed live validation consumes the same constant to reject result
-// substitution across subject types.
-const AUTHORED_CLAIM_SUBJECT_TYPE: &str = "person";
-
 fn generated_notary_config(
     loaded: &LoadedRegistryProject,
     environment_name: &str,
@@ -169,7 +164,7 @@ fn generated_notary_config(
                 "id": claim_id,
                 "title": claim_id.replace('-', " "),
                 "version": service.version.to_string(),
-                "subject_type": AUTHORED_CLAIM_SUBJECT_TYPE,
+                "subject_type": "person",
                 "evidence_mode": evidence_mode,
                 "value": { "type": value_type, "nullable": nullable },
                 "purpose": service.purpose,

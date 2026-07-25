@@ -578,7 +578,7 @@ fn audit_shipping_state(config: &Config) -> (bool, &'static str) {
 /// Build the `deployment` posture object: declared profile, gate findings, and
 /// active waivers. Findings carry only `{id, severity, status}` plus an
 /// optional waiver block; the default-tier posture filter strips waiver
-/// metadata. `findings` and `waivers` are always present (possibly empty).
+/// reasons. `findings` and `waivers` are always present (possibly empty).
 fn deployment_summary_with_observation(
     config: &Config,
     config_source: ConfigSource,
@@ -613,7 +613,11 @@ fn deployment_summary_with_observation(
         json!(evaluation
             .active_waivers
             .iter()
-            .map(deployment_waiver_json)
+            .map(|waiver| json!({
+                "finding": waiver.finding,
+                "reason": waiver.reason,
+                "expires": waiver.expires,
+            }))
             .collect::<Vec<_>>()),
     );
     (Value::Object(summary), !evaluation.has_readiness_failure())
@@ -649,31 +653,14 @@ fn deployment_finding_json(finding: &registry_platform_ops::DeploymentFinding) -
     object.insert("severity".to_string(), json!(finding.severity.as_str()));
     object.insert("status".to_string(), json!(finding.status.as_str()));
     if let Some(waiver) = &finding.waiver {
-        object.insert("waiver".to_string(), deployment_finding_waiver_json(waiver));
+        object.insert(
+            "waiver".to_string(),
+            json!({
+                "reason": waiver.reason,
+                "expires": waiver.expires,
+            }),
+        );
     }
-    Value::Object(object)
-}
-
-fn deployment_finding_waiver_json(
-    waiver: &registry_platform_ops::DeploymentFindingWaiver,
-) -> Value {
-    let mut object = Map::new();
-    object.insert("reference".to_string(), json!(waiver.reference));
-    if let Some(summary) = &waiver.summary {
-        object.insert("summary".to_string(), json!(summary));
-    }
-    object.insert("expires".to_string(), json!(waiver.expires));
-    Value::Object(object)
-}
-
-fn deployment_waiver_json(waiver: &registry_platform_ops::DeploymentWaiver) -> Value {
-    let mut object = Map::new();
-    object.insert("finding".to_string(), json!(waiver.finding));
-    object.insert("reference".to_string(), json!(waiver.reference));
-    if let Some(summary) = &waiver.summary {
-        object.insert("summary".to_string(), json!(summary));
-    }
-    object.insert("expires".to_string(), json!(waiver.expires));
     Value::Object(object)
 }
 
@@ -1189,18 +1176,18 @@ datasets: []
     }
 
     /// The default-tier allowlist exposes only finding id/severity/status; the
-    /// whole deployment `waivers` block is dropped. The restricted tier
-    /// returns the unfiltered document, so the waiver reference and optional
-    /// summary appear there. This pins the allowlist contract, including that
-    /// synthetic waiver metadata never leaks at the default tier.
+    /// whole deployment `waivers` block (finding, reason, expires) is dropped.
+    /// The restricted tier returns the unfiltered document, so the waiver and
+    /// its reason appear there. This pins the allowlist contract for the new
+    /// deployment block, including that synthetic waiver reasons never leak at
+    /// the default tier.
     #[test]
     fn posture_default_tier_drops_waivers_restricted_keeps_them() {
         let mut config = parse_minimal_config(&minimal_config_yaml());
         config.deployment.profile = Some(DeploymentProfile::HostedLab);
         config.deployment.waivers = vec![crate::config::DeploymentWaiverConfig {
             finding: "relay.config.unsigned".to_string(),
-            reference: "OPS-TEST-1188".to_string(),
-            summary: Some("Synthetic waiver summary".to_string()),
+            reason: "synthetic-waiver-reason-not-a-secret".to_string(),
             expires: "2999-01-01".to_string(),
         }];
 
@@ -1224,15 +1211,11 @@ datasets: []
         );
         let serialized = default_tier.to_string();
         assert!(
-            !serialized.contains("OPS-TEST-1188"),
-            "default-tier posture must never leak a waiver reference"
-        );
-        assert!(
-            !serialized.contains("Synthetic waiver summary"),
-            "default-tier posture must never leak a waiver summary"
+            !serialized.contains("synthetic-waiver-reason-not-a-secret"),
+            "default-tier posture must never leak a waiver reason"
         );
 
-        // Restricted tier: full document and validated waiver metadata present.
+        // Restricted tier: full document, waiver and reason present.
         let restricted = build_posture(
             &config,
             None,
@@ -1247,8 +1230,10 @@ datasets: []
         assert_eq!(restricted_waivers.len(), 1);
         assert_eq!(restricted_waivers[0]["finding"], "relay.config.unsigned");
         assert_eq!(restricted_waivers[0]["expires"], "2999-01-01");
-        assert_eq!(restricted_waivers[0]["reference"], "OPS-TEST-1188");
-        assert_eq!(restricted_waivers[0]["summary"], "Synthetic waiver summary");
+        assert_eq!(
+            restricted_waivers[0]["reason"],
+            "synthetic-waiver-reason-not-a-secret"
+        );
     }
 
     /// Default-config posture regression: the gate train adds exactly the

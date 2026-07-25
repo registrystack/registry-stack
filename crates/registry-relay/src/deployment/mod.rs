@@ -16,8 +16,7 @@
 //! * `finding_error` / `finding_warn`: a posture finding only.
 //!
 //! A triggered gate can be suppressed by a config waiver that names the
-//! finding, carries a required operator reference, and sets a mandatory expiry
-//! date. An optional summary can add validated operational context. A waived
+//! finding, carries a free-text reason, and a mandatory expiry date. A waived
 //! finding reports status `waived` instead of its severity effect. An expired
 //! waiver stops suppressing the finding and additionally raises
 //! `deployment.waiver_expired`. `startup_fail` and `readiness_fail` gates are
@@ -53,14 +52,12 @@ pub const PROFILE_UNDECLARED: &str = "deployment.profile_undeclared";
 /// has passed its expiry date.
 pub const WAIVER_EXPIRED: &str = "deployment.waiver_expired";
 
-/// A waiver as declared in config: one finding id, a required operator
-/// reference, an optional summary, and a mandatory expiry date in `YYYY-MM-DD`
-/// form.
+/// A waiver as declared in config: one finding id, a reason, and a mandatory
+/// expiry date in `YYYY-MM-DD` form.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WaiverInput {
     pub finding: String,
-    pub reference: String,
-    pub summary: Option<String>,
+    pub reason: String,
     pub expires: String,
 }
 
@@ -325,8 +322,7 @@ pub fn evaluate(
                     severity,
                     status: DeploymentFindingStatus::Waived,
                     waiver: Some(DeploymentFindingWaiver {
-                        reference: waiver.reference.clone(),
-                        summary: waiver.summary.clone(),
+                        reason: waiver.reason.clone(),
                         expires: waiver.expires.clone(),
                     }),
                 });
@@ -362,16 +358,14 @@ pub fn evaluate(
                 severity: FindingError,
                 status: DeploymentFindingStatus::Active,
                 waiver: Some(DeploymentFindingWaiver {
-                    reference: waiver.reference.clone(),
-                    summary: waiver.summary.clone(),
+                    reason: waiver.reason.clone(),
                     expires: waiver.expires.clone(),
                 }),
             });
         } else {
             evaluation.active_waivers.push(DeploymentWaiver {
                 finding: waiver.finding.clone(),
-                reference: waiver.reference.clone(),
-                summary: waiver.summary.clone(),
+                reason: waiver.reason.clone(),
                 expires: waiver.expires.clone(),
             });
         }
@@ -651,8 +645,7 @@ pub fn waivers_from_config(config: &Config) -> Vec<WaiverInput> {
         .iter()
         .map(|waiver| WaiverInput {
             finding: waiver.finding.clone(),
-            reference: waiver.reference.clone(),
-            summary: waiver.summary.clone(),
+            reason: waiver.reason.clone(),
             expires: waiver.expires.clone(),
         })
         .collect()
@@ -1125,8 +1118,7 @@ mod tests {
         let id = "relay.audit.retention_local_only";
         let waivers = [WaiverInput {
             finding: id.to_string(),
-            reference: "OPS-TEST-1125".to_string(),
-            summary: Some("Synthetic test waiver".to_string()),
+            reason: "synthetic test waiver".to_string(),
             expires: FUTURE.to_string(),
         }];
         let evaluation = evaluate(Some(DeploymentProfile::Production), &facts, &waivers, TODAY);
@@ -1265,8 +1257,7 @@ mod tests {
         let id = "relay.audit.shipping_stale";
         let waivers = [WaiverInput {
             finding: id.to_string(),
-            reference: "OPS-TEST-1264".to_string(),
-            summary: Some("Synthetic stale-shipping waiver".to_string()),
+            reason: "synthetic stale-shipping waiver".to_string(),
             expires: FUTURE.to_string(),
         }];
         let evaluation = evaluate(
@@ -1292,8 +1283,7 @@ mod tests {
         };
         let waivers = [WaiverInput {
             finding: "relay.openapi.public".to_string(),
-            reference: "OPS-TEST-1290".to_string(),
-            summary: Some("Synthetic test waiver".to_string()),
+            reason: "synthetic test waiver".to_string(),
             expires: FUTURE.to_string(),
         }];
         let evaluation = evaluate(Some(DeploymentProfile::Production), &facts, &waivers, TODAY);
@@ -1301,8 +1291,8 @@ mod tests {
         assert_eq!(f.status, DeploymentFindingStatus::Waived);
         assert_eq!(f.severity, FindingError);
         assert_eq!(
-            f.waiver.as_ref().unwrap().reference,
-            "OPS-TEST-1290".to_string()
+            f.waiver.as_ref().unwrap().reason,
+            "synthetic test waiver".to_string()
         );
         // An active waiver is reported in the waivers list.
         assert_eq!(evaluation.active_waivers.len(), 1);
@@ -1323,8 +1313,7 @@ mod tests {
         let id = "relay.admin.public_exposure";
         let waivers = [WaiverInput {
             finding: id.to_string(),
-            reference: "OPS-TEST-1320".to_string(),
-            summary: Some("Synthetic readiness waiver".to_string()),
+            reason: "synthetic readiness waiver".to_string(),
             expires: FUTURE.to_string(),
         }];
         let evaluation = evaluate(Some(DeploymentProfile::Production), &facts, &waivers, TODAY);
@@ -1348,8 +1337,7 @@ mod tests {
         };
         let waivers = [WaiverInput {
             finding: "relay.openapi.public".to_string(),
-            reference: "OPS-TEST-1344".to_string(),
-            summary: Some("Synthetic expired waiver".to_string()),
+            reason: "synthetic expired waiver".to_string(),
             expires: PAST.to_string(),
         }];
         let evaluation = evaluate(Some(DeploymentProfile::Production), &facts, &waivers, TODAY);
@@ -1371,8 +1359,7 @@ mod tests {
         };
         let waivers = [WaiverInput {
             finding: "relay.config.unsigned".to_string(),
-            reference: "OPS-TEST-1366".to_string(),
-            summary: Some("Synthetic attempt to waive a startup gate".to_string()),
+            reason: "synthetic attempt to waive a startup gate".to_string(),
             expires: FUTURE.to_string(),
         }];
         let evaluation = evaluate(
@@ -1399,8 +1386,7 @@ mod tests {
         };
         let waivers = [WaiverInput {
             finding: "relay.openapi.public".to_string(),
-            reference: "OPS-TEST-1393".to_string(),
-            summary: Some("Synthetic boundary waiver".to_string()),
+            reason: "synthetic boundary waiver".to_string(),
             expires: TODAY.to_string(),
         }];
         let evaluation = evaluate(Some(DeploymentProfile::Production), &facts, &waivers, TODAY);

@@ -558,9 +558,8 @@ fn audit_posture(
 
 /// Render the operator-declared deployment profile, gate findings, and active
 /// waivers as the posture `deployment` object. The default tier strips waiver
-/// metadata via the allowlist; this object carries it so the restricted tier
-/// can surface the validated reference and optional summary to Trust
-/// Operations.
+/// reasons via the allowlist; this object carries them so the restricted tier
+/// can surface them to Trust Operations.
 fn deployment_object(gates: &DeploymentGateState) -> Value {
     let mut object = Map::new();
     if let Some(profile) = gates.profile {
@@ -575,7 +574,13 @@ fn deployment_object(gates: &DeploymentGateState) -> Value {
             entry.insert("severity".to_string(), json!(finding.severity.as_str()));
             entry.insert("status".to_string(), json!(finding.status.as_str()));
             if let Some(waiver) = &finding.waiver {
-                entry.insert("waiver".to_string(), evaluated_waiver_metadata_json(waiver));
+                entry.insert(
+                    "waiver".to_string(),
+                    json!({
+                        "reason": waiver.reason,
+                        "expires": waiver.expires,
+                    }),
+                );
             }
             Value::Object(entry)
         })
@@ -584,30 +589,15 @@ fn deployment_object(gates: &DeploymentGateState) -> Value {
     let waivers = gates
         .active_waivers
         .iter()
-        .map(evaluated_waiver_json)
+        .map(|waiver| {
+            json!({
+                "finding": waiver.finding,
+                "reason": waiver.reason,
+                "expires": waiver.expires,
+            })
+        })
         .collect::<Vec<_>>();
     object.insert("waivers".to_string(), Value::Array(waivers));
-    Value::Object(object)
-}
-
-fn evaluated_waiver_metadata_json(
-    waiver: &registry_notary_core::deployment::EvaluatedWaiver,
-) -> Value {
-    let mut object = Map::new();
-    object.insert("reference".to_string(), json!(waiver.reference));
-    if let Some(summary) = &waiver.summary {
-        object.insert("summary".to_string(), json!(summary));
-    }
-    object.insert("expires".to_string(), json!(waiver.expires));
-    Value::Object(object)
-}
-
-fn evaluated_waiver_json(waiver: &registry_notary_core::deployment::EvaluatedWaiver) -> Value {
-    let mut object = evaluated_waiver_metadata_json(waiver)
-        .as_object()
-        .expect("waiver metadata renders as an object")
-        .clone();
-    object.insert("finding".to_string(), json!(waiver.finding));
     Value::Object(object)
 }
 

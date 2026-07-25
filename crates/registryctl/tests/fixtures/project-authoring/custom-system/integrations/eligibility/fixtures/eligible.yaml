@@ -1,4 +1,4 @@
-name: source-approved-household
+name: eligible-household
 classification: synthetic
 input: { household_reference: HH-AB12CD34 }
 interactions:
@@ -12,7 +12,4 @@ interactions:
 expect:
   outcome: match
   outputs: { approved: true, category: PRIORITY }
-  claims:
-    household-record-exists: true
-    household-category: PRIORITY
-    source-household-approval-decision: true
+  claims: { household-record-exists: true, household-category: PRIORITY, household-eligible: true }
