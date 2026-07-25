@@ -761,6 +761,8 @@ purpose, tenant, registry, and source-plan binding.
 PostgreSQL runtime connection URL. The optional `root_certificate_path` pins a
 private PostgreSQL trust root exclusively: when configured, Relay does not
 also trust system roots. Omit it to use the host's normal system trust store.
+Relay rejects a custom root on Android because that platform's `native-tls`
+backend cannot exclude the Android system root directory.
 The epoch id and advisory-lock keys are stable, deployment-owned identifiers
 and must not collide with another state-plane user. Do not place a database URL
 in YAML.
