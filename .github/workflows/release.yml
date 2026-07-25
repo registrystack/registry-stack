@@ -878,6 +878,7 @@ jobs:
           mapfile -d '' -t assets < <(find dist/bin dist/binary-sbom \
             dist/image-evidence dist/release-capsule -type f -print0 | sort -z)
           gh release create "${{ needs.verify.outputs.tag }}" \
+            --verify-tag \
             --title "RegistryStack ${{ needs.verify.outputs.tag }}" \
             --notes-file "release/notes/${{ needs.verify.outputs.tag }}.md" \
             --prerelease \
