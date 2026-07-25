@@ -25,6 +25,56 @@ use rustix::fs::{Mode, OFlags};
 
 pub const POSTURE_SCHEMA_V1: &str = include_str!("../schemas/registry.ops.posture.v1.schema.json");
 
+/// Return the portable JSON Schema fragment for deployment-waiver references.
+///
+/// Runtime validation remains authoritative, including the deliberate
+/// acceptance of an empty suffix after a reserved authorization scheme.
+#[must_use]
+pub fn deployment_waiver_reference_schema_fragment() -> Value {
+    serde_json::json!({
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": r"^(?!.*\.\.)[A-Za-z0-9._:-]+$",
+        "not": {
+            "pattern": r"^(?:[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]:)?(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc]):[A-Za-z0-9._:-]+$"
+        }
+    })
+}
+
+/// Return the portable structural JSON Schema fragment for waiver summaries.
+///
+/// Contextual authorization-value and private-key marker exclusions require
+/// [`validate_deployment_waiver_metadata`]; schema acceptance alone is not
+/// sufficient semantic producer validation.
+#[must_use]
+pub fn deployment_waiver_summary_schema_fragment() -> Value {
+    serde_json::json!({
+        "description": "Structurally valid deployment-waiver summary. Contextual authorization-value and private-key marker exclusions require semantic producer validation.",
+        "$comment": "Schema acceptance does not replace validate_deployment_waiver_metadata.",
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "allOf": [
+            {
+                "not": {
+                    "pattern": r"[\u0000-\u001F\u007F-\u009F]"
+                }
+            },
+            {
+                "not": {
+                    "pattern": r"^[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]"
+                }
+            },
+            {
+                "not": {
+                    "pattern": r"[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]$"
+                }
+            }
+        ]
+    })
+}
+
 pub const ADMIN_ERROR_SCHEMA_V1: &str =
     include_str!("../schemas/registry.admin.error.v1.schema.json");
 
@@ -126,9 +176,39 @@ impl DeploymentFindingStatus {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(try_from = "DeploymentFindingWaiverDocument")]
 pub struct DeploymentFindingWaiver {
-    pub reason: String,
+    pub reference: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_deployment_waiver_summary",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub summary: Option<String>,
     pub expires: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeploymentFindingWaiverDocument {
+    reference: String,
+    #[serde(default)]
+    summary: OptionalDeploymentWaiverSummary,
+    expires: String,
+}
+
+impl TryFrom<DeploymentFindingWaiverDocument> for DeploymentFindingWaiver {
+    type Error = DeploymentWaiverMetadataError;
+
+    fn try_from(value: DeploymentFindingWaiverDocument) -> Result<Self, Self::Error> {
+        let summary: Option<String> = value.summary.into();
+        validate_deployment_waiver_metadata(&value.reference, summary.as_deref())?;
+        Ok(Self {
+            reference: value.reference,
+            summary,
+            expires: value.expires,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -141,10 +221,42 @@ pub struct DeploymentFinding {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(try_from = "DeploymentWaiverDocument")]
 pub struct DeploymentWaiver {
     pub finding: String,
-    pub reason: String,
+    pub reference: String,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_deployment_waiver_summary",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub summary: Option<String>,
     pub expires: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeploymentWaiverDocument {
+    finding: String,
+    reference: String,
+    #[serde(default)]
+    summary: OptionalDeploymentWaiverSummary,
+    expires: String,
+}
+
+impl TryFrom<DeploymentWaiverDocument> for DeploymentWaiver {
+    type Error = DeploymentWaiverMetadataError;
+
+    fn try_from(value: DeploymentWaiverDocument) -> Result<Self, Self::Error> {
+        let summary: Option<String> = value.summary.into();
+        validate_deployment_waiver_metadata(&value.reference, summary.as_deref())?;
+        Ok(Self {
+            finding: value.finding,
+            reference: value.reference,
+            summary,
+            expires: value.expires,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -1042,6 +1154,364 @@ pub fn is_valid_approval_reference(reference: &str) -> bool {
     reference
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '-'))
+}
+
+/// Maximum UTF-8 byte length for a deployment-waiver reference.
+pub const DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES: usize = 128;
+
+/// Maximum Unicode scalar-value count for an optional deployment-waiver summary.
+pub const DEPLOYMENT_WAIVER_SUMMARY_MAX_CHARS: usize = 256;
+
+/// Deserialize an optional waiver summary while distinguishing omission from
+/// explicit `null`. The 1.0 contract permits only an omitted field or a string;
+/// products reuse this helper so their config parsers cannot drift.
+pub fn deserialize_optional_deployment_waiver_summary<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    OptionalDeploymentWaiverSummary::deserialize(deserializer).map(Into::into)
+}
+
+/// Field adapter for optional waiver summaries that rejects explicit `null`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct OptionalDeploymentWaiverSummary(Option<String>);
+
+impl From<OptionalDeploymentWaiverSummary> for Option<String> {
+    fn from(value: OptionalDeploymentWaiverSummary) -> Self {
+        value.0
+    }
+}
+
+impl<'de> Deserialize<'de> for OptionalDeploymentWaiverSummary {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct OptionalSummaryVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for OptionalSummaryVisitor {
+            type Value = OptionalDeploymentWaiverSummary;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an omitted deployment waiver summary or a non-null string")
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::invalid_type(serde::de::Unexpected::Unit, &self))
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Err(E::invalid_type(serde::de::Unexpected::Unit, &self))
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                String::deserialize(deserializer)
+                    .map(|value| OptionalDeploymentWaiverSummary(Some(value)))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(OptionalDeploymentWaiverSummary(Some(value.to_string())))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(OptionalDeploymentWaiverSummary(Some(value)))
+            }
+        }
+
+        deserializer.deserialize_option(OptionalSummaryVisitor)
+    }
+}
+
+/// A field-level deployment-waiver metadata validation failure.
+///
+/// Waiver metadata is privileged, reviewed operator configuration, but it is
+/// copied into restricted posture, boot logs, screenshots, and support
+/// bundles. These narrow checks prevent accidental credential disclosure
+/// without applying hostname, URL, JWT, base64, entropy, or key-name
+/// heuristics that would reject ordinary operational text.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum DeploymentWaiverMetadataError {
+    ReferenceLength,
+    ReferenceNotCanonical,
+    ReferenceInvalidSyntax,
+    ReferenceCredentialLiteral,
+    SummaryLength,
+    SummaryNotCanonical,
+    SummaryControlCharacter,
+    SummaryCredentialLiteral,
+}
+
+impl DeploymentWaiverMetadataError {
+    pub const fn field(self) -> &'static str {
+        match self {
+            Self::ReferenceLength
+            | Self::ReferenceNotCanonical
+            | Self::ReferenceInvalidSyntax
+            | Self::ReferenceCredentialLiteral => "reference",
+            Self::SummaryLength
+            | Self::SummaryNotCanonical
+            | Self::SummaryControlCharacter
+            | Self::SummaryCredentialLiteral => "summary",
+        }
+    }
+}
+
+impl Display for DeploymentWaiverMetadataError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReferenceLength => write!(
+                formatter,
+                "reference must be 1..={DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES} bytes"
+            ),
+            Self::ReferenceNotCanonical => write!(
+                formatter,
+                "reference must be 1..={DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES} bytes and already canonical without surrounding whitespace"
+            ),
+            Self::ReferenceInvalidSyntax => write!(
+                formatter,
+                "reference must be 1..={DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES} bytes and use only [A-Za-z0-9._:-] without '..'"
+            ),
+            Self::ReferenceCredentialLiteral => write!(
+                formatter,
+                "reference must be 1..={DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES} bytes and not encode a Bearer or Basic authorization value"
+            ),
+            Self::SummaryLength => write!(
+                formatter,
+                "summary must be 1..={DEPLOYMENT_WAIVER_SUMMARY_MAX_CHARS} characters when present"
+            ),
+            Self::SummaryNotCanonical => write!(
+                formatter,
+                "summary must be 1..={DEPLOYMENT_WAIVER_SUMMARY_MAX_CHARS} characters and already trimmed when present"
+            ),
+            Self::SummaryControlCharacter => write!(
+                formatter,
+                "summary must be 1..={DEPLOYMENT_WAIVER_SUMMARY_MAX_CHARS} characters and contain no control characters when present"
+            ),
+            Self::SummaryCredentialLiteral => write!(
+                formatter,
+                "summary must be 1..={DEPLOYMENT_WAIVER_SUMMARY_MAX_CHARS} characters and contain no authorization value or private-key begin marker when present"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DeploymentWaiverMetadataError {}
+
+/// Validate the cross-product deployment-waiver metadata contract.
+pub fn validate_deployment_waiver_metadata(
+    reference: &str,
+    summary: Option<&str>,
+) -> Result<(), DeploymentWaiverMetadataError> {
+    if reference.is_empty() || reference.len() > DEPLOYMENT_WAIVER_REFERENCE_MAX_BYTES {
+        return Err(DeploymentWaiverMetadataError::ReferenceLength);
+    }
+    if reference.trim() != reference {
+        return Err(DeploymentWaiverMetadataError::ReferenceNotCanonical);
+    }
+    if !is_valid_approval_reference(reference) {
+        return Err(DeploymentWaiverMetadataError::ReferenceInvalidSyntax);
+    }
+    if contains_reference_authorization_value(reference) {
+        return Err(DeploymentWaiverMetadataError::ReferenceCredentialLiteral);
+    }
+
+    let Some(summary) = summary else {
+        return Ok(());
+    };
+    if summary.is_empty() || summary.chars().count() > DEPLOYMENT_WAIVER_SUMMARY_MAX_CHARS {
+        return Err(DeploymentWaiverMetadataError::SummaryLength);
+    }
+    if summary.trim() != summary {
+        return Err(DeploymentWaiverMetadataError::SummaryNotCanonical);
+    }
+    if summary.chars().any(char::is_control) {
+        return Err(DeploymentWaiverMetadataError::SummaryControlCharacter);
+    }
+    if contains_high_confidence_credential_literal(summary) {
+        return Err(DeploymentWaiverMetadataError::SummaryCredentialLiteral);
+    }
+    Ok(())
+}
+
+const AUTHORIZATION_SCHEMES: [&str; 2] = ["Bearer", "Basic"];
+
+fn contains_reference_authorization_value(reference: &str) -> bool {
+    // References are opaque identifiers, not prose. An exact scheme prefix
+    // plus a nonempty value is therefore a high-confidence pasted credential.
+    let reference = strip_ascii_case_prefix(reference, "Authorization:").unwrap_or(reference);
+    AUTHORIZATION_SCHEMES.iter().any(|scheme| {
+        reference
+            .get(..scheme.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(scheme))
+            && reference.as_bytes().get(scheme.len()) == Some(&b':')
+            && reference.len() > scheme.len() + 1
+    })
+}
+
+fn strip_ascii_case_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    value
+        .get(..prefix.len())
+        .filter(|candidate| candidate.eq_ignore_ascii_case(prefix))
+        .and_then(|_| value.get(prefix.len()..))
+}
+
+fn contains_high_confidence_credential_literal(summary: &str) -> bool {
+    AUTHORIZATION_SCHEMES
+        .iter()
+        .any(|scheme| contains_authorization_value(summary, scheme))
+        || summary.split("-----BEGIN ").skip(1).any(|suffix| {
+            suffix.split_once("-----").is_some_and(|(label, _)| {
+                label == "PRIVATE KEY"
+                    || label.ends_with(" PRIVATE KEY")
+                    || label == "PGP PRIVATE KEY BLOCK"
+            })
+        })
+}
+
+fn contains_authorization_value(summary: &str, scheme: &str) -> bool {
+    let mut value_follows = false;
+    let mut authorization_context = false;
+    let mut authorization_colon_follows = false;
+    for word in summary.split_whitespace() {
+        if value_follows {
+            if is_authorization_separator_token(word) {
+                continue;
+            }
+            value_follows = false;
+            if is_credential_like_authorization_value(word) {
+                return true;
+            }
+        }
+
+        if is_authorization_separator_token(word) {
+            if authorization_colon_follows {
+                authorization_context = word.chars().any(is_authorization_colon);
+                authorization_colon_follows = false;
+            }
+            continue;
+        }
+
+        let authorization_label = authorization_value_in_word(word, "Authorization");
+        if let Some(label) = authorization_label {
+            authorization_context = label.has_colon;
+            authorization_colon_follows = !label.has_colon;
+        } else {
+            authorization_colon_follows = false;
+        }
+
+        let Some(authorization_value) = authorization_value_in_word(word, scheme) else {
+            if authorization_label.is_none() {
+                authorization_context = false;
+            }
+            continue;
+        };
+        if authorization_value.standalone_wrapped && !authorization_context {
+            authorization_context = false;
+            continue;
+        }
+
+        authorization_context = false;
+        if authorization_value.value.is_empty() {
+            value_follows = true;
+        } else if is_credential_like_authorization_value(authorization_value.value) {
+            return true;
+        }
+    }
+    false
+}
+
+#[derive(Clone, Copy)]
+struct AuthorizationValue<'a> {
+    value: &'a str,
+    has_colon: bool,
+    standalone_wrapped: bool,
+}
+
+fn authorization_value_in_word<'a>(word: &'a str, scheme: &str) -> Option<AuthorizationValue<'a>> {
+    let mut segment_start = 0;
+    for (segment_end, delimiter_len) in word
+        .char_indices()
+        .filter_map(|(index, character)| {
+            is_authorization_colon(character).then_some((index, character.len_utf8()))
+        })
+        .chain(std::iter::once((word.len(), 0)))
+    {
+        let segment = word.get(segment_start..segment_end)?;
+        // Normalize only boundaries around ASCII auth tokens. This covers
+        // Unicode punctuation without changing internal characters or
+        // maintaining a partial list of quote and bracket code points.
+        let normalized_scheme = segment.trim_matches(is_authorization_boundary);
+        if normalized_scheme.eq_ignore_ascii_case(scheme) {
+            let has_colon = delimiter_len != 0;
+            let standalone_wrapped = normalized_scheme.len() < segment.len()
+                && segment.starts_with(is_authorization_boundary)
+                && segment.ends_with(is_authorization_boundary);
+            let value = if has_colon {
+                word.get(segment_end + delimiter_len..)?
+                    .trim_start_matches(is_authorization_colon)
+            } else {
+                ""
+            };
+            return Some(AuthorizationValue {
+                value,
+                has_colon,
+                standalone_wrapped,
+            });
+        }
+        segment_start = segment_end + delimiter_len;
+    }
+    None
+}
+
+fn is_credential_like_authorization_value(candidate: &str) -> bool {
+    let prose_word = candidate.trim_matches(is_authorization_boundary);
+    !prose_word.is_empty()
+        && ![
+            "access",
+            "auth",
+            "authentication",
+            "authorization",
+            "credential",
+            "credentials",
+            "header",
+            "scheme",
+            "token",
+            "tokens",
+            "value",
+            "values",
+        ]
+        .iter()
+        .any(|word| prose_word.eq_ignore_ascii_case(word))
+}
+
+fn is_authorization_separator_token(candidate: &str) -> bool {
+    !candidate.is_empty() && candidate.chars().all(is_authorization_boundary)
+}
+
+fn is_authorization_colon(character: char) -> bool {
+    matches!(character, ':' | '\u{fe55}' | '\u{ff1a}')
+}
+
+fn is_authorization_boundary(character: char) -> bool {
+    !character.is_alphanumeric() && !character.is_whitespace() && !character.is_control()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -3462,6 +3932,298 @@ mod tests {
         assert!(!is_valid_approval_reference("with space"));
         assert!(!is_valid_approval_reference("nul\0byte"));
         assert!(!is_valid_approval_reference("ctrl\nchar"));
+    }
+
+    #[test]
+    fn deployment_waiver_metadata_accepts_reference_and_optional_summary() {
+        validate_deployment_waiver_metadata("OPS-2026:INC_42", None)
+            .expect("reference without summary is valid");
+        for reference in ["OPS-BEARER-42", "BasicAuth:OPS-42", "Bearer-rotation:42"] {
+            validate_deployment_waiver_metadata(reference, None).unwrap_or_else(|error| {
+                panic!("ordinary operator reference rejected: {reference:?}: {error}")
+            });
+        }
+        validate_deployment_waiver_metadata(
+            "OPS-2026:INC_42",
+            Some("Gateway rate limiting is tracked in the operations ticket"),
+        )
+        .expect("ordinary short summary is valid");
+    }
+
+    #[test]
+    fn deployment_waiver_metadata_rejects_invalid_or_overlong_reference() {
+        assert_eq!(
+            validate_deployment_waiver_metadata("", None),
+            Err(DeploymentWaiverMetadataError::ReferenceLength)
+        );
+        assert_eq!(
+            validate_deployment_waiver_metadata(" OPS-42", None),
+            Err(DeploymentWaiverMetadataError::ReferenceNotCanonical)
+        );
+        assert_eq!(
+            validate_deployment_waiver_metadata("OPS/42", None),
+            Err(DeploymentWaiverMetadataError::ReferenceInvalidSyntax)
+        );
+        assert_eq!(
+            validate_deployment_waiver_metadata("OPS..42", None),
+            Err(DeploymentWaiverMetadataError::ReferenceInvalidSyntax)
+        );
+        assert_eq!(
+            validate_deployment_waiver_metadata(&"x".repeat(129), None),
+            Err(DeploymentWaiverMetadataError::ReferenceLength)
+        );
+        for reference in [
+            "Bearer:abcdef",
+            "bearer:abc123",
+            "Basic:abc123",
+            "bAsIc:credential-value",
+            "Authorization:Bearer:abc123",
+            "authorization:bAsIc:abc123",
+        ] {
+            assert_eq!(
+                validate_deployment_waiver_metadata(reference, None),
+                Err(DeploymentWaiverMetadataError::ReferenceCredentialLiteral),
+                "credential-like reference must be rejected without echoing it: {reference:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn deployment_waiver_metadata_rejects_invalid_summary() {
+        for (summary, expected) in [
+            ("", DeploymentWaiverMetadataError::SummaryLength),
+            (
+                " summary",
+                DeploymentWaiverMetadataError::SummaryNotCanonical,
+            ),
+            (
+                "summary\ncontinued",
+                DeploymentWaiverMetadataError::SummaryControlCharacter,
+            ),
+            (
+                "Bearer credential-value",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Basic credential-value",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "bearer credential-value",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "basic credential-value",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "rotated leaked Bearer abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "copied Basic Zm9vOmJhcg==",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "rotated leaked bearer abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "rotated leaked Bearer abcdef before config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "copied Basic Zm9vOmJhcg== before config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "rotated leaked bearer abcdef before config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization:Bearer abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Bearer: abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization:Basic Zm9vOmJhcg== before config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: (bearer): abcdef after config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Bearer:abcdef before config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Bearer:token:abcdef before config apply",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: “Bearer abcdef”",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: ＂Bearer abcdef＂",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: 「Basic Zm9vOmJhcg==」",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: “Bearer” abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization ： «Basic» Zm9vOmJhcg==",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: “Bearer”: supported by the gateway",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: «Basic»: enabled",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: (Bearer): API authentication mode",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Bearer : abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Authorization: «Basic Zm9vOmJhcg==»",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Bearer … abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Bearer ： abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                "Bearer：abcdef",
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                concat!("accidentally pasted -----BEGIN PRIVATE ", "KEY-----"),
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                concat!(
+                    "accidentally pasted -----BEGIN OPENSSH PRIVATE ",
+                    "KEY-----"
+                ),
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                concat!(
+                    "accidentally pasted -----BEGIN ED25519 PRIVATE ",
+                    "KEY-----"
+                ),
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+            (
+                concat!(
+                    "accidentally pasted -----BEGIN PGP PRIVATE KEY ",
+                    "BLOCK-----"
+                ),
+                DeploymentWaiverMetadataError::SummaryCredentialLiteral,
+            ),
+        ] {
+            assert_eq!(
+                validate_deployment_waiver_metadata("OPS-42", Some(summary)),
+                Err(expected),
+                "summary must be rejected without echoing it: {summary:?}"
+            );
+        }
+        assert_eq!(
+            validate_deployment_waiver_metadata("OPS-42", Some(&"x".repeat(257))),
+            Err(DeploymentWaiverMetadataError::SummaryLength)
+        );
+        validate_deployment_waiver_metadata("OPS-42", Some(&"é".repeat(256)))
+            .expect("summary limit counts Unicode characters");
+        assert_eq!(
+            validate_deployment_waiver_metadata("OPS-42", Some(&"é".repeat(257))),
+            Err(DeploymentWaiverMetadataError::SummaryLength),
+            "summary limit is measured in Unicode characters"
+        );
+    }
+
+    #[test]
+    fn deployment_waiver_summary_does_not_use_broad_secret_heuristics() {
+        for summary in [
+            "Review URL https://ops.example.test/tickets/42",
+            "JWT validation follow-up",
+            "base64 migration review",
+            "token_name configuration review",
+            "Bearer credential handling review",
+            "Basic authentication migration review",
+            "bearer credential handling review",
+            "basic authentication migration review",
+            "Rotated Bearer token handling review",
+            "Migrated Basic credential storage",
+            "Bearer credential, handling review before config apply",
+            "Basic authentication: migration review after config apply",
+            "Bearer access token handling review",
+            "Basic auth scheme migration review",
+            "Bearer header value handling review",
+            "Authorization: Bearer token handling review",
+            "Bearer: token handling review",
+            "Authorization:Basic authentication migration review",
+            "Bearer-based authentication review",
+            "Basic-auth migration review",
+            "Authorization: “Bearer token handling review”",
+            "Bearer : token handling review",
+            "Bearer … token handling review",
+            "“Bearer-based” authentication review",
+            "Basic：authentication migration review",
+            "Use “Bearer” for API authentication",
+            "Document «Basic» for operators",
+            "Compare ＂Bearer＂ and 「Basic」 schemes",
+            "Document “Bearer”: supported by the gateway",
+            "Compare «Basic»: enabled",
+            "Use (Bearer): API authentication mode",
+        ] {
+            validate_deployment_waiver_metadata("OPS-42", Some(summary))
+                .unwrap_or_else(|error| panic!("ordinary summary rejected: {summary:?}: {error}"));
+        }
+    }
+
+    #[test]
+    fn deployment_waiver_summary_deserializer_rejects_explicit_null() {
+        #[derive(Deserialize)]
+        struct Fixture {
+            #[serde(
+                default,
+                deserialize_with = "deserialize_optional_deployment_waiver_summary"
+            )]
+            summary: Option<String>,
+        }
+
+        let omitted: Fixture =
+            serde_json::from_str(r#"{}"#).expect("omitted optional summary is accepted");
+        assert_eq!(omitted.summary, None);
+
+        let present: Fixture = serde_json::from_str(r#"{"summary":"Approved in OPS-42"}"#)
+            .expect("string summary is accepted");
+        assert_eq!(present.summary.as_deref(), Some("Approved in OPS-42"));
+
+        assert!(
+            serde_json::from_str::<Fixture>(r#"{"summary":null}"#).is_err(),
+            "explicit null must not be accepted as an omitted summary"
+        );
     }
 
     #[test]

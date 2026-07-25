@@ -4010,12 +4010,19 @@ consultation:
             .await
             .expect("test listener binds");
         let addr = listener.local_addr().expect("listener has local addr");
-        drop(listener);
         let url = format!("http://{addr}/healthz");
+        let peer = tokio::spawn(async move {
+            let (connection, _) = listener.accept().await.expect("test peer accepts");
+            drop(connection);
+        });
 
         let err = run_healthcheck(&url, Duration::from_millis(200))
             .await
             .expect_err("healthcheck fails");
+        tokio::time::timeout(Duration::from_secs(1), peer)
+            .await
+            .expect("healthcheck contacts the test peer")
+            .expect("test peer joins");
         assert!(
             err.to_string().contains("request failed"),
             "unexpected error: {err}"

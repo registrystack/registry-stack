@@ -1446,7 +1446,7 @@
           "default": null
         },
         "waivers": {
-          "description": "Per-deployment waivers. Each names one finding id, a free-text reason,\nand a mandatory expiry date. Expired waivers stop suppressing their\nfinding and raise `deployment.waiver_expired`.",
+          "description": "Per-deployment waivers. Each names one finding id, a required operator\nreference, an optional summary, and a mandatory expiry date. Expired\nwaivers stop suppressing their finding and raise\n`deployment.waiver_expired`.",
           "items": {
             "$ref": "#/$defs/DeploymentWaiverConfig"
           },
@@ -1507,7 +1507,7 @@
     },
     "DeploymentWaiverConfig": {
       "additionalProperties": false,
-      "description": "One declared waiver. `expires` is an ISO 8601 `YYYY-MM-DD` date; format is\nvalidated at load time. Reasons must not carry secrets.",
+      "description": "One declared waiver. `expires` is an ISO 8601 `YYYY-MM-DD` date; format is\nvalidated at load time. The reference and optional summary are validated by\nthe shared operations contract before either can reach posture or logs.",
       "properties": {
         "expires": {
           "type": "string"
@@ -1515,16 +1515,52 @@
         "finding": {
           "type": "string"
         },
-        "reason": {
-          "type": "string"
+        "reference": {
+          "$ref": "#/$defs/DeploymentWaiverReference"
+        },
+        "summary": {
+          "$ref": "#/$defs/DeploymentWaiverSummary"
         }
       },
       "required": [
         "finding",
-        "reason",
+        "reference",
         "expires"
       ],
       "type": "object"
+    },
+    "DeploymentWaiverReference": {
+      "maxLength": 128,
+      "minLength": 1,
+      "not": {
+        "pattern": "^(?:[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]:)?(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc]):[A-Za-z0-9._:-]+$"
+      },
+      "pattern": "^(?!.*\\.\\.)[A-Za-z0-9._:-]+$",
+      "type": "string"
+    },
+    "DeploymentWaiverSummary": {
+      "$comment": "Schema acceptance does not replace validate_deployment_waiver_metadata.",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\u0000-\\u001F\\u007F-\\u009F]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]$"
+          }
+        }
+      ],
+      "description": "Structurally valid deployment-waiver summary. Contextual authorization-value and private-key marker exclusions require semantic producer validation.",
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
     },
     "DisclosureControlConfig": {
       "additionalProperties": false,

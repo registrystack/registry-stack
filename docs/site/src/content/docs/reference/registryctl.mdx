@@ -73,6 +73,7 @@ formatting. Artifact and protocol streams retain their native formats, including
 | Invalid-project `check` | `registryctl.project_diagnostics.v1` |
 | `authoring editor` | `registryctl.project_editor.v1` |
 | `doctor` | `registryctl.validation.report.v1` |
+| `smoke` | `registryctl.smoke.v1` |
 | `bundle` or `anchor` | The operation-specific `schema_version` in the report |
 
 An initialized starter records its starter ID, Registry Stack release, and
@@ -86,7 +87,9 @@ Without `--against`, `check` and `build` label the baseline
 Their `semantic_changes` entries identify changed `claim`, `integration`, `service_policy`,
 `operator_security`, and `disclosure` dimensions. The authorized bundle signer reviews that report;
 Registry Stack does not create a separate reviewer workflow.
-Generated files are written under `.registry-stack/build/<environment>/` only by `build`.
+The `registryctl.project_command.v1` build report identifies the complete generated build root in
+its `output` field. Automation must use that field instead of constructing a path from registryctl's
+private generated directory layout.
 
 For invalid authoring, `check` exits nonzero and reports a nonempty typed diagnostic list.
 The default human output and `--format json` use the same diagnostics, stable codes, normalized
@@ -135,6 +138,9 @@ The command copies the five JSON Schema Draft 2020-12 documents embedded in the 
 `registryctl`. It records the binary version and schema SHA-256 values in
 `.registry-stack-editor/manifest.json`, so the project does not depend on a source checkout, a
 mutable branch, or network schema retrieval.
+For automation, `authoring editor --format json` returns the project root in `project_directory`
+and every managed file in `files`. Use those `registryctl.project_editor.v1` fields instead of
+inferring additional editor paths.
 
 | Authored file | Project-local schema |
 | --- | --- |
@@ -280,7 +286,7 @@ default and accept `--format json` for automation.
 
 ## Project setup
 
-The legacy `init relay` command creates a local spreadsheet project.
+The canonical `init relay` command creates a local Relay-backed spreadsheet API tutorial project.
 In registryctl `v0.12.2`, this generation command requires the strict
 `registryctl-vX.Y.Z-image-lock.json` from the same release beside the running
 binary. Set `REGISTRYCTL_IMAGE_LOCK` only when an operator has verified the same
@@ -297,7 +303,9 @@ not need the lock. Registryctl `v0.8.4` predates the image-lock contract.
 
 The human-readable result identifies the generated Bruno collection and gives the validation and
 start commands. The JSON result contains no progress text, so another program can parse standard
-output directly.
+output directly. Automation must read the project root from `output` and supported generated entry
+points from `artifacts` in the `registryctl.init.v1` report. The remaining generated layout is a
+private implementation detail.
 
 {/* Evidence: crates/registryctl/src/main.rs and crates/registryctl/tests/init_output.rs. */}
 
@@ -350,7 +358,9 @@ Inspect commands report on a running or generated project.
 
 ## Testing
 
-Smoke commands run built-in local checks and write a JSON result file.
+Smoke commands run built-in local checks and write a versioned JSON result file. The
+`registryctl.smoke.v1` report is saved as `smoke-results.json` under the authored
+`local.output_dir`. Smoke-check ordering and human-readable names are not compatibility contracts.
 
 | Subcommand | Purpose |
 | --- | --- |

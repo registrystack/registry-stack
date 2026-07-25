@@ -105,9 +105,10 @@ Both runtime services accept a `deployment` block with a profile of `local`, `ho
 Each profile binds a findings catalog at escalating severities: a `production` deployment with no
 durable audit sink refuses to start, and an `evidence_grade` deployment refuses to start from an
 unsigned local config file.
-Findings, waivers (each with a mandatory reason and expiry), and the declared profile are reported
-by the operations posture endpoint, so the deployment's actual state is inspectable rather than
-asserted.
+Findings, waivers (each with a required operator reference, optional summary, and mandatory
+expiry), and the declared profile are reported by the restricted operations posture endpoint, so
+the deployment's actual state is inspectable rather than asserted. The default tier omits waiver
+metadata.
 The gate catalogs are documented in the
 [Registry Relay configuration reference](../products/registry-relay/configuration/) and the
 [Registry Notary operator configuration reference](../products/registry-notary/operator-config-reference/).

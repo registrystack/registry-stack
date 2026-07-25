@@ -168,14 +168,6 @@ async fn test_relay_execute(State(state): State<TestRelayState>, request: Reques
             "integration": {
                 "id": "dhis2.tracker.enrollment-status",
                 "revision": 1
-            },
-            "consent": {
-                "outcome": "not_required",
-                "verifier_id": null,
-                "verifier_revision": null,
-                "checked_at": null,
-                "expires_at": null,
-                "revocation_status": "not_applicable"
             }
         }
     }))

@@ -2155,6 +2155,11 @@ fn claim_result_view_schema() -> Value {
             },
             "satisfied": { "type": ["boolean", "null"] },
             "disclosure": { "type": "string" },
+            "redacted_fields": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Claim or top-level field names redacted from the public result. Omitted when no redaction was applied."
+            },
             "format": { "type": "string" },
             "issued_at": { "type": "string", "format": "date-time" },
             "expires_at": { "type": ["string", "null"], "format": "date-time" },
@@ -4049,6 +4054,15 @@ mod tests {
             doc["components"]["schemas"]["BatchClaimResultView"]["properties"]["value"]["type"],
             json!(["object", "array", "string", "number", "integer", "boolean", "null"])
         );
+        assert_eq!(
+            doc["components"]["schemas"]["ClaimResultView"]["properties"]["redacted_fields"]
+                ["items"]["type"],
+            json!("string")
+        );
+        assert!(!doc["components"]["schemas"]["ClaimResultView"]["required"]
+            .as_array()
+            .expect("required claim-result fields are an array")
+            .contains(&json!("redacted_fields")));
 
         let evaluate_request = &doc["components"]["schemas"]["EvaluateRequest"]["properties"];
         assert!(evaluate_request.get("subject").is_none());

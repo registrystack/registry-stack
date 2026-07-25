@@ -7,6 +7,10 @@ use std::process::Command;
 
 use jsonschema::{Draft, JSONSchema};
 use registry_platform_audit::{AuditChainProfile, AuditError};
+use registry_platform_ops::{
+    deployment_waiver_reference_schema_fragment, deployment_waiver_summary_schema_fragment,
+    validate_deployment_waiver_metadata, DeploymentWaiverMetadataError,
+};
 use registry_relay::config::schema::{document, document_json, CONFIG_SCHEMA_ID};
 use registry_relay::config::Config;
 use serde_json::{json, Value};
@@ -72,8 +76,36 @@ fn assert_runtime_rejects(instance: &Value, label: &str) {
     );
 }
 
+fn assert_runtime_load_rejects(instance: &Value, label: &str) {
+    let yaml = serde_norway::to_string(instance)
+        .unwrap_or_else(|error| panic!("failed to serialize {label} as YAML: {error}"));
+    if let Ok(config) = serde_norway::from_str::<Config>(&yaml) {
+        assert!(
+            registry_relay::config::validate::run(&config).is_err(),
+            "{label} must be rejected during runtime validation"
+        );
+    }
+}
+
 fn example_config() -> Value {
     parse_yaml(&relay_root().join("config/example.yaml"))
+}
+
+fn config_with_deployment_waiver(reference: &str, summary: Option<&str>) -> Value {
+    let mut config = example_config();
+    let mut waiver = json!({
+        "finding": "relay.config.unsigned",
+        "reference": reference,
+        "expires": "2999-01-01"
+    });
+    if let Some(summary) = summary {
+        waiver["summary"] = json!(summary);
+    }
+    config["deployment"] = json!({
+        "profile": "hosted_lab",
+        "waivers": [waiver]
+    });
+    config
 }
 
 fn oidc_config() -> Value {
@@ -250,6 +282,125 @@ fn strict_nested_objects_tagged_variants_and_duration_shapes_are_enforced() {
     let mut duration_object = example_config();
     duration_object["server"]["request_timeout"] = json!({"secs": 30, "nanos": 0});
     assert_invalid(&schema, &duration_object, "object-form duration");
+}
+
+#[test]
+fn deployment_waiver_schema_rejects_retired_and_noncanonical_metadata() {
+    let schema = document();
+    let mut config = example_config();
+    config["deployment"] = json!({
+        "profile": "hosted_lab",
+        "waivers": [{
+            "finding": "relay.config.unsigned",
+            "reference": "OPS..42",
+            "expires": "2999-01-01"
+        }]
+    });
+    assert_invalid(&schema, &config, "waiver reference containing '..'");
+
+    config["deployment"]["waivers"][0]["reference"] = json!("OPS-42");
+    config["deployment"]["waivers"][0]["summary"] = Value::Null;
+    assert_invalid(&schema, &config, "null deployment waiver summary");
+    assert_runtime_load_rejects(&config, "null deployment waiver summary");
+
+    config["deployment"]["waivers"][0]
+        .as_object_mut()
+        .expect("waiver is an object")
+        .remove("summary");
+    config["deployment"]["waivers"][0]["reason"] = json!("retired waiver text");
+    assert_invalid(&schema, &config, "retired deployment waiver reason");
+    assert_runtime_load_rejects(&config, "retired deployment waiver reason");
+}
+
+#[test]
+fn deployment_waiver_schema_matches_shared_portable_metadata_contract() {
+    let schema = document();
+    assert_eq!(
+        schema.pointer("/$defs/DeploymentWaiverReference"),
+        Some(&deployment_waiver_reference_schema_fragment())
+    );
+    assert_eq!(
+        schema.pointer("/$defs/DeploymentWaiverSummary"),
+        Some(&deployment_waiver_summary_schema_fragment())
+    );
+
+    for reference in ["OPS-42", "Bearer:", "Authorization:Basic:"] {
+        validate_deployment_waiver_metadata(reference, None).unwrap_or_else(|error| {
+            panic!("runtime rejected valid reference {reference:?}: {error}")
+        });
+        assert_valid(
+            &schema,
+            &config_with_deployment_waiver(reference, None),
+            &format!("portable deployment waiver reference {reference:?}"),
+        );
+    }
+    for reference in ["Bearer:abcdef", "authorization:bAsIc:abc123", "Bearer::"] {
+        assert_eq!(
+            validate_deployment_waiver_metadata(reference, None),
+            Err(DeploymentWaiverMetadataError::ReferenceCredentialLiteral)
+        );
+        assert_invalid(
+            &schema,
+            &config_with_deployment_waiver(reference, None),
+            &format!("credential-shaped deployment waiver reference {reference:?}"),
+        );
+    }
+
+    for summary in [
+        "Ordinary operator summary".to_string(),
+        "\u{feff}summary\u{feff}".to_string(),
+        "summary\u{2028}continued".to_string(),
+        "é".repeat(256),
+    ] {
+        validate_deployment_waiver_metadata("OPS-42", Some(&summary))
+            .unwrap_or_else(|error| panic!("runtime rejected valid summary {summary:?}: {error}"));
+        assert_valid(
+            &schema,
+            &config_with_deployment_waiver("OPS-42", Some(&summary)),
+            "structurally valid deployment waiver summary",
+        );
+    }
+    for summary in [
+        String::new(),
+        " summary".to_string(),
+        "summary\u{3000}".to_string(),
+        "summary\u{001f}continued".to_string(),
+        "é".repeat(257),
+    ] {
+        assert!(
+            validate_deployment_waiver_metadata("OPS-42", Some(&summary)).is_err(),
+            "runtime must reject structurally invalid summary {summary:?}"
+        );
+        assert_invalid(
+            &schema,
+            &config_with_deployment_waiver("OPS-42", Some(&summary)),
+            "structurally invalid deployment waiver summary",
+        );
+    }
+
+    for summary in [
+        "Authorization: ＂Bearer abcdef＂",
+        concat!("accidentally pasted -----BEGIN PRIVATE ", "KEY-----"),
+        concat!(
+            "accidentally pasted -----BEGIN PGP PRIVATE KEY ",
+            "BLOCK-----"
+        ),
+    ] {
+        assert_eq!(
+            validate_deployment_waiver_metadata("OPS-42", Some(summary)),
+            Err(DeploymentWaiverMetadataError::SummaryCredentialLiteral)
+        );
+        let config = config_with_deployment_waiver("OPS-42", Some(summary));
+        assert_valid(
+            &schema,
+            &config,
+            "contextual waiver summary left to semantic validation",
+        );
+        assert_runtime_load_rejects(
+            &config,
+            "contextual waiver summary rejected by semantic validation",
+        );
+    }
 }
 
 #[test]

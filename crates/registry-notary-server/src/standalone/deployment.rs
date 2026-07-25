@@ -89,6 +89,36 @@ impl DeploymentGateState {
         })
     }
 
+    /// Emit one boot warning for every active or expired waiver. Metadata has
+    /// already passed the shared operations validator, so logs expose only the
+    /// required reference, optional summary, and expiry.
+    pub(super) fn log_boot_waivers(&self) {
+        for finding in &self.findings {
+            let Some(waiver) = &finding.waiver else {
+                continue;
+            };
+            if finding.status == DeploymentFindingStatus::Waived {
+                tracing::warn!(
+                    code = "deployment.gate_waived",
+                    finding = %finding.id,
+                    reference = %waiver.reference,
+                    summary = ?waiver.summary,
+                    expires = %waiver.expires,
+                    "deployment gate finding is suppressed by an active waiver"
+                );
+            } else if finding.id == FINDING_WAIVER_EXPIRED {
+                tracing::warn!(
+                    code = "deployment.waiver_expired",
+                    finding = %waiver.finding,
+                    reference = %waiver.reference,
+                    summary = ?waiver.summary,
+                    expires = %waiver.expires,
+                    "deployment waiver is expired; its gate binds again"
+                );
+            }
+        }
+    }
+
     /// True when a profile is declared, so its gates participate in readiness.
     /// Runtime compilation refuses undeclared profiles before readiness is served.
     pub(crate) fn is_bound(&self) -> bool {

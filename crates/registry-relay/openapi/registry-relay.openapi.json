@@ -1298,54 +1298,6 @@
                           "bounded_full_record"
                         ]
                       },
-                      "consent": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "checked_at": {
-                            "format": "date-time",
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "expires_at": {
-                            "format": "date-time",
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "outcome": {
-                            "const": "not_required"
-                          },
-                          "revocation_status": {
-                            "const": "not_applicable"
-                          },
-                          "verifier_id": {
-                            "maxLength": 128,
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "verifier_revision": {
-                            "maxLength": 128,
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "outcome",
-                          "verifier_id",
-                          "verifier_revision",
-                          "checked_at",
-                          "expires_at",
-                          "revocation_status"
-                        ],
-                        "type": "object"
-                      },
                       "integration": {
                         "additionalProperties": false,
                         "properties": {
@@ -1384,8 +1336,7 @@
                       "source_observed_at",
                       "source_revision",
                       "acquisition_class",
-                      "integration",
-                      "consent"
+                      "integration"
                     ],
                     "type": "object"
                   },
@@ -1398,54 +1349,6 @@
                       },
                       "acquisition_class": {
                         "const": "materialized_snapshot"
-                      },
-                      "consent": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "checked_at": {
-                            "format": "date-time",
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "expires_at": {
-                            "format": "date-time",
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "outcome": {
-                            "const": "not_required"
-                          },
-                          "revocation_status": {
-                            "const": "not_applicable"
-                          },
-                          "verifier_id": {
-                            "maxLength": 128,
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "verifier_revision": {
-                            "maxLength": 128,
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "outcome",
-                          "verifier_id",
-                          "verifier_revision",
-                          "checked_at",
-                          "expires_at",
-                          "revocation_status"
-                        ],
-                        "type": "object"
                       },
                       "integration": {
                         "additionalProperties": false,
@@ -1504,7 +1407,6 @@
                       "source_revision",
                       "acquisition_class",
                       "integration",
-                      "consent",
                       "snapshot"
                     ],
                     "type": "object"
@@ -1573,54 +1475,6 @@
                           "bounded_full_record"
                         ]
                       },
-                      "consent": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "checked_at": {
-                            "format": "date-time",
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "expires_at": {
-                            "format": "date-time",
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "outcome": {
-                            "const": "not_required"
-                          },
-                          "revocation_status": {
-                            "const": "not_applicable"
-                          },
-                          "verifier_id": {
-                            "maxLength": 128,
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "verifier_revision": {
-                            "maxLength": 128,
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "outcome",
-                          "verifier_id",
-                          "verifier_revision",
-                          "checked_at",
-                          "expires_at",
-                          "revocation_status"
-                        ],
-                        "type": "object"
-                      },
                       "integration": {
                         "additionalProperties": false,
                         "properties": {
@@ -1659,8 +1513,7 @@
                       "source_observed_at",
                       "source_revision",
                       "acquisition_class",
-                      "integration",
-                      "consent"
+                      "integration"
                     ],
                     "type": "object"
                   },
@@ -1673,54 +1526,6 @@
                       },
                       "acquisition_class": {
                         "const": "materialized_snapshot"
-                      },
-                      "consent": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "checked_at": {
-                            "format": "date-time",
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "expires_at": {
-                            "format": "date-time",
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "outcome": {
-                            "const": "not_required"
-                          },
-                          "revocation_status": {
-                            "const": "not_applicable"
-                          },
-                          "verifier_id": {
-                            "maxLength": 128,
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "verifier_revision": {
-                            "maxLength": 128,
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "outcome",
-                          "verifier_id",
-                          "verifier_revision",
-                          "checked_at",
-                          "expires_at",
-                          "revocation_status"
-                        ],
-                        "type": "object"
                       },
                       "integration": {
                         "additionalProperties": false,
@@ -1779,7 +1584,6 @@
                       "source_revision",
                       "acquisition_class",
                       "integration",
-                      "consent",
                       "snapshot"
                     ],
                     "type": "object"
@@ -1847,54 +1651,6 @@
                           "bounded_full_record"
                         ]
                       },
-                      "consent": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "checked_at": {
-                            "format": "date-time",
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "expires_at": {
-                            "format": "date-time",
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "outcome": {
-                            "const": "not_required"
-                          },
-                          "revocation_status": {
-                            "const": "not_applicable"
-                          },
-                          "verifier_id": {
-                            "maxLength": 128,
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "verifier_revision": {
-                            "maxLength": 128,
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "outcome",
-                          "verifier_id",
-                          "verifier_revision",
-                          "checked_at",
-                          "expires_at",
-                          "revocation_status"
-                        ],
-                        "type": "object"
-                      },
                       "integration": {
                         "additionalProperties": false,
                         "properties": {
@@ -1933,8 +1689,7 @@
                       "source_observed_at",
                       "source_revision",
                       "acquisition_class",
-                      "integration",
-                      "consent"
+                      "integration"
                     ],
                     "type": "object"
                   },
@@ -1947,54 +1702,6 @@
                       },
                       "acquisition_class": {
                         "const": "materialized_snapshot"
-                      },
-                      "consent": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "checked_at": {
-                            "format": "date-time",
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "expires_at": {
-                            "format": "date-time",
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "outcome": {
-                            "const": "not_required"
-                          },
-                          "revocation_status": {
-                            "const": "not_applicable"
-                          },
-                          "verifier_id": {
-                            "maxLength": 128,
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "verifier_revision": {
-                            "maxLength": 128,
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          }
-                        },
-                        "required": [
-                          "outcome",
-                          "verifier_id",
-                          "verifier_revision",
-                          "checked_at",
-                          "expires_at",
-                          "revocation_status"
-                        ],
-                        "type": "object"
                       },
                       "integration": {
                         "additionalProperties": false,
@@ -2053,7 +1760,6 @@
                       "source_revision",
                       "acquisition_class",
                       "integration",
-                      "consent",
                       "snapshot"
                     ],
                     "type": "object"

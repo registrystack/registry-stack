@@ -51,7 +51,7 @@
     {
       "id": "notary-oid4vci-issuer-full",
       "surface": "Registry Notary registry-backed OID4VCI issuer",
-      "status": "blocked-by-suite-profile-and-offer-adapter",
+      "status": "blocked-by-suite-profile",
       "suite_plan": "oid4vci-1_0-issuer-test-plan",
       "suite_modules": [],
       "variants": {
@@ -66,14 +66,21 @@
         "vci_authorization_code_flow_variant": "issuer_initiated"
       },
       "config_template": "registry-notary-oid4vci-issuer.template.json",
+      "offer_adapter": {
+        "command": "release/scripts/openid-conformance-runner.py submit-offer",
+        "input": "The owner-only openid-credential-offer URI rendered only after Registry Notary completes its authenticated /oid4vci/offer/callback and registry-backed evaluation.",
+        "output": "One no-redirect GET to the pinned suite module's exposed /credential_offer endpoint with the unchanged inline credential_offer value."
+      },
       "requires": [
         "A frozen Registry Notary release-candidate topology with a suite-reachable issuer URL.",
-        "A bridge that sends the issuer-initiated Notary pre-authorized offer to the suite's exposed /credential_offer endpoint.",
+        "The candidate-neutral submit-offer adapter must receive the real owner-only Notary offer URI produced after the authenticated callback; a fabricated offer does not qualify.",
         "A reviewed suite path that does not require DPoP, wallet attestation, PAR, an authorization-code wallet grant, ES256 holder proof, EUDI, or HAIP behavior outside Registry Notary 1.0."
       ],
       "notes": [
         "Registry Notary supports issuer-initiated pre-authorized code only. The identity provider's authorization code is internal to Notary and is not a wallet grant.",
+        "The pinned suite accepts issuer-initiated pre-authorized offers at its exposed /credential_offer endpoint. The adapter now closes that transport gap without adding a Registry Notary product endpoint.",
         "The checked-in sender_constrain=dpop variant is required by this upstream suite plan shape and does not represent Registry Notary DPoP support.",
+        "The full plan remains blocked because its current module and variant roster exercises unsupported DPoP, attestation, batch, notification, and other behavior outside the Registry Notary 1.0 profile.",
         "Do not treat this blocked mapping, a development topology, or historical wallet smoke output as certification evidence."
       ]
     }
@@ -83,6 +90,11 @@
       "surface": "Registry Relay OIDC bearer validation",
       "evidence": "The release-owned candidate-neutral Relay and Zitadel smoke is directly runnable against a published Relay image digest. Its live output requires candidate binding and maintainer review before it becomes release evidence.",
       "reason": "The OIDF suite does not publish a generic resource-server conformance plan for a Relay-style protected API. The separate release topology verifies discovery, signature, audience, token type, and native Zitadel role-object scope mapping."
+    },
+    {
+      "surface": "Registry Notary Rust SD-JWT verifier",
+      "evidence": "Rust library and fixture interoperability tests only; no OIDF OID4VP verifier-plan result applies to this surface.",
+      "reason": "The Rust SD-JWT verifier is a caller-invoked verification library, not an OID4VP endpoint. Registry Stack 1.0 therefore makes no OID4VP verifier conformance claim for it."
     },
     {
       "surface": "Third-party OpenID Providers used by demonstration topologies",

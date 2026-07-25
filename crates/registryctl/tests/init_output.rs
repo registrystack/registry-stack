@@ -284,12 +284,6 @@ fn json_init_rejects_non_utf8_destinations_before_all_dispatches() {
             &["--format", "json"][..],
             true,
         ),
-        (
-            "spreadsheet-api",
-            &["init", "spreadsheet-api"][..],
-            &["--format", "json"][..],
-            true,
-        ),
     ] {
         let mut leaf = format!("{name}-").into_bytes();
         leaf.push(0xff);

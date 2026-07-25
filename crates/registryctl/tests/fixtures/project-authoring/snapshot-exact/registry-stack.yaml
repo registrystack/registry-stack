@@ -2,7 +2,7 @@ version: 1
 starter:
   id: snapshot
   release: 0.12.2
-  content_digest: sha256:efcf38e246e52ad93ca5d0f716386f8657080afe133a63782d1892f802ee630f
+  content_digest: sha256:fddfd7203247c69ada8449b456bd4878e3d760061f4b99be23919e63d61237fb
 registry: { id: fictional-population-registry }
 integrations:
   person-snapshot: { file: integrations/person-snapshot/integration.yaml }
@@ -22,14 +22,14 @@ services:
         input: { person_id: request.target.identifiers.population_person_id }
     claims:
       population-record-exists: { cel: person.matched, disclosure: predicate }
-      benefits-status: { output: person.registration_status, disclosure: value }
-      benefits-eligible: { output: person.eligible, disclosure: predicate }
+      population-registration-status: { output: person.registration_status, disclosure: value }
+      residency-confirmed: { output: person.residency_confirmed, disclosure: predicate }
     credential_profiles:
-      benefits-status:
+      population-evidence:
         format: dc+sd-jwt
-        type: https://credentials.invalid/benefits-status/v1
+        type: https://credentials.invalid/population-evidence/v1
         validity: 10m
-        claims: [population-record-exists, benefits-status, benefits-eligible]
+        claims: [population-record-exists, population-registration-status, residency-confirmed]
   emergency-assistance:
     kind: evidence
     version: 1

@@ -103,9 +103,10 @@ pub struct DeploymentConfig {
     #[serde(default)]
     #[schemars(with = "Option<schema::DeploymentProfileSchema>")]
     pub profile: Option<DeploymentProfile>,
-    /// Per-deployment waivers. Each names one finding id, a free-text reason,
-    /// and a mandatory expiry date. Expired waivers stop suppressing their
-    /// finding and raise `deployment.waiver_expired`.
+    /// Per-deployment waivers. Each names one finding id, a required operator
+    /// reference, an optional summary, and a mandatory expiry date. Expired
+    /// waivers stop suppressing their finding and raise
+    /// `deployment.waiver_expired`.
     #[serde(default)]
     pub waivers: Vec<DeploymentWaiverConfig>,
     /// Operator declarations of assurance evidence the runtime cannot observe
@@ -116,13 +117,40 @@ pub struct DeploymentConfig {
 }
 
 /// One declared waiver. `expires` is an ISO 8601 `YYYY-MM-DD` date; format is
-/// validated at load time. Reasons must not carry secrets.
+/// validated at load time. The reference and optional summary are validated by
+/// the shared operations contract before either can reach posture or logs.
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, from = "DeploymentWaiverConfigDocument")]
+#[schemars(!from)]
 pub struct DeploymentWaiverConfig {
     pub finding: String,
-    pub reason: String,
+    #[schemars(with = "schema::DeploymentWaiverReferenceSchema")]
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "schema::DeploymentWaiverSummarySchema")]
+    pub summary: Option<String>,
     pub expires: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeploymentWaiverConfigDocument {
+    finding: String,
+    reference: String,
+    #[serde(default)]
+    summary: registry_platform_ops::OptionalDeploymentWaiverSummary,
+    expires: String,
+}
+
+impl From<DeploymentWaiverConfigDocument> for DeploymentWaiverConfig {
+    fn from(value: DeploymentWaiverConfigDocument) -> Self {
+        Self {
+            finding: value.finding,
+            reference: value.reference,
+            summary: value.summary.into(),
+            expires: value.expires,
+        }
+    }
 }
 
 /// Operator-asserted assurance evidence for conditions the runtime cannot

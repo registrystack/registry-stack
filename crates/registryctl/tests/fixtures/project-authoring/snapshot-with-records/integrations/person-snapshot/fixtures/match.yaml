@@ -3,13 +3,13 @@ classification: synthetic
 input: { person_id: PER-00000001 }
 interactions:
   - expect: { method: GET, path: /snapshot }
-    respond: { status: 200, body: { registration_status: active, eligible: true } }
+    respond: { status: 200, body: { registration_status: active, residency_confirmed: true } }
 expect:
   outcome: match
-  outputs: { registration_status: active, eligible: true }
+  outputs: { registration_status: active, residency_confirmed: true }
   claims:
     population-record-exists: true
-    benefits-status: active
-    benefits-eligible: true
+    population-registration-status: active
+    residency-confirmed: true
     emergency-record-exists: true
     emergency-status: redacted

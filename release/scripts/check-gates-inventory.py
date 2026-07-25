@@ -32,6 +32,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Other workflow path classification",
         ".github/workflows/*)\n                  mark_all\n                  ;;",
     ),
+    (
+        "Debian 13 image contract",
+        "run: python3 release/scripts/check-debian13-images.py",
+    ),
     ("Cargo metadata", "run: cargo metadata --locked --format-version 1"),
     (
         "Manifest profile validation",
@@ -182,8 +186,20 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_validate_upgrade_exercise.py",
     ),
     (
-        "Upgrade exercise template validation",
-        "python3 release/scripts/validate-upgrade-exercise.py --template",
+        "Upgrade exercise asset preparation tests",
+        "run: python3 -m unittest release/scripts/test_prepare_upgrade_exercise_assets.py",
+    ),
+    (
+        "Upgrade exercise candidate asset preparation",
+        "python3 release/scripts/prepare-upgrade-exercise-assets.py\n"
+        "          --discover release/exercises\n"
+        "          --asset-root target/upgrade-exercise-assets",
+    ),
+    (
+        "Upgrade exercise record discovery",
+        "python3 release/scripts/validate-upgrade-exercise.py --discover "
+        "release/exercises --candidate-asset-root "
+        "target/upgrade-exercise-assets",
     ),
     (
         "Base-reference compatibility input",

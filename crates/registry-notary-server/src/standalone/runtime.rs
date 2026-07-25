@@ -24,7 +24,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use jsonwebtoken::Algorithm;
 use registry_notary_core::deployment::{
-    evaluate_gates, EvaluatedFinding, EvaluatedWaiver, GateEvaluation,
+    evaluate_gates, DeploymentFindingStatus, EvaluatedFinding, EvaluatedWaiver, GateEvaluation,
+    FINDING_WAIVER_EXPIRED,
 };
 use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
