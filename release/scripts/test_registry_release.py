@@ -30,6 +30,73 @@ def load_debian13_image_check():
 
 
 class RegistryReleaseTest(unittest.TestCase):
+    def test_required_ci_contexts_wrap_path_gated_jobs(self) -> None:
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        )
+        jobs = workflow["jobs"]
+        required_contexts = {
+            "rust": (
+                "rust-required",
+                "Rust workspace",
+                "rust",
+            ),
+            "release-tool": (
+                "release-tool-required",
+                "Release tooling",
+                "release_tool",
+            ),
+            "release-source-proof": (
+                "release-source-proof-required",
+                "Release source proof",
+                "release_source_proof",
+            ),
+            "docs": (
+                "docs-required",
+                "Docs",
+                "docs",
+            ),
+        }
+
+        for check_job_id, (
+            required_job_id,
+            context_name,
+            path_output,
+        ) in required_contexts.items():
+            with self.subTest(context=context_name):
+                check_job = jobs[check_job_id]
+                self.assertEqual(f"{context_name} checks", check_job["name"])
+                self.assertEqual(
+                    f"needs.changes.outputs.{path_output} == 'true'",
+                    check_job["if"],
+                )
+
+                required_job = jobs[required_job_id]
+                self.assertEqual(context_name, required_job["name"])
+                self.assertEqual(
+                    {"changes", check_job_id},
+                    set(required_job["needs"]),
+                )
+                self.assertEqual("${{ always() }}", required_job["if"])
+                self.assertEqual(1, len(required_job["steps"]))
+                step = required_job["steps"][0]
+                self.assertEqual(
+                    "${{ needs.changes.result }}",
+                    step["env"]["CHANGES_RESULT"],
+                )
+                self.assertEqual(
+                    f"${{{{ needs.changes.outputs.{path_output} }}}}",
+                    step["env"]["REQUIRED"],
+                )
+                self.assertEqual(
+                    f"${{{{ needs.{check_job_id}.result }}}}",
+                    step["env"]["RESULT"],
+                )
+                self.assertIn(
+                    "success:true:success|success:false:skipped",
+                    step["run"],
+                )
+
     def test_maintained_images_follow_debian13_contract(self) -> None:
         module = load_debian13_image_check()
         self.assertEqual([], module.check_repository(ROOT))
