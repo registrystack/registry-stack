@@ -97,16 +97,16 @@ Unsafe surface:
 - `crates/registry-notary-server/src/standalone/tests/deployment_gates.rs:36`
 - `crates/registry-notary-server/src/standalone/tests/deployment_gates.rs:307`
 - `crates/registry-notary-server/src/standalone/tests/deployment_gates.rs:325`
-- `crates/registry-notary-server/src/state_plane/migration.rs:2944`
-- `crates/registry-notary-server/src/state_plane/migration.rs:3007`
-- `crates/registry-notary-server/src/state_plane/migration.rs:3038`
-- `crates/registry-notary-server/src/state_plane/migration.rs:4210`
-- `crates/registry-notary-server/src/state_plane/migration.rs:4241`
-- `crates/registry-notary-server/src/state_plane/migration.rs:4274`
-- `crates/registry-notary-server/src/state_plane/migration.rs:4303`
-- `crates/registry-notary-server/src/state_plane/migration.rs:4454`
-- `crates/registry-notary-server/src/state_plane/migration.rs:4463`
-- `crates/registry-notary-server/src/state_plane/migration.rs:4465`
+- `crates/registry-notary-server/src/state_plane/migration/tests.rs:603`
+- `crates/registry-notary-server/src/state_plane/migration/tests.rs:666`
+- `crates/registry-notary-server/src/state_plane/migration/tests.rs:697`
+- `crates/registry-notary-server/src/state_plane/migration/tests.rs:1866`
+- `crates/registry-notary-server/src/state_plane/migration/tests.rs:1897`
+- `crates/registry-notary-server/src/state_plane/migration/tests.rs:1930`
+- `crates/registry-notary-server/src/state_plane/migration/tests.rs:1959`
+- `crates/registry-notary-server/src/state_plane/migration/tests.rs:2239`
+- `crates/registry-notary-server/src/state_plane/migration/tests.rs:2248`
+- `crates/registry-notary-server/src/state_plane/migration/tests.rs:2250`
 
 Review notes:
 

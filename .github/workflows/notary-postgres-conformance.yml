@@ -49,6 +49,7 @@ permissions:
   contents: read
 
 env:
+  CARGO_LLVM_COV_VERSION: "0.8.7"
   CARGO_TERM_COLOR: always
   CARGO_TARGET_DIR: target/notary-postgres-conformance
 
@@ -83,11 +84,23 @@ jobs:
           key: notary-postgresql-${{ matrix.postgresql }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install pinned coverage tool
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
+
       - name: Build Registry Notary with CEL support
-        run: cargo build --locked -p registry-notary --features registry-notary-cel
+        run: |
+          set -euo pipefail
+          cargo llvm-cov clean --workspace
+          eval "$(cargo llvm-cov show-env --sh)"
+          cargo build --locked -p registry-notary --features registry-notary-cel
 
       - name: Precompile PostgreSQL conformance tests before service startup
-        run: cargo test --locked -p registry-notary-server --lib --no-run
+        run: |
+          set -euo pipefail
+          eval "$(cargo llvm-cov show-env --sh)"
+          cargo test --locked -p registry-notary-server --lib --no-run
 
       - name: Run Notary PostgreSQL conformance
         env:
@@ -100,7 +113,30 @@ jobs:
           docker events --format '{{json .}}' >"${diagnostics}" &
           events_pid=$!
           trap 'kill "${events_pid}" 2>/dev/null || true; wait "${events_pid}" 2>/dev/null || true' EXIT
+          eval "$(cargo llvm-cov show-env --sh)"
           products/notary/scripts/postgresql-conformance.sh "${{ matrix.postgresql }}"
+
+      - name: Report Notary PostgreSQL coverage
+        run: |
+          set -euo pipefail
+          eval "$(cargo llvm-cov show-env --sh)"
+          coverage_dir="target/notary-postgres-conformance/coverage"
+          mkdir -p "${coverage_dir}"
+          cargo llvm-cov report --locked \
+            -p registry-notary \
+            -p registry-notary-server
+          cargo llvm-cov report --locked \
+            -p registry-notary \
+            -p registry-notary-server \
+            --lcov \
+            --output-path "${coverage_dir}/notary-postgresql-${{ matrix.postgresql }}.lcov"
+
+      - name: Upload Notary PostgreSQL coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: notary-postgresql-${{ matrix.postgresql }}-coverage
+          path: target/notary-postgres-conformance/coverage/
+          if-no-files-found: error
 
       - name: Report PostgreSQL Docker diagnostics
         if: failure()
