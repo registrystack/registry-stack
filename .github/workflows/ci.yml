@@ -336,7 +336,7 @@ jobs:
           if-no-files-found: ignore
 
   rust:
-    name: Rust workspace
+    name: Rust workspace checks
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
@@ -450,6 +450,33 @@ jobs:
             products/notary/scripts/postgresql-conformance.sh "${postgresql_major}"
           done
 
+  rust-required:
+    # Branch protection requires this exact context. Keep it successful for
+    # irrelevant changes without running the expensive workspace job.
+    name: Rust workspace
+    needs:
+      - changes
+      - rust
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Report path-gated result
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          REQUIRED: ${{ needs.changes.outputs.rust }}
+          RESULT: ${{ needs.rust.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${CHANGES_RESULT}:${REQUIRED}:${RESULT}" in
+            success:true:success|success:false:skipped)
+              ;;
+            *)
+              echo "Rust workspace path gate did not complete safely: changes=${CHANGES_RESULT} required=${REQUIRED} result=${RESULT}" >&2
+              exit 1
+              ;;
+          esac
+
   project-authoring-determinism:
     name: Project authoring portability and determinism (${{ matrix.arch }})
     needs: changes
@@ -496,7 +523,7 @@ jobs:
           project_authoring_rhai_commands_are_portable_offline -- --exact
 
   release-tool:
-    name: Release tooling
+    name: Release tooling checks
     needs: changes
     if: needs.changes.outputs.release_tool == 'true'
     runs-on: ubuntu-24.04
@@ -617,8 +644,35 @@ jobs:
       - name: Audit import map
         run: release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
 
+  release-tool-required:
+    # Branch protection requires this exact context. Keep it successful for
+    # irrelevant changes without running the release-tooling suite.
+    name: Release tooling
+    needs:
+      - changes
+      - release-tool
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Report path-gated result
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          REQUIRED: ${{ needs.changes.outputs.release_tool }}
+          RESULT: ${{ needs.release-tool.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${CHANGES_RESULT}:${REQUIRED}:${RESULT}" in
+            success:true:success|success:false:skipped)
+              ;;
+            *)
+              echo "Release tooling path gate did not complete safely: changes=${CHANGES_RESULT} required=${REQUIRED} result=${RESULT}" >&2
+              exit 1
+              ;;
+          esac
+
   release-source-proof:
-    name: Release source proof
+    name: Release source proof checks
     needs: changes
     if: needs.changes.outputs.release_source_proof == 'true'
     runs-on: ubuntu-24.04
@@ -634,6 +688,33 @@ jobs:
 
       - name: Test source model checker
         run: python3 -m unittest release/scripts/test_check_release_source_model.py
+
+  release-source-proof-required:
+    # Branch protection requires this exact context. Keep it successful for
+    # irrelevant changes without running source proof.
+    name: Release source proof
+    needs:
+      - changes
+      - release-source-proof
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Report path-gated result
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          REQUIRED: ${{ needs.changes.outputs.release_source_proof }}
+          RESULT: ${{ needs.release-source-proof.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${CHANGES_RESULT}:${REQUIRED}:${RESULT}" in
+            success:true:success|success:false:skipped)
+              ;;
+            *)
+              echo "Release source proof path gate did not complete safely: changes=${CHANGES_RESULT} required=${REQUIRED} result=${RESULT}" >&2
+              exit 1
+              ;;
+          esac
 
   registryctl-tutorials:
     name: registryctl tutorials from source
@@ -686,7 +767,7 @@ jobs:
         run: npm run check:tutorial:registryctl
 
   docs:
-    name: Docs
+    name: Docs checks
     needs: changes
     if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-24.04
@@ -715,6 +796,33 @@ jobs:
       - name: Check docs build
         working-directory: docs/site
         run: npm run check
+
+  docs-required:
+    # Branch protection requires this exact context. Keep it successful for
+    # irrelevant changes without installing or building the docs site.
+    name: Docs
+    needs:
+      - changes
+      - docs
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Report path-gated result
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          REQUIRED: ${{ needs.changes.outputs.docs }}
+          RESULT: ${{ needs.docs.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${CHANGES_RESULT}:${REQUIRED}:${RESULT}" in
+            success:true:success|success:false:skipped)
+              ;;
+            *)
+              echo "Docs path gate did not complete safely: changes=${CHANGES_RESULT} required=${REQUIRED} result=${RESULT}" >&2
+              exit 1
+              ;;
+          esac
 
   editor-extensions:
     name: Editor extensions
