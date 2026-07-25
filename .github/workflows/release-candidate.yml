@@ -856,11 +856,18 @@ jobs:
           printf '%s\n' "${grype_binary_sha256}" > dist/candidate/dist/grype/grype-binary.sha256
           for name in registry-notary registry-relay; do
             digest_ref="$(cat "inputs/build-a/dist/images/${name}.digest")"
+            expected_label_args=()
+            if [[ "${name}" == "registry-relay" ]]; then
+              expected_label_args+=(
+                --expected-label "org.registrystack.registry-relay.features=attribute-release,crosswalk-runtime"
+              )
+            fi
             python3 release/scripts/check-release-image-oci-labels.py \
               "${digest_ref}" \
               --source "https://github.com/${GITHUB_REPOSITORY}" \
               --revision "${{ needs.validate.outputs.source_sha }}" \
-              --version "${{ needs.validate.outputs.version }}"
+              --version "${{ needs.validate.outputs.version }}" \
+              "${expected_label_args[@]}"
             syft "${digest_ref}" \
               -o "spdx-json=dist/candidate/dist/sbom/${name}.spdx.json" \
               -o "syft-json=dist/candidate/dist/sbom/${name}.syft.json"

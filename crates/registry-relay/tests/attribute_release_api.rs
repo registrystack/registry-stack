@@ -72,23 +72,7 @@ impl From<Error> for TestServerBuildError {
 /// drives the release-condition predicate; `given_name`/`surname` back direct
 /// and computed claims. The `optional_note` claim is optional and absent on the
 /// stored row so it is omitted from a successful release.
-fn release_config(
-    entity_api_extra: &str,
-    include_source_metadata: bool,
-    max_age_seconds: Option<u64>,
-    purpose: Option<&str>,
-) -> String {
-    let max_age_line = match max_age_seconds {
-        Some(secs) => format!("\n              max_age_seconds: {secs}"),
-        None => String::new(),
-    };
-    // A purpose-bound profile declares `purpose`; an unbound one omits it. The
-    // default fixture is unbound so the bulk of the tests need no data-purpose
-    // header; purpose-gate and governed-policy tests pass an explicit purpose.
-    let purpose_line = match purpose {
-        Some(value) => format!("            purpose: {value}\n"),
-        None => String::new(),
-    };
+fn release_config(entity_api_extra: &str, include_source_metadata: bool, purpose: &str) -> String {
     format!(
         r#"
 server:
@@ -175,9 +159,9 @@ datasets:
             version: v1
             title: Civil identity bundle
             description: Minimised identity claims for eSignet.
-{purpose_line}            release_scope: {RELEASE_SCOPE}
+            purpose: {purpose}
+            release_scope: {RELEASE_SCOPE}
             subject:
-              input: subject_token
               source_field: national_id
               id_type: NATIONAL_ID
             release_conditions:
@@ -195,7 +179,7 @@ datasets:
                 source_field: surname
                 required: false
             response:
-              include_source_metadata: {include_source_metadata}{max_age_line}
+              include_source_metadata: {include_source_metadata}
 "#
     )
 }
@@ -224,23 +208,18 @@ async fn try_server_with_scopes_and_extra(
     scopes: &[&str],
     entity_api_extra: &str,
 ) -> Result<TestServer, TestServerBuildError> {
-    // Default fixture is purpose-unbound, so resolve requests need no
-    // data-purpose header; purpose-gate/governed tests build with an explicit
-    // purpose via `try_server_full`.
-    try_server_full(scopes, entity_api_extra, true, None, None).await
+    try_server_full(scopes, entity_api_extra, true, None).await
 }
 
 /// Like [`try_server_with_scopes_and_extra`] but with explicit control over the
-/// profile's `response.include_source_metadata` flag (so both branches of the
-/// source-block gate can be exercised), its `response.max_age_seconds` cache
-/// opt-in (so the default `no-store` and the `private, max-age=N` paths can be
-/// asserted), and its `purpose` binding (so the data-purpose gate can be
-/// exercised). A `Some` purpose makes the profile purpose-bound.
+/// profile's `response.include_source_metadata` flag and its `purpose` binding.
+/// Every profile is purpose-bound. `None` selects the default `identity`
+/// purpose and installs that header on the test server; `Some` configures the
+/// supplied purpose without a default header so purpose denials can be tested.
 async fn try_server_full(
     scopes: &[&str],
     entity_api_extra: &str,
     include_source_metadata: bool,
-    max_age_seconds: Option<u64>,
     purpose: Option<&str>,
 ) -> Result<TestServer, TestServerBuildError> {
     let tmp = TempDir::new().expect("tempdir");
@@ -250,8 +229,7 @@ async fn try_server_full(
         release_config(
             entity_api_extra,
             include_source_metadata,
-            max_age_seconds,
-            purpose,
+            purpose.unwrap_or("identity"),
         ),
     )
     .expect("write config");
@@ -303,7 +281,11 @@ async fn try_server_full(
         .layer(Extension(registry))
         .layer(Extension(evaluator))
         .layer(Extension(config));
-    Ok(TestServer::new(app))
+    let mut server = TestServer::new(app);
+    if purpose.is_none() {
+        server.add_header("data-purpose", "identity");
+    }
+    Ok(server)
 }
 
 async fn server() -> TestServer {
@@ -352,7 +334,7 @@ async fn resolve_omits_source_block_when_metadata_disabled() {
     // an eSignet authenticator profile), the claim bundle is still released but
     // the source block — which would disclose the backing dataset/entity names —
     // is suppressed entirely.
-    let server = try_server_full(&[RELEASE_SCOPE], "", false, None, None)
+    let server = try_server_full(&[RELEASE_SCOPE], "", false, None)
         .await
         .expect("test server builds");
     let response = server.post(RESOLVE_PATH).json(&subject_body("NID-1")).await;
@@ -564,7 +546,6 @@ async fn resolve_required_claim_missing_denies() {
             trusted_context: {}
 "#,
         true,
-        None,
         Some("identity"),
     )
     .await
@@ -592,7 +573,6 @@ async fn resolve_optional_claim_omitted_when_source_redacted() {
             trusted_context: {}
 "#,
         true,
-        None,
         Some("identity"),
     )
     .await
@@ -628,7 +608,6 @@ async fn resolve_computed_claim_cannot_read_redacted_field() {
             trusted_context: {}
 "#,
         true,
-        None,
         Some("identity"),
     )
     .await
@@ -654,6 +633,34 @@ async fn resolve_computed_claim_cannot_read_redacted_field() {
     );
 }
 
+#[tokio::test]
+async fn resolve_release_condition_cannot_read_redacted_field() {
+    // The release predicate reads `source.deceased`. If the PDP redacts that
+    // field, the predicate must evaluate over the redacted row and fail closed
+    // instead of revealing a boolean about the removed value.
+    let server = try_server_full(
+        &[RELEASE_SCOPE],
+        r#"          governed_policy:
+            permitted_purposes:
+              - identity
+            redaction_fields: [deceased]
+            trusted_context: {}
+"#,
+        true,
+        Some("identity"),
+    )
+    .await
+    .expect("test server builds");
+
+    let response = server
+        .post(RESOLVE_PATH)
+        .add_header("data-purpose", "identity")
+        .json(&subject_body("NID-1"))
+        .await;
+    response.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(response.json::<Value>()["code"], "release.subject_denied");
+}
+
 // ---------------------------------------------------------------------------
 // Scope / purpose deny-before-read
 // ---------------------------------------------------------------------------
@@ -662,7 +669,7 @@ async fn resolve_computed_claim_cannot_read_redacted_field() {
 async fn resolve_purpose_bound_profile_accepts_matching_purpose() {
     // A purpose-bound profile (purpose set, entity NOT otherwise governing
     // purposes) resolves when the data-purpose header equals the profile purpose.
-    let server = try_server_full(&[RELEASE_SCOPE], "", true, None, Some("identity"))
+    let server = try_server_full(&[RELEASE_SCOPE], "", true, Some("identity"))
         .await
         .expect("test server builds");
     let response = server
@@ -679,7 +686,7 @@ async fn resolve_purpose_bound_profile_missing_header_is_purpose_required() {
     // Without a backing governed_policy the entity would not require purpose, but
     // the profile purpose binding does: a missing data-purpose header is rejected
     // before the read with 400 auth.purpose_required.
-    let server = try_server_full(&[RELEASE_SCOPE], "", true, None, Some("identity"))
+    let server = try_server_full(&[RELEASE_SCOPE], "", true, Some("identity"))
         .await
         .expect("test server builds");
     let response = server.post(RESOLVE_PATH).json(&subject_body("NID-1")).await;
@@ -691,7 +698,7 @@ async fn resolve_purpose_bound_profile_missing_header_is_purpose_required() {
 async fn resolve_purpose_bound_profile_wrong_purpose_is_denied() {
     // A data-purpose that does not equal the profile purpose is denied before the
     // read with 403 auth.purpose_denied.
-    let server = try_server_full(&[RELEASE_SCOPE], "", true, None, Some("identity"))
+    let server = try_server_full(&[RELEASE_SCOPE], "", true, Some("identity"))
         .await
         .expect("test server builds");
     let response = server
@@ -704,21 +711,30 @@ async fn resolve_purpose_bound_profile_wrong_purpose_is_denied() {
 }
 
 #[tokio::test]
-async fn resolve_without_release_scope_is_denied_before_read() {
-    // A caller holding only the row-read scope cannot invoke a release.
+async fn resolve_without_release_scope_is_hidden_like_unknown_profile() {
+    // Discovery hides profiles without the release scope. Resolve must return
+    // the same response for that known profile and an unknown profile so the
+    // path cannot be used as a profile-id oracle.
     let server = try_server_with_scopes_and_extra(&[READ_SCOPE], "")
         .await
         .expect("test server builds");
-    let response = server.post(RESOLVE_PATH).json(&subject_body("NID-1")).await;
-    response.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(response.json::<Value>()["code"], "auth.scope_denied");
+    let known = server.post(RESOLVE_PATH).json(&subject_body("NID-1")).await;
+    let unknown = server
+        .post("/v1/attribute-releases/unknown/versions/v1/resolve")
+        .json(&subject_body("NID-1"))
+        .await;
+    known.assert_status(StatusCode::NOT_FOUND);
+    unknown.assert_status(StatusCode::NOT_FOUND);
+    assert_eq!(known.json::<Value>(), unknown.json::<Value>());
 }
 
 #[tokio::test]
 async fn resolve_missing_purpose_denies_before_read() {
-    let server = try_server_with_scopes_and_extra(
+    let server = try_server_full(
         &[RELEASE_SCOPE],
         "          require_purpose_header: true\n",
+        true,
+        Some("identity"),
     )
     .await
     .expect("test server builds");
@@ -737,7 +753,7 @@ fn config_accepts_hyphenated_profile_id_and_dotted_claim_name() {
         "REGISTRY_RELAY_TEST_AUDIT_HASH_SECRET",
         "relay-release-audit-secret-32-bytes",
     );
-    let yaml = release_config("", false, None, Some("identity"))
+    let yaml = release_config("", false, "identity")
         .replace("id: civil_identity", "id: esignet-civil-userinfo")
         .replace("name: optional_note", "name: address.region");
     let tmp = TempDir::new().expect("tempdir");
@@ -857,8 +873,8 @@ async fn discovery_sets_private_metadata_headers() {
 
 #[tokio::test]
 async fn resolve_success_defaults_to_no_store() {
-    // A released identity bundle is PII; with no `response.max_age_seconds`
-    // configured the response must forbid any caching.
+    // A released identity bundle is PII and the POST response has no reusable
+    // retrieval URI, so every success must forbid caching.
     let server = server().await;
     let response = server.post(RESOLVE_PATH).json(&subject_body("NID-1")).await;
     response.assert_status(StatusCode::OK);
@@ -873,33 +889,8 @@ async fn resolve_success_defaults_to_no_store() {
 }
 
 #[tokio::test]
-async fn resolve_success_honours_configured_max_age() {
-    // A profile may opt into bounded *private* caching of a successful release;
-    // `response.max_age_seconds: 300` yields `private, max-age=300` (never a
-    // shared cache, still keyed by Authorization via Vary).
-    let server = try_server_full(&[RELEASE_SCOPE], "", true, Some(300), None)
-        .await
-        .expect("test server builds");
-    let response = server.post(RESOLVE_PATH).json(&subject_body("NID-1")).await;
-    response.assert_status(StatusCode::OK);
-    assert_eq!(
-        response.header("cache-control").to_str().expect("ascii"),
-        "private, max-age=300"
-    );
-    assert_eq!(
-        response.header("vary").to_str().expect("ascii"),
-        "Authorization"
-    );
-}
-
-#[tokio::test]
-async fn resolve_denial_is_never_cached_even_with_max_age() {
-    // Denials must never be cached regardless of the profile's caching opt-in:
-    // a missing subject collapses to `release.subject_denied` (403) and the
-    // response must still be `private, no-store`, not `max-age=300`.
-    let server = try_server_full(&[RELEASE_SCOPE], "", true, Some(300), None)
-        .await
-        .expect("test server builds");
+async fn resolve_denial_is_never_cached() {
+    let server = server().await;
     let response = server
         .post(RESOLVE_PATH)
         .json(&subject_body("NID-MISSING"))

@@ -1172,6 +1172,199 @@
         "description": "RFC 9727 API catalog linkset document.",
         "type": "object"
       },
+      "AttributeReleaseProfile": {
+        "additionalProperties": false,
+        "description": "A governed identity attribute-release profile. Identifies the release scope, accepted subject id types, and the claim names that will be returned on a successful resolve.",
+        "properties": {
+          "accepted_subject_id_types": {
+            "description": "Subject identifier types accepted by this profile.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "claim_names": {
+            "description": "Names of all claims that may be returned by this profile.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": {
+            "description": "Human-readable profile description.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "Profile identifier, lower-snake or lower-kebab. Globally unique with `version`.",
+            "type": "string"
+          },
+          "purpose": {
+            "description": "Data-purpose token or IRI this profile is bound to.",
+            "type": "string"
+          },
+          "release_scope": {
+            "description": "Dataset-bound scope a caller must hold to invoke this release. Distinct from the entity read scope.",
+            "type": "string"
+          },
+          "required_claims": {
+            "description": "Names of claims that must be present in any successful response.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "response_media_type": {
+            "description": "Media type of the resolve response. Always `application/json` in v1.",
+            "examples": [
+              "application/json"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "description": "Human-readable profile title.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "description": "Profile version. Globally unique with `id`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "purpose",
+          "release_scope",
+          "claim_names",
+          "required_claims",
+          "accepted_subject_id_types",
+          "response_media_type"
+        ],
+        "type": "object"
+      },
+      "AttributeReleaseProfileList": {
+        "additionalProperties": false,
+        "description": "List of attribute release profiles visible to the calling principal.",
+        "properties": {
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/AttributeReleaseProfile"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "profiles"
+        ],
+        "type": "object"
+      },
+      "AttributeReleaseResolveRequest": {
+        "additionalProperties": false,
+        "description": "Request body for resolving an attribute release profile against one subject.",
+        "properties": {
+          "claims": {
+            "description": "Optional subset of claim names to return. Absent means the profile default set; an empty array is rejected (400); any unknown claim name is denied.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "subject": {
+            "additionalProperties": false,
+            "description": "The subject to look up.",
+            "properties": {
+              "id_type": {
+                "description": "Subject identifier type (e.g. `national_id`, `passport`).",
+                "type": "string"
+              },
+              "value": {
+                "description": "Subject identifier value. Never logged or echoed in responses.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id_type",
+              "value"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "subject"
+        ],
+        "type": "object"
+      },
+      "AttributeReleaseResolveResponse": {
+        "additionalProperties": false,
+        "description": "Resolved attribute release claim bundle. Contains only the approved, minimised claims for the matched subject. Never includes raw source rows, subject identifiers outside released claims, or private source internals.",
+        "properties": {
+          "claims": {
+            "additionalProperties": true,
+            "description": "Released claim bundle. Keys are claim names; values are the projected or computed claim values.",
+            "type": "object"
+          },
+          "profile_id": {
+            "description": "Identifier of the release profile used to resolve this response.",
+            "type": "string"
+          },
+          "profile_version": {
+            "description": "Version of the release profile used to resolve this response.",
+            "type": "string"
+          },
+          "source": {
+            "additionalProperties": false,
+            "description": "Profile-sourced metadata about the release. Present only when the profile sets `response.include_source_metadata: true`; a minimising profile omits it entirely. Contains only metadata derived from the profile configuration — never private source table ids, paths, or secrets.",
+            "properties": {
+              "cardinality": {
+                "description": "Stable attribute release always requires exactly one subject.",
+                "enum": [
+                  "one"
+                ],
+                "type": "string"
+              },
+              "checked_at": {
+                "description": "ISO 8601 timestamp at which the source was checked.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "dataset": {
+                "description": "Dataset identifier for the backing source.",
+                "type": "string"
+              },
+              "entity": {
+                "description": "Entity name for the backing source.",
+                "type": "string"
+              },
+              "subject_id_type": {
+                "description": "Subject identifier type used in the lookup.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "dataset",
+              "entity",
+              "subject_id_type",
+              "cardinality",
+              "checked_at"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "profile_id",
+          "profile_version",
+          "claims"
+        ],
+        "type": "object"
+      },
       "ConsultationExecuteRequest": {
         "additionalProperties": false,
         "description": "The exact consultation-v1 request envelope. Contract mismatch fails before source access. The complete encoded request body is limited to 8 KiB.",
@@ -5080,6 +5273,271 @@
         ]
       }
     },
+    "/v1/attribute-releases": {
+      "get": {
+        "description": "Returns all attribute release profiles visible to the calling principal. Authenticated-only: the response includes release_scope strings, which are never exposed anonymously.",
+        "operationId": "list_attribute_release_profiles",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributeReleaseProfileList"
+                }
+              }
+            },
+            "description": "Attribute release profile list."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Authenticated principal lacks the scope required for this operation."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "List attribute release profiles",
+        "tags": [
+          "Attribute Releases"
+        ]
+      }
+    },
+    "/v1/attribute-releases/{profile_id}/versions/{version}/resolve": {
+      "post": {
+        "description": "Resolves a single subject against a named release profile and returns the approved claim bundle. The subject identifier is sent in the request body so it does not appear in access logs.",
+        "operationId": "resolve_attribute_release",
+        "parameters": [
+          {
+            "description": "Attribute release profile identifier.",
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Attribute release profile version.",
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional PDP trust context. Relay passes this value to policy evaluation only when the authenticated principal has the exact value-bound `registry:trust:legal_basis:<value>` scope. Without that scope, Relay treats the header as absent. Header names are case-insensitive.",
+            "in": "header",
+            "name": "x-registry-trust-legal-basis",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional PDP trust context. Relay passes this value to policy evaluation only when the authenticated principal has the exact value-bound `registry:trust:consent:<value>` scope. Without that scope, Relay treats the header as absent. Header names are case-insensitive.",
+            "in": "header",
+            "name": "x-registry-trust-consent",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional PDP trust context. Relay passes this value to policy evaluation only when the authenticated principal has the exact value-bound `registry:trust:assurance:<value>` scope. Without that scope, Relay treats the header as absent. Header names are case-insensitive.",
+            "in": "header",
+            "name": "x-registry-trust-assurance",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional PDP trust context. Relay passes this value to policy evaluation only when the authenticated principal has the exact value-bound `registry:trust:jurisdiction:<value>` scope. Without that scope, Relay treats the header as absent. Header names are case-insensitive.",
+            "in": "header",
+            "name": "x-registry-trust-jurisdiction",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional PDP trust context. Relay passes this value to policy evaluation only when the authenticated principal has the exact value-bound `registry:trust:subject_ref:<value>` scope. Without that scope, Relay treats the header as absent. Header names are case-insensitive.",
+            "in": "header",
+            "name": "x-registry-subject-ref",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional PDP trust context. Relay passes this value to policy evaluation only when the authenticated principal has the exact value-bound `registry:trust:relationship:<value>` scope. Without that scope, Relay treats the header as absent. Header names are case-insensitive.",
+            "in": "header",
+            "name": "x-registry-relationship",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional PDP trust context. Relay passes this value to policy evaluation only when the authenticated principal has the exact value-bound `registry:trust:on_behalf_of:<value>` scope. Without that scope, Relay treats the header as absent. Header names are case-insensitive.",
+            "in": "header",
+            "name": "x-registry-on-behalf-of",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional PDP trust context. Relay passes this value to policy evaluation only when the authenticated principal has the exact value-bound `registry:trust:requested_credential_format:<value>` scope. Without that scope, Relay treats the header as absent. Header names are case-insensitive.",
+            "in": "header",
+            "name": "x-registry-credential-format",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional PDP trust context. Relay passes this value to policy evaluation only when the authenticated principal has the exact value-bound `registry:trust:source_observed_at_unix_seconds:<value>` scope. Without that scope, Relay treats the header as absent. Header names are case-insensitive.",
+            "in": "header",
+            "name": "x-registry-source-observed-at-unix-seconds",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional PDP trust context. Relay passes this value to policy evaluation only when the authenticated principal has the exact value-bound `registry:trust:source_observed_age_seconds:<value>` scope. Without that scope, Relay treats the header as absent. Header names are case-insensitive.",
+            "in": "header",
+            "name": "x-registry-source-observed-age-seconds",
+            "required": false,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttributeReleaseResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributeReleaseResolveResponse"
+                }
+              }
+            },
+            "description": "Resolved attribute release claim bundle."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid request: malformed body, unknown id_type, empty claims list, or unsupported media type."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid bearer credential."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Subject denied: not found, ambiguous, release condition not met, or required claim unavailable. The response does not distinguish these cases."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Profile not found or not visible to the authenticated principal. Does not confirm whether the profile ever existed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Source unavailable."
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Problem Details error response."
+          }
+        },
+        "summary": "Resolve attribute release",
+        "tags": [
+          "Attribute Releases"
+        ]
+      }
+    },
     "/v1/consultations/{profile_id}": {
       "get": {
         "description": "Returns the complete hash-pinned public contract for the one active contract behind this profile id. The response is protected and visible only to the configured authorized OIDC workload with the profile's exact required scope.",
@@ -7580,6 +8038,10 @@
       "name": "Catalog"
     },
     {
+      "description": "Projection-limited, exactly-one-subject identity attribute release; every profile is purpose-bound. Returns only the approved claim bundle for a named release profile; never a raw registry row.",
+      "name": "Attribute Releases"
+    },
+    {
       "description": "Dataset-scoped aggregate discovery and execution for `social_registry`.",
       "name": "social_registry / aggregates",
       "x-displayName": "Aggregates"
@@ -7614,6 +8076,12 @@
       "name": "Catalog",
       "tags": [
         "Catalog"
+      ]
+    },
+    {
+      "name": "Attribute Releases",
+      "tags": [
+        "Attribute Releases"
       ]
     },
     {

@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
+ARG REGISTRY_RELAY_FEATURES="attribute-release,crosswalk-runtime"
+
 # Keep the tag for humans and the digest for reproducible pulls.
 FROM rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 AS builder
+ARG REGISTRY_RELAY_FEATURES
 WORKDIR /workspace/registry_relay
 
 COPY Cargo.toml Cargo.lock ./
@@ -15,14 +18,13 @@ COPY benches ./benches
 COPY resources ./resources
 COPY src ./src
 
-ARG REGISTRY_RELAY_FEATURES=""
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/workspace/registry_relay/target \
     find src benches resources -type f -exec touch {} + && \
     if [ -n "$REGISTRY_RELAY_FEATURES" ]; then \
-        cargo build --release --locked --features "$REGISTRY_RELAY_FEATURES"; \
+        cargo build --release --locked --no-default-features --features "$REGISTRY_RELAY_FEATURES"; \
     else \
-        cargo build --release --locked; \
+        cargo build --release --locked --no-default-features; \
     fi && \
     cp /workspace/registry_relay/target/release/registry-relay /usr/local/bin/registry-relay && \
     cp /workspace/registry_relay/target/release/registry-relay-rhai-worker /usr/local/bin/registry-relay-rhai-worker && \
@@ -35,11 +37,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Distroless cc keeps glibc and CA certificates while dropping shell/package tools.
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775 AS runtime
+ARG REGISTRY_RELAY_FEATURES
 
 COPY --from=builder --chown=65532:65532 /workspace/runtime-root/ /
 COPY --from=builder /usr/local/bin/registry-relay /usr/local/bin/registry-relay
 COPY --from=builder /usr/local/bin/registry-relay-rhai-worker /usr/local/bin/registry-relay-rhai-worker
 COPY LICENSE /licenses/registry-relay/LICENSE
+LABEL org.registrystack.registry-relay.features="${REGISTRY_RELAY_FEATURES}"
 
 WORKDIR /var/lib/registry-relay
 

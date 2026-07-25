@@ -80,14 +80,14 @@ def main() -> int:
     failures.extend(
         require(
             dockerfile,
-            'ARG REGISTRY_RELAY_FEATURES=""',
-            "empty-by-default feature build arg",
+            'ARG REGISTRY_RELAY_FEATURES="attribute-release,crosswalk-runtime"',
+            "canonical feature build arg",
         )
     )
     failures.extend(
         require(
             dockerfile,
-            'cargo build --release --locked --features "$REGISTRY_RELAY_FEATURES"',
+            'cargo build --release --locked --no-default-features --features "$REGISTRY_RELAY_FEATURES"',
             "feature-enabled cargo build path",
         )
     )
@@ -101,8 +101,15 @@ def main() -> int:
     failures.extend(
         require(
             dockerfile,
-            "cargo build --release --locked",
-            "default cargo build path",
+            "cargo build --release --locked --no-default-features",
+            "explicit minimal cargo build path",
+        )
+    )
+    failures.extend(
+        require(
+            dockerfile,
+            'LABEL org.registrystack.registry-relay.features="${REGISTRY_RELAY_FEATURES}"',
+            "compiled feature metadata label",
         )
     )
     failures.extend(

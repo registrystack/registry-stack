@@ -1487,8 +1487,6 @@ fn validate_record_attribute_release_profiles(
         ) {
             bail!("{collision}");
         }
-        validate_input_name(&profile.subject.input)
-            .context("attribute release subject input is invalid")?;
         validate_token(
             &profile.subject.id_type,
             "attribute release subject id_type",
@@ -1532,13 +1530,6 @@ fn validate_record_attribute_release_profiles(
         }
         if !has_required_claim {
             bail!("attribute release profiles require at least one required claim");
-        }
-        if profile
-            .response
-            .max_age_seconds
-            .is_some_and(|seconds| !(1..=3600).contains(&seconds))
-        {
-            bail!("attribute release response max_age_seconds must be between 1 and 3600");
         }
     }
     Ok(())

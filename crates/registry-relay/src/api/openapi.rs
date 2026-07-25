@@ -1797,7 +1797,7 @@ fn tag_definitions(catalog: &CatalogDocument, config: &Config) -> Value {
         tags.push(json!({
             "name": TAG_ATTRIBUTE_RELEASE,
             "description": "Projection-limited, exactly-one-subject identity attribute \
-                            release; a profile is purpose-bound when it declares a purpose. \
+                            release; every profile is purpose-bound. \
                             Returns only the approved claim bundle for a named release \
                             profile; never a raw registry row.",
         }));
@@ -4161,7 +4161,8 @@ fn insert_attribute_release_paths(paths: &mut Map<String, Value>) {
                          these cases."
                     ),
                     "404": problem_response(
-                        "Profile not found. Does not confirm whether the profile ever existed."
+                        "Profile not found or not visible to the authenticated principal. \
+                         Does not confirm whether the profile ever existed."
                     ),
                     "503": problem_response("Source unavailable."),
                     "default": problem_response("Problem Details error response."),
@@ -5237,31 +5238,29 @@ fn attribute_release_profile_schema() -> Value {
         "description": "A governed identity attribute-release profile. Identifies the release \
                         scope, accepted subject id types, and the claim names that will be \
                         returned on a successful resolve.",
-        "required": ["profile_id", "version", "release_scope", "claim_names", "required_claims",
-                     "accepted_subject_id_types", "response_media_type"],
+        "required": ["id", "version", "purpose", "release_scope", "claim_names",
+                     "required_claims", "accepted_subject_id_types", "response_media_type"],
         "properties": {
-            "profile_id": {
+            "id": {
                 "type": "string",
-                "description": "Profile identifier, lower-snake. Globally unique with `version`."
+                "description": "Profile identifier, lower-snake or lower-kebab. Globally unique \
+                                with `version`."
             },
             "version": {
                 "type": "string",
-                "description": "Profile version. Globally unique with `profile_id`."
+                "description": "Profile version. Globally unique with `id`."
             },
             "title": {
-                "type": "string",
-                "description": "Human-readable profile title.",
-                "nullable": true
+                "type": ["string", "null"],
+                "description": "Human-readable profile title."
             },
             "description": {
-                "type": "string",
-                "description": "Human-readable profile description.",
-                "nullable": true
+                "type": ["string", "null"],
+                "description": "Human-readable profile description."
             },
             "purpose": {
                 "type": "string",
-                "description": "Data-purpose IRI this profile is bound to.",
-                "nullable": true
+                "description": "Data-purpose token or IRI this profile is bound to."
             },
             "accepted_subject_id_types": {
                 "type": "array",
@@ -5317,12 +5316,11 @@ fn attribute_release_resolve_request_schema() -> Value {
                 "additionalProperties": false
             },
             "claims": {
-                "type": "array",
+                "type": ["array", "null"],
                 "description": "Optional subset of claim names to return. Absent means the \
                                 profile default set; an empty array is rejected (400); \
                                 any unknown claim name is denied.",
-                "items": { "type": "string" },
-                "nullable": true
+                "items": { "type": "string" }
             }
         },
         "additionalProperties": false,
@@ -5346,11 +5344,6 @@ fn attribute_release_resolve_response_schema() -> Value {
             "profile_version": {
                 "type": "string",
                 "description": "Version of the release profile used to resolve this response."
-            },
-            "purpose": {
-                "type": "string",
-                "description": "Data-purpose IRI bound to this release profile.",
-                "nullable": true
             },
             "claims": {
                 "type": "object",
@@ -5382,8 +5375,8 @@ fn attribute_release_resolve_response_schema() -> Value {
                     },
                     "cardinality": {
                         "type": "string",
-                        "description": "Subject cardinality expectation from the profile.",
-                        "enum": ["one", "many"]
+                        "description": "Stable attribute release always requires exactly one subject.",
+                        "enum": ["one"]
                     },
                     "checked_at": {
                         "type": "string",
@@ -5409,7 +5402,7 @@ mod tests {
     #[cfg(feature = "attribute-release")]
     use crate::config::{
         AttributeReleaseProfile, ClaimSensitivity, ReleaseClaimConfig, ReleaseResponseConfig,
-        ReleaseSubjectConfig, SubjectCardinality,
+        ReleaseSubjectConfig,
     };
     use crate::metadata::catalog::{CatalogLinks, DatasetLinks, EntityLinks};
 
@@ -5463,13 +5456,11 @@ mod tests {
                 description: Some(
                     "Minimal identity claims for an authenticator plugin.".to_string(),
                 ),
-                purpose: None,
+                purpose: "identity_verification".to_string(),
                 release_scope: "social_registry:identity_release".to_string(),
                 subject: ReleaseSubjectConfig {
-                    input: "individual_id".to_string(),
                     source_field: "id".to_string(),
-                    id_type: Some("national_id".to_string()),
-                    cardinality: SubjectCardinality::One,
+                    id_type: "national_id".to_string(),
                 },
                 release_conditions: None,
                 claims: vec![ReleaseClaimConfig {
@@ -5480,11 +5471,9 @@ mod tests {
                     sensitivity: Some(ClaimSensitivity::DirectIdentifier),
                     format: None,
                     locale: None,
-                    shareable: false,
                 }],
                 response: ReleaseResponseConfig {
                     include_source_metadata: false,
-                    max_age_seconds: Some(300),
                 },
             });
     }
@@ -6465,8 +6454,9 @@ mod tests {
         // Required fields on AttributeReleaseProfile schema
         let profile_required = &schemas["AttributeReleaseProfile"]["required"];
         for field in [
-            "profile_id",
+            "id",
             "version",
+            "purpose",
             "release_scope",
             "claim_names",
             "required_claims",

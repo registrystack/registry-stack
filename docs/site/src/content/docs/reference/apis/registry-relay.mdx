@@ -64,10 +64,11 @@ For setup steps, scope strings, and credential configuration, see
   `api.require_purpose_header: true` on an entity or aggregate source makes the header mandatory for
   that operation. Calls that omit it are rejected with `400 auth.purpose_required`.
 - **Feature-gated surfaces.** The live OGC API Features, Records, and EDR adapters, SP DCI sync
-  routes, standards-CEL mapping, and attribute release are experimental and feature-frozen.
+  routes and standards-CEL mapping are experimental and feature-frozen.
   They are outside the 1.0 compatibility promise and excluded from the canonical release binary.
-  Their source and all-feature tests remain available. Relay does not issue response credentials
-  or host issuer DID documents.
+  Their source and all-feature tests remain available. Governed attribute release is stable and
+  included in the canonical binary. Relay does not issue response credentials or host issuer DID
+  documents.
 - **Link-free Records metadata.** Stable link-free OGC Records bodies under
   `/metadata/ogc/records` are portable metadata. They are separate from the experimental live
   adapter under `/ogc/v1/records`.

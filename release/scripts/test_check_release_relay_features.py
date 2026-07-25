@@ -28,13 +28,35 @@ class CheckReleaseRelayFeaturesTest(unittest.TestCase):
         binary.write_bytes(b"\x7fELF\x02\x01" + b"\x00".join(markers))
         return binary
 
-    def test_accepts_binary_with_all_disabled_feature_markers(self) -> None:
+    def canonical_markers(self) -> list[bytes]:
+        return [
+            *self.module.ENABLED_FEATURE_MARKERS.values(),
+            *self.module.DISABLED_FEATURE_MARKERS.values(),
+        ]
+
+    def test_accepts_binary_with_exact_canonical_feature_markers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            binary = self.write_binary(
-                Path(directory), list(self.module.DISABLED_FEATURE_MARKERS.values())
-            )
+            binary = self.write_binary(Path(directory), self.canonical_markers())
 
             self.module.check_binary(binary)
+
+    def test_rejects_each_missing_enabled_feature_marker(self) -> None:
+        markers = self.module.ENABLED_FEATURE_MARKERS
+        for missing_feature, missing_marker in markers.items():
+            with self.subTest(feature=missing_feature), tempfile.TemporaryDirectory() as directory:
+                binary = self.write_binary(
+                    Path(directory),
+                    [
+                        marker
+                        for marker in self.canonical_markers()
+                        if marker != missing_marker
+                    ],
+                )
+
+                with self.assertRaisesRegex(
+                    self.module.FeatureCheckError, missing_feature
+                ):
+                    self.module.check_binary(binary)
 
     def test_rejects_each_missing_disabled_feature_marker(self) -> None:
         markers = self.module.DISABLED_FEATURE_MARKERS
@@ -43,9 +65,12 @@ class CheckReleaseRelayFeaturesTest(unittest.TestCase):
                 binary = self.write_binary(
                     Path(directory),
                     [
-                        marker
-                        for feature, marker in markers.items()
-                        if feature != missing_feature
+                        *self.module.ENABLED_FEATURE_MARKERS.values(),
+                        *[
+                            marker
+                            for feature, marker in markers.items()
+                            if feature != missing_feature
+                        ],
                     ],
                 )
 
@@ -64,7 +89,7 @@ class CheckReleaseRelayFeaturesTest(unittest.TestCase):
 
     def test_rejects_truncated_marker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            markers = list(self.module.DISABLED_FEATURE_MARKERS.values())
+            markers = self.canonical_markers()
             markers[-1] = markers[-1][:-1]
             binary = self.write_binary(Path(directory), markers)
 
@@ -77,7 +102,7 @@ class CheckReleaseRelayFeaturesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             binary = self.write_binary(
                 Path(directory),
-                [self.module.DISABLED_FEATURE_MARKERS["attribute-release"]],
+                list(self.module.ENABLED_FEATURE_MARKERS.values()),
             )
 
             with self.assertRaises(self.module.FeatureCheckError) as context:
@@ -85,6 +110,21 @@ class CheckReleaseRelayFeaturesTest(unittest.TestCase):
             message = str(context.exception)
             self.assertIn("ogcapi-features", message)
             self.assertIn("spdci-api-standards", message)
+
+    def test_rejects_feature_disabled_marker_for_canonical_feature(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            binary = self.write_binary(
+                Path(directory),
+                [
+                    *self.canonical_markers(),
+                    self.module.FORBIDDEN_FEATURE_MARKERS["attribute-release"],
+                ],
+            )
+
+            with self.assertRaisesRegex(
+                self.module.FeatureCheckError, "attribute-release"
+            ):
+                self.module.check_binary(binary)
 
     def test_rejects_missing_binary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: Promote governed attribute release to the stable default and
+  canonical release feature set. Require purpose, exact release-scope, and
+  subject-type bindings; remove inert pre-1.0 configuration fields; evaluate
+  release expressions only over redacted rows; prevent profile enumeration;
+  disable response storage; and publish compiled feature evidence through the
+  admin capabilities document and Relay image metadata.
+
 ## 0.13.0 - 2026-07-25
 
 - BREAKING: Remove the inert six-field `provenance.consent` member from the

@@ -1213,13 +1213,13 @@
       ],
       "rate_limit": null,
       "audit": "required",
-      "openapi": false,
-      "stability": "experimental",
+      "openapi": true,
+      "stability": "stable",
       "data_classification": "personal",
-      "notes": "Off-by-default experimental, feature-frozen surface outside the 1.0 compatibility promise. Governed identity attribute release is purpose-bound, projection-limited, and exactly-one-subject.",
+      "notes": "Stable canonical surface. Governed identity attribute release is purpose-bound, projection-limited, exactly-one-subject, and non-storable.",
       "source": "manual",
       "enforcement_tests": [
-        "tests/attribute_release_api.rs::resolve_without_release_scope_is_denied_before_read",
+        "tests/attribute_release_api.rs::resolve_without_release_scope_is_hidden_like_unknown_profile",
         "tests/attribute_release_api.rs::resolve_missing_purpose_denies_before_read"
       ],
       "waiver": null
@@ -1237,10 +1237,10 @@
       ],
       "rate_limit": null,
       "audit": "required",
-      "openapi": false,
-      "stability": "experimental",
+      "openapi": true,
+      "stability": "stable",
       "data_classification": "metadata",
-      "notes": "Off-by-default experimental, feature-frozen surface outside the 1.0 compatibility promise. Authenticated discovery lists visible profiles without exposing source internals.",
+      "notes": "Stable canonical surface. Authenticated discovery lists visible profiles without exposing source internals.",
       "source": "manual",
       "enforcement_tests": [
         "tests/attribute_release_api.rs::discovery_hides_profiles_without_release_scope",

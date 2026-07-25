@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- BREAKING: Attribute release is stable and enabled in the default and
+  canonical release builds. Profiles now require a purpose, the exact
+  `<dataset_id>:identity_release` scope, and a subject `id_type`. Strict
+  configuration parsing rejects the unused subject input and cardinality,
+  claim shareability, denial-code, and response cache-age fields. Release
+  predicates and computed claims evaluate only the redacted source row, every
+  response is `private, no-store`, and unauthorized profile lookups are
+  indistinguishable from unknown profiles.
+
 ## 0.13.0
 
 - BREAKING: Relay consultation results remove the inert

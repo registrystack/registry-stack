@@ -500,10 +500,11 @@ fn dataset_with_release_profiles(profiles_yaml: &str) -> String {
 fn valid_release_profile() -> String {
     r#"          - id: basic_identity
             version: "1"
+            purpose: identity_verification
             release_scope: social_registry:identity_release
             subject:
-              input: individual_id
               source_field: id
+              id_type: national_id
             claims:
               - name: subject_identifier
                 source_field: id
@@ -629,6 +630,17 @@ fn release_profile_release_scope_must_be_dataset_bound() {
 
 #[cfg(feature = "attribute-release")]
 #[test]
+fn release_profile_release_scope_must_use_identity_release_suffix() {
+    let profile = valid_release_profile().replace(
+        "release_scope: social_registry:identity_release",
+        "release_scope: social_registry:release",
+    );
+    let err = load_release_dataset(&profile).expect_err("release scope must use identity_release");
+    assert_eq!(err, "config.validation_error");
+}
+
+#[cfg(feature = "attribute-release")]
+#[test]
 fn release_profile_release_scope_must_differ_from_read_scope() {
     let profile = valid_release_profile().replace(
         "release_scope: social_registry:identity_release",
@@ -637,6 +649,49 @@ fn release_profile_release_scope_must_differ_from_read_scope() {
     let err =
         load_release_dataset(&profile).expect_err("release scope must differ from read scope");
     assert_eq!(err, "config.validation_error");
+}
+
+#[cfg(feature = "attribute-release")]
+#[test]
+fn release_profile_requires_bounded_purpose_and_subject_id_type() {
+    let empty_purpose =
+        valid_release_profile().replace("purpose: identity_verification", "purpose: \"\"");
+    assert_eq!(
+        load_release_dataset(&empty_purpose).expect_err("empty purpose rejected"),
+        "config.validation_error"
+    );
+
+    let empty_id_type = valid_release_profile().replace("id_type: national_id", "id_type: \"\"");
+    assert_eq!(
+        load_release_dataset(&empty_id_type).expect_err("empty id_type rejected"),
+        "config.validation_error"
+    );
+}
+
+#[cfg(feature = "attribute-release")]
+#[test]
+fn release_profile_rejects_principal_bound_required_filter_entities() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dataset = dataset_with_release_profiles(&valid_release_profile()).replace(
+        "          allowed_expansions: [household]\n",
+        "          required_filters: [id]\n          required_filter_bindings:\n            - field: id\n              source: principal_id\n          allowed_expansions: [household]\n",
+    );
+    let config_path = write_config(&tmp, &base_config(&dataset));
+    let err = registry_relay::config::load(&config_path)
+        .expect_err("caller-controlled release subject cannot satisfy required_filters");
+    assert_eq!(err.code(), "config.validation_error");
+}
+
+#[cfg(feature = "attribute-release")]
+#[test]
+fn release_profile_requires_max_limit_to_detect_ambiguity() {
+    let tmp = TempDir::new().expect("tempdir");
+    let dataset = dataset_with_release_profiles(&valid_release_profile())
+        .replace("          max_limit: 1000\n", "          max_limit: 1\n");
+    let config_path = write_config(&tmp, &base_config(&dataset));
+    let err = registry_relay::config::load(&config_path)
+        .expect_err("exact-one lookup requires limit two for ambiguity detection");
+    assert_eq!(err.code(), "config.validation_error");
 }
 
 #[cfg(feature = "attribute-release")]
@@ -686,5 +741,16 @@ fn release_profile_rejects_invalid_cel_expression() {
         "              - name: full_name\n                expression:\n                  cel: \"this is ( not valid cel\"\n",
     );
     let err = load_release_dataset(&profile).expect_err("invalid CEL rejected");
+    assert_eq!(err, "config.validation_error");
+}
+
+#[cfg(feature = "attribute-release")]
+#[test]
+fn release_profile_cel_may_reference_only_projected_source() {
+    let profile = valid_release_profile().replace(
+        "              - name: municipality\n                source_field: municipality_code\n",
+        "              - name: municipality\n                expression:\n                  cel: context.municipality_code\n",
+    );
+    let err = load_release_dataset(&profile).expect_err("context CEL authority rejected");
     assert_eq!(err, "config.validation_error");
 }

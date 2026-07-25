@@ -4,9 +4,9 @@
 //! Registry Relay evaluates two kinds of operator-authored CEL expressions for
 //! identity attribute release:
 //!
-//! * **release predicates** (e.g. `deceased == false`) that gate whether a
+//! * **release predicates** (e.g. `source.deceased == false`) that gate whether a
 //!   subject's claims may be released at all, and
-//! * **computed claim scalars** (e.g. `given_name + ' ' + surname`) that derive
+//! * **computed claim scalars** (e.g. `source.given_name + ' ' + source.surname`) that derive
 //!   a single claim value from a subject's source fields.
 //!
 //! Rather than introduce a second expression language, this module reuses the
@@ -64,7 +64,7 @@ pub use disabled::{
 mod enabled {
     use super::AttributeReleaseError;
 
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
     use std::sync::{Arc, RwLock};
 
     use serde_json::{json, Value};
@@ -241,8 +241,78 @@ mod enabled {
     /// expression that does not compile is rejected before the runtime serves
     /// any request.
     pub fn validate_release_expression(cel: &str) -> Result<(), AttributeReleaseError> {
+        validate_expression_authority(cel)?;
         let runtime = MappingRuntime::new(RuntimeOptions::default());
         compile(&runtime, cel).map(|_| ())
+    }
+
+    /// Restrict release expressions to the projected `source` object. The
+    /// Crosswalk runtime also offers a `context` object, but Relay does not
+    /// define an attribute-release authority contract for it. Rejecting any
+    /// other member root at config load prevents raw Relay configuration from
+    /// acquiring capabilities that Registryctl-authored profiles do not have.
+    fn validate_expression_authority(cel: &str) -> Result<(), AttributeReleaseError> {
+        let roots = cel_member_roots(cel)
+            .map_err(|()| AttributeReleaseError::Compile("kind=authority".to_string()))?;
+        if roots != BTreeSet::from(["source".to_string()]) {
+            return Err(AttributeReleaseError::Compile("kind=authority".to_string()));
+        }
+        Ok(())
+    }
+
+    /// Collect dotted or bracketed CEL member roots while ignoring quoted string
+    /// contents. The reserved `context` root is collected even when bare.
+    /// This mirrors Registryctl's authoring validator so direct Relay config and
+    /// generated config enforce the same source-only authority boundary.
+    fn cel_member_roots(expression: &str) -> Result<BTreeSet<String>, ()> {
+        let bytes = expression.as_bytes();
+        let mut roots = BTreeSet::new();
+        let mut index = 0;
+        while index < bytes.len() {
+            if matches!(bytes[index], b'\'' | b'"') {
+                let quote = bytes[index];
+                index += 1;
+                let mut escaped = false;
+                let mut closed = false;
+                while index < bytes.len() {
+                    let byte = bytes[index];
+                    index += 1;
+                    if escaped {
+                        escaped = false;
+                    } else if byte == b'\\' {
+                        escaped = true;
+                    } else if byte == quote {
+                        closed = true;
+                        break;
+                    }
+                }
+                if !closed {
+                    return Err(());
+                }
+                continue;
+            }
+            if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
+                let start = index;
+                index += 1;
+                while index < bytes.len()
+                    && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+                {
+                    index += 1;
+                }
+                let mut member_index = index;
+                while bytes.get(member_index).is_some_and(u8::is_ascii_whitespace) {
+                    member_index += 1;
+                }
+                if &expression[start..index] == "context"
+                    || matches!(bytes.get(member_index), Some(b'.' | b'['))
+                {
+                    roots.insert(expression[start..index].to_string());
+                }
+                continue;
+            }
+            index += 1;
+        }
+        Ok(roots)
     }
 
     /// Evaluate a release **predicate** over a subject record. Fails closed:
@@ -440,6 +510,33 @@ mod enabled {
             assert!(matches!(err, AttributeReleaseError::Compile(_)));
             // PII-free: the rendered message carries no expression text.
             assert!(!err.to_string().contains("given_name"));
+        }
+
+        #[test]
+        fn expression_authority_rejects_context_members() {
+            let err = validate_release_expression("context.subject == source.subject")
+                .expect_err("context authority must be rejected");
+            assert!(matches!(err, AttributeReleaseError::Compile(_)));
+            assert!(!err.to_string().contains("subject"));
+
+            let err = validate_release_expression("source.subject == context [\"subject\"]")
+                .expect_err("bracketed context authority must be rejected");
+            assert!(matches!(err, AttributeReleaseError::Compile(_)));
+        }
+
+        #[test]
+        fn expression_authority_ignores_member_decoys_in_strings() {
+            validate_release_expression(
+                "source.given_name == 'context.secret' || source.given_name == \"request.value\"",
+            )
+            .expect("quoted member-like text is not authority");
+        }
+
+        #[test]
+        fn expression_authority_rejects_unterminated_strings() {
+            let err = validate_release_expression("source.given_name == 'unterminated")
+                .expect_err("unterminated string must be rejected");
+            assert!(matches!(err, AttributeReleaseError::Compile(_)));
         }
 
         #[test]

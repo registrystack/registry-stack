@@ -21,6 +21,8 @@ const stableIds = new Set([
   'csv-source-input',
   'xlsx-source-input',
   'json-aggregate-output',
+  'attribute-release',
+  'crosswalk-runtime',
 ]);
 
 const experimentalIds = new Set([
@@ -31,9 +33,10 @@ const experimentalIds = new Set([
   'standards-cel-mapping',
   'sdmx-json-aggregate-output',
   'csv-aggregate-output',
-  'attribute-release',
   'parquet-source-input',
 ]);
+
+const issue487Ids = new Set(['attribute-release', 'crosswalk-runtime']);
 
 async function readRepo(path) {
   return readFile(resolve(repoRoot, path), 'utf8');
@@ -59,10 +62,15 @@ test('Relay 1.0 roster pins the approved stable and experimental surfaces', asyn
   );
 
   for (const entry of roster) {
-    assert.equal(entry.decision_date, '2026-07-19', `${entry.id} decision date`);
+    const issue487 = issue487Ids.has(entry.id);
+    assert.equal(
+      entry.decision_date,
+      issue487 ? '2026-07-25' : '2026-07-19',
+      `${entry.id} decision date`,
+    );
     assert.equal(
       entry.decision_reference,
-      'https://github.com/registrystack/registry-stack/issues/305',
+      `https://github.com/registrystack/registry-stack/issues/${issue487 ? '487' : '305'}`,
       `${entry.id} decision reference`,
     );
     assert.ok(entry.evidence, `${entry.id} evidence reference`);
@@ -118,32 +126,54 @@ test('canonical Relay release, local image, and OpenAPI use the same feature set
       .filter((entry) => entry.canonical_release)
       .flatMap((entry) => entry.cargo_features),
   );
-  assert.deepEqual(canonicalFeatures, new Set(), 'the approved 1.0 Relay feature list is empty');
+  assert.deepEqual(
+    canonicalFeatures,
+    new Set(['attribute-release', 'crosswalk-runtime']),
+    'the approved 1.0 Relay feature list must be exact',
+  );
 
   const cargoToml = await readRepo('crates/registry-relay/Cargo.toml');
+  const cargoFeatureSection = cargoToml.match(/\[features\]\n([\s\S]*?)\n\[/)?.[1];
+  assert.ok(cargoFeatureSection, 'Relay Cargo.toml must declare a features table');
   const declaredFeatures = new Set(
-    [...cargoToml.matchAll(/^([a-z][a-z0-9-]*)\s*=\s*\[/gm)].map((match) => match[1]),
+    [...cargoFeatureSection.matchAll(/^([a-z][a-z0-9-]*)\s*=\s*\[/gm)].map(
+      (match) => match[1],
+    ),
   );
   for (const feature of roster.flatMap((entry) => entry.cargo_features)) {
-    assert.ok(declaredFeatures.has(feature), `experimental source feature ${feature} must remain`);
+    assert.ok(declaredFeatures.has(feature), `rostered source feature ${feature} must remain`);
   }
+  assert.deepEqual(
+    new Set(roster.flatMap((entry) => entry.cargo_features)),
+    new Set([...declaredFeatures].filter((feature) => feature !== 'default')),
+    'every Relay Cargo feature must have one support-roster decision',
+  );
+  assert.match(
+    cargoToml,
+    /^default = \["attribute-release"\]$/m,
+    'the developer default must enable stable attribute release',
+  );
 
   const dockerfile = await readRepo('crates/registry-relay/Dockerfile');
   assert.match(
     dockerfile,
-    /^ARG REGISTRY_RELAY_FEATURES=""$/m,
-    'the local production image must default to the canonical empty feature set',
+    /^ARG REGISTRY_RELAY_FEATURES="attribute-release,crosswalk-runtime"$/m,
+    'the local production image must default to the canonical feature set',
   );
 
-  const workflowPath = process.env.RELAY_RELEASE_WORKFLOW_PATH ?? '.github/workflows/release.yml';
-  const workflow = isAbsolute(workflowPath)
-    ? await readFile(workflowPath, 'utf8')
-    : await readRepo(workflowPath);
+  const releaseRecipePath =
+    process.env.RELAY_RELEASE_WORKFLOW_PATH ?? 'release/scripts/build-release-binaries.sh';
+  const releaseRecipe = isAbsolute(releaseRecipePath)
+    ? await readFile(releaseRecipePath, 'utf8')
+    : await readRepo(releaseRecipePath);
+  const relayBuild = releaseRecipe.match(
+    /-p registry-relay \\\n\s+--no-default-features \\\n\s+--features ([^\s'"]+)/,
+  );
+  assert.ok(relayBuild, 'the release recipe must select an exact Relay feature set');
   const workflowRelayFeatures = new Set(
-    [...workflow.matchAll(/--features\s+([^\s'"]+)/g)]
-      .flatMap((match) => match[1].split(','))
-      .filter((feature) => feature.startsWith('registry-relay/'))
-      .map((feature) => feature.slice('registry-relay/'.length)),
+    relayBuild[1]
+      .split(',')
+      .map((feature) => feature.replace(/^registry-relay\//, '')),
   );
   assert.deepEqual(
     workflowRelayFeatures,
@@ -175,6 +205,14 @@ test('canonical Relay release, local image, and OpenAPI use the same feature set
   assert.ok(
     openapi.paths['/metadata/ogc/records'],
     'stable link-free OGC Records metadata must remain in the pinned OpenAPI',
+  );
+  assert.ok(
+    openapi.paths['/v1/attribute-releases'],
+    'stable attribute release discovery must appear in the pinned OpenAPI',
+  );
+  assert.ok(
+    openapi.paths['/v1/attribute-releases/{profile_id}/versions/{version}/resolve'],
+    'stable attribute release resolution must appear in the pinned OpenAPI',
   );
 
   const justfile = await readRepo('crates/registry-relay/justfile');

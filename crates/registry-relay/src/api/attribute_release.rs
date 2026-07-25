@@ -3,10 +3,9 @@
 //!
 //! A release profile is a projection-limited, exactly-one-subject lookup that
 //! returns only the attributes approved for a named profile, mapped into
-//! OIDC/UserInfo-style claims. A profile is *optionally* purpose-bound: when it
-//! declares a `purpose`, the request's `data-purpose` header must equal it
-//! before any release; a profile that omits `purpose` carries no such gate. The
-//! resolve handler
+//! OIDC/UserInfo-style claims. Every profile is purpose-bound: the request's
+//! `data-purpose` header must equal the configured purpose before any release.
+//! The resolve handler
 //! never returns a raw registry row: the response body is built field-by-field
 //! from profile metadata and the projected claim set, so no source field absent
 //! from the profile, no raw subject value (outside a released claim), and no
@@ -114,17 +113,35 @@ async fn resolve(
     Json(body): Json<ResolveRequest>,
 ) -> Response {
     let RouteDeps { runtime, principal } = deps;
+    let Some(principal) = principal else {
+        return with_release_cache_headers(
+            Error::from(AuthError::MissingCredential).into_response(),
+        );
+    };
     let route = match RouteState::resolve(&runtime, &profile_id, &version) {
         Ok(route) => route,
-        // `profile_not_found` renders as a generic 404 that does not confirm
-        // enumeration; it carries no audit context because no gate ran. It is
-        // still marked non-cacheable so a 404 is never stored.
-        Err(error) => return with_release_cache_headers(error.into_response(), None),
+        // Profile lookup runs only after authentication so anonymous callers
+        // cannot distinguish a configured profile from an unknown one.
+        Err(error) => return with_release_cache_headers(error.into_response()),
     };
-    // Only a successful release honours the profile's caching opt-in; every
-    // denial is forced to `no-store` below by passing `None`.
-    let success_max_age = route.profile.response.max_age_seconds;
-    let result = run_resolve(&runtime, &route, &headers, principal, body).await;
+    if !principal.scopes.contains(&route.profile.release_scope) {
+        // Discovery hides profiles whose release scope the principal lacks.
+        // Resolve follows the same anti-enumeration rule: an authenticated
+        // caller sees the same 404 for an unknown profile and for a known
+        // profile it cannot discover. The audit retains the real scope-denial
+        // outcome.
+        let response = Error::from(ReleaseError::ProfileNotFound).into_response();
+        let response = with_audit_context(
+            response,
+            &route,
+            ResolveAudit {
+                internal_outcome: Some("auth.scope_denied".to_string()),
+                ..ResolveAudit::default()
+            },
+        );
+        return with_release_cache_headers(response);
+    }
+    let result = run_resolve(&runtime, &route, &headers, Some(principal), body).await;
     match result {
         Ok(success) => {
             let response = with_audit_context(
@@ -141,12 +158,12 @@ async fn resolve(
                     pdp_trust_provenance: BTreeSet::new(),
                 },
             );
-            with_release_cache_headers(response, success_max_age)
+            with_release_cache_headers(response)
         }
         Err(error) => {
             let response = error.error.into_response();
             let response = with_audit_context(response, &route, error.audit);
-            with_release_cache_headers(response, None)
+            with_release_cache_headers(response)
         }
     }
 }
@@ -252,8 +269,8 @@ async fn run_resolve(
     require_release_scope(principal_ref, &route.profile.release_scope)?;
 
     // 3 + 4: purpose + ODRL policy enforced atomically. `DeferredOutput`
-    // because redaction applies to the projected claim bundle, not raw entity
-    // fields. Denials return before the source read.
+    // because this route applies governed redaction before its release predicate
+    // and claim projection. Denials return before the source read.
     let governed = require_governed_read_access(
         runtime,
         route.dataset_id.as_str(),
@@ -269,26 +286,18 @@ async fn run_resolve(
     )?;
     let pdp_audit = governed.audit.clone();
 
-    // 4b: profile-level purpose binding. When a profile declares a `purpose`, the
-    // `data-purpose` header must be present and equal it — enforced here, before
-    // the source read, independent of whether the backing entity governs
-    // purposes (`require_governed_read_access` only checks purpose when the entity
-    // does). When the entity also governs, this is an additional equality
-    // constraint on the same header. A profile with no purpose keeps the prior
-    // behaviour. Missing header ⇒ 400 auth.purpose_required; mismatch ⇒ 403
-    // auth.purpose_denied — surfaced like the entity-governed purpose denials,
-    // not collapsed into the subject-denied outcome.
-    if let Some(profile_purpose) = route.profile.purpose.as_deref() {
-        match purpose_header_value(headers) {
-            Some(value) if value == profile_purpose => {}
-            Some(_) => {
-                return Err(ResolveRunError::from(Error::from(AuthError::PurposeDenied)));
-            }
-            None => {
-                return Err(ResolveRunError::from(Error::from(
-                    AuthError::PurposeRequired,
-                )));
-            }
+    // 4b: profile-level purpose binding. The `data-purpose` header must be
+    // present and equal the profile purpose before the source read, independent
+    // of whether the backing entity also governs purposes.
+    match purpose_header_value(headers) {
+        Some(value) if value == route.profile.purpose => {}
+        Some(_) => {
+            return Err(ResolveRunError::from(Error::from(AuthError::PurposeDenied)));
+        }
+        None => {
+            return Err(ResolveRunError::from(Error::from(
+                AuthError::PurposeRequired,
+            )));
         }
     }
 
@@ -351,12 +360,17 @@ async fn run_resolve(
         }
     };
 
-    // 8: release-condition predicate (CEL). A false predicate, or any evaluation
-    // failure, fails closed to SubjectReleaseDenied.
+    // Governed redaction applies before every operator-authored CEL evaluation.
+    // A release predicate or computed claim cannot use a field the PDP removed
+    // to reconstruct even a boolean about that field.
+    let projection_row = redact_row(&row, &governed.redaction_fields);
+
+    // 8: release-condition predicate (CEL). A false predicate, a reference to a
+    // redacted field, or any evaluation failure fails closed.
     if let Some(conditions) = route.profile.release_conditions.as_ref() {
         let allowed = route
             .evaluator
-            .evaluate_release_predicate(&conditions.expression.cel, &row)
+            .evaluate_release_predicate(&conditions.expression.cel, &projection_row)
             .unwrap_or(false);
         if !allowed {
             return Err(ResolveRunError::release(
@@ -374,14 +388,8 @@ async fn run_resolve(
     // ClaimUnavailable; optional missing ⇒ omit; a claim whose source field is
     // dropped by governed redaction is treated as unavailable.
     //
-    // Governed redaction is field-layer: `claim_is_redacted` gates *direct*
-    // claims, but a computed (CEL) claim reads the row directly and would
-    // otherwise see a redacted field. Project claims over a row with the
-    // redacted fields removed so a CEL reference to one resolves to null/error
-    // and the claim fails closed — closing the redaction-bypass path for
-    // computed claims. The release predicate above runs over the full row on
-    // purpose: it is a disclosure gate whose boolean result reveals no value.
-    let projection_row = redact_row(&row, &governed.redaction_fields);
+    // Governed redaction is field-layer: `claim_is_redacted` gates direct
+    // claims, while computed claims evaluate over the already-redacted row.
     let mut released = Map::new();
     for claim in &requested {
         if claim_is_redacted(claim, &governed.redaction_fields) {
@@ -450,8 +458,8 @@ async fn run_resolve(
 }
 
 /// Validate the subject id_type and value before any source read. A mismatched
-/// id_type, or (for an unpinned profile) a blank id_type, or a non-scalar/blank
-/// value fails closed to `release.subject_invalid` (400) — a request-shape error
+/// id_type or a non-scalar/blank value fails closed to
+/// `release.subject_invalid` (400) — a request-shape error
 /// distinct from the collapsed `release.subject_denied`. Unlike subject
 /// existence, id_type/value validity reveals nothing about the backing registry,
 /// so surfacing it as a distinct, diagnosable code is safe.
@@ -459,11 +467,7 @@ fn validate_subject(
     profile: &AttributeReleaseProfile,
     subject: &ResolveSubject,
 ) -> Result<Value, Error> {
-    if let Some(expected) = profile.subject.id_type.as_deref() {
-        if subject.id_type != expected {
-            return Err(ReleaseError::SubjectInvalid.into());
-        }
-    } else if subject.id_type.trim().is_empty() {
+    if subject.id_type != profile.subject.id_type {
         return Err(ReleaseError::SubjectInvalid.into());
     }
     match scalar_subject_value(&subject.value) {
@@ -663,15 +667,13 @@ fn discovery_profile(profile: &AttributeReleaseProfile) -> Value {
         .filter(|claim| claim.required)
         .map(|claim| claim.name.as_str())
         .collect();
-    let accepted_subject_id_types: Vec<&str> =
-        profile.subject.id_type.as_deref().into_iter().collect();
     json!({
         "id": profile.id,
         "version": profile.version,
         "title": profile.title,
         "description": profile.description,
         "purpose": profile.purpose,
-        "accepted_subject_id_types": accepted_subject_id_types,
+        "accepted_subject_id_types": [profile.subject.id_type.as_str()],
         "claim_names": claim_names,
         "required_claims": required_claims,
         "response_media_type": RESPONSE_MEDIA_TYPE,
@@ -805,23 +807,14 @@ fn with_private_metadata_headers(mut response: Response) -> Response {
     response
 }
 
-/// Attach caching directives to a resolve response. Released identity attributes
-/// are PII, so the default is `private, no-store`: the bundle is never written to
-/// a shared or local cache. A profile may opt into bounded *private* caching of a
-/// successful release by setting `response.max_age_seconds`, which yields
-/// `private, max-age=N` (still never shared-cacheable, still `Vary: Authorization`
-/// so a token swap cannot reuse another principal's entry). Denials always pass
-/// `max_age = None` so an error is never cached regardless of the profile knob.
-fn with_release_cache_headers(mut response: Response, max_age_seconds: Option<u64>) -> Response {
-    let directive = match max_age_seconds {
-        Some(secs) => format!("private, max-age={secs}"),
-        None => "private, no-store".to_string(),
-    };
-    let value = axum::http::HeaderValue::from_str(&directive)
-        .unwrap_or_else(|_| axum::http::HeaderValue::from_static("private, no-store"));
-    response
-        .headers_mut()
-        .insert(axum::http::header::CACHE_CONTROL, value);
+/// Released identity attributes and every denial are non-cacheable. Resolve is
+/// a POST endpoint, so a response freshness directive without a matching
+/// reusable retrieval URI would create a misleading configuration contract.
+fn with_release_cache_headers(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store"),
+    );
     response.headers_mut().insert(
         axum::http::header::VARY,
         axum::http::HeaderValue::from_static("Authorization"),
@@ -839,7 +832,7 @@ fn with_audit_context(mut response: Response, route: &RouteState, audit: Resolve
         table_id: Some(route.entity.table_id.clone()),
         ar_profile_id: Some(route.profile.id.clone()),
         ar_profile_version: Some(route.profile.version.clone()),
-        ar_subject_id_type: route.profile.subject.id_type.clone(),
+        ar_subject_id_type: Some(route.profile.subject.id_type.clone()),
         ar_subject_id_raw: audit.subject_id_raw.map(crate::audit::Sensitive::from),
         ar_requested_claims: audit.requested_claims,
         ar_released_claims: audit.released_claims,

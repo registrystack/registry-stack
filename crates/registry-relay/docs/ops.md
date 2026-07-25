@@ -197,11 +197,13 @@ checkout at the reviewed commit. Set
 `REGISTRY_RELAY_ALLOW_UNPINNED_LOCAL_CONTEXTS=1` only for local development
 builds that will not be published.
 
-The base image is built with no optional Cargo features. Standards-enabled
-release or lab images must opt in explicitly:
+The base image is built with the canonical
+`attribute-release,crosswalk-runtime` feature set. A custom
+`REGISTRY_RELAY_FEATURES` value replaces that set, so standards-enabled
+release or lab images must retain the canonical features explicitly:
 
 ```sh
-REGISTRY_RELAY_FEATURES=spdci-api-standards,standards-cel-mapping,ogcapi-edr \
+REGISTRY_RELAY_FEATURES=attribute-release,crosswalk-runtime,spdci-api-standards,standards-cel-mapping,ogcapi-edr \
   scripts/build-image.sh registry-relay:<version>-standards
 ```
 

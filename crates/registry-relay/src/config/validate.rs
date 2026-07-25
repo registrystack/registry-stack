@@ -3698,6 +3698,22 @@ fn release_claim_has_exactly_one_source(claim: &ReleaseClaimConfig) -> bool {
     claim.source_field.is_some() ^ claim.expression.is_some()
 }
 
+fn is_bounded_release_token(value: &str, max_bytes: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_bytes
+        && !value.contains(',')
+        && !value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+}
+
+fn is_bounded_release_text(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 2048
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
 /// Validate the attribute-release profiles attached to an entity (plan §5.1).
 ///
 /// `exposed_fields` is the entity's resolved projection (claim/subject
@@ -3705,8 +3721,8 @@ fn release_claim_has_exactly_one_source(claim: &ReleaseClaimConfig) -> bool {
 /// `validate_entity_filters` membership discipline. CEL expressions are
 /// compile-checked through the Relay-owned adapter when the
 /// `attribute-release` feature is enabled. When the feature is disabled, any
-/// configured profile is rejected at load so the default 1.0 build does not
-/// silently accept a beta config surface whose routes are not mounted.
+/// configured profile is rejected at load so a deliberately minimal build does
+/// not silently accept a config surface whose routes are not mounted.
 fn validate_entity_release_profiles(
     dataset: &DatasetConfig,
     entity: &EntityConfig,
@@ -3750,11 +3766,47 @@ fn validate_entity_release_profile(
     if profile.id.trim().is_empty() {
         return release_error("attribute_release_profiles id must not be empty");
     }
-    if !is_valid_profile_id(&profile.id) {
-        return release_error("attribute_release_profiles id does not match ^[a-z][a-z0-9_-]*$");
+    if profile.id.len() > 96 || !is_valid_profile_id(&profile.id) {
+        return release_error("attribute_release_profiles id must match ^[a-z][a-z0-9_-]{0,95}$");
     }
-    if profile.version.trim().is_empty() {
-        return release_error("attribute_release_profiles version must not be empty");
+    if !is_bounded_release_token(&profile.version, 64) {
+        return release_error(
+            "attribute_release_profiles version must be one bounded token of at most 64 bytes",
+        );
+    }
+    if profile
+        .title
+        .as_deref()
+        .is_some_and(|value| !is_bounded_release_text(value))
+        || profile
+            .description
+            .as_deref()
+            .is_some_and(|value| !is_bounded_release_text(value))
+    {
+        return release_error(
+            "attribute_release_profiles title and description must be bounded, trimmed text",
+        );
+    }
+    if !is_bounded_release_token(&profile.purpose, 256) {
+        return release_error(
+            "attribute_release_profiles purpose must be one bounded token of at most 256 bytes",
+        );
+    }
+    let expected_release_scope = format!("{}:identity_release", dataset.id);
+    if profile.release_scope != expected_release_scope {
+        return release_error(
+            "attribute_release_profiles release_scope must be the dataset-bound identity_release scope",
+        );
+    }
+    if !entity.api.required_filters.is_empty() {
+        return release_error(
+            "attribute_release_profiles cannot use an entity with required_filters because the caller-supplied subject cannot satisfy a principal-bound filter",
+        );
+    }
+    if entity.api.max_limit < 2 {
+        return release_error(
+            "attribute_release_profiles require entity api.max_limit of at least 2 to detect ambiguous subjects",
+        );
     }
 
     // Subject source field must be exposed by the entity projection.
@@ -3763,21 +3815,23 @@ fn validate_entity_release_profile(
             "attribute_release_profiles subject.source_field references a non-exposed field",
         );
     }
-    if profile.subject.input.trim().is_empty() {
-        return release_error("attribute_release_profiles subject.input must not be empty");
+    if !is_bounded_release_token(&profile.subject.id_type, 64) {
+        return release_error(
+            "attribute_release_profiles subject.id_type must be one bounded token of at most 64 bytes",
+        );
     }
 
     // Claims: non-empty, ≥1 required, unique names, each a valid id, and each
     // declaring exactly one of source_field / expression.cel.
-    if profile.claims.is_empty() {
-        return release_error("attribute_release_profiles must declare at least one claim");
+    if profile.claims.is_empty() || profile.claims.len() > 32 {
+        return release_error("attribute_release_profiles must declare between one and 32 claims");
     }
     let mut claim_names: HashSet<&str> = HashSet::new();
     let mut has_required = false;
     for claim in &profile.claims {
-        if !is_valid_claim_name(&claim.name) {
+        if claim.name.len() > 64 || !is_valid_claim_name(&claim.name) {
             return release_error(
-                "attribute_release_profiles claim name does not match \
+                "attribute_release_profiles claim name must be at most 64 bytes and match \
                  ^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
             );
         }
@@ -3813,22 +3867,17 @@ fn validate_entity_release_profile(
     }
 
     // Purpose coupling: when the backing entity governs purposes, the profile
-    // purpose must be set and a member of the permitted set.
+    // purpose must be a member of the permitted set.
     if let Some(policy) = entity.api.governed_policy.as_ref() {
-        if !policy.permitted_purposes.is_empty() {
-            match profile.purpose.as_ref() {
-                Some(purpose) if policy.permitted_purposes.iter().any(|p| p == purpose) => {}
-                Some(_) => {
-                    return release_error(
-                        "attribute_release_profiles purpose must be one of the entity governed_policy permitted_purposes",
-                    );
-                }
-                None => {
-                    return release_error(
-                        "attribute_release_profiles purpose is required when the entity governs permitted_purposes",
-                    );
-                }
-            }
+        if !policy.permitted_purposes.is_empty()
+            && !policy
+                .permitted_purposes
+                .iter()
+                .any(|purpose| purpose == &profile.purpose)
+        {
+            return release_error(
+                "attribute_release_profiles purpose must be one of the entity governed_policy permitted_purposes",
+            );
         }
     }
 
@@ -3891,6 +3940,16 @@ fn compile_release_expression(
     profile: &AttributeReleaseProfile,
     cel: &str,
 ) -> Result<(), ConfigError> {
+    if cel.is_empty() || cel.len() > 4096 {
+        tracing::error!(
+            code = "config.validation_error",
+            dataset_id = %dataset.id,
+            entity = %entity.name,
+            profile_id = %profile.id,
+            "attribute_release_profiles CEL expression must contain between one and 4096 bytes"
+        );
+        return Err(ConfigError::ValidationError);
+    }
     crate::attribute_release::validate_release_expression(cel).map_err(|err| {
         tracing::error!(
             code = "config.validation_error",
@@ -5512,7 +5571,6 @@ deployment:
             sensitivity: None,
             format: None,
             locale: None,
-            shareable: true,
         }
     }
 

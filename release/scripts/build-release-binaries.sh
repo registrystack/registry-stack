@@ -65,7 +65,8 @@ docker run --rm \
 
     cargo build --release --locked \
       -p registry-relay \
-      --no-default-features
+      --no-default-features \
+      --features registry-relay/attribute-release,registry-relay/crosswalk-runtime
     python3 release/scripts/check-release-relay-features.py target/release/registry-relay
     cp target/release/registry-relay "dist/bin/registry-relay-${RELEASE_TAG}-linux-amd64"
     cp target/release/registry-relay-rhai-worker "dist/bin/registry-relay-rhai-worker-${RELEASE_TAG}-linux-amd64"

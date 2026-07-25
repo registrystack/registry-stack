@@ -270,6 +270,11 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn(
             '--version "${{ needs.validate.outputs.version }}"', verification_job
         )
+        self.assertIn(
+            '--expected-label "org.registrystack.registry-relay.features='
+            'attribute-release,crosswalk-runtime"',
+            verification_job,
+        )
         self.assertNotIn("{{json .Image.config}}", workflow)
 
     def test_release_cargo_cache_is_scoped_to_builder_image(self) -> None:

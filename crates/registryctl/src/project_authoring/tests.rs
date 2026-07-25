@@ -428,15 +428,14 @@ outputs:
         assert_eq!(profile["id"], "solmara-nia-userinfo");
         assert_eq!(profile["version"], "v1");
         assert_eq!(profile["release_scope"], "population:identity_release");
-        assert_eq!(profile["subject"]["input"], "individual_id");
         assert_eq!(profile["subject"]["source_field"], "legacy_nid");
-        assert_eq!(profile["subject"]["cardinality"], "one");
+        assert!(profile["subject"].get("input").is_none());
+        assert!(profile["subject"].get("cardinality").is_none());
         assert_eq!(
             profile["release_conditions"]["expression"]["cel"],
             "source.identity_status == 'active' && source.alive == true"
         );
-        assert_eq!(profile["response"]["include_source_metadata"], false);
-        assert_eq!(profile["response"]["max_age_seconds"], 300);
+        assert!(profile.get("response").is_none());
         let claims = profile["claims"]
             .as_array()
             .expect("release claims are a closed list")

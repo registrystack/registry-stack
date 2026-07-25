@@ -33,6 +33,13 @@ case "${name}" in
     ;;
 esac
 
+product_label_args=()
+if [[ "${name}" == "registry-relay" ]]; then
+  product_label_args+=(
+    --label "org.registrystack.registry-relay.features=attribute-release,crosswalk-runtime"
+  )
+fi
+
 cache_args=()
 if [[ -n "${RELEASE_IMAGE_CACHE_FROM:-}" ]]; then
   cache_args+=(--cache-from "${RELEASE_IMAGE_CACHE_FROM}")
@@ -160,6 +167,7 @@ docker buildx build \
   --label "org.opencontainers.image.source=${source_label}" \
   --label "org.opencontainers.image.revision=${revision_label}" \
   --label "org.opencontainers.image.version=${version_label}" \
+  "${product_label_args[@]}" \
   --build-arg "SOURCE_DATE_EPOCH=${source_date_epoch}" \
   --metadata-file "${metadata_file}" \
   "${no_cache_args[@]}" \

@@ -532,17 +532,11 @@ fn generated_attribute_release_profiles(api: &RecordsApiDeclaration) -> Vec<Valu
                 "purpose": profile.purpose,
                 "release_scope": profile.release_scope,
                 "subject": {
-                    "input": profile.subject.input,
                     "source_field": profile.subject.source_field,
                     "id_type": profile.subject.id_type,
-                    "cardinality": "one",
                 },
                 "release_conditions": profile.release_conditions,
                 "claims": claims,
-                "response": {
-                    "include_source_metadata": false,
-                    "max_age_seconds": profile.response.max_age_seconds,
-                },
             })
         })
         .collect()

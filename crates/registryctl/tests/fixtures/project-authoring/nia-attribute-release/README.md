@@ -15,7 +15,8 @@ review shows the complete release policy in one place. Direct claims name an
 explicitly projected entity field; computed claims and the required release
 condition may reference only the projected `source` object.
 
-The compiler fixes subject cardinality to exactly one and always generates
-`include_source_metadata: false`. Authors may set only a private cache lifetime
-from 1 to 3,600 seconds. The authored profile and generated Relay configuration
-are both covered by the signed project semantic and closure digests.
+The compiled contract fixes subject cardinality to exactly one, omits source
+metadata, and makes every resolve response non-cacheable. These are runtime
+invariants rather than authoring switches. The authored profile and generated
+Relay configuration are both covered by the signed project semantic and
+closure digests.

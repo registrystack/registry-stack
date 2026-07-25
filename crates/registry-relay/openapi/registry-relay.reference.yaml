@@ -161,6 +161,23 @@ datasets:
             - field: household_id
               ops: [eq]
           allowed_expansions: [household]
+        attribute_release_profiles:
+          - id: individual_identity
+            version: v1
+            title: Individual identity
+            description: Minimal identity profile used for the canonical OpenAPI contract.
+            purpose: identity_verification
+            release_scope: social_registry:identity_release
+            subject:
+              source_field: id
+              id_type: individual_id
+            release_conditions:
+              expression:
+                cel: source.age >= 0
+            claims:
+              - name: individual_id
+                source_field: id
+                required: true
 
 audit:
   sink: stdout
