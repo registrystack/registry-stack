@@ -38,6 +38,16 @@ result becomes evidence only when it records the candidate image digest, suite
 commit, exact plan variants, configuration digest, start and completion times,
 and unmodified result status without retaining secrets.
 
+`promote-evidence` provides that source-side boundary for the metadata-only
+slice. It authenticates the referenced published candidate through the same
+signed image lock, release capsule, provenance, checksums, local tag target, and
+manifest binding used by the other conformance tooling. Candidate fields are
+derived, not supplied individually. The OIDF export cannot prove that the
+tested endpoint ran that candidate image, so the summary marks that association
+as operator-attested and pending review. The command creates a new, closed JSON
+summary for separate maintainer review. It does not make the summary
+certification evidence by itself.
+
 ## Plan mapping
 
 [`plan-map.json`](plan-map.json) is the machine-readable mapping.
@@ -144,6 +154,100 @@ The checkout, Python environment, Maven cache, rendered configuration, and
 exported suite artifacts live under `target/openid-conformance/`, which Git
 ignores.
 
+## Promote a result for review
+
+Keep the raw plan export outside the repository and make it owner-only. Download
+the candidate's `registryctl-<tag>-image-lock.json`, its `.sig` and `.pem`, the
+release capsule and its `.sig` and `.pem`, release provenance, and
+`SHA256SUMS` into one private directory. Fetch the immutable release tag and
+install `cosign` and `slsa-verifier`.
+
+While the same suite instance used for the run is still running, capture its
+generated CA and `/jwks` signing-key response through the runner's authenticated
+HTTPS path:
+
+```bash
+release/scripts/openid-conformance-runner.py export-suite-ca \
+  --output /private/oidf/suite-ca.pem
+
+release/scripts/openid-conformance-runner.py export-suite-jwks \
+  --conformance-server https://localhost.emobix.co.uk:8443 \
+  --suite-ca-certificate /private/oidf/suite-ca.pem \
+  --output /private/oidf/suite-jwks.json
+```
+
+The JWKS command disables proxies and redirects, validates a closed RSA signing
+key shape, and refuses to overwrite its owner-only output. Do not restart or
+replace the suite after this capture. Run the metadata slice with an explicit
+private output directory:
+
+```bash
+mkdir -m 700 /private/oidf/metadata-run
+
+REGISTRY_OPENID_CONFORMANCE_ISSUER_URL="https://issuer.example.test" \
+  release/scripts/openid-conformance-runner.py run \
+  notary-oid4vci-issuer-metadata \
+  --output-dir /private/oidf/metadata-run
+```
+
+The wrapper passes that directory to the pinned upstream runner as
+`--export-dir`. The completed directory contains the rendered configuration
+and exactly one plan-export ZIP for this one-module slice. There is no separate
+UI download step. Keep the same suite instance running until the command
+finishes, then identify the ZIP and make it owner-only:
+
+```bash
+find /private/oidf/metadata-run -maxdepth 1 -type f -name '*.zip' -print
+chmod 600 /private/oidf/metadata-run/<plan-export>.zip
+
+release/scripts/openid-conformance-runner.py promote-evidence \
+  --suite-export /private/oidf/metadata-run/<plan-export>.zip \
+  --suite-jwks /private/oidf/suite-jwks.json \
+  --release-manifest release/manifests/registry-stack-<release-id>.yaml \
+  --image-lock /private/release/registryctl-<tag>-image-lock.json \
+  --output /private/review/openid-metadata-evidence.json
+```
+
+The command refuses to overwrite the output. It accepts only the single
+`oid4vci-1_0-issuer-metadata-test` JSON export and its matching signature,
+rejects unsafe or unexpected ZIP entries, and verifies the Base64URL
+SHA256withRSA signature over the exact JSON bytes against exactly one captured
+suite key. The filename run identifier must match `testInfo._id`,
+`testInfo.testId`, and every considered log entry.
+
+The authoritative module status must be `FINISHED`. Its `PASSED`, `FAILED`,
+`WARNING`, `REVIEW`, `SKIPPED`, or `UNKNOWN` result is copied unchanged. The
+archive does not contain a plan verdict or runner exit status. Completion time
+comes from the matching terminal log event. Condition identifiers and messages
+are not copied. The summary retains only aggregate informational, successful,
+review, warning, and failure counts.
+
+The summary records:
+
+- the authenticated release tag target, manifest source ref, signed capsule,
+  image-lock hashes, and exact Registry Notary image digest;
+- the exact issuer URL from the signed runtime configuration and its explicit
+  operator-attested association with the candidate deployment;
+- the pinned 40-character suite commit, release tag, signed export's matching
+  reported version and origin, exact scenario, expected plan, module, variants,
+  and the explicit operator-attested plan and commit associations;
+- the canonical SHA-256 digest of the captured suite JWKS and successful
+  exact-byte export signature verification;
+- SHA-256 digests of the checked-in plan map and configuration template;
+- a digest of the effective runtime configuration after replacing only
+  `vci.static_tx_code` with the fixed `<redacted>` marker; and
+- the suite start time, terminal-log completion time, terminal status,
+  unmodified result, and condition outcome counts.
+
+The transaction code is not copied or hashed because a digest of a
+low-entropy code would be brute-forceable. The public summary includes no raw
+export hash, plan or module instance id, free-form message, request, response,
+token, proof, credential, civil identifier, or suite log. Its committed shape
+is [`evidence-summary.schema.json`](evidence-summary.schema.json), which the
+command validates before writing output. Review the candidate deployment
+evidence, suite checkout and runtime, and summary separately before committing
+it as release evidence.
+
 When advancing the suite ref, compare its `scripts/requirements.txt` with
 `python-requirements.in`. After review, regenerate the hashed lock with the
 command recorded at the top of `python-requirements.txt`. Dependabot scans that
@@ -157,14 +261,20 @@ override digest, and artifact digest still match.
 
 Do not commit a raw result export. Full-flow output may include bearer tokens,
 proof JWTs, issued credentials, transaction codes, or seeded civil identifiers.
-Review and redact an export before turning it into release evidence. A failed
-or warned result must remain visible in the reviewed summary.
+The promotion command reads the private export only to validate the selected
+module, terminal record, safe runtime-configuration shape, and condition
+counts. It constructs the public summary
+from an explicit allowlist and checks that sensitive raw values did not cross
+that boundary. A failed, warned, skipped, review, or unknown result remains
+visible and is never upgraded to a pass.
 
-The current runner keeps raw exports private but does not yet generate the
-candidate-bound allowlisted summary or review promotion required for release
-evidence. Until that source-side gate and a real frozen-candidate exercise
-exist, its output remains candidate-exercise material rather than a completed
-conformance claim.
+A promoted summary is still unreviewed candidate output until a maintainer
+checks the authenticated candidate assets, the recorded issuer URL's
+operator-attested candidate association, the expected plan association, and
+the result. The full issuer scenario remains explicitly
+unsupported because the upstream profile requires behavior outside Registry
+Notary 1.0. The offer adapter is no longer a blocker; it closes only the
+callback transport gap.
 
 The first metadata-only run and its known failures are recorded in
 [`initial-report.md`](initial-report.md). It is historical context only. It is

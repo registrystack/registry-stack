@@ -45,7 +45,7 @@
         "This repeatable suite slice exercises issuer metadata only and is not a wallet, verifier, or full issuer conformance claim.",
         "The suite requires the sender_constrain=dpop plan selector, but the metadata-only module does not exercise DPoP and Registry Notary does not support or claim DPoP.",
         "No external result is release evidence until it is captured from the frozen candidate artifact with the required immutable identifiers.",
-        "The full OID4VCI issuer plan remains blocked by the suite callback adapter and by suite profile requirements outside Registry Notary 1.0."
+        "The submit-offer adapter closes the callback transport gap. The full OID4VCI issuer plan remains blocked only by suite profile requirements outside Registry Notary 1.0."
       ]
     },
     {
