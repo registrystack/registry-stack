@@ -58,21 +58,22 @@ Neither the service nor Rhai worker imports `ungetwc` or the affected deprecated
 DNS-printing functions. The libstdc++ object that imports `ungetwc` is not in
 either executable dependency closure.
 
-The implementation reviewed for the pre-tag `v0.12.2` candidate is protected-
-main revision `0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8`, which remains an ancestor
+The implementation reviewed for the pre-tag `v0.13.0` candidate is protected-
+main revision `d45761a0104bd3d9c2e4b4db391d4223f289bd44`, which remains an ancestor
 of the release lineage. The versioned candidate was built with the release's
 pinned Linux/amd64 builder and scanned at exact Relay image digest
-`sha256:a1cc61a508a6b6afe378c48af1ed3abb5ce8840f271b1d6957a5835f57d80df2`.
-Grype 0.114.0 with valid database schema v6.1.9, built July 20, 2026, reported
+`sha256:3877afea8e71c4080adef845def5e43e950d54e8ca2f1d69d7f14997dd25207b`.
+Grype 0.114.0 with valid database schema v6.1.9, built July 25, 2026, reported
 the same three non-fixable blocking-severity findings and no fixable finding.
 The reviewed root filesystem digest is
-`sha256:47f838a9c902008b857ff83bd148f087941c2a04cdc732adf9ee1bda504e5b0f`.
+`sha256:1134de7c597865c38d549848695b903d06be3ed50a5275e7cef57ebb614d17d5`.
 Direct inspection of the candidate service and Rhai worker confirmed that they
 do not import `ungetwc` or the affected DNS-printing functions and contain no
-`%mc` format string. The tagged release must reproduce this root filesystem
-digest and pass the same policy against its exact pushed digest.
+effective `%mc` format string. Neither executable dependency closure contains
+libstdc++. The tagged release must reproduce this root filesystem digest and
+pass the same policy against its exact pushed digest.
 
-The matching accepted-risk entries expire on August 20, 2026. A Trixie fix,
+The matching accepted-risk entries expire on August 25, 2026. A Trixie fix,
 changed fingerprint, new scanf format or call path, new C++ or wide-character
 input path, or new DNS TSIG debugging or printing path requires earlier review.
 The accepted-risk entries record the evidence image digest and the reachable
