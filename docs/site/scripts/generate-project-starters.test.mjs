@@ -177,7 +177,7 @@ test('keeps country, snapshot-records, OpenSPP, and conformance decisions explic
       source: 'crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records',
     },
   );
-  assert.equal(byId['openspp-exact'].evidence, 'offline-fixture-only-pending-357');
+  assert.equal(byId['openspp-exact'].evidence, 'offline-fixture-validation');
   assert.equal(byId['dhis2-script'].classification, 'conformance-only');
   assert.equal(byId['dhis2-script'].starter, undefined);
   assert.deepEqual(byId['dhis2-script'].capabilities, ['test', 'check', 'build']);

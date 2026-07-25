@@ -209,11 +209,11 @@
   {
     "id": "openspp-exact",
     "label": "OpenSPP exact lookup",
-    "summary": "Offline fixture evidence only, pending the owner-run holdout in GH#357.",
+    "summary": "Offline fixture, configuration validation, and build coverage for a synthetic OpenSPP exact lookup.",
     "source": "crates/registryctl/tests/fixtures/project-authoring/openspp-exact",
     "classification": "maintained",
     "topology": "combined",
-    "evidence": "offline-fixture-only-pending-357",
+    "evidence": "offline-fixture-validation",
     "project_dir": "crates/registryctl/tests/fixtures/project-authoring/openspp-exact",
     "capabilities": [
       "trace",

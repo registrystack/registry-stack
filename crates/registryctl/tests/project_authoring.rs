@@ -1088,7 +1088,7 @@ fn project_authoring_catalog_classifies_every_golden_and_only_five_starters() {
         .expect("OpenSPP catalog entry");
     assert_eq!(
         openspp.evidence.as_deref(),
-        Some("offline-fixture-only-pending-357")
+        Some("offline-fixture-validation")
     );
 }
 
