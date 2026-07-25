@@ -1,23 +1,24 @@
 name: RegistryStack Release Capsule Backfill
 
+# Keep the privileged implementation on repository_dispatch: workflow_dispatch lets
+# an operator select a branch and would let branch-controlled workflow code request
+# this job's contents: write token.
+# Invoke this default-branch workflow with:
+# gh api --method POST repos/registrystack/registry-stack/dispatches \
+#   -f event_type=release-capsule-backfill \
+#   -f 'client_payload[tag]=v0.8.0' \
+#   -F 'client_payload[replace_existing]=false'
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing semver release tag to backfill
-        required: true
-        type: string
-      replace_existing:
-        description: Replace existing capsule assets for this tag
-        required: false
-        default: false
-        type: boolean
+  repository_dispatch:
+    types: [release-capsule-backfill]
+
+run-name: Backfill release capsule for ${{ github.event.client_payload.tag }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-capsule-backfill-${{ inputs.tag }}
+  group: release-capsule-backfill-${{ github.event.client_payload.tag }}
   cancel-in-progress: false
 
 env:
@@ -33,14 +34,16 @@ jobs:
     permissions:
       contents: write
     env:
-      TAG: ${{ inputs.tag }}
-      REPLACE_EXISTING: ${{ inputs.replace_existing }}
+      TAG: ${{ github.event.client_payload.tag }}
+      REPLACE_EXISTING: ${{ github.event.client_payload.replace_existing }}
     steps:
-      - name: Checkout current capsule tooling
+      - name: Checkout protected capsule tooling
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
+          ref: ${{ github.sha }}
           path: generator
           fetch-depth: 0
+          persist-credentials: false
           submodules: false
 
       - name: Validate backfill request
@@ -91,9 +94,10 @@ jobs:
       - name: Checkout release source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ github.event.client_payload.tag }}
           path: release-source
           fetch-depth: 0
+          persist-credentials: false
           submodules: false
 
       - name: Resolve release manifest
