@@ -19,6 +19,8 @@ SCRIPT = ROOT / "release" / "scripts" / "validate-upgrade-exercise.py"
 TEMPLATE = ROOT / "release" / "exercises" / "upgrade-exercise-v1.template.json"
 TARGET_COMMIT = "e25f081ce800ade13e892503cc19b96588e081ef"
 TARGET_MANIFEST = Path("release/manifests/registry-stack-beta-16.yaml")
+SOURCE_COMMIT = "3e587a4f3483b180037b6994fcc4cc0e1d670a16"
+SOURCE_MANIFEST = Path("release/manifests/registry-stack-beta-13.yaml")
 
 
 def load_module():
@@ -37,23 +39,38 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         self.template = json.loads(TEMPLATE.read_text(encoding="utf-8"))
         self.candidate_asset_root = Path("/authenticated-candidate-assets")
         self.real_load_candidate = self.module.load_candidate
+        self.source_candidate = {
+            "release_id": "beta-13",
+            "version": "0.11.0",
+            "source_ref": "9b851a606c9cfe298c16e515fbbb5f32c28d98cd",
+            "source_tag": "v0.11.0",
+            "tag_target": SOURCE_COMMIT,
+            "image_lock_sha256": "sha256:" + "b" * 64,
+            "relay_image": (
+                "ghcr.io/registrystack/registry-relay@sha256:" + "b" * 64
+            ),
+            "notary_image": (
+                "ghcr.io/registrystack/registry-notary@sha256:" + "b" * 64
+            ),
+        }
+        self.target_candidate = {
+            "release_id": "beta-16",
+            "version": "0.12.2",
+            "source_ref": "0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8",
+            "source_tag": "v0.12.2",
+            "tag_target": TARGET_COMMIT,
+            "image_lock_sha256": "sha256:" + "b" * 64,
+            "relay_image": (
+                "ghcr.io/registrystack/registry-relay@sha256:" + "b" * 64
+            ),
+            "notary_image": (
+                "ghcr.io/registrystack/registry-notary@sha256:" + "b" * 64
+            ),
+        }
         self.load_candidate = mock.patch.object(
             self.module,
             "load_candidate",
-            return_value={
-                "release_id": "beta-16",
-                "version": "0.12.2",
-                "source_ref": "0e76f5ea61f78bbc15d91fcb6e9dfcaa956c3df8",
-                "source_tag": "v0.12.2",
-                "tag_target": TARGET_COMMIT,
-                "image_lock_sha256": "sha256:" + "b" * 64,
-                "relay_image": (
-                    "ghcr.io/registrystack/registry-relay@sha256:" + "b" * 64
-                ),
-                "notary_image": (
-                    "ghcr.io/registrystack/registry-notary@sha256:" + "b" * 64
-                ),
-            },
+            side_effect=self.authenticated_candidate,
         )
         self.load_candidate.start()
         self.addCleanup(self.load_candidate.stop)
@@ -61,6 +78,11 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
     def validate_record(self, data, **kwargs):
         kwargs.setdefault("candidate_asset_root", self.candidate_asset_root)
         return self.module.validate_record(data, **kwargs)
+
+    def authenticated_candidate(self, _manifest_path, lock_path):
+        if "v0.11.0" in lock_path.name:
+            return self.source_candidate.copy()
+        return self.target_candidate.copy()
 
     def candidate(self):
         def replace(value):
@@ -102,6 +124,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record["candidate_independently_verified"] = True
         for result in record["results"]:
             result["outcome"] = "passed"
+        record["source_release"]["source_commit"] = SOURCE_COMMIT
         record["target_release"]["source_commit"] = TARGET_COMMIT
         manifest = self.module.git_bytes(ROOT, TARGET_COMMIT, TARGET_MANIFEST)
         record["target_release_manifest"]["sha256"] = self.module.sha256_bytes(manifest)
@@ -132,14 +155,27 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         self.validate_record(
             self.candidate(), allow_template=False, require_all_passed=True
         )
-        self.module.load_candidate.assert_called_once_with(
-            ROOT / TARGET_MANIFEST,
-            (
-                self.candidate_asset_root
-                / "v0.12.2"
-                / "registryctl-v0.12.2-image-lock.json"
-            ),
+        self.module.load_candidate.assert_has_calls(
+            [
+                mock.call(
+                    ROOT / SOURCE_MANIFEST,
+                    (
+                        self.candidate_asset_root
+                        / "v0.11.0"
+                        / "registryctl-v0.11.0-image-lock.json"
+                    ),
+                ),
+                mock.call(
+                    ROOT / TARGET_MANIFEST,
+                    (
+                        self.candidate_asset_root
+                        / "v0.12.2"
+                        / "registryctl-v0.12.2-image-lock.json"
+                    ),
+                ),
+            ]
         )
+        self.assertEqual(2, self.module.load_candidate.call_count)
 
     def test_artifact_coordinate_digest_prefixes_are_equivalent(self) -> None:
         record = self.candidate()
@@ -255,7 +291,15 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             "relay_image_digest": "sha256:" + "b" * 64,
             "notary_image_digest": "sha256:" + "b" * 64,
         }
-        for version in ("1.0.0", "v1.0", "v1.0.0+build", "v1.0.x"):
+        for version in (
+            "1.0.0",
+            "v1.0",
+            "v1.0.0+build",
+            "v1.0.x",
+            "v1.0.0-rc..1",
+            "v1.0.0-.",
+            "v1.0.0-01",
+        ):
             with self.subTest(version=version):
                 with self.assertRaisesRegex(
                     self.module.ExerciseError, "invalid or unsafe"
@@ -277,6 +321,48 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                 record["target_release"][field] = value
                 with self.assertRaisesRegex(self.module.ExerciseError, "invalid or unsafe"):
                     self.validate_record(record, allow_template=False)
+
+    def test_source_release_coordinates_are_authenticated(self) -> None:
+        for field, value in (
+            ("version", "v0.10.0"),
+            ("source_commit", "f" * 40),
+            ("relay_image_digest", "sha256:" + "e" * 64),
+            ("notary_image_digest", "sha256:" + "e" * 64),
+        ):
+            with self.subTest(field=field):
+                record = self.candidate()
+                record["source_release"][field] = value
+                with self.assertRaisesRegex(
+                    self.module.ExerciseError,
+                    "authenticated source release assets",
+                ):
+                    self.validate_record(record, allow_template=False)
+
+    def test_source_release_manifest_must_be_unique(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifests = root / "release" / "manifests"
+            manifests.mkdir(parents=True)
+            manifest = {
+                "stack": {
+                    "release": "beta-13",
+                    "version": "0.11.0",
+                    "source_tag": "v0.11.0",
+                }
+            }
+            with self.assertRaisesRegex(
+                self.module.ExerciseError, "exactly one committed release manifest"
+            ):
+                self.module.release_manifest_for_version(root, "v0.11.0")
+            for name in ("registry-stack-beta-13.yaml", "registry-stack-copy.yaml"):
+                (manifests / name).write_text(
+                    self.module.yaml.safe_dump(manifest),
+                    encoding="utf-8",
+                )
+            with self.assertRaisesRegex(
+                self.module.ExerciseError, "exactly one committed release manifest"
+            ):
+                self.module.release_manifest_for_version(root, "v0.11.0")
 
     def test_unknown_field_is_rejected_to_prevent_raw_evidence(self) -> None:
         record = self.candidate()
@@ -430,13 +516,14 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             record["candidate_artifact_set"]["sha256"] = (
                 self.module.canonical_sha256(artifacts)
             )
-            candidate = self.module.load_candidate.return_value.copy()
-
             def authenticated_candidate(_manifest_path, lock_path):
-                metadata = candidate.copy()
-                metadata["image_lock_sha256"] = self.module.sha256_bytes(
-                    lock_path.read_bytes()
+                metadata = self.authenticated_candidate(
+                    _manifest_path, lock_path
                 )
+                if "v0.12.2" in lock_path.name:
+                    metadata["image_lock_sha256"] = self.module.sha256_bytes(
+                        lock_path.read_bytes()
+                    )
                 return metadata
 
             with mock.patch.object(
@@ -452,7 +539,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                 image_lock.write_bytes(image_lock.read_bytes() + b"\n")
                 with self.assertRaisesRegex(
                     self.module.ExerciseError,
-                    "exact authenticated release image-lock",
+                    "exact authenticated target release image-lock",
                 ):
                     self.validate_record(
                         record,
@@ -556,7 +643,13 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                     return real_git_output(arguments, max_bytes)
 
                 with mock.patch.object(
-                    self.module, "load_candidate", self.real_load_candidate
+                    self.module,
+                    "load_candidate",
+                    side_effect=lambda manifest_path, lock_path: (
+                        self.authenticated_candidate(manifest_path, lock_path)
+                        if "v0.11.0" in lock_path.name
+                        else self.real_load_candidate(manifest_path, lock_path)
+                    ),
                 ), mock.patch.object(
                     candidate_module,
                     "candidate_asset_snapshot",
@@ -598,21 +691,31 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                 "REGISTRY_TEST_UPGRADE_ASSET_ROOT is required for real release assets"
             )
         asset_root = Path(asset_root_value)
-        asset_dir = asset_root / "v0.12.2"
-        image_lock = asset_dir / "registryctl-v0.12.2-image-lock.json"
-        lock = json.loads(image_lock.read_text(encoding="utf-8"))
         record = self.candidate()
         artifacts = record["candidate_artifact_set"]["artifacts"]
-        record["target_release"]["relay_image_digest"] = lock["images"][
-            "registry-relay"
-        ].split("@", 1)[1]
-        record["target_release"]["notary_image_digest"] = lock["images"][
-            "registry-notary"
-        ].split("@", 1)[1]
+        for label, version in (
+            ("source_release", "v0.11.0"),
+            ("target_release", "v0.12.2"),
+        ):
+            image_lock = (
+                asset_root / version / f"registryctl-{version}-image-lock.json"
+            )
+            lock = json.loads(image_lock.read_text(encoding="utf-8"))
+            record[label]["relay_image_digest"] = lock["images"][
+                "registry-relay"
+            ].split("@", 1)[1]
+            record[label]["notary_image_digest"] = lock["images"][
+                "registry-notary"
+            ].split("@", 1)[1]
         artifacts["relay_image"] = record["target_release"]["relay_image_digest"]
         artifacts["notary_image"] = record["target_release"][
             "notary_image_digest"
         ]
+        image_lock = (
+            asset_root
+            / "v0.12.2"
+            / "registryctl-v0.12.2-image-lock.json"
+        )
         artifacts["image_lock"] = self.module.sha256_bytes(
             image_lock.read_bytes()
         )

@@ -666,7 +666,7 @@ outputs:
             evaluation_id: "eval-live-1".to_string(),
             claim_id: claim_id.to_string(),
             claim_version: "1.0.0".to_string(),
-            subject_type: "Person".to_string(),
+            subject_type: AUTHORED_CLAIM_SUBJECT_TYPE.to_string(),
             requester_ref: Some(registry_notary_core::EvidenceEntityRef {
                 entity_type: "Organisation".to_string(),
                 handle: format!("rnref:v1:hmac-sha256:{}", "1".repeat(64)),
@@ -1227,6 +1227,77 @@ outputs:
     }
 
     #[test]
+    fn governed_live_result_enforces_value_evidence_semantics() {
+        let request = governed_live_validated_request(&["programme-code"]);
+
+        for (value, satisfied) in [
+            (json!(true), Some(true)),
+            (json!(false), Some(false)),
+            (json!("SUPPORT"), None),
+            (json!(1), None),
+            (json!({ "status": "eligible" }), None),
+            (Value::Null, None),
+        ] {
+            let expected = json!({
+                "claims": {
+                    "programme-code": {
+                        "value": value.clone(),
+                        "satisfied": satisfied,
+                        "disclosure": "value",
+                    },
+                },
+            });
+            let response = json!({
+                "results": [governed_live_claim_result(
+                    "programme-code",
+                    value,
+                    satisfied,
+                    "value",
+                )],
+            });
+            assert_eq!(
+                validate_live_response(&response, &request, &expected)
+                    .expect("producer-consistent value evidence passes"),
+                request.claims
+            );
+        }
+
+        for (value, satisfied) in [
+            (json!(true), None),
+            (json!(true), Some(false)),
+            (json!(false), Some(true)),
+            (json!("SUPPORT"), Some(false)),
+            (json!(0), Some(false)),
+            (json!({ "status": "eligible" }), Some(true)),
+            (Value::Null, Some(false)),
+        ] {
+            let expected = json!({
+                "claims": {
+                    "programme-code": {
+                        "value": value.clone(),
+                        "satisfied": satisfied,
+                        "disclosure": "value",
+                    },
+                },
+            });
+            let response = json!({
+                "results": [governed_live_claim_result(
+                    "programme-code",
+                    value,
+                    satisfied,
+                    "value",
+                )],
+            });
+            assert!(
+                validate_live_response(&response, &request, &expected)
+                    .expect_err("producer-inconsistent copied value fixture must fail closed")
+                    .to_string()
+                    .contains("value evidence semantics")
+            );
+        }
+    }
+
+    #[test]
     fn governed_live_result_enforces_field_redaction_semantics() {
         let request = governed_live_validated_request(&["profile"]);
         let expected = json!({
@@ -1453,7 +1524,7 @@ outputs:
     }
 
     #[test]
-    fn governed_live_result_claim_version_matches_authored_request() {
+    fn governed_live_result_claim_identity_matches_authored_project() {
         let loaded = load_registry_project(&project_golden("openspp-exact"), Some("local"))
             .expect("OpenSPP golden project loads");
         let request = validate_live_request(
@@ -1501,6 +1572,17 @@ outputs:
                 .expect_err("result from a different claim version must fail closed")
                 .to_string()
                 .contains("does not match the authored project")
+        );
+
+        let mut wrong_subject_type = wrong_version;
+        wrong_subject_type["results"][0]["claim_version"] = json!("1");
+        wrong_subject_type["results"][0]["provenance"]["generated_by"]["claim_version"] = json!("1");
+        wrong_subject_type["results"][0]["subject_type"] = json!("organisation");
+        assert!(
+            validate_live_response(&wrong_subject_type, &request, &expected)
+                .expect_err("result for a different claim subject type must fail closed")
+                .to_string()
+                .contains("subject type does not match the authored project")
         );
     }
 

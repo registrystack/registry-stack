@@ -83,7 +83,15 @@ REQUIRED_RECOVERY_ITEMS = (
     "relay_key_lifecycle_reference",
 )
 SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
-VERSION = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")
+SEMVER_NUMBER = r"(?:0|[1-9][0-9]*)"
+SEMVER_PRERELEASE_IDENTIFIER = (
+    rf"(?:{SEMVER_NUMBER}|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
+)
+VERSION = re.compile(
+    rf"^v{SEMVER_NUMBER}\.{SEMVER_NUMBER}\.{SEMVER_NUMBER}"
+    rf"(?:-{SEMVER_PRERELEASE_IDENTIFIER}"
+    rf"(?:\.{SEMVER_PRERELEASE_IDENTIFIER})*)?$"
+)
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 TIMESTAMP = re.compile(
@@ -267,6 +275,9 @@ def validate_artifact_set(value: Any, record: dict[str, Any], *, template: bool)
 
 
 def validate_topology(value: Any, *, template: bool) -> None:
+    # The public record bounds and cross-checks topology coordinates without
+    # ingesting the private Solmara execution packet. Independent review owns
+    # the binding between these coordinates and retained execution evidence.
     topology = require_object(
         value,
         "topology",
@@ -460,63 +471,114 @@ def validate_target_binding(record: dict[str, Any], root: Path) -> None:
             raise ExerciseError(f"candidate_artifact_set.artifacts.{field} does not match exact Git object")
 
 
-def validate_image_lock_binding(
+def validate_release_asset_bindings(
     record: dict[str, Any],
     root: Path,
     candidate_asset_root: Path | None,
 ) -> None:
-    if candidate_asset_root is None:
-        raise ExerciseError(
-            "candidate evidence requires --candidate-asset-root for image-lock authentication"
-        )
-    target = record["target_release"]
-    candidate_asset_dir = candidate_asset_root.expanduser() / target["version"]
-    image_lock_path = (
-        candidate_asset_dir / f"registryctl-{target['version']}-image-lock.json"
+    source = record["source_release"]
+    source_manifest_path = release_manifest_for_version(root, source["version"])
+    load_authenticated_release(
+        source,
+        "source release",
+        source_manifest_path,
+        candidate_asset_root,
     )
-    manifest_path = root / record["target_release_manifest"]["path"]
-    try:
-        candidate = load_candidate(manifest_path, image_lock_path)
-    except (CandidateError, OSError):
-        raise ExerciseError(
-            "candidate release image lock could not be authenticated"
-        ) from None
+
+    target = record["target_release"]
+    candidate = load_authenticated_release(
+        target,
+        "target release",
+        root / record["target_release_manifest"]["path"],
+        candidate_asset_root,
+    )
     artifacts = record["candidate_artifact_set"]["artifacts"]
     expected = {
         "release_id": target["release_id"],
-        "version": target["version"].removeprefix("v"),
         "source_ref": target["source_ref"],
-        "source_tag": target["version"],
-        "tag_target": target["source_commit"],
         "image_lock_sha256": artifacts["image_lock"],
-        "relay_image": "ghcr.io/registrystack/registry-relay@sha256:"
-        + sha256_hex(target["relay_image_digest"]),
-        "notary_image": "ghcr.io/registrystack/registry-notary@sha256:"
-        + sha256_hex(target["notary_image_digest"]),
     }
     if sha256_hex(candidate["image_lock_sha256"]) != sha256_hex(
         expected["image_lock_sha256"]
     ):
         raise ExerciseError(
             "candidate_artifact_set.artifacts.image_lock does not match "
-            "the exact authenticated release image-lock asset"
+            "the exact authenticated target release image-lock asset"
         )
-    for field in (
-        "release_id",
-        "version",
-        "source_ref",
-        "source_tag",
-        "tag_target",
-        "relay_image",
-        "notary_image",
-    ):
+    for field in ("release_id", "source_ref"):
         if candidate[field] != expected[field]:
             raise ExerciseError(
-                "authenticated release image lock does not match target release coordinates"
+                "authenticated target release assets do not match target release coordinates"
             )
 
 
+def release_manifest_for_version(root: Path, version: str) -> Path:
+    matches: list[Path] = []
+    manifest_dir = root / "release" / "manifests"
+    for path in sorted(manifest_dir.glob("registry-stack-*.yaml")):
+        try:
+            manifest = yaml.safe_load(path.read_bytes())
+        except (OSError, yaml.YAMLError):
+            raise ExerciseError(
+                "release manifests could not be inspected safely"
+            ) from None
+        stack = manifest.get("stack") if isinstance(manifest, dict) else None
+        if (
+            isinstance(stack, dict)
+            and stack.get("source_tag") == version
+            and str(stack.get("version")) == version.removeprefix("v")
+        ):
+            matches.append(path)
+    if len(matches) != 1:
+        raise ExerciseError(
+            f"source release {version} must identify exactly one committed release manifest"
+        )
+    return matches[0]
+
+
+def load_authenticated_release(
+    release: dict[str, Any],
+    label: str,
+    manifest_path: Path,
+    candidate_asset_root: Path | None,
+) -> dict[str, Any]:
+    if candidate_asset_root is None:
+        raise ExerciseError(
+            "candidate evidence requires --candidate-asset-root for release authentication"
+        )
+    version = release["version"]
+    candidate_asset_dir = candidate_asset_root.expanduser() / version
+    image_lock_path = (
+        candidate_asset_dir / f"registryctl-{version}-image-lock.json"
+    )
+    try:
+        candidate = load_candidate(manifest_path, image_lock_path)
+    except (CandidateError, OSError):
+        raise ExerciseError(
+            f"{label} assets could not be authenticated"
+        ) from None
+    expected = {
+        "version": version.removeprefix("v"),
+        "source_tag": version,
+        "tag_target": release["source_commit"],
+        "relay_image": "ghcr.io/registrystack/registry-relay@sha256:"
+        + sha256_hex(release["relay_image_digest"]),
+        "notary_image": "ghcr.io/registrystack/registry-notary@sha256:"
+        + sha256_hex(release["notary_image_digest"]),
+    }
+    for field in expected:
+        if candidate[field] != expected[field]:
+            raise ExerciseError(
+                f"authenticated {label} assets do not match {label} coordinates"
+            )
+    return candidate
+
+
 def require_pass(record: dict[str, Any]) -> None:
+    # Private inventories and OCI layouts remain outside the public record.
+    # Promotion therefore requires explicit freeze and independent-review
+    # attestations, then enforces that every recorded result passed and that
+    # all redaction-safe P/T identities agree.
     if not record["candidate_frozen"] or not record["candidate_independently_verified"]:
         raise ExerciseError("--require-pass requires both candidate attestations")
     if any(result["outcome"] != "passed" for result in record["results"]):
@@ -612,7 +674,7 @@ def validate_record(
     validate_results(record["results"], template=template)
     if not template:
         validate_target_binding(record, root)
-        validate_image_lock_binding(record, root, candidate_asset_root)
+        validate_release_asset_bindings(record, root, candidate_asset_root)
     if require_all_passed:
         require_pass(record)
 
@@ -625,14 +687,21 @@ def main() -> int:
         action="store_true",
         help="validate a preparation template; templates never count as candidate evidence",
     )
-    parser.add_argument("--require-pass", action="store_true")
+    parser.add_argument(
+        "--require-pass",
+        action="store_true",
+        help=(
+            "require candidate attestations, passed checks, and matching P/T "
+            "identities; private evidence remains independently reviewed"
+        ),
+    )
     parser.add_argument("--discover", type=Path)
     parser.add_argument(
         "--candidate-asset-root",
         type=Path,
         help=(
             "root containing one downloaded and authenticated asset directory "
-            "per target version"
+            "per source and target version"
         ),
     )
     args = parser.parse_args()

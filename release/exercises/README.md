@@ -39,11 +39,12 @@ release are frozen and independently verified:
    `sha256` is the SHA-256 of canonical compact JSON for the `artifacts` object
    (`sort_keys=True`, separators `,` and `:`).
    Under a private candidate-asset root, keep one directory named for each
-   target version. Each version directory contains the downloaded
-   `registryctl-<target-version>-image-lock.json` beside its `SHA256SUMS`,
+   source and target version. Each version directory contains the downloaded
+   `registryctl-<version>-image-lock.json` beside its `SHA256SUMS`,
    signed release capsule, Cosign signatures and certificates, and shared SLSA
-   provenance. The validator authenticates each exact release asset and
-   requires its byte digest and image pins to match the corresponding record.
+   provenance. The validator authenticates both releases and requires their
+   signed tag targets and image pins to match the corresponding record. The
+   target image-lock byte digest must also match the canonical artifact set.
 6. Exercise every required check against the pinned standalone Solmara
    topology. Record `passed` only when the retained evidence proves the check.
    Honest `failed` and `not_run` records remain structurally valid; a `not_run`
@@ -62,6 +63,12 @@ release are frozen and independently verified:
      --candidate-asset-root /private/path/candidate-release-assets \
      release/exercises/<candidate-upgrade-record.json>
    ```
+
+The validator authenticates release coordinates and enforces equality among
+the redaction-safe P/T inventory and layout digests. The underlying private
+inventory, layout, Solmara execution, and result evidence remains subject to
+the candidate-freeze and independent-review attestations; it is not ingested
+from the public record.
 
 The validator accepts only a bounded schema. It records hashes and labels, not
 raw commands, logs, database URLs, credentials, tokens, subject identifiers,

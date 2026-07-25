@@ -832,6 +832,9 @@ fn validate_live_response(
         {
             bail!("governed Notary result claim version does not match the authored project");
         }
+        if result_view.subject_type != AUTHORED_CLAIM_SUBJECT_TYPE {
+            bail!("governed Notary result subject type does not match the authored project");
+        }
         let expected_result = expected[claim_id]
             .as_object()
             .ok_or_else(|| anyhow!("live expected claim result must be an object"))?;
@@ -1003,6 +1006,9 @@ fn validate_live_result_redaction(
         registry_notary_core::DisclosureProfile::Value => {
             if expected_redacted_fields.is_some() {
                 bail!("live expected redacted_fields apply only to a fully redacted claim result");
+            }
+            if result.satisfied != result.value.as_ref().and_then(Value::as_bool) {
+                bail!("governed Notary result has invalid value evidence semantics");
             }
             if result.redacted_fields.is_empty() {
                 return Ok(());

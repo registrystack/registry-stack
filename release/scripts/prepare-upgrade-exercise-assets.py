@@ -13,7 +13,15 @@ from typing import Callable
 
 
 STACK_REPOSITORY = "registrystack/registry-stack"
-VERSION = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$")
+SEMVER_NUMBER = r"(?:0|[1-9][0-9]*)"
+SEMVER_PRERELEASE_IDENTIFIER = (
+    rf"(?:{SEMVER_NUMBER}|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
+)
+VERSION = re.compile(
+    rf"^v{SEMVER_NUMBER}\.{SEMVER_NUMBER}\.{SEMVER_NUMBER}"
+    rf"(?:-{SEMVER_PRERELEASE_IDENTIFIER}"
+    rf"(?:\.{SEMVER_PRERELEASE_IDENTIFIER})*)?$"
+)
 
 
 class PreparationError(RuntimeError):
@@ -33,13 +41,14 @@ def candidate_versions(records: Path) -> tuple[str, ...]:
             continue
         if value.get("record_kind") != "candidate_evidence":
             raise PreparationError("upgrade exercise record kind is invalid")
-        target = value.get("target_release")
-        version = target.get("version") if isinstance(target, dict) else None
-        if not isinstance(version, str) or VERSION.fullmatch(version) is None:
-            raise PreparationError(
-                "candidate upgrade target version is invalid"
-            )
-        versions.add(version)
+        for label in ("source_release", "target_release"):
+            release = value.get(label)
+            version = release.get("version") if isinstance(release, dict) else None
+            if not isinstance(version, str) or VERSION.fullmatch(version) is None:
+                raise PreparationError(
+                    f"candidate upgrade {label.removesuffix('_release')} version is invalid"
+                )
+            versions.add(version)
     return tuple(sorted(versions))
 
 

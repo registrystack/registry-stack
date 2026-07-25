@@ -29,11 +29,19 @@ class PrepareUpgradeExerciseAssetsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
 
-    def write_record(self, directory: Path, name: str, version: str) -> None:
+    def write_record(
+        self,
+        directory: Path,
+        name: str,
+        version: str,
+        *,
+        source_version: str = "v0.11.0",
+    ) -> None:
         (directory / name).write_text(
             json.dumps(
                 {
                     "record_kind": "candidate_evidence",
+                    "source_release": {"version": source_version},
                     "target_release": {"version": version},
                 }
             ),
@@ -83,22 +91,26 @@ class PrepareUpgradeExerciseAssetsTest(unittest.TestCase):
                 records, root / "assets", downloader=download
             )
 
-            self.assertEqual(("v0.12.2",), versions)
+            self.assertEqual(("v0.11.0", "v0.12.2"), versions)
+            for version in versions:
+                self.assertEqual(
+                    set(self.module.required_asset_names(version)),
+                    {
+                        path.name
+                        for path in (root / "assets" / version).iterdir()
+                    },
+                )
             self.assertEqual(
-                set(self.module.required_asset_names("v0.12.2")),
-                {
-                    path.name
-                    for path in (root / "assets" / "v0.12.2").iterdir()
-                },
+                ["v0.11.0", "v0.12.2"],
+                [command[3] for command in commands],
             )
-            self.assertEqual("v0.12.2", commands[0][3])
 
     def test_multiple_versions_use_separate_authenticated_directories(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             records = root / "records"
             records.mkdir()
-            self.write_record(records, "candidate-a.json", "v0.11.0")
+            self.write_record(records, "candidate-a.json", "v0.12.1")
             self.write_record(records, "candidate-b.json", "v0.12.2")
             self.write_record(records, "candidate-c.json", "v0.12.2")
 
@@ -108,9 +120,32 @@ class PrepareUpgradeExerciseAssetsTest(unittest.TestCase):
                 downloader=self.download_fixture,
             )
 
-            self.assertEqual(("v0.11.0", "v0.12.2"), versions)
+            self.assertEqual(("v0.11.0", "v0.12.1", "v0.12.2"), versions)
             self.assertTrue((root / "assets" / "v0.11.0").is_dir())
+            self.assertTrue((root / "assets" / "v0.12.1").is_dir())
             self.assertTrue((root / "assets" / "v0.12.2").is_dir())
+
+    def test_invalid_source_version_is_rejected_before_download(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            records = root / "records"
+            records.mkdir()
+            self.write_record(
+                records,
+                "candidate.json",
+                "v0.12.2",
+                source_version="v0.11.0-rc..1",
+            )
+            downloader = unittest.mock.Mock()
+            with self.assertRaisesRegex(
+                self.module.PreparationError, "source version is invalid"
+            ):
+                self.module.prepare_assets(
+                    records,
+                    root / "assets",
+                    downloader=downloader,
+                )
+            downloader.assert_not_called()
 
     def test_missing_release_asset_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
