@@ -1,6 +1,23 @@
 {
-  "version": 1,
+  "version": 2,
   "service": "registry-relay",
+  "field_semantics": {
+    "reviewed_findings[].tool": "enforced",
+    "reviewed_findings[].fingerprint": "enforced",
+    "reviewed_findings[].rule_id": "enforced",
+    "reviewed_findings[].severity": "enforced",
+    "reviewed_findings[].status": "enforced",
+    "reviewed_findings[].component_layer_id": "enforced",
+    "reviewed_findings[].runtime_base": "enforced",
+    "reviewed_findings[].exposure_assertion": "enforced",
+    "reviewed_findings[].reviewed_at": "enforced",
+    "reviewed_findings[].expires_at": "enforced",
+    "reviewed_findings[].owner": "recorded",
+    "reviewed_findings[].reason": "recorded",
+    "reviewed_findings[].evidence_image_digest": "recorded",
+    "reviewed_findings[].evidence_revision": "recorded",
+    "reviewed_findings[].rereview_triggers": "recorded"
+  },
   "policies": [
     {
       "tool": "zizmor",
@@ -21,11 +38,93 @@
       "rule_id": "CVE-2026-5450",
       "severity": "Critical",
       "status": "accepted_risk",
+      "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
+      "runtime_base": {
+        "image": "gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775",
+        "layer_ids": [
+          "sha256:50abe06dfc0957e14cb8332ed242e8b884ef2563a9eb202e5172f243f62792f7",
+          "sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda",
+          "sha256:c8b007d0206e4b10ed4d3b3d99dfeab47c2648e82011989fd78a5731baf33fc3",
+          "sha256:bec7e6bb35e05d1284f28b10d2150c259717d91c658c4c10c08424bb9466caba",
+          "sha256:275a30dd8ce958b21daa9ad962c6fbc09f98306ee2f486b65c9075dc257b1412",
+          "sha256:4d049f83d9cf21d1f5cc0e11deaf36df02790d0e60c1a3829538fb4b61685368",
+          "sha256:af5aa97ebe6ce1604747ec1e21af7136ded391bcabe4acef882e718a87c86bcc",
+          "sha256:6f1cdceb6a3146f0ccb986521156bef8a422cdbb0863396f7f751f575ba308f4",
+          "sha256:bd3cdfae1d3fdd83a2231d608969b38b82349777c2fff9a7c12d54f8ac5c9b38",
+          "sha256:4cde6b0bb6f50a5f255eef7b2a42162c661cf776b803225dcac9a659e396bb6b",
+          "sha256:ad51d0769d16ba578106a177987dfe3d2e02c1668c852b795b2f6b024068242a",
+          "sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139",
+          "sha256:5fd2536c39c0700be8b7b4344e375196da2f126842fd8ede66996a18860a3890",
+          "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
+          "sha256:80bb2aedf42cbf9911cb9073be23406c0e7f799f8083bf13a1cd2d460a25e383",
+          "sha256:c0e409312adc366898967307565f692bb33d43a439d3de48e27d14b742389725",
+          "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
+          "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
+          "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
+          "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
+          "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
+        ]
+      },
+      "exposure_assertion": {
+        "kind": "file_digest_equals",
+        "definition_digest": "sha256:c65101d30fd0b40da130574a4bd0d4048dc973510bacce6bcd95dab5b5209a49",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:438c546d8e8cc48496bf3a95f753051afd9db66a629a74e31a9ded71586b56e0"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "sha256": "sha256:cb0b7ad91caee5f3b1448198b1a60b4d202baf916e779e9dbab7f232155991eb"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "sha256": "sha256:30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libssl.so.3",
+            "sha256": "sha256:caac96cbdee92283c7ab4a25611503cb63f161dcc7e6569be76158b63830e398"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
+            "sha256": "sha256:85590dd58edf5445e18bc7193e5ebc01ac5841f1ae187e97705a662e90c6421e"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",
+            "sha256": "sha256:27f07c9a49c2c956bcfb64cd4712976586a66facbf15fc7f09bc37413b5f2b21"
+          },
+          {
+            "path": "/usr/local/bin/registry-relay",
+            "sha256": "sha256:e60c2764cdc7bcf86bffe71d6c73982a1323c34399b78d8c9644e96bf8df020d"
+          },
+          {
+            "path": "/usr/local/bin/registry-relay-rhai-worker",
+            "sha256": "sha256:8e654bfd2b11d491353cb2291a8357d76b02e1ebed89c65eb9a0454d0047e1f1"
+          }
+        ]
+      },
       "evidence_image_digest": "sha256:3877afea8e71c4080adef845def5e43e950d54e8ca2f1d69d7f14997dd25207b",
-      "reviewed_rootfs_digest": "sha256:1134de7c597865c38d549848695b903d06be3ed50a5275e7cef57ebb614d17d5",
       "evidence_revision": "d45761a0104bd3d9c2e4b4db391d4223f289bd44",
+      "rereview_triggers": [
+        "component_layer_changed",
+        "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
+        "fix_available",
+        "runtime_base_changed",
+        "severity_changed"
+      ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The exact v0.13.0 service's two direct AWS-LC sscanf call sites use fixed %lu and %lx formats, and neither the service nor its linked libcrypto contains the vulnerable %mc conversion. Re-review on a Trixie fix, a changed fingerprint, or any new scanf format or call path.",
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed service and linked libcrypto have only fixed-format %lu and %lx AWS-LC sscanf call sites and no effective vulnerable %mc conversion. Every file in both candidate executable closures is digest-enforced because dynamic-symbol absence cannot truthfully express a format-string invariant.",
       "reviewed_at": "2026-07-25",
       "expires_at": "2026-08-25"
     },
@@ -35,11 +134,97 @@
       "rule_id": "CVE-2026-5928",
       "severity": "High",
       "status": "accepted_risk",
+      "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
+      "runtime_base": {
+        "image": "gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775",
+        "layer_ids": [
+          "sha256:50abe06dfc0957e14cb8332ed242e8b884ef2563a9eb202e5172f243f62792f7",
+          "sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda",
+          "sha256:c8b007d0206e4b10ed4d3b3d99dfeab47c2648e82011989fd78a5731baf33fc3",
+          "sha256:bec7e6bb35e05d1284f28b10d2150c259717d91c658c4c10c08424bb9466caba",
+          "sha256:275a30dd8ce958b21daa9ad962c6fbc09f98306ee2f486b65c9075dc257b1412",
+          "sha256:4d049f83d9cf21d1f5cc0e11deaf36df02790d0e60c1a3829538fb4b61685368",
+          "sha256:af5aa97ebe6ce1604747ec1e21af7136ded391bcabe4acef882e718a87c86bcc",
+          "sha256:6f1cdceb6a3146f0ccb986521156bef8a422cdbb0863396f7f751f575ba308f4",
+          "sha256:bd3cdfae1d3fdd83a2231d608969b38b82349777c2fff9a7c12d54f8ac5c9b38",
+          "sha256:4cde6b0bb6f50a5f255eef7b2a42162c661cf776b803225dcac9a659e396bb6b",
+          "sha256:ad51d0769d16ba578106a177987dfe3d2e02c1668c852b795b2f6b024068242a",
+          "sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139",
+          "sha256:5fd2536c39c0700be8b7b4344e375196da2f126842fd8ede66996a18860a3890",
+          "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
+          "sha256:80bb2aedf42cbf9911cb9073be23406c0e7f799f8083bf13a1cd2d460a25e383",
+          "sha256:c0e409312adc366898967307565f692bb33d43a439d3de48e27d14b742389725",
+          "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
+          "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
+          "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
+          "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
+          "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
+        ]
+      },
+      "exposure_assertion": {
+        "kind": "file_digest_equals",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:438c546d8e8cc48496bf3a95f753051afd9db66a629a74e31a9ded71586b56e0"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "sha256": "sha256:cb0b7ad91caee5f3b1448198b1a60b4d202baf916e779e9dbab7f232155991eb"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "sha256": "sha256:30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libssl.so.3",
+            "sha256": "sha256:caac96cbdee92283c7ab4a25611503cb63f161dcc7e6569be76158b63830e398"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33",
+            "sha256": "sha256:972bb2a18b71140dab0240f8a1f68ab3fb1d56bcd4c4f824a91b70888faf5a00"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
+            "sha256": "sha256:85590dd58edf5445e18bc7193e5ebc01ac5841f1ae187e97705a662e90c6421e"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",
+            "sha256": "sha256:27f07c9a49c2c956bcfb64cd4712976586a66facbf15fc7f09bc37413b5f2b21"
+          },
+          {
+            "path": "/usr/local/bin/registry-relay",
+            "sha256": "sha256:e60c2764cdc7bcf86bffe71d6c73982a1323c34399b78d8c9644e96bf8df020d"
+          },
+          {
+            "path": "/usr/local/bin/registry-relay-rhai-worker",
+            "sha256": "sha256:8e654bfd2b11d491353cb2291a8357d76b02e1ebed89c65eb9a0454d0047e1f1"
+          }
+        ],
+        "definition_digest": "sha256:3cd0fc02f56bc0d86771870f52e13b8845fe391b02c595c6e37d2bd974175b35"
+      },
       "evidence_image_digest": "sha256:3877afea8e71c4080adef845def5e43e950d54e8ca2f1d69d7f14997dd25207b",
-      "reviewed_rootfs_digest": "sha256:1134de7c597865c38d549848695b903d06be3ed50a5275e7cef57ebb614d17d5",
       "evidence_revision": "d45761a0104bd3d9c2e4b4db391d4223f289bd44",
+      "rereview_triggers": [
+        "component_layer_changed",
+        "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
+        "fix_available",
+        "runtime_base_changed",
+        "severity_changed"
+      ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The exact v0.13.0 service and Rhai worker do not import ungetwc; libstdc++ is outside both executable dependency closures. Re-review on a Trixie fix or any new C++ or wide-character input path.",
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. Every file in both candidate executable closures plus the out-of-closure libstdc++ object that imports ungetwc is digest-enforced. A static dynamic-symbol assertion is incomplete because the executables import dlsym.",
       "reviewed_at": "2026-07-25",
       "expires_at": "2026-08-25"
     },
@@ -49,11 +234,97 @@
       "rule_id": "CVE-2026-5435",
       "severity": "High",
       "status": "accepted_risk",
+      "component_layer_id": "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
+      "runtime_base": {
+        "image": "gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775",
+        "layer_ids": [
+          "sha256:50abe06dfc0957e14cb8332ed242e8b884ef2563a9eb202e5172f243f62792f7",
+          "sha256:621c35e751a51a9a9dc3e80aa0b7fe8be2a93402ea6ccd307d30852cd7776cda",
+          "sha256:c8b007d0206e4b10ed4d3b3d99dfeab47c2648e82011989fd78a5731baf33fc3",
+          "sha256:bec7e6bb35e05d1284f28b10d2150c259717d91c658c4c10c08424bb9466caba",
+          "sha256:275a30dd8ce958b21daa9ad962c6fbc09f98306ee2f486b65c9075dc257b1412",
+          "sha256:4d049f83d9cf21d1f5cc0e11deaf36df02790d0e60c1a3829538fb4b61685368",
+          "sha256:af5aa97ebe6ce1604747ec1e21af7136ded391bcabe4acef882e718a87c86bcc",
+          "sha256:6f1cdceb6a3146f0ccb986521156bef8a422cdbb0863396f7f751f575ba308f4",
+          "sha256:bd3cdfae1d3fdd83a2231d608969b38b82349777c2fff9a7c12d54f8ac5c9b38",
+          "sha256:4cde6b0bb6f50a5f255eef7b2a42162c661cf776b803225dcac9a659e396bb6b",
+          "sha256:ad51d0769d16ba578106a177987dfe3d2e02c1668c852b795b2f6b024068242a",
+          "sha256:187cfc6d1e3e8a40a5e64653bcd3239c140807dcf1c09e48021178705a5a6139",
+          "sha256:5fd2536c39c0700be8b7b4344e375196da2f126842fd8ede66996a18860a3890",
+          "sha256:3a7299f559d987305122c7669fc3643095eb0955f8ff4a38c9430d54d0b4452e",
+          "sha256:80bb2aedf42cbf9911cb9073be23406c0e7f799f8083bf13a1cd2d460a25e383",
+          "sha256:c0e409312adc366898967307565f692bb33d43a439d3de48e27d14b742389725",
+          "sha256:e4ba966d7f0527dfe0fcb559e4e18d4da42c4e6beae924719255e0dedb554ed0",
+          "sha256:1f5d28bd51650f429293f7730ede274b81dc0744aa918bc887133c4ad610258c",
+          "sha256:6e18ad80f3d64a8cbbcd1ff2e8a0d5ce7282cf664e816b86183a59d30a618e8a",
+          "sha256:c16b2ec4b1493bad1b1de23d659c899e60abb166bda756d02792f0a03ba54a43",
+          "sha256:7db505d90756626f425c6c5468eca565c82f589b144ecaa4f411ad9bbf79e614"
+        ]
+      },
+      "exposure_assertion": {
+        "kind": "file_digest_equals",
+        "files": [
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "sha256:438c546d8e8cc48496bf3a95f753051afd9db66a629a74e31a9ded71586b56e0"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "sha256": "sha256:fa430b8f298f817a266046af84a77533185ad6fc4406c7d3787b5a0a0c207826"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "sha256": "sha256:cb0b7ad91caee5f3b1448198b1a60b4d202baf916e779e9dbab7f232155991eb"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "sha256": "sha256:30c61ab012a4241bed033725a09b61f5fdd3bb7df95ee852d0b096520524c7af"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+            "sha256": "sha256:6d567d53e895273ca14a1f9dc164fc6c8d39aed2f60aa46a733c2784228915f3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libresolv.so.2",
+            "sha256": "sha256:d41dd4adacf5a35df426461dd8a92d7bdd5ba29bb61a1c3531bec0ada386f8dd"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libssl.so.3",
+            "sha256": "sha256:caac96cbdee92283c7ab4a25611503cb63f161dcc7e6569be76158b63830e398"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
+            "sha256": "sha256:85590dd58edf5445e18bc7193e5ebc01ac5841f1ae187e97705a662e90c6421e"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",
+            "sha256": "sha256:27f07c9a49c2c956bcfb64cd4712976586a66facbf15fc7f09bc37413b5f2b21"
+          },
+          {
+            "path": "/usr/local/bin/registry-relay",
+            "sha256": "sha256:e60c2764cdc7bcf86bffe71d6c73982a1323c34399b78d8c9644e96bf8df020d"
+          },
+          {
+            "path": "/usr/local/bin/registry-relay-rhai-worker",
+            "sha256": "sha256:8e654bfd2b11d491353cb2291a8357d76b02e1ebed89c65eb9a0454d0047e1f1"
+          }
+        ],
+        "definition_digest": "sha256:fadb407d67ba77abf1c981f3eaf08c875defe09f23c2e7d526c5cdab7322af82"
+      },
       "evidence_image_digest": "sha256:3877afea8e71c4080adef845def5e43e950d54e8ca2f1d69d7f14997dd25207b",
-      "reviewed_rootfs_digest": "sha256:1134de7c597865c38d549848695b903d06be3ed50a5275e7cef57ebb614d17d5",
       "evidence_revision": "d45761a0104bd3d9c2e4b4db391d4223f289bd44",
+      "rereview_triggers": [
+        "component_layer_changed",
+        "expired",
+        "exposure_assertion_changed",
+        "exposure_assertion_false",
+        "exposure_assertion_unevaluable",
+        "fix_available",
+        "runtime_base_changed",
+        "severity_changed"
+      ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed upstream or Trixie version. The exact v0.13.0 service and Rhai worker do not import the affected deprecated ns_printrrf, ns_printrr, or fp_nquery functions. Re-review on a fix or any new DNS TSIG debugging or printing path.",
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed upstream or Trixie version. Every file in both candidate executable closures plus libresolv is digest-enforced after review found no path to ns_printrrf, ns_printrr, or fp_nquery. A static dynamic-symbol assertion is incomplete because the executables import dlsym.",
       "reviewed_at": "2026-07-25",
       "expires_at": "2026-08-25"
     }
