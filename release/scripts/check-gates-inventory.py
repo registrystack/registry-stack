@@ -410,6 +410,7 @@ REQUIRED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] = 
             "name: Generate release file SBOMs and release capsule",
             "name: Sign promoted release evidence",
             "name: Create immutable GitHub Release",
+            "--verify-tag",
         ),
     ),
     (

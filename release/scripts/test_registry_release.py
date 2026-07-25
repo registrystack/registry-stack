@@ -752,7 +752,25 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotIn("gh release upload", step)
         self.assertNotIn("--clobber", step)
         self.assertIn('gh release create "${{ needs.verify.outputs.tag }}"', step)
+        self.assertIn("--verify-tag", step)
         self.assertIn("GitHub Release is no longer absent", step)
+
+    def test_candidate_receipt_checks_its_in_progress_run_identity(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        receipt_step = workflow[
+            workflow.index(
+                "      - name: Create closed candidate receipt"
+            ) : workflow.index(
+                "      - name: Create compact candidate telemetry evidence"
+            )
+        ]
+
+        self.assertIn('/actions/runs/${GITHUB_RUN_ID}"', receipt_step)
+        self.assertIn('.status == "in_progress"', receipt_step)
+        self.assertIn(".conclusion == null", receipt_step)
+        self.assertNotIn('.conclusion == "success"', receipt_step)
 
     def test_candidate_promotion_has_closed_no_rebuild_publish_gates(self) -> None:
         path = ROOT / ".github/workflows/release.yml"
