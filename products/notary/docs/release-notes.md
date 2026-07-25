@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.13.0
+
+- BREAKING: The closed Relay-result decoder rejects the retired
+  `provenance.consent` member and accepts only the reduced
+  `registry.relay.consultation-result.v1` contract. Registry-backed issuance
+  still requires compiler-pinned Relay evidence. Consent verification, policy
+  enforcement, legal-basis handling, and authorization are unchanged.
+- BREAKING: Deployment waivers replace `reason` with a required validated
+  `reference` and optional validated `summary`. Strict configuration parsing
+  rejects the retired field. Startup and readiness gates that were
+  non-waivable remain non-waivable.
+
 ## 0.12.2
 
 - Registry Notary has no new product features relative to v0.12.1. This

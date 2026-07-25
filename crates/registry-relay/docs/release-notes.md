@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.13.0
+
+- BREAKING: Relay consultation results remove the inert
+  `provenance.consent` member. Existing pre-release PostgreSQL terminal
+  constraints are incompatible, so operators must drain retained terminal
+  replays and re-bootstrap the consultation state plane before upgrading.
+  Consent verification, policy enforcement, legal-basis handling, evidence
+  commitments, scopes, and trust headers are unchanged.
+- BREAKING: Deployment waivers replace `reason` with a required validated
+  `reference` and optional validated `summary`. Strict configuration parsing
+  rejects the retired field. Expiry and non-waivable startup and readiness
+  behavior are unchanged.
+
 ## 0.12.2
 
 - Relay has no new product features relative to v0.12.1. This release fixes

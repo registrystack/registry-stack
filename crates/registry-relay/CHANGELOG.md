@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.13.0 - 2026-07-25
+
 - BREAKING: Remove the inert six-field `provenance.consent` member from the
   pre-1.0 `registry.relay.consultation-result.v1` response and its closed
   batch-terminal replay representation. The PostgreSQL terminal constraint is
