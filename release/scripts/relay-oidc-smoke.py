@@ -631,6 +631,12 @@ def candidate_from_args(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def execute_live(args: argparse.Namespace) -> Path:
+    if args.topology == "solmara":
+        raise SmokeError(
+            "Solmara live candidate evidence is unsupported until this runner "
+            "consumes and hashes the pinned Solmara checkout; use plan only for "
+            "non-evidence preparation"
+        )
     assets = validate_assets()
     candidate = candidate_from_args(args)
     relay_image = candidate["relay_image"]

@@ -180,6 +180,25 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             record, allow_template=False, require_all_passed=True
         )
 
+    def test_promotion_digest_prefixes_are_equivalent_for_all_pt_sets(self) -> None:
+        record = self.candidate()
+        artifacts = record["candidate_artifact_set"]["artifacts"]
+        for field in (
+            "p1_binaries",
+            "t2_image_inputs",
+            "p_notary_layouts",
+            "p_relay_layouts",
+            "p_release_inputs",
+        ):
+            artifacts[field] = artifacts[field].removeprefix("sha256:")
+        record["candidate_artifact_set"]["sha256"] = self.module.canonical_sha256(
+            artifacts
+        )
+
+        self.validate_record(
+            record, allow_template=False, require_all_passed=True
+        )
+
     def test_candidate_tag_must_resolve_to_exact_target_commit(self) -> None:
         record = self.candidate()
         tag_ref = f"refs/tags/{record['target_release']['version']}^{{commit}}"
@@ -214,6 +233,38 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record["source_release"]["version"] = record["target_release"]["version"]
         with self.assertRaisesRegex(self.module.ExerciseError, "must be newer"):
             self.validate_record(record, allow_template=False)
+
+    def test_prerelease_version_order_uses_semver_precedence(self) -> None:
+        for lower, higher in (
+            ("v1.0.0-rc.1", "v1.0.0-rc.2"),
+            ("v1.0.0-1", "v1.0.0-2"),
+            ("v1.0.0-2", "v1.0.0-10"),
+            ("v1.0.0-alpha", "v1.0.0-beta"),
+            ("v1.0.0-1", "v1.0.0-alpha"),
+            ("v1.0.0-rc.2", "v1.0.0"),
+        ):
+            with self.subTest(lower=lower, higher=higher):
+                self.assertLess(
+                    self.module.version_order(lower),
+                    self.module.version_order(higher),
+                )
+
+    def test_invalid_versions_are_rejected_by_existing_grammar(self) -> None:
+        release = {
+            "source_commit": "a" * 40,
+            "relay_image_digest": "sha256:" + "b" * 64,
+            "notary_image_digest": "sha256:" + "b" * 64,
+        }
+        for version in ("1.0.0", "v1.0", "v1.0.0+build", "v1.0.x"):
+            with self.subTest(version=version):
+                with self.assertRaisesRegex(
+                    self.module.ExerciseError, "invalid or unsafe"
+                ):
+                    self.module.validate_release(
+                        {**release, "version": version},
+                        "source_release",
+                        template=False,
+                    )
 
     def test_candidate_release_identifiers_are_strict(self) -> None:
         for field, value in (

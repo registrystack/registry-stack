@@ -241,7 +241,12 @@ class RelayOidcSmokeTest(TestCase):
         self.assertNotIn("ghcr.io/registrystack/registry-relay@sha256:", compose)
 
     def test_plan_declares_authenticity_network_and_no_live_evidence(self) -> None:
-        candidate = {"release_id": "beta-17", "source_ref": "a" * 40}
+        candidate = {
+            "release_id": "beta-17",
+            "source_ref": "a" * 40,
+            "topology": "solmara",
+            "solmara_source_ref": "b" * 40,
+        }
         plan = self.runner.plan_document(candidate)
 
         self.assertTrue(plan["plan_network_required"])
@@ -251,6 +256,49 @@ class RelayOidcSmokeTest(TestCase):
         self.assertEqual(list(self.runner.REQUIRED_CHECKS), plan["checks"])
         self.assertEqual("candidate-neutral-harness-plan", plan["classification"])
         self.assertEqual(candidate, plan["candidate"])
+
+    def test_solmara_live_run_cannot_emit_evidence_from_metadata(self) -> None:
+        args = Namespace(
+            topology="solmara",
+            solmara_source_ref="b" * 40,
+            output_dir=None,
+        )
+        with (
+            patch.object(self.runner, "validate_assets") as validate_assets,
+            patch.object(self.runner, "candidate_from_args") as load_candidate,
+            patch.object(self.runner, "safe_report") as write_report,
+        ):
+            with self.assertRaisesRegex(
+                self.runner.SmokeError,
+                "unsupported until this runner consumes and hashes",
+            ):
+                self.runner.execute_live(args)
+
+        validate_assets.assert_not_called()
+        load_candidate.assert_not_called()
+        write_report.assert_not_called()
+
+    def test_release_owned_live_run_reaches_existing_candidate_path(self) -> None:
+        args = Namespace(topology="release-owned", output_dir=None)
+        candidate = {
+            "relay_image": ("ghcr.io/registrystack/registry-relay@sha256:" + "d" * 64)
+        }
+        with (
+            patch.object(
+                self.runner, "validate_assets", return_value={}
+            ) as validate_assets,
+            patch.object(
+                self.runner, "candidate_from_args", return_value=candidate
+            ) as load_candidate,
+            patch.object(self.runner.shutil, "which", return_value=None),
+        ):
+            with self.assertRaisesRegex(
+                self.runner.SmokeError, "Docker with Compose is required"
+            ):
+                self.runner.execute_live(args)
+
+        validate_assets.assert_called_once_with()
+        load_candidate.assert_called_once_with(args)
 
     def test_candidate_binding_rejects_manifest_lock_and_image_mismatches(self) -> None:
         candidate_module = sys.modules["conformance_candidate"]

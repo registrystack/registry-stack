@@ -995,6 +995,10 @@ fn validate_live_result_redaction(
             if !result.redacted_fields.is_empty() || expected_redacted_fields.is_some() {
                 bail!("governed Notary result exposes a predicate over redacted fields");
             }
+            let predicate_value = result.value.as_ref().and_then(Value::as_bool);
+            if predicate_value.is_none() || predicate_value != result.satisfied {
+                bail!("governed Notary result has invalid predicate evidence semantics");
+            }
         }
         registry_notary_core::DisclosureProfile::Value => {
             if expected_redacted_fields.is_some() {

@@ -1323,6 +1323,50 @@ outputs:
     }
 
     #[test]
+    fn governed_live_result_enforces_predicate_evidence_semantics() {
+        let (request, expected, response) = governed_live_eligible_fixture();
+        assert_eq!(
+            validate_live_response(&response, &request, &expected)
+                .expect("matching boolean predicate evidence passes"),
+            request.claims
+        );
+
+        for invalid_value in [json!({ "status": true }), json!("IND-AB12CD34")] {
+            let mut invalid = response.clone();
+            set_governed_live_result_pointer(&mut invalid, "/value", invalid_value);
+            let error = validate_live_response(&invalid, &request, &expected)
+                .expect_err("non-boolean predicate value must fail closed")
+                .to_string();
+            assert!(error.contains("predicate evidence semantics"));
+            assert!(!error.contains("IND-AB12CD34"));
+        }
+
+        let mut non_boolean_satisfied = response.clone();
+        set_governed_live_result_pointer(
+            &mut non_boolean_satisfied,
+            "/satisfied",
+            json!("IND-AB12CD34"),
+        );
+        let error = validate_live_response(&non_boolean_satisfied, &request, &expected)
+            .expect_err("non-boolean predicate satisfaction must fail closed")
+            .to_string();
+        assert!(error.contains("closed public claim-result schema"));
+        assert!(!error.contains("IND-AB12CD34"));
+
+        for (value, satisfied) in [(true, false), (false, true)] {
+            let mut mismatched = response.clone();
+            set_governed_live_result_pointer(&mut mismatched, "/value", json!(value));
+            set_governed_live_result_pointer(&mut mismatched, "/satisfied", json!(satisfied));
+            assert!(
+                validate_live_response(&mismatched, &request, &expected)
+                    .expect_err("mismatched predicate booleans must fail closed")
+                    .to_string()
+                    .contains("predicate evidence semantics")
+            );
+        }
+    }
+
+    #[test]
     fn governed_live_response_requires_one_evaluation_id() {
         let request = governed_live_validated_request(&["eligible", "active"]);
         let expected = json!({

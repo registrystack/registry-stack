@@ -192,9 +192,20 @@ def validate_release(value: Any, label: str, *, template: bool) -> None:
     )
 
 
-def version_order(value: str) -> tuple[tuple[int, int, int], bool]:
-    core, separator, _prerelease = value.removeprefix("v").partition("-")
-    return tuple(int(part) for part in core.split(".")), not bool(separator)
+def version_order(
+    value: str,
+) -> tuple[tuple[int, int, int], tuple[tuple[int, int | str], ...]]:
+    core, separator, prerelease = value.removeprefix("v").partition("-")
+    core_order = tuple(int(part) for part in core.split("."))
+    if not separator:
+        return core_order, ((2, 0),)
+    identifiers: list[tuple[int, int | str]] = []
+    for identifier in prerelease.split("."):
+        if identifier.isdigit():
+            identifiers.append((0, int(identifier)))
+        else:
+            identifiers.append((1, identifier))
+    return core_order, tuple(identifiers)
 
 
 def validate_config_schemas(
@@ -512,12 +523,23 @@ def require_pass(record: dict[str, Any]) -> None:
         raise ExerciseError("--require-pass requires every check to pass")
     artifacts = record["candidate_artifact_set"]["artifacts"]
     for kind in ("binaries", "image_inputs"):
-        if len({artifacts[f"{phase}{run}_{kind}"] for phase in ("p", "t") for run in (1, 2)}) != 1:
+        if (
+            len({
+                sha256_hex(artifacts[f"{phase}{run}_{kind}"])
+                for phase in ("p", "t")
+                for run in (1, 2)
+            })
+            != 1
+        ):
             raise ExerciseError(f"--require-pass rejects P/T {kind} drift")
     for product in ("notary", "relay"):
-        if artifacts[f"p_{product}_layouts"] != artifacts[f"t_{product}_layouts"]:
+        if sha256_hex(artifacts[f"p_{product}_layouts"]) != sha256_hex(
+            artifacts[f"t_{product}_layouts"]
+        ):
             raise ExerciseError(f"--require-pass rejects P/T {product} OCI layout drift")
-    if artifacts["p_release_inputs"] != artifacts["t_release_inputs"]:
+    if sha256_hex(artifacts["p_release_inputs"]) != sha256_hex(
+        artifacts["t_release_inputs"]
+    ):
         raise ExerciseError("--require-pass rejects P/T release-input drift")
 
 
