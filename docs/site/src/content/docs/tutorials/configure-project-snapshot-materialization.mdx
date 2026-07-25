@@ -64,11 +64,11 @@ primary_key: person_id
 schema:
   type: object
   additionalProperties: false
-  required: [person_id, registration_status, eligible]
+  required: [person_id, registration_status, residency_confirmed]
   properties:
     person_id: { type: string, maxLength: 64 }
     registration_status: { type: [string, "null"], maxLength: 32 }
-    eligible: { type: [boolean, "null"] }
+    residency_confirmed: { type: [boolean, "null"] }
 materialization:
   max_records: 1000000
   max_bytes: 256MiB
@@ -100,7 +100,7 @@ services:
         metadata: people:metadata
         rows: people:rows
       purposes: [case-management]
-      projection: [person_id, registration_status, eligible]
+      projection: [person_id, registration_status, residency_confirmed]
       pagination: { default_limit: 50, max_limit: 100 }
       filters:
         person_id: [eq]
@@ -133,7 +133,7 @@ capability:
     exact:
       person_id: { input: person_id }
     freshness: 24h
-outputs: [registration_status, eligible]
+outputs: [registration_status, residency_confirmed]
 ```
 
 The `snapshot` capability applies the complete exact selector to one immutable published handle and probes at
@@ -144,6 +144,16 @@ Add an evidence service and consultation in `registry-stack.yaml`, mapping `pers
 declared request identifier. This Notary-owned service defines its service policy, claims,
 disclosure, and optional credential profiles. Claims can select only the integration's closed
 outputs through their authored `output` field.
+Name those claims for reusable evidence, such as `population-registration-status` and
+`residency-confirmed`, rather than for a consumer decision such as `benefits-eligible`. The
+evidence consumer determines how the evidence is used, and the decision owner retains
+accountability for eligibility and action rules.
+
+Preserve the distinction between an explicit `false`, a matched `null`, `no_match`, `ambiguous`,
+and an unavailable or stale materialization. Missing evidence is not a negative fact, so a claim
+must not turn those non-values or failures into `false`. An explicitly named record-exists claim
+can map `matched == false` to `false`; the residency evidence remains `null`, and ambiguity or
+source failure remains unavailable.
 
 ## Bind the physical source once
 
@@ -159,7 +169,7 @@ entities:
     columns:
       person_id: subject_key
       registration_status: status_code
-      eligible: benefit_eligible
+      residency_confirmed: residency_flag
     source_revision: population-export-v1
     generation: 2026-07-12
 ```

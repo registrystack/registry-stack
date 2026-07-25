@@ -358,6 +358,13 @@
           "provenance": {
             "$ref": "#/components/schemas/ClaimProvenance"
           },
+          "redacted_fields": {
+            "description": "Claim or top-level field names redacted from the public result. Omitted when no redaction was applied.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "requester_ref": {
             "$ref": "#/components/schemas/EvidenceEntityRef"
           },

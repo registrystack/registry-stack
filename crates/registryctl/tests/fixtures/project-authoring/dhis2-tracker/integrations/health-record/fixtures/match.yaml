@@ -1,4 +1,4 @@
-name: complete-health-match
+name: complete-child-health-evidence
 classification: synthetic
 input: { tracked_entity: A0000000001, include_inactive: true }
 variables: { as_of_date: 2026-01-01 }
@@ -21,7 +21,11 @@ interactions:
         enrollments:
           - program: DEMO_CHILD_PROGRAM_UID
             status: ACTIVE
-            events: [{ programStage: DEMO_CHILD_VISIT_STAGE_UID, status: COMPLETED }]
+            events:
+              - { programStage: DEMO_CHILD_VISIT_STAGE_UID, status: COMPLETED }
+              - { programStage: DEMO_BCG_BIRTH_STAGE_UID, status: COMPLETED }
+              - { programStage: DEMO_OPV_BIRTH_STAGE_UID, status: COMPLETED }
+              - { programStage: DEMO_MEASLES_STAGE_UID, status: COMPLETED }
           - { program: DEMO_MATERNAL_PROGRAM_UID, status: ACTIVE, events: [] }
           - { program: DEMO_TB_PROGRAM_UID, status: CANCELLED, events: [] }
         ignored_upstream_field: safe-extra-field
@@ -37,6 +41,9 @@ expect:
     maternal_postnatal_active: true
     child_health_visit_recorded: true
     tb_program_active: false
+    bcg_birth_dose_recorded: true
+    opv_birth_dose_recorded: true
+    measles_dose_recorded: true
   claims:
     tracked-entity-first-name: Nia
     tracked-entity-last-name: Example
@@ -47,3 +54,6 @@ expect:
     maternal-postnatal-care-active: true
     child-health-visit-recorded: true
     tb-program-active: false
+    bcg-birth-dose-recorded: true
+    opv-birth-dose-recorded: true
+    measles-dose-recorded: true

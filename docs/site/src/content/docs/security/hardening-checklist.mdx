@@ -146,9 +146,10 @@ or the [Registry Notary operator configuration reference](../../products/registr
   active waivers, so the deployment's actual state is inspectable rather than asserted. Read
   [RS-OP-POSTURE](../../spec/rs-op-posture/) before building operational tooling around its
   default or restricted tier.
-- Give every waiver a non-empty, non-secret reason and a mandatory expiry date. `startup_fail`
-  gates are never waivable; a waiver naming one is rejected. Waiver reasons appear only in the
-  restricted posture tier.
+- Give every waiver a validated operator reference and a mandatory expiry date. Add a short
+  summary only when operators need more context, and keep credentials and private keys out of
+  both fields. `startup_fail` and `readiness_fail` gates are never waivable; a waiver naming one
+  is rejected. Waiver references and summaries appear only in the restricted posture tier.
 - Use `deployment.evidence.*` flags (for example `ingress_rate_limit`, `api_key_rotation`) only to
   assert controls that live outside the process and cannot be observed by it. Each flag defaults to
   `false`.

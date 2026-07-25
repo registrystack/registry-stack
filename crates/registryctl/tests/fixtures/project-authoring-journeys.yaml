@@ -20,7 +20,7 @@ workspaces:
     classification: maintained
     topology: combined
     project_dir: crates/registryctl/tests/fixtures/project-authoring/custom-system
-    focused_fixture_file: eligible.yaml
+    focused_fixture_file: source-approved.yaml
     steps: [trace, watch, test, check, build]
     environment: local
     check_explain: true
@@ -38,7 +38,7 @@ workspaces:
 
   - id: dhis2-tracker
     label: DHIS2 Tracker
-    summary: A product-neutral script adapter applied to a bounded DHIS2 Tracker read journey.
+    summary: Bounded DHIS2 Tracker acquisition normalized into reusable health evidence for consumer-owned decisions.
     source: crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker
     classification: maintained
     topology: combined

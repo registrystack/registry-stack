@@ -64,6 +64,45 @@ updated policy documents without touching deployment config.
             topologies." />
 </figure>
 
+## Evidence and decision ownership
+
+The following responsibility flow is normative for 1.0 project authoring:
+
+1. A source system owns its operational data and any decisions made inside that source.
+2. Registry Relay owns source-specific acquisition, source-access policy, and typed normalization.
+   Relay returns only the declared consultation outcome and typed outputs. It does not assign a
+   consumer consequence to those outputs.
+3. Registry Notary owns atomic, precise, reusable evidence statements plus the authorization and
+   disclosure policy for evaluating and releasing them. Purpose-bound authorization controls who
+   can request evidence and what can be disclosed. It does not turn the evidence statement into a
+   consumer rule.
+4. An evidence consumer determines how returned evidence is used. The accountable decision owner
+   retains responsibility for requirements, eligibility, qualification, prioritization, approval,
+   routing, payment, workflow, and action policy.
+
+These are three different policy categories: Relay source-access and adaptation policy, Notary
+evidence authorization and disclosure policy, and consumer use, decision, and action policy.
+Project authors must keep them separate even when one deployment operates every component. The
+caller, evidence consumer, and decision owner can be the same component or separate components.
+
+An evidence consumer can be a social-protection programme, admissions service, licensing
+authority, healthcare workflow, lender, insurer, or credential verifier. The caller is the
+technical client that invokes Notary, which may be a portal, intermediary, wallet backend, or
+workflow connector acting for the consumer.
+
+| Context | Caller | Evidence consumer | Decision owner |
+| --- | --- | --- | --- |
+| Social protection | Case-management connector | Programme workflow | Administering authority |
+| Public administration | Procedure portal or intermediary | Online procedure | Competent authority |
+| Education | Admissions portal | Admissions workflow | Education institution |
+| Healthcare | Clinical or case system | Care or public-health workflow | Provider or health authority |
+| Regulated private service | Application platform | Lending or insurance workflow | Lender or insurer |
+
+Registry Notary can attest a decision already made by an authoritative source system. The claim
+identifier and its review documentation must identify that fact as a source-owned decision.
+Notary attests what the source decided; it does not recompute the decision or take ownership of
+the source's policy.
+
 ## Data and contract flow
 
 1. Registry Platform provides reusable security and operational primitives consumed by runtime services.
@@ -78,12 +117,15 @@ updated policy documents without touching deployment config.
    endpoints through configured auth.
 5. Registry Relay executes compiler-pinned consultations. Its product-neutral `http`, `script`,
    and `snapshot` capabilities adapt reviewed source contracts and return only declared typed
-   outputs. Registry Notary evaluates registry-backed claims from those Relay outputs, or evaluates
-   source-free and self-attested claims without Relay. It renders evaluation results as
+   outputs. Registry Notary evaluates registry-backed evidence claims from those Relay outputs, or
+   evaluates source-free and self-attested evidence claims without Relay. It renders evaluation
+   results as
    `application/vnd.registry-notary.claim-result+json`
-   or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), and it materializes eligible
-   stored evaluations into SD-JWT VC credentials (`application/dc+sd-jwt`).
-6. A trusted Registry Notary can call another trusted Registry Notary through
+   or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), and it materializes stored
+   evaluations that pass issuance checks into SD-JWT VC credentials (`application/dc+sd-jwt`).
+6. An evidence consumer receives the returned evidence. The decision owner applies any
+   consumer-specific requirement, decision, workflow, or action rules outside Relay and Notary.
+7. A trusted Registry Notary can call another trusted Registry Notary through
    `POST /federation/v1/evaluations` for signed delegated evaluation. Registry Manifest can publish
    discovery metadata for that relationship, but local Notary peer policy grants access.
 For what each project does and does not own, refer to the product overview pages linked in the capabilities table.

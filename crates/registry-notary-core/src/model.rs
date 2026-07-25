@@ -1378,6 +1378,7 @@ pub struct EvidenceFormat {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClaimResultView {
     pub evaluation_id: String,
     pub claim_id: String,
@@ -1398,6 +1399,7 @@ pub struct ClaimResultView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TargetRefView {
     #[serde(rename = "type", default, skip_serializing_if = "String::is_empty")]
     pub entity_type: String,
@@ -1409,6 +1411,7 @@ pub struct TargetRefView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EvidenceEntityRef {
     #[serde(rename = "type")]
     pub entity_type: String,
@@ -1435,6 +1438,7 @@ pub const PROVENANCE_GENERATED_BY_CLAIM_EVALUATION: &str = "claim_evaluation";
 /// Requester-side identity (client, actor, subject) is deliberately absent;
 /// those live in restricted audit, never on the public wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClaimProvenance {
     pub schema_version: String,
     pub generated_by: ProvenanceGeneratedBy,
@@ -1481,6 +1485,7 @@ impl ClaimProvenance {
 /// `policy_id` here names the *evaluation* policy under which the result was
 /// produced.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProvenanceGeneratedBy {
     #[serde(rename = "type")]
     pub entry_type: String,
@@ -1512,6 +1517,7 @@ pub struct ProvenanceGeneratedBy {
 /// The consumed side of a claim provenance record: how many Relay consultations
 /// contributed to the claim.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProvenanceUsed {
     pub relay_consultation_count: usize,
 }

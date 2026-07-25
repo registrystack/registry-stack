@@ -21,6 +21,36 @@ use super::Config;
 pub const CONFIG_SCHEMA_ID: &str =
     "https://id.registrystack.org/schemas/registry-relay/registry-relay.config.schema.json";
 
+/// Schema-only deployment-waiver reference contract shared with posture.
+pub(crate) struct DeploymentWaiverReferenceSchema;
+
+impl JsonSchema for DeploymentWaiverReferenceSchema {
+    fn schema_name() -> Cow<'static, str> {
+        "DeploymentWaiverReference".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        registry_platform_ops::deployment_waiver_reference_schema_fragment()
+            .try_into()
+            .expect("the shared waiver-reference fragment is a valid JSON Schema")
+    }
+}
+
+/// Schema-only structural deployment-waiver summary contract shared with posture.
+pub(crate) struct DeploymentWaiverSummarySchema;
+
+impl JsonSchema for DeploymentWaiverSummarySchema {
+    fn schema_name() -> Cow<'static, str> {
+        "DeploymentWaiverSummary".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        registry_platform_ops::deployment_waiver_summary_schema_fragment()
+            .try_into()
+            .expect("the shared waiver-summary fragment is a valid JSON Schema")
+    }
+}
+
 const IPV4_SOCKET_PATTERN: &str = concat!(
     "^(?:",
     r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.",

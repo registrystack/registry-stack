@@ -64,6 +64,33 @@ such as a social-protection management information system do not become raw-reco
             owns the eligibility decision and reads the registry it owns directly." />
 </figure>
 
+## Evidence-to-action boundary
+
+Every combined integration follows the same ownership boundary. Registry Relay owns
+source-specific acquisition, source-access policy, and typed normalization. Registry Notary owns
+atomic evidence claims plus evidence authorization and disclosure policy. The evidence consumer
+determines how the evidence is used, and the decision owner remains accountable for requirements,
+decisions, workflow, and action.
+
+The DHIS2 health-evidence starter makes that boundary visible. DHIS2 remains the system of record.
+Relay uses its product-neutral script capability to perform bounded, same-origin acquisition and
+normalize the existing health outputs plus `bcg_birth_dose_recorded`,
+`opv_birth_dose_recorded`, and `measles_dose_recorded`. Notary exposes those facts as reusable
+evidence claims. In this example, a public-health programme is both the evidence consumer and the
+decision owner. It can compute `outreach-required` or `follow-up-priority` without moving either
+decision into Relay or Notary.
+
+The reviewed contract keeps `true`, `false`, `null`, no-match, ambiguity, and source failure
+distinct. Missing evidence is not a negative fact. Offline synthetic fixtures are the deterministic
+acceptance path; a governed live check against a reachable DHIS2 instance is optional compatibility
+evidence.
+
+Registry Notary may attest a decision that DHIS2 or another authoritative source already made only
+when the claim identifier and its review documentation identify it as a source-owned decision.
+This exception does not make Notary a general-purpose eligibility or workflow engine.
+
+{/* Evidence: crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker/. */}
+
 ## Domain registry platforms
 
 Examples: [OpenCRVS](https://www.opencrvs.org/) (civil registration), [OpenSPP](https://openspp.org/)
@@ -176,7 +203,8 @@ source tables, raw SQL, or full records.
 
 Wire Registry Stack in alongside a workflow engine when:
 
-- A workflow step needs an authoritative registry output (status, predicate, selected value).
+- A workflow step needs an authoritative evidence fact (status, predicate, selected value) as an
+  input to the workflow engine's own decision.
 - A workflow step needs an evidence artifact or credential rather than an internal service result.
 - Generated workflow connectors must not depend on source schema details.
 

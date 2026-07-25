@@ -96,7 +96,6 @@ struct BatchTerminalProvenance {
     integration: BatchTerminalIntegration,
     #[serde(skip_serializing_if = "Option::is_none")]
     snapshot: Option<BatchTerminalSnapshot>,
-    consent: BatchTerminalConsent,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -111,17 +110,6 @@ struct BatchTerminalIntegration {
 struct BatchTerminalSnapshot {
     generation_id: String,
     published_at: String,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BatchTerminalConsent {
-    outcome: String,
-    verifier_id: Option<String>,
-    verifier_revision: Option<String>,
-    checked_at: Option<String>,
-    expires_at: Option<String>,
-    revocation_status: String,
 }
 
 enum BatchTerminalScalar {
@@ -365,14 +353,6 @@ impl PublishableConsultationResponse {
                     revision: integration_pack.version().get(),
                 },
                 snapshot,
-                consent: BatchTerminalConsent {
-                    outcome: "not_required".to_owned(),
-                    verifier_id: None,
-                    verifier_revision: None,
-                    checked_at: None,
-                    expires_at: None,
-                    revocation_status: "not_applicable".to_owned(),
-                },
             },
         };
         let configured_limit =
@@ -514,12 +494,6 @@ impl BatchTerminalPayload {
                 != acquisition_class_str(profile.footprint().acquisition_class())
             || self.provenance.integration.id != profile.integration_pack().id().as_str()
             || self.provenance.integration.revision != profile.integration_pack().version().get()
-            || self.provenance.consent.outcome != "not_required"
-            || self.provenance.consent.revocation_status != "not_applicable"
-            || self.provenance.consent.verifier_id.is_some()
-            || self.provenance.consent.verifier_revision.is_some()
-            || self.provenance.consent.checked_at.is_some()
-            || self.provenance.consent.expires_at.is_some()
             || !valid_rfc3339_milliseconds(&self.provenance.acquired_at)
         {
             return Err(ConsultationResponseError::Serialization);
@@ -656,14 +630,6 @@ impl BatchTerminalPayload {
                         generation_id: &snapshot.generation_id,
                         published_at: &snapshot.published_at,
                     }),
-                consent: ResponseConsent {
-                    outcome: &self.provenance.consent.outcome,
-                    verifier_id: self.provenance.consent.verifier_id.as_deref(),
-                    verifier_revision: self.provenance.consent.verifier_revision.as_deref(),
-                    checked_at: self.provenance.consent.checked_at.as_deref(),
-                    expires_at: self.provenance.consent.expires_at.as_deref(),
-                    revocation_status: &self.provenance.consent.revocation_status,
-                },
             },
         };
         let mut bytes = Zeroizing::new(Vec::with_capacity(limit));
@@ -715,7 +681,6 @@ struct ResponseProvenance<'a> {
     integration: ResponseIntegration<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
     snapshot: Option<ResponseSnapshot<'a>>,
-    consent: ResponseConsent<'a>,
 }
 
 #[derive(Serialize)]
@@ -728,16 +693,6 @@ struct ResponseIntegration<'a> {
 struct ResponseSnapshot<'a> {
     generation_id: &'a str,
     published_at: &'a str,
-}
-
-#[derive(Serialize)]
-struct ResponseConsent<'a> {
-    outcome: &'a str,
-    verifier_id: Option<&'a str>,
-    verifier_revision: Option<&'a str>,
-    checked_at: Option<&'a str>,
-    expires_at: Option<&'a str>,
-    revocation_status: &'a str,
 }
 
 enum ProjectedRecord<'a> {
@@ -1272,22 +1227,47 @@ mod tests {
             assert!(value["provenance"].get("snapshot").is_none());
             assert!(value["provenance"].get("policy_id").is_none());
             assert!(value["provenance"].get("policy_hash").is_none());
-            assert_eq!(
-                value["provenance"]["consent"],
-                json!({
-                    "outcome": "not_required",
-                    "verifier_id": null,
-                    "verifier_revision": null,
-                    "checked_at": null,
-                    "expires_at": null,
-                    "revocation_status": "not_applicable"
-                })
-            );
+            assert!(value["provenance"].get("consent").is_none());
             assert_eq!(
                 value.get("notary_evaluation_id").and_then(Value::as_str),
                 Some(evaluation_id.to_canonical_string()).as_deref()
             );
         }
+    }
+
+    #[test]
+    fn batch_terminal_replay_rejects_retired_consent_member() {
+        let plan = dhis2_runtime_vector_plan_fixture();
+        let profile = plan.runtime_profile();
+        let candidate = PublishableConsultationResponse::serialize_validated_live_result(
+            ConsultationId::generate(),
+            Some(NotaryEvaluationId::try_parse("01JYZZZZZZZZZZZZZZZZZZZZZZ").unwrap()),
+            profile,
+            ConsultationOutcome::NoMatch,
+            None,
+            1_752_148_800_123,
+        )
+        .expect("frozen response serializes");
+        let mut terminal: Value = serde_json::from_str(
+            candidate
+                .batch_terminal_json()
+                .expect("batch terminal serializes")
+                .as_str(),
+        )
+        .expect("batch terminal is JSON");
+        terminal["provenance"]["consent"] = json!({
+            "outcome": "not_required",
+            "verifier_id": null,
+            "verifier_revision": null,
+            "checked_at": null,
+            "expires_at": null,
+            "revocation_status": "not_applicable"
+        });
+
+        assert!(matches!(
+            BatchTerminalPayload::from_persisted(&terminal.to_string()),
+            Err(ConsultationResponseError::Serialization)
+        ));
     }
 
     #[test]

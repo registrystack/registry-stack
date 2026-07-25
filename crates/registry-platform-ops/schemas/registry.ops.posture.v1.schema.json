@@ -400,6 +400,39 @@
         "waived"
       ]
     },
+    "waiver_reference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(?!.*\\.\\.)[A-Za-z0-9._:-]+$",
+      "not": {
+        "pattern": "^(?:[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]:)?(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc]):[A-Za-z0-9._:-]+$"
+      }
+    },
+    "waiver_summary": {
+      "description": "Structurally valid deployment-waiver summary. Contextual authorization-value and private-key marker exclusions require semantic producer validation.",
+      "$comment": "Schema acceptance does not replace validate_deployment_waiver_metadata.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\u0000-\\u001F\\u007F-\\u009F]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]$"
+          }
+        }
+      ]
+    },
     "deployment_finding": {
       "type": "object",
       "additionalProperties": false,
@@ -427,13 +460,15 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "reason",
+        "reference",
         "expires"
       ],
       "properties": {
-        "reason": {
-          "type": "string",
-          "minLength": 1
+        "reference": {
+          "$ref": "#/$defs/waiver_reference"
+        },
+        "summary": {
+          "$ref": "#/$defs/waiver_summary"
         },
         "expires": {
           "type": "string",
@@ -447,16 +482,18 @@
       "additionalProperties": false,
       "required": [
         "finding",
-        "reason",
+        "reference",
         "expires"
       ],
       "properties": {
         "finding": {
           "$ref": "#/$defs/finding_id"
         },
-        "reason": {
-          "type": "string",
-          "minLength": 1
+        "reference": {
+          "$ref": "#/$defs/waiver_reference"
+        },
+        "summary": {
+          "$ref": "#/$defs/waiver_summary"
         },
         "expires": {
           "type": "string",

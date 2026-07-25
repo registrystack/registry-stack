@@ -1010,21 +1010,6 @@ fn result_decoder(profile: &VerifiedRelayProfile) -> Result<ClosedJsonDecoder, R
                 ],
             )?,
         )?,
-        field(
-            "consent",
-            true,
-            object(
-                false,
-                vec![
-                    field("outcome", true, string(false, 32)?)?,
-                    field("verifier_id", true, string(true, 128)?)?,
-                    field("verifier_revision", true, string(true, 128)?)?,
-                    field("checked_at", true, string(true, 64)?)?,
-                    field("expires_at", true, string(true, 64)?)?,
-                    field("revocation_status", true, string(false, 32)?)?,
-                ],
-            )?,
-        )?,
     ];
     provenance_fields.push(field(
         "snapshot",
@@ -1073,17 +1058,11 @@ fn result_decoder(profile: &VerifiedRelayProfile) -> Result<ClosedJsonDecoder, R
         projection("r10", &["provenance", "acquisition_class"])?,
         projection("r11", &["provenance", "integration", "id"])?,
         projection("r12", &["provenance", "integration", "revision"])?,
-        projection("r16", &["provenance", "consent", "outcome"])?,
-        projection("r17", &["provenance", "consent", "verifier_id"])?,
-        projection("r18", &["provenance", "consent", "verifier_revision"])?,
-        projection("r19", &["provenance", "consent", "checked_at"])?,
-        projection("r20", &["provenance", "consent", "expires_at"])?,
-        projection("r21", &["provenance", "consent", "revocation_status"])?,
-        projection("r22", &["provenance", "snapshot", "generation_id"])?,
-        projection("r23", &["provenance", "snapshot", "published_at"])?,
+        projection("r13", &["provenance", "snapshot", "generation_id"])?,
+        projection("r14", &["provenance", "snapshot", "published_at"])?,
     ];
     let mut presence = Vec::new();
-    let output_projection_offset = 24;
+    let output_projection_offset = 15;
     let VerifiedRelayResult::OutputMap(outputs) = &profile.result;
     for (index, name) in outputs.keys().enumerate() {
         projections.push(projection(
@@ -1187,12 +1166,6 @@ fn parse_result(
     {
         return Err(RelayClientError::InvalidResult);
     }
-    fields.require_string("not_required")?;
-    fields.require_null()?;
-    fields.require_null()?;
-    fields.require_null()?;
-    fields.require_null()?;
-    fields.require_string("not_applicable")?;
     let snapshot = match (fields.scalar()?, fields.scalar()?) {
         (ProjectedJsonScalar::String(generation_id), ProjectedJsonScalar::String(published_at)) => {
             if generation_id.is_empty() {
@@ -1348,12 +1321,6 @@ impl FieldCursor {
 
     fn require_string(&mut self, expected: &str) -> Result<(), RelayClientError> {
         (self.string()?.as_str() == expected)
-            .then_some(())
-            .ok_or(self.error)
-    }
-
-    fn require_null(&mut self) -> Result<(), RelayClientError> {
-        matches!(self.scalar()?, ProjectedJsonScalar::Null)
             .then_some(())
             .ok_or(self.error)
     }

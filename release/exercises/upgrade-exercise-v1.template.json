@@ -11,11 +11,16 @@
   },
   "target_release": {
     "version": "<TARGET_VERSION>",
+    "release_id": "<TARGET_RELEASE_ID>",
+    "source_ref": "<TARGET_SOURCE_REF>",
     "source_commit": "<TARGET_COMMIT>",
     "relay_image_digest": "<TARGET_RELAY_IMAGE_DIGEST>",
     "notary_image_digest": "<TARGET_NOTARY_IMAGE_DIGEST>"
   },
-  "target_release_manifest_sha256": "<TARGET_RELEASE_MANIFEST_SHA256>",
+  "target_release_manifest": {
+    "path": "<TARGET_RELEASE_MANIFEST_PATH>",
+    "sha256": "<TARGET_RELEASE_MANIFEST_SHA256>"
+  },
   "candidate_frozen": false,
   "candidate_independently_verified": false,
   "config_schemas": {
@@ -26,6 +31,29 @@
     "registry-notary": {
       "path": "schemas/registry-notary.config.schema.json",
       "sha256": "<NOTARY_CONFIG_SCHEMA_SHA256>"
+    }
+  },
+  "candidate_artifact_set": {
+    "sha256": "<CANDIDATE_ARTIFACT_SET_SHA256>",
+    "artifacts": {
+      "p1_binaries": "<P1_BINARY_INVENTORY_SHA256>",
+      "p1_image_inputs": "<P1_IMAGE_INPUT_INVENTORY_SHA256>",
+      "p2_binaries": "<P2_BINARY_INVENTORY_SHA256>",
+      "p2_image_inputs": "<P2_IMAGE_INPUT_INVENTORY_SHA256>",
+      "t1_binaries": "<T1_BINARY_INVENTORY_SHA256>",
+      "t1_image_inputs": "<T1_IMAGE_INPUT_INVENTORY_SHA256>",
+      "t2_binaries": "<T2_BINARY_INVENTORY_SHA256>",
+      "t2_image_inputs": "<T2_IMAGE_INPUT_INVENTORY_SHA256>",
+      "p_notary_layouts": "<P_NOTARY_LAYOUT_PAIR_SHA256>",
+      "p_relay_layouts": "<P_RELAY_LAYOUT_PAIR_SHA256>",
+      "t_notary_layouts": "<T_NOTARY_LAYOUT_PAIR_SHA256>",
+      "t_relay_layouts": "<T_RELAY_LAYOUT_PAIR_SHA256>",
+      "image_lock": "<IMAGE_LOCK_SHA256>",
+      "manifest": "<TARGET_RELEASE_MANIFEST_SHA256>",
+      "notary_image": "<TARGET_NOTARY_IMAGE_DIGEST>",
+      "relay_image": "<TARGET_RELAY_IMAGE_DIGEST>",
+      "p_release_inputs": "<P_RELEASE_INPUTS_SHA256>",
+      "t_release_inputs": "<T_RELEASE_INPUTS_SHA256>"
     }
   },
   "topology": {

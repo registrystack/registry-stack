@@ -389,7 +389,8 @@ pub(super) fn deployment_block_round_trips_through_yaml() {
 profile: production
 waivers:
   - finding: notary.openapi.public
-    reason: synthetic partner integration waiver
+    reference: OPS-2026-0042
+    summary: Synthetic partner integration waiver
     expires: 2099-09-30
 "#,
     )
@@ -401,6 +402,58 @@ waivers:
     config
         .validate()
         .expect("production config with waivable waiver validates");
+}
+
+#[test]
+pub(super) fn deployment_waiver_rejects_legacy_reason_as_unknown() {
+    let result: Result<crate::deployment::DeploymentConfig, _> = serde_norway::from_str(
+        r#"
+profile: hosted_lab
+waivers:
+  - finding: notary.openapi.public
+    reference: OPS-2026-0042
+    reason: legacy waiver text
+    expires: 2099-09-30
+"#,
+    );
+    assert!(
+        result.is_err(),
+        "the removed reason field must fail strict deserialization"
+    );
+}
+
+#[test]
+pub(super) fn deployment_waiver_rejects_missing_reference() {
+    let result: Result<crate::deployment::DeploymentConfig, _> = serde_norway::from_str(
+        r#"
+profile: hosted_lab
+waivers:
+  - finding: notary.openapi.public
+    expires: 2099-09-30
+"#,
+    );
+    assert!(
+        result.is_err(),
+        "a waiver without the required reference must fail deserialization"
+    );
+}
+
+#[test]
+pub(super) fn deployment_waiver_rejects_explicit_null_summary() {
+    let result: Result<crate::deployment::DeploymentConfig, _> = serde_norway::from_str(
+        r#"
+profile: hosted_lab
+waivers:
+  - finding: notary.openapi.public
+    reference: OPS-2026-0042
+    summary: null
+    expires: 2099-09-30
+"#,
+    );
+    assert!(
+        result.is_err(),
+        "summary must be a string when present, not null: {result:?}"
+    );
 }
 
 #[test]

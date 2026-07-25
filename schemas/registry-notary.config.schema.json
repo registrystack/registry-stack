@@ -641,7 +641,7 @@
     },
     "DeploymentWaiverConfig": {
       "additionalProperties": false,
-      "description": "One operator-configured waiver.\n\nA waiver names exactly one finding id, a free-text reason, and a mandatory\nexpiry date (`YYYY-MM-DD`). Reasons must not contain secrets.",
+      "description": "One operator-configured waiver.\n\nA waiver names exactly one finding id, a required operator reference, an\noptional summary, and a mandatory expiry date (`YYYY-MM-DD`). The shared\noperations contract validates metadata before it can reach posture or logs.",
       "properties": {
         "expires": {
           "type": "string"
@@ -649,16 +649,52 @@
         "finding": {
           "type": "string"
         },
-        "reason": {
-          "type": "string"
+        "reference": {
+          "$ref": "#/$defs/DeploymentWaiverReference"
+        },
+        "summary": {
+          "$ref": "#/$defs/DeploymentWaiverSummary"
         }
       },
       "required": [
         "finding",
-        "reason",
+        "reference",
         "expires"
       ],
       "type": "object"
+    },
+    "DeploymentWaiverReference": {
+      "maxLength": 128,
+      "minLength": 1,
+      "not": {
+        "pattern": "^(?:[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]:)?(?:[Bb][Ee][Aa][Rr][Ee][Rr]|[Bb][Aa][Ss][Ii][Cc]):[A-Za-z0-9._:-]+$"
+      },
+      "pattern": "^(?!.*\\.\\.)[A-Za-z0-9._:-]+$",
+      "type": "string"
+    },
+    "DeploymentWaiverSummary": {
+      "$comment": "Schema acceptance does not replace validate_deployment_waiver_metadata.",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "[\\u0000-\\u001F\\u007F-\\u009F]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]"
+          }
+        },
+        {
+          "not": {
+            "pattern": "[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]$"
+          }
+        }
+      ],
+      "description": "Structurally valid deployment-waiver summary. Contextual authorization-value and private-key marker exclusions require semantic producer validation.",
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
     },
     "DisclosureConfig": {
       "additionalProperties": false,

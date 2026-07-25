@@ -28,13 +28,13 @@ services:
       household-category:
         output: household.category
         disclosure: value
-      household-eligible:
+      source-household-approval-decision:
         cel: >-
-          household.approved != null ? household.matched && household.approved : false
+          household.matched && household.approved != null ? household.approved : null
         disclosure: predicate
     credential_profiles:
       household-eligibility:
         format: dc+sd-jwt
         type: https://credentials.invalid/household-eligibility/v1
         validity: 5m
-        claims: [household-record-exists, household-category, household-eligible]
+        claims: [household-record-exists, household-category, source-household-approval-decision]

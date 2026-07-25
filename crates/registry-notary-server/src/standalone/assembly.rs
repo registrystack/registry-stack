@@ -218,6 +218,7 @@ fn compile_notary_runtime_with_state_override(
 ) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
     config.validate()?;
     let deployment_gates = DeploymentGateState::evaluate_with_config_source(&config, config_source);
+    deployment_gates.log_boot_waivers();
     deployment_gates.fail_startup_if_blocked()?;
     let federation_enabled = config.federation.enabled;
     let http_limits = NotaryHttpLimits {

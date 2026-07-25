@@ -62,6 +62,34 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertTrue(
                 any("not pinned by immutable digest" in failure for failure in failures)
             )
+
+    def test_debian13_contract_rejects_other_tutorial_builders(self) -> None:
+        module = load_debian13_image_check()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in module.MAINTAINED_TEXT_PATHS:
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(
+                    (ROOT / relative).read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+
+            tutorial = root / "docs/site/scripts/check-registryctl-tutorials.sh"
+            text = tutorial.read_text(encoding="utf-8")
+            tutorial.write_text(
+                text.replace(module.RUST_BUILDER, "rust:1.95-debian-12", 1),
+                encoding="utf-8",
+            )
+
+            failures = module.check_repository(root)
+            self.assertTrue(
+                any("retired Debian image generation marker" in failure for failure in failures)
+            )
+            self.assertTrue(
+                any("pinned Debian 13 tutorial builder" in failure for failure in failures)
+            )
+
     def test_contributing_documents_major_functionality_test_policy(self) -> None:
         text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
 
