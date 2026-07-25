@@ -322,14 +322,37 @@ fn collect_project_authoring_diagnostics(
             ));
         }
         if validate_project_entity_links(&project, &integrations, &entities).is_err() {
-            diagnostics.push(invalid_diagnostic(
-                "registryctl.authoring.project.invalid",
-                PROJECT_FILE,
-                Some("services"),
-                "A project entity reference is inconsistent.",
-                "Align services, snapshots, and relationships with declared entities.",
-                Some(PROJECT_SCHEMA_HINT),
-            ));
+            if let Some(collision) = project_records_scope_collision(&project, &entities) {
+                let (field, cause, remediation) = match collision.kind {
+                    RecordsScopeCollisionKind::RecordApi => (
+                        "services.api.scopes",
+                        "Effective records API authorization scopes collide.",
+                        "Give metadata, aggregate, row, and evidence-verification access distinct scopes.",
+                    ),
+                    RecordsScopeCollisionKind::AttributeRelease => (
+                        "services.api.attribute_release_profiles.release_scope",
+                        "An attribute release scope collides with a records API authorization scope.",
+                        "Keep attribute release access distinct from metadata, aggregate, row, and evidence-verification access.",
+                    ),
+                };
+                diagnostics.push(invalid_diagnostic(
+                    "registryctl.authoring.project.scope_collision",
+                    PROJECT_FILE,
+                    Some(field),
+                    cause,
+                    remediation,
+                    Some(PROJECT_SCHEMA_HINT),
+                ));
+            } else {
+                diagnostics.push(invalid_diagnostic(
+                    "registryctl.authoring.project.invalid",
+                    PROJECT_FILE,
+                    Some("services"),
+                    "A project entity reference is inconsistent.",
+                    "Align services, snapshots, and relationships with declared entities.",
+                    Some(PROJECT_SCHEMA_HINT),
+                ));
+            }
         }
         for (alias, integration) in &integrations {
             if integration_fixture_complete.get(alias) == Some(&true)

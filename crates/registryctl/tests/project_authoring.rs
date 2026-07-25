@@ -3466,6 +3466,39 @@ fn project_schema_keeps_attribute_release_source_metadata_private() {
 }
 
 #[test]
+fn project_check_field_addresses_records_scope_collisions() {
+    for (metadata_scope, expected_field, expected_cause) in [
+        (
+            "population:aggregate",
+            "services.api.scopes",
+            "Effective records API authorization scopes collide.",
+        ),
+        (
+            "population:identity_release",
+            "services.api.attribute_release_profiles.release_scope",
+            "An attribute release scope collides with a records API authorization scope.",
+        ),
+    ] {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = copy_project("nia-attribute-release", temporary.path());
+        let project_file = project.join("registry-stack.yaml");
+        let mut document = read_yaml(&project_file);
+        document["services"]["nia-population-records"]["api"]["scopes"]["metadata"] =
+            serde_norway::Value::String(metadata_scope.to_string());
+        write_yaml(&project_file, &document);
+
+        let report = authoring_diagnostics(&project);
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "registryctl.authoring.project.scope_collision")
+            .expect("scope collision diagnostic");
+        assert_eq!(diagnostic.field, Some(expected_field));
+        assert_eq!(diagnostic.cause, expected_cause);
+    }
+}
+
+#[test]
 fn project_schema_accepts_sixteen_consultation_inputs_and_rejects_seventeen() {
     let schema: serde_json::Value = serde_json::from_slice(
         &std::fs::read(
