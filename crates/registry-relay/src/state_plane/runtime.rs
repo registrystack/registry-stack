@@ -472,7 +472,7 @@ fn build_tls_connector(
     } else {
         None
     };
-    configure_tls_trust_roots(&mut builder, root_certificate);
+    configure_tls_trust_roots(&mut builder, root_certificate, std::env::consts::OS)?;
     builder
         .build()
         .map_err(|_| ConsultationStatePlaneRuntimeError::InvalidTlsConfiguration)
@@ -496,13 +496,20 @@ impl TlsTrustRootBuilder for TlsConnectorBuilder {
 fn configure_tls_trust_roots(
     builder: &mut impl TlsTrustRootBuilder,
     root_certificate: Option<Certificate>,
-) {
+    target_os: &str,
+) -> Result<(), ConsultationStatePlaneRuntimeError> {
+    // native-tls reloads Android's system certificate directory after clearing
+    // its OpenSSL root store, so it cannot enforce an exclusive custom root.
+    if root_certificate.is_some() && target_os == "android" {
+        return Err(ConsultationStatePlaneRuntimeError::InvalidTlsConfiguration);
+    }
     if let Some(certificate) = root_certificate {
         // A configured root is a trust pin, not an addition to the host's
         // mutable system trust store.
         builder.disable_built_in_roots(true);
         builder.add_root_certificate(certificate);
     }
+    Ok(())
 }
 
 fn read_bounded_root_certificate(
@@ -759,7 +766,8 @@ mod tests {
             .expect("fixture is a valid certificate");
         let mut builder = RecordingBuilder::default();
 
-        configure_tls_trust_roots(&mut builder, Some(certificate));
+        configure_tls_trust_roots(&mut builder, Some(certificate), "linux")
+            .expect("the OpenSSL backend can isolate a custom root on Linux");
 
         assert_eq!(
             builder.operations,
@@ -790,12 +798,46 @@ mod tests {
 
         let mut builder = RecordingBuilder::default();
 
-        configure_tls_trust_roots(&mut builder, None);
+        configure_tls_trust_roots(&mut builder, None, "android")
+            .expect("system trust remains valid when no custom root is configured");
 
         assert_eq!(
             builder.calls, 0,
             "the native TLS builder default must retain system trust"
         );
+    }
+
+    #[test]
+    fn android_rejects_a_custom_root_that_cannot_be_exclusive() {
+        #[derive(Default)]
+        struct RecordingBuilder {
+            calls: usize,
+        }
+
+        impl TlsTrustRootBuilder for RecordingBuilder {
+            fn disable_built_in_roots(&mut self, _disable: bool) {
+                self.calls += 1;
+            }
+
+            fn add_root_certificate(&mut self, _certificate: Certificate) {
+                self.calls += 1;
+            }
+        }
+
+        let fixture = generate_simple_self_signed(vec!["state-plane.example.test".to_owned()])
+            .expect("generate root-certificate fixture");
+        let certificate = Certificate::from_der(fixture.cert.der().as_ref())
+            .expect("fixture is a valid certificate");
+        let mut builder = RecordingBuilder::default();
+
+        let error = configure_tls_trust_roots(&mut builder, Some(certificate), "android")
+            .expect_err("Android must fail closed instead of reloading system roots");
+
+        assert_eq!(
+            error,
+            ConsultationStatePlaneRuntimeError::InvalidTlsConfiguration
+        );
+        assert_eq!(builder.calls, 0);
     }
 
     #[tokio::test]
