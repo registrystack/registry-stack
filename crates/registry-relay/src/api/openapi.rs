@@ -4151,14 +4151,14 @@ fn insert_attribute_release_paths(paths: &mut Map<String, Value>) {
                         }
                     },
                     "400": problem_response(
-                        "Invalid request: malformed body, unknown id_type, empty claims list, \
-                         or unsupported media type."
+                        "Invalid request: missing Data-Purpose header, malformed body, unknown \
+                         id_type, empty claims list, or unsupported media type."
                     ),
                     "401": problem_response("Missing or invalid bearer credential."),
                     "403": problem_response(
-                        "Subject denied: not found, ambiguous, release condition not met, \
-                         or required claim unavailable. The response does not distinguish \
-                         these cases."
+                        "Purpose denied, or subject denied because it was not found, was \
+                         ambiguous, failed the release condition, or lacked a required claim. \
+                         The response does not distinguish subject-denial cases."
                     ),
                     "404": problem_response(
                         "Profile not found or not visible to the authenticated principal. \
@@ -4169,6 +4169,12 @@ fn insert_attribute_release_paths(paths: &mut Map<String, Value>) {
                 }
             }
         }),
+    );
+    add_header_parameter(
+        paths,
+        "/v1/attribute-releases/{profile_id}/versions/{version}/resolve",
+        "post",
+        attribute_release_purpose_header_parameter(),
     );
     add_value_bound_trust_header_parameters(
         paths,
@@ -5143,6 +5149,25 @@ fn purpose_header_parameter_with_required(required: bool) -> Value {
                         Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
         "schema": { "type": "string", "minLength": 1 },
         "example": "https://demo.example.gov/purpose/demo-review",
+    })
+}
+
+fn attribute_release_purpose_header_parameter() -> Value {
+    json!({
+        "name": "Data-Purpose",
+        "in": "header",
+        "required": true,
+        "description": "Purpose of use. The value must exactly match the selected \
+                        attribute-release profile's purpose and is checked before any source \
+                        read. A missing value returns `400 auth.purpose_required`; a mismatched \
+                        value returns `403 auth.purpose_denied`. Header names are \
+                        case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+        "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+        },
+        "example": "identity_verification",
     })
 }
 
@@ -6410,6 +6435,23 @@ mod tests {
         assert_eq!(
             resolve_op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
             "#/components/schemas/AttributeReleaseResolveResponse"
+        );
+        let purpose = resolve_op["parameters"]
+            .as_array()
+            .expect("resolve parameters")
+            .iter()
+            .find(|parameter| parameter["name"] == "Data-Purpose")
+            .expect("resolve must declare Data-Purpose");
+        assert_eq!(purpose["in"], "header");
+        assert_eq!(purpose["required"], true);
+        assert_eq!(purpose["schema"]["minLength"], 1);
+        assert_eq!(purpose["schema"]["maxLength"], 256);
+        assert!(
+            purpose["description"]
+                .as_str()
+                .expect("purpose description")
+                .contains("exactly match"),
+            "purpose parameter must document profile binding"
         );
         assert_value_bound_trust_headers(resolve_op);
         // Standard denial responses must be present

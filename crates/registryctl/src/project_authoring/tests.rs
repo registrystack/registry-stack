@@ -2104,6 +2104,14 @@ outputs:
             cel_member_roots("'decoy.exists' == 'x' && person.exists").expect("CEL roots parse"),
             BTreeSet::from(["person".to_string()])
         );
+        assert_eq!(
+            cel_member_roots(
+                "person.details.name == 'Ada' && person.name.startsWith('A') \
+                 && person['details'].active"
+            )
+            .expect("nested CEL roots parse"),
+            BTreeSet::from(["person".to_string()])
+        );
         assert!(cel_member_roots("person.exists && 'unterminated").is_err());
     }
 

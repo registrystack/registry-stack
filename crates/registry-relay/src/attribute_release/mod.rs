@@ -303,8 +303,14 @@ mod enabled {
                 while bytes.get(member_index).is_some_and(u8::is_ascii_whitespace) {
                     member_index += 1;
                 }
-                if &expression[start..index] == "context"
-                    || matches!(bytes.get(member_index), Some(b'.' | b'['))
+                let mut root_index = start;
+                while root_index > 0 && bytes[root_index - 1].is_ascii_whitespace() {
+                    root_index -= 1;
+                }
+                let follows_member_access = root_index > 0 && bytes[root_index - 1] == b'.';
+                if !follows_member_access
+                    && (&expression[start..index] == "context"
+                        || matches!(bytes.get(member_index), Some(b'.' | b'[')))
                 {
                     roots.insert(expression[start..index].to_string());
                 }
@@ -530,6 +536,20 @@ mod enabled {
                 "source.given_name == 'context.secret' || source.given_name == \"request.value\"",
             )
             .expect("quoted member-like text is not authority");
+        }
+
+        #[test]
+        fn expression_authority_accepts_nested_and_method_member_chains() {
+            for expression in [
+                "source.person.name == 'Ada'",
+                "source.name.startsWith('A')",
+                "source['person'].name == 'Ada'",
+                "source . context == 'profile-field'",
+            ] {
+                validate_release_expression(expression).unwrap_or_else(|_| {
+                    panic!("source-only expression must compile: {expression}")
+                });
+            }
         }
 
         #[test]

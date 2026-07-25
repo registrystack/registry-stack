@@ -893,7 +893,18 @@ fn cel_member_roots(expression: &str) -> Result<BTreeSet<String>> {
             {
                 index += 1;
             }
-            if bytes.get(index) == Some(&b'.') {
+            let mut member_index = index;
+            while bytes.get(member_index).is_some_and(u8::is_ascii_whitespace) {
+                member_index += 1;
+            }
+            let mut root_index = start;
+            while root_index > 0 && bytes[root_index - 1].is_ascii_whitespace() {
+                root_index -= 1;
+            }
+            let follows_member_access = root_index > 0 && bytes[root_index - 1] == b'.';
+            if !follows_member_access
+                && matches!(bytes.get(member_index), Some(b'.' | b'['))
+            {
                 roots.insert(expression[start..index].to_string());
             }
             continue;

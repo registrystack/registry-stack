@@ -5350,6 +5350,18 @@
             }
           },
           {
+            "description": "Purpose of use. The value must exactly match the selected attribute-release profile's purpose and is checked before any source read. A missing value returns `400 auth.purpose_required`; a mismatched value returns `403 auth.purpose_denied`. Header names are case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+            "example": "identity_verification",
+            "in": "header",
+            "name": "Data-Purpose",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
             "description": "Optional PDP trust context. Relay passes this value to policy evaluation only when the authenticated principal has the exact value-bound `registry:trust:legal_basis:<value>` scope. Without that scope, Relay treats the header as absent. Header names are case-insensitive.",
             "in": "header",
             "name": "x-registry-trust-legal-basis",
@@ -5479,7 +5491,7 @@
                 }
               }
             },
-            "description": "Invalid request: malformed body, unknown id_type, empty claims list, or unsupported media type."
+            "description": "Invalid request: missing Data-Purpose header, malformed body, unknown id_type, empty claims list, or unsupported media type."
           },
           "401": {
             "content": {
@@ -5499,7 +5511,7 @@
                 }
               }
             },
-            "description": "Subject denied: not found, ambiguous, release condition not met, or required claim unavailable. The response does not distinguish these cases."
+            "description": "Purpose denied, or subject denied because it was not found, was ambiguous, failed the release condition, or lacked a required claim. The response does not distinguish subject-denial cases."
           },
           "404": {
             "content": {
