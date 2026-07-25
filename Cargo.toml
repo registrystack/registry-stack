@@ -169,6 +169,11 @@ debug = "line-tables-only"
 [profile.test]
 debug = "line-tables-only"
 
+[profile.ci]
+inherits = "dev"
+debug = false
+incremental = false
+
 [profile.release]
 codegen-units = 1
 lto = "thin"

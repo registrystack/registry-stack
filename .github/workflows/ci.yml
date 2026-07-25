@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - release/1.0
+  merge_group:
+    types:
+      - checks_requested
   push:
     branches:
       - main
@@ -18,6 +21,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_FUZZ_VERSION: "0.13.2"
   CARGO_LLVM_COV_VERSION: "0.8.7"
   GITLEAKS_VERSION: "8.30.1"
@@ -31,8 +37,13 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      rust_matrix: ${{ steps.filter.outputs.rust_matrix }}
+      rust_packages: ${{ steps.filter.outputs.rust_packages }}
       platform: ${{ steps.filter.outputs.platform }}
       platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}
+      notary_contracts: ${{ steps.filter.outputs.notary_contracts }}
+      relay_contracts: ${{ steps.filter.outputs.relay_contracts }}
+      project_authoring: ${{ steps.filter.outputs.project_authoring }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
       docs: ${{ steps.filter.outputs.docs }}
@@ -47,125 +58,36 @@ jobs:
 
       - name: Classify changed paths
         id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          rust=false
-          platform=false
-          platform_hygiene=false
-          release_tool=false
-          release_source_proof=false
-          docs=false
-          editors=false
-          registryctl_tutorial=false
-          all=false
-
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            base="${{ github.event.pull_request.base.sha }}"
-            head="${{ github.event.pull_request.head.sha }}"
-          else
-            base="${{ github.event.before }}"
-            head="${GITHUB_SHA}"
-            if [[ "${base}" =~ ^0+$ ]]; then
-              base="$(git rev-parse "${head}^" 2>/dev/null || true)"
-            fi
-          fi
-
-          mark_all() {
-            rust=true
-            platform=true
-            platform_hygiene=true
-            release_tool=true
-            release_source_proof=true
-            docs=true
-            editors=true
-            registryctl_tutorial=true
-          }
-
+          metadata="${RUNNER_TEMP}/registry-stack-cargo-metadata.json"
           changed_files="${RUNNER_TEMP}/registry-stack-changed-files"
-          if [[ -z "${base}" ]] ||
-             ! git cat-file -e "${base}^{commit}" 2>/dev/null ||
-             ! git cat-file -e "${head}^{commit}" 2>/dev/null; then
-            all=true
+          cargo metadata --locked --format-version 1 > "${metadata}"
+          classifier=(
+            python3 .github/scripts/ci_changes.py
+            --metadata "${metadata}"
+            --github-output "${GITHUB_OUTPUT}"
+          )
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null &&
+               git cat-file -e "${HEAD_SHA}^{commit}" 2>/dev/null; then
+              git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" > "${changed_files}"
+              classifier+=(--changed-files "${changed_files}")
+            else
+              classifier+=(--all)
+            fi
           else
-            git diff --name-only -z "${base}" "${head}" > "${changed_files}"
+            # Pushes and merge-queue candidates run the complete matrix.
+            classifier+=(--all)
           fi
+          "${classifier[@]}"
 
-          if [[ "${all}" == "true" ]]; then
-            mark_all
-          else
-            while IFS= read -r -d '' path; do
-              case "${path}" in
-                .github/workflows/ci.yml)
-                  mark_all
-                  ;;
-                .github/workflows/release.yml)
-                  release_tool=true
-                  release_source_proof=true
-                  ;;
-                .github/workflows/*)
-                  mark_all
-                  ;;
-              esac
-              case "${path}" in
-                Cargo.toml|Cargo.lock|deny.toml|rust-toolchain*|crates/*|products/*)
-                  rust=true
-                  ;;
-                docs/site/src/data/relay-support.yaml|docs/site/src/data/generated/relay-support.json)
-                  rust=true
-                  ;;
-              esac
-              case "${path}" in
-                Cargo.toml|Cargo.lock|clippy.toml|deny.toml|rustfmt.toml|rust-toolchain*|crates/registry-config-report/*|crates/registry-platform-*|products/platform/Cargo.toml|products/platform/fuzz/*|products/platform/rust-toolchain.toml)
-                  platform=true
-                  ;;
-              esac
-              case "${path}" in
-                clippy.toml|deny.toml|rustfmt.toml|crates/registry-relay/clippy.toml|crates/registry-relay/deny.toml|crates/registry-relay/rustfmt.toml|crates/registry-relay/config/*|crates/registry-relay/demo/config/*|crates/registry-relay/perf/config/*|crates/registry-relay/profiles/*|crates/registry-relay/tests/fixtures/config/*|products/platform/clippy.toml|products/platform/deny.toml|products/platform/rustfmt.toml|products/platform/scripts/*|products/platform/templates/*)
-                  platform_hygiene=true
-                  ;;
-              esac
-              case "${path}" in
-                release/*)
-                  release_tool=true
-                  ;;
-                docs/site/src/content/docs/reference/errors.mdx)
-                  release_tool=true
-                  ;;
-              esac
-              case "${path}" in
-                Cargo.toml|Cargo.lock|release/scripts/check-release-source-model.sh|release/scripts/test_check_release_source_model.py|release/manifests/*)
-                  release_source_proof=true
-                  ;;
-              esac
-              case "${path}" in
-                docs/site/*|crates/registry-relay/docs/*|crates/registry-relay/openapi/*|products/notary/docs/*|products/notary/openapi/*|products/manifest/docs/*)
-                  docs=true
-                  ;;
-              esac
-              case "${path}" in
-                editors/*)
-                  editors=true
-                  ;;
-              esac
-              case "${path}" in
-                Cargo.toml|Cargo.lock|rust-toolchain*|LICENSE|docs/site/package.json|docs/site/package-lock.json|docs/site/scripts/check-registryctl-tutorials.sh|docs/site/scripts/registryctl-tutorial.*|docs/site/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx|docs/site/src/content/docs/tutorials/verify-claim-registry-api.mdx|crates/registry-config-report/*|crates/registry-manifest-*/*|crates/registry-notary/*|crates/registry-notary-*/*|crates/registry-platform-*/*|crates/registry-relay/*|crates/registryctl/*|products/notary/*|release/docker/Dockerfile.registry-notary|release/docker/Dockerfile.registry-relay)
-                  registryctl_tutorial=true
-                  ;;
-              esac
-            done < "${changed_files}"
-          fi
-
-          {
-            echo "rust=${rust}"
-            echo "platform=${platform}"
-            echo "platform_hygiene=${platform_hygiene}"
-            echo "release_tool=${release_tool}"
-            echo "release_source_proof=${release_source_proof}"
-            echo "docs=${docs}"
-            echo "editors=${editors}"
-            echo "registryctl_tutorial=${registryctl_tutorial}"
-          } >> "${GITHUB_OUTPUT}"
+      - name: Test CI classifier
+        run: python3 .github/scripts/test_ci_changes.py
 
       - name: Check Debian 13 image contract
         run: python3 release/scripts/check-debian13-images.py
@@ -218,15 +140,10 @@ jobs:
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: platform-all-features
-
-      - name: Build platform crates with all features
-        run: cargo build --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Lint platform crates with all features
         run: cargo clippy --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features -- -D warnings
-
-      - name: Test platform crates with all features
-        run: cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features
 
   platform-coverage:
     name: Platform line coverage
@@ -244,6 +161,7 @@ jobs:
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: platform-coverage
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install pinned coverage tool
         uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
@@ -310,6 +228,7 @@ jobs:
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: platform-fuzz-${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install pinned cargo-fuzz
         uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
@@ -335,16 +254,11 @@ jobs:
           path: products/platform/fuzz/artifacts/${{ matrix.target }}/
           if-no-files-found: ignore
 
-  rust:
-    name: Rust workspace checks
+  rust-policy:
+    name: Rust policy
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
-    env:
-      # Keep the full workspace gate below the hosted runner disk limit.
-      CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_DEV_DEBUG: "0"
-      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -352,15 +266,138 @@ jobs:
           fetch-depth: 0
           submodules: false
 
-      - name: Cache Cargo registry and build artifacts
+      - name: Cache Cargo registry
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
+          shared-key: workspace-registry
           cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Install cargo-deny and just
+      - name: Install cargo-deny
         uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
         with:
-          tool: cargo-deny@0.19.8,just@1.51.0
+          tool: cargo-deny@0.19.8
+
+      - name: Gate inventory
+        if: needs.changes.outputs.release_tool != 'true'
+        run: python3 release/scripts/check-gates-inventory.py
+
+      - name: Test gate inventory
+        if: needs.changes.outputs.release_tool != 'true'
+        run: python3 -m unittest release/scripts/test_check_gates_inventory.py
+
+      - name: Test stable surface compatibility checker
+        if: needs.changes.outputs.release_tool != 'true'
+        run: python3 -m unittest release/scripts/test_check_stable_surface_compatibility.py
+
+      - name: Stable surface compatibility
+        if: needs.changes.outputs.release_tool != 'true'
+        env:
+          STABLE_SURFACE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: python3 release/scripts/check-stable-surface-compatibility.py
+
+      - name: Cargo deny
+        run: cargo deny check
+
+  rust-quality:
+    name: Rust format and clippy
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CI_RUST_PACKAGES: ${{ needs.changes.outputs.rust_packages }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy affected packages
+        run: python3 .github/scripts/run_cargo_packages.py clippy
+
+      - name: Report disk usage
+        if: always()
+        run: |
+          df -h /
+          du -sh target 2>/dev/null || true
+
+  rust-tests:
+    name: Rust tests (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}
+    env:
+      CI_RUST_ALL_FEATURES: ${{ matrix.all_features }}
+      CI_RUST_PACKAGES: ${{ toJSON(matrix.packages) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test affected packages
+        run: python3 .github/scripts/run_cargo_packages.py test
+
+      - name: Validate Manifest profiles
+        if: matrix.name == 'manifest'
+        working-directory: products/manifest
+        run: cargo run --locked --profile ci -p registry-manifest-cli -- validate-profiles profiles
+
+      - name: Report disk usage
+        if: always()
+        run: |
+          df -h /
+          du -sh target 2>/dev/null || true
+
+  notary-contracts:
+    name: Notary API contracts
+    needs: changes
+    if: needs.changes.outputs.notary_contracts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install just
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: just@1.51.0
 
       - name: Install pinned oasdiff
         shell: bash
@@ -375,48 +412,6 @@ jobs:
           chmod +x "${RUNNER_TEMP}/bin/oasdiff"
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
-      - name: Cargo metadata
-        run: cargo metadata --locked --format-version 1 >/tmp/registry-stack-cargo-metadata.json
-
-      - name: Validate Manifest profiles
-        working-directory: products/manifest
-        run: cargo run --locked -p registry-manifest-cli -- validate-profiles profiles
-
-      - name: Gate inventory
-        run: python3 release/scripts/check-gates-inventory.py
-
-      - name: Test gate inventory
-        run: python3 -m unittest release/scripts/test_check_gates_inventory.py
-
-      - name: Test stable surface compatibility checker
-        run: python3 -m unittest release/scripts/test_check_stable_surface_compatibility.py
-
-      - name: Stable surface compatibility
-        env:
-          STABLE_SURFACE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: python3 release/scripts/check-stable-surface-compatibility.py
-
-      - name: Format
-        run: cargo fmt --check
-
-      - name: Workspace check
-        run: cargo check --locked --workspace --all-targets
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Reclaim build space before tests
-        run: cargo clean
-
-      - name: Workspace tests
-        run: cargo test --locked --workspace
-
-      - name: Relay all-features tests
-        run: cargo test --locked -p registry-relay --all-features
-
-      - name: Cargo deny
-        run: cargo deny check
-
       - name: Notary OpenAPI baseline
         working-directory: products/notary
         run: just openapi-check
@@ -424,63 +419,99 @@ jobs:
       - name: Notary OpenAPI contract
         working-directory: products/notary
         env:
-          OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: just openapi-contract
 
       - name: Notary exposure check
         working-directory: products/notary
         run: just exposure-check
 
+  relay-contracts:
+    name: Relay API contracts
+    needs: changes
+    if: needs.changes.outputs.relay_contracts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install just
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: just@1.51.0
+
+      - name: Install pinned oasdiff
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/oasdiff.tar.gz" \
+            "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
+          echo "${OASDIFF_LINUX_X64_SHA256}  ${RUNNER_TEMP}/oasdiff.tar.gz" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/oasdiff.tar.gz" -C "${RUNNER_TEMP}/bin" oasdiff
+          chmod +x "${RUNNER_TEMP}/bin/oasdiff"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
       - name: Relay OpenAPI contract
         working-directory: crates/registry-relay
         env:
-          OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: just openapi-contract
 
       - name: Relay exposure check
         working-directory: crates/registry-relay
         run: just exposure-check
 
-      - name: Notary PostgreSQL 16, 17, and 18 conformance
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo build --locked -p registry-notary --features registry-notary-cel
-          for postgresql_major in 16 17 18; do
-            products/notary/scripts/postgresql-conformance.sh "${postgresql_major}"
-          done
-
-  rust-required:
-    # Branch protection requires this exact context. Keep it successful for
-    # irrelevant changes without running the expensive workspace job.
+  rust-result:
     name: Rust workspace
+    if: always()
     needs:
       - changes
-      - rust
-    if: ${{ always() }}
+      - rust-policy
+      - rust-quality
+      - rust-tests
+      - notary-contracts
+      - relay-contracts
     runs-on: ubuntu-24.04
+    env:
+      RUST_JOB_RESULTS: ${{ toJSON(needs) }}
     steps:
-      - name: Report path-gated result
-        env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          REQUIRED: ${{ needs.changes.outputs.rust }}
-          RESULT: ${{ needs.rust.result }}
-        shell: bash
+      - name: Require every selected Rust job
         run: |
-          set -euo pipefail
-          case "${CHANGES_RESULT}:${REQUIRED}:${RESULT}" in
-            success:true:success|success:false:skipped)
-              ;;
-            *)
-              echo "Rust workspace path gate did not complete safely: changes=${CHANGES_RESULT} required=${REQUIRED} result=${RESULT}" >&2
-              exit 1
-              ;;
-          esac
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          jobs = json.loads(os.environ["RUST_JOB_RESULTS"])
+          failed = {
+              name: details["result"]
+              for name, details in jobs.items()
+              if details["result"] not in {"success", "skipped"}
+          }
+          if failed:
+              print(f"Rust jobs did not pass: {failed}", file=sys.stderr)
+              raise SystemExit(1)
+          print("Every selected Rust job passed; unselected jobs were skipped.")
+          PY
 
   project-authoring-determinism:
     name: Project authoring portability and determinism (${{ matrix.arch }})
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.project_authoring == 'true'
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -509,6 +540,7 @@ jobs:
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: project-authoring-${{ matrix.arch }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Verify cross-machine project inputs
         run: >-
@@ -627,7 +659,7 @@ jobs:
 
       - name: Stable surface compatibility
         env:
-          STABLE_SURFACE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          STABLE_SURFACE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
         run: python3 release/scripts/check-stable-surface-compatibility.py
 
       - name: Validate release manifest
@@ -754,17 +786,39 @@ jobs:
         working-directory: docs/site
         run: npm run check:tutorial:dry-run
 
-      - name: Cache source-under-test Cargo build
-        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8
+      - name: Restore source-under-test Cargo build
+        id: tutorial-cache
+        uses: actions/cache/restore@2c8a9bd7457de244a408f35966fab2fb45fda9c8
         with:
           path: |
             target/registryctl-tutorial-cargo-home
             target/registryctl-tutorial-linux-amd64
-          key: registryctl-tutorial-${{ runner.os }}-${{ hashFiles('docs/site/scripts/check-registryctl-tutorials.sh', 'Cargo.lock') }}
+          key: registryctl-tutorial-ci-${{ runner.os }}-${{ hashFiles('docs/site/scripts/check-registryctl-tutorials.sh', 'Cargo.lock', 'Cargo.toml') }}
+          restore-keys: |
+            registryctl-tutorial-ci-${{ runner.os }}-
+            registryctl-tutorial-${{ runner.os }}-
 
       - name: Execute registryctl tutorials from source
         working-directory: docs/site
         run: npm run check:tutorial:registryctl
+
+      - name: Save source-under-test Cargo build
+        if: github.ref == 'refs/heads/main' && steps.tutorial-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@2c8a9bd7457de244a408f35966fab2fb45fda9c8
+        with:
+          path: |
+            target/registryctl-tutorial-cargo-home
+            target/registryctl-tutorial-linux-amd64
+          key: ${{ steps.tutorial-cache.outputs.cache-primary-key }}
+
+      - name: Report tutorial disk usage
+        if: always()
+        run: |
+          df -h /
+          du -sh \
+            target/registryctl-tutorial-cargo-home \
+            target/registryctl-tutorial-linux-amd64 \
+            2>/dev/null || true
 
   docs:
     name: Docs checks
@@ -862,3 +916,43 @@ jobs:
         run: |
           cargo check --locked --target wasm32-wasip2 --manifest-path editors/zed/Cargo.toml
           cmp LICENSE editors/zed/LICENSE
+
+  ci-result:
+    name: CI result
+    if: always()
+    needs:
+      - changes
+      - secrets
+      - platform-quality
+      - platform-coverage
+      - platform-hygiene
+      - platform-fuzz
+      - rust-result
+      - project-authoring-determinism
+      - release-tool
+      - release-source-proof
+      - registryctl-tutorials
+      - docs
+      - editor-extensions
+    runs-on: ubuntu-24.04
+    env:
+      CI_JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Require every selected CI job
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          jobs = json.loads(os.environ["CI_JOB_RESULTS"])
+          failed = {
+              name: details["result"]
+              for name, details in jobs.items()
+              if details["result"] not in {"success", "skipped"}
+          }
+          if failed:
+              print(f"CI jobs did not pass: {failed}", file=sys.stderr)
+              raise SystemExit(1)
+          print("Every selected CI job passed; unselected jobs were skipped.")
+          PY
