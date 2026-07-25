@@ -68,6 +68,15 @@ ROOT_RUST_INPUTS = {
     "rustfmt.toml",
 }
 
+RELEASE_SECURITY_WORKFLOWS = frozenset(
+    {
+        ".github/workflows/release.yml",
+        ".github/workflows/release-candidate.yml",
+        ".github/workflows/release-repeatability.yml",
+        ".github/workflows/release-candidate-cleanup.yml",
+    }
+)
+
 
 class Workspace:
     def __init__(self, metadata: dict[str, Any]) -> None:
@@ -77,9 +86,7 @@ class Workspace:
             for package in metadata["packages"]
             if package["id"] in workspace_ids
         }
-        shard_packages = [
-            package for members in SHARDS.values() for package in members
-        ]
+        shard_packages = [package for members in SHARDS.values() for package in members]
         duplicates = sorted(
             package
             for package in set(shard_packages)
@@ -102,7 +109,9 @@ class Workspace:
         workspace_root = Path(metadata["workspace_root"]).resolve()
         for name, package in packages.items():
             manifest_path = Path(package["manifest_path"]).resolve()
-            self.roots[name] = manifest_path.parent.relative_to(workspace_root).as_posix()
+            self.roots[name] = manifest_path.parent.relative_to(
+                workspace_root
+            ).as_posix()
 
         reverse_dependencies: dict[str, set[str]] = defaultdict(set)
         for package_name, package in packages.items():
@@ -224,16 +233,16 @@ def classify(
     release_tool = complete or any(
         path.startswith("release/")
         or path
-        in {
-            ".github/workflows/release.yml",
+        in RELEASE_SECURITY_WORKFLOWS
+        | {
             "docs/site/src/content/docs/reference/errors.mdx",
         }
         for path in paths
     )
     release_source_proof = complete or any(
-        path
+        path in RELEASE_SECURITY_WORKFLOWS
+        or path
         in {
-            ".github/workflows/release.yml",
             "Cargo.lock",
             "Cargo.toml",
             "release/scripts/check-release-source-model.sh",
@@ -277,9 +286,7 @@ def classify(
         for path in paths
     )
     registryctl_tutorial = (
-        complete
-        or tutorial_infrastructure
-        or bool(affected & TUTORIAL_PACKAGES)
+        complete or tutorial_infrastructure or bool(affected & TUTORIAL_PACKAGES)
     )
 
     matrix = []

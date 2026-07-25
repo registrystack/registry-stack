@@ -9,7 +9,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from ci_changes import SHARDS, Workspace, classify
+from ci_changes import RELEASE_SECURITY_WORKFLOWS, SHARDS, Workspace, classify
 from run_cargo_packages import command_args, package_args
 
 
@@ -40,9 +40,7 @@ class CiChangesTest(unittest.TestCase):
                 "release/scripts/test_registry_release.py",
             ),
         )
-        shard_names = {
-            entry["name"] for entry in outputs["rust_matrix"]["include"]
-        }
+        shard_names = {entry["name"] for entry in outputs["rust_matrix"]["include"]}
         self.assertEqual(shard_names, {"relay", "registryctl"})
         self.assertTrue(outputs["release_tool"])
         self.assertTrue(outputs["release_source_proof"])
@@ -74,14 +72,24 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["docs"])
 
     def test_other_workflow_changes_do_not_select_the_full_matrix(self) -> None:
+        for workflow in sorted(RELEASE_SECURITY_WORKFLOWS):
+            with self.subTest(workflow=workflow):
+                outputs = classify(
+                    self.workspace,
+                    (workflow,),
+                )
+                self.assertFalse(outputs["rust"])
+                self.assertTrue(outputs["release_tool"])
+                self.assertTrue(outputs["release_source_proof"])
+                self.assertFalse(outputs["docs"])
+
+    def test_unrelated_workflow_does_not_select_release_checks(self) -> None:
         outputs = classify(
             self.workspace,
-            (".github/workflows/release.yml",),
+            (".github/workflows/docs-pages.yml",),
         )
-        self.assertFalse(outputs["rust"])
-        self.assertTrue(outputs["release_tool"])
-        self.assertTrue(outputs["release_source_proof"])
-        self.assertFalse(outputs["docs"])
+        self.assertFalse(outputs["release_tool"])
+        self.assertFalse(outputs["release_source_proof"])
 
     def test_nightly_notary_fuzz_inventory_matches_declared_targets(self) -> None:
         workflow = Path(".github/workflows/nightly-security.yml").read_text(
