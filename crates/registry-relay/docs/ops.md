@@ -207,6 +207,12 @@ REGISTRY_RELAY_FEATURES=attribute-release,crosswalk-runtime,spdci-api-standards,
   scripts/build-image.sh registry-relay:<version>-standards
 ```
 
+Custom profiles use unique comma-separated Cargo feature names and must name
+transitive product features explicitly. Both `attribute-release` and
+`standards-cel-mapping` require `crosswalk-runtime`; the image build rejects an
+incomplete profile so its feature label stays consistent with
+`/admin/v1/capabilities`.
+
 If release notes claim SP DCI, standards CEL mapping, or OGC EDR support, record
 the standards-enabled image tag or digest in the release evidence.
 

@@ -1286,8 +1286,12 @@
                 "type": "string"
               },
               "value": {
-                "description": "Subject identifier value. Never logged or echoed in responses.",
-                "type": "string"
+                "description": "Non-blank scalar subject identifier value. String, number, and boolean values are matched without coercion. Never logged or echoed in responses.",
+                "type": [
+                  "string",
+                  "number",
+                  "boolean"
+                ]
               }
             },
             "required": [
@@ -5491,7 +5495,7 @@
                 }
               }
             },
-            "description": "Invalid request: missing Data-Purpose header, malformed body, unknown id_type, empty claims list, or unsupported media type."
+            "description": "Invalid request: missing Data-Purpose header, malformed body, unknown id_type, or empty claims list."
           },
           "401": {
             "content": {
@@ -5522,6 +5526,16 @@
               }
             },
             "description": "Profile not found or not visible to the authenticated principal. Does not confirm whether the profile ever existed."
+          },
+          "415": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Unsupported media type: request body must be application/json."
           },
           "503": {
             "content": {

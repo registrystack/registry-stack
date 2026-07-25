@@ -108,8 +108,11 @@ scripts/build-image.sh registry-relay:local
 
 The production image is distroless, non-root, and built with the canonical
 `attribute-release,crosswalk-runtime` feature set. A custom
-`REGISTRY_RELAY_FEATURES` value replaces that exact set. Build steps,
-sibling-checkout requirements, and promotion gates are in
+`REGISTRY_RELAY_FEATURES` value replaces that exact set. Custom profiles must
+list transitive product features explicitly, so `attribute-release` and
+`standards-cel-mapping` each require `crosswalk-runtime`; incomplete or
+duplicate profiles fail the image build. Build steps, sibling-checkout
+requirements, and promotion gates are in
 [docs/ops.md](docs/ops.md#build-and-release); image publication, tagging, and
 signing policy are in [docs/security-assurance.md](docs/security-assurance.md).
 Release images publish to `ghcr.io/registrystack/registry-relay` from stable

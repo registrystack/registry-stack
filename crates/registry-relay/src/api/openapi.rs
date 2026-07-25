@@ -4152,7 +4152,7 @@ fn insert_attribute_release_paths(paths: &mut Map<String, Value>) {
                     },
                     "400": problem_response(
                         "Invalid request: missing Data-Purpose header, malformed body, unknown \
-                         id_type, empty claims list, or unsupported media type."
+                         id_type, or empty claims list."
                     ),
                     "401": problem_response("Missing or invalid bearer credential."),
                     "403": problem_response(
@@ -4163,6 +4163,9 @@ fn insert_attribute_release_paths(paths: &mut Map<String, Value>) {
                     "404": problem_response(
                         "Profile not found or not visible to the authenticated principal. \
                          Does not confirm whether the profile ever existed."
+                    ),
+                    "415": problem_response(
+                        "Unsupported media type: request body must be application/json."
                     ),
                     "503": problem_response("Source unavailable."),
                     "default": problem_response("Problem Details error response."),
@@ -5334,8 +5337,10 @@ fn attribute_release_resolve_request_schema() -> Value {
                         "description": "Subject identifier type (e.g. `national_id`, `passport`)."
                     },
                     "value": {
-                        "type": "string",
-                        "description": "Subject identifier value. Never logged or echoed in responses."
+                        "type": ["string", "number", "boolean"],
+                        "description": "Non-blank scalar subject identifier value. String, number, \
+                                        and boolean values are matched without coercion. Never \
+                                        logged or echoed in responses."
                     }
                 },
                 "additionalProperties": false
@@ -6468,6 +6473,10 @@ mod tests {
             "404 must be present"
         );
         assert!(
+            resolve_op["responses"]["415"].is_object(),
+            "415 must be present"
+        );
+        assert!(
             resolve_op["responses"]["503"].is_object(),
             "503 must be present"
         );
@@ -6491,6 +6500,12 @@ mod tests {
         assert!(
             schemas.contains_key("AttributeReleaseResolveResponse"),
             "AttributeReleaseResolveResponse schema must be present"
+        );
+        assert_eq!(
+            schemas["AttributeReleaseResolveRequest"]["properties"]["subject"]["properties"]
+                ["value"]["type"],
+            json!(["string", "number", "boolean"]),
+            "subject value must document every runtime-supported scalar type"
         );
 
         // Required fields on AttributeReleaseProfile schema
