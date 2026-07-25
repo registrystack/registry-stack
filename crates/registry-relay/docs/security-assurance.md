@@ -176,9 +176,12 @@ rules when installed.
 
 Endpoint exposure is checked in three directions: route inventory to
 manifest, manifest to route inventory, and Rust Axum route declarations to
-route inventory. Protected public routes with non-optional features are also
-covered by `tests/security_assurance_surface.rs`, which builds the production
-public app and verifies the manifest routes are actually mounted behind auth.
+route inventory. A feature-gated route may be stable only when its Cargo
+feature is enabled by default; optional feature gates remain experimental.
+Protected public routes without a feature gate or behind a default feature are
+also covered by `tests/security_assurance_surface.rs`, which builds the
+production public app and verifies the manifest routes are actually mounted
+behind auth.
 
 Hadolint ignores `DL3022` because the Dockerfile intentionally copies from
 named external build contexts. It also ignores `DL3008` for the apt package

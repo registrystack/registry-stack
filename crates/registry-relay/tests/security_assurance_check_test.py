@@ -39,6 +39,7 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
             "openapi": "3.0.3",
             "paths": {"/x": {"get": {}}},
         }))
+        self.write_features()
         self.old_root = self.module.ROOT
         self.old_security = self.module.SECURITY_DIR
         self.module.ROOT = self.root
@@ -67,6 +68,17 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
             "endpoints": [manifest_entry],
         }))
 
+    def write_features(self, default=None):
+        default = default or []
+        rendered_default = json.dumps(default)
+        (self.root / "Cargo.toml").write_text(
+            "[features]\n"
+            f"default = {rendered_default}\n"
+            'attribute-release = ["crosswalk-runtime"]\n'
+            "crosswalk-runtime = []\n"
+            "ogcapi-features = []\n"
+        )
+
     def entry(self, **overrides):
         base = {
             "service": "registry-relay",
@@ -94,7 +106,7 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         self.write_contracts(self.entry())
         self.module.validate_manifest()
 
-    def test_feature_gated_endpoint_must_remain_experimental(self):
+    def test_optional_feature_gated_endpoint_must_remain_experimental(self):
         self.write_contracts(self.entry(feature="ogcapi-features", stability="stable"))
         with self.assertRaises(SystemExit):
             self.module.validate_manifest()
@@ -103,6 +115,22 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
             self.entry(feature="ogcapi-features", stability="experimental")
         )
         self.module.validate_manifest()
+
+    def test_default_feature_gated_endpoint_may_be_stable(self):
+        self.write_features(["attribute-release"])
+        self.write_contracts(
+            self.entry(feature="attribute-release", stability="stable")
+        )
+
+        self.module.validate_manifest()
+
+    def test_default_feature_expansion_includes_local_feature_dependencies(self):
+        self.write_features(["attribute-release"])
+
+        self.assertEqual(
+            self.module.load_default_features(),
+            {"attribute-release", "crosswalk-runtime"},
+        )
 
     def test_core_record_read_routes_must_remain_stable(self):
         expected = {
@@ -227,6 +255,26 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         self.module.check_openapi_manifest_coverage(
             self.root / "openapi" / "registry-relay.openapi.json"
         )
+
+    def test_openapi_true_default_feature_operation_is_required_in_default_artifact(self):
+        self.write_features(["attribute-release"])
+        (self.root / "security" / "exposure-manifest.json").write_text(json.dumps({
+            "version": 1,
+            "service": "registry-relay",
+            "endpoints": [self.entry(feature="attribute-release", openapi=True)],
+        }))
+        self.module.check_openapi_manifest_coverage(
+            self.root / "openapi" / "registry-relay.openapi.json"
+        )
+
+        (self.root / "openapi" / "registry-relay.openapi.json").write_text(json.dumps({
+            "openapi": "3.0.3",
+            "paths": {},
+        }))
+        with self.assertRaises(SystemExit):
+            self.module.check_openapi_manifest_coverage(
+                self.root / "openapi" / "registry-relay.openapi.json"
+            )
 
     def test_feature_gated_operation_present_in_default_openapi_fails(self):
         (self.root / "security" / "exposure-manifest.json").write_text(json.dumps({

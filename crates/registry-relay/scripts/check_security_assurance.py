@@ -8,6 +8,7 @@ import argparse
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -84,6 +85,40 @@ def load_json(path: Path) -> object:
         fail(f"{path.relative_to(ROOT)} is not valid JSON: {exc}")
 
 
+def load_default_features() -> set[str]:
+    path = ROOT / "Cargo.toml"
+    try:
+        document = tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        fail("missing required file: Cargo.toml")
+    except tomllib.TOMLDecodeError as exc:
+        fail(f"Cargo.toml is not valid TOML: {exc}")
+
+    features = document.get("features")
+    if not isinstance(features, dict):
+        fail("Cargo.toml must contain a [features] table")
+    defaults = features.get("default")
+    if not isinstance(defaults, list) or not all(
+        isinstance(feature, str) for feature in defaults
+    ):
+        fail("Cargo.toml features.default must be a list of feature names")
+
+    enabled: set[str] = set()
+    pending = list(defaults)
+    while pending:
+        feature = pending.pop()
+        if feature in enabled:
+            continue
+        members = features.get(feature)
+        if not isinstance(members, list) or not all(
+            isinstance(member, str) for member in members
+        ):
+            fail(f"Cargo.toml default feature {feature} must name a feature list")
+        enabled.add(feature)
+        pending.extend(member for member in members if member in features)
+    return enabled
+
+
 def fail(message: str) -> None:
     print(f"security assurance check failed: {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -126,6 +161,7 @@ def validate_manifest() -> None:
     manifest = load_json(SECURITY_DIR / "exposure-manifest.json")
     inventory = load_json(SECURITY_DIR / "route-inventory.json")
     allowlist = load_allowlist(SECURITY_DIR / "auth-none-allowlist.yml")
+    default_features = load_default_features()
 
     if not isinstance(manifest, dict) or manifest.get("service") != "registry-relay":
         fail("exposure-manifest.json must describe service registry-relay")
@@ -150,7 +186,7 @@ def validate_manifest() -> None:
         check_value(entry, "stability", STABILITY)
         check_value(entry, "data_classification", DATA)
         check_value(entry, "source", SOURCES)
-        validate_stability(entry)
+        validate_stability(entry, default_features)
         if entry["method"] not in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}:
             fail(f"{entry['path']} has invalid method {entry['method']}")
         if not isinstance(entry["scopes"], list):
@@ -199,11 +235,20 @@ def validate_manifest() -> None:
     validate_route_sources(inventory)
 
 
-def validate_stability(entry: dict) -> None:
-    if entry["feature"] is not None and entry["stability"] != "experimental":
+def validate_stability(
+    entry: dict, default_features: set[str] | None = None
+) -> None:
+    default_features = default_features or set()
+    feature = entry["feature"]
+    if (
+        feature is not None
+        and feature not in default_features
+        and entry["stability"] != "experimental"
+    ):
         fail(
-            f"{entry['path']} is feature-gated but has stability "
-            f"{entry['stability']}; the 1.0 optional surfaces are experimental"
+            f"{entry['path']} is gated by optional feature {feature} but has "
+            f"stability {entry['stability']}; the 1.0 optional surfaces are "
+            "experimental"
         )
     if key(entry) in CORE_STABLE_ROUTE_KEYS and entry["stability"] != "stable":
         fail(
@@ -413,6 +458,7 @@ def check_openapi_strategy() -> None:
 def check_openapi_manifest_coverage(path: Path) -> None:
     manifest = load_json(SECURITY_DIR / "exposure-manifest.json")
     document = load_json(path)
+    default_features = load_default_features()
     if not isinstance(manifest, dict) or not isinstance(document, dict):
         fail("OpenAPI coverage inputs must be JSON objects")
     endpoints = manifest.get("endpoints")
@@ -432,14 +478,16 @@ def check_openapi_manifest_coverage(path: Path) -> None:
             fail("endpoint entries must be objects")
         op_key = (openapi_path_shape(str(entry.get("path"))), str(entry.get("method")))
         manifest_ops.setdefault(op_key, []).append(entry)
-        if entry.get("openapi") is True and is_default_openapi_entry(entry):
+        if entry.get("openapi") is True and is_default_openapi_entry(
+            entry, default_features
+        ):
             manifest_openapi_ops.add(op_key)
 
     missing = sorted(
         (entry["method"], entry["path"])
         for entry in endpoints
         if entry.get("openapi")
-        and is_default_openapi_entry(entry)
+        and is_default_openapi_entry(entry, default_features)
         and (openapi_path_shape(entry["path"]), entry["method"]) not in openapi_op_keys
     )
     if missing:
@@ -478,8 +526,11 @@ def check_openapi_manifest_coverage(path: Path) -> None:
         )
 
 
-def is_default_openapi_entry(entry: dict) -> bool:
-    return entry.get("feature") is None
+def is_default_openapi_entry(
+    entry: dict, default_features: set[str] | None = None
+) -> bool:
+    feature = entry.get("feature")
+    return feature is None or feature in (default_features or set())
 
 
 def openapi_path_shape(path: str) -> str:
