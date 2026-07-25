@@ -21,6 +21,9 @@ on:
       - crates/registry-platform-ops/**
       - crates/registry-platform-replay/**
       - products/notary/scripts/postgresql-conformance.sh
+  merge_group:
+    types:
+      - checks_requested
   push:
     branches:
       - main
@@ -78,6 +81,7 @@ jobs:
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: notary-postgresql-${{ matrix.postgresql }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build Registry Notary with CEL support
         run: cargo build --locked -p registry-notary --features registry-notary-cel

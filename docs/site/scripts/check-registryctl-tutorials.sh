@@ -2,7 +2,7 @@
 #
 # Execute the deployable Relay and Notary adopter tutorials against checked-out source.
 # This is a source-under-test CI gate: it builds registryctl and the release
-# product image shapes from the current checkout. It deliberately does not run
+# product runtime image shapes from the current checkout. It deliberately does not run
 # the published installer or release assets; the fresh-reader release proof is
 # tracked separately in GH#198. The gate writes a valid source-under-test image
 # lock beside registryctl, then rebinds generated Compose files to the local
@@ -19,6 +19,7 @@ BUILDER_IMAGE="rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e
 LINUX_TARGET="$REPO_ROOT/target/registryctl-tutorial-linux-amd64"
 CARGO_HOME_DIR="$REPO_ROOT/target/registryctl-tutorial-cargo-home"
 NATIVE_TARGET="$REPO_ROOT/target/registryctl-tutorial-native"
+BUILD_PROFILE="${REGISTRYCTL_TUTORIAL_CARGO_PROFILE:-ci}"
 RUN_ID="${GITHUB_RUN_ID:-local}-$$-$(date -u +%s)"
 RELAY_IMAGE="registryctl-tutorial-relay:$RUN_ID"
 NOTARY_IMAGE="registryctl-tutorial-notary:$RUN_ID"
@@ -76,6 +77,10 @@ if [[ ! -f "$SITE_ROOT/node_modules/yaml/package.json" ]]; then
 	printf 'docs dependencies are not installed; run npm ci in %s\n' "$SITE_ROOT" >&2
 	exit 1
 fi
+if [[ "$BUILD_PROFILE" != "ci" && "$BUILD_PROFILE" != "release" ]]; then
+	printf 'unsupported tutorial Cargo profile: %s (expected ci or release)\n' "$BUILD_PROFILE" >&2
+	exit 1
+fi
 
 node "$HELPER" assert-ports-free 4242 4255
 
@@ -94,22 +99,23 @@ build_source_under_test() {
 		--env CARGO_TARGET_DIR=/workspace/target/registryctl-tutorial-linux-amd64 \
 		--env CARGO_TERM_COLOR=always \
 		--env HOME=/tmp/registryctl-tutorial-home \
+		--env REGISTRYCTL_TUTORIAL_CARGO_PROFILE="$BUILD_PROFILE" \
 		"$BUILDER_IMAGE" \
 		bash -c 'set -euo pipefail
-			cargo build --release --locked \
+			cargo build --profile "$REGISTRYCTL_TUTORIAL_CARGO_PROFILE" --locked \
 				-p registryctl \
 				-p registry-relay \
 				-p registry-notary \
 				--features registry-relay/spdci-api-standards,registry-relay/standards-cel-mapping,registry-relay/ogcapi-edr,registry-notary/registry-notary-cel,registry-notary/pkcs11
-			cargo build --release --locked \
+			cargo build --profile "$REGISTRYCTL_TUTORIAL_CARGO_PROFILE" --locked \
 				-p registry-notary-server \
 				--bin registry-notary-cel-worker \
 				--features registry-notary-server/registry-notary-cel'
 
-	cp "$LINUX_TARGET/release/registry-relay" "$image_context/dist/image-bin/registry-relay"
-	cp "$LINUX_TARGET/release/registry-relay-rhai-worker" "$image_context/dist/image-bin/registry-relay-rhai-worker"
-	cp "$LINUX_TARGET/release/registry-notary" "$image_context/dist/image-bin/registry-notary"
-	cp "$LINUX_TARGET/release/registry-notary-cel-worker" "$image_context/dist/image-bin/registry-notary-cel-worker"
+	cp "$LINUX_TARGET/$BUILD_PROFILE/registry-relay" "$image_context/dist/image-bin/registry-relay"
+	cp "$LINUX_TARGET/$BUILD_PROFILE/registry-relay-rhai-worker" "$image_context/dist/image-bin/registry-relay-rhai-worker"
+	cp "$LINUX_TARGET/$BUILD_PROFILE/registry-notary" "$image_context/dist/image-bin/registry-notary"
+	cp "$LINUX_TARGET/$BUILD_PROFILE/registry-notary-cel-worker" "$image_context/dist/image-bin/registry-notary-cel-worker"
 	cp "$REPO_ROOT/LICENSE" "$image_context/LICENSE"
 	chmod 0755 \
 		"$image_context/dist/image-bin/registry-relay" \
@@ -130,7 +136,7 @@ build_source_under_test() {
 
 	host_arch="$(uname -m)"
 	if [[ "$(uname -s)" == "Linux" && "$host_arch" == "x86_64" ]]; then
-		REGISTRYCTL_BIN="$LINUX_TARGET/release/registryctl"
+		REGISTRYCTL_BIN="$LINUX_TARGET/$BUILD_PROFILE/registryctl"
 	else
 		printf 'building a native registryctl command for %s/%s\n' "$(uname -s)" "$host_arch"
 		CARGO_HOME="$CARGO_HOME_DIR" CARGO_TARGET_DIR="$NATIVE_TARGET" \
