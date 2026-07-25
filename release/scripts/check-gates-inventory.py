@@ -341,6 +341,7 @@ REQUIRED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] = 
             "name: Parse exact annotated-tag candidate binding",
             'for field in ("run_id", "run_attempt", "receipt_sha256"):',
             "name: Validate tag source without rebuilding",
+            'test "$(git rev-parse refs/remotes/origin/main)" = \\',
         ),
     ),
     (

@@ -416,7 +416,6 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
         self.assertEqual(self.check(finding, baseline), 1)
 
     def test_file_digest_assertion_checks_every_file_in_closed_list(self):
-        finding = self.finding()
         helper = self.rootfs / "app/helper"
         helper.write_bytes(b"reviewed helper")
         report = self.report()

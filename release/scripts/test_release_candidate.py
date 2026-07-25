@@ -221,7 +221,7 @@ class ReleaseCandidateTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.receipt = fixture(self.root, now=self.now)
         self.expected_builders = copy.deepcopy(self.receipt["builders"])
-        self.trusted_run = {
+        self.workflow_run_metadata = {
             "id": 123,
             "run_attempt": 2,
             "event": "repository_dispatch",
@@ -241,7 +241,9 @@ class ReleaseCandidateTest(unittest.TestCase):
         self.temp.cleanup()
 
     def verify(self, receipt: dict | None = None, **kwargs):
-        trusted_run = kwargs.pop("trusted_run", self.trusted_run)
+        workflow_run_metadata = kwargs.pop(
+            "workflow_run_metadata", self.workflow_run_metadata
+        )
         return self.module.validate_receipt(
             receipt or self.receipt,
             artifact_root=self.root,
@@ -253,7 +255,7 @@ class ReleaseCandidateTest(unittest.TestCase):
             expected_run_attempt=2,
             now=self.now,
             promotion=True,
-            trusted_run=trusted_run,
+            workflow_run_metadata=workflow_run_metadata,
             expected_builders=self.expected_builders,
             **kwargs,
         )
@@ -331,17 +333,17 @@ class ReleaseCandidateTest(unittest.TestCase):
         self,
     ) -> None:
         response = {
-            **self.trusted_run,
+            **self.workflow_run_metadata,
             "html_url": "https://github.com/registrystack/registry-stack/actions/runs/123",
             "actor": {"login": "release-operator"},
             "repository": {"full_name": "registrystack/registry-stack"},
             "jobs_url": "https://api.github.test/runs/123/jobs",
         }
         self.assertEqual(
-            self.trusted_run,
-            self.module.trusted_run_from_json(response),
+            self.workflow_run_metadata,
+            self.module.workflow_run_from_json(response),
         )
-        self.verify(trusted_run=self.module.trusted_run_from_json(response))
+        self.verify(workflow_run_metadata=self.module.workflow_run_from_json(response))
 
     def test_slsa_subject_contract_rejects_one_extra_provenance_subject(self) -> None:
         contract = self.root / "subjects.json"
@@ -535,8 +537,8 @@ class ReleaseCandidateTest(unittest.TestCase):
             "%Y-%m-%dT%H:%M:%SZ"
         )
         with self.assertRaisesRegex(self.module.CandidateError, "stale"):
-            trusted = dict(self.trusted_run)
-            trusted["created_at"] = (self.now - timedelta(hours=74)).strftime(
+            workflow_run = dict(self.workflow_run_metadata)
+            workflow_run["created_at"] = (self.now - timedelta(hours=74)).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"
             )
             self.module.validate_receipt(
@@ -545,7 +547,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                 artifact_metadata=self.artifact_metadata,
                 now=self.now,
                 promotion=True,
-                trusted_run=trusted,
+                workflow_run_metadata=workflow_run,
                 expected_builders=self.expected_builders,
             )
 
@@ -636,7 +638,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                 expected_run_attempt=2,
                 now=self.now,
                 promotion=True,
-                trusted_run=self.trusted_run,
+                workflow_run_metadata=self.workflow_run_metadata,
                 expected_builders=self.expected_builders,
             )
 
@@ -648,7 +650,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                 substituted,
                 now=self.now,
                 promotion=True,
-                trusted_run=self.trusted_run,
+                workflow_run_metadata=self.workflow_run_metadata,
                 expected_builders=self.expected_builders,
             )
 
@@ -663,7 +665,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                 extra,
                 now=self.now,
                 promotion=True,
-                trusted_run=self.trusted_run,
+                workflow_run_metadata=self.workflow_run_metadata,
                 expected_builders=self.expected_builders,
             )
 
@@ -691,8 +693,8 @@ class ReleaseCandidateTest(unittest.TestCase):
 
     def test_trusted_run_age_and_timestamp_substitution_fail(self) -> None:
         fresh_receipt = copy.deepcopy(self.receipt)
-        trusted = dict(self.trusted_run)
-        trusted["created_at"] = (self.now - timedelta(hours=73)).strftime(
+        workflow_run = dict(self.workflow_run_metadata)
+        workflow_run["created_at"] = (self.now - timedelta(hours=73)).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
         with self.assertRaisesRegex(self.module.CandidateError, "stale"):
@@ -702,7 +704,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                 artifact_metadata=self.artifact_metadata,
                 now=self.now,
                 promotion=True,
-                trusted_run=trusted,
+                workflow_run_metadata=workflow_run,
             )
 
         substituted = copy.deepcopy(self.receipt)

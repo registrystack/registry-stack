@@ -5,9 +5,9 @@ import importlib.util
 import json
 import tempfile
 import unittest
+import unittest.mock
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("check-release-storage.py")
@@ -124,7 +124,9 @@ class CheckReleaseStorageTest(unittest.TestCase):
                     "workspace_bytes": 1_500,
                 },
             ]
-            with mock.patch.object(self.module, "sample_once", side_effect=samples):
+            with unittest.mock.patch.object(
+                self.module, "sample_once", side_effect=samples
+            ):
                 result = self.module.monitor(
                     workspace=root,
                     output=output,

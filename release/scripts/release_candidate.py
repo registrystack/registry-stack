@@ -724,7 +724,7 @@ def validate_receipt(
     now: datetime | None = None,
     promotion: bool = False,
     promoted_identities: set[str] | None = None,
-    trusted_run: dict[str, Any] | None = None,
+    workflow_run_metadata: dict[str, Any] | None = None,
     expected_builders: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     receipt = require_object(document, "receipt", TOP_LEVEL_FIELDS)
@@ -785,12 +785,12 @@ def validate_receipt(
     if created_at > current + timedelta(minutes=5):
         raise CandidateError("candidate creation timestamp is future-dated")
     if promotion:
-        if trusted_run is None:
+        if workflow_run_metadata is None:
             raise CandidateError(
                 "promotion requires independently fetched trusted workflow-run metadata"
             )
-        trusted = require_object(
-            trusted_run,
+        workflow_run = require_object(
+            workflow_run_metadata,
             "trusted workflow run",
             {
                 "id",
@@ -802,10 +802,10 @@ def validate_receipt(
                 "created_at",
             },
         )
-        trusted_created_at = parse_timestamp(
-            trusted["created_at"], "trusted workflow run.created_at"
+        workflow_run_created_at = parse_timestamp(
+            workflow_run["created_at"], "trusted workflow run.created_at"
         )
-        trusted_expectations = {
+        workflow_run_expectations = {
             "id": run_id,
             "run_attempt": run_attempt,
             "event": "repository_dispatch",
@@ -813,17 +813,20 @@ def validate_receipt(
             "path": WORKFLOW_PATH,
             "conclusion": "success",
         }
-        for field, expected in trusted_expectations.items():
-            if trusted[field] != expected:
+        for field, expected in workflow_run_expectations.items():
+            if workflow_run[field] != expected:
                 raise CandidateError(
                     f"trusted workflow run {field} mismatch: "
-                    f"expected {expected!r}, got {trusted[field]!r}"
+                    f"expected {expected!r}, got {workflow_run[field]!r}"
                 )
-        if created_at < trusted_created_at:
+        if created_at < workflow_run_created_at:
             raise CandidateError(
                 "receipt creation timestamp predates the trusted workflow run"
             )
-        if current - trusted_created_at > MAX_PROMOTION_AGE or current >= expires_at:
+        if (
+            current - workflow_run_created_at > MAX_PROMOTION_AGE
+            or current >= expires_at
+        ):
             raise CandidateError(
                 "candidate trusted workflow run is stale or receipt is expired for promotion"
             )
@@ -975,7 +978,7 @@ def artifact_metadata_from_json(document: Any) -> dict[int, tuple[str, str]]:
     return metadata
 
 
-def trusted_run_from_json(document: Any) -> dict[str, Any]:
+def workflow_run_from_json(document: Any) -> dict[str, Any]:
     """Normalize the independently fetched GitHub Actions run API response."""
     if not isinstance(document, dict):
         raise CandidateError("trusted workflow-run metadata must be an object")
@@ -1214,7 +1217,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify.add_argument("--run-id", type=int)
     verify.add_argument("--run-attempt", type=int)
     verify.add_argument("--promotion", action="store_true")
-    verify.add_argument("--trusted-run-metadata", type=Path)
+    verify.add_argument(
+        "--trusted-run-metadata", dest="workflow_run_metadata", type=Path
+    )
     verify.add_argument("--expected-builders", type=Path)
     verify.add_argument("--promoted-identities", type=Path)
 
@@ -1239,7 +1244,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_binding = subparsers.add_parser("verify-tag-binding")
     verify_binding.add_argument("--message", type=Path, required=True)
     verify_binding.add_argument("--receipt", type=Path, required=True)
-    verify_binding.add_argument("--trusted-run-metadata", type=Path, required=True)
+    verify_binding.add_argument(
+        "--trusted-run-metadata",
+        dest="workflow_run_metadata",
+        type=Path,
+        required=True,
+    )
     verify_binding.add_argument("--expected-builders", type=Path, required=True)
 
     promotion_state = subparsers.add_parser("verify-promotion-state")
@@ -1282,9 +1292,9 @@ def main(argv: list[str] | None = None) -> int:
                 expected_run_id=args.run_id,
                 expected_run_attempt=args.run_attempt,
                 promotion=args.promotion,
-                trusted_run=(
-                    trusted_run_from_json(read_json(args.trusted_run_metadata))
-                    if args.trusted_run_metadata
+                workflow_run_metadata=(
+                    workflow_run_from_json(read_json(args.workflow_run_metadata))
+                    if args.workflow_run_metadata
                     else None
                 ),
                 expected_builders=(
@@ -1364,7 +1374,9 @@ def main(argv: list[str] | None = None) -> int:
                 expected_run_id=binding["run_id"],
                 expected_run_attempt=binding["run_attempt"],
                 promotion=True,
-                trusted_run=trusted_run_from_json(read_json(args.trusted_run_metadata)),
+                workflow_run_metadata=workflow_run_from_json(
+                    read_json(args.workflow_run_metadata)
+                ),
                 expected_builders=read_json(args.expected_builders),
             )
             print(
