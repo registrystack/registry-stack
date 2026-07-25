@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+CI_CLASSIFIER = ROOT / ".github" / "scripts" / "ci_changes.py"
 
 REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
@@ -20,34 +21,58 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "Pull request concurrency cancellation",
         "cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
     ),
+    ("Merge queue trigger", "merge_group:"),
     (
-        "CI workflow path classification",
-        ".github/workflows/ci.yml)\n                  mark_all\n                  ;;",
+        "CI classifier invocation",
+        "python3 .github/scripts/ci_changes.py",
     ),
     (
-        "Release workflow path classification",
-        ".github/workflows/release.yml)\n                  release_tool=true\n                  release_source_proof=true\n                  ;;",
+        "CI classifier tests",
+        "run: python3 .github/scripts/test_ci_changes.py",
     ),
     (
-        "Other workflow path classification",
-        ".github/workflows/*)\n                  mark_all\n                  ;;",
+        "CI workflow change classification",
+        '".github/workflows/ci.yml",',
+    ),
+    (
+        "Release workflow change classification",
+        '".github/workflows/release.yml",',
     ),
     (
         "Debian 13 image contract",
         "run: python3 release/scripts/check-debian13-images.py",
     ),
-    ("Cargo metadata", "run: cargo metadata --locked --format-version 1"),
+    ("Cargo metadata", "cargo metadata --locked --format-version 1"),
     (
         "Manifest profile validation",
-        "run: cargo run --locked -p registry-manifest-cli -- validate-profiles profiles",
+        "run: cargo run --locked --profile ci -p registry-manifest-cli -- validate-profiles profiles",
     ),
     ("Format", "run: cargo fmt --check"),
-    ("Workspace check", "run: cargo check --locked --workspace --all-targets"),
-    ("Clippy", "run: cargo clippy --workspace --all-targets -- -D warnings"),
-    ("Workspace tests", "run: cargo test --locked --workspace"),
     (
-        "Relay all-features tests",
-        "run: cargo test --locked -p registry-relay --all-features",
+        "Affected package clippy",
+        "run: python3 .github/scripts/run_cargo_packages.py clippy",
+    ),
+    (
+        "Affected package tests",
+        "run: python3 .github/scripts/run_cargo_packages.py test",
+    ),
+    (
+        "Rust shard matrix",
+        "matrix: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}",
+    ),
+    (
+        "Relay all-features shard",
+        '"all_features": shard_name == "relay"',
+    ),
+    ("Disk-bounded Rust cache", "cache-targets: false"),
+    ("Rust disk telemetry", "du -sh target 2>/dev/null || true"),
+    (
+        "Required Rust aggregate",
+        "rust-result:\n    name: Rust workspace",
+    ),
+    (
+        "Stable CI aggregate",
+        "ci-result:\n    name: CI result",
     ),
     ("Cargo deny", "run: cargo deny check"),
     (
@@ -56,23 +81,15 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Config report platform path",
-        "crates/registry-config-report/*|crates/registry-platform-*",
+        '"crates/registry-config-report/*",',
     ),
     (
         "Platform hygiene path filter",
         "platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}",
     ),
     (
-        "Platform all-features build",
-        "run: cargo build --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features",
-    ),
-    (
         "Platform all-features clippy",
         "run: cargo clippy --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features -- -D warnings",
-    ),
-    (
-        "Platform all-features tests",
-        "run: cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features",
     ),
     ("Platform coverage job", "platform-coverage:"),
     ("Platform coverage version pin", 'CARGO_LLVM_COV_VERSION: "0.8.7"'),
@@ -203,19 +220,19 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Base-reference compatibility input",
-        "STABLE_SURFACE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}",
+        "STABLE_SURFACE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}",
     ),
     (
         "OpenAPI base-reference input",
-        "OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}",
+        "OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}",
     ),
     (
         "Stable error registry path filter",
-        "docs/site/src/content/docs/reference/errors.mdx)",
+        '"docs/site/src/content/docs/reference/errors.mdx",',
     ),
     (
         "Relay support roster path filter",
-        "docs/site/src/data/relay-support.yaml|docs/site/src/data/generated/relay-support.json)",
+        '"docs/site/src/data/relay-support.yaml",',
     ),
     ("Docs dependency install", "run: npm ci"),
     ("Docs tests", "run: npm test"),
@@ -240,8 +257,13 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
 )
 
 
-def missing_gates(workflow_text: str) -> list[str]:
-    return [name for name, snippet in REQUIRED_GATES if snippet not in workflow_text]
+def missing_gates(
+    workflow_text: str, classifier_text: str | None = None
+) -> list[str]:
+    if classifier_text is None:
+        classifier_text = CI_CLASSIFIER.read_text(encoding="utf-8")
+    inventory_text = f"{workflow_text}\n{classifier_text}"
+    return [name for name, snippet in REQUIRED_GATES if snippet not in inventory_text]
 
 
 def nested_workflow_paths(paths: list[str]) -> list[str]:
