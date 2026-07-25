@@ -36,11 +36,6 @@ class RegistryReleaseTest(unittest.TestCase):
         )
         jobs = workflow["jobs"]
         required_contexts = {
-            "rust": (
-                "rust-required",
-                "Rust workspace",
-                "rust",
-            ),
             "release-tool": (
                 "release-tool-required",
                 "Release tooling",
@@ -96,6 +91,36 @@ class RegistryReleaseTest(unittest.TestCase):
                     "success:true:success|success:false:skipped",
                     step["run"],
                 )
+
+    def test_required_rust_context_aggregates_path_gated_shards(self) -> None:
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        )
+        jobs = workflow["jobs"]
+        rust_result = jobs["rust-result"]
+
+        self.assertEqual("Rust workspace", rust_result["name"])
+        self.assertEqual("always()", rust_result["if"])
+        self.assertEqual(
+            {
+                "changes",
+                "rust-policy",
+                "rust-quality",
+                "rust-tests",
+                "notary-contracts",
+                "relay-contracts",
+            },
+            set(rust_result["needs"]),
+        )
+        self.assertEqual(
+            "${{ toJSON(needs) }}",
+            rust_result["env"]["RUST_JOB_RESULTS"],
+        )
+        self.assertEqual(1, len(rust_result["steps"]))
+        self.assertIn(
+            'details["result"] not in {"success", "skipped"}',
+            rust_result["steps"][0]["run"],
+        )
 
     def test_maintained_images_follow_debian13_contract(self) -> None:
         module = load_debian13_image_check()

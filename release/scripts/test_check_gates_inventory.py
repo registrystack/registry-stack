@@ -26,13 +26,6 @@ def extract_top_level_block(workflow: str, name: str) -> str:
     return "\n".join(lines[start:end]).rstrip()
 
 
-def extract_classifier_arm(workflow: str, pattern: str) -> list[str]:
-    lines = workflow.splitlines()
-    start = lines.index(f"                {pattern})") + 1
-    end = lines.index("                  ;;", start)
-    return [line.strip() for line in lines[start:end]]
-
-
 def load_module():
     spec = importlib.util.spec_from_file_location("check_gates_inventory", SCRIPT)
     if spec is None or spec.loader is None:
@@ -46,6 +39,9 @@ class GateInventoryTest(unittest.TestCase):
     def setUp(self) -> None:
         self.module = load_module()
         self.workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.classifier = (ROOT / ".github" / "scripts" / "ci_changes.py").read_text(
             encoding="utf-8"
         )
         self.gitleaks_config = (ROOT / ".gitleaks.toml").read_text(encoding="utf-8")
@@ -71,22 +67,14 @@ class GateInventoryTest(unittest.TestCase):
             extract_top_level_block(self.workflow, "concurrency"),
         )
 
-    def test_ci_workflow_change_marks_all_gates(self) -> None:
-        self.assertEqual(
-            ["mark_all"],
-            extract_classifier_arm(self.workflow, ".github/workflows/ci.yml"),
+    def test_ci_classifier_and_its_tests_are_wired(self) -> None:
+        self.assertIn(
+            "python3 .github/scripts/ci_changes.py",
+            self.workflow,
         )
-
-    def test_release_workflow_change_marks_only_release_gates(self) -> None:
-        self.assertEqual(
-            ["release_tool=true", "release_source_proof=true"],
-            extract_classifier_arm(self.workflow, ".github/workflows/release.yml"),
-        )
-
-    def test_other_workflow_change_marks_all_gates(self) -> None:
-        self.assertEqual(
-            ["mark_all"],
-            extract_classifier_arm(self.workflow, ".github/workflows/*"),
+        self.assertIn(
+            "run: python3 .github/scripts/test_ci_changes.py",
+            self.workflow,
         )
 
     def test_real_repository_has_no_tracked_nested_workflows(self) -> None:
@@ -172,51 +160,42 @@ class GateInventoryTest(unittest.TestCase):
         )
 
     def test_missing_release_workflow_classification_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "                .github/workflows/release.yml)\n"
-            "                  release_tool=true\n"
-            "                  release_source_proof=true\n"
-            "                  ;;",
-            "                .github/workflows/release.yml)\n"
-            "                  mark_all\n"
-            "                  ;;",
+        classifier = self.classifier.replace(
+            '".github/workflows/release.yml",',
+            '".github/workflows/disabled-release.yml",',
         )
         self.assertIn(
-            "Release workflow path classification", self.module.missing_gates(text)
+            "Release workflow change classification",
+            self.module.missing_gates(self.workflow, classifier),
         )
 
-    def test_missing_platform_all_features_gate_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features",
-            "cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets",
+    def test_missing_relay_all_features_shard_is_reported(self) -> None:
+        classifier = self.classifier.replace(
+            '"all_features": shard_name == "relay"',
+            '"all_features": False',
         )
         self.assertIn(
-            "Platform all-features tests", self.module.missing_gates(text)
+            "Relay all-features shard",
+            self.module.missing_gates(self.workflow, classifier),
         )
 
     def test_missing_config_report_platform_path_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "crates/registry-config-report/*|crates/registry-platform-*",
-            "crates/registry-platform-*",
-        )
-        self.assertIn("Config report platform path", self.module.missing_gates(text))
-
-    def test_missing_config_report_platform_test_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features",
-            "cargo test --locked -p 'registry-platform-*' --all-targets --all-features",
+        classifier = self.classifier.replace(
+            '"crates/registry-config-report/*",',
+            '"crates/removed-config-report/*",',
         )
         self.assertIn(
-            "Platform all-features tests", self.module.missing_gates(text)
+            "Config report platform path",
+            self.module.missing_gates(self.workflow, classifier),
         )
 
-    def test_missing_config_report_platform_build_is_reported(self) -> None:
+    def test_missing_affected_package_test_is_reported(self) -> None:
         text = self.workflow.replace(
-            "cargo build --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features",
-            "cargo build --locked -p 'registry-platform-*' --all-targets --all-features",
+            "run: python3 .github/scripts/run_cargo_packages.py test",
+            "run: python3 .github/scripts/run_cargo_packages.py skip-tests",
         )
         self.assertIn(
-            "Platform all-features build", self.module.missing_gates(text)
+            "Affected package tests", self.module.missing_gates(text)
         )
 
     def test_missing_config_report_platform_clippy_is_reported(self) -> None:
@@ -296,8 +275,8 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_missing_manifest_profile_validation_is_reported(self) -> None:
         text = self.workflow.replace(
-            "cargo run --locked -p registry-manifest-cli -- validate-profiles profiles",
-            "cargo run --locked -p registry-manifest-cli -- skip-profile-validation",
+            "cargo run --locked --profile ci -p registry-manifest-cli -- validate-profiles profiles",
+            "cargo run --locked --profile ci -p registry-manifest-cli -- skip-profile-validation",
         )
         self.assertIn("Manifest profile validation", self.module.missing_gates(text))
 
@@ -369,7 +348,7 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_missing_openapi_base_reference_is_reported(self) -> None:
         text = self.workflow.replace(
-            "OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}",
+            "OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}",
             "OPENAPI_CONTRACT_BASE_REF: disabled",
         )
         self.assertIn("OpenAPI base-reference input", self.module.missing_gates(text))
@@ -403,18 +382,24 @@ class GateInventoryTest(unittest.TestCase):
         )
 
     def test_missing_stable_error_registry_path_filter_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "docs/site/src/content/docs/reference/errors.mdx)",
-            "docs/site/src/content/docs/reference/removed-errors.mdx)",
+        classifier = self.classifier.replace(
+            '"docs/site/src/content/docs/reference/errors.mdx",',
+            '"docs/site/src/content/docs/reference/removed-errors.mdx",',
         )
-        self.assertIn("Stable error registry path filter", self.module.missing_gates(text))
+        self.assertIn(
+            "Stable error registry path filter",
+            self.module.missing_gates(self.workflow, classifier),
+        )
 
     def test_missing_relay_support_roster_path_filter_is_reported(self) -> None:
-        text = self.workflow.replace(
-            "docs/site/src/data/relay-support.yaml|docs/site/src/data/generated/relay-support.json)",
-            "docs/site/src/data/removed-relay-support.yaml)",
+        classifier = self.classifier.replace(
+            '"docs/site/src/data/relay-support.yaml",',
+            '"docs/site/src/data/removed-relay-support.yaml",',
         )
-        self.assertIn("Relay support roster path filter", self.module.missing_gates(text))
+        self.assertIn(
+            "Relay support roster path filter",
+            self.module.missing_gates(self.workflow, classifier),
+        )
 
     def test_missing_registryctl_tutorial_path_filter_is_reported(self) -> None:
         text = self.workflow.replace(
