@@ -2160,7 +2160,7 @@ def run_release_plan(
     return 0
 
 
-def trusted_candidate_builders(repo: Path) -> dict[str, str]:
+def candidate_builder_contract(repo: Path) -> dict[str, str]:
     binary_recipe = repo / "release/scripts/build-release-binaries.sh"
     image_recipe = repo / "release/scripts/build-release-image.sh"
     for path in (binary_recipe, image_recipe):
@@ -2385,8 +2385,8 @@ def verify_candidate_run_for_finalize(
             )
         )
         artifacts_path.write_text(json.dumps(artifacts_document), encoding="utf-8")
-        trusted_run = release_candidate.trusted_run_from_json(run_document)
-        run_attempt = trusted_run["run_attempt"]
+        workflow_run = release_candidate.workflow_run_from_json(run_document)
+        run_attempt = workflow_run["run_attempt"]
         try:
             attempt_artifacts = release_candidate.validate_attempt_artifact_inventory(
                 artifacts_document,
@@ -2443,7 +2443,7 @@ def verify_candidate_run_for_finalize(
             )
 
         expected_builders_path = temporary / "expected-builders.json"
-        expected_builders = trusted_candidate_builders(repo)
+        expected_builders = candidate_builder_contract(repo)
         expected_builders_path.write_text(
             json.dumps(expected_builders, sort_keys=True), encoding="utf-8"
         )
@@ -2511,7 +2511,7 @@ def verify_candidate_run_for_finalize(
                 expected_run_id=candidate_run,
                 expected_run_attempt=run_attempt,
                 promotion=True,
-                trusted_run=trusted_run,
+                workflow_run_metadata=workflow_run,
                 expected_builders=expected_builders,
                 promoted_identities=promoted_identities,
             )

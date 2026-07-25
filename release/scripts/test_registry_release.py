@@ -785,6 +785,11 @@ class RegistryReleaseTest(unittest.TestCase):
             for step in verification["steps"]
             if isinstance(step, dict)
         )
+        source_verification = next(
+            step["run"]
+            for step in workflow["jobs"]["verify"]["steps"]
+            if step.get("name") == "Validate tag source without rebuilding"
+        )
         publish_script = "\n".join(
             step.get("run", "")
             for step in publish_images["steps"]
@@ -796,6 +801,11 @@ class RegistryReleaseTest(unittest.TestCase):
 
         self.assertNotIn("write", verification["permissions"].values())
         self.assertIn("--release-id", verification_script)
+        self.assertIn(
+            'test "$(git rev-parse refs/remotes/origin/main)" = \\\n'
+            '  "${{ steps.release.outputs.tag_target }}"',
+            source_verification,
+        )
         self.assertEqual("read", publish_images["permissions"]["contents"])
         self.assertEqual("write", publish_images["permissions"]["packages"])
         self.assertNotIn("id-token", publish_images["permissions"])
