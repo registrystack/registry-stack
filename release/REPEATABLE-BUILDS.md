@@ -4,6 +4,112 @@ Registry Stack release builds are intended to be repeatable from the release
 tag, locked dependencies, and the pinned release builder image declared in
 `.github/workflows/release.yml`.
 
+## v0.13.0 Linux amd64 Binary and OCI Image Proof
+
+On 2026-07-25, `v0.13.0` was rebuilt and compared at both the release
+preparation commit and the annotated tag target, then compared with the
+successful published release workflow. The full proof was repeated because
+the shipped binaries and reviewed root filesystems changed after `v0.12.2`.
+
+- Preparation commit (`P`):
+  `d45761a0104bd3d9c2e4b4db391d4223f289bd44`
+- Annotated tag object:
+  `9afcd6bc834ed19d8a14b906644b8530fdc211e5`
+- Tag target (`T`): `985022e58c627967480b8ad304fbbd250ec7193d`
+- Published release:
+  <https://github.com/registrystack/registry-stack/releases/tag/v0.13.0>
+- Successful release workflow:
+  <https://github.com/registrystack/registry-stack/actions/runs/30154192076>
+
+### Canonical binary builds
+
+Two independent builds at `P` and two independent builds at `T` used clean
+source worktrees, initially empty independent Cargo and target directories,
+and the canonical container paths implemented by
+`release/scripts/build-release-binaries.sh`. All four builds produced
+byte-identical Linux amd64 release binaries and image inputs. `P` and `T` also
+matched each other exactly.
+
+The release-binary SHA-256 inventory common to all four builds was:
+
+```text
+db494720c6e52e52492ae1d0a12de6707176fd22ed4bba3ce961846ef0659cb7  registry-manifest-v0.13.0-linux-amd64
+de948aefdbec5df7a4ab1384bef024d5b5c478a777f3ce5ca480e05d1ab01b77  registry-notary-v0.13.0-linux-amd64
+02e102218bc322606f27b177eca5845848002834badc21bbe6880481a8a25785  registry-notary-cel-worker-v0.13.0-linux-amd64
+e60c2764cdc7bcf86bffe71d6c73982a1323c34399b78d8c9644e96bf8df020d  registry-relay-v0.13.0-linux-amd64
+8e654bfd2b11d491353cb2291a8357d76b02e1ebed89c65eb9a0454d0047e1f1  registry-relay-rhai-worker-v0.13.0-linux-amd64
+24a0fd3edc994774779e88645d45dd9a81ec2473f24e88bca419af2fba600b39  registryctl-v0.13.0-linux-amd64
+```
+
+The image-input SHA-256 inventory common to all four builds was:
+
+```text
+f59ca2916e4f8868c7c857f3cfbb7e0799e1880ccb859831ac283e3ee4695389  RELEASE_BUILDER_IMAGE
+dc26397b47320c7128832d9662e4524e76c598f329d1eb5b3299c0bfcfa1dd38  registry-notary
+02e102218bc322606f27b177eca5845848002834badc21bbe6880481a8a25785  registry-notary-cel-worker
+e60c2764cdc7bcf86bffe71d6c73982a1323c34399b78d8c9644e96bf8df020d  registry-relay
+8e654bfd2b11d491353cb2291a8357d76b02e1ebed89c65eb9a0454d0047e1f1  registry-relay-rhai-worker
+```
+
+The Linux binary and image-input artifacts downloaded from release workflow
+run `30154192076` were byte-identical to both retained `T` inventories and
+every listed file.
+
+### OCI image builds and publication
+
+Two no-cache builds at both `P` and `T` used the shared release-image wrapper,
+new pinned BuildKit builders, the same image refs within each pair, and
+deliberately different input mtimes. For each product, the two builds at each
+ref had identical OCI layout bytes, application manifest, config, ordered
+rootfs layers, and referenced blobs.
+
+The exact Registry Notary equality targets at `T` were:
+
+- Application manifest:
+  `sha256:b3bd8a780d2624023e38a108513703507b9f1a5d07e6c886c110d67f05b430da`
+- Ordered rootfs-layers digest:
+  `sha256:22a18dcdaf3a6d0764de0d8476b673052a627e5149ea514dda9372ec3aa4d35f`
+- Reviewed rootfs aggregate:
+  `sha256:2278147669c7f00534ca8b75f1ff14f00a01fb4719141adbc597d35909b13190`
+
+The exact Registry Relay equality targets at `T` were:
+
+- Application manifest:
+  `sha256:a162068c7740cefbe080ae96fd857dd1d882a3f0887c9be5a342cff1157009b9`
+- Ordered rootfs-layers digest:
+  `sha256:fd2ff75a143a01ae12582c4df8b8702e09e33588ca617fa87967f54cf94056b9`
+- Reviewed rootfs aggregate:
+  `sha256:1134de7c597865c38d549848695b903d06be3ed50a5275e7cef57ebb614d17d5`
+
+The retained `P` and `T` root filesystems matched for both products. Immutable
+digest-bound scans at both refs passed the public advisory-baseline policy
+with three reviewed, non-fixable Debian `libc6` findings, no fixable findings,
+and no unreviewed, expired, invalid, or stale blocking finding.
+
+The published Linux amd64 application manifests are exactly the Notary and
+Relay application-manifest digests above, and all 23 ordered rootfs layer
+descriptors for each published image match the retained `T` layouts. The
+published OCI index digests are
+`sha256:6848ad62789bd6e5a1af4262f85e9a0110bea9ed8e3f9297adab19cb62f8f297`
+for Notary and
+`sha256:00681003d06667cde377e15640a3825eec97aca26f486cde2e9f5013ef56819e`
+for Relay. Each published index contains one Linux amd64 application manifest
+and one associated BuildKit provenance attestation manifest bound to `T`.
+
+### Scope and exclusions
+
+This proof covers the six hermetic Linux amd64 release binaries, the four
+runtime image-input binaries, the release-builder identity record, and both
+Linux amd64 application images. The separately built Registryctl Linux arm64
+and macOS arm64 binaries were not independently rebuilt.
+
+This proof makes no bit-for-bit reproducibility claim for SBOM, Grype report,
+release capsule, signature, certificate, or SLSA provenance bytes. A
+provenance-bearing published OCI index digest is not expected to equal a
+provenance-disabled local comparison layout. OCI image signatures were not
+published; the release workflow's cosign signatures cover GitHub Release
+payloads.
+
 ## v0.12.2 Linux amd64 Binary and OCI Image Proof
 
 On 2026-07-20 and 2026-07-21, `v0.12.2` was rebuilt and compared at both the
