@@ -106,10 +106,11 @@ to choose an empty report directory and `--host-port` only when a fixed free
 loopback port is required. The default output is under
 `target/relay-oidc-smoke/`, which Git ignores.
 
-The release-owned topology is the default. An optional Solmara adopter
-exercise must add
-`--topology solmara --solmara-source-ref '<40-lowercase-hex-commit>'`;
-an unpinned Solmara checkout is rejected.
+Live execution currently supports only the release-owned topology. Solmara may
+be selected for candidate-neutral planning with
+`plan --topology solmara --solmara-source-ref '<40-lowercase-hex-commit>'`,
+but the plan records no live evidence. A Solmara `run` fails closed until this
+runner consumes and hashes the pinned Solmara checkout.
 
 If teardown fails, treat the run as an error. The diagnostic includes the exact
 random Compose project name only in the local command output, so an operator

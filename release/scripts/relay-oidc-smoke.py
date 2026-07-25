@@ -957,8 +957,12 @@ def add_candidate_args(parser: argparse.ArgumentParser) -> None:
         "--topology",
         choices=("release-owned", "solmara"),
         default="release-owned",
+        help="candidate topology; live execution currently supports release-owned only",
     )
-    parser.add_argument("--solmara-source-ref")
+    parser.add_argument(
+        "--solmara-source-ref",
+        help="pinned Solmara commit for planning; Solmara live execution is unsupported",
+    )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
