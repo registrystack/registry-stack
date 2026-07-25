@@ -31,12 +31,6 @@ identity reads, and inspect the contract Registry Stack generated.
 This tutorial uses synthetic data and local demo credentials.
 Do not use the generated local keys in production.
 
-:::note[Current first-run route]
-The v0.13.0 source beta and this local tutorial can be used while hosted credential publication is
-held by [GH#330](https://github.com/registrystack/registry-stack/issues/330) and the incomplete
-[GH#198](https://github.com/registrystack/registry-stack/issues/198) fresh-reader run.
-:::
-
 ## Install registryctl
 
 Install `registryctl` without cloning the repository:
@@ -485,7 +479,6 @@ Relay refused to start when the floor dropped under 2 on personal data.
 | `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, OrbStack, Colima, Podman, or your supported provider, then run `registryctl start` again. |
 | Docker reports no `linux/arm64` manifest for a Registry Stack image | The v0.13.0 Relay and Notary images are published for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`. |
 | `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | The locally cached container image does not match the digest-pinned image in the generated `compose.yaml`. | Run `docker compose pull` in the project directory (on Apple silicon, prefix it with `DOCKER_DEFAULT_PLATFORM=linux/amd64`), then `registryctl start` again. |
-| `registryctl start` times out and the container log shows `missing field \`commitment\`` | registryctl v0.8.4 pins a service image older than its own generated config format ([GH#278](https://github.com/registrystack/registry-stack/issues/278)). | Pin the project's `compose.yaml` to the published v0.8.4 release digests: `ghcr.io/registrystack/registry-relay@sha256:93e194500a3500ba3f6331d5a0a9a3069127c48a709beccb083a5fcbdbc3ec61` and, when present, `ghcr.io/registrystack/registry-notary@sha256:0cf05184885d7ed17dd9889e20f3797eb2a9ad07517f4ac7c05c03b774a00b8f`. Then run `docker compose pull`; reapply the pins after a generation command rewrites `compose.yaml`. |
 | `registryctl init` reports that its image lock is missing or invalid | The binary was moved or built without the strict image lock from the same release, or the file failed its release, source, platform, or digest checks. | Rerun the installer from the same pinned target tag so it checksum-verifies and installs both files. For an operator-managed or source-test location, set `REGISTRYCTL_IMAGE_LOCK` to the checksum-verified lock from that exact release. Do not substitute a lock from another version or a mutable image tag. |
 | `registryctl start` fails with `Relay did not become healthy and ready before timeout` after a config edit | The edited `relay/config.yaml` fails validation, so the container exits at startup. | Run `registryctl logs`, fix the field named in the `ERROR` line, then run `registryctl stop` and `registryctl start` again. |
 | A row read returns `403 Forbidden` | The key is valid but lacks the row-read scope. | Use `ROW_READER_RAW` for row reads. |
