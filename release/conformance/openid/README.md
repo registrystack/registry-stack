@@ -225,11 +225,12 @@ review, warning, and failure counts.
 The summary records:
 
 - the authenticated release tag target, manifest source ref, signed capsule,
-  image-lock hashes, exact Registry Notary image digest, and the explicit
-  operator-attested endpoint association;
+  image-lock hashes, and exact Registry Notary image digest;
+- the exact issuer URL from the signed runtime configuration and its explicit
+  operator-attested association with the candidate deployment;
 - the pinned 40-character suite commit, release tag, signed export's matching
-  reported version and origin, exact scenario, plan, module, variants, and the
-  explicit operator-attested commit association;
+  reported version and origin, exact scenario, expected plan, module, variants,
+  and the explicit operator-attested plan and commit associations;
 - the canonical SHA-256 digest of the captured suite JWKS and successful
   exact-byte export signature verification;
 - SHA-256 digests of the checked-in plan map and configuration template;
@@ -268,8 +269,9 @@ that boundary. A failed, warned, skipped, review, or unknown result remains
 visible and is never upgraded to a pass.
 
 A promoted summary is still unreviewed candidate output until a maintainer
-checks the authenticated candidate assets, operator-attested endpoint
-association, and result. The full issuer scenario remains explicitly
+checks the authenticated candidate assets, the recorded issuer URL's
+operator-attested candidate association, the expected plan association, and
+the result. The full issuer scenario remains explicitly
 unsupported because the upstream profile requires behavior outside Registry
 Notary 1.0. The offer adapter is no longer a blocker; it closes only the
 callback transport gap.

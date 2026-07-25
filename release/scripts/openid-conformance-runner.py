@@ -32,7 +32,6 @@ from string import Template
 from typing import Any
 
 from closed_json_schema import SchemaValidationError, validate_against_schema
-from conformance_candidate import CandidateError, load_candidate
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -654,19 +653,48 @@ def validate_considered_log_bindings(
             raise RunnerError("suite export log entry does not match the selected run")
 
 
-def validate_https_url(value: Any, label: str) -> None:
-    if not isinstance(value, str) or len(value) > 2048:
+def validate_https_url(value: Any, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) > 2048
+        or "\\" in value
+        or any(
+            character.isspace()
+            or ord(character) < 0x20
+            or ord(character) == 0x7F
+            for character in value
+        )
+    ):
         raise RunnerError(f"suite runtime configuration {label} is invalid")
-    parsed = urllib.parse.urlsplit(value)
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise RunnerError(
+            f"suite runtime configuration {label} is invalid"
+        ) from None
+    hostname = parsed.hostname
     if (
         parsed.scheme != "https"
-        or not parsed.hostname
+        or not hostname
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
+        or (
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*", hostname) is None
+            and re.fullmatch(r"[0-9A-Fa-f:.]+", hostname) is None
+        )
     ):
         raise RunnerError(f"suite runtime configuration {label} is invalid")
+    normalized_host = (
+        f"[{hostname.lower()}]" if ":" in hostname else hostname.lower()
+    )
+    if port is not None:
+        normalized_host = f"{normalized_host}:{port}"
+    return urllib.parse.urlunsplit(
+        ("https", normalized_host, parsed.path, "", "")
+    )
 
 
 def redacted_runtime_configuration_sha256(
@@ -771,6 +799,7 @@ def assert_public_summary_safe(
         "classification",
         "configuration",
         "contains_sensitive_material",
+        "deployment",
         "raw_suite_export_included",
         "review_required",
         "run",
@@ -828,7 +857,6 @@ def candidate_evidence_summary(candidate: dict[str, Any]) -> dict[str, Any]:
     except KeyError:
         raise RunnerError("authenticated candidate result is incomplete") from None
     selected["release_assets_authenticity_verified"] = True
-    selected["tested_endpoint_association"] = EVIDENCE_ASSOCIATION
     return selected
 
 
@@ -893,6 +921,9 @@ def build_evidence_summary(
     runtime_config_sha256 = redacted_runtime_configuration_sha256(
         test_info.get("config"), template, modules[0]
     )
+    issuer_url = validate_https_url(
+        test_info["config"]["vci"]["credential_issuer_url"], "issuer URL"
+    )
     unsupported = [
         {
             "scenario_id": item["id"],
@@ -914,6 +945,10 @@ def build_evidence_summary(
         "contains_sensitive_material": False,
         "raw_suite_export_included": False,
         "candidate": candidate_evidence_summary(candidate),
+        "deployment": {
+            "issuer_url": issuer_url,
+            "candidate_association": EVIDENCE_ASSOCIATION,
+        },
         "suite": {
             "repository": plan_map["suite"]["repo"],
             "commit": suite_ref,
@@ -926,7 +961,8 @@ def build_evidence_summary(
         },
         "scenario": {
             "scenario_id": scenario["id"],
-            "plan": scenario["suite_plan"],
+            "expected_plan": scenario["suite_plan"],
+            "plan_association": EVIDENCE_ASSOCIATION,
             "modules": modules,
             "variants": scenario["variants"],
         },
@@ -1435,7 +1471,7 @@ def cmd_promote_evidence(args: argparse.Namespace) -> int:
         raise RunnerError("evidence scenario must select exactly one suite module")
     suite_jwks, suite_jwks_sha256 = load_suite_jwks(args.suite_jwks)
     exported = load_suite_export(args.suite_export, modules[0], suite_jwks)
-    candidate = load_candidate(args.release_manifest, args.image_lock)
+    candidate = load_authenticated_candidate(args.release_manifest, args.image_lock)
     try:
         summary, sensitive_values = build_evidence_summary(
             plan_map,
@@ -1463,6 +1499,22 @@ def cmd_promote_evidence(args: argparse.Namespace) -> int:
     output = write_new_file(args.output, encoded)
     print(output)
     return 0
+
+
+def load_authenticated_candidate(
+    release_manifest: Path, image_lock: Path
+) -> dict[str, Any]:
+    try:
+        from conformance_candidate import CandidateError, load_candidate
+    except ModuleNotFoundError as exc:
+        dependency = exc.name or "the candidate validation dependency"
+        raise RunnerError(
+            f"promote-evidence requires {dependency}; install the release tooling dependencies"
+        ) from None
+    try:
+        return load_candidate(release_manifest, image_lock)
+    except CandidateError as exc:
+        raise RunnerError(str(exc)) from None
 
 
 def add_common(parser: argparse.ArgumentParser) -> None:
@@ -1620,7 +1672,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(args.func(args))
     except (
-        CandidateError,
         OSError,
         json.JSONDecodeError,
         KeyError,
