@@ -68,10 +68,10 @@ class RegistryReleaseTest(unittest.TestCase):
 
                 required_job = jobs[required_job_id]
                 self.assertEqual(context_name, required_job["name"])
-                self.assertEqual(
-                    {"changes", check_job_id},
-                    set(required_job["needs"]),
-                )
+                expected_needs = {"changes", check_job_id}
+                if check_job_id == "docs":
+                    expected_needs.add("docs-archives")
+                self.assertEqual(expected_needs, set(required_job["needs"]))
                 self.assertEqual("${{ always() }}", required_job["if"])
                 self.assertEqual(1, len(required_job["steps"]))
                 step = required_job["steps"][0]
@@ -784,6 +784,37 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("--verify-tag", step)
         self.assertIn("GitHub Release is no longer absent", step)
 
+    def test_release_workflow_builds_docs_without_publish_permissions(self) -> None:
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        )
+        docs_job = workflow["jobs"]["docs-archive"]
+        publisher = workflow["jobs"]["github-release"]
+        self.assertEqual(["verify"], [docs_job["needs"]])
+        self.assertEqual({"contents": "read"}, docs_job["permissions"])
+        checkout = next(
+            step
+            for step in docs_job["steps"]
+            if step.get("name", "").startswith("Checkout exact tag target")
+        )
+        self.assertFalse(checkout["with"]["persist-credentials"])
+        docs_script = "\n".join(
+            step.get("run", "")
+            for step in docs_job["steps"]
+            if isinstance(step, dict)
+        )
+        self.assertIn("npm run build:archive", docs_script)
+        self.assertIn("--verify-lock", docs_script)
+        self.assertIn("docs-archive", publisher["needs"])
+        self.assertIn("docs-archive", workflow["jobs"]["publish-images"]["needs"])
+        publish_script = "\n".join(
+            step.get("run", "")
+            for step in publisher["steps"]
+            if isinstance(step, dict)
+        )
+        self.assertIn("does not match immutable lock", publish_script)
+        self.assertIn("--require-registry-docs-archive", publish_script)
+
     def test_candidate_receipt_checks_its_in_progress_run_identity(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
@@ -1040,6 +1071,34 @@ class RegistryReleaseTest(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("has no release manifest", result.stderr)
+
+    def test_validate_docsets_rejects_missing_archive_lock_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            archive_lock = root / "archive-lock.yaml"
+            archive_lock.write_text(
+                yaml.safe_dump(
+                    {
+                        "schema_version": "registry-docs.archive-lock.v1",
+                        "archives": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+                "--archive-lock",
+                str(archive_lock),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("missing archived docset v0.8.0", result.stderr)
 
     def test_audit_import_map(self) -> None:
         result = run_tool("audit", "release/manifests/import-map-2026-06-24.yaml")
@@ -1481,6 +1540,69 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn(
             "requires exactly one registryctl release image lock", result.stderr
         )
+
+    def test_render_capsule_classifies_required_docs_archive_as_release_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_ref = init_release_repo(root)
+            manifest = write_manifest(root, source_ref=source_ref)
+            binary_dir = write_binary_fixture(root)
+            docs_archive = binary_dir / "registry-docs-v0.8.0.tar.gz"
+            docs_archive.write_bytes(b"immutable docs bundle\n")
+            checksums = "".join(
+                subprocess.check_output(
+                    ["sha256sum", path.name],
+                    cwd=binary_dir,
+                    text=True,
+                )
+                for path in sorted(binary_dir.iterdir())
+                if path.is_file() and path.name != "SHA256SUMS"
+            )
+            (binary_dir / "SHA256SUMS").write_text(checksums, encoding="utf-8")
+            binary_sbom_dir = write_binary_sbom_fixture(root, binary_dir)
+            image_dir = write_image_fixture(root)
+            output_json = root / "capsule.json"
+
+            result = render_capsule(
+                manifest,
+                binary_dir,
+                image_dir,
+                output_json,
+                root / "capsule.md",
+                root,
+                binary_sbom_dir=binary_sbom_dir,
+                require_registry_docs_archive=True,
+            )
+            evidence = json.loads(output_json.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        docs_files = [
+            item
+            for item in evidence["release_files"]
+            if item["kind"] == "registry-docs-archive"
+        ]
+        self.assertEqual(1, len(docs_files))
+        self.assertEqual("registry-docs-v0.8.0.tar.gz", docs_files[0]["name"])
+
+    def test_render_capsule_required_docs_archive_fails_when_omitted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_ref = init_release_repo(root)
+            manifest = write_manifest(root, source_ref=source_ref)
+            result = render_capsule(
+                manifest,
+                write_binary_fixture(root),
+                write_image_fixture(root),
+                root / "capsule.json",
+                root / "capsule.md",
+                root,
+                require_registry_docs_archive=True,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("requires exactly one registry docs archive", result.stderr)
 
     def test_render_capsule_includes_cross_platform_binaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2214,6 +2336,7 @@ def write_docset_fixture(root: Path) -> tuple[Path, Path]:
                 "docsets": [
                     {
                         "id": "v0.8.0",
+                        "status": "archived",
                         "source": "registry-stack-v0.8.0",
                         "products": {
                             "registry-stack": {
@@ -2227,6 +2350,20 @@ def write_docset_fixture(root: Path) -> tuple[Path, Path]:
                         },
                     }
                 ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "archive-lock.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "registry-docs.archive-lock.v1",
+                "archives": {
+                    "v0.8.0": {
+                        "bundle_sha256": "a" * 64,
+                        "tree_sha256": "b" * 64,
+                    }
+                },
             }
         ),
         encoding="utf-8",
@@ -2446,6 +2583,7 @@ def render_capsule(
     *,
     binary_sbom_dir: Path | None = None,
     require_registryctl_image_lock: bool = False,
+    require_registry_docs_archive: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     if binary_sbom_dir is None:
         binary_sbom_dir = write_binary_sbom_fixture(repo, binary_dir)
@@ -2477,6 +2615,8 @@ def render_capsule(
     ]
     if require_registryctl_image_lock:
         args.append("--require-registryctl-image-lock")
+    if require_registry_docs_archive:
+        args.append("--require-registry-docs-archive")
     return run_tool(*args)
 
 

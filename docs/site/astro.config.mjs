@@ -184,6 +184,10 @@ export default defineConfig({
     starlight({
       title: 'Registry stack docs',
       description: 'Documentation for Registry Stack: Registry Relay and Registry Notary, the runtime services that publish registry metadata, serve protected registry data, and issue evidence credentials.',
+      // Pagefind's generated index is platform-dependent. Archives are release
+      // artifacts, so disable their local search instead of allowing the same
+      // source release to produce different immutable bytes on macOS and Linux.
+      pagefind: !isArchivedBuild,
       plugins: [
         // Generates /llms.txt, /llms-full.txt, and /llms-small.txt for
         // machine consumption. The `details` field carries the discovery

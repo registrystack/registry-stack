@@ -2,10 +2,19 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, join, normalize, relative } from 'node:path';
 
 import { extractEvidenceUrlsFromYaml } from './check-evidence-links.mjs';
+import { loadDocsets } from './docsets.mjs';
 
 const distDir = 'dist';
 const attrPattern = /\s(?:href|src)=["']([^"']+)["']/g;
 const idPattern = /\sid=["']([^"']+)["']/g;
+
+function scopeFromArgs(args) {
+  if (args.length === 0) return 'all';
+  if (args.length === 2 && args[0] === '--scope' && ['all', 'current'].includes(args[1])) {
+    return args[1];
+  }
+  throw new Error('usage: check-built-links.mjs [--scope current|all]');
+}
 
 async function exists(path) {
   try {
@@ -93,15 +102,28 @@ const errors = [];
 let checked = 0;
 const idsByFile = new Map();
 const evidencePaths = await currentEvidencePaths();
+const scope = scopeFromArgs(process.argv.slice(2));
+const archivedRootPattern = /^\/v\/[^/]+\//;
+const archivedRoots = scope === 'current'
+  ? new Set(
+    (await loadDocsets()).docsets
+      .filter((docset) => docset.status === 'archived')
+      .map((docset) => docset.path),
+  )
+  : new Set();
 
-for (const file of await htmlFiles(distDir)) {
+const files = (await htmlFiles(distDir)).filter(
+  (file) => scope === 'all' || archiveRoot(file) === null,
+);
+
+for (const file of files) {
   const html = await readFile(file, 'utf8');
   const ids = new Set();
   for (const match of html.matchAll(idPattern)) ids.add(match[1]);
   idsByFile.set(file, ids);
 }
 
-for (const file of await htmlFiles(distDir)) {
+for (const file of files) {
   const html = await readFile(file, 'utf8');
   for (const match of html.matchAll(attrPattern)) {
     const raw = match[1];
@@ -120,6 +142,14 @@ for (const file of await htmlFiles(distDir)) {
 
     const url = resolveInternal(raw, file);
     if (!url) continue;
+    const archivedRoot = splitUrl(url)[0].match(archivedRootPattern)?.[0];
+    if (scope === 'current' && archivedRoot) {
+      checked += 1;
+      if (!archivedRoots.has(archivedRoot)) {
+        errors.push(`${relative('.', file)} links to unknown archive ${raw}`);
+      }
+      continue;
+    }
 
     checked += 1;
     const [path, fragment] = splitUrl(url);

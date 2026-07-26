@@ -60,6 +60,7 @@ class CiChangesTest(unittest.TestCase):
         outputs = classify(self.workspace, (".github/workflows/ci.yml",))
         self.assertCountEqual(outputs["rust_packages"], self.workspace.package_names)
         self.assertTrue(outputs["docs"])
+        self.assertTrue(outputs["docs_archives"])
         self.assertTrue(outputs["editors"])
 
     def test_docs_only_change_skips_rust(self) -> None:
@@ -70,6 +71,49 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(outputs["rust"])
         self.assertEqual(outputs["rust_matrix"], {"include": []})
         self.assertTrue(outputs["docs"])
+        self.assertFalse(outputs["docs_archives"])
+
+    def test_archive_content_is_immutable_during_routine_docs_changes(self) -> None:
+        current_content = classify(
+            self.workspace,
+            ("docs/site/src/content/docs/reference/glossary.mdx",),
+        )
+        archive_lock = classify(
+            self.workspace,
+            ("docs/site/src/data/archive-lock.yaml",),
+        )
+        archive_assembler = classify(
+            self.workspace,
+            ("docs/site/scripts/assemble-archives.mjs",),
+        )
+        self.assertFalse(current_content["docs_archives"])
+        self.assertTrue(archive_lock["docs_archives"])
+        self.assertTrue(archive_assembler["docs_archives"])
+
+    def test_archive_dependent_scripts_select_archive_verification(self) -> None:
+        for path in (
+            ".github/scripts/ci_changes.py",
+            "docs/site/scripts/check-built-links.mjs",
+            "docs/site/scripts/check-seo.mjs",
+            "docs/site/scripts/docsets.mjs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["docs_archives"])
+
+    def test_run_all_does_not_rebuild_immutable_archives_without_changed_paths(self) -> None:
+        outputs = classify(self.workspace, (), run_all=True)
+        self.assertTrue(outputs["docs"])
+        self.assertFalse(outputs["docs_archives"])
+
+    def test_run_all_keeps_archive_sensitive_changed_paths(self) -> None:
+        outputs = classify(
+            self.workspace,
+            ("docs/site/scripts/archive-bundle.mjs",),
+            run_all=True,
+        )
+        self.assertTrue(outputs["docs"])
+        self.assertTrue(outputs["docs_archives"])
 
     def test_other_workflow_changes_do_not_select_the_full_matrix(self) -> None:
         for workflow in sorted(RELEASE_SECURITY_WORKFLOWS):
