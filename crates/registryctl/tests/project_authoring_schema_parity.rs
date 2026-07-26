@@ -1049,6 +1049,77 @@ fn validate_production_ingress_inventory(
     Ok(())
 }
 
+fn collect_project_authoring_rust_sources(
+    directory: &Path,
+    sources: &mut Vec<(PathBuf, String)>,
+) -> std::io::Result<()> {
+    let mut entries = std::fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(std::fs::DirEntry::path);
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_project_authoring_rust_sources(&path, sources)?;
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            sources.push((path.clone(), std::fs::read_to_string(path)?));
+        }
+    }
+    Ok(())
+}
+
+fn direct_current_document_deserializers(sources: &[(PathBuf, String)]) -> Vec<String> {
+    const PARSERS: [&str; 5] = [
+        "serde_norway::from_slice",
+        "serde_norway::from_str",
+        "serde_json::from_slice",
+        "serde_json::from_str",
+        "serde_json::from_value",
+    ];
+    const CURRENT_DOCUMENTS: [&str; 5] = [
+        "RegistryProject",
+        "EnvironmentDocument",
+        "AuthoredIntegrationDocument",
+        "AuthoredFixtureDocument",
+        "EntityDefinition",
+    ];
+
+    let mut violations = Vec::new();
+    for (path, source) in sources {
+        if path
+            .file_name()
+            .is_some_and(|name| name == "schema_authority.rs")
+        {
+            continue;
+        }
+        let production = source.split("\n#[cfg(test)]").next().unwrap_or(source);
+        let normalized = normalized_rust_source(production);
+        for statement in normalized.split(';') {
+            let Some(parser) = PARSERS.iter().find(|parser| statement.contains(**parser)) else {
+                continue;
+            };
+            for document in CURRENT_DOCUMENTS {
+                if contains_rust_identifier(statement, document) {
+                    violations.push(format!(
+                        "{} directly deserializes {document} with {parser}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+    }
+    violations.sort();
+    violations.dedup();
+    violations
+}
+
+fn contains_rust_identifier(source: &str, identifier: &str) -> bool {
+    source.match_indices(identifier).any(|(start, matched)| {
+        let before = source[..start].chars().next_back();
+        let after = source[start + matched.len()..].chars().next();
+        before.is_none_or(|character| !(character.is_alphanumeric() || character == '_'))
+            && after.is_none_or(|character| !(character.is_alphanumeric() || character == '_'))
+    })
+}
+
 #[test]
 fn every_production_current_format_ingress_routes_through_schema_authority() {
     let project = include_str!("../src/project_authoring/project.rs");
@@ -1069,6 +1140,36 @@ fn every_production_current_format_ingress_routes_through_schema_authority() {
         .expect_err("route-kind drift must fail closed")
         .contains("loader/integration"),
         "the route inventory has a planted negative control"
+    );
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = Vec::new();
+    collect_project_authoring_rust_sources(
+        &manifest_dir.join("src/project_authoring"),
+        &mut sources,
+    )
+    .expect("project-authoring Rust sources are readable");
+    let root_module = manifest_dir.join("src/project_authoring.rs");
+    sources.push((
+        root_module.clone(),
+        std::fs::read_to_string(root_module).expect("project-authoring root is readable"),
+    ));
+    assert!(
+        direct_current_document_deserializers(&sources).is_empty(),
+        "current authoring DTOs must not bypass schema authority: {:#?}",
+        direct_current_document_deserializers(&sources)
+    );
+
+    let planted_bypass = vec![(
+        PathBuf::from("new_loader.rs"),
+        "let project: RegistryProject = serde_norway::from_slice(bytes)?;".to_string(),
+    )];
+    assert_eq!(
+        direct_current_document_deserializers(&planted_bypass),
+        vec!["new_loader.rs directly deserializes RegistryProject with \
+             serde_norway::from_slice"
+            .to_string()],
+        "the repository-wide ingress guard has a planted negative control"
     );
 }
 

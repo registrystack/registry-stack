@@ -1131,6 +1131,12 @@ pub(super) fn server_limits_default_to_relay_parity_values() {
 }
 
 #[test]
+pub(super) fn cel_evaluation_timeout_keeps_the_fail_closed_product_default() {
+    let config = minimal_config();
+    assert_eq!(config.cel.eval_timeout_ms, 2_000);
+}
+
+#[test]
 pub(super) fn server_limits_must_be_nonzero() {
     let mut config = minimal_config();
     config.server.request_timeout = Duration::ZERO;
