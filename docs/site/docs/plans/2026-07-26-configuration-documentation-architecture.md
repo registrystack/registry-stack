@@ -243,9 +243,14 @@ data-plane local cache is purely derived.
    `spec/rs-terms` and the glossary before it multiplies, particularly around "service", which already
    means an evidence service in the project file and a deployment service in the environment file.
 2. **No troubleshooting entry point.** Distributing diagnostics into feature pages leaves a reader who
-   has a symptom, not a feature, with nowhere to start. Registry Stack's authoring diagnostics have the
-   same shape today: codes exist in source, one appears in a tutorial troubleshooting table, and there
-   is no index.
+   has a symptom, not a feature, with nowhere to start. Registry Stack has the same shape today, across
+   two separate code families and with no index for either. The roughly fifteen
+   `registryctl.authoring.*` diagnostics in
+   `crates/registryctl/src/project_authoring/diagnostics.rs` reach no published page, and only
+   `registryctl.authoring.diagnostics.truncated` is named in prose on `reference/registryctl`. The
+   offline fixture errors are a different family, defined in
+   `crates/registryctl/src/project_authoring/fixtures.rs`, and exactly one of them,
+   `input.pattern_mismatch`, appears in a tutorial troubleshooting table.
 
 ## A.2 Tyk
 
@@ -403,8 +408,13 @@ A reader assembles this model themselves.
 1. **Document secret-reference resolution timing per location, beyond syntax.** The KV store page's
    split between startup-only, reload-time, and per-request resolution is the single most operationally
    useful configuration page in this review. Registry Stack's `${VAR}`, `${VAR:-fallback}`, and
-   `${VAR:?message}` expansion happens before YAML parsing, which means resolution is bundle-activation
-   time; the docs should say that as plainly as Tyk says its three cases.
+   `${VAR:?message}` expansion happens before YAML parsing, at product config-load time, and it happens
+   the same way for a local configuration file and for the configuration document inside a signed Config
+   Bundle. Both paths run through the same loader, `parse_expanded_config` alongside
+   `validate_signed_bundle_config_document` in `crates/registry-notary/src/config_loader.rs`. The docs
+   should say that as plainly as Tyk says its three cases, because an operator who believes expansion is
+   tied to bundle activation will draw the wrong conclusion about when an environment change takes
+   effect.
 2. **Publish the authoring schemas as fetchable URLs with editor wiring, and say so on a page.**
    `registryctl authoring schema --kind` and the `init`-time VS Code and Zed configuration already do
    the mechanism. Tyk's contribution is treating the schema as a documented, addressable artifact.
@@ -1043,10 +1053,19 @@ ambiguous.
 
 1. **Publish a versioned projection of every generated artifact and write down the increment rule.**
    Registry Stack already versions its CLI reports (`registryctl.init.v1`, `registryctl.smoke.v1`, and
-   the rest). Extend that to `build` output: a `format_version` in the generated Relay and Notary
-   configuration, plus a documented rule that a minor bump is additive and consumers must ignore
-   unrecognized properties, and a major bump must be rejected. That converts a deterministic artifact
-   into a depended-upon one.
+   the rest). Extend that to the `build` output envelope, so a tool reading
+   `.registry-stack/build/<env>/reviewable/review.json` can tell which contract it is reading, and
+   document the increment rule for that envelope.
+
+   Adopt the versioning idea and not Terraform's forward-compatibility rule. Terraform tells consumers
+   to "Ignore any object properties with unrecognized names", which is right for a plan projection and
+   wrong for runtime configuration: both product config graphs use `serde(deny_unknown_fields)`, the
+   generated schemas are closed, and the published contract already says "strict parsers and the
+   deprecated-field guard reject unknown or retired fields"
+   (`reference/api-stability`). Keep that rejection. If newer `registryctl` output reached an older
+   Relay or Notary, silently ignoring an unrecognized field could drop an authorization or disclosure
+   setting. Loosening it would be a security-sensitive product-contract decision, not something a
+   documentation plan should prescribe.
 2. **Split concept pages from generated block references, and lint for prose coverage.** The
    `/language/{concept}` against `/language/block/{name}` shape maps directly onto the five authored
    surfaces. Generate the field tables from the schemas the `check` command already validates against,
@@ -1067,9 +1086,12 @@ ambiguous.
    "manifest" (Registry Manifest the portable source description against `release/manifests/*.yaml`).
    Define both senses in the glossary and mark the first collision with an admonition rather than a
    sentence.
-2. **Letting URLs churn without redirects.** Four widely linked Terraform language paths are dead. The
-   docs site already fails the build on a dangling internal link; the missing half is a redirect map for
-   external inbound links when a slug moves.
+2. **Letting URLs churn without redirects.** Four widely linked Terraform language paths are dead.
+   Registry Stack already has both halves of the defense: the build fails on a dangling internal link,
+   and `docs/site/astro.config.mjs` carries an inbound `redirects` map for retired and renamed routes,
+   with `astro-config.test.mjs` asserting docset-specific behavior. The practice to avoid is letting
+   that map fall behind a slug change, so treat adding a redirect as part of any rename rather than as
+   follow-up work.
 
 ## A.6 OpenTelemetry Collector
 
@@ -1348,9 +1370,9 @@ of them are source shapes, so this proposal reads all five on the source-shape a
 | Journey | What the adopter starts from | Current surface |
 | --- | --- | --- |
 | Spreadsheet | A workbook or table the institution already holds | `registryctl init relay --sample benefits` (`InitProjectKind::RelaySpreadsheetApi`); tutorial `tutorials/publish-spreadsheet-secured-registry-api` |
-| OpenAPI | A source that publishes an OpenAPI description, so the bounded request is lifted from a contract | No starter names this shape. `fhir-r4`, `dhis2-tracker`, and `opencrvs-dci` are its instances |
-| `http` | One bounded request declared by hand | `init --from http`, `capability.request`; tutorial `tutorials/author-registry-project` |
-| `script` | A source recipe needing more than one bounded call | `capability.script`, `adapter.rhai`, `xw.v1`; tutorial `tutorials/configure-project-script-adapter` |
+| OpenAPI | A source that publishes an OpenAPI description, so the bounded request is lifted from a contract | None. No starter names this shape, and a repository search finds no OpenAPI ingestion or request-lifting code. The three standards starters are not instances of it: `fhir-r4`, `dhis2-tracker`, and `opencrvs-dci` each ship an `adapter.rhai` and declare `capability.script` |
+| `http` | One bounded request declared by hand | `init --from http`, `capability.http` with the request nested under it; tutorial `tutorials/author-registry-project` |
+| `script` | A source recipe needing more than one bounded call | `capability.script`, `adapter.rhai`, `xw.v1`; tutorial `tutorials/configure-project-script-adapter`, plus the `fhir-r4`, `dhis2-tracker`, and `opencrvs-dci` starters |
 | `snapshot` | An immutable local snapshot | `init --from snapshot`, `capability.snapshot`; tutorial `tutorials/configure-project-snapshot-materialization` |
 
 A second reading of "OpenAPI" is the generated `openapi.json` contract a configured Relay or Notary
@@ -1369,7 +1391,7 @@ when the capability requires one:
 | Surface | Schema | Owner |
 | --- | --- | --- |
 | `registry-stack.yaml` | `project.schema.json` | Registry authority: registry id, services, purpose, caller scopes, consultations, claims, disclosure modes, credential claim allow-list |
-| `integrations/<id>/integration.yaml` | `integration.schema.json` | Integration reviewer: input schemas, one fixed capability (`request`, `script`, `snapshot`), output pointers, cardinality, limits |
+| `integrations/<id>/integration.yaml` | `integration.schema.json` | Integration reviewer: input schemas, one fixed capability (`http`, `script`, `snapshot`), output pointers, cardinality, limits |
 | `integrations/<id>/fixtures/*.yaml` | `fixture.schema.json` | Integration reviewer: synthetic interactions, expected outputs, expected claims, denial cases |
 | `environments/<name>.yaml` | `environment.schema.json` | Deployment operator: source origin, secret references, caller fingerprints, Relay trust, deployment services |
 | `entities/*.yaml` | `entity.schema.json` | Registry authority: entity shapes |
@@ -1382,9 +1404,15 @@ when the capability requires one:
 `schemas/registry-relay.config.schema.json` and `schemas/registry-notary.config.schema.json`, which
 the products' `config-schema-check` commands reproduce from their typed config graphs.
 
+A signed Config Bundle belongs to this plane, not to plane 3. `registryctl bundle sign` packages the
+generated product input directory, the bundle carries that product's `config/` document, and Relay or
+Notary verifies the bundle before parsing the configuration inside it. It is governed generated
+configuration under a signature, so build, sign, verify, and activate document one artifact through one
+lifecycle. The trust anchor is the exception and belongs to the operator: it is trust configuration the
+deployment owns, not an output of `build`.
+
 **Plane 3, runtime and evidence state.** Served `openapi.json`, audit records, credential status,
-issued credentials, posture reads, signed Config Bundles and trust anchors. Not configuration, and
-never hand-edited.
+issued credentials, and posture reads. Not configuration, and never hand-edited.
 
 The ownership boundary the docs must state once and enforce everywhere: integration plus environment
 define Relay source access and adaptation policy; the evidence service defines Notary authorization
@@ -1426,7 +1454,7 @@ Configure a project                             [move] renamed from "Integration
   Author a project (http)
   Choose by source shape:
     Spreadsheet source
-    OpenAPI-described source                    [new]
+    OpenAPI-described source                    [new, blocked: no current surface]
     Bounded HTTP source            (existing author-registry-project)
     Script source adapter
     Snapshot materialization
@@ -1537,7 +1565,13 @@ Already in place and worth naming in the docs as the reason examples can be trus
 - `ProjectStarterSequence` and `ProjectWorkspaceJourneys` are generated from
   `crates/registryctl/tests/fixtures/project-authoring-journeys.yaml` and the committed golden
   workspaces, so every published command sequence is a tested sequence.
-- `check:tutorial:registryctl` and `check:tutorial:dry-run` execute tutorial commands.
+- `check:tutorial:registryctl` executes the two deployable adopter tutorials against checked-out
+  source, `tutorials/publish-spreadsheet-secured-registry-api` and
+  `tutorials/verify-claim-registry-api`.
+- `check:tutorial:dry-run`, which is the variant `npm run check` calls, does not execute anything: it
+  runs extraction and drift checks and then exits, printing `dry-run: extraction and drift checks
+  passed`. The project-authoring tutorials therefore get drift checking here and their execution
+  coverage from the Rust tests in `crates/registryctl/tests/project_authoring.rs`.
 - `check:openapi` lints both products' committed OpenAPI documents; Redoc output is generated.
 - `check:config-vocabulary` is a grep guard that fails the build when retired configuration
   vocabulary reappears in prose.
@@ -1630,6 +1664,17 @@ Method limits worth stating, because they bound how far the conclusions carry:
 - Documentation moves. Four Terraform language paths that are widely linked returned 404 during this
   review, and Kong's legacy host splits between clean redirects and a frozen archive. Any URL in this
   review is a claim about 2026-07-26.
+- The OpenTelemetry Collector section cites roughly ten `raw.githubusercontent.com/.../main/...` URLs
+  for READMEs, RFCs, component metadata, and release documents, because that project keeps its
+  per-component reference in repository files rather than on its documentation site. Those are mutable
+  branch URLs and their content will drift. They are cited unpinned deliberately: `main` is what was
+  fetched, and rewriting them to a release tag would assert evidence that was not read. Where a claim
+  depends on a specific version, the version appears in the prose instead, as with the `${VAR}`
+  expansion change in v0.107.0, the `localhost` default in v0.110.0, the profiles gate from v0.112.0,
+  and the v0.157.0 component tables. A reader re-verifying this section after the fact should read those
+  paths at the matching tag. The repository's own rule about pinning links to a tag or commit binds
+  citations of Registry Stack source, and every such citation in this review names a repository path
+  rather than a branch URL.
 
 ## Next
 
