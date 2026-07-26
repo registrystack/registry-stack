@@ -44,6 +44,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   reject values at or above the generated token contract's 60-second minimum
   lifetime.
 - **BREAKING:** Before the Registry Stack 1.0 compatibility promise takes
+  effect, integration deadlines, environment source timeouts, and fixture
+  timeout intent now expose Registryctl's end-to-end 20-second project ceiling
+  in authoring schemas, generated configuration reference, and runtime
+  validation. Schema-only consumers may newly reject values above 20 seconds,
+  which Registryctl runtime already rejected. This preserves compatibility
+  with Notary's fixed 25-second Relay service-hop boundary.
+- **BREAKING:** Before the Registry Stack 1.0 compatibility promise takes
   effect, `registry.project.fixture_coverage.v1` now distinguishes
   mapping-derived fixtures from independently executed, per-consultation
   governed-request witnesses. The closed report adds governed-request proof scope,

@@ -752,6 +752,47 @@
       }
     },
     {
+      "id": "integration-deadline-over-project-ceiling",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["pattern"],
+      "schema": "integration",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
+      "document": "integrations/birth-record/integration.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/limits/deadline",
+        "value": "21s"
+      }
+    },
+    {
+      "id": "environment-source-timeout-over-project-ceiling",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["pattern"],
+      "schema": "environment",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
+      "document": "environments/local.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/integrations/eligibility/source/timeout",
+        "value": "21s"
+      }
+    },
+    {
+      "id": "fixture-timeout-over-project-ceiling",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
+      "schema": "fixture",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
+      "document": "integrations/eligibility/fixtures/source-approved.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/interactions/0/respond",
+        "value": {
+          "timeout": "21s"
+        }
+      }
+    },
+    {
       "id": "integration-input-below-json-safe-minimum",
       "dimension": "boundary",
       "expected_failing_keywords": ["minimum"],

@@ -2609,9 +2609,7 @@ fn validate_fixture_inputs(
                     }
                 }
                 FixtureSourceResponse::Timeout { timeout } => {
-                    if parse_fixture_timeout_ms(timeout)? == 0 {
-                        bail!("fixture timeout must be positive");
-                    }
+                    parse_fixture_timeout_ms(timeout)?;
                 }
             }
         }
@@ -3459,14 +3457,8 @@ fn validate_source_binding(
     {
         bail!("integrations.{alias}.source.concurrency must be between 1 and 64");
     }
-    if source
-        .timeout
-        .as_deref()
-        .map(parse_environment_source_timeout_ms)
-        .transpose()?
-        .is_some_and(|value| value == 0 || value > 60_000)
-    {
-        bail!("integrations.{alias}.source.timeout must be between 1ms and 60s");
+    if let Some(timeout) = source.timeout.as_deref() {
+        parse_environment_source_timeout_ms(timeout)?;
     }
     if let Some(rate) = &source.rate {
         if rate.per_minute == 0

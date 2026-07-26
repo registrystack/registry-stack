@@ -995,7 +995,7 @@
     {
       "schema": "environment",
       "pointer": "/$defs/source/properties/timeout",
-      "purpose": "Bounds the elapsed time allowed for one request to this environment source."
+      "purpose": "Optionally narrows one environment source request to a positive timeout no greater than twenty seconds."
     },
     {
       "schema": "environment",
@@ -1390,7 +1390,7 @@
     {
       "schema": "integration",
       "pointer": "/$defs/limits/properties/deadline",
-      "purpose": "Caps total integration execution time with a positive duration no greater than sixty seconds."
+      "purpose": "Caps total integration execution time with a positive duration no greater than twenty seconds."
     },
     {
       "schema": "fixture",
@@ -1415,7 +1415,7 @@
     {
       "schema": "fixture",
       "pointer": "/$defs/response/oneOf/1/properties/timeout",
-      "purpose": "Selects the synthetic timeout duration returned instead of an HTTP response."
+      "purpose": "Records bounded synthetic timeout intent; offline execution returns the timeout outcome without waiting for the authored interval."
     },
     {
       "schema": "fixture",

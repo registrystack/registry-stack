@@ -5595,6 +5595,11 @@ fn generated_relay_contract_activates_through_notary_exactly_and_rejects_a_stale
 
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
+    let integration_path = project.join("integrations/eligibility/integration.yaml");
+    let mut integration = read_yaml(&integration_path);
+    integration["limits"] = serde_norway::from_str("deadline: 20s\n")
+        .expect("reviewed deadline boundary is valid YAML");
+    write_yaml(&integration_path, &integration);
     let build = build_registry_project(&ProjectBuildOptions {
         project_directory: project.clone(),
         environment: "local".to_string(),
@@ -5607,6 +5612,9 @@ fn generated_relay_contract_activates_through_notary_exactly_and_rejects_a_stale
         "private/relay/config/artifacts/consultation-contracts/household-eligibility-household.json",
     );
     let contract_bytes = std::fs::read(&contract_path).expect("Relay contract artifact reads");
+    let contract: serde_json::Value =
+        serde_json::from_slice(&contract_bytes).expect("Relay contract artifact parses");
+    assert_eq!(contract["spec"]["bounds"]["timeout_ms"], 20_000);
     let notary: StandaloneRegistryNotaryConfig = serde_norway::from_slice(
         &std::fs::read(output.join("private/notary/config/notary.yaml"))
             .expect("Notary config reads"),

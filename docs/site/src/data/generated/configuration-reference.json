@@ -30381,7 +30381,7 @@
         "pointer": "/$defs/source/properties/timeout",
         "path_kind": "property"
       },
-      "purpose": "Bounds the elapsed time allowed for one request to this environment source.",
+      "purpose": "Optionally narrows one environment source request to a positive timeout no greater than twenty seconds.",
       "purpose_source": "reviewed_override",
       "semantic_owner": "deployment_security",
       "human_owner": "security_maintainers",
@@ -30458,7 +30458,7 @@
       "constraints": [
         {
           "keyword": "pattern",
-          "value": "^[1-9][0-9]*(?:ms|s)$"
+          "value": "^(?:(?:[1-9][0-9]{0,3}|1[0-9]{4}|20000)ms|(?:[1-9]|1[0-9]|20)s)$"
         },
         {
           "keyword": "type",
@@ -45200,7 +45200,7 @@
         "pointer": "/$defs/limits/properties/deadline",
         "path_kind": "property"
       },
-      "purpose": "Caps total integration execution time with a positive duration no greater than sixty seconds.",
+      "purpose": "Caps total integration execution time with a positive duration no greater than twenty seconds.",
       "purpose_source": "reviewed_override",
       "semantic_owner": "integration_contract",
       "human_owner": "integration_maintainers",
@@ -45279,7 +45279,7 @@
       "constraints": [
         {
           "keyword": "pattern",
-          "value": "^[1-9][0-9]*(?:ms|s)$"
+          "value": "^(?:(?:[1-9][0-9]{0,3}|1[0-9]{4}|20000)ms|(?:[1-9]|1[0-9]|20)s)$"
         },
         {
           "keyword": "type",
@@ -55867,7 +55867,7 @@
         "pointer": "/$defs/response/oneOf/1/properties/timeout",
         "path_kind": "property"
       },
-      "purpose": "Selects the synthetic timeout duration returned instead of an HTTP response.",
+      "purpose": "Records bounded synthetic timeout intent; offline execution returns the timeout outcome without waiting for the authored interval.",
       "purpose_source": "reviewed_override",
       "semantic_owner": "fixture_harness",
       "human_owner": "test_maintainers",
@@ -55935,7 +55935,7 @@
       "constraints": [
         {
           "keyword": "pattern",
-          "value": "^[1-9][0-9]*(?:ms|s)$"
+          "value": "^(?:(?:[1-9][0-9]{0,3}|1[0-9]{4}|20000)ms|(?:[1-9]|1[0-9]|20)s)$"
         },
         {
           "keyword": "type",

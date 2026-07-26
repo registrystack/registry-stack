@@ -799,10 +799,7 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
             bail!("authored limits exceed the v1 hard ceilings");
         }
         if let Some(deadline) = &limits.deadline {
-            let milliseconds = parse_integration_deadline_ms(deadline)?;
-            if milliseconds == 0 || milliseconds > 60_000 {
-                bail!("limits.deadline must be between 1ms and 60s");
-            }
+            parse_integration_deadline_ms(deadline)?;
         }
     }
     match &authored.capability {

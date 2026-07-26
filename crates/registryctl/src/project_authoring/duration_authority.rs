@@ -98,16 +98,16 @@ pub(super) fn parse_materialization_refresh_ms(value: &str) -> Result<u32> {
 
 fn parse_bounded_duration_ms(value: &str, policy: DurationPolicy) -> Result<u32> {
     let milliseconds = if let Some(milliseconds) = value.strip_suffix("ms") {
-        Some(milliseconds.parse::<u32>()?)
+        Some(parse_positive_decimal(milliseconds, policy.label)?)
     } else if let Some(seconds) = value.strip_suffix('s') {
-        seconds.parse::<u32>()?.checked_mul(1_000)
+        parse_positive_decimal(seconds, policy.label)?.checked_mul(1_000)
     } else if matches!(policy.units, DurationUnits::Extended) {
         if let Some(minutes) = value.strip_suffix('m') {
-            minutes.parse::<u32>()?.checked_mul(60_000)
+            parse_positive_decimal(minutes, policy.label)?.checked_mul(60_000)
         } else if let Some(hours) = value.strip_suffix('h') {
-            hours.parse::<u32>()?.checked_mul(60 * 60 * 1_000)
+            parse_positive_decimal(hours, policy.label)?.checked_mul(60 * 60 * 1_000)
         } else if let Some(days) = value.strip_suffix('d') {
-            days.parse::<u32>()?.checked_mul(24 * 60 * 60 * 1_000)
+            parse_positive_decimal(days, policy.label)?.checked_mul(24 * 60 * 60 * 1_000)
         } else {
             None
         }
@@ -127,6 +127,18 @@ fn parse_bounded_duration_ms(value: &str, policy: DurationPolicy) -> Result<u32>
     Ok(milliseconds)
 }
 
+fn parse_positive_decimal(value: &str, label: &str) -> Result<u32> {
+    if value.is_empty()
+        || value.starts_with('0')
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        bail!("{label} must use canonical positive decimal digits");
+    }
+    value
+        .parse()
+        .map_err(|_| anyhow!("{label} exceeds its numeric representation"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,6 +155,9 @@ mod tests {
             assert!(parser("0ms").is_err());
             assert!(parser("20001ms").is_err());
             assert!(parser("1m").is_err());
+            assert!(parser("01s").is_err());
+            assert!(parser("0001ms").is_err());
+            assert!(parser("+1s").is_err());
         }
 
         assert_eq!(
@@ -161,6 +176,7 @@ mod tests {
             SNAPSHOT_FRESHNESS_MAX_MS
         );
         assert!(parse_snapshot_freshness_ms("32d").is_err());
+        assert!(parse_snapshot_freshness_ms("01d").is_err());
         assert_eq!(
             parse_materialization_refresh_ms("30d").expect("materialization maximum is valid"),
             MATERIALIZATION_REFRESH_MAX_MS
