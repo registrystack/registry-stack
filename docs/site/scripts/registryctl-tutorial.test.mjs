@@ -349,3 +349,43 @@ test('Notary tutorial does not pair the unreleased claim with v0.13.0 assets', (
   assert.doesNotMatch(tutorial, /Matching Registry Stack v0\.13\.0/);
   assert.doesNotMatch(tutorial, /same Registry Stack `v0\.13\.0` release/);
 });
+
+test('current-source bootstrap stays executable and non-candidate', () => {
+  const bootstrap = readFileSync(
+    new URL('../src/content/docs/start/test-current-source-revision.mdx', import.meta.url),
+    'utf8',
+  );
+  const authoring = readFileSync(
+    new URL('../src/content/docs/tutorials/author-registry-project.mdx', import.meta.url),
+    'utf8',
+  );
+  const notary = readFileSync(
+    new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
+    'utf8',
+  );
+  const reference = readFileSync(
+    new URL('../src/content/docs/reference/registryctl.mdx', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(bootstrap, /^status: current$/m);
+  assert.match(bootstrap, /^doc_type: how-to$/m);
+  assert.match(bootstrap, /git switch --detach "\$SOURCE_REF"/);
+  assert.match(bootstrap, /cargo build --locked -p registryctl/);
+  assert.match(bootstrap, /npm run test:tutorial:registryctl/);
+  assert.match(bootstrap, /npm run check:tutorial:registryctl/);
+  assert.match(bootstrap, /temporary source-test lock/);
+  assert.match(bootstrap, /generation-only image sentinels/);
+  assert.match(bootstrap, /does not retain or publish the[\s\S]*lock as a reusable artifact/);
+  assert.match(bootstrap, /\.manifest_source_ref == \$source_ref/);
+  assert.match(bootstrap, /\.tag_target == \$source_ref/);
+  assert.match(bootstrap, /export REGISTRYCTL_IMAGE_LOCK="\$LOCK_PATH"/);
+  assert.match(
+    bootstrap,
+    /not a release, release candidate, signed artifact set, production image, country[\s\S]*acceptance result, or interoperability result/,
+  );
+
+  for (const page of [authoring, notary, reference]) {
+    assert.match(page, /test-current-source-revision/);
+  }
+});

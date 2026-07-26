@@ -66,6 +66,15 @@ test('publishes one stable overview route for every task-flow section', () => {
   }
 });
 
+test('keeps the bounded current-source procedure discoverable from Start', () => {
+  const start = topLevelSection(sidebarSource, 'Start');
+  assert.ok(start, 'could not isolate Start');
+  assert.match(
+    start,
+    /label: 'Test one current source revision', slug: 'start\/test-current-source-revision'/,
+  );
+});
+
 test('keeps the Relay and Notary generated product navigation under Configure', () => {
   const configureSource = sidebarSource.match(
     /label: 'Configure',[\s\S]*?(?=\n        \{\n          label: 'Verify',)/,

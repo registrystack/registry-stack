@@ -31,7 +31,8 @@ test('current-source registryctl docs do not attribute unreleased commands to v0
   assert.equal(lastRelease.availability, 'released');
 
   const registryctlLead = registryctl.split('## Registry Stack project authoring')[0];
-  assert.match(registryctlLead, /Main source \(unreleased\), the next release candidate/);
+  assert.match(registryctlLead, /Main source \(unreleased\)/);
+  assert.match(registryctlLead, /has not been designated as a release candidate/);
   assert.match(registryctlLead, /The last released `registryctl` is `v0\.13\.0`/);
   for (const command of [
     'preflight',
@@ -67,7 +68,8 @@ test('current-source registryctl docs do not attribute unreleased commands to v0
   assert.doesNotMatch(configuration, /field baseline records when/);
   assert.doesNotMatch(configuration, /Configuration release: `0\.13\.0`/);
 
-  assert.match(tutorial, /documents Main source \(unreleased\), the next release candidate/);
+  assert.match(tutorial, /documents Main source \(unreleased\)/);
+  assert.match(tutorial, /has not been designated as a release candidate/);
   assert.match(tutorial, /The `v0\.13\.0` binary cannot complete this workflow/);
   assert.match(
     tutorial,

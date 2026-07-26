@@ -264,6 +264,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', link: '/' },
             { label: 'When to use', slug: 'start/when-to-use' },
+            { label: 'Test one current source revision', slug: 'start/test-current-source-revision' },
             { label: 'Architecture', slug: 'explanation/architecture' },
             { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
           ],

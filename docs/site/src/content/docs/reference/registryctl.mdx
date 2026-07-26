@@ -16,10 +16,13 @@ import ProjectWorkspaceJourneys from '../../../components/ProjectWorkspaceJourne
 
 `registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
 
-This page lists commands in Main source (unreleased), the next release candidate.
+This page lists commands in Main source (unreleased).
+The source has not been designated as a release candidate.
 The last released `registryctl` is `v0.13.0`.
 That artifact does not contain `preflight`, `capabilities`, `compare`, `promote`, `migrate`,
 `authoring reference`, or `project diagnostics`; use a current source build for those commands.
+The [current-source test procedure](../../start/test-current-source-revision/) pins the checkout,
+builds the CLI, and distinguishes the temporary source-test artifacts from release evidence.
 Run `registryctl <command> --help` for the built-in usage text.
 Most human-facing commands also perform a once-per-day update check; see
 [Update check](#update-check).
@@ -147,6 +150,10 @@ Registry Stack does not create a separate reviewer workflow.
 The `registryctl.project_command.v1` build report identifies the complete generated build root in
 its `output` field. Automation must use that field instead of constructing a path from registryctl's
 private generated directory layout.
+Treat the Relay and Notary configuration below that root as build output, not another authoring
+surface. `registryctl` diagnostics apply to the project sources that produced it. Hand-editing
+compiled configuration is unsupported and has no project-level diagnostic path; change the project
+and regenerate the output.
 
 ### Same-v1 migration checks
 
@@ -494,6 +501,8 @@ Related environment variables are listed in the [environment variable reference]
 ## Source
 
 The command tables on this page come from Main source (unreleased).
-They describe the next release candidate, not the `v0.13.0` artifact.
+They do not establish a release candidate and do not describe the `v0.13.0` artifact.
+Use [Test one current source revision](../../start/test-current-source-revision/) to build and
+identify the exact source used for a review.
 For the last released command tree, read the
 [registryctl `v0.13.0` command tree](https://github.com/registrystack/registry-stack/blob/v0.13.0/crates/registryctl/src/main.rs).

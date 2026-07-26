@@ -53,6 +53,8 @@ checkout. Record the revision with `git rev-parse HEAD`, and require the lock's
 `manifest_source_ref` and `tag_target` to equal that full commit. `registryctl --version` reports a
 package version; it does not establish source revision or artifact identity. Do not combine
 artifacts from different commits.
+The [current-source test procedure](../../start/test-current-source-revision/) provides the exact
+pin, build, field-verification, and all-in-one local runtime commands.
 
 This is an evaluation-only local tutorial. It does not issue a credential or
 prove wallet, credential-presentation, or OID4VCI interoperability.
