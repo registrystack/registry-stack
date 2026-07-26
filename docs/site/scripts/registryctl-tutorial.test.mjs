@@ -218,7 +218,7 @@ test('HTTP authoring tutorial output stays synchronized with the current starter
     assert.ok(documented, 'tutorial trace output block is missing');
     assert.equal(documented.content, actual);
 
-    assert.match(actual, /^PASS: 8\/8 fixtures passed$/m);
+    assert.match(actual, /^PASS: 9\/9 fixtures passed$/m);
     assert.deepEqual(
       actual
         .split('\n')
@@ -226,6 +226,7 @@ test('HTTP authoring tutorial output stays synchronized with the current starter
         .map((line) => line.trim().slice('PASS person-record.'.length)),
       [
         'active-person',
+        'active-person::derived/request_to_consultation_binding',
         'active-person::derived/request_authority',
         'active-person::derived/status_rejection',
         'active-person::derived/malformed_decode',

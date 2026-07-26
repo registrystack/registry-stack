@@ -26,12 +26,12 @@ test('committed internal and public reference artifacts are exact and complete',
   validateAuthoringReference(reference, coverage);
   assert.deepEqual(publicReference, reference);
   assert.deepEqual(publicCoverage, coverage);
-  assert.equal(reference.fields.length, 1736);
-  assert.equal(coverage.reviewed_intent_assignment_required_count, 1736);
-  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1736);
-  assert.equal(coverage.distinct_reviewed_intent_count, 571);
+  assert.equal(reference.fields.length, 1758);
+  assert.equal(coverage.reviewed_intent_assignment_required_count, 1758);
+  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1758);
+  assert.equal(coverage.distinct_reviewed_intent_count, 588);
   assert.equal(coverage.distinct_reviewed_intents_reused_count, 83);
-  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1248);
+  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1253);
   assert.deepEqual(reference.reference_baseline, {
     generator_lifecycle: 'unreleased',
     published_release: null,
@@ -53,18 +53,18 @@ test('committed internal and public reference artifacts are exact and complete',
     project: 219,
     environment: 191,
     integration: 138,
-    fixture: 40,
+    fixture: 62,
     entity: 35,
     relay: 584,
     notary: 529,
   });
   assert.deepEqual(reference.coverage.by_path_kind, {
     root: 7,
-    property: 1391,
-    map_key: 24,
-    map_value: 45,
-    array_item: 175,
-    branch: 94,
+    property: 1406,
+    map_key: 25,
+    map_value: 47,
+    array_item: 177,
+    branch: 96,
   });
   assert.equal(
     Object.values(reference.coverage.by_intent_profile).reduce(
