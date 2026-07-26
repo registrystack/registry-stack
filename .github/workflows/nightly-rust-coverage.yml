@@ -4,10 +4,6 @@ on:
   schedule:
     - cron: "17 19 * * *"
   workflow_dispatch:
-  # Temporary branch trigger used to verify this new workflow before merge.
-  push:
-    branches:
-      - agent/nightly-rust-coverage
 
 concurrency:
   group: nightly-rust-coverage
