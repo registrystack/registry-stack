@@ -67,9 +67,9 @@
       "structural": 113
     },
     "by_intent_source": {
-      "schema_description": 481,
+      "schema_description": 486,
       "reviewed_override": 243,
-      "structural_taxonomy": 121,
+      "structural_taxonomy": 116,
       "reviewed_profile": 891
     },
     "by_intent_profile": {
@@ -150,8 +150,8 @@
   },
   "reviewed_intent_assignment_required_count": 1736,
   "reviewed_intent_assignment_covered_count": 1736,
-  "distinct_reviewed_intent_count": 566,
+  "distinct_reviewed_intent_count": 571,
   "distinct_reviewed_intents_reused_count": 83,
-  "reviewed_intent_assignments_using_reused_intent_count": 1253,
+  "reviewed_intent_assignments_using_reused_intent_count": 1248,
   "missing_intent": []
 }

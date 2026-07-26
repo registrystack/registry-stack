@@ -2161,10 +2161,7 @@ services: {}
                 PROJECT_SCHEMA_HINT,
             )
             .expect_err("planted invalid scalar is rejected");
-            assert_eq!(
-                diagnostic.code,
-                "registryctl.authoring.yaml.invalid_syntax"
-            );
+            assert_eq!(diagnostic.code, "registryctl.authoring.project.invalid");
             let serialized = serde_json::to_string(&diagnostic).expect("diagnostic serializes");
             assert!(
                 !serialized.contains(sentinel),

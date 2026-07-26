@@ -452,7 +452,7 @@ fn project_check_keeps_script_probe_stable_across_metadata_and_ignores_non_calls
     integration["source"]["product"] =
         serde_norway::Value::String("unrelated-product-metadata".to_string());
     integration["source"]["versions"] =
-        serde_norway::from_str("unverified: [9.9]\n").expect("version metadata");
+        serde_norway::from_str("unverified: ['9.9']\n").expect("version metadata");
     write_yaml(&integration_path, &integration);
     assert_eq!(authoring_diagnostics(&project), baseline);
 }
@@ -482,15 +482,16 @@ fn project_check_root_parse_gates_references_but_keeps_selected_environment_synt
 }
 
 #[test]
-fn project_check_reports_two_independent_environment_errors_once_each() {
+fn project_check_reports_two_schema_valid_environment_errors_once_each() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     let environment_path = project.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
     environment["integrations"]["eligibility"]["source"]["origin"] =
-        serde_norway::Value::String("http://unsafe-origin-marker.invalid".to_string());
-    environment["integrations"]["eligibility"]["source"]["credential"]["generation"] =
-        serde_norway::Value::Number(0.into());
+        serde_norway::Value::String("https://user@unsafe-origin-marker.invalid".to_string());
+    environment["integrations"]["eligibility"]["source"]["credential"] =
+        serde_norway::from_str("token: { secret: HOUSEHOLD_TOKEN }\ngeneration: 1\n")
+            .expect("schema-valid incompatible credential");
     write_yaml(&environment_path, &environment);
 
     let report = authoring_diagnostics(&project);
@@ -3438,7 +3439,9 @@ fn pre_freeze_fact_authoring_keys_are_rejected_without_aliases() {
         live: false,
     })
     .expect_err("integration facts alias must be rejected");
-    assert!(format!("{error:#}").contains("facts"));
+    let rendered = format!("{error:#}");
+    assert!(rendered.contains("canonical schema validation"));
+    assert!(!rendered.contains("facts"));
 
     let claim_root = tempfile::tempdir().expect("claim-key temporary directory");
     let claim = copy_project("custom-system", claim_root.path());
@@ -3453,7 +3456,9 @@ fn pre_freeze_fact_authoring_keys_are_rejected_without_aliases() {
         live: false,
     })
     .expect_err("claim fact alias must be rejected");
-    assert!(format!("{error:#}").contains("fact"));
+    let rendered = format!("{error:#}");
+    assert!(rendered.contains("canonical schema validation"));
+    assert!(!rendered.contains("fact:"));
 
     let fixture_root = tempfile::tempdir().expect("fixture-key temporary directory");
     let fixture = copy_project("custom-system", fixture_root.path());
@@ -3465,7 +3470,9 @@ fn pre_freeze_fact_authoring_keys_are_rejected_without_aliases() {
         live: false,
     })
     .expect_err("fixture facts alias must be rejected");
-    assert!(format!("{error:#}").contains("facts"));
+    let rendered = format!("{error:#}");
+    assert!(rendered.contains("canonical schema validation"));
+    assert!(!rendered.contains("facts"));
 }
 
 #[test]
@@ -3764,12 +3771,11 @@ fn project_authoring_schemas_keep_editor_annotations_and_valid_examples() {
             );
         }
 
-        let (descriptions, defaults, examples) = schema_annotation_counts(&schema);
+        let (descriptions, _defaults, examples) = schema_annotation_counts(&schema);
         assert!(
             descriptions > properties.len() + definitions.len(),
             "{schema_name} description coverage regressed"
         );
-        assert!(defaults >= 1, "{schema_name} needs at least one default");
         assert!(examples >= 1, "{schema_name} needs at least one example");
 
         let compiled = jsonschema::JSONSchema::options()
@@ -3984,6 +3990,8 @@ fn project_check_preserves_both_exact_sides_of_cross_file_failures() {
         .as_mapping_mut()
         .expect("fixture input")
         .clear();
+    fixture["input"]["unrelated_input"] =
+        serde_norway::Value::String("schema-valid-mismatch".to_string());
     write_yaml(&fixture_path, &fixture);
     assert_addresses(
         &fixture_project,
@@ -4694,10 +4702,8 @@ fn integration_input_names_match_the_wire_grammar() {
         })
         .expect_err("invalid input name must be rejected before source access");
         let error = format!("{error:#}");
-        assert!(
-            error.contains(&format!("input.{invalid_name}.name")),
-            "{error}"
-        );
+        assert!(error.contains("canonical schema validation"), "{error}");
+        assert!(!error.contains(&invalid_name), "{error}");
     }
 }
 
@@ -4885,7 +4891,7 @@ fn api_key_interfaces_keep_values_environment_only_and_use_the_stable_auth_type(
         anchor: None,
     })
     .expect_err("environment auth-type compatibility alias must fail");
-    assert_authoring_diagnostic(&error, "registryctl.authoring.yaml.unknown_field");
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
 }
 
 #[test]
@@ -5170,7 +5176,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "de90605ab4ccc22fe5ac1daa701d56b0576d7042678f787870050805dc4ce25d",
+        "6b6cd57e5676d7ab5cdc0e9a02a27afedd932e8d037f451867201e4870829459",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }

@@ -66,9 +66,9 @@
       "structural": 113
     },
     "by_intent_source": {
-      "schema_description": 481,
+      "schema_description": 486,
       "reviewed_override": 243,
-      "structural_taxonomy": 121,
+      "structural_taxonomy": 116,
       "reviewed_profile": 891
     },
     "by_intent_profile": {
@@ -5022,8 +5022,8 @@
         "pointer": "/$defs/recordAggregate/properties/dimensions/items",
         "path_kind": "array_item"
       },
-      "purpose": "Defines the contract shared by each ordered item in the enclosing authored list.",
-      "purpose_source": "structural_taxonomy",
+      "purpose": "Named grouping dimension backed by one entity field.",
+      "purpose_source": "schema_description",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
       "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",
@@ -5575,8 +5575,8 @@
         "pointer": "/$defs/recordAggregate/properties/indicators/items",
         "path_kind": "array_item"
       },
-      "purpose": "Defines the contract shared by each ordered item in the enclosing authored list.",
-      "purpose_source": "structural_taxonomy",
+      "purpose": "SDMX-style aggregate indicator with units and display metadata.",
+      "purpose_source": "schema_description",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
       "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",
@@ -5866,8 +5866,8 @@
         "pointer": "/$defs/recordAggregate/properties/measures/items",
         "path_kind": "array_item"
       },
-      "purpose": "Defines the contract shared by each ordered item in the enclosing authored list.",
-      "purpose_source": "structural_taxonomy",
+      "purpose": "Named aggregate calculation over one entity column.",
+      "purpose_source": "schema_description",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
       "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",
@@ -16666,8 +16666,8 @@
         "pointer": "/$defs/recordsApi/properties/standards/properties/ogc_features/oneOf/1",
         "path_kind": "branch"
       },
-      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
-      "purpose_source": "structural_taxonomy",
+      "purpose": "OGC API Features collection metadata and bounded geometry mapping.",
+      "purpose_source": "schema_description",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
       "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",
@@ -16928,8 +16928,8 @@
         "pointer": "/$defs/recordsApi/properties/standards/properties/sp_dci/oneOf/1",
         "path_kind": "branch"
       },
-      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
-      "purpose_source": "structural_taxonomy",
+      "purpose": "SP-DCI registry identity and field mappings for a records service.",
+      "purpose_source": "schema_description",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
       "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",

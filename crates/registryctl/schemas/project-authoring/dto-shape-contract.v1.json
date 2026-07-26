@@ -1,0 +1,3768 @@
+{
+  "contract": "registryctl.dto-shape-contract",
+  "generator": {
+    "draft": "https://json-schema.org/draft/2020-12/schema",
+    "name": "schemars",
+    "version": "1.2.1"
+  },
+  "roots": [
+    {
+      "kind": "project",
+      "rust_type": "RegistryProject",
+      "schema": {
+        "$defs": {
+          "AccessDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "scopes": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "ClaimDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "cel": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "disclosure": {
+                "$ref": "#/$defs/DisclosureDeclaration"
+              },
+              "output": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ClaimValueDeclaration"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "disclosure"
+            ],
+            "type": "object"
+          },
+          "ClaimValueDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "max_bytes": {
+                "default": null,
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "nullable": {
+                "default": false,
+                "type": "boolean"
+              },
+              "type": {
+                "$ref": "#/$defs/OutputType"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "ConsentDeclaration": {
+            "enum": [
+              "not_required",
+              "required"
+            ],
+            "type": "string"
+          },
+          "ConsultationDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "input": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "integration": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "integration",
+              "input"
+            ],
+            "type": "object"
+          },
+          "CredentialProfileDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "claims": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "format": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "validity": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "format",
+              "type",
+              "validity",
+              "claims"
+            ],
+            "type": "object"
+          },
+          "DisclosureDeclaration": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DisclosureMode"
+              },
+              {
+                "properties": {
+                  "allowed": {
+                    "items": {
+                      "$ref": "#/$defs/DisclosureMode"
+                    },
+                    "type": "array"
+                  },
+                  "default": {
+                    "$ref": "#/$defs/DisclosureMode"
+                  }
+                },
+                "required": [
+                  "default",
+                  "allowed"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "DisclosureMode": {
+            "enum": [
+              "value",
+              "predicate",
+              "redacted"
+            ],
+            "type": "string"
+          },
+          "EntityReference": {
+            "additionalProperties": false,
+            "properties": {
+              "file": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
+          },
+          "IntegrationReference": {
+            "additionalProperties": false,
+            "properties": {
+              "file": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
+          },
+          "OutputType": {
+            "enum": [
+              "boolean",
+              "integer",
+              "string",
+              "date",
+              "presence"
+            ],
+            "type": "string"
+          },
+          "RecordAccessRights": {
+            "enum": [
+              "public",
+              "restricted",
+              "non_public"
+            ],
+            "type": "string"
+          },
+          "RecordAggregate": {
+            "additionalProperties": false,
+            "properties": {
+              "access": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RecordAggregateAccess"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "allowed_filters": {
+                "additionalProperties": {
+                  "items": {
+                    "$ref": "#/$defs/RecordFilterOperator"
+                  },
+                  "type": "array"
+                },
+                "default": {},
+                "type": "object"
+              },
+              "default_group_by": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "description": {
+                "type": "string"
+              },
+              "dimensions": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/RecordAggregateDimension"
+                },
+                "type": "array"
+              },
+              "disclosure_control": {
+                "$ref": "#/$defs/RecordDisclosureControl"
+              },
+              "group_by": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "indicators": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/RecordAggregateIndicator"
+                },
+                "type": "array"
+              },
+              "joins": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "measures": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/RecordAggregateMeasure"
+                },
+                "type": "array"
+              },
+              "required_principal_filters": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "spatial": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RecordAggregateSpatial"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "temporal_field": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "description",
+              "disclosure_control"
+            ],
+            "type": "object"
+          },
+          "RecordAggregateAccess": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregate_only_execution": {
+                "default": false,
+                "type": "boolean"
+              },
+              "aggregate_scope": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "metadata_scope": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "RecordAggregateDimension": {
+            "additionalProperties": false,
+            "properties": {
+              "codelist": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "field": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "field"
+            ],
+            "type": "object"
+          },
+          "RecordAggregateFunction": {
+            "enum": [
+              "count",
+              "sum",
+              "avg",
+              "min",
+              "max",
+              "median",
+              "count_distinct",
+              "stddev"
+            ],
+            "type": "string"
+          },
+          "RecordAggregateIndicator": {
+            "additionalProperties": false,
+            "properties": {
+              "column": {
+                "type": "string"
+              },
+              "decimals": {
+                "default": null,
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "definition_uri": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "frequency": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "function": {
+                "$ref": "#/$defs/RecordAggregateFunction"
+              },
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "unit_measure": {
+                "type": "string"
+              },
+              "unit_mult": {
+                "default": null,
+                "format": "int32",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "function",
+              "column",
+              "unit_measure"
+            ],
+            "type": "object"
+          },
+          "RecordAggregateMeasure": {
+            "additionalProperties": false,
+            "properties": {
+              "column": {
+                "type": "string"
+              },
+              "function": {
+                "$ref": "#/$defs/RecordAggregateFunction"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "function",
+              "column"
+            ],
+            "type": "object"
+          },
+          "RecordAggregateSpatial": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "bbox_fields": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/RecordSpatialBbox"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null
+                  },
+                  "collection_id": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "dimension": {
+                    "type": "string"
+                  },
+                  "geometry_entity": {
+                    "type": "string"
+                  },
+                  "geometry_field": {
+                    "type": "string"
+                  },
+                  "geometry_id_field": {
+                    "type": "string"
+                  },
+                  "max_geometry_vertices": {
+                    "default": 10000,
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "mode": {
+                    "const": "admin_area",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "dimension",
+                  "geometry_entity",
+                  "geometry_id_field",
+                  "geometry_field"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RecordAttributeReleaseClaim": {
+            "additionalProperties": false,
+            "properties": {
+              "expression": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RecordAttributeReleaseExpression"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "sensitivity": {
+                "$ref": "#/$defs/RecordAttributeReleaseSensitivity"
+              },
+              "source_field": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "required",
+              "sensitivity"
+            ],
+            "type": "object"
+          },
+          "RecordAttributeReleaseConditions": {
+            "additionalProperties": false,
+            "properties": {
+              "expression": {
+                "$ref": "#/$defs/RecordAttributeReleaseExpression"
+              }
+            },
+            "required": [
+              "expression"
+            ],
+            "type": "object"
+          },
+          "RecordAttributeReleaseExpression": {
+            "additionalProperties": false,
+            "properties": {
+              "cel": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cel"
+            ],
+            "type": "object"
+          },
+          "RecordAttributeReleaseProfile": {
+            "additionalProperties": false,
+            "description": "A project-authored, entity-bound identity release. The project compiler\ndeliberately exposes only the minimizing subset used by Registry Relay:\nexact-one subject resolution, purpose binding, and typed claim selection.\nSource metadata disclosure and response caching are not authoring options.",
+            "properties": {
+              "claims": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/RecordAttributeReleaseClaim"
+                },
+                "type": "object"
+              },
+              "description": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "release_conditions": {
+                "$ref": "#/$defs/RecordAttributeReleaseConditions"
+              },
+              "release_scope": {
+                "type": "string"
+              },
+              "subject": {
+                "$ref": "#/$defs/RecordAttributeReleaseSubject"
+              },
+              "title": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "version",
+              "purpose",
+              "release_scope",
+              "subject",
+              "release_conditions",
+              "claims"
+            ],
+            "type": "object"
+          },
+          "RecordAttributeReleaseSensitivity": {
+            "enum": [
+              "direct_identifier",
+              "personal",
+              "public",
+              "pseudonymous"
+            ],
+            "type": "string"
+          },
+          "RecordAttributeReleaseSubject": {
+            "additionalProperties": false,
+            "properties": {
+              "id_type": {
+                "type": "string"
+              },
+              "source_field": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "source_field",
+              "id_type"
+            ],
+            "type": "object"
+          },
+          "RecordDisclosureControl": {
+            "additionalProperties": false,
+            "properties": {
+              "min_group_size": {
+                "default": 5,
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "suppression": {
+                "$ref": "#/$defs/RecordSuppression",
+                "default": "omit"
+              }
+            },
+            "type": "object"
+          },
+          "RecordFilterOperator": {
+            "enum": [
+              "eq",
+              "in",
+              "gte",
+              "lte",
+              "between"
+            ],
+            "type": "string"
+          },
+          "RecordPagination": {
+            "additionalProperties": false,
+            "properties": {
+              "default_limit": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_limit": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "default_limit",
+              "max_limit"
+            ],
+            "type": "object"
+          },
+          "RecordRelationship": {
+            "additionalProperties": false,
+            "properties": {
+              "concept_uri": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "foreign_key": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/RecordRelationshipKind"
+              },
+              "target": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "target",
+              "foreign_key"
+            ],
+            "type": "object"
+          },
+          "RecordRelationshipKind": {
+            "enum": [
+              "belongs_to",
+              "has_many",
+              "has_one"
+            ],
+            "type": "string"
+          },
+          "RecordScopes": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregate": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "evidence_verification": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "metadata": {
+                "type": "string"
+              },
+              "rows": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "metadata",
+              "rows"
+            ],
+            "type": "object"
+          },
+          "RecordSensitivity": {
+            "enum": [
+              "public",
+              "internal",
+              "personal",
+              "confidential",
+              "secret"
+            ],
+            "type": "string"
+          },
+          "RecordSpatial": {
+            "additionalProperties": false,
+            "properties": {
+              "bbox_fields": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RecordSpatialBbox"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "collection_id": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "datetime_field": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "description": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "geometry": {
+                "$ref": "#/$defs/RecordSpatialGeometry"
+              },
+              "max_bbox_degrees": {
+                "default": 5.0,
+                "format": "double",
+                "type": "number"
+              },
+              "max_geometry_vertices": {
+                "default": 10000,
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "title": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "geometry"
+            ],
+            "type": "object"
+          },
+          "RecordSpatialBbox": {
+            "additionalProperties": false,
+            "properties": {
+              "max_x": {
+                "type": "string"
+              },
+              "max_y": {
+                "type": "string"
+              },
+              "min_x": {
+                "type": "string"
+              },
+              "min_y": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "min_x",
+              "min_y",
+              "max_x",
+              "max_y"
+            ],
+            "type": "object"
+          },
+          "RecordSpatialGeometry": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "crs": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "point",
+                    "type": "string"
+                  },
+                  "latitude_field": {
+                    "type": "string"
+                  },
+                  "longitude_field": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "longitude_field",
+                  "latitude_field",
+                  "crs"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "crs": {
+                    "type": "string"
+                  },
+                  "field": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "geojson",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "field",
+                  "crs"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "crs": {
+                    "type": "string"
+                  },
+                  "field": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "wkt",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "field",
+                  "crs"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "crs": {
+                    "type": "string"
+                  },
+                  "field": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "wkb",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "field",
+                  "crs"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RecordSpdci": {
+            "additionalProperties": false,
+            "properties": {
+              "expression_fields": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "identifiers": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "record_type": {
+                "type": "string"
+              },
+              "registry": {
+                "type": "string"
+              },
+              "registry_type": {
+                "type": "string"
+              },
+              "response_fields": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "type": "object"
+              }
+            },
+            "required": [
+              "registry",
+              "registry_type",
+              "record_type",
+              "identifiers",
+              "expression_fields"
+            ],
+            "type": "object"
+          },
+          "RecordStandard": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RecordSpatial"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "RecordStandard2": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RecordSpdci"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "RecordStandards": {
+            "additionalProperties": false,
+            "properties": {
+              "ogc_features": {
+                "$ref": "#/$defs/RecordStandard"
+              },
+              "sp_dci": {
+                "$ref": "#/$defs/RecordStandard2"
+              }
+            },
+            "required": [
+              "ogc_features",
+              "sp_dci"
+            ],
+            "type": "object"
+          },
+          "RecordSuppression": {
+            "enum": [
+              "omit",
+              "mask",
+              "null"
+            ],
+            "type": "string"
+          },
+          "RecordUpdateFrequency": {
+            "enum": [
+              "continuous",
+              "daily",
+              "weekly",
+              "termly",
+              "monthly",
+              "quarterly",
+              "annual",
+              "irregular",
+              "as_needed",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "RecordsApiDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregates": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/RecordAggregate"
+                },
+                "default": {},
+                "type": "object"
+              },
+              "attribute_release_profiles": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/RecordAttributeReleaseProfile"
+                },
+                "default": {},
+                "type": "object"
+              },
+              "filters": {
+                "additionalProperties": {
+                  "items": {
+                    "$ref": "#/$defs/RecordFilterOperator"
+                  },
+                  "type": "array"
+                },
+                "default": {},
+                "type": "object"
+              },
+              "pagination": {
+                "$ref": "#/$defs/RecordPagination"
+              },
+              "projection": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "purposes": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "relationships": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/RecordRelationship"
+                },
+                "default": {},
+                "type": "object"
+              },
+              "required_principal_filters": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "scopes": {
+                "$ref": "#/$defs/RecordScopes"
+              },
+              "standards": {
+                "$ref": "#/$defs/RecordStandards"
+              }
+            },
+            "required": [
+              "scopes",
+              "projection",
+              "pagination",
+              "standards"
+            ],
+            "type": "object"
+          },
+          "RegistryDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "RequestVariable": {
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "type": {
+                "$ref": "#/$defs/OutputType"
+              }
+            },
+            "required": [
+              "from",
+              "type"
+            ],
+            "type": "object"
+          },
+          "ServiceDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "access": {
+                "$ref": "#/$defs/AccessDeclaration",
+                "default": {
+                  "scopes": []
+                }
+              },
+              "access_rights": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RecordAccessRights"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "api": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RecordsApiDeclaration"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "claims": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/ClaimDeclaration"
+                },
+                "default": {},
+                "type": "object"
+              },
+              "conforms_to": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "consent": {
+                "$ref": "#/$defs/ConsentDeclaration",
+                "default": "not_required"
+              },
+              "consultations": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/ConsultationDeclaration"
+                },
+                "default": {},
+                "type": "object"
+              },
+              "credential_profiles": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/CredentialProfileDeclaration"
+                },
+                "default": {},
+                "type": "object"
+              },
+              "description": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "entity": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/ServiceKind"
+              },
+              "legal_basis": {
+                "default": "",
+                "type": "string"
+              },
+              "owner": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "purpose": {
+                "default": "",
+                "type": "string"
+              },
+              "sensitivity": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RecordSensitivity"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "title": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "update_frequency": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RecordUpdateFrequency"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "variables": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/RequestVariable"
+                },
+                "default": {},
+                "type": "object"
+              },
+              "version": {
+                "default": 0,
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          "ServiceKind": {
+            "enum": [
+              "evidence",
+              "records_api"
+            ],
+            "type": "string"
+          },
+          "StarterProvenance": {
+            "additionalProperties": false,
+            "properties": {
+              "content_digest": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "release": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "release",
+              "content_digest"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "entities": {
+            "additionalProperties": {
+              "$ref": "#/$defs/EntityReference"
+            },
+            "default": {},
+            "type": "object"
+          },
+          "integrations": {
+            "additionalProperties": {
+              "$ref": "#/$defs/IntegrationReference"
+            },
+            "default": {},
+            "type": "object"
+          },
+          "registry": {
+            "$ref": "#/$defs/RegistryDeclaration"
+          },
+          "services": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ServiceDeclaration"
+            },
+            "type": "object"
+          },
+          "starter": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StarterProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "version": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "registry",
+          "services"
+        ],
+        "title": "RegistryProject",
+        "type": "object"
+      }
+    },
+    {
+      "kind": "environment",
+      "rust_type": "EnvironmentDocument",
+      "schema": {
+        "$defs": {
+          "CallerBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key_fingerprint": {
+                "$ref": "#/$defs/SecretReference"
+              },
+              "scopes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "api_key_fingerprint",
+              "scopes"
+            ],
+            "type": "object"
+          },
+          "CertificateAuthorityBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "file",
+              "generation"
+            ],
+            "type": "object"
+          },
+          "DeploymentBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "notary": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ServiceBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "profile": {
+                "$ref": "#/$defs/DeploymentProfile"
+              },
+              "relay": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ServiceBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "profile"
+            ],
+            "type": "object"
+          },
+          "DeploymentProfile": {
+            "enum": [
+              "local",
+              "hosted_lab",
+              "production",
+              "evidence_grade"
+            ],
+            "type": "string"
+          },
+          "EnvironmentCredential": {
+            "additionalProperties": false,
+            "properties": {
+              "client_id": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SecretReference"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "client_secret": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SecretReference"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "password": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SecretReference"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "token": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SecretReference"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "username": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SecretReference"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SecretReference"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "generation"
+            ],
+            "type": "object"
+          },
+          "EnvironmentEntityBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "generation": {
+                "type": "string"
+              },
+              "provider": {
+                "$ref": "#/$defs/RecordProvider"
+              },
+              "source_revision": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "columns",
+              "source_revision",
+              "generation"
+            ],
+            "type": "object"
+          },
+          "EnvironmentIntegration": {
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "$ref": "#/$defs/EnvironmentSourceBinding"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "type": "object"
+          },
+          "EnvironmentSourceBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "allowed_private_cidrs": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "ca": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CertificateAuthorityBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "concurrency": {
+                "default": null,
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "credential": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EnvironmentCredential"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "jwks": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PrivateEndpointBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "mtls": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/MutualTlsBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "oauth": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/PrivateEndpointBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "origin": {
+                "type": "string"
+              },
+              "rate": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/SourceRateBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "timeout": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "origin"
+            ],
+            "type": "object"
+          },
+          "IssuanceBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "algorithm": {
+                "$ref": "#/$defs/IssuanceSigningAlgorithm",
+                "default": "EdDSA"
+              },
+              "generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "issuer": {
+                "type": "string"
+              },
+              "signing_key": {
+                "$ref": "#/$defs/SecretReference"
+              },
+              "signing_kid": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "issuer",
+              "signing_key",
+              "signing_kid",
+              "generation"
+            ],
+            "type": "object"
+          },
+          "IssuanceSigningAlgorithm": {
+            "enum": [
+              "EdDSA",
+              "ES256"
+            ],
+            "type": "string"
+          },
+          "MutualTlsBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "certificate_file": {
+                "type": "string"
+              },
+              "generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "private_key": {
+                "$ref": "#/$defs/SecretReference"
+              }
+            },
+            "required": [
+              "certificate_file",
+              "private_key",
+              "generation"
+            ],
+            "type": "object"
+          },
+          "NotaryCelBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "worker_memory_bytes": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "worker_memory_bytes"
+            ],
+            "type": "object"
+          },
+          "NotaryPostgresqlBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "root_certificate_path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root_certificate_path"
+            ],
+            "type": "object"
+          },
+          "NotaryRelayBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "base_url": {
+                "type": "string"
+              },
+              "token_file": {
+                "type": "string"
+              },
+              "workload_client_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "base_url",
+              "workload_client_id",
+              "token_file"
+            ],
+            "type": "object"
+          },
+          "NotaryStateBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "postgresql": {
+                "$ref": "#/$defs/NotaryPostgresqlBinding"
+              }
+            },
+            "required": [
+              "postgresql"
+            ],
+            "type": "object"
+          },
+          "Oid4vciAuthorizationServerBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "authorize_url": {
+                "type": "string"
+              },
+              "issuer": {
+                "type": "string"
+              },
+              "jwks_url": {
+                "type": "string"
+              },
+              "token_url": {
+                "type": "string"
+              },
+              "userinfo_url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "issuer",
+              "jwks_url",
+              "userinfo_url",
+              "authorize_url",
+              "token_url"
+            ],
+            "type": "object"
+          },
+          "Oid4vciBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "access_token": {
+                "$ref": "#/$defs/Oid4vciSigningKeyBinding"
+              },
+              "allowed_wallet_origins": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "authorization_server": {
+                "$ref": "#/$defs/Oid4vciAuthorizationServerBinding"
+              },
+              "client": {
+                "$ref": "#/$defs/Oid4vciClientBinding"
+              },
+              "credential": {
+                "$ref": "#/$defs/Oid4vciCredentialBinding"
+              },
+              "public_base_url": {
+                "type": "string"
+              },
+              "redirect_uri": {
+                "type": "string"
+              },
+              "sensitive_state_key": {
+                "$ref": "#/$defs/SecretReference"
+              },
+              "subject": {
+                "$ref": "#/$defs/Oid4vciSubjectBinding"
+              },
+              "tx_code": {
+                "$ref": "#/$defs/Oid4vciTxCodeBinding",
+                "default": {
+                  "required": true
+                }
+              }
+            },
+            "required": [
+              "public_base_url",
+              "credential",
+              "authorization_server",
+              "client",
+              "access_token",
+              "sensitive_state_key",
+              "subject",
+              "redirect_uri",
+              "allowed_wallet_origins"
+            ],
+            "type": "object"
+          },
+          "Oid4vciClientBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "signing_key": {
+                "$ref": "#/$defs/SecretReference"
+              },
+              "signing_kid": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "signing_key",
+              "signing_kid"
+            ],
+            "type": "object"
+          },
+          "Oid4vciCredentialBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "profile": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "service",
+              "profile"
+            ],
+            "type": "object"
+          },
+          "Oid4vciSigningKeyBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "signing_key": {
+                "$ref": "#/$defs/SecretReference"
+              },
+              "signing_kid": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "signing_key",
+              "signing_kid"
+            ],
+            "type": "object"
+          },
+          "Oid4vciSubjectBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "id_type": {
+                "type": "string"
+              },
+              "token_claim": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "token_claim",
+              "id_type"
+            ],
+            "type": "object"
+          },
+          "Oid4vciTxCodeBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "required": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "PrivateEndpointBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "allowed_private_cidrs": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "ca": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/CertificateAuthorityBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "generation": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "mtls": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/MutualTlsBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "origin": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "origin",
+              "path",
+              "generation"
+            ],
+            "type": "object"
+          },
+          "RecordProvider": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "delimiter": {
+                    "default": null,
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "header_row": {
+                    "default": null,
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "quote": {
+                    "default": null,
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "const": "csv",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "data_range": {
+                    "default": null,
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "header_row": {
+                    "default": null,
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "sheet": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "xlsx",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path",
+                  "sheet"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "parquet",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "connection": {
+                    "$ref": "#/$defs/SecretReference"
+                  },
+                  "schema": {
+                    "type": "string"
+                  },
+                  "table": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "postgres",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "connection",
+                  "schema",
+                  "table"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "RelayBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "allowed_clients": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "audience": {
+                "type": "string"
+              },
+              "issuer": {
+                "type": "string"
+              },
+              "jwks_url": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "origin",
+              "issuer",
+              "jwks_url",
+              "audience",
+              "allowed_clients"
+            ],
+            "type": "object"
+          },
+          "RelayPostgresqlBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "root_certificate_path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "root_certificate_path"
+            ],
+            "type": "object"
+          },
+          "RelayStateBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "postgresql": {
+                "$ref": "#/$defs/RelayPostgresqlBinding"
+              }
+            },
+            "required": [
+              "postgresql"
+            ],
+            "type": "object"
+          },
+          "SecretReference": {
+            "additionalProperties": false,
+            "properties": {
+              "secret": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "secret"
+            ],
+            "type": "object"
+          },
+          "ServiceBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "service": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "service"
+            ],
+            "type": "object"
+          },
+          "SourceRateBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "burst": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "per_minute": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "per_minute",
+              "burst"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "callers": {
+            "additionalProperties": {
+              "$ref": "#/$defs/CallerBinding"
+            },
+            "default": {},
+            "type": "object"
+          },
+          "deployment": {
+            "$ref": "#/$defs/DeploymentBinding"
+          },
+          "entities": {
+            "additionalProperties": {
+              "$ref": "#/$defs/EnvironmentEntityBinding"
+            },
+            "default": {},
+            "type": "object"
+          },
+          "integrations": {
+            "additionalProperties": {
+              "$ref": "#/$defs/EnvironmentIntegration"
+            },
+            "default": {},
+            "type": "object"
+          },
+          "issuance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/IssuanceBinding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "notary_cel": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NotaryCelBinding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "notary_relay": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NotaryRelayBinding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "notary_state": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NotaryStateBinding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "oid4vci": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Oid4vciBinding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "relay": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RelayBinding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "relay_state": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RelayStateBinding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "version": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "deployment"
+        ],
+        "title": "EnvironmentDocument",
+        "type": "object"
+      }
+    },
+    {
+      "kind": "integration",
+      "rust_type": "AuthoredIntegrationDocument",
+      "schema": {
+        "$defs": {
+          "AuthoredByteSize": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "AuthoredCapabilityDeclaration": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuthoredHttpCapability"
+              },
+              {
+                "$ref": "#/$defs/AuthoredScriptCapability"
+              },
+              {
+                "$ref": "#/$defs/AuthoredSnapshotCapability"
+              }
+            ]
+          },
+          "AuthoredDciSelectorBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "response_pointer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "field",
+              "response_pointer"
+            ],
+            "type": "object"
+          },
+          "AuthoredHttpCapability": {
+            "additionalProperties": false,
+            "properties": {
+              "http": {
+                "$ref": "#/$defs/AuthoredHttpDeclaration"
+              }
+            },
+            "required": [
+              "http"
+            ],
+            "type": "object"
+          },
+          "AuthoredHttpDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "request": {
+                "$ref": "#/$defs/AuthoredHttpRequest"
+              },
+              "response": {
+                "$ref": "#/$defs/AuthoredHttpResponse",
+                "default": {
+                  "ambiguous": [],
+                  "no_match": [],
+                  "shape": null
+                }
+              }
+            },
+            "required": [
+              "request"
+            ],
+            "type": "object"
+          },
+          "AuthoredHttpRequest": {
+            "additionalProperties": false,
+            "properties": {
+              "body": {
+                "default": null
+              },
+              "headers": {
+                "additionalProperties": true,
+                "default": {},
+                "type": "object"
+              },
+              "method": {
+                "$ref": "#/$defs/ReadMethod"
+              },
+              "path": {
+                "type": "string"
+              },
+              "query": {
+                "additionalProperties": true,
+                "default": {},
+                "type": "object"
+              },
+              "semantics": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredRequestSemantics"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "method",
+              "path"
+            ],
+            "type": "object"
+          },
+          "AuthoredHttpResponse": {
+            "additionalProperties": false,
+            "properties": {
+              "ambiguous": {
+                "default": [],
+                "items": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "no_match": {
+                "default": [],
+                "items": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "shape": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredHttpShape"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "AuthoredHttpShape": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuthoredSingletonShape"
+              },
+              {
+                "properties": {
+                  "cardinality": {
+                    "$ref": "#/$defs/CardinalityMode"
+                  },
+                  "records": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "records",
+                  "cardinality"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "AuthoredInputDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "canonicalization": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Canonicalization"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "const": {
+                "default": null
+              },
+              "enum": {
+                "default": null,
+                "items": true,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "format": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredStringFormat"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "maxLength": {
+                "default": null,
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "maximum": {
+                "default": null,
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "minLength": {
+                "default": null,
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "minimum": {
+                "default": null,
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "pattern": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "role": {
+                "$ref": "#/$defs/AuthoredInputRole"
+              },
+              "type": {
+                "$ref": "#/$defs/AuthoredSchemaType"
+              }
+            },
+            "required": [
+              "role",
+              "type"
+            ],
+            "type": "object"
+          },
+          "AuthoredInputReference": {
+            "additionalProperties": false,
+            "properties": {
+              "input": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "input"
+            ],
+            "type": "object"
+          },
+          "AuthoredInputRole": {
+            "enum": [
+              "selector",
+              "parameter"
+            ],
+            "type": "string"
+          },
+          "AuthoredLimitsDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "calls": {
+                "default": null,
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "deadline": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "request_bytes": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredByteSize"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "source_bytes": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredByteSize"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "AuthoredNotApplicableDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "ambiguity": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredNotApplicableReason"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "subject_mismatch": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredNotApplicableReason"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "AuthoredNotApplicableReason": {
+            "additionalProperties": false,
+            "properties": {
+              "rationale": {
+                "type": "string"
+              },
+              "request_fixture": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "rationale",
+              "request_fixture"
+            ],
+            "type": "object"
+          },
+          "AuthoredOutputDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "format": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredStringFormat"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "maxLength": {
+                "default": null,
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "maximum": {
+                "default": null,
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "minimum": {
+                "default": null,
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "type": {
+                "$ref": "#/$defs/AuthoredSchemaType"
+              },
+              "x-registry-source": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "AuthoredOutputsDeclaration": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/$defs/AuthoredOutputDeclaration"
+                },
+                "type": "object"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "AuthoredProtocolDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "signed_dci": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredSignedDciDeclaration"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "AuthoredRequestSemantics": {
+            "enum": [
+              "read_only"
+            ],
+            "type": "string"
+          },
+          "AuthoredResponseFormat": {
+            "enum": [
+              "json",
+              "text"
+            ],
+            "type": "string"
+          },
+          "AuthoredScalarType": {
+            "enum": [
+              "string",
+              "boolean",
+              "integer",
+              "null"
+            ],
+            "type": "string"
+          },
+          "AuthoredSchemaType": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuthoredScalarType"
+              },
+              {
+                "items": {
+                  "$ref": "#/$defs/AuthoredScalarType"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "AuthoredScriptCapability": {
+            "additionalProperties": false,
+            "properties": {
+              "script": {
+                "$ref": "#/$defs/AuthoredScriptDeclaration"
+              }
+            },
+            "required": [
+              "script"
+            ],
+            "type": "object"
+          },
+          "AuthoredScriptDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "modules": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
+          },
+          "AuthoredSignedDciDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "jwks_profile": {
+                "type": "string"
+              },
+              "locale": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "receiver": {
+                "type": "string"
+              },
+              "record_type": {
+                "type": "string"
+              },
+              "registry_type": {
+                "type": "string"
+              },
+              "selectors": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/AuthoredDciSelectorBinding"
+                },
+                "type": "object"
+              },
+              "sender": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "profile",
+              "path",
+              "jwks_profile",
+              "sender",
+              "receiver",
+              "registry_type",
+              "record_type",
+              "locale",
+              "selectors"
+            ],
+            "type": "object"
+          },
+          "AuthoredSingletonShape": {
+            "enum": [
+              "singleton"
+            ],
+            "type": "string"
+          },
+          "AuthoredSnapshotCapability": {
+            "additionalProperties": false,
+            "properties": {
+              "snapshot": {
+                "$ref": "#/$defs/AuthoredSnapshotDeclaration"
+              }
+            },
+            "required": [
+              "snapshot"
+            ],
+            "type": "object"
+          },
+          "AuthoredSnapshotDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "entity": {
+                "type": "string"
+              },
+              "exact": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/AuthoredInputReference"
+                },
+                "type": "object"
+              },
+              "freshness": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity",
+              "exact",
+              "freshness"
+            ],
+            "type": "object"
+          },
+          "AuthoredSourceAllowRule": {
+            "additionalProperties": false,
+            "properties": {
+              "method": {
+                "$ref": "#/$defs/ReadMethod"
+              },
+              "path": {
+                "type": "string"
+              },
+              "semantics": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredRequestSemantics"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": [
+              "method",
+              "path"
+            ],
+            "type": "object"
+          },
+          "AuthoredSourceDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "allow": {
+                "default": [],
+                "items": {
+                  "$ref": "#/$defs/AuthoredSourceAllowRule"
+                },
+                "type": "array"
+              },
+              "auth": {
+                "$ref": "#/$defs/CredentialInterface"
+              },
+              "product": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "protocol": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredProtocolDeclaration"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "request_headers": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "response": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredSourceResponse"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "response_headers": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "versions": {
+                "$ref": "#/$defs/AuthoredSourceVersions",
+                "default": {
+                  "tested": [],
+                  "unverified": []
+                }
+              }
+            },
+            "required": [
+              "auth"
+            ],
+            "type": "object"
+          },
+          "AuthoredSourceResponse": {
+            "additionalProperties": false,
+            "properties": {
+              "format": {
+                "$ref": "#/$defs/AuthoredResponseFormat",
+                "default": "json"
+              },
+              "max_bytes": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredByteSize"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "AuthoredSourceVersions": {
+            "additionalProperties": false,
+            "properties": {
+              "tested": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "unverified": {
+                "default": [],
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "AuthoredStringFormat": {
+            "enum": [
+              "date"
+            ],
+            "type": "string"
+          },
+          "Canonicalization": {
+            "enum": [
+              "identity",
+              "ascii_lowercase"
+            ],
+            "type": "string"
+          },
+          "CardinalityMode": {
+            "enum": [
+              "singleton",
+              "probe_two"
+            ],
+            "type": "string"
+          },
+          "CredentialInterface": {
+            "additionalProperties": false,
+            "properties": {
+              "audience": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "max_value_bytes": {
+                "default": null,
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "name": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "refresh_skew": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "request": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/OAuthRequestFormat"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "response_profile": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/OAuthResponseProfile"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "scope": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "$ref": "#/$defs/CredentialType"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "CredentialType": {
+            "enum": [
+              "none",
+              "basic",
+              "static_bearer",
+              "oauth2_client_credentials",
+              "api_key_header",
+              "api_key_query"
+            ],
+            "type": "string"
+          },
+          "OAuthRequestFormat": {
+            "enum": [
+              "form",
+              "json"
+            ],
+            "type": "string"
+          },
+          "OAuthResponseProfile": {
+            "enum": [
+              "oauth2_bearer"
+            ],
+            "type": "string"
+          },
+          "ReadMethod": {
+            "enum": [
+              "GET",
+              "POST"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "description": "The pre-1.0 project authoring contract. Runtime artifacts may still lower\nthis concise model into product-owned structures, but authored files never\nexpose those structures.",
+        "properties": {
+          "capability": {
+            "$ref": "#/$defs/AuthoredCapabilityDeclaration"
+          },
+          "id": {
+            "type": "string"
+          },
+          "input": {
+            "additionalProperties": {
+              "$ref": "#/$defs/AuthoredInputDeclaration"
+            },
+            "type": "object"
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuthoredLimitsDeclaration"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "not_applicable": {
+            "$ref": "#/$defs/AuthoredNotApplicableDeclaration",
+            "default": {
+              "ambiguity": null,
+              "subject_mismatch": null
+            }
+          },
+          "outputs": {
+            "$ref": "#/$defs/AuthoredOutputsDeclaration"
+          },
+          "revision": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuthoredSourceDeclaration"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "version": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "id",
+          "revision",
+          "input",
+          "capability",
+          "outputs"
+        ],
+        "title": "AuthoredIntegrationDocument",
+        "type": "object"
+      }
+    },
+    {
+      "kind": "fixture",
+      "rust_type": "AuthoredFixtureDocument",
+      "schema": {
+        "$defs": {
+          "AuthoredFixtureBody": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/AuthoredFixtureBodyFile"
+              },
+              {
+                "not": {
+                  "required": [
+                    "file"
+                  ],
+                  "type": "object"
+                }
+              }
+            ]
+          },
+          "AuthoredFixtureBodyFile": {
+            "additionalProperties": false,
+            "properties": {
+              "file": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "type": "object"
+          },
+          "AuthoredFixtureClassification": {
+            "enum": [
+              "synthetic"
+            ],
+            "type": "string"
+          },
+          "AuthoredFixtureHttpResponse": {
+            "additionalProperties": false,
+            "properties": {
+              "body": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredFixtureBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "headers": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "type": "object"
+              },
+              "status": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          "AuthoredFixtureInteraction": {
+            "additionalProperties": false,
+            "properties": {
+              "expect": {
+                "$ref": "#/$defs/AuthoredFixtureRequest"
+              },
+              "respond": {
+                "$ref": "#/$defs/AuthoredFixtureResponse"
+              }
+            },
+            "required": [
+              "expect",
+              "respond"
+            ],
+            "type": "object"
+          },
+          "AuthoredFixtureRequest": {
+            "additionalProperties": false,
+            "properties": {
+              "body": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredFixtureBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "headers": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "default": {},
+                "type": "object"
+              },
+              "method": {
+                "$ref": "#/$defs/ReadMethod"
+              },
+              "path": {
+                "type": "string"
+              },
+              "query": {
+                "additionalProperties": true,
+                "default": {},
+                "type": "object"
+              }
+            },
+            "required": [
+              "method",
+              "path"
+            ],
+            "type": "object"
+          },
+          "AuthoredFixtureResponse": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuthoredFixtureHttpResponse"
+              },
+              {
+                "$ref": "#/$defs/AuthoredFixtureTimeoutResponse"
+              }
+            ]
+          },
+          "AuthoredFixtureTimeoutResponse": {
+            "additionalProperties": false,
+            "properties": {
+              "timeout": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "timeout"
+            ],
+            "type": "object"
+          },
+          "FixtureExpectation": {
+            "additionalProperties": false,
+            "properties": {
+              "claims": {
+                "additionalProperties": true,
+                "default": {},
+                "type": "object"
+              },
+              "error": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "outcome": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "outputs": {
+                "additionalProperties": true,
+                "default": {},
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
+          "ReadMethod": {
+            "enum": [
+              "GET",
+              "POST"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "classification": {
+            "$ref": "#/$defs/AuthoredFixtureClassification"
+          },
+          "expect": {
+            "$ref": "#/$defs/FixtureExpectation"
+          },
+          "input": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "interactions": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/AuthoredFixtureInteraction"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "variables": {
+            "additionalProperties": true,
+            "default": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "classification",
+          "input",
+          "expect"
+        ],
+        "title": "AuthoredFixtureDocument",
+        "type": "object"
+      }
+    },
+    {
+      "kind": "entity",
+      "rust_type": "EntityDefinition",
+      "schema": {
+        "$defs": {
+          "AuthoredByteSize": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "AuthoredScalarType": {
+            "enum": [
+              "string",
+              "boolean",
+              "integer",
+              "null"
+            ],
+            "type": "string"
+          },
+          "AuthoredSchemaType": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuthoredScalarType"
+              },
+              {
+                "items": {
+                  "$ref": "#/$defs/AuthoredScalarType"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "AuthoredStringFormat": {
+            "enum": [
+              "date"
+            ],
+            "type": "string"
+          },
+          "EntityFieldSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "const": {
+                "default": null
+              },
+              "enum": {
+                "default": null,
+                "items": true,
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
+              "format": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredStringFormat"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "maxLength": {
+                "default": null,
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "maximum": {
+                "default": null,
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "minLength": {
+                "default": null,
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "minimum": {
+                "default": null,
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "pattern": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "$ref": "#/$defs/AuthoredSchemaType"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "EntityMaterialization": {
+            "additionalProperties": false,
+            "properties": {
+              "max_bytes": {
+                "$ref": "#/$defs/AuthoredByteSize"
+              },
+              "max_records": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "refresh": {
+                "type": "string"
+              },
+              "retain_generations": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "max_records",
+              "max_bytes",
+              "refresh",
+              "retain_generations"
+            ],
+            "type": "object"
+          },
+          "EntityObjectSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "properties": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/EntityFieldSchema"
+                },
+                "type": "object"
+              },
+              "required": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": {
+                "$ref": "#/$defs/EntityObjectType"
+              }
+            },
+            "required": [
+              "type",
+              "additionalProperties",
+              "required",
+              "properties"
+            ],
+            "type": "object"
+          },
+          "EntityObjectType": {
+            "enum": [
+              "object"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "materialization": {
+            "$ref": "#/$defs/EntityMaterialization"
+          },
+          "primary_key": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema": {
+            "$ref": "#/$defs/EntityObjectSchema"
+          },
+          "version": {
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "id",
+          "revision",
+          "primary_key",
+          "schema",
+          "materialization"
+        ],
+        "title": "EntityDefinition",
+        "type": "object"
+      }
+    }
+  ],
+  "version": 1
+}

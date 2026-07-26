@@ -29,9 +29,9 @@ test('committed internal and public reference artifacts are exact and complete',
   assert.equal(reference.fields.length, 1736);
   assert.equal(coverage.reviewed_intent_assignment_required_count, 1736);
   assert.equal(coverage.reviewed_intent_assignment_covered_count, 1736);
-  assert.equal(coverage.distinct_reviewed_intent_count, 566);
+  assert.equal(coverage.distinct_reviewed_intent_count, 571);
   assert.equal(coverage.distinct_reviewed_intents_reused_count, 83);
-  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1253);
+  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1248);
   assert.deepEqual(reference.reference_baseline, {
     generator_lifecycle: 'unreleased',
     published_release: null,

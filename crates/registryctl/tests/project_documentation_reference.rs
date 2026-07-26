@@ -488,7 +488,7 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
             coverage.distinct_reviewed_intents_reused_count,
             coverage.reviewed_intent_assignments_using_reused_intent_count,
         ),
-        (566, 83, 1_253),
+        (571, 83, 1_248),
         "the exact intent-text reuse baseline must change intentionally with reviewed documentation"
     );
     assert_eq!(

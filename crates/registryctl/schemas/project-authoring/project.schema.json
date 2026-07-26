@@ -264,6 +264,7 @@
       "anyOf": [{"x-registry-field": "branch", "required": ["measures"] }, {"x-registry-field": "branch", "required": ["indicators"] }]
     },
     "recordAggregateAccess": {
+      "description": "Authorization scopes and execution policy for one governed aggregate.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -273,6 +274,7 @@
       }
     },
     "recordAggregateSpatial": {
+      "description": "Administrative-area geometry join used to spatially group aggregate results.",
       "type": "object",
       "additionalProperties": false,
       "required": ["mode", "dimension", "geometry_entity", "geometry_id_field", "geometry_field"],
@@ -288,6 +290,7 @@
       }
     },
     "recordSpatial": {
+      "description": "OGC API Features collection metadata and bounded geometry mapping.",
       "type": "object",
       "additionalProperties": false,
       "required": ["geometry"],
@@ -303,6 +306,7 @@
       }
     },
     "recordSpatialGeometry": {
+      "description": "Supported point or encoded-geometry field mapping for spatial records.",
       "oneOf": [
         {
           "x-registry-field": "branch",
@@ -330,6 +334,7 @@
       ]
     },
     "recordSpatialBbox": {
+      "description": "Record fields carrying the four coordinates of a bounding box.",
       "type": "object",
       "additionalProperties": false,
       "required": ["min_x", "min_y", "max_x", "max_y"],
@@ -341,6 +346,7 @@
       }
     },
     "recordSpdci": {
+      "description": "SP-DCI registry identity and field mappings for a records service.",
       "type": "object",
       "additionalProperties": false,
       "required": ["registry", "registry_type", "record_type", "identifiers", "expression_fields"],
@@ -354,12 +360,14 @@
       }
     },
     "recordFieldMap": {
+      "description": "Bounded mapping from standard field names to entity field identifiers.",
       "type": "object",
       "maxProperties": 64,
       "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
       "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/stableId" }
     },
     "recordAggregateDimension": {
+      "description": "Named grouping dimension backed by one entity field.",
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "label", "field"],
@@ -371,6 +379,7 @@
       }
     },
     "recordAggregateIndicator": {
+      "description": "SDMX-style aggregate indicator with units and display metadata.",
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "label", "function", "column", "unit_measure"],
@@ -387,6 +396,7 @@
       }
     },
     "recordAggregateMeasure": {
+      "description": "Named aggregate calculation over one entity column.",
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "function", "column"],
@@ -397,6 +407,7 @@
       }
     },
     "recordAggregateFunction": {
+      "description": "Supported aggregate calculation function.",
       "enum": ["count", "sum", "avg", "min", "max", "median", "count_distinct", "stddev"]
     },
     "disclosureMode": { "enum": ["value", "predicate", "redacted"], "description": "Maximum detail a claim may disclose." },
