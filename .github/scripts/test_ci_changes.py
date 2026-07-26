@@ -92,6 +92,7 @@ class CiChangesTest(unittest.TestCase):
 
     def test_archive_dependent_scripts_select_archive_verification(self) -> None:
         for path in (
+            ".github/scripts/ci_changes.py",
             "docs/site/scripts/check-built-links.mjs",
             "docs/site/scripts/check-seo.mjs",
             "docs/site/scripts/docsets.mjs",

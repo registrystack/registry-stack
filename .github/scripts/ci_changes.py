@@ -267,6 +267,7 @@ def classify(
     docs_archives = any(
         path
         in {
+            ".github/scripts/ci_changes.py",
             ".github/workflows/ci.yml",
             ".github/workflows/docs-pages.yml",
             ".github/workflows/release.yml",
