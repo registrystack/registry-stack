@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, Result};
 const INTEGRATION_DEADLINE_MAX_MS: u32 = 20_000;
 const FIXTURE_TIMEOUT_MAX_MS: u32 = 20_000;
 const ENVIRONMENT_SOURCE_TIMEOUT_MAX_MS: u32 = 20_000;
-const OAUTH_REFRESH_SKEW_MAX_MS: u32 = 20_000;
+const OAUTH_REFRESH_SKEW_MAX_MS: u32 = 59_999;
 const SNAPSHOT_FRESHNESS_MAX_MS: u32 = 31 * 24 * 60 * 60 * 1_000;
 const MATERIALIZATION_REFRESH_MAX_MS: u32 = 30 * 24 * 60 * 60 * 1_000;
 
@@ -137,7 +137,6 @@ mod tests {
             parse_integration_deadline_ms,
             parse_fixture_timeout_ms,
             parse_environment_source_timeout_ms,
-            parse_oauth_refresh_skew_ms,
         ] {
             assert_eq!(parser("1ms").expect("minimum is valid"), 1);
             assert_eq!(parser("20s").expect("maximum is valid"), 20_000);
@@ -145,6 +144,17 @@ mod tests {
             assert!(parser("20001ms").is_err());
             assert!(parser("1m").is_err());
         }
+
+        assert_eq!(
+            parse_oauth_refresh_skew_ms("30s").expect("explicit default is valid"),
+            30_000
+        );
+        assert_eq!(
+            parse_oauth_refresh_skew_ms("59999ms").expect("OAuth maximum is valid"),
+            OAUTH_REFRESH_SKEW_MAX_MS
+        );
+        assert!(parse_oauth_refresh_skew_ms("60s").is_err());
+        assert!(parse_oauth_refresh_skew_ms("1m").is_err());
 
         assert_eq!(
             parse_snapshot_freshness_ms("31d").expect("snapshot maximum is valid"),

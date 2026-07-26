@@ -5250,6 +5250,39 @@ fn opencrvs_composite_dci_uses_unified_exact_predicates_canonically() {
         ));
 }
 
+#[test]
+fn oauth_refresh_skew_accepts_explicit_default_and_safe_ceiling() {
+    for (authored, expected_ms) in [("30s", 30_000), ("59999ms", 59_999)] {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = copy_project("opencrvs", temporary.path());
+        replace_in_file(
+            &project.join("integrations/birth-record/integration.yaml"),
+            "    response_profile: oauth2_bearer",
+            &format!("    response_profile: oauth2_bearer\n    refresh_skew: {authored}"),
+        );
+        let report = build_registry_project(&ProjectBuildOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+            against: None,
+            anchor: None,
+        })
+        .unwrap_or_else(|error| panic!("OAuth refresh skew {authored} builds: {error:#}"));
+        let output =
+            resolve_build_output(&project, report.output.expect("OAuth build output exists"));
+        let pack: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                output.join("private/relay/config/artifacts/integration-packs/birth-record.json"),
+            )
+            .expect("generated OpenCRVS integration pack reads"),
+        )
+        .expect("generated OpenCRVS integration pack is JSON");
+        assert_eq!(
+            pack["spec"]["plan"]["credential_operation"]["response"]["expiry_safety_skew_ms"],
+            expected_ms
+        );
+    }
+}
+
 fn validate_yaml(schema: &jsonschema::JSONSchema, path: &Path) {
     let authored: serde_norway::Value = serde_norway::from_slice(
         &std::fs::read(path).unwrap_or_else(|error| panic!("{}: {error}", path.display())),

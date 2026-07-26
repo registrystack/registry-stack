@@ -213,7 +213,12 @@
             "response_profile": {"x-registry-field": "property", "const": "oauth2_bearer" },
             "scope": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 1024 },
             "audience": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 1, "maxLength": 2048 },
-            "refresh_skew": {"x-registry-field": "property", "type": "string", "pattern": "^[1-9][0-9]*(?:ms|s)$" }
+            "refresh_skew": {
+              "x-registry-field": "property",
+              "description": "Positive OAuth refresh interval below the generated token contract's 60-second minimum lifetime.",
+              "type": "string",
+              "pattern": "^(?:(?:[1-9][0-9]{0,3}|[1-5][0-9]{4})ms|(?:[1-9]|[1-5][0-9])s)$"
+            }
           }
         }
       ]

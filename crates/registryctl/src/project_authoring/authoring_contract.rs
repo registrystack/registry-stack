@@ -949,14 +949,8 @@ fn validate_authored_credential_interface(interface: &CredentialInterface) -> Re
             if let Some(audience) = &interface.audience {
                 validate_token(audience, "source.auth.audience", 2048)?;
             }
-            if interface
-                .refresh_skew
-                .as_deref()
-                .map(parse_oauth_refresh_skew_ms)
-                .transpose()?
-                .is_some_and(|skew| skew == 0 || skew >= 3_600_000)
-            {
-                bail!("source.auth.refresh_skew must be positive and below one hour");
+            if let Some(refresh_skew) = interface.refresh_skew.as_deref() {
+                parse_oauth_refresh_skew_ms(refresh_skew)?;
             }
         }
         CredentialType::ApiKeyHeader | CredentialType::ApiKeyQuery => {

@@ -41951,7 +41951,7 @@
         "pointer": "/$defs/credential/oneOf/3/properties/refresh_skew",
         "path_kind": "property"
       },
-      "purpose": "Sets the positive interval before token expiry at which the OAuth credential is refreshed.",
+      "purpose": "Sets a positive refresh interval below sixty seconds so a cached OAuth credential retains usable lifetime.",
       "purpose_source": "reviewed_override",
       "semantic_owner": "integration_contract",
       "human_owner": "integration_maintainers",
@@ -42030,7 +42030,7 @@
       "constraints": [
         {
           "keyword": "pattern",
-          "value": "^[1-9][0-9]*(?:ms|s)$"
+          "value": "^(?:(?:[1-9][0-9]{0,3}|[1-5][0-9]{4})ms|(?:[1-9]|[1-5][0-9])s)$"
         },
         {
           "keyword": "type",

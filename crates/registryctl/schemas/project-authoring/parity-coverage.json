@@ -739,6 +739,19 @@
       }
     },
     {
+      "id": "integration-oauth-refresh-skew-at-minimum-token-lifetime",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
+      "schema": "integration",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
+      "document": "integrations/birth-record/integration.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/source/auth/refresh_skew",
+        "value": "60s"
+      }
+    },
+    {
       "id": "integration-input-below-json-safe-minimum",
       "dimension": "boundary",
       "expected_failing_keywords": ["minimum"],

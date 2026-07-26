@@ -38,6 +38,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   reference that Registryctl already enforces at runtime. The field description
   states the same ceiling for human-readable KiB/MiB values, which remain
   semantically validated.
+- OAuth `refresh_skew` now accepts the documented safe interval through
+  59,999ms, including an explicit `30s` value that matches the generated
+  default, while the schema, generated configuration reference, and runtime
+  reject values at or above the generated token contract's 60-second minimum
+  lifetime.
 - **BREAKING:** Before the Registry Stack 1.0 compatibility promise takes
   effect, `registry.project.fixture_coverage.v1` now distinguishes
   mapping-derived fixtures from independently executed, per-consultation

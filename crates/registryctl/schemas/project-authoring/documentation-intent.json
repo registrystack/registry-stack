@@ -1175,7 +1175,7 @@
     {
       "schema": "integration",
       "pointer": "/$defs/credential/oneOf/3/properties/refresh_skew",
-      "purpose": "Sets the positive interval before token expiry at which the OAuth credential is refreshed."
+      "purpose": "Sets a positive refresh interval below sixty seconds so a cached OAuth credential retains usable lifetime."
     },
     {
       "schema": "integration",
