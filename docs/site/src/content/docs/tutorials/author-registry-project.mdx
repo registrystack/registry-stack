@@ -150,13 +150,18 @@ The human-readable report identifies the selected fixture, typed input, source c
 output, claim results, and derived security cases. The complete report is:
 
 ```text
-PASS: 8/8 fixtures passed
+PASS: 9/9 fixtures passed
   PASS person-record.active-person
     inputs: person_id
     calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
     outputs: active
     claims: person-active, person-record-exists
     outcome: match
+  PASS person-record.active-person::derived/request_to_consultation_binding
+    inputs: person_id
+    calls: notary-relay-consultation
+    claims: person-record-exists
+    source access: true
   PASS person-record.active-person::derived/request_authority
     inputs: person_id
     expected error: fixture.request_mismatch
@@ -209,7 +214,7 @@ registryctl test \
   --watch
 ```
 
-The command prints `PASS: 8/8 fixtures passed`, waits for an authored file to change, then reruns
+The command prints `PASS: 9/9 fixtures passed`, waits for an authored file to change, then reruns
 the selected fixture. Use the preceding non-watch command for the full trace. Press `Ctrl+C` after
 you confirm the initial pass. The watcher ignores generated `.registry-stack` output and never
 enables live source access.
