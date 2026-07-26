@@ -494,6 +494,79 @@ outputs:
     }
 
     #[test]
+    fn attribute_release_purpose_must_be_header_safe_during_authoring() {
+        let mut loaded = load_registry_project(
+            &project_golden("nia-attribute-release"),
+            Some("local"),
+        )
+        .expect("NIA release project loads");
+        let api = loaded
+            .project
+            .services
+            .get_mut("nia-population-records")
+            .and_then(|service| service.api.as_mut())
+            .expect("records API exists");
+        let purpose = "identité_verification".to_string();
+        api.purposes[0] = purpose.clone();
+        api.attribute_release_profiles
+            .get_mut("solmara-nia-userinfo")
+            .expect("release profile exists")
+            .purpose = purpose;
+
+        let error = validate_project_entity_links(
+            &loaded.project,
+            &loaded.integrations,
+            &loaded.entities,
+        )
+        .expect_err("header-bound release purpose must use visible ASCII");
+        assert!(
+            error.to_string().contains("purpose must use visible ASCII"),
+            "unexpected diagnostic: {error:#}"
+        );
+    }
+
+    #[test]
+    fn attribute_release_prerequisites_fail_during_authoring() {
+        for case in ["required principal filters", "pagination max_limit"] {
+            let mut loaded = load_registry_project(
+                &project_golden("nia-attribute-release"),
+                Some("local"),
+            )
+            .expect("NIA release project loads");
+            let api = loaded
+                .project
+                .services
+                .get_mut("nia-population-records")
+                .and_then(|service| service.api.as_mut())
+                .expect("records API exists");
+            let expected = match case {
+                "required principal filters" => {
+                    api.required_principal_filters
+                        .push("legacy_nid".to_string());
+                    "attribute release profiles cannot use required principal filters"
+                }
+                "pagination max_limit" => {
+                    api.pagination.default_limit = 1;
+                    api.pagination.max_limit = 1;
+                    "attribute release profiles require records pagination max_limit of at least 2"
+                }
+                _ => unreachable!("unknown prerequisite case"),
+            };
+
+            let error = validate_project_entity_links(
+                &loaded.project,
+                &loaded.integrations,
+                &loaded.entities,
+            )
+            .expect_err("invalid release prerequisite must fail during authoring");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected {case} diagnostic: {error:#}"
+            );
+        }
+    }
+
+    #[test]
     fn interval_materialization_refresh_uses_an_operational_bound() {
         let project = project_golden("nia-attribute-release");
         let mut loaded =

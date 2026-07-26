@@ -1448,6 +1448,18 @@ fn validate_record_attribute_release_profiles(
     entity: &EntityDefinition,
     fields: &BTreeSet<&str>,
 ) -> Result<()> {
+    if !api.attribute_release_profiles.is_empty()
+        && !api.required_principal_filters.is_empty()
+    {
+        bail!(
+            "attribute release profiles cannot use required principal filters because the caller-supplied subject cannot satisfy a principal-bound filter"
+        );
+    }
+    if !api.attribute_release_profiles.is_empty() && api.pagination.max_limit < 2 {
+        bail!(
+            "attribute release profiles require records pagination max_limit of at least 2 to detect ambiguous subjects"
+        );
+    }
     let projected = api
         .projection
         .iter()
@@ -1466,7 +1478,11 @@ fn validate_record_attribute_release_profiles(
         if let Some(description) = &profile.description {
             validate_authored_text(description, "attribute release profile description")?;
         }
-        validate_token(&profile.purpose, "attribute release profile purpose", 256)?;
+        validate_header_token(
+            &profile.purpose,
+            "attribute release profile purpose",
+            256,
+        )?;
         if !api.purposes.contains(&profile.purpose) {
             bail!("attribute release profile purpose must be a records API permitted purpose");
         }

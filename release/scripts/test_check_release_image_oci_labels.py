@@ -24,7 +24,12 @@ SOURCE = "https://github.com/registrystack/registry-stack"
 REVISION = "b" * 40
 VERSION = "v0.12.0"
 RELAY_FEATURE_LABEL = "org.registrystack.registry-relay.features"
-RELAY_FEATURES = "attribute-release,crosswalk-runtime"
+RELAY_FEATURES = (
+    Path(__file__).resolve().parents[2]
+    / "crates"
+    / "registry-relay"
+    / "canonical-release-features.txt"
+).read_text(encoding="utf-8").strip()
 BUILDKIT_IMAGE = (
     "moby/buildkit:v0.31.2@sha256:"
     "2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"

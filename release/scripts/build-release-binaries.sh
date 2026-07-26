@@ -19,6 +19,10 @@ fi
 release_builder_image="${default_builder_image}"
 release_cargo_home="${RELEASE_CARGO_HOME:-${repo_root}/.cargo-home}"
 release_target_dir="${RELEASE_TARGET_DIR:-${repo_root}/target}"
+relay_feature_profile="${repo_root}/crates/registry-relay/canonical-release-features.txt"
+relay_release_features="$(<"${relay_feature_profile}")"
+sh "${repo_root}/crates/registry-relay/scripts/validate-feature-profile.sh" \
+  "${relay_release_features}"
 
 if [[ "${release_cargo_home}" != /* ]]; then
   release_cargo_home="${repo_root}/${release_cargo_home}"
@@ -49,6 +53,7 @@ docker run --rm \
   --env CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}" \
   --env HOME=/workspace \
   --env RELEASE_TAG="${tag}" \
+  --env RELEASE_RELAY_FEATURES="${relay_release_features}" \
   --env RELEASE_RUSTFLAGS="${release_rustflags}" \
   "${release_builder_image}" \
   bash -c 'set -euo pipefail
@@ -66,7 +71,7 @@ docker run --rm \
     cargo build --release --locked \
       -p registry-relay \
       --no-default-features \
-      --features registry-relay/attribute-release,registry-relay/crosswalk-runtime
+      --features "${RELEASE_RELAY_FEATURES}"
     python3 release/scripts/check-release-relay-features.py target/release/registry-relay
     cp target/release/registry-relay "dist/bin/registry-relay-${RELEASE_TAG}-linux-amd64"
     cp target/release/registry-relay-rhai-worker "dist/bin/registry-relay-rhai-worker-${RELEASE_TAG}-linux-amd64"

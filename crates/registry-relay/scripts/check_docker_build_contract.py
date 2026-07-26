@@ -101,18 +101,39 @@ def check_feature_profile_script(path: Path) -> list[str]:
     return failures
 
 
+def check_feature_profile(path: Path, profile: str) -> list[str]:
+    result = subprocess.run(
+        ["sh", str(path), profile],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return []
+    return [
+        f"{path.relative_to(ROOT)}: canonical release feature profile "
+        f"{profile!r} is invalid: {result.stderr.strip()}"
+    ]
+
+
 def main() -> int:
     dockerfile = ROOT / "Dockerfile"
     build_script = ROOT / "scripts" / "build-image.sh"
     feature_profile_script = ROOT / "scripts" / "validate-feature-profile.sh"
+    canonical_feature_profile = (
+        ROOT / "canonical-release-features.txt"
+    ).read_text(encoding="utf-8").strip()
     docs = [ROOT / "README.md", ROOT / "docs" / "ops.md"]
 
     failures: list[str] = []
     failures.extend(check_feature_profile_script(feature_profile_script))
     failures.extend(
+        check_feature_profile(feature_profile_script, canonical_feature_profile)
+    )
+    failures.extend(
         require(
             dockerfile,
-            'ARG REGISTRY_RELAY_FEATURES="attribute-release,crosswalk-runtime"',
+            f'ARG REGISTRY_RELAY_FEATURES="{canonical_feature_profile}"',
             "canonical feature build arg",
         )
     )

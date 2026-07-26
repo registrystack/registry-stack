@@ -14,7 +14,10 @@ revision_label="0123456789abcdef0123456789abcdef01234567"
 wrong_revision_label="89abcdef0123456789abcdef0123456789abcdef"
 version_label="v0.0.0-oci-label-smoke"
 source_date_epoch=0
-relay_features_label="org.registrystack.registry-relay.features=attribute-release,crosswalk-runtime"
+relay_release_features="$(<"${repo_root}/crates/registry-relay/canonical-release-features.txt")"
+sh "${repo_root}/crates/registry-relay/scripts/validate-feature-profile.sh" \
+  "${relay_release_features}"
+relay_features_label="org.registrystack.registry-relay.features=${relay_release_features}"
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/registry-stack-oci-labels.XXXXXX")"
 smoke_builder="registry-stack-release-smoke-$$-${RANDOM}"

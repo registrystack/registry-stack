@@ -197,8 +197,9 @@ checkout at the reviewed commit. Set
 `REGISTRY_RELAY_ALLOW_UNPINNED_LOCAL_CONTEXTS=1` only for local development
 builds that will not be published.
 
-The base image is built with the canonical
-`attribute-release,crosswalk-runtime` feature set. A custom
+The base image is built with the feature set in
+[`canonical-release-features.txt`](../canonical-release-features.txt),
+currently `attribute-release,crosswalk-runtime`. A custom
 `REGISTRY_RELAY_FEATURES` value replaces that set, so standards-enabled
 release or lab images must retain the canonical features explicitly:
 

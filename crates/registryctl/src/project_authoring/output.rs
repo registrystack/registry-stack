@@ -1318,6 +1318,14 @@ fn validate_token(value: &str, field: &str, max_bytes: usize) -> Result<()> {
     Ok(())
 }
 
+fn validate_header_token(value: &str, field: &str, max_bytes: usize) -> Result<()> {
+    validate_token(value, field, max_bytes)?;
+    if !value.is_ascii() {
+        bail!("{field} must use visible ASCII");
+    }
+    Ok(())
+}
+
 fn validate_scopes(scopes: &[String]) -> Result<()> {
     if scopes.is_empty() || scopes.len() > 16 {
         bail!("caller scopes must contain between one and 16 entries");

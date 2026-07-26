@@ -106,8 +106,9 @@ registry-stack root.
 scripts/build-image.sh registry-relay:local
 ```
 
-The production image is distroless, non-root, and built with the canonical
-`attribute-release,crosswalk-runtime` feature set. A custom
+The production image is distroless, non-root, and built with the feature set in
+[`canonical-release-features.txt`](canonical-release-features.txt), currently
+`attribute-release,crosswalk-runtime`. A custom
 `REGISTRY_RELAY_FEATURES` value replaces that exact set. Custom profiles must
 list transitive product features explicitly, so `attribute-release` and
 `standards-cel-mapping` each require `crosswalk-runtime`; incomplete or

@@ -3787,9 +3787,9 @@ fn validate_entity_release_profile(
             "attribute_release_profiles title and description must be bounded, trimmed text",
         );
     }
-    if !is_bounded_release_token(&profile.purpose, 256) {
+    if !profile.purpose.is_ascii() || !is_bounded_release_token(&profile.purpose, 256) {
         return release_error(
-            "attribute_release_profiles purpose must be one bounded token of at most 256 bytes",
+            "attribute_release_profiles purpose must be one visible-ASCII bounded token of at most 256 bytes",
         );
     }
     let expected_release_scope = format!("{}:identity_release", dataset.id);

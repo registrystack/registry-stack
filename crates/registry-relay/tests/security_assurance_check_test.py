@@ -68,8 +68,9 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
             "endpoints": [manifest_entry],
         }))
 
-    def write_features(self, default=None):
+    def write_features(self, default=None, release=None):
         default = default or []
+        release = release or ["attribute-release", "crosswalk-runtime"]
         rendered_default = json.dumps(default)
         (self.root / "Cargo.toml").write_text(
             "[features]\n"
@@ -77,6 +78,9 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
             'attribute-release = ["crosswalk-runtime"]\n'
             "crosswalk-runtime = []\n"
             "ogcapi-features = []\n"
+        )
+        (self.root / "canonical-release-features.txt").write_text(
+            ",".join(release) + "\n"
         )
 
     def entry(self, **overrides):
@@ -116,19 +120,33 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         )
         self.module.validate_manifest()
 
-    def test_default_feature_gated_endpoint_may_be_stable(self):
-        self.write_features(["attribute-release"])
+    def test_release_feature_gated_endpoint_may_be_stable(self):
+        self.write_features(default=["ogcapi-features"])
         self.write_contracts(
             self.entry(feature="attribute-release", stability="stable")
         )
 
         self.module.validate_manifest()
 
-    def test_default_feature_expansion_includes_local_feature_dependencies(self):
-        self.write_features(["attribute-release"])
+    def test_developer_default_does_not_make_optional_route_stable(self):
+        self.write_features(default=["ogcapi-features"])
+        self.write_contracts(
+            self.entry(feature="ogcapi-features", stability="stable")
+        )
 
+        with self.assertRaises(SystemExit):
+            self.module.validate_manifest()
+
+    def test_release_profile_requires_explicit_local_feature_dependencies(self):
+        self.write_features(release=["attribute-release"])
+        with self.assertRaises(SystemExit):
+            self.module.load_release_features()
+
+        self.write_features(
+            release=["attribute-release", "crosswalk-runtime"]
+        )
         self.assertEqual(
-            self.module.load_default_features(),
+            self.module.load_release_features(),
             {"attribute-release", "crosswalk-runtime"},
         )
 

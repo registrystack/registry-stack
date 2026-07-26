@@ -670,6 +670,19 @@ fn release_profile_requires_bounded_purpose_and_subject_id_type() {
 
 #[cfg(feature = "attribute-release")]
 #[test]
+fn release_profile_purpose_must_be_visible_ascii() {
+    let non_ascii_purpose = valid_release_profile().replace(
+        "purpose: identity_verification",
+        "purpose: identity_vérification",
+    );
+    assert_eq!(
+        load_release_dataset(&non_ascii_purpose).expect_err("non-ASCII purpose rejected"),
+        "config.validation_error"
+    );
+}
+
+#[cfg(feature = "attribute-release")]
+#[test]
 fn release_profile_rejects_principal_bound_required_filter_entities() {
     let tmp = TempDir::new().expect("tempdir");
     let dataset = dataset_with_release_profiles(&valid_release_profile()).replace(

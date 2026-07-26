@@ -858,8 +858,9 @@ jobs:
             digest_ref="$(cat "inputs/build-a/dist/images/${name}.digest")"
             expected_label_args=()
             if [[ "${name}" == "registry-relay" ]]; then
+              relay_features="$(<crates/registry-relay/canonical-release-features.txt)"
               expected_label_args+=(
-                --expected-label "org.registrystack.registry-relay.features=attribute-release,crosswalk-runtime"
+                --expected-label "org.registrystack.registry-relay.features=${relay_features}"
               )
             fi
             python3 release/scripts/check-release-image-oci-labels.py \

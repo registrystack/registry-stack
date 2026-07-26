@@ -15,10 +15,13 @@ FILTERED_CURRENT="$WORK_DIR/current.stable.openapi.json"
 ROSTER_PATH="../../docs/site/src/data/generated/relay-support.json"
 BASE_ROSTER="$WORK_DIR/base.relay-support.json"
 FILTER_SCRIPT="../../release/scripts/filter-relay-openapi-stability.py"
+RELEASE_FEATURES="$(<canonical-release-features.txt)"
 
 mkdir -p "$WORK_DIR"
 
-cargo run -q --bin registry-relay -- openapi --config "$REFERENCE_CONFIG" > "$GENERATED"
+sh scripts/validate-feature-profile.sh "$RELEASE_FEATURES"
+cargo run -q --no-default-features --features "$RELEASE_FEATURES" \
+  --bin registry-relay -- openapi --config "$REFERENCE_CONFIG" > "$GENERATED"
 
 python3 - "$SPEC_PATH" "$GENERATED" <<'PY'
 import json

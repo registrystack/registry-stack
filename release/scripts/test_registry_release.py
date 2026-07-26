@@ -271,8 +271,11 @@ class RegistryReleaseTest(unittest.TestCase):
             '--version "${{ needs.validate.outputs.version }}"', verification_job
         )
         self.assertIn(
-            '--expected-label "org.registrystack.registry-relay.features='
-            'attribute-release,crosswalk-runtime"',
+            'relay_features="$(<crates/registry-relay/canonical-release-features.txt)"',
+            verification_job,
+        )
+        self.assertIn(
+            '--expected-label "org.registrystack.registry-relay.features=${relay_features}"',
             verification_job,
         )
         self.assertNotIn("{{json .Image.config}}", workflow)
@@ -376,6 +379,15 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotIn("-p registry-relay", registryctl_commands[0])
         self.assertNotIn("-p registryctl", relay_commands[0])
         self.assertIn("--no-default-features", relay_commands[0])
+        self.assertIn(
+            "crates/registry-relay/canonical-release-features.txt",
+            binary_recipe,
+        )
+        self.assertIn(
+            '--env RELEASE_RELAY_FEATURES="${relay_release_features}"',
+            binary_recipe,
+        )
+        self.assertIn('--features "${RELEASE_RELAY_FEATURES}"', relay_commands[0])
         feature_check = (
             "python3 release/scripts/check-release-relay-features.py "
             "target/release/registry-relay"
@@ -394,6 +406,14 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertEqual(1, images_job.count("release/scripts/build-release-image.sh"))
         self.assertNotIn("docker buildx build", images_job)
         self.assertIn("registry-notary|registry-relay", image_recipe)
+        self.assertIn(
+            "crates/registry-relay/canonical-release-features.txt",
+            image_recipe,
+        )
+        self.assertIn(
+            "org.registrystack.registry-relay.features=${relay_release_features}",
+            image_recipe,
+        )
         self.assertIn("SOURCE_DATE_EPOCH=${source_date_epoch}", image_recipe)
         self.assertIn("source_date_epoch=0", image_recipe)
         self.assertNotIn("${SOURCE_DATE_EPOCH", image_recipe)
