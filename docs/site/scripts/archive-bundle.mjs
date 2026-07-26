@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
 import {
   cp,
   lstat,
   mkdir,
   mkdtemp,
-  readFile,
+  open,
   readdir,
   rm,
   writeFile,
@@ -44,8 +45,46 @@ export function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
+async function readRegularFile(path, label, {
+  maximumBytes = Number.POSITIVE_INFINITY,
+} = {}) {
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch (error) {
+    if (error?.code === 'ELOOP') {
+      throw new Error(`${label} must be a regular file, not a symlink: ${path}`);
+    }
+    throw error;
+  }
+  try {
+    const before = await handle.stat();
+    if (!before.isFile()) {
+      throw new Error(`${label} must be a regular file: ${path}`);
+    }
+    if (before.size > maximumBytes) {
+      throw new Error(`${label} must be no larger than ${maximumBytes} bytes`);
+    }
+    const contents = await handle.readFile();
+    const after = await handle.stat();
+    if (
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs
+    ) {
+      throw new Error(`${label} changed while it was being read: ${path}`);
+    }
+    return { contents, info: after };
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function fileDigest(path) {
-  return sha256(await readFile(path));
+  const { contents } = await readRegularFile(path, 'digest input');
+  return sha256(contents);
 }
 
 function isWithin(parent, child) {
@@ -158,10 +197,10 @@ export async function treeDigest(root) {
   const { files } = await collectTree(root);
   const hash = createHash('sha256');
   for (const path of files) {
-    const info = await lstat(path);
+    const { contents, info } = await readRegularFile(path, 'archive tree entry');
     const rel = relative(root, path).replaceAll(sep, '/');
     hash.update(`${rel}\0${info.mode & 0o111 ? 'x' : '-'}\0`);
-    hash.update(await readFile(path));
+    hash.update(contents);
     hash.update('\0');
   }
   return hash.digest('hex');
@@ -207,21 +246,25 @@ export async function createArchiveBundle({
 } = {}) {
   const output = await validateArchiveOutputLocation(docsRoot, docset);
   await requireRealDirectory(output, `archive output for ${docset.id}`);
-  const outputDigest = await treeDigest(output);
-  const metadata = archiveMetadata(docset, outputDigest);
   const staging = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-bundle-'));
+  let outputDigest;
+  let metadata;
   try {
+    await cp(output, resolve(staging, 'site'), {
+      recursive: true,
+      dereference: false,
+      force: false,
+      errorOnExist: true,
+      preserveTimestamps: false,
+      verbatimSymlinks: true,
+    });
+    outputDigest = await treeDigest(resolve(staging, 'site'));
+    metadata = archiveMetadata(docset, outputDigest);
     await writeFile(
       resolve(staging, 'metadata.json'),
       `${JSON.stringify(metadata, null, 2)}\n`,
       { mode: 0o644 },
     );
-    await cp(output, resolve(staging, 'site'), {
-      recursive: true,
-      force: false,
-      errorOnExist: true,
-      preserveTimestamps: false,
-    });
     const entries = await stagedTarEntries(staging);
     await mkdir(dirname(bundlePath), { recursive: true });
     await rm(bundlePath, { force: true });
@@ -311,30 +354,29 @@ export async function inspectArchiveBundle({
   if (!sha256Pattern.test(expectedTreeSha256)) {
     throw new Error(`archive bundle ${docset.id} has no valid locked tree digest`);
   }
-  const bundleInfo = await lstat(bundlePath);
-  if (
-    bundleInfo.isSymbolicLink() ||
-    !bundleInfo.isFile() ||
-    bundleInfo.size > maximumArchiveBundleBytes
-  ) {
-    throw new Error(
-      `archive bundle ${docset.id} must be a regular file no larger than ${maximumArchiveBundleBytes} bytes`,
-    );
-  }
-  const actualBundleDigest = await fileDigest(bundlePath);
+  const { contents: bundleContents } = await readRegularFile(
+    bundlePath,
+    `archive bundle ${docset.id}`,
+    { maximumBytes: maximumArchiveBundleBytes },
+  );
+  const actualBundleDigest = sha256(bundleContents);
   if (actualBundleDigest !== expectedBundleSha256) {
     throw new Error(
       `archive bundle ${docset.id} digest ${actualBundleDigest} does not match lock ${expectedBundleSha256}`,
     );
   }
 
-  const extraction = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-extract-'));
+  const temporary = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-extract-'));
+  const extraction = resolve(temporary, 'extracted');
+  const bundleSnapshot = resolve(temporary, 'bundle.tar.gz');
   try {
+    await mkdir(extraction);
+    await writeFile(bundleSnapshot, bundleContents, { mode: 0o600 });
     let entryCount = 0;
     let extractedBytes = 0;
     await Promise.resolve(tar.extract({
       cwd: extraction,
-      file: bundlePath,
+      file: bundleSnapshot,
       filter(path, entry) {
         entryCount += 1;
         extractedBytes += Number(entry.size ?? 0);
@@ -357,12 +399,12 @@ export async function inspectArchiveBundle({
     if (canonicalJson(rootEntries) !== canonicalJson(['metadata.json', 'site'])) {
       throw new Error(`archive bundle ${docset.id} must contain only metadata.json and site/`);
     }
-    const metadataInfo = await lstat(resolve(extraction, 'metadata.json'));
-    if (metadataInfo.isSymbolicLink() || !metadataInfo.isFile()) {
-      throw new Error(`archive bundle ${docset.id} metadata must be a regular file`);
-    }
+    const { contents: metadataContents } = await readRegularFile(
+      resolve(extraction, 'metadata.json'),
+      `archive bundle ${docset.id} metadata`,
+    );
     await requireRealDirectory(resolve(extraction, 'site'), `archive bundle ${docset.id} site`);
-    const metadata = JSON.parse(await readFile(resolve(extraction, 'metadata.json'), 'utf8'));
+    const metadata = JSON.parse(metadataContents.toString('utf8'));
     assertMetadataMatchesDocset(metadata, docset);
     const actualTreeDigest = await treeDigest(resolve(extraction, 'site'));
     if (
@@ -373,9 +415,16 @@ export async function inspectArchiveBundle({
         `archive bundle ${docset.id} tree digest ${actualTreeDigest} does not match its lock`,
       );
     }
-    return { extraction, metadata, bundle_sha256: actualBundleDigest, tree_sha256: actualTreeDigest };
+    return {
+      bundle_sha256: actualBundleDigest,
+      bundle_snapshot: bundleSnapshot,
+      extraction,
+      metadata,
+      temporary,
+      tree_sha256: actualTreeDigest,
+    };
   } catch (error) {
-    await rm(extraction, { recursive: true, force: true });
+    await rm(temporary, { recursive: true, force: true });
     throw error;
   }
 }
@@ -405,9 +454,9 @@ export async function restoreArchiveBundle({
       preserveTimestamps: false,
     });
     const publicBundle = publicArchiveBundlePath(docsRoot, docset);
-    if (publishBundle && resolve(bundlePath) !== resolve(publicBundle)) {
+    if (publishBundle) {
       await mkdir(dirname(publicBundle), { recursive: true });
-      await cp(bundlePath, publicBundle, { force: true });
+      await cp(inspected.bundle_snapshot, publicBundle, { force: true });
     }
     return {
       ...inspected,
@@ -415,6 +464,6 @@ export async function restoreArchiveBundle({
       public_bundle: publishBundle ? publicBundle : null,
     };
   } finally {
-    await rm(inspected.extraction, { recursive: true, force: true });
+    await rm(inspected.temporary, { recursive: true, force: true });
   }
 }
