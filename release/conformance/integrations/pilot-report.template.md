@@ -8,6 +8,8 @@ to restricted evidence.
 
 Plans, dry runs, fixture runs, and source-built branch runs are not pilot
 evidence. One completed pilot is not proof of broad production readiness.
+An integration pilot alone does not close Country ready or First-country
+success.
 
 ## Closing evidence
 

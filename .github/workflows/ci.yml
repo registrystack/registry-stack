@@ -738,6 +738,12 @@ jobs:
       - name: Validate product-input lifecycle records
         run: python3 release/scripts/validate-product-input-lifecycle.py --discover release/exercises
 
+      - name: Test first-country acceptance validator
+        run: python3 -m unittest release/scripts/test_validate_first_country_acceptance.py
+
+      - name: Validate first-country acceptance source packet
+        run: python3 release/scripts/validate-first-country-acceptance.py check-packet
+
       - name: Test upgrade exercise asset preparation
         run: python3 -m unittest release/scripts/test_prepare_upgrade_exercise_assets.py
 

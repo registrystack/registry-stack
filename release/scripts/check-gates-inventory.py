@@ -269,6 +269,22 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_validate_upgrade_exercise.py",
     ),
     (
+        "Product-input lifecycle validator tests",
+        "run: python3 -m unittest release/scripts/test_validate_product_input_lifecycle.py",
+    ),
+    (
+        "Product-input lifecycle record discovery",
+        "run: python3 release/scripts/validate-product-input-lifecycle.py --discover release/exercises",
+    ),
+    (
+        "First-country acceptance validator tests",
+        "run: python3 -m unittest release/scripts/test_validate_first_country_acceptance.py",
+    ),
+    (
+        "First-country acceptance source packet",
+        "run: python3 release/scripts/validate-first-country-acceptance.py check-packet",
+    ),
+    (
         "Upgrade exercise asset preparation tests",
         "run: python3 -m unittest release/scripts/test_prepare_upgrade_exercise_assets.py",
     ),

@@ -775,6 +775,54 @@ class GateInventoryTest(unittest.TestCase):
             "Upgrade exercise record discovery", self.module.missing_gates(text)
         )
 
+    def test_missing_product_input_lifecycle_validator_tests_are_reported(
+        self,
+    ) -> None:
+        text = self.workflow.replace(
+            "python3 -m unittest release/scripts/test_validate_product_input_lifecycle.py",
+            "python3 -m unittest release/scripts/skip_validate_product_input_lifecycle.py",
+        )
+        self.assertIn(
+            "Product-input lifecycle validator tests",
+            self.module.missing_gates(text),
+        )
+
+    def test_missing_product_input_lifecycle_record_discovery_is_reported(
+        self,
+    ) -> None:
+        text = self.workflow.replace(
+            "python3 release/scripts/validate-product-input-lifecycle.py --discover release/exercises",
+            "python3 release/scripts/validate-product-input-lifecycle.py --skip-discovery",
+        )
+        self.assertIn(
+            "Product-input lifecycle record discovery",
+            self.module.missing_gates(text),
+        )
+
+    def test_missing_first_country_acceptance_validator_tests_are_reported(
+        self,
+    ) -> None:
+        text = self.workflow.replace(
+            "python3 -m unittest release/scripts/test_validate_first_country_acceptance.py",
+            "python3 -m unittest release/scripts/skip_validate_first_country_acceptance.py",
+        )
+        self.assertIn(
+            "First-country acceptance validator tests",
+            self.module.missing_gates(text),
+        )
+
+    def test_missing_first_country_acceptance_source_packet_is_reported(
+        self,
+    ) -> None:
+        text = self.workflow.replace(
+            "python3 release/scripts/validate-first-country-acceptance.py check-packet",
+            "python3 release/scripts/validate-first-country-acceptance.py skip-packet",
+        )
+        self.assertIn(
+            "First-country acceptance source packet",
+            self.module.missing_gates(text),
+        )
+
     def test_missing_upgrade_exercise_asset_preparation_is_reported(self) -> None:
         text = self.workflow.replace(
             "python3 release/scripts/prepare-upgrade-exercise-assets.py",

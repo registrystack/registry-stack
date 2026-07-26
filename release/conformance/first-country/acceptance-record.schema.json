@@ -1,0 +1,813 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/schemas/release/first-country-acceptance-record-v1.json",
+  "title": "Registry Stack first-country acceptance record",
+  "description": "Closed, value-free evidence for one exact-candidate bounded non-production first-country acceptance run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_kind",
+    "is_evidence",
+    "evidence_state",
+    "overall_outcome",
+    "acceptance_binding_sha256",
+    "binding",
+    "scope_claims",
+    "human_acceptance",
+    "cases",
+    "evidence_handling",
+    "governance",
+    "publication_review",
+    "teardown",
+    "evidence_limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "registry.release.first_country_acceptance.v1"
+    },
+    "record_kind": {
+      "enum": ["template", "candidate_acceptance_evidence"]
+    },
+    "is_evidence": {
+      "type": "boolean"
+    },
+    "evidence_state": {
+      "enum": [
+        "planned_not_executed",
+        "passed_non_production",
+        "failed_non_production"
+      ]
+    },
+    "overall_outcome": {
+      "enum": ["not_executed", "passed", "failed"]
+    },
+    "acceptance_binding_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "binding": {
+      "$ref": "#/$defs/binding"
+    },
+    "scope_claims": {
+      "$ref": "#/$defs/scope_claims"
+    },
+    "human_acceptance": {
+      "$ref": "#/$defs/human_acceptance"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 21,
+      "maxItems": 21,
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    },
+    "evidence_handling": {
+      "$ref": "#/$defs/evidence_handling"
+    },
+    "governance": {
+      "$ref": "#/$defs/governance"
+    },
+    "publication_review": {
+      "$ref": "#/$defs/publication_review"
+    },
+    "teardown": {
+      "$ref": "#/$defs/teardown"
+    },
+    "evidence_limitations": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "bounded-non-production-only",
+          "exact-candidate-only",
+          "exact-project-environment-source-profile-only",
+          "no-production-authorization",
+          "no-broad-interoperability",
+          "not-upstream-product-certification",
+          "not-general-country-system-conformance",
+          "offline-fixtures-not-live-evidence",
+          "signing-not-governance-approval",
+          "digests-not-independent-evidence"
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "release_tag": {
+      "type": "string",
+      "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "role": {
+      "enum": [
+        "approved-operator",
+        "country-technical-owner",
+        "independent-country-implementer",
+        "privacy-legal-owner",
+        "product-signing-authority",
+        "publication-reviewer",
+        "recovery-owner",
+        "registry-stack-evidence-reviewer",
+        "source-system-owner"
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate", "project", "environment", "source_profile"],
+      "properties": {
+        "candidate": {
+          "$ref": "#/$defs/candidate"
+        },
+        "project": {
+          "$ref": "#/$defs/project"
+        },
+        "environment": {
+          "$ref": "#/$defs/environment"
+        },
+        "source_profile": {
+          "$ref": "#/$defs/source_profile"
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "release_tag",
+        "source_commit",
+        "registryctl_asset_sha256",
+        "relay_product_sha256",
+        "notary_product_sha256",
+        "worker_set_sha256",
+        "image_lock_sha256",
+        "release_capsule_sha256",
+        "release_provenance_sha256",
+        "candidate_evidence_sha256",
+        "candidate_assets_verified",
+        "authenticity_verified",
+        "exact_candidate_approved"
+      ],
+      "properties": {
+        "release_tag": {
+          "$ref": "#/$defs/release_tag"
+        },
+        "source_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "registryctl_asset_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "relay_product_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "notary_product_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "worker_set_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "image_lock_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "release_capsule_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "release_provenance_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "candidate_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "candidate_assets_verified": {
+          "type": "boolean"
+        },
+        "authenticity_verified": {
+          "type": "boolean"
+        },
+        "exact_candidate_approved": {
+          "type": "boolean"
+        }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "project_semantic_sha256",
+        "approved_baseline_sha256",
+        "starter_content_sha256",
+        "generated_relay_input_sha256",
+        "generated_notary_input_sha256",
+        "generated_artifact_manifest_sha256",
+        "generated_files_unchanged",
+        "generated_files_edited",
+        "product_code_changes_required"
+      ],
+      "properties": {
+        "project_semantic_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "approved_baseline_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "starter_content_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "generated_relay_input_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "generated_notary_input_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "generated_artifact_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "generated_files_unchanged": {
+          "type": "boolean"
+        },
+        "generated_files_edited": {
+          "type": "boolean"
+        },
+        "product_code_changes_required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "environment_sha256",
+        "preflight_evidence_sha256",
+        "relay_validation_evidence_sha256",
+        "notary_validation_evidence_sha256",
+        "secret_values_retained",
+        "authority_widening_detected"
+      ],
+      "properties": {
+        "environment_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "preflight_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "relay_validation_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "notary_validation_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "secret_values_retained": {
+          "type": "boolean"
+        },
+        "authority_widening_detected": {
+          "type": "boolean"
+        }
+      }
+    },
+    "source_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_profile_sha256",
+        "source_contract_sha256",
+        "operation_projection_sha256",
+        "source_limits_sha256",
+        "source_owner_attestation_sha256",
+        "exact_version_bound",
+        "exact_read_operation_bound",
+        "non_production_only",
+        "approved_input_class",
+        "zero_one_call_probe_approved"
+      ],
+      "properties": {
+        "source_profile_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_contract_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "operation_projection_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_limits_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_owner_attestation_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "exact_version_bound": {
+          "type": "boolean"
+        },
+        "exact_read_operation_bound": {
+          "type": "boolean"
+        },
+        "non_production_only": {
+          "type": "boolean"
+        },
+        "approved_input_class": {
+          "enum": [
+            "not-selected",
+            "synthetic",
+            "owner-approved-non-personal"
+          ]
+        },
+        "zero_one_call_probe_approved": {
+          "type": "boolean"
+        }
+      }
+    },
+    "scope_claims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform_complete",
+        "country_ready",
+        "first_country_success",
+        "production_authorized",
+        "broad_interoperability",
+        "upstream_product_certification"
+      ],
+      "properties": {
+        "platform_complete": {
+          "type": "boolean"
+        },
+        "country_ready": {
+          "type": "boolean"
+        },
+        "first_country_success": {
+          "type": "boolean"
+        },
+        "production_authorized": {
+          "const": false
+        },
+        "broad_interoperability": {
+          "const": false
+        },
+        "upstream_product_certification": {
+          "const": false
+        }
+      }
+    },
+    "human_acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "published_candidate_artifacts_only",
+        "private_maintainer_instructions_used",
+        "authored_intent_understood",
+        "environment_binding_understood",
+        "generated_artifacts_understood",
+        "signed_product_inputs_understood",
+        "operator_trust_understood",
+        "runtime_state_understood",
+        "country_owner_usability_acceptance",
+        "maintainability_acceptance",
+        "public_evidence_sha256",
+        "restricted_evidence_sha256",
+        "owner_attestation_sha256",
+        "owner_roles"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": ["not_executed", "passed", "failed"]
+        },
+        "published_candidate_artifacts_only": {
+          "type": "boolean"
+        },
+        "private_maintainer_instructions_used": {
+          "type": "boolean"
+        },
+        "authored_intent_understood": {
+          "type": "boolean"
+        },
+        "environment_binding_understood": {
+          "type": "boolean"
+        },
+        "generated_artifacts_understood": {
+          "type": "boolean"
+        },
+        "signed_product_inputs_understood": {
+          "type": "boolean"
+        },
+        "operator_trust_understood": {
+          "type": "boolean"
+        },
+        "runtime_state_understood": {
+          "type": "boolean"
+        },
+        "country_owner_usability_acceptance": {
+          "enum": ["not_reviewed", "accepted", "not_accepted"]
+        },
+        "maintainability_acceptance": {
+          "enum": ["not_reviewed", "accepted", "not_accepted"]
+        },
+        "public_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "restricted_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner_attestation_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner_roles": {
+          "$ref": "#/$defs/roles"
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "outcome",
+        "result_class",
+        "acceptance_binding_sha256",
+        "source_call_classification",
+        "source_call_evidence_sha256",
+        "public_evidence_sha256",
+        "restricted_evidence_sha256",
+        "owner_attestation_sha256",
+        "owner_roles"
+      ],
+      "properties": {
+        "case_id": {
+          "enum": [
+            "offline-clean-journey",
+            "missing-caller-credential-denial",
+            "wrong-caller-credential-denial",
+            "missing-purpose-denial",
+            "wrong-purpose-denial",
+            "disallowed-service-policy-denial",
+            "allowed-relay-consultation",
+            "no-match",
+            "ambiguity",
+            "subject-mismatch",
+            "source-unavailable",
+            "source-rejected",
+            "source-malformed",
+            "source-late",
+            "notary-value-claim",
+            "notary-predicate-claim",
+            "notary-redacted-claim",
+            "consultation-contract-mismatch",
+            "promotion",
+            "rollback-recovery",
+            "teardown"
+          ]
+        },
+        "outcome": {
+          "enum": ["not_executed", "passed", "failed"]
+        },
+        "result_class": {
+          "enum": [
+            "not-executed",
+            "execution-failed",
+            "offline-journey-complete",
+            "caller-authorization-denied",
+            "purpose-authorization-denied",
+            "service-policy-denied",
+            "allowed-minimized-result",
+            "no-match",
+            "ambiguity-without-unsupported-claim",
+            "subject-mismatch-safe-failure",
+            "source-unavailable-safe-failure",
+            "source-rejected-safe-failure",
+            "source-malformed-safe-failure",
+            "source-late-safe-failure",
+            "notary-value-approved-disclosure",
+            "notary-predicate-true-false-null-without-value",
+            "notary-redacted-without-hidden-value",
+            "contract-mismatch-before-access",
+            "promotion-non-widening",
+            "rollback-recovery-restored",
+            "teardown-completed"
+          ]
+        },
+        "acceptance_binding_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_call_classification": {
+          "enum": [
+            "unknown",
+            "unexpected-data-operation-contact",
+            "source-call-bound-breached",
+            "offline-no-contact",
+            "denied-before-data-operation",
+            "consulted-within-profile",
+            "source-failed-within-profile",
+            "no-data-operation-operational"
+          ]
+        },
+        "source_call_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "public_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "restricted_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner_attestation_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner_roles": {
+          "$ref": "#/$defs/roles"
+        }
+      }
+    },
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/role"
+      }
+    },
+    "evidence_handling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["restricted_storage", "retention", "deletion", "redaction"],
+      "properties": {
+        "restricted_storage": {
+          "$ref": "#/$defs/restricted_storage"
+        },
+        "retention": {
+          "$ref": "#/$defs/retention"
+        },
+        "deletion": {
+          "$ref": "#/$defs/deletion"
+        },
+        "redaction": {
+          "$ref": "#/$defs/redaction"
+        }
+      }
+    },
+    "restricted_storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approved",
+        "storage_policy_sha256",
+        "access_policy_sha256",
+        "owner_role"
+      ],
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        },
+        "storage_policy_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "access_policy_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner_role": {
+          "$ref": "#/$defs/role"
+        }
+      }
+    },
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approved",
+        "retention_policy_sha256",
+        "failed_run_retention_approved",
+        "failed_run_retention_policy_sha256",
+        "owner_role"
+      ],
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        },
+        "retention_policy_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "failed_run_retention_approved": {
+          "type": "boolean"
+        },
+        "failed_run_retention_policy_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner_role": {
+          "$ref": "#/$defs/role"
+        }
+      }
+    },
+    "deletion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "procedure_approved",
+        "procedure_sha256",
+        "completion_state",
+        "evidence_sha256",
+        "owner_role"
+      ],
+      "properties": {
+        "procedure_approved": {
+          "type": "boolean"
+        },
+        "procedure_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "completion_state": {
+          "enum": [
+            "not_scheduled",
+            "scheduled-within-approved-policy",
+            "completed"
+          ]
+        },
+        "evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner_role": {
+          "$ref": "#/$defs/role"
+        }
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canary_scan_passed",
+        "public_private_split_confirmed",
+        "restricted_values_in_public_record",
+        "secret_values_in_public_record",
+        "personal_data_in_public_record",
+        "private_origins_in_public_record",
+        "raw_logs_in_public_record",
+        "public_summary_sha256",
+        "restricted_index_sha256",
+        "scan_evidence_sha256"
+      ],
+      "properties": {
+        "canary_scan_passed": {
+          "type": "boolean"
+        },
+        "public_private_split_confirmed": {
+          "type": "boolean"
+        },
+        "restricted_values_in_public_record": {
+          "const": false
+        },
+        "secret_values_in_public_record": {
+          "const": false
+        },
+        "personal_data_in_public_record": {
+          "const": false
+        },
+        "private_origins_in_public_record": {
+          "const": false
+        },
+        "raw_logs_in_public_record": {
+          "const": false
+        },
+        "public_summary_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "restricted_index_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "scan_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "privacy_acceptance",
+        "legal_acceptance",
+        "country_technical_acceptance",
+        "production_authorization"
+      ],
+      "properties": {
+        "privacy_acceptance": {
+          "$ref": "#/$defs/bounded_acceptance"
+        },
+        "legal_acceptance": {
+          "$ref": "#/$defs/bounded_acceptance"
+        },
+        "country_technical_acceptance": {
+          "$ref": "#/$defs/bounded_acceptance"
+        },
+        "production_authorization": {
+          "const": "not-granted"
+        }
+      }
+    },
+    "bounded_acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "status", "evidence_sha256", "owner_role"],
+      "properties": {
+        "scope": {
+          "const": "bounded-non-production"
+        },
+        "status": {
+          "enum": ["not_reviewed", "accepted", "not_accepted"]
+        },
+        "evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner_role": {
+          "$ref": "#/$defs/role"
+        }
+      }
+    },
+    "publication_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "public_restricted_comparison_confirmed",
+        "forbidden_content_absent",
+        "review_evidence_sha256",
+        "owner_role"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["not_executed", "passed", "failed"]
+        },
+        "public_restricted_comparison_confirmed": {
+          "type": "boolean"
+        },
+        "forbidden_content_absent": {
+          "type": "boolean"
+        },
+        "review_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner_role": {
+          "$ref": "#/$defs/role"
+        }
+      }
+    },
+    "teardown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempted",
+        "finally_path",
+        "outcome",
+        "within_approved_bound",
+        "source_call_classification",
+        "public_evidence_sha256",
+        "restricted_evidence_sha256",
+        "owner_attestation_sha256",
+        "owner_roles"
+      ],
+      "properties": {
+        "attempted": {
+          "type": "boolean"
+        },
+        "finally_path": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "enum": ["not_executed", "completed", "failed"]
+        },
+        "within_approved_bound": {
+          "type": "boolean"
+        },
+        "source_call_classification": {
+          "enum": [
+            "unknown",
+            "unexpected-data-operation-contact",
+            "source-call-bound-breached",
+            "no-data-operation-operational"
+          ]
+        },
+        "public_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "restricted_evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner_attestation_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "owner_roles": {
+          "$ref": "#/$defs/roles"
+        }
+      }
+    }
+  }
+}

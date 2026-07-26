@@ -8,6 +8,8 @@ credentials, infrastructure details, or raw logs.
 Both profiles are **Registry Stack-supported unofficial integration profiles**.
 They prove one reviewed read operation against one exact upstream baseline.
 They are not product certification or general conformance claims.
+An integration pilot alone does not close the separate Country ready or
+First-country success gates.
 
 ## Evidence boundary
 
