@@ -1393,7 +1393,7 @@ of them are source shapes, so this proposal reads all five on the source-shape a
 
 | Journey | What the adopter starts from | Current surface |
 | --- | --- | --- |
-| Spreadsheet | A workbook or table the institution already holds | `registryctl init relay --sample benefits` (`InitProjectKind::RelaySpreadsheetApi`); tutorial `tutorials/publish-spreadsheet-secured-registry-api` |
+| Spreadsheet | A workbook or table the institution already holds | `registryctl init relay <dir> --sample benefits`, where `<dir>` is required (`InitProjectKind::RelaySpreadsheetApi`); tutorial `tutorials/publish-spreadsheet-secured-registry-api` |
 | OpenAPI | A source that publishes an OpenAPI description, so the bounded request is lifted from a contract | None. No starter names this shape, and a repository search finds no OpenAPI ingestion or request-lifting code. The three standards starters are not instances of it: `fhir-r4`, `dhis2-tracker`, and `opencrvs-dci` each ship an `adapter.rhai` and declare `capability.script` |
 | `http` | One bounded request declared by hand | `init --from http`, `capability.http` with the request nested under it; tutorial `tutorials/author-registry-project` |
 | `script` | A source recipe needing more than one bounded call | `capability.script`, `adapter.rhai`, `xw.v1`; tutorial `tutorials/configure-project-script-adapter`, plus the `fhir-r4`, `dhis2-tracker`, and `opencrvs-dci` starters |
@@ -1457,9 +1457,26 @@ Four rungs, each with an explicit exit test. The ladder is the sidebar's first g
 4. **Bind an environment and generate product input.** Exit test: `check --explain` reviewed,
    `build` reproduced twice with identical output, then Config Bundle sign and verify.
 
-Rungs 1 and 2 exist. Rung 3 exists but is entered through a tutorial whose title does not say
-"choose by source shape". Rung 4 is split across `reference/registryctl` and the operate pages with
-no single page that walks it.
+Rung 1 exists. Rung 3 exists but is entered through a tutorial whose title does not say "choose by
+source shape".
+
+Rung 2 exists as a tutorial but does not yet meet its exit test.
+`tutorials/verify-claim-registry-api` renders the no-match case as `"value": false` and calls the
+predicate false, then says "No-match is a claim result, not a source error" without contrasting the two.
+That is correct behavior for a `predicate` disclosure, and it is exactly why the distinction has to be
+taught: on the wire the two results are identical, so a reader can only tell them apart from the
+disclosure mode, never from the payload. Either the tutorial gains that contrast or the exit test moves
+to a page that can carry it. Keep the exit test, because
+`explanation/disclosure-modes-and-computed-answers` already commits the project to preserving negative,
+unknown, and unavailable evidence as distinct, and the onboarding path should not teach a reader to
+collapse them.
+
+Rung 4 is documented, and the gap is placement rather than absence.
+`operate/single-node-compose-behind-proxy` already walks `test`, `check --explain`, `build`,
+`bundle sign`, and `bundle verify` in order under one "Author and verify the project" section. What is
+missing is a topology-neutral entry point: that sequence is currently reachable only by a reader who
+has decided to deploy single-node Compose behind a proxy. The proposed page should own the sequence and
+the deployment page should link to it, rather than the sequence being duplicated in both.
 
 ## B.3 Proposed documentation tree
 
@@ -1577,11 +1594,14 @@ being written, not a scaffold of empty sections to create first.
   literal secret-reference name. Expansion belongs to the runtime configuration reference, where the
   product loaders resolve `${VAR}`, `${VAR:-fallback}`, and `${VAR:?message}` at config-load time. The
   authoring page should state that boundary explicitly and link across.
-- **Validate before you deploy.** The single page that walks `test` to `check --explain` to `build` to
-  `bundle sign` to `bundle verify --bundle-dir <dir> --anchor-path <file>`, then `check --against` and
-  `build --against` with `--anchor` for a signed baseline. Note that the flags differ by command:
-  `verify` takes `--anchor-path`, `check` and `build` take `--anchor`, and `anchor` is a separate
-  top-level namespace.
+- **Validate before you deploy.** Not new content so much as relocated content. The sequence already
+  exists inside `operate/single-node-compose-behind-proxy`; this page takes ownership of it so a reader
+  who is not deploying single-node Compose can find it, and the deployment page links across instead of
+  keeping a second copy. It walks `test` to `check --explain` to `build` to `bundle sign` to
+  `bundle verify --bundle-dir <dir> --anchor-path <file>`, then `check --against` and `build --against`
+  with `--anchor` for a signed baseline, and it includes `explain-config` for reading the resolved
+  runtime configuration. Note that the flags differ by command: `verify` takes `--anchor-path`, `check`
+  and `build` take `--anchor`, and `anchor` is a separate top-level namespace.
 
   The page covers six semantic-change dimensions, not five. The authored five are `claim`,
   `integration`, `service_policy`, `operator_security`, and `disclosure`. A sixth, `compiler`
@@ -1633,8 +1653,15 @@ Three additions this proposal depends on:
    compare generated bytes against the committed files and fail on difference, the way
    `just config-schema-check` does with `cmp` and `diff`, or CI must assert a clean worktree after
    `generate`. Without one of those, reference drift is regenerated rather than reported.
-2. **Generate the diagnostics index** from the same source the CLI uses, so a new code cannot ship
-   undocumented.
+2. **Generate the diagnostics index** from the same source the CLI uses. On its own this does not stop
+   an undocumented code from shipping, because the Docs job that runs `npm run check` is path-gated:
+   `.github/scripts/ci_changes.py` sets `docs` only for docs-owned paths such as `docs/site/*` and the
+   product documentation and OpenAPI directories. A pull request touching only
+   `crates/registryctl/src/project_authoring/diagnostics.rs` skips that job entirely. So either the
+   classifier gains the diagnostics source path, or the generated-index comparison runs in the
+   project-authoring job that already builds the CLI. The same reasoning applies to the configuration
+   references, whose sources are the authoring schemas and the two product config graphs, none of which
+   live under a docs-owned path.
 3. **Assert the ownership matrix.** One data file mapping every top-level authored field to its
    owning plane, checked against the schemas, so a new field cannot land without an owner.
 
