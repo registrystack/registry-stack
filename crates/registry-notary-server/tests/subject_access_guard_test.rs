@@ -256,6 +256,7 @@ fn cel_worker() -> Arc<CelWorker> {
         current_dir: None,
         forbidden_env_names: BTreeSet::from([OsString::from("REGISTRY_NOTARY_AUDIT_HASH_SECRET")]),
         max_workers: 1,
+        startup_timeout: Duration::from_secs(10),
         request_timeout: Duration::from_secs(5),
         max_request_bytes: 64 * 1024,
         max_response_bytes: 16 * 1024,

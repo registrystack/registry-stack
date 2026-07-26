@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Registry Notary now requires every configured CEL worker to complete a
+  bounded protocol probe and remain live before listener binding or readiness.
+  Worker startup uses one 10-second wall-clock bound for the complete
+  concurrent batch, evaluations retain their independent 2-second default,
+  and failed evaluations return without waiting for background replacement
+  startup. Healthy members of a mixed replacement batch are retained while
+  initial activation remains all-or-nothing. Startup failures use the
+  value-free `notary.cel.worker_unavailable` category.
+
 ## 0.13.0
 
 - BREAKING: The closed Relay-result decoder rejects the retired

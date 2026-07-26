@@ -60,10 +60,10 @@ pub(super) async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>)
         _ => (0, 0, 0),
     };
     #[cfg(feature = "registry-notary-cel")]
-    let (total, ok, failed) = {
-        let mut total = 1 + signer_total + relay_total;
-        let mut ok = usize::from(base_ready) + signer_ok + relay_ok;
-        let mut failed = usize::from(!base_ready && !base_degraded) + signer_failed + relay_failed;
+    let (cel_total, cel_ok, cel_failed) = {
+        let mut total = 0;
+        let mut ok = 0;
+        let mut failed = 0;
         if let Some(Extension(state)) = state.as_ref() {
             if let Some(cel_worker) = &state.cel_worker {
                 total += 1;
@@ -73,36 +73,26 @@ pub(super) async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>)
                     failed += 1;
                 }
             }
-            if let Some(gates) = current_deployment_gates
-                .as_ref()
-                .filter(|gates| gates.is_bound())
-            {
-                total += 1;
-                if gates.has_readiness_failure() {
-                    failed += 1;
-                } else {
-                    ok += 1;
-                }
-            }
         }
         (total, ok, failed)
     };
     #[cfg(not(feature = "registry-notary-cel"))]
+    let (cel_total, cel_ok, cel_failed) = (0, 0, 0);
+
     let (total, ok, failed) = {
-        let mut total = 1 + signer_total + relay_total;
-        let mut ok = usize::from(base_ready) + signer_ok + relay_ok;
-        let mut failed = usize::from(!base_ready && !base_degraded) + signer_failed + relay_failed;
-        if state.is_some() {
-            if let Some(gates) = current_deployment_gates
-                .as_ref()
-                .filter(|gates| gates.is_bound())
-            {
-                total += 1;
-                if gates.has_readiness_failure() {
-                    failed += 1;
-                } else {
-                    ok += 1;
-                }
+        let mut total = 1 + signer_total + relay_total + cel_total;
+        let mut ok = usize::from(base_ready) + signer_ok + relay_ok + cel_ok;
+        let mut failed =
+            usize::from(!base_ready && !base_degraded) + signer_failed + relay_failed + cel_failed;
+        if let Some(gates) = current_deployment_gates
+            .as_ref()
+            .filter(|gates| gates.is_bound())
+        {
+            total += 1;
+            if gates.has_readiness_failure() {
+                failed += 1;
+            } else {
+                ok += 1;
             }
         }
         (total, ok, failed)
@@ -139,6 +129,11 @@ pub(super) async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>)
             "total": relay_total,
             "ok": relay_ok,
             "failed": relay_failed,
+        },
+        "cel": {
+            "total": cel_total,
+            "ok": cel_ok,
+            "failed": cel_failed,
         },
     });
     if ready {

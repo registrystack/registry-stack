@@ -73,6 +73,38 @@ async fn source_free_state_does_not_require_relay_readiness() {
     assert!(state.relay_ready().await);
 }
 
+#[cfg(feature = "registry-notary-cel")]
+#[tokio::test]
+async fn readiness_reports_unactivated_cel_without_starting_the_worker() {
+    let worker = Arc::new(crate::cel_worker::CelWorker::lazy(
+        crate::cel_worker::CelWorkerConfig::for_current_exe_subcommand(),
+    ));
+    let state = Arc::new(
+        RegistryNotaryApiState::new(
+            Arc::new(evidence_config()),
+            AuditKeyHasher::unkeyed_dev_only(),
+            Arc::new(EvidenceStore::default()),
+            Arc::new(NoopIssuerResolver),
+        )
+        .with_cel_worker(Some(Arc::clone(&worker))),
+    );
+
+    let response = ready(Some(Extension(state))).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("ready body reads");
+    let value: Value = serde_json::from_slice(&body).expect("ready body is JSON");
+
+    assert_eq!(value["checks"]["cel"]["total"], json!(1));
+    assert_eq!(value["checks"]["cel"]["ok"], json!(0));
+    assert_eq!(value["checks"]["cel"]["failed"], json!(1));
+    assert!(
+        !worker.is_activated(),
+        "readiness must not spawn the worker"
+    );
+}
+
 #[tokio::test]
 async fn registry_backed_state_is_not_ready_before_relay_activation() {
     let state = Arc::new(relay_readiness_state());
@@ -94,6 +126,9 @@ async fn registry_backed_state_is_not_ready_before_relay_activation() {
     assert_eq!(value["checks"]["relay"]["total"], json!(1));
     assert_eq!(value["checks"]["relay"]["ok"], json!(0));
     assert_eq!(value["checks"]["relay"]["failed"], json!(1));
+    assert_eq!(value["checks"]["cel"]["total"], json!(0));
+    assert_eq!(value["checks"]["cel"]["ok"], json!(0));
+    assert_eq!(value["checks"]["cel"]["failed"], json!(0));
 }
 
 #[tokio::test]

@@ -12,6 +12,7 @@ const ACTIVATION_EVIDENCE_LIMITATION: &str = "The category confirms only the fai
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 enum NotaryActivationCodeKind {
+    CelWorkerUnavailable,
     ConfigurationInvalid,
     DeploymentGateFailed,
     RelayActivationFailed,
@@ -39,6 +40,7 @@ enum NotaryActivationCodeKind {
 pub struct NotaryActivationCode(NotaryActivationCodeKind);
 
 impl NotaryActivationCode {
+    pub const CEL_WORKER_UNAVAILABLE: Self = Self(NotaryActivationCodeKind::CelWorkerUnavailable);
     pub const CONFIGURATION_INVALID: Self = Self(NotaryActivationCodeKind::ConfigurationInvalid);
     pub const DEPLOYMENT_GATE_FAILED: Self = Self(NotaryActivationCodeKind::DeploymentGateFailed);
     pub const RELAY_ACTIVATION_FAILED: Self = Self(NotaryActivationCodeKind::RelayActivationFailed);
@@ -70,6 +72,7 @@ impl NotaryActivationCode {
 
     /// Every published code in stable lexical order.
     pub const ALL: &'static [Self] = &[
+        Self::CEL_WORKER_UNAVAILABLE,
         Self::CONFIGURATION_INVALID,
         Self::DEPLOYMENT_GATE_FAILED,
         Self::RELAY_ACTIVATION_FAILED,
@@ -92,6 +95,7 @@ impl NotaryActivationCode {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self.0 {
+            NotaryActivationCodeKind::CelWorkerUnavailable => "notary.cel.worker_unavailable",
             NotaryActivationCodeKind::ConfigurationInvalid => "notary.configuration.invalid",
             NotaryActivationCodeKind::DeploymentGateFailed => "notary.deployment.gate_failed",
             NotaryActivationCodeKind::RelayActivationFailed => "notary.relay.activation_failed",
@@ -188,7 +192,19 @@ pub struct NotaryActivationCodeDefinition {
 }
 
 /// Product-owned source for generated operator references.
-pub static NOTARY_ACTIVATION_CODE_DEFINITIONS: [NotaryActivationCodeDefinition; 17] = [
+pub static NOTARY_ACTIVATION_CODE_DEFINITIONS: [NotaryActivationCodeDefinition; 18] = [
+    NotaryActivationCodeDefinition {
+        code: NotaryActivationCode::CEL_WORKER_UNAVAILABLE,
+        lifecycle: NotaryActivationCodeLifecycle::Unreleased,
+        phase: "runtime_activation",
+        meaning: "Registry Notary CEL worker is unavailable",
+        rule: "Every configured CEL worker must complete the bounded product protocol probe before listeners serve",
+        remediation: "verify that the adjacent CEL worker artifact is present and executable, confirm the supported platform and configured resource ceilings, then retry activation",
+        evidence_scope: "CEL worker packaging, protocol responsiveness, supported platform, and bounded startup capacity",
+        evidence_policy: VALUE_FREE_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "cel-worker-unavailable",
+    },
     NotaryActivationCodeDefinition {
         code: NotaryActivationCode::CONFIGURATION_INVALID,
         lifecycle: NotaryActivationCodeLifecycle::Unreleased,
@@ -509,6 +525,8 @@ impl StandaloneServerError {
             }
             #[cfg(feature = "registry-notary-cel")]
             Self::InvalidCelConfig(_) => NotaryActivationCode::CONFIGURATION_INVALID,
+            #[cfg(feature = "registry-notary-cel")]
+            Self::CelWorkerUnavailable => NotaryActivationCode::CEL_WORKER_UNAVAILABLE,
             Self::DeploymentGateStartupFailure { .. } => {
                 NotaryActivationCode::DEPLOYMENT_GATE_FAILED
             }
@@ -678,6 +696,10 @@ mod tests {
                 StandaloneServerError::InvalidCelConfig(SENTINEL.to_string()),
                 NotaryActivationCode::CONFIGURATION_INVALID,
             ));
+            errors.push((
+                StandaloneServerError::CelWorkerUnavailable,
+                NotaryActivationCode::CEL_WORKER_UNAVAILABLE,
+            ));
             errors
         };
         errors
@@ -762,7 +784,7 @@ mod tests {
         #[cfg(not(feature = "registry-notary-cel"))]
         assert_eq!(cases.len(), 29);
         #[cfg(feature = "registry-notary-cel")]
-        assert_eq!(cases.len(), 30);
+        assert_eq!(cases.len(), 31);
 
         for (error, expected) in cases {
             assert_eq!(error.activation_code(), expected);
@@ -902,11 +924,19 @@ mod tests {
 
     #[cfg(feature = "registry-notary-cel")]
     #[test]
-    fn cel_startup_errors_use_the_value_free_configuration_code() {
-        let failure = NotaryActivationFailure::from(StandaloneServerError::InvalidCelConfig(
+    fn cel_startup_errors_keep_configuration_and_runtime_codes_separate() {
+        let invalid = NotaryActivationFailure::from(StandaloneServerError::InvalidCelConfig(
             SENTINEL.to_string(),
         ));
-        assert_eq!(failure.code(), NotaryActivationCode::CONFIGURATION_INVALID);
-        assert!(!failure.to_string().contains(SENTINEL));
+        assert_eq!(invalid.code(), NotaryActivationCode::CONFIGURATION_INVALID);
+        assert!(!invalid.to_string().contains(SENTINEL));
+
+        let unavailable =
+            NotaryActivationFailure::from(StandaloneServerError::CelWorkerUnavailable);
+        assert_eq!(
+            unavailable.code(),
+            NotaryActivationCode::CEL_WORKER_UNAVAILABLE
+        );
+        assert!(!unavailable.to_string().contains(SENTINEL));
     }
 }

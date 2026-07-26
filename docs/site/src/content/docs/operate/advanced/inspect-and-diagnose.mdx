@@ -56,6 +56,11 @@ Inspect each surface for its own purpose:
 | Product audit sink | Security and request evidence | Retained chain integrity does not prove complete off-host receipt |
 | `GET /openapi.json` | Concrete API shape for the running instance | Access is product configuration and authentication dependent |
 
+For a CEL-backed Notary configuration, `/ready` counts only workers that
+completed the fixed CEL protocol probe. A missing, warming, sleeping, or
+wrong-protocol worker keeps readiness false. CEL-free configurations do not
+start a worker.
+
 Query health and readiness through the same network path used by traffic admission:
 
 ```sh

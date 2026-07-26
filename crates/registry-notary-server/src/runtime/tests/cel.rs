@@ -375,3 +375,16 @@ fn cel_result_limits_reject_deep_worker_output_without_recursive_walk() {
         Err(EvidenceError::RuleEvaluationFailed)
     ));
 }
+
+#[cfg(feature = "registry-notary-cel")]
+#[test]
+fn configured_cel_worker_failures_are_server_side_rule_failures() {
+    assert!(matches!(
+        cel_worker_error(CelWorkerError::Compile),
+        EvidenceError::RuleEvaluationFailed
+    ));
+    assert!(matches!(
+        cel_worker_error(CelWorkerError::Protocol),
+        EvidenceError::RuleEvaluationFailed
+    ));
+}

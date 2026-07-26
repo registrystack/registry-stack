@@ -584,10 +584,11 @@ pub(super) fn cel_project_claim_value(
 #[cfg(feature = "registry-notary-cel")]
 pub(super) fn cel_worker_error(error: CelWorkerError) -> EvidenceError {
     match error {
-        CelWorkerError::Compile | CelWorkerError::Protocol => EvidenceError::InvalidRequest,
-        CelWorkerError::Evaluate | CelWorkerError::Harness(_) => {
-            EvidenceError::RuleEvaluationFailed
-        }
+        CelWorkerError::Unavailable
+        | CelWorkerError::Compile
+        | CelWorkerError::Protocol
+        | CelWorkerError::Evaluate
+        | CelWorkerError::Harness(_) => EvidenceError::RuleEvaluationFailed,
     }
 }
 

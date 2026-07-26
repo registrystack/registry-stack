@@ -17,6 +17,7 @@ pub async fn standalone_router(
     let admin_listener_mode = config.server.admin_listener.mode;
     let mut runtime = compile_notary_runtime(config)?;
     runtime.verify_retained_audit_chain().await;
+    runtime.activate_cel_worker().await?;
     match admin_listener_mode {
         RegistryNotaryAdminListenerMode::SharedWithPublic => {
             notary_shared_router_from_runtime(runtime)
@@ -56,9 +57,20 @@ impl NotaryRuntimeSnapshot {
                 .install_activated_relay(activated)
                 .map_err(|_| StandaloneServerError::RelayAlreadyActivated)?;
         }
+        self.activate_cel_worker().await?;
         self.state_plane.start_retention_maintenance()?;
         self.ensure_ready_to_serve()?;
         Ok(self)
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    async fn activate_cel_worker(&self) -> Result<(), StandaloneServerError> {
+        activate_configured_cel_worker(self.api_state.cel_worker.as_ref()).await
+    }
+
+    #[cfg(not(feature = "registry-notary-cel"))]
+    async fn activate_cel_worker(&self) -> Result<(), StandaloneServerError> {
+        Ok(())
     }
 
     async fn verify_retained_audit_chain(&mut self) {
@@ -96,6 +108,15 @@ impl NotaryRuntimeSnapshot {
         if self.api_state.relay_required() && !self.api_state.relay_activated() {
             return Err(StandaloneServerError::RelayNotActivated);
         }
+        #[cfg(feature = "registry-notary-cel")]
+        if self
+            .api_state
+            .cel_worker
+            .as_ref()
+            .is_some_and(|worker| !worker.is_activated())
+        {
+            return Err(StandaloneServerError::CelWorkerUnavailable);
+        }
         Ok(())
     }
 
@@ -109,6 +130,23 @@ impl NotaryRuntimeSnapshot {
             .emit(&config_boot_audit_event(event, audit))
             .await
     }
+}
+
+#[cfg(feature = "registry-notary-cel")]
+async fn activate_configured_cel_worker(
+    worker: Option<&Arc<CelWorker>>,
+) -> Result<(), StandaloneServerError> {
+    let Some(worker) = worker else {
+        return Ok(());
+    };
+    if worker.activate().await.is_err() {
+        tracing::error!(
+            code = "notary.cel.worker_unavailable",
+            "CEL worker failed protocol activation"
+        );
+        return Err(StandaloneServerError::CelWorkerUnavailable);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -160,6 +198,7 @@ pub(super) async fn standalone_router_for_gate_test(
     let admin_listener_mode = config.server.admin_listener.mode;
     let mut runtime = compile_notary_runtime_for_gate_test(config)?;
     runtime.verify_retained_audit_chain().await;
+    runtime.activate_cel_worker().await?;
     match admin_listener_mode {
         RegistryNotaryAdminListenerMode::SharedWithPublic => {
             notary_shared_router_from_runtime(runtime)
@@ -182,6 +221,7 @@ pub(super) async fn standalone_router_with_ready_relay_for_gate_test(
         .install_activated_relay(activated)
         .map_err(|_| StandaloneServerError::RelayAlreadyActivated)?;
     runtime.verify_retained_audit_chain().await;
+    runtime.activate_cel_worker().await?;
     match admin_listener_mode {
         RegistryNotaryAdminListenerMode::SharedWithPublic => {
             notary_shared_router_from_runtime(runtime)
@@ -588,6 +628,9 @@ pub enum StandaloneServerError {
     #[cfg(feature = "registry-notary-cel")]
     #[error("invalid CEL worker configuration: {0}")]
     InvalidCelConfig(String),
+    #[cfg(feature = "registry-notary-cel")]
+    #[error("configured CEL worker is unavailable")]
+    CelWorkerUnavailable,
     #[error(
         "deployment profile '{profile}' refuses startup; failing gates: {findings}; {DEPLOYMENT_PROFILE_REQUIRED_ACTION}"
     )]
@@ -623,4 +666,57 @@ fn evidence_uses_cel(evidence: &EvidenceConfig) -> bool {
         .claims
         .iter()
         .any(|claim| matches!(&claim.rule, registry_notary_core::RuleConfig::Cel { .. }))
+}
+
+#[cfg(all(test, feature = "registry-notary-cel"))]
+mod cel_activation_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn worker_with_command(command: &str) -> Arc<CelWorker> {
+        let mut config = CelWorkerConfig::for_current_exe_subcommand();
+        config.command = PathBuf::from(command);
+        config.command_args.clear();
+        config.command_envs.clear();
+        config.max_workers = 1;
+        config.startup_timeout = Duration::from_millis(250);
+        config.max_memory_bytes = None;
+        Arc::new(CelWorker::lazy(config))
+    }
+
+    #[tokio::test]
+    async fn cel_free_activation_does_not_require_a_worker() {
+        activate_configured_cel_worker(None)
+            .await
+            .expect("CEL-free activation completes without a worker");
+    }
+
+    #[tokio::test]
+    async fn missing_cel_worker_fails_with_the_closed_activation_code() {
+        const MISSING_WORKER: &str = "/registry-notary-test/missing-cel-worker";
+        let worker = worker_with_command(MISSING_WORKER);
+
+        let error = activate_configured_cel_worker(Some(&worker))
+            .await
+            .expect_err("missing worker must fail activation");
+        assert!(matches!(error, StandaloneServerError::CelWorkerUnavailable));
+        let failure = NotaryActivationFailure::from(error);
+        assert_eq!(failure.code(), NotaryActivationCode::CEL_WORKER_UNAVAILABLE);
+        assert!(!failure.to_string().contains(MISSING_WORKER));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn non_protocol_cel_worker_fails_with_the_closed_activation_code() {
+        const NON_PROTOCOL_WORKER: &str = "/usr/bin/true";
+        let worker = worker_with_command(NON_PROTOCOL_WORKER);
+
+        let error = activate_configured_cel_worker(Some(&worker))
+            .await
+            .expect_err("non-protocol worker must fail activation");
+        assert!(matches!(error, StandaloneServerError::CelWorkerUnavailable));
+        let failure = NotaryActivationFailure::from(error);
+        assert_eq!(failure.code(), NotaryActivationCode::CEL_WORKER_UNAVAILABLE);
+        assert!(!failure.to_string().contains(NON_PROTOCOL_WORKER));
+    }
 }

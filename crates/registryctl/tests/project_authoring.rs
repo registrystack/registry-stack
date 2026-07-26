@@ -2214,7 +2214,7 @@ fn production_cel_worker_evaluates_project_date_policy() {
         registry_notary_server::cel_worker::CelWorkerConfig::for_current_exe_subcommand();
     config.command = env!("CARGO_BIN_EXE_registryctl").into();
     config.command_args = vec!["__registryctl-cel-worker-v1".into()];
-    config.request_timeout = std::time::Duration::from_secs(10);
+    config.startup_timeout = std::time::Duration::from_secs(10);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

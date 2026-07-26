@@ -11,8 +11,8 @@
     },
     "entries": {
       "type": "array",
-      "minItems": 59,
-      "maxItems": 59,
+      "minItems": 60,
+      "maxItems": 60,
       "uniqueItems": true,
       "items": {
         "allOf": [
@@ -163,6 +163,7 @@
             },
             "code": {
               "enum": [
+                "notary.cel.worker_unavailable",
                 "notary.configuration.invalid",
                 "notary.deployment.gate_failed",
                 "notary.relay.activation_failed",

@@ -8,7 +8,7 @@ use std::{
     path::PathBuf,
     process::ExitStatus,
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -18,7 +18,7 @@ use tokio::{
     io::{self, AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command},
     sync::Mutex,
-    task::JoinHandle,
+    task::{JoinHandle, JoinSet},
     time,
 };
 use tracing::error;
@@ -69,10 +69,18 @@ impl WorkerCommand {
 }
 
 #[derive(Clone, Debug)]
+pub struct WorkerStartupProbe {
+    pub request: Value,
+    pub expected_response: Value,
+}
+
+#[derive(Clone, Debug)]
 pub struct WorkerPoolConfig {
     pub command: WorkerCommand,
     pub forbidden_env_names: BTreeSet<OsString>,
     pub max_workers: usize,
+    pub startup_probe: Option<WorkerStartupProbe>,
+    pub startup_timeout: Duration,
     pub request_timeout: Duration,
     pub max_request_bytes: usize,
     pub max_stdout_bytes: usize,
@@ -88,6 +96,11 @@ impl WorkerPoolConfig {
         if self.max_workers == 0 {
             return Err(WorkerError::InvalidConfig {
                 reason: "max_workers must be greater than zero",
+            });
+        }
+        if self.startup_timeout.is_zero() {
+            return Err(WorkerError::InvalidConfig {
+                reason: "startup_timeout must be greater than zero",
             });
         }
         if self.request_timeout.is_zero() {
@@ -198,6 +211,15 @@ pub enum WorkerError {
         #[source]
         source: io::Error,
     },
+    #[error("worker pool startup timed out after {timeout:?}")]
+    StartupTimeout { timeout: Duration },
+    #[error("worker {worker_id} failed its startup protocol probe; stderr bytes captured: {stderr_len}, truncated: {stderr_truncated}")]
+    StartupProbeFailed {
+        worker_id: u64,
+        stderr_len: usize,
+        stderr_truncated: bool,
+        stderr: CapturedOutput,
+    },
     #[error("worker {worker_id} timed out after {timeout:?}; stderr bytes captured: {stderr_len}, truncated: {stderr_truncated}")]
     Timeout {
         worker_id: u64,
@@ -264,6 +286,21 @@ impl fmt::Debug for WorkerError {
                 .finish(),
             Self::Encode { source } => f.debug_struct("Encode").field("source", source).finish(),
             Self::Spawn { source } => f.debug_struct("Spawn").field("source", source).finish(),
+            Self::StartupTimeout { timeout } => f
+                .debug_struct("StartupTimeout")
+                .field("timeout", timeout)
+                .finish(),
+            Self::StartupProbeFailed {
+                worker_id,
+                stderr_len,
+                stderr_truncated,
+                ..
+            } => f
+                .debug_struct("StartupProbeFailed")
+                .field("worker_id", worker_id)
+                .field("stderr_len", stderr_len)
+                .field("stderr_truncated", stderr_truncated)
+                .finish(),
             Self::Timeout {
                 worker_id,
                 timeout,
@@ -337,6 +374,7 @@ impl WorkerError {
     pub fn worker_id(&self) -> Option<u64> {
         match self {
             Self::Timeout { worker_id, .. }
+            | Self::StartupProbeFailed { worker_id, .. }
             | Self::StdoutTooLarge { worker_id, .. }
             | Self::InvalidOutput { worker_id, .. }
             | Self::WorkerExited { worker_id, .. }
@@ -348,6 +386,7 @@ impl WorkerError {
     pub fn stderr(&self) -> Option<&CapturedOutput> {
         match self {
             Self::Timeout { stderr, .. }
+            | Self::StartupProbeFailed { stderr, .. }
             | Self::StdoutTooLarge { stderr, .. }
             | Self::InvalidOutput { stderr, .. }
             | Self::WorkerExited { stderr, .. }
@@ -373,6 +412,12 @@ impl WorkerError {
             } => Self::Timeout {
                 worker_id,
                 timeout,
+                stderr_len: stderr.len(),
+                stderr_truncated: stderr.is_truncated(),
+                stderr,
+            },
+            Self::StartupProbeFailed { worker_id, .. } => Self::StartupProbeFailed {
+                worker_id,
                 stderr_len: stderr.len(),
                 stderr_truncated: stderr.is_truncated(),
                 stderr,
@@ -426,7 +471,8 @@ pub struct WorkerPool {
 struct WorkerPoolInner {
     config: WorkerPoolConfig,
     idle: Mutex<VecDeque<Worker>>,
-    replenish: Mutex<()>,
+    replenishing: AtomicBool,
+    warming_workers: AtomicUsize,
     next_worker_id: AtomicU64,
     in_flight: AtomicUsize,
     completed_total: AtomicU64,
@@ -442,6 +488,7 @@ struct WorkerPoolInner {
 pub struct WorkerPoolSnapshot {
     pub max_workers: usize,
     pub idle_workers: usize,
+    pub warming_workers: usize,
     pub in_flight: usize,
     pub completed_total: u64,
     pub replacements_total: u64,
@@ -464,7 +511,8 @@ impl WorkerPool {
         let inner = Arc::new(WorkerPoolInner {
             config,
             idle: Mutex::new(VecDeque::new()),
-            replenish: Mutex::new(()),
+            replenishing: AtomicBool::new(false),
+            warming_workers: AtomicUsize::new(0),
             next_worker_id: AtomicU64::new(1),
             in_flight: AtomicUsize::new(0),
             completed_total: AtomicU64::new(0),
@@ -476,10 +524,18 @@ impl WorkerPool {
             circuit_open_until: Mutex::new(None),
         });
 
-        for _ in 0..inner.config.max_workers {
-            let worker = inner.spawn_worker().await?;
-            inner.idle.lock().await.push_back(worker);
+        let startup_deadline =
+            time::Instant::from_std(inner.started_at + inner.config.startup_timeout);
+        let batch = WorkerPoolInner::spawn_worker_batch_until(
+            Arc::clone(&inner),
+            inner.config.max_workers,
+            startup_deadline,
+        )
+        .await;
+        if let Some(error) = batch.first_error {
+            return Err(error);
         }
+        inner.idle.lock().await.extend(batch.ready);
 
         Ok(Self { inner })
     }
@@ -498,8 +554,8 @@ impl WorkerPool {
             return Err(WorkerError::CircuitOpen { retry_after });
         }
         let request_line = encode_request(request, self.inner.config.max_request_bytes)?;
-        let Some((mut worker, _in_flight)) = self.inner.take_idle_worker_or_replenish().await
-        else {
+        let Some((mut worker, in_flight)) = self.inner.take_idle_worker().await else {
+            self.inner.schedule_replenish();
             return Err(WorkerError::Saturated {
                 max_workers: self.inner.config.max_workers,
             });
@@ -520,7 +576,8 @@ impl WorkerPool {
                 if worker.is_running().unwrap_or(false) {
                     self.inner.idle.lock().await.push_back(worker);
                 } else {
-                    self.inner.replace_worker().await;
+                    drop(in_flight);
+                    self.inner.schedule_replenish();
                 }
                 Ok(WorkerExecution {
                     value: response,
@@ -529,7 +586,8 @@ impl WorkerPool {
             }
             Err(error) => {
                 self.inner.mark_completed().await;
-                self.inner.replace_worker().await;
+                drop(in_flight);
+                self.inner.schedule_replenish();
                 Err(error)
             }
         }
@@ -561,72 +619,218 @@ impl WorkerPool {
             *idle = running_workers;
         }
 
-        let mut replaced_missing_worker = false;
         if missing_workers > 0 {
-            let _replenish = self.inner.replenish.lock().await;
-            for _ in 0..missing_workers {
-                self.inner.replace_worker().await;
-                replaced_missing_worker = true;
-            }
-        }
-
-        if replaced_missing_worker {
+            self.inner.schedule_replenish();
             return false;
         }
         let snapshot = self.snapshot().await;
-        let current_workers = snapshot.idle_workers + snapshot.in_flight;
+        let current_workers = snapshot.idle_workers + snapshot.in_flight + snapshot.warming_workers;
         if current_workers < snapshot.max_workers {
-            let _replenish = self.inner.replenish.lock().await;
-            for _ in 0..snapshot.max_workers - current_workers {
-                self.inner.replace_worker().await;
-            }
+            self.inner.schedule_replenish();
             return false;
         }
-        current_workers == snapshot.max_workers
+        snapshot.warming_workers == 0 && current_workers == snapshot.max_workers
+    }
+
+    pub async fn prove_ready(&self) -> bool {
+        if self.inner.config.startup_probe.is_none() {
+            return self.check_ready().await;
+        }
+        if self.inner.circuit_retry_after().await.is_some()
+            || self.inner.in_flight.load(Ordering::Relaxed) > 0
+            || self.inner.warming_workers.load(Ordering::Relaxed) > 0
+        {
+            return false;
+        }
+
+        let workers = {
+            let mut idle = self.inner.idle.lock().await;
+            if idle.len() != self.inner.config.max_workers {
+                return false;
+            }
+            self.inner
+                .warming_workers
+                .store(idle.len(), Ordering::Release);
+            idle.drain(..).collect::<Vec<_>>()
+        };
+        let startup_deadline =
+            time::Instant::from_std(self.inner.started_at + self.inner.config.startup_timeout);
+        let batch =
+            WorkerPoolInner::probe_worker_batch(Arc::clone(&self.inner), workers, startup_deadline)
+                .await;
+        let ready_workers = batch.ready.len();
+        self.inner.idle.lock().await.extend(batch.ready);
+        self.inner.warming_workers.store(0, Ordering::Release);
+        let ready = batch.first_error.is_none() && ready_workers == self.inner.config.max_workers;
+        if !ready {
+            self.inner.schedule_replenish();
+        }
+        ready
     }
 }
 
 impl WorkerPoolInner {
     async fn spawn_worker(&self) -> Result<Worker, WorkerError> {
         let worker_id = self.next_worker_id.fetch_add(1, Ordering::Relaxed);
-        Worker::spawn(worker_id, &self.config).await
+        let worker = Worker::spawn(worker_id, &self.config).await?;
+        self.probe_worker(worker).await
     }
 
-    async fn replace_worker(&self) {
+    async fn probe_worker(&self, mut worker: Worker) -> Result<Worker, WorkerError> {
+        let Some(probe) = &self.config.startup_probe else {
+            return Ok(worker);
+        };
+        let worker_id = worker.id;
+        let request_line = encode_request(&probe.request, self.config.max_request_bytes)?;
+        let actual = worker
+            .request(
+                &request_line,
+                self.config.startup_timeout,
+                self.config.max_stdout_bytes,
+            )
+            .await?;
+        if actual != probe.expected_response {
+            let stderr = worker.kill_failed_worker().await;
+            return Err(WorkerError::StartupProbeFailed {
+                worker_id,
+                stderr_len: stderr.len(),
+                stderr_truncated: stderr.is_truncated(),
+                stderr,
+            });
+        }
+        tokio::task::yield_now().await;
+        match worker.child.try_wait() {
+            Ok(None) => Ok(worker),
+            Ok(Some(status)) => {
+                let stderr = worker.finish_failed_worker().await;
+                Err(worker_exited(worker_id, Some(status), stderr))
+            }
+            Err(source) => {
+                let stderr = worker.kill_failed_worker().await;
+                Err(worker_io_error(worker_id, source, stderr))
+            }
+        }
+    }
+
+    async fn spawn_worker_batch(inner: Arc<Self>, count: usize) -> WorkerBatch {
+        let deadline = time::Instant::now() + inner.config.startup_timeout;
+        Self::spawn_worker_batch_until(inner, count, deadline).await
+    }
+
+    async fn spawn_worker_batch_until(
+        inner: Arc<Self>,
+        count: usize,
+        deadline: time::Instant,
+    ) -> WorkerBatch {
+        let startup_timeout = inner.config.startup_timeout;
+        let mut workers = JoinSet::new();
+        for _ in 0..count {
+            let inner = Arc::clone(&inner);
+            workers.spawn(async move {
+                match time::timeout_at(deadline, inner.spawn_worker()).await {
+                    Ok(Err(WorkerError::Timeout { .. })) | Err(_) => {
+                        Err(WorkerError::StartupTimeout {
+                            timeout: startup_timeout,
+                        })
+                    }
+                    Ok(result) => result,
+                }
+            });
+        }
+        collect_worker_batch(workers).await
+    }
+
+    async fn probe_worker_batch(
+        inner: Arc<Self>,
+        workers_to_probe: Vec<Worker>,
+        deadline: time::Instant,
+    ) -> WorkerBatch {
+        let startup_timeout = inner.config.startup_timeout;
+        let mut workers = JoinSet::new();
+        for worker in workers_to_probe {
+            let inner = Arc::clone(&inner);
+            workers.spawn(async move {
+                match time::timeout_at(deadline, inner.probe_worker(worker)).await {
+                    Ok(Err(WorkerError::Timeout { .. })) | Err(_) => {
+                        Err(WorkerError::StartupTimeout {
+                            timeout: startup_timeout,
+                        })
+                    }
+                    Ok(result) => result,
+                }
+            });
+        }
+        collect_worker_batch(workers).await
+    }
+
+    fn schedule_replenish(self: &Arc<Self>) {
+        if self
+            .replenishing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        let inner = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                inner.replenish_to_capacity().await;
+                inner.replenishing.store(false, Ordering::Release);
+                if !inner.needs_replenishment().await
+                    || inner
+                        .replenishing
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                        .is_err()
+                {
+                    break;
+                }
+            }
+        });
+    }
+
+    async fn needs_replenishment(&self) -> bool {
+        if self.circuit_retry_after().await.is_some() {
+            return false;
+        }
+        let current_workers = self.idle.lock().await.len()
+            + self.in_flight.load(Ordering::Relaxed)
+            + self.warming_workers.load(Ordering::Relaxed);
+        current_workers < self.config.max_workers
+    }
+
+    async fn replenish_to_capacity(self: &Arc<Self>) {
         if self.circuit_retry_after().await.is_some() {
             return;
         }
-        if self.record_replacement_and_maybe_open_circuit().await {
+        let current_workers = self.idle.lock().await.len() + self.in_flight.load(Ordering::Relaxed);
+        let missing_workers = self.config.max_workers.saturating_sub(current_workers);
+        if missing_workers == 0 {
             return;
         }
-        match self.spawn_worker().await {
-            Ok(worker) => {
-                self.replacements_total.fetch_add(1, Ordering::Relaxed);
-                self.idle.lock().await.push_back(worker);
+
+        let mut permitted = 0;
+        for _ in 0..missing_workers {
+            if self.record_replacement_and_maybe_open_circuit().await {
+                break;
             }
-            Err(error) => {
-                error!(error = ?error, "failed to replace worker process");
-            }
+            permitted += 1;
         }
+        if permitted == 0 {
+            return;
+        }
+
+        self.warming_workers.store(permitted, Ordering::Release);
+        let batch = Self::spawn_worker_batch(Arc::clone(self), permitted).await;
+        self.replacements_total
+            .fetch_add(batch.ready.len() as u64, Ordering::Relaxed);
+        self.idle.lock().await.extend(batch.ready);
+        if let Some(error) = batch.first_error {
+            error!(error = ?error, "failed to replace worker process");
+        }
+        self.warming_workers.store(0, Ordering::Release);
     }
 
-    async fn take_idle_worker_or_replenish(self: &Arc<Self>) -> Option<(Worker, InFlightGuard)> {
-        if let Some(worker) = self.idle.lock().await.pop_front() {
-            let in_flight = InFlightGuard::new(self.clone()).await;
-            return Some((worker, in_flight));
-        }
-        let _replenish = self.replenish.lock().await;
-        if let Some(worker) = self.idle.lock().await.pop_front() {
-            let in_flight = InFlightGuard::new(self.clone()).await;
-            return Some((worker, in_flight));
-        }
-        let current_workers = self.in_flight.load(Ordering::Relaxed);
-        if current_workers >= self.config.max_workers {
-            return None;
-        }
-        for _ in 0..self.config.max_workers - current_workers {
-            self.replace_worker().await;
-        }
+    async fn take_idle_worker(self: &Arc<Self>) -> Option<(Worker, InFlightGuard)> {
         let worker = self.idle.lock().await.pop_front()?;
         let in_flight = InFlightGuard::new(self.clone()).await;
         Some((worker, in_flight))
@@ -679,6 +883,7 @@ impl WorkerPoolInner {
         WorkerPoolSnapshot {
             max_workers: self.config.max_workers,
             idle_workers,
+            warming_workers: self.warming_workers.load(Ordering::Relaxed),
             in_flight: self.in_flight.load(Ordering::Relaxed),
             completed_total: self.completed_total.load(Ordering::Relaxed),
             replacements_total: self.replacements_total.load(Ordering::Relaxed),
@@ -688,6 +893,30 @@ impl WorkerPoolInner {
             pool_age: now.saturating_duration_since(self.started_at),
         }
     }
+}
+
+struct WorkerBatch {
+    ready: Vec<Worker>,
+    first_error: Option<WorkerError>,
+}
+
+async fn collect_worker_batch(mut workers: JoinSet<Result<Worker, WorkerError>>) -> WorkerBatch {
+    let mut ready = Vec::with_capacity(workers.len());
+    let mut first_error = None;
+    while let Some(result) = workers.join_next().await {
+        match result {
+            Ok(Ok(worker)) => ready.push(worker),
+            Ok(Err(error)) if first_error.is_none() => first_error = Some(error),
+            Ok(Err(_)) => {}
+            Err(_) if first_error.is_none() => {
+                first_error = Some(WorkerError::Spawn {
+                    source: io::Error::other("worker startup task failed"),
+                });
+            }
+            Err(_) => {}
+        }
+    }
+    WorkerBatch { ready, first_error }
 }
 
 struct InFlightGuard {
@@ -721,6 +950,19 @@ struct Worker {
     stdout: BufReader<ChildStdout>,
     stderr: SharedStderrCapture,
     stderr_task: JoinHandle<io::Result<()>>,
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pid) = self.child.id() {
+            unsafe {
+                let _ = kill(-(pid as i32), SIGKILL);
+            }
+        }
+        let _ = self.child.start_kill();
+        self.stderr_task.abort();
+    }
 }
 
 impl Worker {

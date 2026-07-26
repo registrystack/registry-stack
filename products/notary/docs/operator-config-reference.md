@@ -53,6 +53,52 @@ a public nonce route. `oid4vci.nonce_endpoint` must be omitted, and
 single-use bearer credential material until redemption and must remain covered
 by rate limits and disclosure controls.
 
+## CEL worker lifecycle
+
+Registry Notary starts a CEL worker pool only when at least one configured
+claim uses CEL. Before listener binding, every initial worker must answer a
+fixed, value-free CEL protocol probe and remain live through activation. One
+10-second wall-clock deadline covers the complete concurrent spawn-and-probe
+batch; it is not a separate allowance for each worker. The bound is
+product-owned and is not a configuration field. A missing, non-executable,
+sleeping, resource-constrained, exited, or wrong-protocol worker fails
+activation with `notary.cel.worker_unavailable`. Timed-out or rejected worker
+process groups are terminated before they can be admitted.
+
+Only workers that pass the probe count toward readiness. A replacement starts
+in the background and does not receive work until the same probe passes. A
+healthy replacement is installed even when another worker in its concurrent
+replacement batch fails; initial activation still requires the complete
+configured capacity. Readiness remains false while required capacity is
+missing or warming. The failed evaluation is not retried and does not wait for
+replacement startup.
+
+`cel.eval_timeout_ms` applies only after a proven worker receives an
+evaluation. Its default is 2,000 ms and its accepted range is 1 through
+30,000 ms. The startup wall-clock deadline and evaluation deadline are
+independent; neither consumes or multiplies the other.
+
+The remaining CEL controls have these defaults and accepted bounds:
+
+| Field | Default | Accepted values |
+| --- | ---: | --- |
+| `cel.worker_count` | 2 | 1 through 16 |
+| `cel.allow_regex` | `false` | Boolean |
+| `cel.max_expression_bytes` | 8,192 | 1 through 262,144 |
+| `cel.max_binding_json_bytes` | 65,536 | 1 through 1,048,576 |
+| `cel.max_result_json_bytes` | 16,384 | 1 through 1,048,576 |
+| `cel.max_string_bytes` | 16,384 | 1 through 262,144 |
+| `cel.max_list_items` | 1,024 | 1 through 100,000 |
+| `cel.max_object_depth` | 16 | 1 through 64 |
+| `cel.max_object_keys` | 256 | 1 through 2,048 |
+| `cel.worker_memory_bytes` | 134,217,728 | 33,554,432 through 1,073,741,824 |
+| `cel.worker_stderr_bytes` | 1,024 | 1 through 65,536 |
+
+The worker subprocess receives a cleared environment plus the platform's
+minimal process environment. Registry Notary does not expose probe requests,
+responses, CEL expressions, bindings, stderr, paths, or environment values
+through readiness or the public activation failure.
+
 {/* registry-notary-config-key-paths:start */}
 ```text
 audit

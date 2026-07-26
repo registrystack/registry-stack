@@ -108,14 +108,18 @@ Notary together.
    readiness, audit, and deployment-posture checks to pass.
 3. Start or stage Notary against the ready Relay. Require Notary startup and
    readiness to validate its complete expected Relay consultation contract,
-   then require Notary health, audit, and deployment-posture checks to pass.
+   and require every configured CEL worker to pass its pool-wide bounded
+   protocol probe and remain live through activation. Then require Notary
+   health, audit, and deployment-posture checks to pass.
 4. Admit caller traffic only after both products are ready and the contract
    check succeeds.
 
 For drain-and-restart, stop new traffic and drain active work before the same
 ordered restart. A contract mismatch during execute is rejected by Relay
 before source access. Do not restore traffic merely because both processes are
-live.
+live. `notary.cel.worker_unavailable` means the adjacent worker artifact,
+execution permission, supported platform, resource ceiling, or protocol must
+be corrected before traffic returns.
 
 Run:
 

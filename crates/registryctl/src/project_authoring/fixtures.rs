@@ -2207,10 +2207,9 @@ fn project_cel_worker_config(
     config.command_envs.clear();
     config.current_dir = None;
     // Debug and sanitizer builds can take longer than the production worker's
-    // evaluation deadline to cold-start the isolated subprocess. Project
-    // conformance remains bounded, but must measure the rule rather than the
-    // test binary's startup latency.
-    config.request_timeout = std::time::Duration::from_secs(10);
+    // evaluation deadline to cold-start the isolated subprocess. Keep startup
+    // separately bounded while preserving the production evaluation deadline.
+    config.startup_timeout = std::time::Duration::from_secs(10);
     config
 }
 

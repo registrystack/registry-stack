@@ -1,4 +1,6 @@
-use registry_notary_worker_harness::{WorkerCommand, WorkerError, WorkerPool, WorkerPoolConfig};
+use registry_notary_worker_harness::{
+    WorkerCommand, WorkerError, WorkerPool, WorkerPoolConfig, WorkerStartupProbe,
+};
 use serde_json::json;
 use std::{
     collections::BTreeSet,
@@ -6,7 +8,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 struct WorkerPoolTestLock {
@@ -28,6 +30,11 @@ fn pool_config(max_workers: usize) -> WorkerPoolConfig {
         command: fixture_command(),
         forbidden_env_names: BTreeSet::new(),
         max_workers,
+        startup_probe: Some(WorkerStartupProbe {
+            request: json!({ "mode": "startup" }),
+            expected_response: json!({ "ready": true }),
+        }),
+        startup_timeout: Duration::from_secs(30),
         request_timeout: Duration::from_millis(30_000),
         max_request_bytes: 4096,
         max_stdout_bytes: 4096,
@@ -87,6 +94,129 @@ async fn worker_config_rejects_forbidden_explicit_envs() {
         Err(error) => error,
     };
     assert!(matches!(error, WorkerError::InvalidConfig { .. }));
+}
+
+#[tokio::test]
+async fn startup_probe_requires_the_exact_response_before_admission() {
+    let _guard = worker_pool_test_lock().await;
+    let mut config = pool_config(1);
+    config.startup_probe = Some(WorkerStartupProbe {
+        request: json!({ "mode": "startup" }),
+        expected_response: json!({ "ready": false }),
+    });
+
+    let error = match WorkerPool::new(config).await {
+        Ok(_) => panic!("mismatched startup response must fail pool construction"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, WorkerError::StartupProbeFailed { .. }));
+}
+
+#[tokio::test]
+async fn startup_probe_rejects_a_worker_that_exits_before_the_protocol_response() {
+    let _guard = worker_pool_test_lock().await;
+    let state_path = unique_state_path();
+    let mut config = pool_config(1);
+    config.command = fixture_command().env(
+        OsString::from("WORKER_HARNESS_EXIT_ONCE_STATE"),
+        state_path.as_os_str().to_os_string(),
+    );
+
+    let error = match WorkerPool::new(config.clone()).await {
+        Ok(_) => panic!("worker exiting during startup must not be admitted"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, WorkerError::WorkerExited { .. }));
+    wait_for_path(&state_path).await;
+
+    let recovered = WorkerPool::new(config)
+        .await
+        .expect("a later process that passes the probe is admitted");
+    assert!(recovered.check_ready().await);
+}
+
+#[tokio::test]
+async fn startup_probe_failure_does_not_disclose_captured_stderr() {
+    let _guard = worker_pool_test_lock().await;
+    let secret = "STARTUP_PROBE_SECRET";
+    let mut config = pool_config(1);
+    config.startup_probe = Some(WorkerStartupProbe {
+        request: json!({
+            "mode": "stderr-then-crash",
+            "stderr_bytes": 256,
+            "stderr_payload": secret,
+        }),
+        expected_response: json!({ "ready": true }),
+    });
+    config.max_stderr_bytes = 32;
+
+    let error = match WorkerPool::new(config).await {
+        Ok(_) => panic!("crashing startup probe must fail pool construction"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, WorkerError::WorkerExited { .. }));
+    assert!(!format!("{error:?}").contains(secret));
+    assert!(!error.to_string().contains(secret));
+}
+
+#[tokio::test]
+async fn startup_and_request_timeouts_are_independent() {
+    let _guard = worker_pool_test_lock().await;
+    let mut config = pool_config(1);
+    config.startup_probe = Some(WorkerStartupProbe {
+        request: json!({ "mode": "startup-sleep", "sleep_ms": 100 }),
+        expected_response: json!({ "ready": true }),
+    });
+    config.startup_timeout = Duration::from_secs(1);
+    config.request_timeout = Duration::from_millis(50);
+
+    let pool = WorkerPool::new(config)
+        .await
+        .expect("slow startup probe fits its independent bound");
+    let started = Instant::now();
+    let error = pool
+        .execute_json(json!({ "mode": "hang" }))
+        .await
+        .expect_err("request uses the shorter evaluation bound");
+    assert!(matches!(error, WorkerError::Timeout { .. }));
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "request timeout must not inherit the startup bound"
+    );
+}
+
+#[tokio::test]
+async fn pool_startup_has_one_wall_clock_deadline_for_the_concurrent_batch() {
+    let _guard = worker_pool_test_lock().await;
+    let mut config = pool_config(3);
+    config.startup_probe = Some(WorkerStartupProbe {
+        request: json!({ "mode": "startup-sleep", "sleep_ms": 1_000 }),
+        expected_response: json!({ "ready": true }),
+    });
+    config.startup_timeout = Duration::from_millis(100);
+
+    let started = Instant::now();
+    let error = match WorkerPool::new(config).await {
+        Ok(_) => panic!("the whole startup batch must stop at the common deadline"),
+        Err(error) => error,
+    };
+    let elapsed = started.elapsed();
+
+    assert!(matches!(
+        error,
+        WorkerError::StartupTimeout { timeout }
+            if timeout == Duration::from_millis(100)
+    ));
+    assert!(
+        elapsed >= Duration::from_millis(75),
+        "startup failed before the configured wall-clock deadline: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(750),
+        "pool startup exceeded its common wall-clock deadline: {elapsed:?}"
+    );
 }
 
 #[tokio::test]
@@ -158,6 +288,7 @@ async fn timeout_kills_worker_and_replaces_it_without_retrying_request() {
     let failed_worker_id = error.worker_id().expect("timeout worker id");
 
     assert!(matches!(error, WorkerError::Timeout { .. }));
+    wait_for_ready(&pool).await;
     let restarted = pool
         .execute_json_with_metadata(json!({ "value": "after" }))
         .await
@@ -185,6 +316,7 @@ async fn oversized_stdout_kills_worker_and_replaces_it() {
         error,
         WorkerError::StdoutTooLarge { limit: 64, .. }
     ));
+    wait_for_ready(&pool).await;
     let restarted = pool
         .execute_json_with_metadata(json!({ "value": "after" }))
         .await
@@ -258,17 +390,13 @@ async fn snapshot_counters_track_idle_busy_and_completed_workers() {
 #[tokio::test]
 async fn check_ready_detects_replaces_and_fails_current_check_for_dead_idle_worker() {
     let _guard = worker_pool_test_lock().await;
-    let state_path = unique_state_path();
-    let mut config = pool_config(1);
-    config.command = fixture_command().env(
-        OsString::from("WORKER_HARNESS_EXIT_ONCE_STATE"),
-        state_path.as_os_str().to_os_string(),
-    );
-    let pool = WorkerPool::new(config).await.unwrap();
-    wait_for_path(&state_path).await;
+    let pool = WorkerPool::new(pool_config(1)).await.unwrap();
+    pool.execute_json(json!({ "mode": "exit" }))
+        .await
+        .expect_err("exited worker fails the request");
 
     wait_for_not_ready(&pool).await;
-    assert!(pool.check_ready().await);
+    wait_for_ready(&pool).await;
     let response = pool
         .execute_json(json!({ "value": "after-replacement" }))
         .await
@@ -291,6 +419,7 @@ async fn repeated_worker_failures_open_circuit_and_recover_after_cooldown() {
         .await
         .unwrap_err();
     assert!(matches!(first, WorkerError::Timeout { .. }));
+    wait_for_ready(&pool).await;
     let snapshot = pool.snapshot().await;
     assert!(!snapshot.circuit_open);
     assert_eq!(snapshot.replacements_total, 1);
@@ -300,6 +429,7 @@ async fn repeated_worker_failures_open_circuit_and_recover_after_cooldown() {
         .await
         .unwrap_err();
     assert!(matches!(opens, WorkerError::Timeout { .. }));
+    wait_for_circuit(&pool).await;
     let snapshot = pool.snapshot().await;
     assert!(snapshot.circuit_open);
     assert_eq!(snapshot.replacements_total, 1);
@@ -313,7 +443,7 @@ async fn repeated_worker_failures_open_circuit_and_recover_after_cooldown() {
 
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert!(!pool.check_ready().await);
-    assert!(pool.check_ready().await);
+    wait_for_ready(&pool).await;
     let response = pool
         .execute_json(json!({ "value": "after-cooldown" }))
         .await
@@ -322,7 +452,78 @@ async fn repeated_worker_failures_open_circuit_and_recover_after_cooldown() {
 }
 
 #[tokio::test]
-async fn execute_replenishes_worker_after_circuit_cooldown_without_readiness_probe() {
+async fn repeated_replacement_probe_failures_open_the_circuit() {
+    let _guard = worker_pool_test_lock().await;
+    let state_path = unique_state_path();
+    let mut config = pool_config(1);
+    config.command = fixture_command().env(
+        OsString::from("WORKER_HARNESS_FAIL_AFTER_FIRST_START_STATE"),
+        state_path.as_os_str().to_os_string(),
+    );
+    config.request_timeout = Duration::from_millis(50);
+    config.max_replacements_per_window = 1;
+    config.replacement_window = Duration::from_secs(60);
+    let pool = WorkerPool::new(config)
+        .await
+        .expect("initial worker passes its startup probe");
+    wait_for_path(&state_path).await;
+
+    let error = pool
+        .execute_json(json!({ "mode": "hang" }))
+        .await
+        .expect_err("request failure starts replacement recovery");
+    assert!(matches!(error, WorkerError::Timeout { .. }));
+
+    wait_for_background_circuit(&pool).await;
+    assert!(!pool.check_ready().await);
+    assert!(pool.snapshot().await.circuit_open);
+}
+
+#[tokio::test]
+async fn replacement_batch_installs_healthy_worker_when_its_sibling_fails() {
+    let _guard = worker_pool_test_lock().await;
+    let state_dir = unique_state_path();
+    fs::create_dir(&state_dir).expect("create fixture start-ordinal directory");
+    let mut config = pool_config(2);
+    config.command = fixture_command()
+        .env(
+            OsString::from("WORKER_HARNESS_START_ORDINAL_DIR"),
+            state_dir.as_os_str().to_os_string(),
+        )
+        .env("WORKER_HARNESS_FAIL_START_ORDINAL", "3")
+        .env("WORKER_HARNESS_EXIT_START_ORDINALS_THROUGH", "2")
+        .env("WORKER_HARNESS_EXIT_AFTER_STARTUP_MS", "100");
+    config.startup_timeout = Duration::from_secs(1);
+    config.max_replacements_per_window = 2;
+    config.replacement_window = Duration::from_secs(60);
+
+    let pool = WorkerPool::new(config)
+        .await
+        .expect("both initial workers pass the startup probe");
+    wait_for_start_ordinal(&state_dir, 2).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !pool.check_ready().await,
+        "dead initial workers must make readiness false"
+    );
+
+    wait_for_background_circuit(&pool).await;
+    let snapshot = pool.snapshot().await;
+    assert_eq!(
+        snapshot.idle_workers, 1,
+        "the healthy member of the mixed replacement batch must be installed"
+    );
+    assert_eq!(snapshot.replacements_total, 1);
+    assert!(snapshot.circuit_open);
+    assert!(
+        !state_dir.join("5").exists(),
+        "the circuit must open before another worker process is spawned"
+    );
+    fs::remove_dir_all(&state_dir).expect("remove fixture start-ordinal directory");
+}
+
+#[tokio::test]
+async fn execute_does_not_wait_for_replenishment_after_circuit_cooldown() {
     let _guard = worker_pool_test_lock().await;
     let mut config = pool_config(1);
     config.request_timeout = Duration::from_secs(2);
@@ -334,16 +535,24 @@ async fn execute_replenishes_worker_after_circuit_cooldown_without_readiness_pro
     pool.execute_json(json!({ "mode": "hang" }))
         .await
         .expect_err("first timeout fails");
+    wait_for_ready(&pool).await;
     pool.execute_json(json!({ "mode": "hang" }))
         .await
         .expect_err("second timeout opens circuit");
+    wait_for_circuit(&pool).await;
     assert!(pool.snapshot().await.circuit_open);
 
     tokio::time::sleep(Duration::from_millis(150)).await;
+    let error = pool
+        .execute_json(json!({ "value": "after-direct-execute" }))
+        .await
+        .expect_err("request does not wait for a replacement startup");
+    assert!(matches!(error, WorkerError::Saturated { max_workers: 1 }));
+    wait_for_ready(&pool).await;
     let response = pool
         .execute_json(json!({ "value": "after-direct-execute" }))
         .await
-        .expect("execute path replenishes after cooldown");
+        .expect("replacement serves a later request");
     assert_eq!(response["value"], "after-direct-execute");
 }
 
@@ -352,6 +561,7 @@ async fn worker_stdout_is_drained_while_large_stdin_request_is_written() {
     let _guard = worker_pool_test_lock().await;
     let mut config = pool_config(1);
     config.command = fixture_command().env("WORKER_HARNESS_PREWRITE_STDOUT_BYTES", "131072");
+    config.startup_probe = None;
     config.request_timeout = Duration::from_secs(5);
     config.max_request_bytes = 192 * 1024;
     config.max_stdout_bytes = 192 * 1024;
@@ -452,6 +662,10 @@ async fn wait_for_path(path: &Path) {
     }
 }
 
+async fn wait_for_start_ordinal(directory: &Path, ordinal: usize) {
+    wait_for_path(&directory.join(ordinal.to_string())).await;
+}
+
 async fn wait_for_not_ready(pool: &WorkerPool) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -461,6 +675,49 @@ async fn wait_for_not_ready(pool: &WorkerPool) {
         assert!(
             tokio::time::Instant::now() < deadline,
             "worker pool did not observe an unready worker"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_ready(pool: &WorkerPool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if pool.check_ready().await {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "worker pool did not become ready"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_circuit(pool: &WorkerPool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let _ = pool.check_ready().await;
+        if pool.snapshot().await.circuit_open {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "worker pool circuit did not open"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_background_circuit(pool: &WorkerPool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if pool.snapshot().await.circuit_open {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "background replenishment did not open the worker pool circuit"
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }

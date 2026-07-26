@@ -49,6 +49,7 @@ fn config() -> CelWorkerConfig {
         command_envs: Vec::new(),
         current_dir: None,
         max_workers: 1,
+        startup_timeout: Duration::from_secs(10),
         request_timeout: Duration::from_secs(5),
         max_request_bytes: 8192,
         max_response_bytes: 8192,
@@ -100,6 +101,7 @@ fn fixture_config() -> CelWorkerConfig {
         command_envs: Vec::new(),
         current_dir: None,
         max_workers: 1,
+        startup_timeout: Duration::from_secs(10),
         request_timeout: Duration::from_secs(5),
         max_request_bytes: 8192,
         max_response_bytes: 8192,
@@ -211,9 +213,82 @@ async fn cel_worker_snapshot_reports_ready_capacity() {
 }
 
 #[tokio::test]
+#[cfg(feature = "cel-worker-fixture")]
+async fn cel_worker_rejects_sleeping_process_before_it_can_be_ready() {
+    let _guard = CEL_WORKER_TEST_LOCK.lock().await;
+    let mut config = fixture_config();
+    config.startup_timeout = Duration::from_millis(100);
+    config.command_envs.push((
+        OsString::from("REGISTRY_NOTARY_CEL_WORKER_FIXTURE_STARTUP_MODE"),
+        OsString::from("sleep"),
+    ));
+
+    let error = CelWorker::new(config)
+        .await
+        .expect_err("sleeping process never proves the CEL protocol");
+
+    assert!(matches!(error, CelWorkerError::Unavailable));
+    assert_eq!(error.to_string(), "CEL worker is unavailable");
+}
+
+#[tokio::test]
+#[cfg(feature = "cel-worker-fixture")]
+async fn cel_worker_rejects_wrong_protocol_before_it_can_be_ready() {
+    let _guard = CEL_WORKER_TEST_LOCK.lock().await;
+    let mut config = fixture_config();
+    config.command_envs.push((
+        OsString::from("REGISTRY_NOTARY_CEL_WORKER_FIXTURE_STARTUP_MODE"),
+        OsString::from("wrong_protocol"),
+    ));
+
+    let error = CelWorker::new(config)
+        .await
+        .expect_err("wrong protocol process is never admitted");
+
+    assert!(matches!(error, CelWorkerError::Unavailable));
+    assert_eq!(error.to_string(), "CEL worker is unavailable");
+}
+
+#[tokio::test]
+#[cfg(feature = "cel-worker-fixture")]
+async fn cel_worker_activation_rejects_a_worker_that_replies_then_exits() {
+    let _guard = CEL_WORKER_TEST_LOCK.lock().await;
+    let mut config = fixture_config();
+    config.command_envs.push((
+        OsString::from("REGISTRY_NOTARY_CEL_WORKER_FIXTURE_STARTUP_MODE"),
+        OsString::from("reply_then_exit"),
+    ));
+
+    let error = CelWorker::new(config)
+        .await
+        .expect_err("a startup reply without live capacity must fail activation");
+
+    assert!(matches!(error, CelWorkerError::Unavailable), "{error:?}");
+    assert_eq!(error.to_string(), "CEL worker is unavailable");
+}
+
+#[tokio::test]
+#[cfg(feature = "cel-worker-fixture")]
+async fn lazy_cel_worker_is_not_ready_until_protocol_activation_completes() {
+    let _guard = CEL_WORKER_TEST_LOCK.lock().await;
+    let worker = CelWorker::lazy(fixture_config());
+
+    assert!(!worker.is_activated());
+    assert!(!worker.check_ready().await);
+    assert!(!worker.is_activated(), "readiness must not trigger startup");
+
+    worker
+        .activate()
+        .await
+        .expect("protocol activation succeeds");
+    assert!(worker.is_activated());
+    assert!(worker.check_ready().await);
+}
+
+#[tokio::test]
 async fn cel_worker_request_size_cap_applies_before_worker_dispatch() {
     let worker = CelWorker::new(CelWorkerConfig {
-        max_request_bytes: 64,
+        max_request_bytes: 512,
         ..config()
     })
     .await
@@ -235,7 +310,7 @@ async fn cel_worker_request_size_cap_applies_before_worker_dispatch() {
 
     assert!(matches!(
         error,
-        CelWorkerError::Harness(WorkerError::RequestTooLarge { limit: 64, .. })
+        CelWorkerError::Harness(WorkerError::RequestTooLarge { limit: 512, .. })
     ));
     let snapshot = worker.snapshot().await.expect("snapshot succeeds");
     assert_eq!(snapshot.idle_workers, 1);
@@ -288,6 +363,7 @@ async fn cel_worker_timeout_kills_and_replaces_fixture_worker() {
         error,
         CelWorkerError::Harness(WorkerError::Timeout { .. })
     ));
+    wait_for_cel_ready(&worker).await;
     let restarted = worker
         .evaluate("fixture.value", json!({ "value": "after-timeout" }))
         .await
@@ -318,6 +394,7 @@ async fn cel_worker_stdout_cap_kills_and_replaces_fixture_worker() {
         ),
         "{error:?}"
     );
+    wait_for_cel_ready(&worker).await;
     let restarted = worker
         .evaluate("fixture.value", json!({ "value": "ok" }))
         .await
@@ -356,6 +433,21 @@ async fn cel_worker_stderr_cap_does_not_disclose_fixture_stderr() {
     let display = error.to_string();
     assert!(!debug.contains(secret));
     assert!(!display.contains(secret));
+}
+
+#[cfg(feature = "cel-worker-fixture")]
+async fn wait_for_cel_ready(worker: &CelWorker) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if worker.check_ready().await {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "CEL worker did not become ready"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 #[tokio::test]
@@ -515,7 +607,8 @@ async fn cel_worker_rejects_forbidden_explicit_env_names() {
         .await
         .expect_err("forbidden explicit worker env fails validation");
 
-    assert!(matches!(error, CelWorkerError::Harness { .. }));
+    assert!(matches!(error, CelWorkerError::Unavailable));
+    assert_eq!(error.to_string(), "CEL worker is unavailable");
 }
 
 #[test]
