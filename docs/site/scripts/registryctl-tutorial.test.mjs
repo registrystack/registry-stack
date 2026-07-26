@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 
 import { parse } from 'yaml';
 
@@ -22,6 +29,64 @@ import {
 
 const siteRoot = resolve(import.meta.dirname, '..');
 const repoRoot = resolve(siteRoot, '../..');
+let registryctlBinary;
+let registryctlBinaryDirectory;
+
+after(() => {
+  if (registryctlBinaryDirectory !== undefined) {
+    rmSync(registryctlBinaryDirectory, { recursive: true, force: true });
+  }
+});
+
+function exactRegistryctlBinary() {
+  if (registryctlBinary !== undefined) return registryctlBinary;
+  if (process.env.REGISTRYCTL_BIN !== undefined) {
+    registryctlBinary = process.env.REGISTRYCTL_BIN;
+    return registryctlBinary;
+  }
+
+  const buildEvents = execFileSync(
+    'cargo',
+    [
+      'build',
+      '--locked',
+      '--quiet',
+      '-p',
+      'registryctl',
+      '--bin',
+      'registryctl',
+      '--message-format=json',
+    ],
+    { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+  )
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const artifact = buildEvents.findLast(
+    (event) =>
+      event.reason === 'compiler-artifact' &&
+      event.target?.name === 'registryctl' &&
+      event.executable,
+  );
+  assert.ok(artifact, 'cargo did not identify the exact registryctl executable');
+  registryctlBinaryDirectory = mkdtempSync(join(tmpdir(), 'registryctl-docs-binary-'));
+  registryctlBinary = join(
+    registryctlBinaryDirectory,
+    process.platform === 'win32' ? 'registryctl.exe' : 'registryctl',
+  );
+  copyFileSync(artifact.executable, registryctlBinary);
+  chmodSync(registryctlBinary, 0o700);
+  return registryctlBinary;
+}
+
+function registryctl(args) {
+  return execFileSync(exactRegistryctlBinary(), args, {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  });
+}
 
 test('extracts shell fences with headings, occurrences, and multiline commands intact', () => {
   const markdown = `## Start
@@ -171,32 +236,20 @@ test('HTTP authoring tutorial output stays synchronized with the current starter
   const directory = mkdtempSync(join(tmpdir(), 'registryctl-http-trace-'));
   const projectDirectory = join(directory, 'registry-project');
   try {
-    execFileSync(
-      'cargo',
-      [
-        'run',
-        '--locked',
-        '--quiet',
-        '-p',
-        'registryctl',
-        '--',
-        'init',
-        '--from',
-        'http',
-        '--project-dir',
-        projectDirectory,
-      ],
-      { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+    registryctl(['init', '--from', 'http', '--project-dir', projectDirectory]);
+    assert.match(
+      readFileSync(
+        join(
+          projectDirectory,
+          'integrations/person-record/fixtures/active.yaml',
+        ),
+        'utf8',
+      ),
+      /^request:$/m,
+      'the exact executable must embed the governed-request starter',
     );
-    const actual = execFileSync(
-      'cargo',
+    const actual = registryctl(
       [
-        'run',
-        '--locked',
-        '--quiet',
-        '-p',
-        'registryctl',
-        '--',
         'test',
         '--project-dir',
         projectDirectory,
@@ -206,7 +259,6 @@ test('HTTP authoring tutorial output stays synchronized with the current starter
         'active-person',
         '--trace',
       ],
-      { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
     ).trimEnd();
     const tutorial = readFileSync(
       resolve(siteRoot, 'src/content/docs/tutorials/author-registry-project.mdx'),
@@ -237,22 +289,14 @@ test('HTTP authoring tutorial output stays synchronized with the current starter
       ],
     );
 
-    const built = execFileSync(
-      'cargo',
+    const built = registryctl(
       [
-        'run',
-        '--locked',
-        '--quiet',
-        '-p',
-        'registryctl',
-        '--',
         'build',
         '--project-dir',
         projectDirectory,
         '--environment',
         'local',
       ],
-      { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
     ).trimEnd();
     const documentedBuild = extractFencedBlocks(tutorial).find(
       (block) => block.heading === 'Build unsigned product inputs' && block.language === 'text',
@@ -262,15 +306,8 @@ test('HTTP authoring tutorial output stays synchronized with the current starter
     assert.match(built, /^  Output: \.registry-stack\/build\/local$/m);
     assert.match(tutorial, /An artifact action of `regenerate` is lifecycle metadata/);
 
-    const trustedLocal = execFileSync(
-      'cargo',
+    const trustedLocal = registryctl(
       [
-        'run',
-        '--locked',
-        '--quiet',
-        '-p',
-        'registryctl',
-        '--',
         'check',
         '--project-dir',
         projectDirectory,
@@ -279,7 +316,6 @@ test('HTTP authoring tutorial output stays synchronized with the current starter
         '--explain',
         '--show-authored-values',
       ],
-      { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
     ).trimEnd();
     const documentedTrustedLocal = extractFencedBlocks(tutorial).find(
       (block) =>
@@ -290,11 +326,7 @@ test('HTTP authoring tutorial output stays synchronized with the current starter
     assert.ok(documentedTrustedLocal, 'trusted-local safety output block is missing');
     assertOutputContainsLines(trustedLocal, documentedTrustedLocal.content);
 
-    const checkHelp = execFileSync(
-      'cargo',
-      ['run', '--locked', '--quiet', '-p', 'registryctl', '--', 'check', '--help'],
-      { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
-    );
+    const checkHelp = registryctl(['check', '--help']);
     assert.match(
       checkHelp,
       /--show-authored-values[\s\S]*Show directly authored non-secret values for trusted-local terminal review/,
