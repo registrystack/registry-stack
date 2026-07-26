@@ -765,6 +765,19 @@
       }
     },
     {
+      "id": "entity-over-ceiling-max-records",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["maximum"],
+      "schema": "entity",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
+      "document": "entities/population.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/materialization/max_records",
+        "value": 100000001
+      }
+    },
+    {
       "id": "project-incoherent-service-union",
       "dimension": "conditional",
       "expected_failing_keywords": ["oneOf"],

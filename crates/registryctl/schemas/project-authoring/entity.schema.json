@@ -20,7 +20,7 @@
       "additionalProperties": false,
       "required": ["max_records", "max_bytes", "refresh", "retain_generations"],
       "properties": {
-        "max_records": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615, "description": "Maximum number of records allowed in one generation.", "examples": [10000] },
+        "max_records": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 100000000, "description": "Maximum number of records allowed in one generation.", "examples": [10000] },
         "max_bytes": {
           "x-registry-field": "property",
           "description": "Maximum encoded size of one generation, as bytes or a KiB/MiB quantity.",

@@ -59275,7 +59275,7 @@
       "constraints": [
         {
           "keyword": "maximum",
-          "value": 18446744073709551615
+          "value": 100000000
         },
         {
           "keyword": "minimum",
