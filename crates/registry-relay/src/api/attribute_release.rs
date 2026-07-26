@@ -41,7 +41,9 @@ use crate::attribute_release::AttributeReleaseEvaluator;
 use crate::audit::AuditContextExt;
 use crate::auth::scopes::require_scope;
 use crate::auth::Principal;
-use crate::config::{AttributeReleaseProfile, Config, EntityConfig, ReleaseClaimConfig};
+use crate::config::{
+    AttributeReleaseProfile, Config, EntityConfig, ReleaseClaimConfig, MAX_ATTRIBUTE_RELEASE_CLAIMS,
+};
 use crate::entity::EntityModel;
 use crate::error::{AuthError, Error, FilterError, ReleaseError, SchemaError};
 use crate::query::{EntityCollectionQuery, EntityFilter, EntityQueryEngine};
@@ -502,8 +504,8 @@ fn subject_audit_raw(value: &Value) -> Option<String> {
 }
 
 /// Resolve the effective claim set. Absent ⇒ the profile default (all
-/// configured claims); explicit `[]` ⇒ 400 invalid value; any name not in the
-/// profile ⇒ deny (`release.subject_denied`).
+/// configured claims); an empty, duplicate, or over-bound list ⇒ 400 invalid
+/// value; any name not in the profile ⇒ deny (`release.subject_denied`).
 #[allow(clippy::result_large_err)]
 fn resolve_requested_claims<'a>(
     route: &'a RouteState,
@@ -514,13 +516,19 @@ fn resolve_requested_claims<'a>(
     let Some(names) = requested else {
         return Ok(route.profile.claims.iter().collect());
     };
-    if names.is_empty() {
+    if names.is_empty() || names.len() > MAX_ATTRIBUTE_RELEASE_CLAIMS {
         return Err(ResolveRunError::from(Error::from(
             FilterError::InvalidValue,
         )));
     }
     let mut resolved = Vec::with_capacity(names.len());
+    let mut unique_names = BTreeSet::new();
     for name in names {
+        if !unique_names.insert(name.as_str()) {
+            return Err(ResolveRunError::from(Error::from(
+                FilterError::InvalidValue,
+            )));
+        }
         match route
             .profile
             .claims

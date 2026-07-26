@@ -2172,7 +2172,7 @@ outputs:
     }
 
     #[test]
-    fn cel_consultation_roots_ignore_string_literals() {
+    fn cel_consultation_roots_ignore_strings_and_comments() {
         assert_eq!(
             cel_member_roots("'decoy.exists' == 'x' && person.exists").expect("CEL roots parse"),
             BTreeSet::from(["person".to_string()])
@@ -2184,6 +2184,14 @@ outputs:
             )
             .expect("nested CEL roots parse"),
             BTreeSet::from(["person".to_string()])
+        );
+        assert_eq!(
+            cel_member_roots(
+                r#"person.exists // decoy.value ' "unterminated
+&& another.exists"#
+            )
+            .expect("commented CEL roots parse"),
+            BTreeSet::from(["another".to_string(), "person".to_string()])
         );
         assert!(cel_member_roots("person.exists && 'unterminated").is_err());
     }

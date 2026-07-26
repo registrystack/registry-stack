@@ -28,7 +28,7 @@ use super::{
     AuditSinkConfig, AuthMode, Config, DatasetConfig, EntityConfig, EntityRelationshipConfig,
     EntitySpatialConfig, FieldConfig, FieldType, FilterOp, GovernedPolicyConfig, OidcConfig,
     RefreshConfig, RelationshipKind, ReleaseClaimConfig, ResourceConfig, Sensitivity, SourceConfig,
-    SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84,
+    SpatialBboxFieldsConfig, SpatialGeometryConfig, CRS84, MAX_ATTRIBUTE_RELEASE_CLAIMS,
 };
 
 /// Product-scoped admin capability required by private admin mutations.
@@ -3823,7 +3823,7 @@ fn validate_entity_release_profile(
 
     // Claims: non-empty, ≥1 required, unique names, each a valid id, and each
     // declaring exactly one of source_field / expression.cel.
-    if profile.claims.is_empty() || profile.claims.len() > 32 {
+    if profile.claims.is_empty() || profile.claims.len() > MAX_ATTRIBUTE_RELEASE_CLAIMS {
         return release_error("attribute_release_profiles must declare between one and 32 claims");
     }
     let mut claim_names: HashSet<&str> = HashSet::new();

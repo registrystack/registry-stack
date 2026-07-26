@@ -54,6 +54,7 @@ pub use loader::{
 };
 
 pub(crate) const MAX_AUDIT_PSEUDONYM_MATERIALS: usize = 32;
+pub(crate) const MAX_ATTRIBUTE_RELEASE_CLAIMS: usize = 32;
 pub(crate) const MAX_CONSULTATION_SOURCE_CREDENTIALS: usize = 128;
 
 /// Root configuration document. Parsed from YAML at startup.

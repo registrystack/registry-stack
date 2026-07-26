@@ -863,6 +863,13 @@ fn cel_member_roots(expression: &str) -> Result<BTreeSet<String>> {
     let mut roots = BTreeSet::new();
     let mut index = 0;
     while index < bytes.len() {
+        if bytes[index] == b'/' && matches!(bytes.get(index + 1), Some(b'/')) {
+            index += 2;
+            while index < bytes.len() && !matches!(bytes[index], b'\n' | b'\r') {
+                index += 1;
+            }
+            continue;
+        }
         if matches!(bytes[index], b'\'' | b'"') {
             let quote = bytes[index];
             index += 1;

@@ -418,6 +418,22 @@ async fn resolve_empty_claim_list_is_bad_request() {
 }
 
 #[tokio::test]
+async fn resolve_rejects_duplicate_and_over_bound_claim_lists() {
+    let server = server().await;
+    for claims in [vec!["full_name"; 2], vec!["full_name"; 33]] {
+        let response = server
+            .post(RESOLVE_PATH)
+            .json(&json!({
+                "subject": { "id_type": "NATIONAL_ID", "value": "NID-1" },
+                "claims": claims
+            }))
+            .await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+        assert_eq!(response.json::<Value>()["code"], "filter.invalid_value");
+    }
+}
+
+#[tokio::test]
 async fn resolve_unknown_requested_claim_is_denied() {
     let server = server().await;
     let response = server

@@ -261,7 +261,8 @@ mod enabled {
     }
 
     /// Collect dotted or bracketed CEL member roots while ignoring quoted string
-    /// contents. The reserved `context` root is collected even when bare.
+    /// contents and CEL line comments. The reserved `context` root is collected
+    /// even when bare.
     /// This mirrors Registryctl's authoring validator so direct Relay config and
     /// generated config enforce the same source-only authority boundary.
     fn cel_member_roots(expression: &str) -> Result<BTreeSet<String>, ()> {
@@ -269,6 +270,13 @@ mod enabled {
         let mut roots = BTreeSet::new();
         let mut index = 0;
         while index < bytes.len() {
+            if bytes[index] == b'/' && matches!(bytes.get(index + 1), Some(b'/')) {
+                index += 2;
+                while index < bytes.len() && !matches!(bytes[index], b'\n' | b'\r') {
+                    index += 1;
+                }
+                continue;
+            }
             if matches!(bytes[index], b'\'' | b'"') {
                 let quote = bytes[index];
                 index += 1;
@@ -536,6 +544,20 @@ mod enabled {
                 "source.given_name == 'context.secret' || source.given_name == \"request.value\"",
             )
             .expect("quoted member-like text is not authority");
+        }
+
+        #[test]
+        fn expression_authority_ignores_member_decoys_and_quotes_in_comments() {
+            validate_release_expression(
+                r#"source.active // context.secret ' "unterminated
+"#,
+            )
+            .expect("line-comment contents are not authority or string syntax");
+
+            let err =
+                validate_release_expression("source.active // request.value\n || context.secret")
+                    .expect_err("authority on the next line must still be rejected");
+            assert!(matches!(err, AttributeReleaseError::Compile(_)));
         }
 
         #[test]

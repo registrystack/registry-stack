@@ -16,7 +16,9 @@ use crate::api::governed::{
 };
 use crate::audit::ErrorCodeExt;
 use crate::auth::Principal;
-use crate::config::{AuthMode, Config, DatasetConfig, EntityConfig, FilterOp};
+use crate::config::{
+    AuthMode, Config, DatasetConfig, EntityConfig, FilterOp, MAX_ATTRIBUTE_RELEASE_CLAIMS,
+};
 use crate::entity::EntityRegistry;
 use crate::error::{AuthError, Error};
 // Reads the local `CatalogDocument`, not `registry-manifest-core`'s
@@ -5349,8 +5351,12 @@ fn attribute_release_resolve_request_schema() -> Value {
                 "type": ["array", "null"],
                 "description": "Optional subset of claim names to return. Absent means the \
                                 profile default set; an empty array is rejected (400); \
-                                any unknown claim name is denied.",
-                "items": { "type": "string" }
+                                duplicate or over-bound arrays are rejected (400); any \
+                                unknown claim name is denied.",
+                "items": { "type": "string" },
+                "minItems": 1,
+                "maxItems": MAX_ATTRIBUTE_RELEASE_CLAIMS,
+                "uniqueItems": true
             }
         },
         "additionalProperties": false,
@@ -6507,6 +6513,13 @@ mod tests {
             json!(["string", "number", "boolean"]),
             "subject value must document every runtime-supported scalar type"
         );
+        let claims_schema = &schemas["AttributeReleaseResolveRequest"]["properties"]["claims"];
+        assert_eq!(claims_schema["minItems"], 1);
+        assert_eq!(
+            claims_schema["maxItems"],
+            json!(MAX_ATTRIBUTE_RELEASE_CLAIMS)
+        );
+        assert_eq!(claims_schema["uniqueItems"], true);
 
         // Required fields on AttributeReleaseProfile schema
         let profile_required = &schemas["AttributeReleaseProfile"]["required"];

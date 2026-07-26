@@ -1268,14 +1268,17 @@
         "description": "Request body for resolving an attribute release profile against one subject.",
         "properties": {
           "claims": {
-            "description": "Optional subset of claim names to return. Absent means the profile default set; an empty array is rejected (400); any unknown claim name is denied.",
+            "description": "Optional subset of claim names to return. Absent means the profile default set; an empty array is rejected (400); duplicate or over-bound arrays are rejected (400); any unknown claim name is denied.",
             "items": {
               "type": "string"
             },
+            "maxItems": 32,
+            "minItems": 1,
             "type": [
               "array",
               "null"
-            ]
+            ],
+            "uniqueItems": true
           },
           "subject": {
             "additionalProperties": false,

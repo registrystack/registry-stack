@@ -458,9 +458,10 @@ Request body:
 }
 ```
 
-`claims` is optional: absent resolves the profile's full default claim set; an
-explicit empty list is rejected with `400 filter.invalid_value`; a name
-outside the profile's configured claims is denied. `subject.value` accepts
+`claims` is optional: absent resolves the profile's full default claim set. An
+explicit list must contain between 1 and 32 unique claim names; an invalid
+list returns `400 filter.invalid_value`. A name outside the profile's
+configured claims is denied. `subject.value` accepts
 only a non-blank scalar (string, number, or boolean); `subject.id_type` must
 match the profile's configured type. Either failure returns
 `400 release.subject_invalid`.
