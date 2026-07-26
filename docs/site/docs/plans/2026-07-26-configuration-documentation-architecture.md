@@ -567,9 +567,15 @@ JSON schema definition that low code manifests are validated against, see
 `declarative_component_schema.yaml`"
 ([component-schema-reference](https://docs.airbyte.com/platform/connector-development/config-based/advanced-topics/component-schema-reference)).
 That schema is the validator, and the prose reference is a hand-authored companion to it rather than a
-render of it, so drift between the two is structurally possible. The real consistency mechanism is the
-live-test loop, which catches drift by execution. Documented pytest-based unit, integration, and
-acceptance testing exists separately and does not appear to assert declarative-schema conformance
+render of it, so drift between the two is structurally possible.
+
+The live-test loop is worth separating from that, because it solves a different problem. It gives strong
+runtime-conformance coverage: a manifest is executed against the real API and the real schema, and an
+author sees the wire result. It cannot detect prose drift, because the reference page is not an input to
+that execution, so the documentation can disagree with `declarative_component_schema.yaml` while every
+connector test passes. Airbyte therefore has runtime conformance gated and reference-against-schema
+agreement ungated. Documented pytest-based unit, integration, and acceptance testing exists separately
+and does not appear to assert declarative-schema conformance
 ([testing-connectors](https://docs.airbyte.com/platform/connector-development/testing-connectors)).
 
 ### Friction
@@ -1392,8 +1398,9 @@ into the site, from two sources that can disagree.
 2. **Restating shared blocks in prose, and pinning examples to values that are meant to change.** The
    collector documents TLS, retry, and queue settings centrally, restates them per component, restates
    them again on a resiliency page, and then lets one exporter silently rename a field. Separately,
-   hardcoding `0.0.0.0` across every site example to smooth a future default change left the whole
-   corpus contradicting the security page permanently. Render shared blocks once from a schema
+   hardcoding `0.0.0.0` on the configuration page's examples, five receiver endpoints as read on
+   2026-07-26, leaves those examples disagreeing with the security page's `localhost` recommendation
+   inside one corpus. The scope is that page, not every example on the site. Render shared blocks once from a schema
    reference, show the secure value, and let a generated "default changed in vX" note carry the
    migration.
 
@@ -1464,7 +1471,13 @@ when the capability requires one:
 **Plane 2, generated product input.** `registryctl build --environment <name>` writes
 `.registry-stack/build/<env>/` with a `reviewable/` half (`entities/<id>.json` for each declared
 entity, `integration-packs/`, `consultation-contracts/`, and `review.json`) and a `private/` half (`relay/config/relay.yaml`,
-`notary/config/notary.yaml`, each with `approval/review.json`). These validate against
+`notary/config/notary.yaml`, each with both `approval/review.json` and
+`approval/project-state.json`). The second approval file is load-bearing rather than metadata:
+`APPROVAL_STATE_PATH` is `approval/project-state.json` carrying schema
+`registry.project.approval-state.v1` (`crates/registryctl/src/project_authoring.rs:45`), verified-baseline
+loading requires it, and it binds the review digest to the generated product closure. Signing and
+baseline-review documentation must name it, because a signed artifact the docs omit is one an operator
+cannot be asked to review. The product configuration files validate against
 `schemas/registry-relay.config.schema.json` and `schemas/registry-notary.config.schema.json`, which
 the products' `config-schema-check` commands reproduce from their typed config graphs.
 
@@ -1569,9 +1582,9 @@ Reference
     Integration
     Fixture
     Entity
-  Runtime configuration                         [new]  generated from the two config schemas
-    Relay
-    Notary
+  Runtime configuration                         [enhance existing, not new]
+    Relay          products/registry-relay/configuration
+    Notary         products/registry-notary/operator-config-reference
   API reference (Relay, Notary)
   registryctl CLI
   Errors and status codes
@@ -1649,10 +1662,15 @@ being written, not a scaffold of empty sections to create first.
   `registryctl` version, independently of any authored change. An operator upgrading the CLI will see a
   reported change with no authored cause, so the page must say what `compiler` means and what reviewing
   it requires.
-- **Authored configuration reference** and **Runtime configuration reference.** Generated, never
-  hand-written, each field carrying type, default, required, and the owning plane.
+- **Authored configuration reference.** Genuinely new, generated from the five committed authoring
+  schemas, each field carrying type, default, required, and the owning surface.
+- **Runtime configuration reference.** Not a new page. `products/registry-relay/configuration` and
+  `products/registry-notary/operator-config-reference` already publish through the
+  `src/data/repo-docs.yaml` sync, and both product suites already enforce key-path parity between those
+  references and their generated schemas. The work is replacing their hand-maintained field tables with
+  schema-rendered ones in place, not standing up a parallel hierarchy beside them.
 - **Authoring diagnostics.** Generated from `diagnostics.rs`: code, cause, remediation. Today one
-  code appears in a tutorial troubleshooting table and the rest are reachable only by reading a
+  fixture-error code appears in a tutorial troubleshooting table and the rest are reachable only by reading a
   pinned source file.
 
 ## B.5 Consistency machinery
@@ -1677,17 +1695,24 @@ Already in place and worth naming in the docs as the reason examples can be trus
 
 Three additions this proposal depends on:
 
-1. **Generate the two reference sections from schema, reading committed files only.** A
-   `generate-config-reference.mjs` step that reads the two runtime schemas from the committed
-   `schemas/*.config.schema.json` and the five authoring schemas from committed copies alongside them.
+1. **Generate the two reference sections from schema, reading committed files only.** Every input this
+   needs is already committed, so the step is smaller than it first appears. The two runtime schemas are
+   at `schemas/*.config.schema.json`. The five authoring schemas are at
+   `crates/registryctl/schemas/project-authoring/{project,environment,integration,fixture,entity}.schema.json`,
+   and `project_authoring/editor.rs:72` embeds those exact files with `include_str!`, which makes the
+   committed file the source of truth rather than a copy of one. No new CLI-side generator is required,
+   and proposing one would invent work.
 
-   It must not shell out to `registryctl authoring schema --kind <kind>`. The Docs checks job in
+   The step must not shell out to `registryctl authoring schema --kind <kind>`. The Docs checks job in
    `.github/workflows/ci.yml` runs checkout, Node setup, `npm ci`, `npm test`, and `npm run check`, with
    no Rust toolchain and no built CLI, so a generator that invoked the binary would fail every docs
-   build. The existing `generate-project-starters.mjs` already models the right shape: it reads committed
-   fixture files rather than running the CLI. So the authoring schemas need the treatment the runtime
-   schemas already have, a `just`-style generate-and-check pair on the CLI side that commits the five
-   files and fails Rust CI on drift, after which the docs step consumes committed artifacts.
+   build. `generate-project-starters.mjs` already models the right shape by reading committed fixtures
+   rather than running the CLI.
+
+   One residual gap is worth naming rather than assuming away: because the schemas are embedded rather
+   than produced from the Rust types, nothing found in this review asserts that they agree with the
+   `deny_unknown_fields` structs they describe. That is a CLI-side concern, not a documentation one, and
+   the reference generated from them inherits whatever divergence exists.
 
    The generator writes `src/data/generated/`. The runtime half is nearly free, because
    `just config-schema-generate` and `just config-schema-check` in `crates/registry-relay/justfile` and
@@ -1738,7 +1763,8 @@ it through a failed command.
    Three pages, no new tooling, and they close the three navigational holes.
 2. `Write and run fixtures`, `Define a service policy`, `Bind an environment`, extracted from
    existing tutorial prose so the tutorials get shorter.
-3. The generated references and their CI drift gates.
+3. The authored configuration reference, then the schema-rendered replacement of the two existing
+   product configuration references, each with the drift gate and triggering path from B.5.
 4. `OpenAPI-described source`, once a starter or a documented lift-from-contract procedure exists.
 
 ## B.9 Where each element comes from
