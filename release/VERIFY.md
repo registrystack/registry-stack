@@ -311,6 +311,47 @@ The provenance subject set covers release artifacts before their generated
 exact Relay and Notary digest evidence are all independent signed and
 provenance-covered subjects.
 
+## Verify An Immutable Documentation Archive
+
+Releases created after the immutable archive contract publish
+`registry-docs-${tag}.tar.gz`. The archive digest must match the append-only
+`docs/site/src/data/archive-lock.yaml` entry committed at that tag.
+
+```bash
+docs_archive="registry-docs-${tag}.tar.gz"
+docs_archive_sbom="${docs_archive}.spdx.json"
+
+gh release download "${tag}" \
+  --repo registrystack/registry-stack \
+  --pattern "${docs_archive}" \
+  --pattern "${docs_archive}.sig" \
+  --pattern "${docs_archive}.pem" \
+  --pattern "${docs_archive_sbom}" \
+  --pattern "${provenance}"
+
+expected="$(
+  gh api "repos/registrystack/registry-stack/contents/docs/site/src/data/archive-lock.yaml?ref=${tag}" \
+    --jq .content | base64 --decode |
+    python3 -c 'import sys,yaml; tag=sys.argv[1]; print(yaml.safe_load(sys.stdin)["archives"][tag]["bundle_sha256"])' "${tag}"
+)"
+test "$(sha256sum "${docs_archive}" | awk '{print $1}')" = "${expected}"
+
+cosign verify-blob "${docs_archive}" \
+  --signature "${docs_archive}.sig" \
+  --certificate "${docs_archive}.pem" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/registrystack/registry-stack/.github/workflows/release.yml@refs/tags/${tag}"
+
+slsa-verifier verify-artifact "${docs_archive}" \
+  --provenance-path "${provenance}" \
+  --source-uri github.com/registrystack/registry-stack \
+  --source-tag "${tag}"
+```
+
+The file-subject SBOM and release capsule classify this payload as
+`registry-docs-archive`. Pages verifies the same locked bundle and extracted
+tree digests before serving it.
+
 ## Install Or Move Registryctl
 
 For `v0.9.0` and later, the matching release installer checksum-verifies and
@@ -338,7 +379,8 @@ installation.
 The candidate workflow compiles the release payload before the tag exists.
 The tag-bound workflow verifies the exact candidate run, attempt, receipt, and
 bytes, then promotes those bytes without rebuilding product binaries.
-It signs binaries, the registryctl image lock, checksums, release file SBOMs,
+It signs binaries, the registryctl image lock, the immutable documentation
+archive, checksums, release file SBOMs,
 image-input binary SBOMs, image evidence files, image SBOMs, Grype reports,
 release capsules, and the candidate receipt before upload.
 The separate SLSA generator publishes tag-bound provenance for those
@@ -363,8 +405,9 @@ For post-tag verification, require the pushed image's Linux amd64 image config
 and ordered rootfs layers to match the retained candidate proof, then verify
 the published index's BuildKit provenance separately.
 
-The release capsule summarizes binary asset hashes, the image lock under
-`release_files`, file SBOM asset names, image digests, image SBOMs, Grype
+The release capsule summarizes binary asset hashes, the image lock and
+documentation archive under `release_files`, file SBOM asset names, image
+digests, image SBOMs, Grype
 reports, workflow lineage, and release warnings. It does not carry
 per-artifact signature or provenance status fields. Verify cosign signatures
 from sibling `.sig` and `.pem` files, and verify the separately uploaded

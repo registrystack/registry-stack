@@ -3,11 +3,11 @@ import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyArchiveSeo } from './apply-archive-seo.mjs';
+import {
+  archiveOutputDirectory,
+  validateArchiveOutputLocation,
+} from './archive-bundle.mjs';
 import { loadDocsets } from './docsets.mjs';
-
-function outDirForDocset(docset) {
-  return `dist${docset.path.replace(/\/$/, '')}`;
-}
 
 async function run(command, args, env) {
   await new Promise((resolveRun, rejectRun) => {
@@ -24,17 +24,29 @@ async function run(command, args, env) {
   });
 }
 
-export async function buildDocsetArchive(docset) {
+export async function buildDocsetArchive(docset, {
+  docsRoot = process.cwd(),
+} = {}) {
   if (docset.status !== 'archived') {
     throw new Error(`Docset "${docset.id}" is not archived`);
   }
 
-  const env = { ...process.env, DOCS_DOCSET: docset.id, DOCS_BASE: docset.path };
-  const outDir = outDirForDocset(docset);
+  const env = {
+    ...process.env,
+    DOCS_DOCSET: docset.id,
+    DOCS_BASE: docset.path,
+    TZ: 'UTC',
+    // Archives are immutable release files, so their bytes cannot depend on
+    // mutable deployment analytics configuration.
+    PUBLIC_UMAMI_WEBSITE_ID: '',
+    PUBLIC_UMAMI_SCRIPT_SRC: '',
+    PUBLIC_UMAMI_DOMAINS: '',
+  };
+  const outDir = await validateArchiveOutputLocation(docsRoot, docset);
   await rm(outDir, { recursive: true, force: true });
   await run('npm', ['run', 'generate'], env);
   await run('npx', ['astro', 'check'], env);
-  await run('npx', ['astro', 'build', '--outDir', outDir], env);
+  await run('npx', ['astro', 'build', '--outDir', archiveOutputDirectory(docsRoot, docset)], env);
   await applyArchiveSeo(outDir);
   console.log(`Built archived docset ${docset.id} at ${outDir}.`);
 }

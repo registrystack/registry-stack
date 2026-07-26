@@ -25,6 +25,7 @@ import release_candidate
 ROOT = Path(__file__).resolve().parents[2]
 RELEASE_MANIFEST_DIR = ROOT / "release" / "manifests"
 DOCSETS_PATH = ROOT / "docs" / "site" / "src" / "data" / "docsets.yaml"
+ARCHIVE_LOCK_SCHEMA = "registry-docs.archive-lock.v1"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
@@ -445,10 +446,17 @@ def validate(manifest_path: Path) -> int:
     return 0
 
 
-def validate_docsets(manifest_dir: Path, docsets_path: Path) -> int:
+def validate_docsets(
+    manifest_dir: Path,
+    docsets_path: Path,
+    archive_lock_path: Path | None = None,
+) -> int:
     errors: list[str] = []
+    if archive_lock_path is None:
+        archive_lock_path = docsets_path.with_name("archive-lock.yaml")
     try:
         docsets_data = load_yaml(docsets_path)
+        archive_lock = load_yaml(archive_lock_path)
         manifests = [
             load_yaml(path)
             for path in sorted(manifest_dir.glob("registry-stack-*.yaml"))
@@ -461,6 +469,45 @@ def validate_docsets(manifest_dir: Path, docsets_path: Path) -> int:
     if not isinstance(docsets, list):
         print("error: docsets.yaml docsets must be a list", file=sys.stderr)
         return 1
+
+    archived_ids = sorted(
+        str(docset.get("id", ""))
+        for docset in docsets
+        if isinstance(docset, dict) and docset.get("status") == "archived"
+    )
+    if not isinstance(archive_lock, dict):
+        errors.append("archive-lock.yaml must contain an object")
+        archive_entries: dict = {}
+    else:
+        if archive_lock.get("schema_version") != ARCHIVE_LOCK_SCHEMA:
+            errors.append(
+                f"archive-lock.yaml schema_version must be {ARCHIVE_LOCK_SCHEMA}"
+            )
+        candidate_entries = archive_lock.get("archives")
+        if not isinstance(candidate_entries, dict):
+            errors.append("archive-lock.yaml archives must be an object")
+            archive_entries = {}
+        else:
+            archive_entries = candidate_entries
+    locked_ids = sorted(str(docset_id) for docset_id in archive_entries)
+    for docset_id in sorted(set(archived_ids) - set(locked_ids)):
+        errors.append(f"archive-lock.yaml is missing archived docset {docset_id}")
+    for docset_id in sorted(set(locked_ids) - set(archived_ids)):
+        errors.append(f"archive-lock.yaml contains non-archived docset {docset_id}")
+    for docset_id, entry in sorted(archive_entries.items()):
+        if not isinstance(entry, dict):
+            errors.append(f"archive-lock.yaml {docset_id} entry must be an object")
+            continue
+        unknown = sorted(set(entry) - {"bundle_sha256", "tree_sha256"})
+        if unknown:
+            errors.append(
+                f"archive-lock.yaml {docset_id} has unknown field {unknown[0]}"
+            )
+        for field in ("bundle_sha256", "tree_sha256"):
+            if SHA256_HEX.fullmatch(str(entry.get(field, ""))) is None:
+                errors.append(
+                    f"archive-lock.yaml {docset_id}.{field} must be 64 lowercase hex characters"
+                )
 
     manifests_by_tag: dict[str, dict] = {}
     for manifest in manifests:
@@ -890,6 +937,7 @@ def render_capsule(
     repo: Path,
     default_branch: str,
     require_registryctl_image_lock: bool = False,
+    require_registry_docs_archive: bool = False,
 ) -> int:
     manifest = load_yaml(manifest_path)
     if not isinstance(manifest, dict):
@@ -904,12 +952,17 @@ def render_capsule(
         binaries = []
         release_files = []
         expected_image_lock_name = f"registryctl-v{version}-image-lock.json"
+        expected_docs_archive_name = f"registry-docs-v{version}.tar.gz"
         for path in sorted(binary_dir.iterdir()) if binary_dir.exists() else []:
             if not path.is_file() or path.name == "SHA256SUMS":
                 continue
             if path.name.endswith("-image-lock.json") and path.name != expected_image_lock_name:
                 raise ValueError(
                     f"unexpected registryctl image lock filename {path.name}; expected {expected_image_lock_name}"
+                )
+            if path.name.startswith("registry-docs-") and path.name != expected_docs_archive_name:
+                raise ValueError(
+                    f"unexpected registry docs archive filename {path.name}; expected {expected_docs_archive_name}"
                 )
             file_sha256 = verified_binary_sha256(path, checksums)
             sbom = binary_sbom_dir / f"{path.name}.spdx.json"
@@ -932,12 +985,27 @@ def render_capsule(
             if path.name == expected_image_lock_name:
                 file_evidence["kind"] = "registryctl-release-image-lock"
                 release_files.append(file_evidence)
+            elif path.name == expected_docs_archive_name:
+                file_evidence["kind"] = "registry-docs-archive"
+                release_files.append(file_evidence)
             else:
                 binaries.append(file_evidence)
 
-        if require_registryctl_image_lock and len(release_files) != 1:
+        image_locks = [
+            entry for entry in release_files
+            if entry["kind"] == "registryctl-release-image-lock"
+        ]
+        docs_archives = [
+            entry for entry in release_files
+            if entry["kind"] == "registry-docs-archive"
+        ]
+        if require_registryctl_image_lock and len(image_locks) != 1:
             raise ValueError(
                 f"capsule requires exactly one registryctl release image lock named {expected_image_lock_name}"
+            )
+        if require_registry_docs_archive and len(docs_archives) != 1:
+            raise ValueError(
+                f"capsule requires exactly one registry docs archive named {expected_docs_archive_name}"
             )
 
         images = []
@@ -993,6 +1061,8 @@ def render_capsule(
         if errors:
             raise ValueError("; ".join(errors))
         for release_file in release_files:
+            if release_file["kind"] != "registryctl-release-image-lock":
+                continue
             validate_registryctl_image_lock_document(
                 load_json(Path(release_file["path"])),
                 version=version,
@@ -2719,6 +2789,7 @@ def main() -> int:
         "--manifest-dir", type=Path, default=RELEASE_MANIFEST_DIR
     )
     docsets_parser.add_argument("--docsets", type=Path, default=DOCSETS_PATH)
+    docsets_parser.add_argument("--archive-lock", type=Path)
     source_parser = subparsers.add_parser("validate-source")
     source_parser.add_argument("manifest", type=Path)
     source_parser.add_argument("--tag", required=True)
@@ -2768,6 +2839,7 @@ def main() -> int:
     capsule_parser.add_argument("--repo", type=Path, default=ROOT)
     capsule_parser.add_argument("--default-branch", default="origin/main")
     capsule_parser.add_argument("--require-registryctl-image-lock", action="store_true")
+    capsule_parser.add_argument("--require-registry-docs-archive", action="store_true")
     prepare_parser = subparsers.add_parser("prepare")
     prepare_parser.add_argument("--version", required=True)
     prepare_parser.add_argument("--release-id", required=True)
@@ -2806,7 +2878,7 @@ def main() -> int:
     if args.command == "validate":
         return validate(args.manifest)
     if args.command == "validate-docsets":
-        return validate_docsets(args.manifest_dir, args.docsets)
+        return validate_docsets(args.manifest_dir, args.docsets, args.archive_lock)
     if args.command == "validate-source":
         return validate_source(args.manifest, args.tag, args.repo, args.default_branch)
     if args.command == "audit":
@@ -2846,6 +2918,7 @@ def main() -> int:
             args.repo,
             args.default_branch,
             args.require_registryctl_image_lock,
+            args.require_registry_docs_archive,
         )
     if args.command == "prepare":
         return run_release_plan(

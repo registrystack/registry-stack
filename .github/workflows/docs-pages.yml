@@ -93,13 +93,19 @@ jobs:
           PUBLIC_UMAMI_SCRIPT_SRC: ${{ vars.PUBLIC_UMAMI_SCRIPT_SRC }}
           PUBLIC_UMAMI_DOMAINS: ${{ vars.PUBLIC_UMAMI_DOMAINS }}
 
-      - name: Build archived docs
+      - name: Verify current machine-readable documentation
         working-directory: docs/site
-        run: npm run build:archives
-        env:
-          PUBLIC_UMAMI_WEBSITE_ID: ${{ vars.PUBLIC_UMAMI_WEBSITE_ID }}
-          PUBLIC_UMAMI_SCRIPT_SRC: ${{ vars.PUBLIC_UMAMI_SCRIPT_SRC }}
-          PUBLIC_UMAMI_DOMAINS: ${{ vars.PUBLIC_UMAMI_DOMAINS }}
+        run: npm run check:llms:built
+
+      - name: Assemble immutable archived docs
+        working-directory: docs/site
+        run: npm run assemble:archives -- --bootstrap
+
+      - name: Verify assembled documentation tree
+        working-directory: docs/site
+        run: |
+          npm run check:seo:built
+          npm run check:links:built
 
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6

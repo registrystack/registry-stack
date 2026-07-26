@@ -67,3 +67,7 @@ test('unsupported archive flags cannot make current components and config disagr
   assert.equal(context.isArchivedBuild, false);
   assert.equal(context.currentDocsetRedirect(currentOnlyPath), `/snapshot${currentOnlyPath}`);
 });
+
+test('archived builds disable platform-dependent Pagefind output', () => {
+  assert.match(configSource, /pagefind:\s*!isArchivedBuild/);
+});

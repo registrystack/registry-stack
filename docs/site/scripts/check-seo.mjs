@@ -4,6 +4,14 @@ import { loadDocsets } from './docsets.mjs';
 
 const distDir = 'dist';
 
+function scopeFromArgs(args) {
+  if (args.length === 0) return 'all';
+  if (args.length === 2 && args[0] === '--scope' && ['all', 'current'].includes(args[1])) {
+    return args[1];
+  }
+  throw new Error('usage: check-seo.mjs [--scope current|all]');
+}
+
 async function exists(path) {
   try {
     await stat(path);
@@ -31,6 +39,7 @@ function archiveRootForFile(file, archivedDocsets) {
 
 const manifest = await loadDocsets();
 const archivedDocsets = manifest.docsets.filter((docset) => docset.status === 'archived');
+const scope = scopeFromArgs(process.argv.slice(2));
 const errors = [];
 let latestChecked = 0;
 let archivedChecked = 0;
@@ -39,21 +48,24 @@ if (!await exists(join(distDir, 'sitemap-index.xml'))) {
   errors.push('Latest sitemap is missing: dist/sitemap-index.xml');
 }
 
-for (const docset of archivedDocsets) {
-  const archiveDir = join(distDir, docset.path);
-  const archiveSitemap = join(archiveDir, 'sitemap-index.xml');
-  const archiveSitemapPage = join(archiveDir, 'sitemap-0.xml');
-  if (await exists(archiveSitemap)) {
-    errors.push(`Archived docset ${docset.id} must not publish sitemap-index.xml`);
-  }
-  if (await exists(archiveSitemapPage)) {
-    errors.push(`Archived docset ${docset.id} must not publish sitemap-0.xml`);
+if (scope === 'all') {
+  for (const docset of archivedDocsets) {
+    const archiveDir = join(distDir, docset.path);
+    const archiveSitemap = join(archiveDir, 'sitemap-index.xml');
+    const archiveSitemapPage = join(archiveDir, 'sitemap-0.xml');
+    if (await exists(archiveSitemap)) {
+      errors.push(`Archived docset ${docset.id} must not publish sitemap-index.xml`);
+    }
+    if (await exists(archiveSitemapPage)) {
+      errors.push(`Archived docset ${docset.id} must not publish sitemap-0.xml`);
+    }
   }
 }
 
 for (const file of await htmlFiles(distDir)) {
   const html = await readFile(file, 'utf8');
   const isArchived = Boolean(archiveRootForFile(file, archivedDocsets));
+  if (scope === 'current' && isArchived) continue;
   const hasNoindex = /<meta\s+name=["']robots["']\s+content=["']noindex,follow["']\s*\/?>/.test(html);
   const hasSitemapLink = /<link\b(?=[^>]*\brel=["']sitemap["'])[^>]*>/i.test(html);
 
@@ -73,7 +85,7 @@ for (const file of await htmlFiles(distDir)) {
   }
 }
 
-if (archivedDocsets.length > 0 && archivedChecked === 0) {
+if (scope === 'all' && archivedDocsets.length > 0 && archivedChecked === 0) {
   errors.push('No archived HTML files were checked.');
 }
 

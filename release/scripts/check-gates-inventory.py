@@ -354,6 +354,19 @@ REQUIRED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] = 
         ),
     ),
     (
+        "Immutable documentation archive publication",
+        ".github/workflows/release.yml",
+        (
+            "docs-archive:\n    name: Build immutable release docs archive",
+            "name: Build and verify the tag-bound docs bundle",
+            "npm run build:archive",
+            "--verify-lock",
+            "name: Download unprivileged docs archive",
+            "does not match immutable lock",
+            "--require-registry-docs-archive",
+        ),
+    ),
+    (
         "Exact promotion run attempt and receipt binding",
         ".github/workflows/release.yml",
         (
@@ -693,6 +706,12 @@ REQUIRED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] = 
 )
 
 ORDERED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "Immutable docs archive before first public image write",
+        ".github/workflows/release.yml",
+        "name: Build and verify the tag-bound docs bundle",
+        "name: Promote provenance-bearing candidate indexes without rewriting",
+    ),
     (
         "Promotion binding parsed before candidate verification",
         ".github/workflows/release.yml",

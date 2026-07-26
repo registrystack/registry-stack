@@ -227,9 +227,25 @@ test('extracts only policy-owned YAML fields', () => {
 
 test('release verification uses the resolved tag target without installing the docs tree', () => {
   const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/release.yml'), 'utf8');
+  const verifyJob = workflow.slice(
+    workflow.indexOf('  verify:\n'),
+    workflow.indexOf('  docs-archive:\n'),
+  );
   assert.match(
-    workflow,
+    verifyJob,
     /npm run check:evidence-links --\s+--source-ref "\$\{\{ steps\.release\.outputs\.tag_target \}\}"/,
   );
-  assert.doesNotMatch(workflow, /npm ci/);
+  assert.doesNotMatch(verifyJob, /npm ci/);
+});
+
+test('Pages checks the current machine-readable corpus before inserting archives', () => {
+  const workflow = readFileSync(
+    resolve(repositoryRoot, '.github/workflows/docs-pages.yml'),
+    'utf8',
+  );
+  const llmsCheck = workflow.indexOf('npm run check:llms:built');
+  const archiveAssembly = workflow.indexOf('npm run assemble:archives');
+  assert.ok(llmsCheck >= 0);
+  assert.ok(archiveAssembly > llmsCheck);
+  assert.equal(workflow.indexOf('npm run check:llms:built', llmsCheck + 1), -1);
 });
