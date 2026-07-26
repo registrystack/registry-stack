@@ -1,0 +1,217 @@
+---
+import authoringReference from '../data/generated/diagnostics/authoring.json';
+import fixtureReference from '../data/generated/diagnostics/fixture.json';
+import operatorReference from '../data/generated/diagnostics/operator.json';
+
+type Catalog = 'authoring' | 'fixture' | 'operator';
+type Entry = {
+  family: string;
+  code: string;
+  owner: string;
+  product: string;
+  phase: string;
+  safe_meaning: string;
+  rule: string;
+  safe_remediation: string;
+  field_address_pattern: string | null;
+  evidence_scope: string;
+  secret_sensitive_value_policy: string;
+  docs_anchor: string;
+  lifecycle: string;
+  introduced_in: string | null;
+  stability: string;
+  evidence_limitation: string;
+};
+type Omission = {
+  family: string;
+  product: string;
+  reason: string;
+  evidence: string;
+  required_action: string;
+};
+type Reference = {
+  schema_version: string;
+  entries: Entry[];
+  omissions?: Omission[];
+};
+
+const { catalog } = Astro.props as { catalog: Catalog };
+const references: Record<Catalog, Reference> = {
+  authoring: authoringReference,
+  fixture: fixtureReference,
+  operator: operatorReference,
+};
+const reference = references[catalog];
+const base = import.meta.env.BASE_URL === '/' ? '' : import.meta.env.BASE_URL.replace(/\/$/, '');
+const words = (value: string) => value.replaceAll('_', ' ');
+const anchorId = (entry: Entry) => entry.docs_anchor.split('#', 2)[1];
+const publicArtifact = `${base}/generated/diagnostics/${catalog}.v1.json`;
+---
+
+<p>
+  This page is generated from product-owned static definitions. It does not inspect a project,
+  environment variables, secrets, runtime configuration, source responses, or country values.
+</p>
+
+<div class="diagnostic-summary">
+  <dl>
+    <div>
+      <dt>Catalog</dt>
+      <dd>{catalog}</dd>
+    </div>
+    <div>
+      <dt>Schema</dt>
+      <dd><code>{reference.schema_version}</code></dd>
+    </div>
+    <div>
+      <dt>Entries</dt>
+      <dd>{reference.entries.length}</dd>
+    </div>
+    <div>
+      <dt>Runtime value reads</dt>
+      <dd>None</dd>
+    </div>
+  </dl>
+</div>
+
+<p>
+  Download the <a href={publicArtifact}>machine-readable {catalog} diagnostic catalog</a>.
+  Entries are ordered by family, product, and code. An unreleased entry has no release attribution;
+  its <code>introduced_in</code> value remains <code>null</code> until a product owner records a
+  released lifecycle.
+</p>
+
+<div class="diagnostic-list">
+  {
+    reference.entries.map((entry) => (
+      <article class="diagnostic-entry" id={anchorId(entry)}>
+        <h2><code>{entry.code}</code></h2>
+        <p>{entry.safe_meaning}</p>
+        <dl>
+          <div>
+            <dt>Family</dt>
+            <dd>{words(entry.family)}</dd>
+          </div>
+          <div>
+            <dt>Product and owner</dt>
+            <dd>{words(entry.product)}; {words(entry.owner)}</dd>
+          </div>
+          <div>
+            <dt>Phase</dt>
+            <dd>{words(entry.phase)}</dd>
+          </div>
+          <div>
+            <dt>Rule</dt>
+            <dd><code>{entry.rule}</code></dd>
+          </div>
+          <div>
+            <dt>Safe remediation</dt>
+            <dd>{entry.safe_remediation}</dd>
+          </div>
+          <div>
+            <dt>Evidence scope</dt>
+            <dd>{entry.evidence_scope}</dd>
+          </div>
+          <div>
+            <dt>Evidence limitation</dt>
+            <dd>{entry.evidence_limitation}</dd>
+          </div>
+          <div>
+            <dt>Value policy</dt>
+            <dd>{words(entry.secret_sensitive_value_policy)}</dd>
+          </div>
+          <div>
+            <dt>Lifecycle</dt>
+            <dd>
+              {words(entry.lifecycle)}
+              {entry.introduced_in ? `, introduced in ${entry.introduced_in}` : ', not released'}
+            </dd>
+          </div>
+          {
+            entry.field_address_pattern && (
+              <div>
+                <dt>Static address pattern</dt>
+                <dd><code>{entry.field_address_pattern}</code></dd>
+              </div>
+            )
+          }
+        </dl>
+      </article>
+    ))
+  }
+</div>
+
+{
+  reference.omissions && reference.omissions.length > 0 && (
+    <section>
+      <h2 id="explicit-omissions">Explicit omissions</h2>
+      <p>
+        An omission remains until that product exports a complete closed catalog with all required
+        static metadata. It is not evidence that the omitted boundary has no failures.
+      </p>
+      {reference.omissions.map((omission) => (
+        <article class="diagnostic-entry">
+          <h3>{words(omission.product)}: {words(omission.family)}</h3>
+          <p>{omission.evidence}</p>
+          <p><strong>Required action:</strong> {omission.required_action}</p>
+        </article>
+      ))}
+    </section>
+  )
+}
+
+<style>
+  .diagnostic-summary dl {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: 0.75rem;
+    margin: 1.5rem 0;
+  }
+
+  .diagnostic-summary dl > div,
+  .diagnostic-entry {
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.4rem;
+    padding: 0.75rem;
+  }
+
+  .diagnostic-list {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .diagnostic-entry {
+    scroll-margin-top: 5rem;
+  }
+
+  .diagnostic-entry h2 {
+    font-size: var(--sl-text-lg);
+    margin-top: 0;
+  }
+
+  .diagnostic-entry dl {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .diagnostic-entry dl > div {
+    display: grid;
+    gap: 0.15rem;
+    grid-template-columns: minmax(9rem, 0.3fr) 1fr;
+  }
+
+  .diagnostic-entry dt,
+  .diagnostic-summary dt {
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-xs);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .diagnostic-entry dd,
+  .diagnostic-summary dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+</style>

@@ -1,0 +1,319 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registryctl/project-reports/registryctl.operator_error_reference.v1.schema.json",
+  "title": "Registryctl Operator Error Reference v1",
+  "type": "object",
+  "required": ["schema_version", "entries", "omissions"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "registryctl.operator_error_reference.v1"
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 46,
+      "maxItems": 46,
+      "uniqueItems": true,
+      "items": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/entry"
+          },
+          {
+            "$ref": "#/$defs/family_projection"
+          }
+        ]
+      }
+    },
+    "omissions": {
+      "type": "array",
+      "maxItems": 0
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": [
+        "family",
+        "code",
+        "owner",
+        "product",
+        "phase",
+        "safe_meaning",
+        "rule",
+        "safe_remediation",
+        "field_address_pattern",
+        "evidence_scope",
+        "secret_sensitive_value_policy",
+        "docs_anchor",
+        "lifecycle",
+        "introduced_in",
+        "stability",
+        "evidence_limitation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "enum": [
+            "bundle_verification",
+            "notary_activation",
+            "operator_preflight",
+            "relay_activation",
+            "relay_process_startup"
+          ]
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "owner": {
+          "enum": [
+            "registry_notary",
+            "registry_platform_ops",
+            "registry_relay",
+            "registryctl"
+          ]
+        },
+        "product": {
+          "enum": [
+            "registry_notary",
+            "registry_platform_ops",
+            "registry_relay",
+            "registryctl"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "safe_meaning": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "rule": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "safe_remediation": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "field_address_pattern": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "evidence_scope": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "secret_sensitive_value_policy": {
+          "const": "no_runtime_values"
+        },
+        "docs_anchor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/lifecycle"
+        },
+        "introduced_in": {
+          "$ref": "#/$defs/introduced_in"
+        },
+        "stability": {
+          "const": "pre1_stable_code"
+        },
+        "evidence_limitation": {
+          "$ref": "#/$defs/safe_text"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/lifecycle_version"
+        }
+      ]
+    },
+    "family_projection": {
+      "oneOf": [
+        {
+          "properties": {
+            "family": {
+              "const": "bundle_verification"
+            },
+            "code": {
+              "enum": [
+                "rejected_binding",
+                "rejected_rollback",
+                "rejected_signature",
+                "rejected_validation"
+              ]
+            },
+            "owner": {
+              "const": "registry_platform_ops"
+            },
+            "product": {
+              "const": "registry_platform_ops"
+            },
+            "docs_anchor": {
+              "pattern": "^/reference/diagnostics/operator/#registry_platform_ops--[a-z0-9]+(?:-[a-z0-9]+)*$"
+            }
+          }
+        },
+        {
+          "properties": {
+            "family": {
+              "const": "notary_activation"
+            },
+            "code": {
+              "enum": [
+                "notary.configuration.invalid",
+                "notary.deployment.gate_failed",
+                "notary.relay.activation_failed",
+                "notary.relay.configuration_invalid",
+                "notary.relay.credential_unavailable",
+                "notary.relay.credentials_rejected",
+                "notary.relay.profile_mismatch",
+                "notary.relay.profile_not_found",
+                "notary.relay.unavailable",
+                "notary.runtime.activation_failed",
+                "notary.runtime.activation_required"
+              ]
+            },
+            "owner": {
+              "const": "registry_notary"
+            },
+            "product": {
+              "const": "registry_notary"
+            },
+            "docs_anchor": {
+              "pattern": "^/reference/diagnostics/operator/#registry_notary--[a-z0-9]+(?:-[a-z0-9]+)*$"
+            }
+          }
+        },
+        {
+          "properties": {
+            "family": {
+              "const": "operator_preflight"
+            },
+            "code": {
+              "enum": [
+                "registryctl.preflight.product_validator_not_checked",
+                "registryctl.preflight.report_capacity_exceeded",
+                "registryctl.preflight.runtime_file_empty",
+                "registryctl.preflight.runtime_file_missing",
+                "registryctl.preflight.runtime_file_not_checked",
+                "registryctl.preflight.runtime_file_not_regular",
+                "registryctl.preflight.runtime_file_unsafe_mode",
+                "registryctl.preflight.runtime_file_unsafe_owner",
+                "registryctl.preflight.secret_empty",
+                "registryctl.preflight.secret_missing",
+                "registryctl.preflight.static_validation_not_checked"
+              ]
+            },
+            "owner": {
+              "const": "registryctl"
+            },
+            "product": {
+              "const": "registryctl"
+            },
+            "docs_anchor": {
+              "pattern": "^/reference/diagnostics/operator/#registryctl--registryctl\\.preflight\\.[a-z0-9_]+$"
+            }
+          }
+        },
+        {
+          "properties": {
+            "family": {
+              "const": "relay_activation"
+            },
+            "code": {
+              "enum": [
+                "relay.consultation.activation.artifact_registry_invalid",
+                "relay.consultation.activation.configuration_missing",
+                "relay.consultation.activation.protected_metadata_invalid",
+                "relay.consultation.activation.pseudonym_material_unavailable",
+                "relay.consultation.activation.quota_limits_invalid",
+                "relay.consultation.activation.source_credentials_unavailable",
+                "relay.consultation.activation.state_plane_unavailable",
+                "relay.consultation.activation.unsupported_plan",
+                "relay.consultation.activation.workload_binding_invalid"
+              ]
+            },
+            "owner": {
+              "const": "registry_relay"
+            },
+            "product": {
+              "const": "registry_relay"
+            },
+            "docs_anchor": {
+              "pattern": "^/reference/diagnostics/operator/#registry_relay--[a-z0-9]+(?:-[a-z0-9]+)*$"
+            }
+          }
+        },
+        {
+          "properties": {
+            "family": {
+              "const": "relay_process_startup"
+            },
+            "code": {
+              "enum": [
+                "relay.startup.bundle_binding_rejected",
+                "relay.startup.bundle_rollback_rejected",
+                "relay.startup.bundle_signature_rejected",
+                "relay.startup.bundle_validation_rejected",
+                "relay.startup.config_document_invalid",
+                "relay.startup.config_source_unavailable",
+                "relay.startup.config_validation_rejected",
+                "relay.startup.consultation_artifacts_rejected",
+                "relay.startup.doctor_failed",
+                "relay.startup.listener_unavailable",
+                "relay.startup.runtime_initialization_failed"
+              ]
+            },
+            "owner": {
+              "const": "registry_relay"
+            },
+            "product": {
+              "const": "registry_relay"
+            },
+            "docs_anchor": {
+              "pattern": "^/reference/diagnostics/operator/#registry_relay--[a-z0-9]+(?:-[a-z0-9]+)*$"
+            }
+          }
+        }
+      ]
+    },
+    "safe_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "lifecycle": {
+      "enum": ["unreleased", "active", "deprecated", "released"]
+    },
+    "introduced_in": {
+      "type": ["string", "null"],
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "lifecycle_version": {
+      "if": {
+        "properties": {
+          "lifecycle": {
+            "const": "unreleased"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "introduced_in": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "introduced_in": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

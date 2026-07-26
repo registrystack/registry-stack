@@ -88,22 +88,34 @@ fn rhai_diagnostic_source(
     ))
 }
 
-fn execute_all_fixtures(
+fn execute_all_fixtures_with_coverage_observations(
     loaded: &LoadedRegistryProject,
     compiled: &CompiledProject,
     integration_filter: Option<&str>,
     fixture_filter: Option<&str>,
     trace: bool,
-) -> Result<Vec<FixtureReport>> {
+    execution_context: &ProjectExecutionContext,
+) -> Result<(
+    Vec<FixtureReport>,
+    Vec<GeneratedFixtureObservation>,
+    Option<FixtureSafeCode>,
+)> {
+    let call_budget_actual =
+        platform_call_budget_result(loaded, compiled, execution_context.worker_program())?;
     if loaded.integrations.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new(), call_budget_actual));
     }
     let relay_config = compiled
         .relay_private
         .get(Path::new("config/relay.yaml"))
         .ok_or_else(|| anyhow!("generated Relay config is absent"))?;
-    let relay_fixture = compile_generated_relay_fixture(relay_config, &compiled.relay_private)?;
+    let relay_fixture = compile_generated_relay_fixture(
+        relay_config,
+        &compiled.relay_private,
+        Some(execution_context.worker_program()),
+    )?;
     let mut reports = Vec::new();
+    let mut generated_observations = Vec::new();
     for (alias, integration) in &loaded.integrations {
         if integration_filter.is_some_and(|selected| selected != alias) {
             continue;
@@ -137,13 +149,16 @@ fn execute_all_fixtures(
                         Some((&outputs, outcome)),
                         registry_notary_server::standalone::OfflineAuthentication::Valid,
                         false,
+                        execution_context.worker_program(),
                     )
                     .with_context(|| {
                         format!(
                             "failed to evaluate product claims for fixture {}.{}",
                             alias, fixture.name
                         )
-                    })? {
+                    })?
+                    .result
+                    {
                         Ok(claims) => (Ok((outputs, outcome)), Some(claims)),
                         Err(error) => (Err(error), None),
                     }
@@ -256,15 +271,19 @@ fn execute_all_fixtures(
                 alias,
                 fixture,
                 trace,
+                &mut generated_observations,
+                execution_context.worker_program(),
             )?);
         }
     }
     if reports.is_empty() && (integration_filter.is_some() || fixture_filter.is_some()) {
         bail!("the selected integration or fixture does not exist");
     }
-    Ok(reports)
+    Ok((reports, generated_observations, call_budget_actual))
 }
 
+// The execution seam keeps each authority and observation channel explicit.
+#[allow(clippy::too_many_arguments)]
 fn derived_fixture_reports(
     loaded: &LoadedRegistryProject,
     compiled: &CompiledProject,
@@ -272,79 +291,129 @@ fn derived_fixture_reports(
     integration_alias: &str,
     fixture: &FixtureDocument,
     trace: bool,
+    generated_observations: &mut Vec<GeneratedFixtureObservation>,
+    worker_program: &Path,
 ) -> Result<Vec<FixtureReport>> {
     use registry_relay::offline_fixture::OfflineSourceResponse;
 
     let base = offline_fixture_interactions(fixture).map_err(|error| anyhow!(error))?;
     let input = offline_fixture_input(fixture).map_err(|error| anyhow!(error))?;
     let mut cases = Vec::<(
-        &str,
+        GeneratorRecipeId,
         Vec<registry_relay::offline_fixture::OfflineInteraction>,
         &str,
     )>::new();
-
-    let mut request_mismatch = base.clone();
-    if let Some(interaction) = request_mismatch.first_mut() {
-        interaction
-            .request
-            .path
-            .push_str("/__registry_fixture_mismatch");
-        cases.push((
-            "request_authority",
-            request_mismatch,
-            "fixture.request_mismatch",
-        ));
-    }
-    let mut malformed = base.clone();
-    if let Some(interaction) = malformed.last_mut() {
-        interaction.response = OfflineSourceResponse::Http {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: b"{".to_vec(),
-        };
-        cases.push(("malformed_decode", malformed, "source.response_malformed"));
-    }
-    let mut oversized = base.clone();
-    if let Some(interaction) = oversized.last_mut() {
-        interaction.response = OfflineSourceResponse::DeclaredBodyBytes {
-            status: 200,
-            body_bytes: u64::MAX,
-        };
-        cases.push(("byte_ceiling", oversized, "source.response_too_large"));
-    }
-    let mut timeout = base.clone();
-    if let Some(interaction) = timeout.last_mut() {
-        interaction.response = OfflineSourceResponse::Timeout;
-        cases.push(("timeout", timeout, "source.deadline_exceeded"));
-    }
-    if fixture.interactions.iter().any(|interaction| {
-        interaction
-            .expect
-            .body
-            .as_ref()
-            .is_some_and(contains_generated_fixture_matcher)
-    }) {
-        let mut protocol = base.clone();
-        if let Some(registry_relay::offline_fixture::OfflineInteraction {
-            response: OfflineSourceResponse::Http { body, .. },
-            ..
-        }) = protocol.last_mut()
-        {
-            if let Ok(Value::Object(mut object)) = serde_json::from_slice::<Value>(body) {
-                object.insert("__registry_protocol_mutation".to_owned(), Value::Bool(true));
-                *body = serde_json::to_vec(&Value::Object(object))?;
-                cases.push((
-                    "protocol_verification",
-                    protocol,
-                    "source.response_malformed",
-                ));
+    let supports_remote_source = matches!(
+        loaded.integrations[integration_alias].document.capability,
+        CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. }
+    );
+    if supports_remote_source {
+        let mut request_mismatch = base.clone();
+        if let Some(interaction) = request_mismatch.first_mut() {
+            interaction
+                .request
+                .path
+                .push_str("/__registry_fixture_mismatch");
+            cases.push((
+                GeneratorRecipeId::RequestAuthority,
+                request_mismatch,
+                "fixture.request_mismatch",
+            ));
+        }
+        let mut request_order = base.clone();
+        if let Some((left, right)) = distinguishable_request_pair(&request_order) {
+            request_order.swap(left, right);
+            cases.push((
+                GeneratorRecipeId::RequestOrder,
+                request_order,
+                "fixture.request_mismatch",
+            ));
+        }
+        let mut rejected_status = base.clone();
+        if let Some(interaction) = rejected_status.last_mut() {
+            interaction.response = OfflineSourceResponse::Http {
+                status: 500,
+                headers: BTreeMap::new(),
+                // Keep the representation valid so script capabilities can
+                // classify the rejected status before body decoding can mask it.
+                body: b"{}".to_vec(),
+            };
+            cases.push((
+                GeneratorRecipeId::StatusRejection,
+                rejected_status,
+                "source.status_rejected",
+            ));
+        }
+        let mut malformed = base.clone();
+        if let Some(interaction) = malformed.last_mut() {
+            interaction.response = OfflineSourceResponse::Http {
+                status: 200,
+                headers: BTreeMap::new(),
+                body: b"{".to_vec(),
+            };
+            cases.push((
+                GeneratorRecipeId::MalformedDecode,
+                malformed,
+                "source.response_malformed",
+            ));
+        }
+        let mut oversized = base.clone();
+        if let Some(interaction) = oversized.last_mut() {
+            interaction.response = OfflineSourceResponse::DeclaredBodyBytes {
+                status: 200,
+                body_bytes: u64::MAX,
+            };
+            cases.push((
+                GeneratorRecipeId::ByteCeiling,
+                oversized,
+                "source.response_too_large",
+            ));
+        }
+        let mut timeout = base.clone();
+        if let Some(interaction) = timeout.last_mut() {
+            interaction.response = OfflineSourceResponse::Timeout;
+            cases.push((
+                GeneratorRecipeId::Timeout,
+                timeout,
+                "source.deadline_exceeded",
+            ));
+        }
+        if fixture.interactions.iter().any(|interaction| {
+            interaction
+                .expect
+                .body
+                .as_ref()
+                .is_some_and(contains_generated_fixture_matcher)
+        }) {
+            let mut protocol = base.clone();
+            if let Some(registry_relay::offline_fixture::OfflineInteraction {
+                response: OfflineSourceResponse::Http { body, .. },
+                ..
+            }) = protocol.last_mut()
+            {
+                if let Ok(Value::Object(mut object)) = serde_json::from_slice::<Value>(body) {
+                    object.insert("__registry_protocol_mutation".to_owned(), Value::Bool(true));
+                    *body = serde_json::to_vec(&Value::Object(object))?;
+                    cases.push((
+                        GeneratorRecipeId::ProtocolVerification,
+                        protocol,
+                        "source.response_malformed",
+                    ));
+                }
             }
         }
     }
 
+    cases.retain(|(recipe_id, _, _)| {
+        matches!(
+            generated_recipe_applicability(loaded, integration_alias, fixture, *recipe_id),
+            GeneratedRecipeApplicability::Applicable {}
+        )
+    });
+
     let mut reports = cases
         .into_iter()
-        .map(|(case, interactions, expected)| {
+        .map(|(recipe_id, interactions, expected)| {
             let mut calls = Vec::new();
             let result = execute_offline_profiles(
                 compiled,
@@ -363,9 +432,25 @@ fn derived_fixture_reports(
             });
             let actual = result.as_ref().err().map(String::as_str);
             let passed = actual == Some(expected);
+            generated_observations.push(GeneratedFixtureObservation {
+                integration: integration_alias.to_owned(),
+                source_fixture_id: fixture.name.clone(),
+                recipe_id,
+                actual_safe_code: actual.map(FixtureSafeCode::from_runtime_code),
+                pass_state: if passed {
+                    FixturePassState::Passed
+                } else {
+                    FixturePassState::Failed
+                },
+                actual_source_calls: Some(u32::try_from(calls.len()).unwrap_or(u32::MAX)),
+            });
             FixtureReport {
                 integration: integration_alias.to_owned(),
-                fixture: format!("{}::derived/{case}", fixture.name),
+                fixture: format!(
+                    "{}::derived/{}",
+                    fixture.name,
+                    generated_recipe_fixture_suffix(recipe_id)
+                ),
                 inputs: fixture.input.keys().cloned().collect(),
                 calls,
                 outputs: Vec::new(),
@@ -393,9 +478,26 @@ fn derived_fixture_reports(
             None,
             registry_notary_server::standalone::OfflineAuthentication::WrongCredential,
             true,
+            worker_program,
         )?;
-        let authorization_error = authorization.err();
+        let authorization_error = authorization.result.err();
         let authorization_passed = authorization_error.as_deref() == Some("authorization.denied");
+        let actual_source_calls = u32::try_from(authorization.relay_calls).unwrap_or(u32::MAX);
+        let passed = authorization_passed && actual_source_calls == 0;
+        generated_observations.push(GeneratedFixtureObservation {
+            integration: integration_alias.to_owned(),
+            source_fixture_id: fixture.name.clone(),
+            recipe_id: GeneratorRecipeId::AuthorizationBeforeSource,
+            actual_safe_code: authorization_error
+                .as_deref()
+                .map(FixtureSafeCode::from_runtime_code),
+            pass_state: if passed {
+                FixturePassState::Passed
+            } else {
+                FixturePassState::Failed
+            },
+            actual_source_calls: Some(actual_source_calls),
+        });
         reports.push(FixtureReport {
             integration: integration_alias.to_owned(),
             fixture: format!("{}::derived/authorization_before_source", fixture.name),
@@ -405,12 +507,12 @@ fn derived_fixture_reports(
             claims: Vec::new(),
             outcome: None,
             expected_error: Some("authorization.denied".to_owned()),
-            source_access: Some(false),
-            passed: authorization_passed,
-            failure: (!authorization_passed).then(|| {
+            source_access: Some(actual_source_calls != 0),
+            passed,
+            failure: (!passed).then(|| {
                 format!(
-                    "derived_authorization_mismatch: expected=authorization.denied, actual={}",
-                    authorization_error.as_deref().unwrap_or("success")
+                    "derived_authorization_mismatch: expected=authorization.denied, actual={}, source_calls={actual_source_calls}",
+                    authorization_error.as_deref().unwrap_or("success"),
                 )
             }),
         });
@@ -420,11 +522,7 @@ fn derived_fixture_reports(
     // Ignoring unselected upstream members is a declarative HTTP projection
     // guarantee. Snapshot rows are the reviewed materialization contract, so
     // injecting an undeclared field there must remain a malformed response.
-    let is_declarative_http = matches!(
-        loaded.integrations[integration_alias].document.capability,
-        CapabilityDeclaration::Http { .. }
-    );
-    if is_declarative_http
+    if supports_remote_source
         && !fixture.interactions.iter().any(|interaction| {
             interaction
                 .expect
@@ -454,8 +552,11 @@ fn derived_fixture_reports(
                     trace,
                     &mut trace_calls,
                 );
-                let (passed, calls, outputs, outcome, failure) = match result {
-                    Ok(observation) => {
+                let evaluated = match result {
+                    Ok(mut observation) => {
+                        if trace_calls.is_empty() {
+                            trace_calls = std::mem::take(&mut observation.calls);
+                        }
                         let outcome = match observation.outcome {
                             registry_relay::offline_fixture::OfflineFixtureOutcome::Match => {
                                 "match"
@@ -467,45 +568,97 @@ fn derived_fixture_reports(
                                 "ambiguous"
                             }
                         };
-                        let passed = observation.outputs == fixture.expect.outputs
-                            && fixture
-                                .expect
-                                .outcome
-                                .as_deref()
-                                .is_none_or(|expected| expected == outcome);
-                        (
-                            passed,
-                            if trace_calls.is_empty() {
-                                observation.calls
-                            } else {
-                                trace_calls
-                            },
-                            observation.outputs.keys().cloned().collect(),
-                            Some(outcome.to_owned()),
-                            (!passed)
-                                .then(|| "derived_output_minimization_changed_result".to_owned()),
-                        )
+                        let evaluated_claims = if matches!(outcome, "match" | "no_match")
+                            && integration_has_product_claims(loaded, integration_alias)
+                        {
+                            evaluate_product_claims(
+                                loaded,
+                                compiled,
+                                integration_alias,
+                                fixture,
+                                Some((&observation.outputs, outcome)),
+                                registry_notary_server::standalone::OfflineAuthentication::Valid,
+                                false,
+                                worker_program,
+                            )?
+                            .result
+                            .map(Some)
+                        } else if matches!(outcome, "match" | "no_match") {
+                            Ok(Some(BTreeMap::new()))
+                        } else {
+                            Ok(None)
+                        };
+                        evaluated_claims
+                            .map(|claims| (observation.outputs, outcome.to_owned(), claims))
                     }
-                    Err(error) => (
-                        false,
-                        trace_calls,
-                        Vec::new(),
-                        None,
-                        Some(format!("derived_output_minimization_failed: {error}")),
-                    ),
+                    Err(error) => Err(error),
                 };
+                let passed = match (&evaluated, fixture.expect.error.as_deref()) {
+                    (Ok((outputs, outcome, claims)), None) => {
+                        let outcome_matches = fixture
+                            .expect
+                            .outcome
+                            .as_deref()
+                            .is_none_or(|expected| expected == outcome);
+                        let claims_match = if outcome == "ambiguous" {
+                            fixture.expect.claims.is_empty()
+                        } else {
+                            claims.as_ref() == Some(&fixture.expect.claims)
+                        };
+                        outputs == &fixture.expect.outputs && outcome_matches && claims_match
+                    }
+                    (Err(actual), Some(expected)) => actual == expected,
+                    _ => false,
+                };
+                let actual_safe_code = evaluated
+                    .as_ref()
+                    .err()
+                    .map(|code| FixtureSafeCode::from_runtime_code(code));
+                let outputs = evaluated
+                    .as_ref()
+                    .ok()
+                    .map(|(outputs, _, _)| outputs.keys().cloned().collect())
+                    .unwrap_or_default();
+                let claims = evaluated
+                    .as_ref()
+                    .ok()
+                    .and_then(|(_, _, claims)| claims.as_ref())
+                    .map(|claims| claims.keys().cloned().collect())
+                    .unwrap_or_default();
+                let outcome = evaluated
+                    .as_ref()
+                    .ok()
+                    .map(|(_, outcome, _)| outcome.clone());
+                let actual_source_calls = u32::try_from(trace_calls.len()).unwrap_or(u32::MAX);
                 reports.push(FixtureReport {
                     integration: integration_alias.to_owned(),
                     fixture: format!("{}::derived/output_minimization", fixture.name),
                     inputs: fixture.input.keys().cloned().collect(),
-                    calls,
+                    calls: trace_calls,
                     outputs,
-                    claims: Vec::new(),
+                    claims,
                     outcome,
-                    expected_error: None,
-                    source_access: Some(true),
+                    expected_error: fixture.expect.error.clone(),
+                    source_access: evaluated
+                        .as_ref()
+                        .err()
+                        .map(|code| error_implies_source_access(code))
+                        .or(Some(true)),
                     passed,
-                    failure,
+                    failure: (!passed)
+                        .then(|| "derived_output_minimization_changed_result".to_owned()),
+                });
+                generated_observations.push(GeneratedFixtureObservation {
+                    integration: integration_alias.to_owned(),
+                    source_fixture_id: fixture.name.clone(),
+                    recipe_id: GeneratorRecipeId::OutputMinimization,
+                    actual_safe_code,
+                    pass_state: if passed {
+                        FixturePassState::Passed
+                    } else {
+                        FixturePassState::Failed
+                    },
+                    actual_source_calls: Some(actual_source_calls),
                 });
             }
         }
@@ -532,6 +685,1515 @@ fn contains_generated_fixture_matcher(value: &Value) -> bool {
                 || object.values().any(contains_generated_fixture_matcher)
         }
         _ => false,
+    }
+}
+
+fn generated_recipe_fixture_suffix(recipe: GeneratorRecipeId) -> &'static str {
+    match recipe {
+        GeneratorRecipeId::RequestAuthority => "request_authority",
+        GeneratorRecipeId::RequestOrder => "request_order",
+        GeneratorRecipeId::StatusRejection => "status_rejection",
+        GeneratorRecipeId::MalformedDecode => "malformed_decode",
+        GeneratorRecipeId::ByteCeiling => "byte_ceiling",
+        GeneratorRecipeId::Timeout => "timeout",
+        GeneratorRecipeId::ProtocolVerification => "protocol_verification",
+        GeneratorRecipeId::AuthorizationBeforeSource => "authorization_before_source",
+        GeneratorRecipeId::OutputMinimization => "output_minimization",
+    }
+}
+
+/// Builds the value-free v1 coverage report from the authoritative loaded
+/// project and the observations produced by the existing offline executor.
+///
+/// Every integration is an isolated target with the same ordered requirement
+/// matrix. The regular command has no baseline-to-candidate comparison, so the
+/// four affected-fixture requirements remain honestly `not_evaluated`.
+fn generate_fixture_coverage_report(
+    loaded: &LoadedRegistryProject,
+    fixture_reports: &[FixtureReport],
+    generated_observations: &[GeneratedFixtureObservation],
+    call_budget_actual: Option<FixtureSafeCode>,
+) -> Result<ProjectFixtureCoverageReportV1> {
+    generate_fixture_coverage_report_with_comparison(
+        loaded,
+        fixture_reports,
+        generated_observations,
+        call_budget_actual,
+        None,
+    )
+}
+
+fn generate_fixture_coverage_report_with_comparison(
+    loaded: &LoadedRegistryProject,
+    fixture_reports: &[FixtureReport],
+    generated_observations: &[GeneratedFixtureObservation],
+    call_budget_actual: Option<FixtureSafeCode>,
+    comparison_input: Option<&FixtureCoverageComparisonInput>,
+) -> Result<ProjectFixtureCoverageReportV1> {
+    validate_stable_id(
+        &loaded.project.registry.id,
+        "fixture coverage project identifier",
+    )?;
+    if let Some(environment) = loaded.environment_name.as_deref() {
+        validate_stable_id(environment, "fixture coverage environment identifier")?;
+    }
+    if let Some(comparison_input) = comparison_input {
+        comparison_input
+            .validate()
+            .map_err(|error| anyhow!(error))?;
+    }
+
+    let mut authored_report_index = BTreeMap::<(&str, &str), &FixtureReport>::new();
+    for report in fixture_reports
+        .iter()
+        .filter(|report| !report.fixture.contains("::derived/"))
+    {
+        if authored_report_index
+            .insert(
+                (report.integration.as_str(), report.fixture.as_str()),
+                report,
+            )
+            .is_some()
+        {
+            bail!("fixture coverage received a duplicate authored observation");
+        }
+    }
+    let mut observation_index =
+        BTreeMap::<(&str, &str, GeneratorRecipeId), &GeneratedFixtureObservation>::new();
+    for observation in generated_observations {
+        let key = (
+            observation.integration.as_str(),
+            observation.source_fixture_id.as_str(),
+            observation.recipe_id,
+        );
+        if observation_index.insert(key, observation).is_some() {
+            bail!("fixture coverage received a duplicate generated observation");
+        }
+    }
+
+    let platform_case = call_budget_actual
+        .map(build_platform_call_budget_case)
+        .transpose()?;
+    let mut targets = Vec::with_capacity(loaded.integrations.len());
+    for (integration_alias, integration) in &loaded.integrations {
+        let mut fixture_inventory = Vec::with_capacity(integration.fixtures.len());
+        let mut generated_cases = Vec::with_capacity(
+            integration
+                .fixtures
+                .len()
+                .checked_mul(GeneratorRecipeId::ALL.len())
+                .ok_or_else(|| anyhow!("fixture coverage generated record count overflowed"))?,
+        );
+        for (fixture_path, fixture) in &integration.fixtures {
+            let source = fixture_coverage_source(integration_alias, fixture_path, fixture)?;
+            let report = authored_report_index
+                .get(&(integration_alias.as_str(), fixture.name.as_str()))
+                .copied();
+            let pass_state = report.map_or(FixturePassState::NotExecuted, |report| {
+                if report.passed {
+                    FixturePassState::Passed
+                } else {
+                    FixturePassState::Failed
+                }
+            });
+            let expectation = authored_fixture_expectation(fixture)?;
+            let fixture_evidence = fixture_coverage_evidence(
+                FixtureCoverageEvidenceKind::AuthoredFixture,
+                format!("target/{integration_alias}/fixture/{}", fixture.name),
+                source.fixture_digest.clone(),
+            )
+            .map_err(|error| anyhow!(error))?;
+            fixture_inventory.push(AuthoredSemanticFixtureCoverage {
+                evidence: fixture_evidence,
+                fixture_id: fixture.name.clone(),
+                fixture_digest: source.fixture_digest.clone(),
+                expectation,
+                semantic_null: fixture_has_semantic_null(fixture),
+                interaction_count: u32::try_from(fixture.interactions.len())
+                    .map_err(|_| anyhow!("fixture interaction count exceeds the report range"))?,
+                input_ids: fixture.input.keys().cloned().collect(),
+                output_ids: fixture.expect.outputs.keys().cloned().collect(),
+                claim_ids: fixture.expect.claims.keys().cloned().collect(),
+                exercised_status_mappings: fixture_exercised_status_mappings_for_fixture(
+                    &integration.document,
+                    fixture,
+                ),
+                classification: FixtureCoverageClassification::Synthetic,
+                pass_state,
+            });
+
+            for recipe_id in GeneratorRecipeId::ALL {
+                let applicability =
+                    generated_recipe_applicability(loaded, integration_alias, fixture, recipe_id);
+                let observation = observation_index
+                    .get(&(integration_alias.as_str(), fixture.name.as_str(), recipe_id))
+                    .copied();
+                if matches!(
+                    applicability,
+                    GeneratedRecipeApplicability::NotApplicable { .. }
+                ) && observation.is_some()
+                {
+                    bail!(
+                        "fixture coverage observed an inapplicable generated recipe {}",
+                        generated_recipe_fixture_suffix(recipe_id)
+                    );
+                }
+                let pass_state = if matches!(
+                    applicability,
+                    GeneratedRecipeApplicability::NotApplicable { .. }
+                ) {
+                    FixturePassState::NotExecuted
+                } else {
+                    observation.map_or(FixturePassState::NotExecuted, |value| value.pass_state)
+                };
+                let source_access_assertion = (recipe_id
+                    == GeneratorRecipeId::AuthorizationBeforeSource
+                    && matches!(applicability, GeneratedRecipeApplicability::Applicable {}))
+                .then(|| {
+                    let actual_source_calls =
+                        observation.and_then(|value| value.actual_source_calls);
+                    SourceAccessAssertion {
+                        expected_source_calls: SourceCallExpectation::Zero,
+                        actual_source_calls,
+                        passed: actual_source_calls == Some(0),
+                    }
+                });
+                let actual_safe_code = if recipe_id == GeneratorRecipeId::OutputMinimization {
+                    None
+                } else {
+                    observation.and_then(|value| value.actual_safe_code)
+                };
+                let evidence_digest = fixture_coverage_digest(&(
+                    recipe_id,
+                    &source,
+                    &applicability,
+                    recipe_id.mutation_target(),
+                    recipe_id.expected_safe_code(),
+                    actual_safe_code,
+                    pass_state,
+                    &source_access_assertion,
+                ))
+                .map_err(|error| anyhow!(error))?;
+                let evidence = fixture_coverage_evidence(
+                    FixtureCoverageEvidenceKind::GeneratedCase,
+                    format!(
+                        "target/{integration_alias}/fixture/{}/generated/{}/v1",
+                        fixture.name,
+                        generated_recipe_fixture_suffix(recipe_id)
+                    ),
+                    evidence_digest,
+                )
+                .map_err(|error| anyhow!(error))?;
+                generated_cases.push(GeneratedFixtureCoverage {
+                    evidence,
+                    recipe: GeneratorRecipe {
+                        id: recipe_id,
+                        version: GeneratorRecipeVersion::V1,
+                    },
+                    source_fixture: source.clone(),
+                    applicability,
+                    mutation_target_class: recipe_id.mutation_target(),
+                    expected_safe_code: recipe_id.expected_safe_code(),
+                    actual_safe_code,
+                    pass_state,
+                    source_access_assertion,
+                });
+            }
+        }
+
+        fixture_inventory.sort_by(|left, right| left.fixture_id.cmp(&right.fixture_id));
+        generated_cases.sort_by(|left, right| {
+            (&left.source_fixture.fixture_id, left.recipe.id)
+                .cmp(&(&right.source_fixture.fixture_id, right.recipe.id))
+        });
+        let target_platform_cases = if matches!(
+            integration.document.capability,
+            CapabilityDeclaration::Script { .. }
+        ) {
+            platform_case.clone().into_iter().collect()
+        } else {
+            Vec::new()
+        };
+        let declared = fixture_target_declared_dimensions(loaded, integration_alias, integration);
+        let exercised = fixture_target_exercised_dimensions(
+            integration,
+            &fixture_inventory,
+            &generated_cases,
+            &target_platform_cases,
+        );
+        let identity = FixtureCoverageTargetIdentity {
+            integration: integration_alias.clone(),
+            capability: fixture_coverage_capability(&integration.document.capability),
+        };
+        let contract = fixture_coverage_target_contract(integration)?;
+        let compiled_contract =
+            target_compiled_contract_evidence(&identity, &contract, &declared)
+                .map_err(|error| anyhow!(error))?;
+        let mut target = FixtureCoverageTarget {
+            identity,
+            contract,
+            fixture_set_state: if fixture_inventory.is_empty() {
+                FixtureSetState::Fixtureless
+            } else {
+                FixtureSetState::FixtureBearing
+            },
+            compiled_contract,
+            fixture_inventory,
+            generated_cases,
+            platform_cases: target_platform_cases,
+            declared,
+            exercised,
+            comparison: None,
+            requirements: Vec::new(),
+        };
+        target.requirements = derive_fixture_coverage_requirements(
+            &target,
+            FixtureCoverageNotEvaluatedReason::ComparisonInputAbsent,
+        );
+        targets.push(target);
+    }
+    targets.sort_by(|left, right| left.identity.integration.cmp(&right.identity.integration));
+    let report = ProjectFixtureCoverageReportV1::from_targets(
+        loaded.project.registry.id.clone(),
+        loaded.environment_name.clone(),
+        targets,
+    )
+    .map_err(|error| anyhow!(error))?;
+    comparison_input.map_or(Ok(report), |input| {
+        report.with_comparison(input).map_err(|error| anyhow!(error))
+    })
+}
+
+fn build_platform_call_budget_case(
+    actual_safe_code: FixtureSafeCode,
+) -> Result<PlatformGeneratedFixtureCoverage> {
+    let pass_state = if actual_safe_code == FixtureSafeCode::SourceCallBudgetExceeded {
+        FixturePassState::Passed
+    } else {
+        FixturePassState::Failed
+    };
+    let evidence_digest = fixture_coverage_digest(&(
+        PlatformGeneratedCaseId::RelayScriptCallBudget,
+        GeneratorRecipeVersion::V1,
+        PlatformCoverageComponent::RelayScriptWorker,
+        FixtureMutationTargetClass::SourceCallBudget,
+        FixtureSafeCode::SourceCallBudgetExceeded,
+        actual_safe_code,
+        pass_state,
+    ))
+    .map_err(|error| anyhow!(error))?;
+    Ok(PlatformGeneratedFixtureCoverage {
+        evidence: fixture_coverage_evidence(
+            FixtureCoverageEvidenceKind::PlatformCase,
+            "platform/relay-script-worker/call-budget/v1".to_owned(),
+            evidence_digest,
+        )
+        .map_err(|error| anyhow!(error))?,
+        case_id: PlatformGeneratedCaseId::RelayScriptCallBudget,
+        version: GeneratorRecipeVersion::V1,
+        component: PlatformCoverageComponent::RelayScriptWorker,
+        mutation_target_class: FixtureMutationTargetClass::SourceCallBudget,
+        expected_safe_code: FixtureSafeCode::SourceCallBudgetExceeded,
+        actual_safe_code,
+        pass_state,
+    })
+}
+
+fn fixture_coverage_source(
+    integration_alias: &str,
+    fixture_path: &Path,
+    fixture: &FixtureDocument,
+) -> Result<GeneratedSourceFixture> {
+    validate_stable_id(integration_alias, "fixture coverage integration identifier")?;
+    validate_stable_id(&fixture.name, "fixture coverage fixture identifier")?;
+    let bytes =
+        fs::read(fixture_path).context("failed to read a fixture for coverage digesting")?;
+    Ok(GeneratedSourceFixture {
+        fixture_id: fixture.name.clone(),
+        fixture_digest: Sha256Digest::new(sha256_uri(&bytes)).map_err(|error| anyhow!(error))?,
+    })
+}
+
+fn fixture_coverage_capability(capability: &CapabilityDeclaration) -> FixtureCapability {
+    match capability {
+        CapabilityDeclaration::Http { .. } => FixtureCapability::DeclarativeHttp,
+        CapabilityDeclaration::Script { .. } => FixtureCapability::Script,
+        CapabilityDeclaration::Snapshot { .. } => FixtureCapability::Snapshot,
+    }
+}
+
+fn distinguishable_request_pair(
+    interactions: &[registry_relay::offline_fixture::OfflineInteraction],
+) -> Option<(usize, usize)> {
+    for left in 0..interactions.len() {
+        for right in left + 1..interactions.len() {
+            if interactions[left].request != interactions[right].request {
+                return Some((left, right));
+            }
+        }
+    }
+    None
+}
+
+fn authored_fixture_expectation(fixture: &FixtureDocument) -> Result<FixtureSemanticExpectation> {
+    if let Some(code) = fixture.expect.error.as_deref() {
+        let code = FixtureSafeCode::from_runtime_code(code);
+        if code == FixtureSafeCode::RedactedUnclassifiedError {
+            bail!("authored fixture expects an unreportable error class");
+        }
+        return Ok(FixtureSemanticExpectation::SafeErrorCode { code });
+    }
+    let outcome = match fixture.expect.outcome.as_deref() {
+        Some("match") => FixtureSemanticOutcome::Match,
+        Some("no_match") => FixtureSemanticOutcome::NoMatch,
+        Some("ambiguous") => FixtureSemanticOutcome::Ambiguous,
+        None => FixtureSemanticOutcome::Successful,
+        Some(_) => bail!("authored fixture has an unreportable semantic expectation"),
+    };
+    Ok(FixtureSemanticExpectation::Outcome { outcome })
+}
+
+fn generated_recipe_applicability(
+    loaded: &LoadedRegistryProject,
+    integration_alias: &str,
+    fixture: &FixtureDocument,
+    recipe_id: GeneratorRecipeId,
+) -> GeneratedRecipeApplicability {
+    let has_interaction = !fixture.interactions.is_empty();
+    let has_protocol_matcher = fixture.interactions.iter().any(|interaction| {
+        interaction
+            .expect
+            .body
+            .as_ref()
+            .is_some_and(contains_generated_fixture_matcher)
+    });
+    let final_json_object = matches!(
+        fixture
+            .interactions
+            .last()
+            .map(|interaction| &interaction.respond),
+        Some(FixtureSourceResponse::Http {
+            body: Value::Object(_),
+            ..
+        })
+    );
+    match recipe_id {
+        GeneratorRecipeId::RequestAuthority
+        | GeneratorRecipeId::RequestOrder
+        | GeneratorRecipeId::StatusRejection
+        | GeneratorRecipeId::ProtocolVerification
+        | GeneratorRecipeId::MalformedDecode
+        | GeneratorRecipeId::ByteCeiling
+        | GeneratorRecipeId::Timeout
+            if matches!(
+                loaded.integrations[integration_alias].document.capability,
+                CapabilityDeclaration::Snapshot { .. }
+            ) =>
+        {
+            GeneratedRecipeApplicability::NotApplicable {
+                reason: GeneratedNotApplicableReason::NoRemoteSourceCapability,
+                invariant: CoverageInvariant::RemoteMutationRequiresRemoteSourceCapability,
+            }
+        }
+        GeneratorRecipeId::RequestAuthority
+        | GeneratorRecipeId::StatusRejection
+        | GeneratorRecipeId::MalformedDecode
+        | GeneratorRecipeId::ByteCeiling
+        | GeneratorRecipeId::Timeout
+            if !has_interaction =>
+        {
+            GeneratedRecipeApplicability::NotApplicable {
+                reason: GeneratedNotApplicableReason::NoSourceInteraction,
+                invariant: CoverageInvariant::MutationRequiresSourceInteraction,
+            }
+        }
+        GeneratorRecipeId::RequestOrder if fixture.interactions.len() < 2 => {
+            GeneratedRecipeApplicability::NotApplicable {
+                reason: GeneratedNotApplicableReason::SingleSourceInteraction,
+                invariant: CoverageInvariant::OrderMutationRequiresMultipleSourceInteractions,
+            }
+        }
+        GeneratorRecipeId::RequestOrder
+            if offline_fixture_interactions(fixture)
+                .ok()
+                .and_then(|interactions| distinguishable_request_pair(&interactions))
+                .is_none() =>
+        {
+            GeneratedRecipeApplicability::NotApplicable {
+                reason: GeneratedNotApplicableReason::NoDistinguishableRequestPair,
+                invariant:
+                    CoverageInvariant::OrderMutationRequiresDistinguishableSourceInteractions,
+            }
+        }
+        GeneratorRecipeId::ProtocolVerification if !has_protocol_matcher => {
+            GeneratedRecipeApplicability::NotApplicable {
+                reason: GeneratedNotApplicableReason::NoGeneratedRequestMatcher,
+                invariant: CoverageInvariant::ProtocolMutationRequiresGeneratedRequestMatcher,
+            }
+        }
+        GeneratorRecipeId::ProtocolVerification if !final_json_object => {
+            GeneratedRecipeApplicability::NotApplicable {
+                reason: GeneratedNotApplicableReason::FinalResponseIsNotJsonObject,
+                invariant: CoverageInvariant::MutationRequiresFinalJsonObjectResponse,
+            }
+        }
+        GeneratorRecipeId::AuthorizationBeforeSource
+            if !integration_has_product_claims(loaded, integration_alias) =>
+        {
+            GeneratedRecipeApplicability::NotApplicable {
+                reason: GeneratedNotApplicableReason::IntegrationHasNoProductClaims,
+                invariant: CoverageInvariant::AuthorizationCheckRequiresProductClaimEvaluation,
+            }
+        }
+        GeneratorRecipeId::OutputMinimization
+            if !matches!(
+                loaded.integrations[integration_alias].document.capability,
+                CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. }
+            ) =>
+        {
+            GeneratedRecipeApplicability::NotApplicable {
+                reason: GeneratedNotApplicableReason::SnapshotUsesClosedMaterialization,
+                invariant: CoverageInvariant::SnapshotOutputUsesClosedMaterializationProjection,
+            }
+        }
+        GeneratorRecipeId::OutputMinimization if has_protocol_matcher => {
+            GeneratedRecipeApplicability::NotApplicable {
+                reason: GeneratedNotApplicableReason::ProtocolMatcherOwnsResponseMutation,
+                invariant: CoverageInvariant::ProtocolMatcherFixtureUsesProtocolVerificationInstead,
+            }
+        }
+        GeneratorRecipeId::OutputMinimization if !final_json_object => {
+            GeneratedRecipeApplicability::NotApplicable {
+                reason: GeneratedNotApplicableReason::FinalResponseIsNotJsonObject,
+                invariant: CoverageInvariant::MutationRequiresFinalJsonObjectResponse,
+            }
+        }
+        _ => GeneratedRecipeApplicability::Applicable {},
+    }
+}
+
+fn fixture_target_declared_dimensions(
+    loaded: &LoadedRegistryProject,
+    integration_alias: &str,
+    integration: &LoadedIntegration,
+) -> FixtureCoverageDimensions {
+    let (claim_ids, disclosure_modes) =
+        fixture_target_claims_and_disclosures(loaded, integration_alias);
+    FixtureCoverageDimensions {
+        input_ids: integration.document.input.keys().cloned().collect(),
+        output_ids: integration.document.outputs.keys().cloned().collect(),
+        claim_ids,
+        disclosure_modes,
+        status_mappings: fixture_status_mappings(&integration.document),
+        protocol_helpers: fixture_protocol_helpers(&integration.document),
+        limits: fixture_declared_limits(&integration.document),
+        script_branch_ids: Vec::new(),
+    }
+}
+
+fn fixture_target_exercised_dimensions(
+    integration: &LoadedIntegration,
+    inventory: &[AuthoredSemanticFixtureCoverage],
+    generated: &[GeneratedFixtureCoverage],
+    platform: &[PlatformGeneratedFixtureCoverage],
+) -> FixtureCoverageDimensions {
+    let passed = inventory
+        .iter()
+        .filter(|fixture| fixture.pass_state == FixturePassState::Passed)
+        .collect::<Vec<_>>();
+    let input_ids = passed
+        .iter()
+        .flat_map(|fixture| fixture.input_ids.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let output_ids = passed
+        .iter()
+        .flat_map(|fixture| fixture.output_ids.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let claim_ids = passed
+        .iter()
+        .flat_map(|fixture| fixture.claim_ids.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let protocol_helpers =
+        if generated_recipe_complete(generated, GeneratorRecipeId::ProtocolVerification).0 {
+            fixture_protocol_helpers(&integration.document)
+        } else {
+            Vec::new()
+        };
+    let mut limits = BTreeSet::new();
+    if !matches!(
+        integration.document.capability,
+        CapabilityDeclaration::Snapshot { .. }
+    ) {
+        if generated_recipe_complete(generated, GeneratorRecipeId::ByteCeiling).0 {
+            limits.insert(FixtureLimit::ResponseBytes);
+        }
+        if generated_recipe_complete(generated, GeneratorRecipeId::Timeout).0 {
+            limits.insert(FixtureLimit::Deadline);
+        }
+    }
+    if platform
+        .iter()
+        .any(|case| case.pass_state == FixturePassState::Passed)
+    {
+        limits.insert(FixtureLimit::CallCount);
+    }
+    FixtureCoverageDimensions {
+        input_ids,
+        output_ids,
+        claim_ids,
+        // Claim evaluation does not exercise disclosure selection.
+        disclosure_modes: Vec::new(),
+        status_mappings: fixture_exercised_status_mappings(integration, inventory),
+        protocol_helpers,
+        limits: limits.into_iter().collect(),
+        // Semantic outcomes are not implementation branch identifiers.
+        script_branch_ids: Vec::new(),
+    }
+}
+
+fn fixture_target_claims_and_disclosures(
+    loaded: &LoadedRegistryProject,
+    integration_alias: &str,
+) -> (Vec<String>, Vec<FixtureDisclosureMode>) {
+    let mut claim_ids = BTreeSet::new();
+    let mut modes = BTreeSet::new();
+    for service in loaded.project.services.values() {
+        if service.kind != ServiceKind::Evidence {
+            continue;
+        }
+        for (claim_id, claim) in &service.claims {
+            let belongs_to_target = claim_consultation_name(service, claim)
+                .ok()
+                .and_then(|consultation| service.consultations.get(consultation))
+                .is_some_and(|consultation| consultation.integration == integration_alias);
+            if !belongs_to_target {
+                continue;
+            }
+            claim_ids.insert(claim_id.clone());
+            match &claim.disclosure {
+                DisclosureDeclaration::Mode(mode) => {
+                    modes.insert(fixture_disclosure_mode(*mode));
+                }
+                DisclosureDeclaration::Policy { default, allowed } => {
+                    modes.insert(fixture_disclosure_mode(*default));
+                    modes.extend(allowed.iter().copied().map(fixture_disclosure_mode));
+                }
+            }
+        }
+    }
+    (claim_ids.into_iter().collect(), modes.into_iter().collect())
+}
+
+fn fixture_disclosure_mode(mode: DisclosureMode) -> FixtureDisclosureMode {
+    match mode {
+        DisclosureMode::Value => FixtureDisclosureMode::Value,
+        DisclosureMode::Predicate => FixtureDisclosureMode::Predicate,
+        DisclosureMode::Redacted => FixtureDisclosureMode::Redacted,
+    }
+}
+
+fn fixture_status_mappings(integration: &IntegrationDocument) -> Vec<FixtureStatusMapping> {
+    let CapabilityDeclaration::Http { http } = &integration.capability else {
+        return Vec::new();
+    };
+    let mut no_match = BTreeSet::new();
+    let mut ambiguous = BTreeSet::new();
+    for operation in http.operations.values() {
+        let Some(statuses) = operation.response.status_semantics.as_ref() else {
+            continue;
+        };
+        no_match.extend(statuses.no_match.iter().copied());
+        ambiguous.extend(statuses.ambiguous.iter().copied());
+    }
+    [
+        (FixtureStatusOutcome::Ambiguous, ambiguous),
+        (FixtureStatusOutcome::NoMatch, no_match),
+    ]
+    .into_iter()
+    .filter(|(_, statuses)| !statuses.is_empty())
+    .map(|(outcome, statuses)| FixtureStatusMapping {
+        outcome,
+        statuses: statuses.into_iter().collect(),
+    })
+    .collect()
+}
+
+fn fixture_exercised_status_mappings(
+    integration: &LoadedIntegration,
+    inventory: &[AuthoredSemanticFixtureCoverage],
+) -> Vec<FixtureStatusMapping> {
+    let declared = fixture_status_mappings(&integration.document);
+    declared
+        .into_iter()
+        .filter_map(|mapping| {
+            let statuses = mapping
+                .statuses
+                .iter()
+                .copied()
+                .filter(|status| {
+                    integration.fixtures.iter().any(|(_, fixture)| {
+                        let passed = inventory.iter().any(|record| {
+                            record.fixture_id == fixture.name
+                                && record.pass_state == FixturePassState::Passed
+                        });
+                        let outcome_matches = matches!(
+                            (mapping.outcome, fixture.expect.outcome.as_deref()),
+                            (FixtureStatusOutcome::NoMatch, Some("no_match"))
+                                | (FixtureStatusOutcome::Ambiguous, Some("ambiguous"))
+                        );
+                        passed
+                            && outcome_matches
+                            && fixture.interactions.iter().any(|interaction| {
+                                matches!(
+                                    interaction.respond,
+                                    FixtureSourceResponse::Http { status: actual, .. }
+                                        if actual == *status
+                                )
+                            })
+                    })
+                })
+                .collect::<Vec<_>>();
+            (!statuses.is_empty()).then_some(FixtureStatusMapping {
+                outcome: mapping.outcome,
+                statuses,
+            })
+        })
+        .collect()
+}
+
+fn fixture_protocol_helpers(integration: &IntegrationDocument) -> Vec<FixtureProtocolHelper> {
+    let mut helpers = BTreeSet::new();
+    match &integration.capability {
+        CapabilityDeclaration::Http { http } => {
+            for operation in http.operations.values() {
+                if operation.primitive.is_some() || operation.request.primitive.is_some() {
+                    helpers.insert(FixtureProtocolHelper::RequestPrimitive);
+                }
+                if operation
+                    .response
+                    .codec
+                    .as_deref()
+                    .is_some_and(|codec| codec != "json_v1")
+                {
+                    helpers.insert(FixtureProtocolHelper::ResponseCodec);
+                }
+                if operation.verification.is_some() {
+                    helpers.insert(FixtureProtocolHelper::Verification);
+                }
+            }
+        }
+        CapabilityDeclaration::Script { script } => {
+            if script.signed_dci.is_some() {
+                helpers.insert(FixtureProtocolHelper::SignedDci);
+            }
+        }
+        CapabilityDeclaration::Snapshot { .. } => {}
+    }
+    helpers.into_iter().collect()
+}
+
+fn fixture_declared_limits(integration: &IntegrationDocument) -> Vec<FixtureLimit> {
+    match integration.capability {
+        CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. } => vec![
+            FixtureLimit::AggregateSourceBytes,
+            FixtureLimit::CallCount,
+            FixtureLimit::Deadline,
+            FixtureLimit::OutputBytes,
+            FixtureLimit::RequestBytes,
+            FixtureLimit::ResponseBytes,
+        ],
+        CapabilityDeclaration::Snapshot { .. } => vec![
+            FixtureLimit::AggregateSourceBytes,
+            FixtureLimit::OutputBytes,
+        ],
+    }
+}
+
+fn fixture_has_semantic_null(fixture: &FixtureDocument) -> bool {
+    fixture
+        .input
+        .values()
+        .chain(fixture.expect.outputs.values())
+        .chain(fixture.expect.claims.values())
+        .any(Value::is_null)
+}
+
+fn build_target_fixture_comparison(
+    comparison_input: Option<&FixtureCoverageComparisonInput>,
+    integration_alias: &str,
+    inventory: &[AuthoredSemanticFixtureCoverage],
+) -> Result<Option<FixtureCoverageSemanticComparison>> {
+    let Some(input) = comparison_input else {
+        return Ok(None);
+    };
+    let Some(target_input) = input
+        .targets
+        .iter()
+        .find(|target| target.integration == integration_alias)
+    else {
+        return Ok(None);
+    };
+    let changes = [
+        (
+            FixtureCoverageChangeKind::ChangedInput,
+            target_input.changed_input_ids.clone(),
+        ),
+        (
+            FixtureCoverageChangeKind::ChangedOutput,
+            target_input.changed_output_ids.clone(),
+        ),
+        (
+            FixtureCoverageChangeKind::ChangedClaim,
+            target_input.changed_claim_ids.clone(),
+        ),
+        (
+            FixtureCoverageChangeKind::ChangedSourceContract,
+            if target_input.source_contract_changed {
+                vec!["source_contract".to_owned()]
+            } else {
+                Vec::new()
+            },
+        ),
+    ];
+    let mut impacts = Vec::with_capacity(changes.len());
+    for (kind, changed_member_ids) in changes {
+        let affected_fixture_ids = inventory
+            .iter()
+            .filter(|fixture| match kind {
+                FixtureCoverageChangeKind::ChangedInput => {
+                    slices_intersect(&fixture.input_ids, &changed_member_ids)
+                }
+                FixtureCoverageChangeKind::ChangedOutput => {
+                    slices_intersect(&fixture.output_ids, &changed_member_ids)
+                }
+                FixtureCoverageChangeKind::ChangedClaim => {
+                    slices_intersect(&fixture.claim_ids, &changed_member_ids)
+                }
+                FixtureCoverageChangeKind::ChangedSourceContract => !changed_member_ids.is_empty(),
+            })
+            .map(|fixture| fixture.fixture_id.clone())
+            .collect::<Vec<_>>();
+        let digest = fixture_coverage_digest(&(
+            &input.baseline_digest,
+            &input.candidate_digest,
+            kind,
+            &changed_member_ids,
+            &affected_fixture_ids,
+        ))
+        .map_err(|error| anyhow!(error))?;
+        impacts.push(FixtureCoverageChangeImpact {
+            kind,
+            changed_member_ids,
+            affected_fixture_ids,
+            evidence: fixture_coverage_evidence(
+                FixtureCoverageEvidenceKind::SemanticComparison,
+                format!(
+                    "target/{integration_alias}/semantic-comparison/{}/v1",
+                    change_suffix(kind)
+                ),
+                digest,
+            )
+            .map_err(|error| anyhow!(error))?,
+        });
+    }
+    Ok(Some(FixtureCoverageSemanticComparison {
+        baseline_digest: input.baseline_digest.clone(),
+        candidate_digest: input.candidate_digest.clone(),
+        impacts,
+    }))
+}
+
+fn slices_intersect(left: &[String], right: &[String]) -> bool {
+    left.iter().any(|value| right.binary_search(value).is_ok())
+}
+
+fn fixture_target_requirements(
+    integration: &LoadedIntegration,
+    target: &FixtureCoverageTarget,
+    semantic_null_fixture_ids: &BTreeSet<String>,
+    comparison_reason: FixtureCoverageNotEvaluatedReason,
+) -> Vec<FixtureRequirementCoverage> {
+    use RequiredFixtureCoverageRequirement as Requirement;
+
+    let no_fixtures = target.fixture_inventory.is_empty();
+    let authored = |predicate: fn(&AuthoredSemanticFixtureCoverage) -> bool| {
+        target
+            .fixture_inventory
+            .iter()
+            .filter(|fixture| fixture.pass_state == FixturePassState::Passed && predicate(fixture))
+            .map(|fixture| fixture.evidence.clone())
+            .collect::<Vec<_>>()
+    };
+    let fixture_gap = if no_fixtures {
+        FixtureCoverageGapReason::TargetHasNoFixtures
+    } else {
+        FixtureCoverageGapReason::RequiredEvidenceMissing
+    };
+    let match_evidence = authored(|fixture| {
+        fixture.expectation
+            == FixtureSemanticExpectation::Outcome {
+                outcome: FixtureSemanticOutcome::Match,
+            }
+    });
+    let no_match_evidence = authored(|fixture| {
+        fixture.expectation
+            == FixtureSemanticExpectation::Outcome {
+                outcome: FixtureSemanticOutcome::NoMatch,
+            }
+    });
+    let ambiguity_evidence = authored(|fixture| {
+        fixture.expectation
+            == FixtureSemanticExpectation::Outcome {
+                outcome: FixtureSemanticOutcome::Ambiguous,
+            }
+    });
+    let subject_mismatch_evidence = authored(|fixture| {
+        fixture.expectation
+            == FixtureSemanticExpectation::SafeErrorCode {
+                code: FixtureSafeCode::FailureSubjectMismatch,
+            }
+    });
+    let authorization_evidence = authored(|fixture| {
+        fixture.expectation
+            == FixtureSemanticExpectation::SafeErrorCode {
+                code: FixtureSafeCode::AuthorizationDenied,
+            }
+    });
+    let source_failure_evidence = authored(|fixture| {
+        matches!(
+            fixture.expectation,
+            FixtureSemanticExpectation::SafeErrorCode { code } if code.is_source_failure()
+        )
+    });
+    let null_evidence = target
+        .fixture_inventory
+        .iter()
+        .filter(|fixture| {
+            fixture.pass_state == FixturePassState::Passed
+                && semantic_null_fixture_ids.contains(&fixture.fixture_id)
+        })
+        .map(|fixture| fixture.evidence.clone())
+        .collect::<Vec<_>>();
+    let all_passed_evidence = authored(|_| true);
+    let output_evidence = target
+        .fixture_inventory
+        .iter()
+        .filter(|fixture| {
+            fixture.pass_state == FixturePassState::Passed && !fixture.output_ids.is_empty()
+        })
+        .map(|fixture| fixture.evidence.clone())
+        .collect::<Vec<_>>();
+    let claim_evidence = target
+        .fixture_inventory
+        .iter()
+        .filter(|fixture| {
+            fixture.pass_state == FixturePassState::Passed && !fixture.claim_ids.is_empty()
+        })
+        .map(|fixture| fixture.evidence.clone())
+        .collect::<Vec<_>>();
+    let status_evidence = target
+        .fixture_inventory
+        .iter()
+        .filter(|fixture| {
+            fixture.pass_state == FixturePassState::Passed
+                && integration.fixtures.iter().any(|(_, authored_fixture)| {
+                    authored_fixture.name == fixture.fixture_id
+                        && authored_fixture.interactions.iter().any(|interaction| {
+                            matches!(
+                                interaction.respond,
+                                FixtureSourceResponse::Http { status, .. }
+                                    if target.declared.status_mappings.iter().any(|mapping| {
+                                        mapping.statuses.contains(&status)
+                                    })
+                            )
+                        })
+                })
+        })
+        .map(|fixture| fixture.evidence.clone())
+        .collect::<Vec<_>>();
+    let (request_complete, request_evidence) =
+        generated_recipe_complete(&target.generated_cases, GeneratorRecipeId::RequestAuthority);
+    let (order_complete, order_evidence) =
+        generated_recipe_complete(&target.generated_cases, GeneratorRecipeId::RequestOrder);
+    let (protocol_complete, protocol_evidence) = generated_recipe_complete(
+        &target.generated_cases,
+        GeneratorRecipeId::ProtocolVerification,
+    );
+    let (authorization_before_complete, authorization_before_evidence) = generated_recipe_complete(
+        &target.generated_cases,
+        GeneratorRecipeId::AuthorizationBeforeSource,
+    );
+    let (malformed_complete, malformed_evidence) =
+        generated_recipe_complete(&target.generated_cases, GeneratorRecipeId::MalformedDecode);
+    let (response_bytes_complete, response_bytes_evidence) =
+        generated_recipe_complete(&target.generated_cases, GeneratorRecipeId::ByteCeiling);
+    let (timeout_complete, timeout_evidence) =
+        generated_recipe_complete(&target.generated_cases, GeneratorRecipeId::Timeout);
+    let (minimization_complete, minimization_evidence) = generated_recipe_complete(
+        &target.generated_cases,
+        GeneratorRecipeId::OutputMinimization,
+    );
+    let platform_evidence = target
+        .platform_cases
+        .iter()
+        .filter(|case| case.pass_state == FixturePassState::Passed)
+        .map(|case| case.evidence.clone())
+        .collect::<Vec<_>>();
+
+    let mut requirements = Vec::with_capacity(RequiredFixtureCoverageRequirement::ALL.len());
+    requirements.push(covered_or_missing(
+        Requirement::SemanticMatch,
+        match_evidence,
+        fixture_gap,
+    ));
+    requirements.push(covered_or_missing(
+        Requirement::SemanticNoMatch,
+        no_match_evidence,
+        fixture_gap,
+    ));
+    requirements.push(if !ambiguity_evidence.is_empty() {
+        covered(Requirement::SemanticAmbiguity, ambiguity_evidence)
+    } else if integration.document.not_applicable.ambiguity.is_some() {
+        not_applicable(
+            Requirement::SemanticAmbiguity,
+            FixtureCoverageNotApplicableReason::ReviewedAmbiguityNotApplicable,
+            vec![target.compiled_contract.clone()],
+        )
+    } else {
+        missing(Requirement::SemanticAmbiguity, fixture_gap, Vec::new())
+    });
+    requirements.push(if !subject_mismatch_evidence.is_empty() {
+        covered(Requirement::SubjectMismatch, subject_mismatch_evidence)
+    } else if integration
+        .document
+        .not_applicable
+        .subject_mismatch
+        .is_some()
+    {
+        not_applicable(
+            Requirement::SubjectMismatch,
+            FixtureCoverageNotApplicableReason::ReviewedSubjectMismatchNotApplicable,
+            vec![target.compiled_contract.clone()],
+        )
+    } else {
+        missing(Requirement::SubjectMismatch, fixture_gap, Vec::new())
+    });
+    requirements.push(covered_or_missing(
+        Requirement::SemanticNull,
+        null_evidence,
+        fixture_gap,
+    ));
+    requirements.push(if target.declared.claim_ids.is_empty() {
+        not_applicable(
+            Requirement::AuthorizationDenial,
+            FixtureCoverageNotApplicableReason::NoProductClaimsDeclared,
+            vec![target.compiled_contract.clone()],
+        )
+    } else {
+        covered_or_missing(
+            Requirement::AuthorizationDenial,
+            authorization_evidence,
+            fixture_gap,
+        )
+    });
+    requirements.push(
+        if target.identity.capability == FixtureCapability::Snapshot {
+            not_applicable(
+                Requirement::SourceFailure,
+                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
+                vec![target.compiled_contract.clone()],
+            )
+        } else {
+            covered_or_missing(
+                Requirement::SourceFailure,
+                source_failure_evidence,
+                fixture_gap,
+            )
+        },
+    );
+    requirements.push(
+        if target.identity.capability == FixtureCapability::Snapshot {
+            not_applicable(
+                Requirement::RequestRendering,
+                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
+                vec![target.compiled_contract.clone()],
+            )
+        } else {
+            covered_if_complete(
+                Requirement::RequestRendering,
+                request_evidence,
+                request_complete,
+                fixture_gap,
+            )
+        },
+    );
+    requirements.push(
+        if !target.fixture_inventory.is_empty()
+            && all_passed_evidence.len() == target.fixture_inventory.len()
+        {
+            covered(Requirement::ExpectedSourceInteractions, all_passed_evidence)
+        } else {
+            missing(
+                Requirement::ExpectedSourceInteractions,
+                fixture_gap,
+                all_passed_evidence,
+            )
+        },
+    );
+    requirements.push(if order_complete {
+        covered(Requirement::SourceInteractionOrder, order_evidence)
+    } else if target.identity.capability == FixtureCapability::Snapshot {
+        not_applicable(
+            Requirement::SourceInteractionOrder,
+            FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
+            vec![target.compiled_contract.clone()],
+        )
+    } else if matches!(
+        &integration.document.capability,
+        CapabilityDeclaration::Http { http } if http.operations.len() <= 1
+    ) {
+        not_applicable(
+            Requirement::SourceInteractionOrder,
+            FixtureCoverageNotApplicableReason::SingleCompiledSourceOperation,
+            vec![target.compiled_contract.clone()],
+        )
+    } else {
+        missing(
+            Requirement::SourceInteractionOrder,
+            fixture_gap,
+            order_evidence,
+        )
+    });
+    requirements.push(
+        if !target.declared.output_ids.is_empty()
+            && target.exercised.output_ids == target.declared.output_ids
+            && !output_evidence.is_empty()
+        {
+            covered(Requirement::OutputFields, output_evidence)
+        } else {
+            missing(Requirement::OutputFields, fixture_gap, output_evidence)
+        },
+    );
+    requirements.push(if target.declared.claim_ids.is_empty() {
+        not_applicable(
+            Requirement::Claims,
+            FixtureCoverageNotApplicableReason::NoProductClaimsDeclared,
+            vec![target.compiled_contract.clone()],
+        )
+    } else if target.exercised.claim_ids == target.declared.claim_ids && !claim_evidence.is_empty()
+    {
+        covered(Requirement::Claims, claim_evidence)
+    } else {
+        missing(Requirement::Claims, fixture_gap, claim_evidence)
+    });
+    requirements.push(if target.declared.claim_ids.is_empty() {
+        not_applicable(
+            Requirement::DeclaredDisclosureModes,
+            FixtureCoverageNotApplicableReason::NoProductClaimsDeclared,
+            vec![target.compiled_contract.clone()],
+        )
+    } else {
+        covered(
+            Requirement::DeclaredDisclosureModes,
+            vec![target.compiled_contract.clone()],
+        )
+    });
+    requirements.push(if target.declared.claim_ids.is_empty() {
+        not_applicable(
+            Requirement::ExercisedDisclosureModes,
+            FixtureCoverageNotApplicableReason::NoProductClaimsDeclared,
+            vec![target.compiled_contract.clone()],
+        )
+    } else {
+        missing(
+            Requirement::ExercisedDisclosureModes,
+            FixtureCoverageGapReason::RuntimeDimensionNotObserved,
+            Vec::new(),
+        )
+    });
+    requirements.push(if target.identity.capability != FixtureCapability::Script {
+        not_applicable(
+            Requirement::ScriptBranches,
+            FixtureCoverageNotApplicableReason::NoScriptCapability,
+            vec![target.compiled_contract.clone()],
+        )
+    } else {
+        missing(
+            Requirement::ScriptBranches,
+            FixtureCoverageGapReason::ScriptBranchContractNotDeclared,
+            Vec::new(),
+        )
+    });
+    requirements.push(
+        if target.identity.capability == FixtureCapability::Snapshot {
+            not_applicable(
+                Requirement::PaginationAndContinuation,
+                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
+                vec![target.compiled_contract.clone()],
+            )
+        } else if target.identity.capability == FixtureCapability::DeclarativeHttp {
+            not_applicable(
+                Requirement::PaginationAndContinuation,
+                FixtureCoverageNotApplicableReason::NoContinuationProtocolDeclared,
+                vec![target.compiled_contract.clone()],
+            )
+        } else {
+            missing(
+                Requirement::PaginationAndContinuation,
+                FixtureCoverageGapReason::RequiredEvidenceMissing,
+                Vec::new(),
+            )
+        },
+    );
+    requirements.push(if target.declared.status_mappings.is_empty() {
+        not_applicable(
+            Requirement::StatusMappings,
+            FixtureCoverageNotApplicableReason::NoStatusMappingsDeclared,
+            vec![target.compiled_contract.clone()],
+        )
+    } else if target.exercised.status_mappings == target.declared.status_mappings
+        && !status_evidence.is_empty()
+    {
+        covered(Requirement::StatusMappings, status_evidence)
+    } else {
+        missing(Requirement::StatusMappings, fixture_gap, status_evidence)
+    });
+    requirements.push(if target.declared.protocol_helpers.is_empty() {
+        not_applicable(
+            Requirement::ProtocolHelpers,
+            FixtureCoverageNotApplicableReason::NoProtocolHelpersDeclared,
+            vec![target.compiled_contract.clone()],
+        )
+    } else {
+        covered_if_complete(
+            Requirement::ProtocolHelpers,
+            protocol_evidence.clone(),
+            protocol_complete
+                && target.exercised.protocol_helpers == target.declared.protocol_helpers,
+            fixture_gap,
+        )
+    });
+    requirements.push(
+        if !target.declared.protocol_helpers.iter().any(|helper| {
+            matches!(
+                helper,
+                FixtureProtocolHelper::SignedDci | FixtureProtocolHelper::Verification
+            )
+        }) {
+            not_applicable(
+                Requirement::ProtocolVerification,
+                FixtureCoverageNotApplicableReason::NoVerificationProtocolDeclared,
+                vec![target.compiled_contract.clone()],
+            )
+        } else {
+            covered_if_complete(
+                Requirement::ProtocolVerification,
+                protocol_evidence.clone(),
+                protocol_complete,
+                fixture_gap,
+            )
+        },
+    );
+    requirements.push(if target.declared.claim_ids.is_empty() {
+        not_applicable(
+            Requirement::AuthorizationBeforeSource,
+            FixtureCoverageNotApplicableReason::NoProductClaimsDeclared,
+            vec![target.compiled_contract.clone()],
+        )
+    } else {
+        covered_if_complete(
+            Requirement::AuthorizationBeforeSource,
+            authorization_before_evidence,
+            authorization_before_complete,
+            fixture_gap,
+        )
+    });
+    requirements.push(
+        if target.identity.capability == FixtureCapability::Snapshot {
+            not_applicable(
+                Requirement::MalformedDecoding,
+                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
+                vec![target.compiled_contract.clone()],
+            )
+        } else {
+            covered_if_complete(
+                Requirement::MalformedDecoding,
+                malformed_evidence,
+                malformed_complete,
+                fixture_gap,
+            )
+        },
+    );
+    requirements.push(covered(
+        Requirement::StructuralLimits,
+        vec![target.compiled_contract.clone()],
+    ));
+    requirements.push(
+        if target.identity.capability == FixtureCapability::Snapshot {
+            not_applicable(
+                Requirement::RequestBytes,
+                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
+                vec![target.compiled_contract.clone()],
+            )
+        } else {
+            missing(
+                Requirement::RequestBytes,
+                FixtureCoverageGapReason::NumericBoundaryNotExercised,
+                vec![target.compiled_contract.clone()],
+            )
+        },
+    );
+    requirements.push(
+        if target.identity.capability == FixtureCapability::Snapshot {
+            not_applicable(
+                Requirement::ResponseBytes,
+                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
+                vec![target.compiled_contract.clone()],
+            )
+        } else {
+            covered_if_complete(
+                Requirement::ResponseBytes,
+                response_bytes_evidence,
+                response_bytes_complete,
+                fixture_gap,
+            )
+        },
+    );
+    requirements.push(missing(
+        Requirement::AggregateSourceBytes,
+        FixtureCoverageGapReason::NumericBoundaryNotExercised,
+        vec![target.compiled_contract.clone()],
+    ));
+    requirements.push(missing(
+        Requirement::OutputBytes,
+        FixtureCoverageGapReason::NumericBoundaryNotExercised,
+        vec![target.compiled_contract.clone()],
+    ));
+    requirements.push(if target.identity.capability == FixtureCapability::Script {
+        covered_or_missing(
+            Requirement::CallLimits,
+            platform_evidence,
+            FixtureCoverageGapReason::RequiredEvidenceMissing,
+        )
+    } else {
+        not_applicable(
+            Requirement::CallLimits,
+            FixtureCoverageNotApplicableReason::NoDynamicSourceCallsCapability,
+            vec![target.compiled_contract.clone()],
+        )
+    });
+    requirements.push(
+        if target.identity.capability == FixtureCapability::Snapshot {
+            not_applicable(
+                Requirement::TimeoutClassification,
+                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
+                vec![target.compiled_contract.clone()],
+            )
+        } else {
+            covered_if_complete(
+                Requirement::TimeoutClassification,
+                timeout_evidence.clone(),
+                timeout_complete,
+                fixture_gap,
+            )
+        },
+    );
+    requirements.push(
+        if target.identity.capability == FixtureCapability::Snapshot {
+            not_applicable(
+                Requirement::NumericDeadlineEnforcement,
+                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
+                vec![target.compiled_contract.clone()],
+            )
+        } else {
+            let mut evidence = vec![target.compiled_contract.clone()];
+            evidence.extend(timeout_evidence);
+            missing(
+                Requirement::NumericDeadlineEnforcement,
+                FixtureCoverageGapReason::NumericBoundaryNotExercised,
+                evidence,
+            )
+        },
+    );
+    requirements.push(
+        if target.identity.capability == FixtureCapability::Snapshot {
+            not_applicable(
+                Requirement::OutputMinimization,
+                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
+                vec![target.compiled_contract.clone()],
+            )
+        } else if target.generated_cases.iter().any(|case| {
+            case.recipe.id == GeneratorRecipeId::OutputMinimization
+                && matches!(
+                    case.applicability,
+                    GeneratedRecipeApplicability::NotApplicable {
+                        reason: GeneratedNotApplicableReason::ProtocolMatcherOwnsResponseMutation,
+                        ..
+                    }
+                )
+        }) && protocol_complete
+        {
+            not_applicable(
+                Requirement::OutputMinimization,
+                FixtureCoverageNotApplicableReason::ProtocolMatcherOwnsOutputValidation,
+                protocol_evidence,
+            )
+        } else {
+            covered_if_complete(
+                Requirement::OutputMinimization,
+                minimization_evidence,
+                minimization_complete,
+                fixture_gap,
+            )
+        },
+    );
+    for change_kind in FixtureCoverageChangeKind::ALL {
+        requirements.push(
+            match target.comparison.as_ref().and_then(|comparison| {
+                comparison
+                    .impacts
+                    .iter()
+                    .find(|impact| impact.kind == change_kind)
+            }) {
+                Some(impact) => {
+                    let all_affected_passed =
+                        impact.affected_fixture_ids.iter().all(|fixture_id| {
+                            target.fixture_inventory.iter().any(|fixture| {
+                                fixture.fixture_id == *fixture_id
+                                    && fixture.pass_state == FixturePassState::Passed
+                            })
+                        });
+                    if impact.changed_member_ids.is_empty()
+                        || (!impact.affected_fixture_ids.is_empty() && all_affected_passed)
+                    {
+                        covered(change_kind.requirement(), vec![impact.evidence.clone()])
+                    } else {
+                        missing(
+                            change_kind.requirement(),
+                            FixtureCoverageGapReason::RequiredEvidenceMissing,
+                            vec![impact.evidence.clone()],
+                        )
+                    }
+                }
+                None => FixtureRequirementCoverage::NotEvaluated {
+                    requirement: change_kind.requirement(),
+                    reason: comparison_reason,
+                    evidence: Vec::new(),
+                },
+            },
+        );
+    }
+    debug_assert_eq!(
+        requirements
+            .iter()
+            .map(FixtureRequirementCoverage::requirement)
+            .collect::<Vec<_>>(),
+        RequiredFixtureCoverageRequirement::ALL
+    );
+    requirements
+}
+
+fn generated_recipe_complete(
+    generated: &[GeneratedFixtureCoverage],
+    recipe_id: GeneratorRecipeId,
+) -> (bool, Vec<FixtureCoverageEvidence>) {
+    let applicable = generated
+        .iter()
+        .filter(|case| {
+            case.recipe.id == recipe_id
+                && matches!(
+                    case.applicability,
+                    GeneratedRecipeApplicability::Applicable {}
+                )
+        })
+        .collect::<Vec<_>>();
+    let mut evidence = applicable
+        .iter()
+        .filter(|case| {
+            case.pass_state == FixturePassState::Passed
+                && case
+                    .source_access_assertion
+                    .as_ref()
+                    .is_none_or(|assertion| assertion.passed)
+        })
+        .map(|case| case.evidence.clone())
+        .collect::<Vec<_>>();
+    evidence.sort();
+    evidence.dedup();
+    (
+        !applicable.is_empty() && evidence.len() == applicable.len(),
+        evidence,
+    )
+}
+
+fn covered_or_missing(
+    requirement: RequiredFixtureCoverageRequirement,
+    evidence: Vec<FixtureCoverageEvidence>,
+    gap: FixtureCoverageGapReason,
+) -> FixtureRequirementCoverage {
+    if evidence.is_empty() {
+        missing(requirement, gap, evidence)
+    } else {
+        covered(requirement, evidence)
+    }
+}
+
+fn covered_if_complete(
+    requirement: RequiredFixtureCoverageRequirement,
+    evidence: Vec<FixtureCoverageEvidence>,
+    complete: bool,
+    gap: FixtureCoverageGapReason,
+) -> FixtureRequirementCoverage {
+    if complete && !evidence.is_empty() {
+        covered(requirement, evidence)
+    } else {
+        missing(requirement, gap, evidence)
+    }
+}
+
+fn covered(
+    requirement: RequiredFixtureCoverageRequirement,
+    mut evidence: Vec<FixtureCoverageEvidence>,
+) -> FixtureRequirementCoverage {
+    evidence.sort();
+    evidence.dedup();
+    FixtureRequirementCoverage::Covered {
+        requirement,
+        evidence,
+    }
+}
+
+fn missing(
+    requirement: RequiredFixtureCoverageRequirement,
+    reason: FixtureCoverageGapReason,
+    mut evidence: Vec<FixtureCoverageEvidence>,
+) -> FixtureRequirementCoverage {
+    evidence.sort();
+    evidence.dedup();
+    FixtureRequirementCoverage::Missing {
+        requirement,
+        reason,
+        evidence,
+    }
+}
+
+fn not_applicable(
+    requirement: RequiredFixtureCoverageRequirement,
+    reason: FixtureCoverageNotApplicableReason,
+    mut evidence: Vec<FixtureCoverageEvidence>,
+) -> FixtureRequirementCoverage {
+    evidence.sort();
+    evidence.dedup();
+    FixtureRequirementCoverage::NotApplicable {
+        requirement,
+        reason,
+        evidence,
     }
 }
 
@@ -577,6 +2239,14 @@ fn error_implies_source_access(code: &str) -> bool {
     code.starts_with("source.") || code == "failure.subject_mismatch"
 }
 
+struct ProductClaimsFixtureEvaluation {
+    result: std::result::Result<BTreeMap<String, Value>, String>,
+    relay_calls: u64,
+}
+
+// Authentication and pre-source denial are independent security inputs and
+// remain explicit at this offline product boundary.
+#[allow(clippy::too_many_arguments)]
 fn evaluate_product_claims(
     loaded: &LoadedRegistryProject,
     compiled: &CompiledProject,
@@ -585,7 +2255,8 @@ fn evaluate_product_claims(
     relay_result: Option<(&BTreeMap<String, Value>, &str)>,
     authentication: registry_notary_server::standalone::OfflineAuthentication,
     require_pre_source_denial: bool,
-) -> Result<std::result::Result<BTreeMap<String, Value>, String>> {
+    worker_program: &Path,
+) -> Result<ProductClaimsFixtureEvaluation> {
     use registry_notary_core::{
         ClaimRef, EvaluateRequest, EvidenceEntity, EvidenceIdentifier, RequestVariables,
         FORMAT_CLAIM_RESULT_JSON,
@@ -651,15 +2322,19 @@ fn evaluate_product_claims(
         .ok_or_else(|| anyhow!("generated Notary config is absent"))?;
     let notary_config: StandaloneRegistryNotaryConfig = serde_norway::from_slice(notary_config)
         .context("generated Notary config did not parse for offline evaluation")?;
-    let harness =
-        OfflineNotaryHarness::compile(notary_config, relay_evidence, project_cel_worker_config()?)
-            .context("production Notary offline harness did not compile")?;
+    let harness = OfflineNotaryHarness::compile(
+        notary_config,
+        relay_evidence,
+        project_cel_worker_config(worker_program),
+    )
+    .context("production Notary offline harness did not compile")?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("failed to build the offline Notary evaluation runtime")?;
     let mut claims = BTreeMap::new();
     let mut evaluated_any = false;
+    let mut relay_calls = 0_u64;
     for service in loaded.project.services.values() {
         if service.kind != ServiceKind::Evidence {
             continue;
@@ -715,9 +2390,7 @@ fn evaluate_product_claims(
                             })?
                             .to_string(),
                     );
-                } else if let Some(name) =
-                    request_path.strip_prefix("request.target.attributes.")
-                {
+                } else if let Some(name) = request_path.strip_prefix("request.target.attributes.") {
                     attributes.insert(name.to_string(), value.clone());
                 } else {
                     bail!("compiled consultation input uses an unsupported target path");
@@ -771,11 +2444,15 @@ fn evaluate_product_claims(
             let evidence = runtime.block_on(harness.evaluate(
                 OfflineNotaryRequest::new(authentication, request).with_header_purpose(purpose),
             ));
+            relay_calls = relay_calls.saturating_add(evidence.relay_calls());
             if let Some(error) = evidence.error_class() {
                 if require_pre_source_denial && evidence.relay_calls() != 0 {
                     bail!("derived authorization denial occurred after Relay access");
                 }
-                return Ok(Err(error.as_str().to_string()));
+                return Ok(ProductClaimsFixtureEvaluation {
+                    result: Err(error.as_str().to_string()),
+                    relay_calls,
+                });
             }
             if evidence.relay_calls() != evidence.consultation_count() as u64 {
                 bail!("offline Notary did not reuse each request-scoped consultation exactly once");
@@ -799,13 +2476,18 @@ fn evaluate_product_claims(
     if !evaluated_any {
         bail!("offline fixture does not select a project Notary service");
     }
-    Ok(Ok(claims))
+    Ok(ProductClaimsFixtureEvaluation {
+        result: Ok(claims),
+        relay_calls,
+    })
 }
 
-fn project_cel_worker_config() -> Result<registry_notary_server::cel_worker::CelWorkerConfig> {
+fn project_cel_worker_config(
+    worker_program: &Path,
+) -> registry_notary_server::cel_worker::CelWorkerConfig {
     let mut config =
         registry_notary_server::cel_worker::CelWorkerConfig::for_current_exe_subcommand();
-    config.command = project_registryctl_program()?;
+    config.command = worker_program.to_path_buf();
     config.command_args = vec![std::ffi::OsString::from("__registryctl-cel-worker-v1")];
     config.command_envs.clear();
     config.current_dir = None;
@@ -814,29 +2496,123 @@ fn project_cel_worker_config() -> Result<registry_notary_server::cel_worker::Cel
     // conformance remains bounded, but must measure the rule rather than the
     // test binary's startup latency.
     config.request_timeout = std::time::Duration::from_secs(10);
-    Ok(config)
+    config
 }
 
-fn project_registryctl_program() -> Result<PathBuf> {
-    let current = std::env::current_exe().context("current executable is unavailable")?;
-    if current
-        .parent()
-        .and_then(Path::file_name)
-        .is_some_and(|name| name == "deps")
-    {
-        let mut candidate = current
-            .parent()
-            .and_then(Path::parent)
-            .ok_or_else(|| anyhow!("registryctl worker path is unavailable"))?
-            .join("registryctl");
-        candidate.set_extension(std::env::consts::EXE_EXTENSION);
-        if !candidate.is_file() {
-            bail!("registryctl worker executable is unavailable");
-        }
-        Ok(candidate)
-    } else {
-        Ok(current)
+struct CallBudgetCoverageHost;
+
+#[async_trait::async_trait]
+impl registry_relay::rhai_worker::SourceHost for CallBudgetCoverageHost {
+    async fn call(
+        &mut self,
+        _call: registry_relay::rhai_worker::SourceCall,
+    ) -> std::result::Result<
+        registry_relay::rhai_worker::SourceResponse,
+        registry_relay::rhai_worker::HostFailure,
+    > {
+        Ok(registry_relay::rhai_worker::SourceResponse {
+            status: 200,
+            body: Value::Object(Map::new()),
+            headers: BTreeMap::new(),
+        })
     }
+}
+
+fn platform_call_budget_result(
+    loaded: &LoadedRegistryProject,
+    compiled: &CompiledProject,
+    worker_program: &Path,
+) -> Result<Option<FixtureSafeCode>> {
+    use registry_relay::rhai_worker::{WorkerError, WorkerLimits, WorkerProcess, WorkerRequest};
+
+    let authored_script_call_bounds = loaded
+        .integrations
+        .iter()
+        .filter_map(|(alias, integration)| {
+            matches!(
+                integration.document.capability,
+                CapabilityDeclaration::Script { .. }
+            )
+            .then_some((alias.clone(), u32::from(integration.document.bounds.calls)))
+        })
+        .collect::<BTreeMap<_, _>>();
+    if authored_script_call_bounds.is_empty() {
+        return Ok(None);
+    }
+    let compiled_script_call_bounds = compiled
+        .relay_private
+        .iter()
+        .filter(|(path, _)| path.to_string_lossy().contains("private-bindings"))
+        .filter_map(|(_, bytes)| serde_json::from_slice::<Value>(bytes).ok())
+        .filter_map(|binding| {
+            let source_instance = binding.get("source_instance")?.as_str()?.to_owned();
+            let call_bound = binding
+                .pointer("/capabilities/script/max_calls")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())?;
+            Some((source_instance, call_bound))
+        })
+        .fold(
+            BTreeMap::<String, BTreeSet<u32>>::new(),
+            |mut bounds, (source_instance, call_bound)| {
+                bounds
+                    .entry(source_instance)
+                    .or_default()
+                    .insert(call_bound);
+                bounds
+            },
+        );
+    if !compiled_script_call_bounds_match(
+        &authored_script_call_bounds,
+        &compiled_script_call_bounds,
+    ) {
+        bail!("compiled private bindings did not preserve every authored Script limits.calls");
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build the generated call-budget fixture runtime")?;
+    let all_bounds_enforced = authored_script_call_bounds
+        .values()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .all(|compiled_call_bound| {
+            let source_calls = (0..=compiled_call_bound)
+                .map(|index| format!("source.get(\"/__registry_call_budget_{index}\");"))
+                .collect::<String>();
+            let script = format!("fn consult(ctx) {{ {source_calls} result.no_match() }}");
+            let request = WorkerRequest::v1(
+                &script,
+                "consult",
+                WorkerLimits {
+                    wall_time_ms: 5_000,
+                    max_source_calls: compiled_call_bound,
+                    ..WorkerLimits::default()
+                },
+            );
+            matches!(
+                runtime.block_on(
+                    WorkerProcess::with_program(worker_program)
+                        .evaluate_with_host(&request, &mut CallBudgetCoverageHost),
+                ),
+                Err(WorkerError::BudgetExceeded)
+            )
+        });
+    Ok(Some(if all_bounds_enforced {
+        FixtureSafeCode::SourceCallBudgetExceeded
+    } else {
+        FixtureSafeCode::RedactedUnclassifiedError
+    }))
+}
+
+fn compiled_script_call_bounds_match(
+    authored: &BTreeMap<String, u32>,
+    compiled: &BTreeMap<String, BTreeSet<u32>>,
+) -> bool {
+    authored.iter().all(|(alias, authored_bound)| {
+        compiled.get(&format!("{alias}-source")) == Some(&BTreeSet::from([*authored_bound]))
+    })
 }
 
 fn execute_fixture<'a>(
@@ -1709,73 +3485,26 @@ mod fixture_interface_tests {
     use super::*;
 
     fn rhai_project() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/project-authoring/dhis2-script")
-    }
-
-    fn compiled_project(
-        loaded: &LoadedRegistryProject,
-    ) -> Result<(
-        CompiledProject,
-        registry_relay::offline_fixture::OfflineRelayFixture,
-    )> {
-        let environment = offline_fixture_environment(loaded)?;
-        let compiled =
-            compile_project_for_environment(loaded, "offline-fixture", &environment, None)?;
-        let relay_config = compiled
-            .relay_private
-            .get(Path::new("config/relay.yaml"))
-            .ok_or_else(|| anyhow!("generated Relay config is absent"))?;
-        let fixture = compile_generated_relay_fixture(relay_config, &compiled.relay_private)?;
-        Ok((compiled, fixture))
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-authoring/dhis2-script")
     }
 
     #[test]
-    fn trace_is_deterministic_material_and_value_free() {
-        let loaded = load_registry_project(&rhai_project(), None).expect("Rhai project loads");
-        let (compiled, relay_fixture) = compiled_project(&loaded).expect("Rhai project compiles");
-        let (_, fixture) = loaded.integrations["health-record"]
-            .fixtures
-            .iter()
-            .find(|(_, fixture)| fixture.name == "complete-child-health-evidence")
-            .expect("match fixture exists");
-        let input = offline_fixture_input(fixture).expect("fixture input is valid");
-        let interactions =
-            offline_fixture_interactions(fixture).expect("fixture interactions are valid");
-        let mut ordinary_trace = Vec::new();
-        let ordinary = execute_offline_profiles(
-            &compiled,
-            &relay_fixture,
-            "health-record",
-            input.clone(),
-            interactions.clone(),
-            false,
-            &mut ordinary_trace,
-        )
-        .expect("ordinary fixture passes");
-        assert_eq!(ordinary.calls, ["script-source-call"]);
-        assert!(ordinary_trace.is_empty());
+    fn compiled_call_budget_evidence_requires_every_script_integration_bound() {
+        let authored = BTreeMap::from([("first".to_owned(), 1_u32), ("second".to_owned(), 3_u32)]);
+        let complete = BTreeMap::from([
+            ("first-source".to_owned(), BTreeSet::from([1_u32])),
+            ("second-source".to_owned(), BTreeSet::from([3_u32])),
+        ]);
+        assert!(compiled_script_call_bounds_match(&authored, &complete));
 
-        let mut traced_calls = Vec::new();
-        let traced = execute_offline_profiles(
-            &compiled,
-            &relay_fixture,
-            "health-record",
-            input,
-            interactions,
-            true,
-            &mut traced_calls,
-        )
-        .expect("traced fixture passes");
-        assert_eq!(traced.calls, traced_calls);
-        assert_eq!(traced_calls.len(), 1);
-        assert_eq!(
-            traced_calls[0],
-            "call=1 operation=script-source-call method=GET path=/api/tracker/trackedEntities/* query=[fields,includeDeleted] headers=[] body=none"
-        );
-        for sensitive in ["A0000000001", "Nia", "REF-0001"] {
-            assert!(!traced_calls[0].contains(sensitive));
-        }
+        let missing = BTreeMap::from([("first-source".to_owned(), BTreeSet::from([1_u32]))]);
+        assert!(!compiled_script_call_bounds_match(&authored, &missing));
+
+        let wrong = BTreeMap::from([
+            ("first-source".to_owned(), BTreeSet::from([1_u32])),
+            ("second-source".to_owned(), BTreeSet::from([1_u32])),
+        ]);
+        assert!(!compiled_script_call_bounds_match(&authored, &wrong));
     }
 
     #[test]

@@ -78,7 +78,7 @@ test('derives all advertised starter selections from committed workspaces', asyn
   );
 });
 
-test('emits one canonical seven-command sequence for exactly five starters', async () => {
+test('emits one canonical eight-command sequence for exactly five starters', async () => {
   const starters = await buildProjectStarterMatrix(repoRoot);
 
   assert.equal(starters.length, 5);
@@ -90,16 +90,18 @@ test('emits one canonical seven-command sequence for exactly five starters', asy
       'watch',
       'test',
       'check',
+      'compare',
       'build',
     ]);
-    assert.equal(starter.commands.length, 7);
+    assert.equal(starter.commands.length, 8);
     assert.match(starter.commands[0], /^registryctl init --from /);
     assert.match(starter.commands[1], /^registryctl authoring editor --project-dir /);
     assert.match(starter.commands[2], / --trace$/);
     assert.match(starter.commands[3], / --watch$/);
     assert.match(starter.commands[4], /^registryctl test --project-dir [^ ]+$/);
     assert.match(starter.commands[5], / --environment local --explain$/);
-    assert.match(starter.commands[6], / --environment local$/);
+    assert.match(starter.commands[6], / --environment local --from-starter$/);
+    assert.match(starter.commands[7], / --environment local$/);
   }
 });
 
@@ -289,7 +291,7 @@ test('rejects a catalog with fewer than five starter entries', async () => {
   await withIsolatedProjectCatalog(async ({ root, catalog, catalogPath }) => {
     const fhir = catalog.workspaces.find((workspace) => workspace.starter === 'fhir-r4');
     delete fhir.starter;
-    fhir.steps = fhir.steps.filter((step) => step !== 'init');
+    fhir.steps = fhir.steps.filter((step) => !['init', 'compare'].includes(step));
     await writeFile(catalogPath, YAML.stringify(catalog));
 
     await assert.rejects(
@@ -325,9 +327,9 @@ test('publishes the authoring tutorial with the catalog-backed HTTP command sequ
     1,
     'authoring tutorial has one author-path placement',
   );
-  const integrations = astroConfig.slice(
-    astroConfig.indexOf("label: 'Integrations'"),
-    astroConfig.indexOf("label: 'Concepts'"),
+  const configure = astroConfig.slice(
+    astroConfig.indexOf("label: 'Configure'"),
+    astroConfig.indexOf("label: 'Verify'"),
   );
-  assert.match(integrations, /slug: 'tutorials\/author-registry-project'/);
+  assert.match(configure, /slug: 'tutorials\/author-registry-project'/);
 });

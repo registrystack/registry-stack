@@ -1,0 +1,1092 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registryctl/project-reports/registry.project.migration.v1.schema.json",
+  "title": "Registry Stack project authoring migration report v1",
+  "description": "Strict, deterministic, value-free evidence for a checked project authoring migration. This report never performs a migration or overwrites authored files.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_grade",
+    "migration_execution",
+    "disposition",
+    "version_support",
+    "version_transitions",
+    "compatibility",
+    "compatible_normalizations",
+    "semantic_changes",
+    "affected",
+    "reviews",
+    "output",
+    "rerun_gates",
+    "diagnostics",
+    "unresolved_decisions",
+    "blocking_reasons",
+    "evidence_limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "registry.project.migration.v1"
+    },
+    "evidence_grade": {
+      "const": "offline_static"
+    },
+    "migration_execution": {
+      "const": "not_performed"
+    },
+    "disposition": {
+      "enum": [
+        "no_migration_required",
+        "review_required",
+        "checked_safe",
+        "ready_for_explicit_write",
+        "blocked"
+      ]
+    },
+    "version_support": {
+      "$ref": "#/$defs/version_support_assessment"
+    },
+    "version_transitions": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/version_transition"
+            },
+            {
+              "properties": {
+                "contract": {
+                  "const": "project"
+                },
+                "source_version": {
+                  "$ref": "#/$defs/optional_authoring_version"
+                },
+                "target_version": {
+                  "$ref": "#/$defs/optional_authoring_version"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/version_transition"
+            },
+            {
+              "properties": {
+                "contract": {
+                  "const": "integration"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/version_transition"
+            },
+            {
+              "properties": {
+                "contract": {
+                  "const": "entity"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/version_transition"
+            },
+            {
+              "properties": {
+                "contract": {
+                  "const": "fixture"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/version_transition"
+            },
+            {
+              "properties": {
+                "contract": {
+                  "const": "environment"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "compatibility": {
+      "enum": [
+        "no_migration_required",
+        "compatible_normalization_only",
+        "semantic_review_required",
+        "unsafe_or_unresolved",
+        "unsupported_transition",
+        "catalog_incomplete"
+      ]
+    },
+    "compatible_normalizations": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/change"
+      }
+    },
+    "semantic_changes": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/change"
+      }
+    },
+    "affected": {
+      "$ref": "#/$defs/affected"
+    },
+    "reviews": {
+      "type": "array",
+      "maxItems": 13,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/review"
+      }
+    },
+    "output": {
+      "$ref": "#/$defs/output"
+    },
+    "rerun_gates": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/gate"
+            },
+            {
+              "properties": {
+                "gate": {
+                  "const": "schema"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/gate"
+            },
+            {
+              "properties": {
+                "gate": {
+                  "const": "fixture"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/gate"
+            },
+            {
+              "properties": {
+                "gate": {
+                  "const": "check"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/gate"
+            },
+            {
+              "properties": {
+                "gate": {
+                  "const": "build"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/gate"
+            },
+            {
+              "properties": {
+                "gate": {
+                  "const": "generated_reference"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "diagnostics": {
+      "description": "Closed, value-free source-inspection and gate-failure evidence. The Rust DTO additionally enforces diagnostic-to-version-support and diagnostic-to-gate-status coherence that JSON Schema cannot correlate across arrays.",
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    },
+    "unresolved_decisions": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/decision"
+      }
+    },
+    "blocking_reasons": {
+      "type": "array",
+      "maxItems": 15,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/blocking_reason"
+      }
+    },
+    "evidence_limitations": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "prefixItems": [
+        {
+          "const": "offline_static_only"
+        },
+        {
+          "const": "migration_not_performed"
+        },
+        {
+          "const": "candidate_does_not_apply_migration"
+        },
+        {
+          "const": "authored_files_never_overwritten"
+        },
+        {
+          "const": "secret_material_not_inspected"
+        },
+        {
+          "const": "raw_authored_values_omitted"
+        },
+        {
+          "const": "runtime_not_evaluated"
+        },
+        {
+          "const": "deployment_not_performed"
+        },
+        {
+          "const": "country_approval_not_inferred"
+        }
+      ],
+      "items": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "version_support": {
+            "properties": {
+              "target": {
+                "const": "unsupported"
+              }
+            },
+            "required": [
+              "target"
+            ]
+          }
+        },
+        "required": [
+          "version_support"
+        ]
+      },
+      "then": {
+        "properties": {
+          "disposition": {
+            "const": "blocked"
+          },
+          "version_transitions": {
+            "items": {
+              "properties": {
+                "target_version": {
+                  "type": "null"
+                },
+                "direction": {
+                  "const": "unsupported_target"
+                }
+              },
+              "required": [
+                "target_version",
+                "direction"
+              ]
+            }
+          },
+          "rerun_gates": {
+            "items": {
+              "properties": {
+                "status": {
+                  "const": "not_applicable"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "version_support": {
+                  "properties": {
+                    "source": {
+                      "const": "supported"
+                    }
+                  },
+                  "required": [
+                    "source"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "blocking_reasons": {
+                  "const": [
+                    "target_version_unsupported"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "else": {
+        "properties": {
+          "version_transitions": {
+            "prefixItems": [
+              {
+                "properties": {
+                  "target_version": {
+                    "$ref": "#/$defs/authoring_version"
+                  },
+                  "direction": {
+                    "not": {
+                      "const": "unsupported_target"
+                    }
+                  }
+                },
+                "required": [
+                  "target_version",
+                  "direction"
+                ]
+              }
+            ],
+            "items": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "target_version": {
+                      "$ref": "#/$defs/authoring_version"
+                    },
+                    "direction": {
+                      "not": {
+                        "const": "unsupported_target"
+                      }
+                    }
+                  },
+                  "required": [
+                    "target_version",
+                    "direction"
+                  ]
+                },
+                {
+                  "properties": {
+                    "source_version": {
+                      "type": "null"
+                    },
+                    "target_version": {
+                      "type": "null"
+                    },
+                    "direction": {
+                      "const": "absent"
+                    }
+                  },
+                  "required": [
+                    "source_version",
+                    "target_version",
+                    "direction"
+                  ]
+                },
+                {
+                  "properties": {
+                    "source_version": {
+                      "$ref": "#/$defs/authoring_version"
+                    },
+                    "target_version": {
+                      "type": "null"
+                    },
+                    "direction": {
+                      "const": "removed_contract"
+                    }
+                  },
+                  "required": [
+                    "source_version",
+                    "target_version",
+                    "direction"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "authoring_version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "optional_authoring_version": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/authoring_version"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version_support": {
+      "enum": [
+        "supported",
+        "unsupported",
+        "not_evaluated"
+      ]
+    },
+    "version_support_assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "target"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/version_support"
+        },
+        "target": {
+          "$ref": "#/$defs/version_support"
+        }
+      }
+    },
+    "authoring_contract": {
+      "enum": [
+        "project",
+        "integration",
+        "entity",
+        "fixture",
+        "environment"
+      ]
+    },
+    "version_direction": {
+      "enum": [
+        "absent",
+        "same",
+        "upgrade",
+        "downgrade",
+        "added_contract",
+        "removed_contract",
+        "unsupported_target"
+      ]
+    },
+    "version_transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "source_version",
+        "target_version",
+        "direction"
+      ],
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/authoring_contract"
+        },
+        "source_version": {
+          "$ref": "#/$defs/optional_authoring_version"
+        },
+        "target_version": {
+          "$ref": "#/$defs/optional_authoring_version"
+        },
+        "direction": {
+          "$ref": "#/$defs/version_direction"
+        }
+      }
+    },
+    "document": {
+      "enum": [
+        "project",
+        "integration",
+        "entity",
+        "fixture",
+        "environment"
+      ]
+    },
+    "field_path": {
+      "enum": [
+        "",
+        "/version",
+        "/registry",
+        "/integrations/*",
+        "/entities/*",
+        "/services/*",
+        "/services/*/access",
+        "/services/*/consultations/*",
+        "/services/*/claims/*",
+        "/services/*/api/attribute_release_profiles/*/subject/input",
+        "/services/*/api/attribute_release_profiles/*/response",
+        "/services/*/api/attribute_release_profiles/*/response/max_age_seconds",
+        "/input",
+        "/capability",
+        "/outputs/*",
+        "/primary_key",
+        "/schema",
+        "/materialization",
+        "/classification",
+        "/interactions/*",
+        "/expect",
+        "/integrations/*/source/origin",
+        "/integrations/*/source/credential",
+        "/relay",
+        "/deployment",
+        "/notary_cel"
+      ]
+    },
+    "address": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "document",
+        "path"
+      ],
+      "properties": {
+        "document": {
+          "$ref": "#/$defs/document"
+        },
+        "path": {
+          "$ref": "#/$defs/field_path"
+        }
+      }
+    },
+    "operation": {
+      "enum": [
+        "normalize_field",
+        "add_field",
+        "remove_field",
+        "rename_field",
+        "change_semantics"
+      ]
+    },
+    "semantic_effect": {
+      "enum": [
+        "preserved",
+        "changed",
+        "unresolved"
+      ]
+    },
+    "safety": {
+      "enum": [
+        "safe",
+        "unsafe",
+        "unresolved"
+      ]
+    },
+    "replacement_disposition": {
+      "enum": [
+        "not_applicable",
+        "field",
+        "no_replacement",
+        "unresolved"
+      ]
+    },
+    "replacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "disposition",
+        "address"
+      ],
+      "properties": {
+        "disposition": {
+          "$ref": "#/$defs/replacement_disposition"
+        },
+        "address": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/address"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "field"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "address": {
+                "$ref": "#/$defs/address"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "address": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "owner": {
+      "enum": [
+        "registryctl",
+        "country_author",
+        "operator"
+      ]
+    },
+    "classification": {
+      "enum": [
+        "public",
+        "structural",
+        "internal",
+        "sensitive",
+        "secret_reference",
+        "redacted_fixture"
+      ]
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "address",
+        "operation",
+        "semantic_effect",
+        "safety",
+        "replacement",
+        "owner",
+        "classification"
+      ],
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/address"
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        },
+        "semantic_effect": {
+          "$ref": "#/$defs/semantic_effect"
+        },
+        "safety": {
+          "$ref": "#/$defs/safety"
+        },
+        "replacement": {
+          "$ref": "#/$defs/replacement"
+        },
+        "owner": {
+          "$ref": "#/$defs/owner"
+        },
+        "classification": {
+          "$ref": "#/$defs/classification"
+        }
+      }
+    },
+    "affected_count": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "count"
+          ],
+          "properties": {
+            "state": {
+              "const": "not_affected"
+            },
+            "count": {
+              "const": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "count"
+          ],
+          "properties": {
+            "state": {
+              "const": "affected"
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "count"
+          ],
+          "properties": {
+            "state": {
+              "const": "unresolved"
+            },
+            "count": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "artifact": {
+      "enum": [
+        "relay_config",
+        "relay_environment_contract",
+        "notary_config",
+        "notary_environment_contract",
+        "project_explanation",
+        "project_semantic_impact",
+        "project_fixture_coverage",
+        "project_artifact_manifest",
+        "generated_configuration_reference",
+        "release_readiness_evidence"
+      ]
+    },
+    "affected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fixtures",
+        "services",
+        "consultations",
+        "claims",
+        "environments",
+        "generated_artifacts"
+      ],
+      "properties": {
+        "fixtures": {
+          "$ref": "#/$defs/affected_count"
+        },
+        "services": {
+          "$ref": "#/$defs/affected_count"
+        },
+        "consultations": {
+          "$ref": "#/$defs/affected_count"
+        },
+        "claims": {
+          "$ref": "#/$defs/affected_count"
+        },
+        "environments": {
+          "$ref": "#/$defs/affected_count"
+        },
+        "generated_artifacts": {
+          "type": "array",
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/artifact"
+          }
+        }
+      }
+    },
+    "review_class": {
+      "enum": [
+        "authoring",
+        "compatibility",
+        "migration",
+        "fixtures",
+        "relay",
+        "notary",
+        "interoperability",
+        "privacy",
+        "security",
+        "operations",
+        "documentation",
+        "country_governance",
+        "release"
+      ]
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "class",
+        "status"
+      ],
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/review_class"
+        },
+        "status": {
+          "enum": [
+            "required_pending",
+            "approved"
+          ]
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "write_authority",
+        "candidate_artifact",
+        "candidate_eligibility",
+        "authored_file_policy",
+        "application_policy",
+        "candidate_emission"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "check_only",
+            "reviewable_patch",
+            "separate_output_directory"
+          ]
+        },
+        "write_authority": {
+          "enum": [
+            "not_granted",
+            "explicit_candidate_write_granted"
+          ]
+        },
+        "candidate_artifact": {
+          "enum": [
+            "none",
+            "reviewable_patch",
+            "separate_output_directory"
+          ]
+        },
+        "candidate_eligibility": {
+          "enum": [
+            "not_requested",
+            "eligible_to_emit",
+            "blocked"
+          ]
+        },
+        "authored_file_policy": {
+          "const": "never_overwrite_authored_files"
+        },
+        "application_policy": {
+          "const": "explicit_operator_apply_required"
+        },
+        "candidate_emission": {
+          "enum": [
+            "not_emitted",
+            "reviewable_patch_candidate_emitted",
+            "separate_output_candidate_emitted"
+          ]
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate",
+        "status"
+      ],
+      "properties": {
+        "gate": {
+          "enum": [
+            "schema",
+            "fixture",
+            "check",
+            "build",
+            "generated_reference"
+          ]
+        },
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "not_run",
+            "not_required",
+            "not_applicable"
+          ]
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "kind",
+        "scope"
+      ],
+      "properties": {
+        "owner": {
+          "enum": [
+            "country_authority",
+            "project_operator"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "country_semantic_intent",
+            "country_legal_basis",
+            "field_replacement",
+            "data_minimization",
+            "service_policy",
+            "claim_semantics",
+            "operator_trust",
+            "operator_secret_binding",
+            "operator_deployment"
+          ]
+        },
+        "scope": {
+          "enum": [
+            "project",
+            "service",
+            "consultation",
+            "claim",
+            "environment",
+            "generated_artifacts"
+          ]
+        }
+      }
+    },
+    "blocking_reason": {
+      "enum": [
+        "source_inspection_failed",
+        "source_version_unsupported",
+        "target_version_unsupported",
+        "version_support_not_evaluated",
+        "downgrade_or_contract_removal",
+        "migration_catalog_incomplete",
+        "unsafe_change",
+        "unresolved_change",
+        "removed_field_without_replacement",
+        "affected_surface_unresolved",
+        "unresolved_country_or_operator_decision",
+        "rerun_gate_failed",
+        "rerun_gate_not_run",
+        "explicit_write_authority_missing",
+        "write_authority_scope_mismatch"
+      ]
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "phase",
+        "contract",
+        "remediation"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "source_yaml_malformed",
+            "source_version_missing",
+            "source_version_malformed",
+            "source_version_zero",
+            "source_version_out_of_bounds",
+            "source_version_unsupported",
+            "source_versions_mixed",
+            "target_version_out_of_bounds",
+            "target_version_unsupported",
+            "rerun_gate_failed"
+          ]
+        },
+        "phase": {
+          "enum": [
+            "source_inspection",
+            "version_inspection",
+            "schema_gate",
+            "fixture_gate",
+            "check_gate",
+            "build_gate",
+            "generated_reference_gate"
+          ]
+        },
+        "contract": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/authoring_contract"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remediation": {
+          "enum": [
+            "correct_source_yaml",
+            "declare_supported_version",
+            "align_contract_versions",
+            "select_supported_target_version",
+            "inspect_candidate_schema",
+            "repair_fixtures",
+            "resolve_project_check",
+            "resolve_project_build",
+            "regenerate_configuration_reference"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -8,7 +8,7 @@ const docsRoot = resolve(scriptDir, '..');
 const defaultRepoRoot = resolve(docsRoot, '../..');
 const catalogRelative = 'crates/registryctl/tests/fixtures/project-authoring-journeys.yaml';
 const goldenPrefix = 'crates/registryctl/tests/fixtures/project-authoring/';
-const supportedSteps = ['init', 'editor', 'trace', 'watch', 'test', 'check', 'build'];
+const supportedSteps = ['init', 'editor', 'trace', 'watch', 'test', 'check', 'compare', 'build'];
 const starterSteps = supportedSteps;
 const publicStarterOrder = ['http', 'dhis2-tracker', 'opencrvs-dci', 'fhir-r4', 'snapshot'];
 const safeCliTokenPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
@@ -126,6 +126,14 @@ function buildCommands(workspace, selection) {
           `registryctl check --project-dir ${workspace.project_dir} --environment ${workspace.environment}${workspace.check_explain ? ' --explain' : ''}`,
         );
         break;
+      case 'compare':
+        if (!workspace.starter) {
+          throw new Error(`${workspace.id} cannot compare with an embedded starter`);
+        }
+        commands.push(
+          `registryctl compare --project-dir ${workspace.project_dir} --environment ${workspace.environment} --from-starter`,
+        );
+        break;
       case 'build':
         commands.push(
           `registryctl build --project-dir ${workspace.project_dir} --environment ${workspace.environment}`,
@@ -203,10 +211,10 @@ export async function buildProjectAuthoringJourneyMatrix(repoRoot = defaultRepoR
     }
     if (workspace.starter) {
       if (!equalValues(workspace.steps, starterSteps)) {
-        throw new Error(`${workspace.id} starter must expose the canonical seven-command journey`);
+        throw new Error(`${workspace.id} starter must expose the canonical eight-command journey`);
       }
-    } else if (workspace.steps.includes('init')) {
-      throw new Error(`${workspace.id} is not a starter and cannot emit init --from`);
+    } else if (workspace.steps.includes('init') || workspace.steps.includes('compare')) {
+      throw new Error(`${workspace.id} is not a starter and cannot emit starter-only commands`);
     }
 
     const projectRoot = resolve(repoRoot, workspace.source);

@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registryctl/project-reports/registryctl.fixture_error_reference.v1.schema.json",
+  "title": "Registryctl Offline Fixture Error Reference v1",
+  "type": "object",
+  "required": ["schema_version", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "registryctl.fixture_error_reference.v1"
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 16,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "code": {
+      "enum": [
+        "authorization.denied",
+        "failure.subject_mismatch",
+        "fixture.execution_contract_invalid",
+        "fixture.profile_not_found",
+        "fixture.request_mismatch",
+        "fixture.source_operation_unknown",
+        "input.pattern_mismatch",
+        "redacted_unclassified_error",
+        "source.call_budget_exceeded",
+        "source.cardinality_violation",
+        "source.deadline_exceeded",
+        "source.response_malformed",
+        "source.response_too_large",
+        "source.status_rejected",
+        "source.unavailable",
+        "source_unavailable"
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "required": [
+        "family",
+        "code",
+        "owner",
+        "product",
+        "phase",
+        "safe_meaning",
+        "rule",
+        "safe_remediation",
+        "field_address_pattern",
+        "evidence_scope",
+        "secret_sensitive_value_policy",
+        "docs_anchor",
+        "lifecycle",
+        "introduced_in",
+        "stability",
+        "evidence_limitation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "const": "fixture_execution"
+        },
+        "code": {
+          "$ref": "#/$defs/code"
+        },
+        "owner": {
+          "const": "registryctl"
+        },
+        "product": {
+          "const": "registryctl_relay_offline_harness"
+        },
+        "phase": {
+          "const": "offline_execution"
+        },
+        "safe_meaning": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "rule": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "safe_remediation": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "field_address_pattern": {
+          "type": "null"
+        },
+        "evidence_scope": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "secret_sensitive_value_policy": {
+          "const": "no_runtime_values"
+        },
+        "docs_anchor": {
+          "type": "string",
+          "pattern": "^/reference/diagnostics/fixture/#registryctl_relay_offline_harness--[a-z][a-z0-9_]*(?:\\.[a-z0-9_]+)*$",
+          "maxLength": 512
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/lifecycle"
+        },
+        "introduced_in": {
+          "$ref": "#/$defs/introduced_in"
+        },
+        "stability": {
+          "const": "pre1_stable_code"
+        },
+        "evidence_limitation": {
+          "$ref": "#/$defs/safe_text"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/lifecycle_version"
+        }
+      ]
+    },
+    "safe_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "lifecycle": {
+      "enum": ["unreleased", "active", "deprecated", "released"]
+    },
+    "introduced_in": {
+      "type": ["string", "null"],
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "lifecycle_version": {
+      "if": {
+        "properties": {
+          "lifecycle": {
+            "const": "unreleased"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "introduced_in": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "introduced_in": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

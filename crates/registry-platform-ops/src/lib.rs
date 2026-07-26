@@ -845,6 +845,267 @@ impl ConfigProvenance {
     }
 }
 
+/// Stable, value-free category for a rejected bundle verification or
+/// acceptance decision.
+///
+/// The representation is private so callers cannot construct unreviewed
+/// categories. [`Self::ALL`] is the complete public catalog. Source error
+/// payloads, including paths, hashes, parser messages, and supplied values,
+/// are deliberately excluded from this type and its definitions.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct BundleVerificationCode(BundleVerificationCodeValue);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum BundleVerificationCodeValue {
+    Binding,
+    Rollback,
+    Signature,
+    Validation,
+}
+
+impl BundleVerificationCode {
+    pub const REJECTED_BINDING: Self = Self(BundleVerificationCodeValue::Binding);
+    pub const REJECTED_ROLLBACK: Self = Self(BundleVerificationCodeValue::Rollback);
+    pub const REJECTED_SIGNATURE: Self = Self(BundleVerificationCodeValue::Signature);
+    pub const REJECTED_VALIDATION: Self = Self(BundleVerificationCodeValue::Validation);
+
+    /// Every published bundle-verification rejection code in stable order.
+    pub const ALL: &'static [Self] = &[
+        Self::REJECTED_BINDING,
+        Self::REJECTED_ROLLBACK,
+        Self::REJECTED_SIGNATURE,
+        Self::REJECTED_VALIDATION,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self.0 {
+            BundleVerificationCodeValue::Binding => "rejected_binding",
+            BundleVerificationCodeValue::Rollback => "rejected_rollback",
+            BundleVerificationCodeValue::Signature => "rejected_signature",
+            BundleVerificationCodeValue::Validation => "rejected_validation",
+        }
+    }
+
+    /// Return the reviewed static public metadata for this code.
+    #[must_use]
+    pub fn definition(self) -> &'static BundleVerificationCodeDefinition {
+        let index = match self.0 {
+            BundleVerificationCodeValue::Binding => 0,
+            BundleVerificationCodeValue::Rollback => 1,
+            BundleVerificationCodeValue::Signature => 2,
+            BundleVerificationCodeValue::Validation => 3,
+        };
+        &BUNDLE_VERIFICATION_CODE_DEFINITIONS[index]
+    }
+}
+
+impl Display for BundleVerificationCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for BundleVerificationCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// Restriction applied to evidence published for a bundle-verification code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum BundleVerificationEvidencePolicy {
+    /// Publish the stable code and reviewed static catalog text only.
+    NoRuntimeValues,
+}
+
+impl BundleVerificationEvidencePolicy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoRuntimeValues => "no_runtime_values",
+        }
+    }
+}
+
+/// Publication lifecycle of a bundle-verification code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BundleVerificationCodeLifecycle {
+    /// The code is implemented but has not appeared in a released version.
+    Unreleased,
+    /// The code is part of the active released public contract.
+    Active,
+    /// The released code remains recognized while consumers migrate.
+    Deprecated,
+}
+
+/// Reviewed, value-free public metadata for one bundle-verification code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct BundleVerificationCodeDefinition {
+    pub code: BundleVerificationCode,
+    pub phase: &'static str,
+    pub safe_meaning: &'static str,
+    pub rule: &'static str,
+    pub safe_remediation: &'static str,
+    pub safe_report_message: &'static str,
+    pub evidence_scope: &'static str,
+    pub evidence_policy: BundleVerificationEvidencePolicy,
+    pub evidence_limitation: &'static str,
+    pub docs_slug: &'static str,
+    pub lifecycle: BundleVerificationCodeLifecycle,
+    pub introduced_in: Option<&'static str>,
+}
+
+impl BundleVerificationCodeDefinition {
+    /// Check the lifecycle/version relationship required by generated
+    /// references and release gates.
+    #[must_use]
+    pub fn lifecycle_metadata_is_valid(&self) -> bool {
+        match self.lifecycle {
+            BundleVerificationCodeLifecycle::Unreleased => self.introduced_in.is_none(),
+            BundleVerificationCodeLifecycle::Active
+            | BundleVerificationCodeLifecycle::Deprecated => {
+                self.introduced_in.is_some_and(is_numeric_release_version)
+            }
+        }
+    }
+}
+
+fn is_numeric_release_version(version: &str) -> bool {
+    let mut parts = version.split('.');
+    (0..3).all(|_| {
+        parts
+            .next()
+            .is_some_and(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    }) && parts.next().is_none()
+}
+
+/// Canonical product-owned definitions consumed by reports and generated
+/// references. Entries are ordered by their stable code string.
+pub const BUNDLE_VERIFICATION_CODE_DEFINITIONS: &[BundleVerificationCodeDefinition] = &[
+    BundleVerificationCodeDefinition {
+        code: BundleVerificationCode::REJECTED_BINDING,
+        phase: "bundle_verification",
+        safe_meaning: "The bundle binding does not match the intended runtime target.",
+        rule: "registry.platform.bundle_verification.binding_matches_target",
+        safe_remediation: "Use a bundle issued for the intended runtime binding.",
+        safe_report_message: "The bundle binding does not match the intended runtime target. Use a bundle issued for the intended runtime binding.",
+        evidence_scope: "signed bundle and configured runtime binding",
+        evidence_policy: BundleVerificationEvidencePolicy::NoRuntimeValues,
+        evidence_limitation:
+            "The category does not disclose received or configured binding values.",
+        docs_slug: "rejected-binding",
+        lifecycle: BundleVerificationCodeLifecycle::Unreleased,
+        introduced_in: None,
+    },
+    BundleVerificationCodeDefinition {
+        code: BundleVerificationCode::REJECTED_ROLLBACK,
+        phase: "bundle_activation",
+        safe_meaning:
+            "The bundle or override does not satisfy local anti-rollback requirements.",
+        rule: "registry.platform.bundle_verification.rollback_constraints_satisfied",
+        safe_remediation: "Use a monotonic bundle or an authorized break-glass selection.",
+        safe_report_message: "The bundle or override does not satisfy local anti-rollback requirements. Use a monotonic bundle or an authorized break-glass selection.",
+        evidence_scope: "local anti-rollback state and bundle or override metadata",
+        evidence_policy: BundleVerificationEvidencePolicy::NoRuntimeValues,
+        evidence_limitation:
+            "The category does not disclose stored sequences, content digests, paths, or approval values.",
+        docs_slug: "rejected-rollback",
+        lifecycle: BundleVerificationCodeLifecycle::Unreleased,
+        introduced_in: None,
+    },
+    BundleVerificationCodeDefinition {
+        code: BundleVerificationCode::REJECTED_SIGNATURE,
+        phase: "bundle_verification",
+        safe_meaning:
+            "Bundle authenticity or declared content integrity verification failed.",
+        rule: "registry.platform.bundle_verification.signature_and_integrity_accepted",
+        safe_remediation:
+            "Rebuild and sign the complete bundle with an accepted trust configuration.",
+        safe_report_message: "Bundle authenticity or declared content integrity verification failed. Rebuild and sign the complete bundle with an accepted trust configuration.",
+        evidence_scope: "bundle trust metadata, signature envelope, file closure, and content digests",
+        evidence_policy: BundleVerificationEvidencePolicy::NoRuntimeValues,
+        evidence_limitation:
+            "The category does not disclose signer identifiers, file names, or content digests.",
+        docs_slug: "rejected-signature",
+        lifecycle: BundleVerificationCodeLifecycle::Unreleased,
+        introduced_in: None,
+    },
+    BundleVerificationCodeDefinition {
+        code: BundleVerificationCode::REJECTED_VALIDATION,
+        phase: "bundle_verification",
+        safe_meaning:
+            "The bundle or acceptance metadata is missing, unreadable, malformed, or unsupported.",
+        rule: "registry.platform.bundle_verification.input_is_valid",
+        safe_remediation:
+            "Regenerate the bundle and acceptance metadata using supported formats.",
+        safe_report_message: "The bundle or acceptance metadata is missing, unreadable, malformed, or unsupported. Regenerate the bundle and acceptance metadata using supported formats.",
+        evidence_scope: "bundle encoding, manifest, acceptance metadata, and required local inputs",
+        evidence_policy: BundleVerificationEvidencePolicy::NoRuntimeValues,
+        evidence_limitation:
+            "The category does not disclose parser messages, local paths, or supplied values.",
+        docs_slug: "rejected-validation",
+        lifecycle: BundleVerificationCodeLifecycle::Unreleased,
+        introduced_in: None,
+    },
+];
+
+/// Value-free process-boundary failure for a rejected bundle verification.
+///
+/// This carrier retains only the closed catalog code. In particular, it has no
+/// source error and cannot carry paths, hashes, parser text, identities, or
+/// supplied configuration values into stderr or another operator surface.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct BundleVerificationFailure {
+    code: BundleVerificationCode,
+}
+
+impl BundleVerificationFailure {
+    #[must_use]
+    pub const fn code(self) -> BundleVerificationCode {
+        self.code
+    }
+
+    #[must_use]
+    pub fn definition(self) -> &'static BundleVerificationCodeDefinition {
+        self.code.definition()
+    }
+}
+
+impl fmt::Debug for BundleVerificationFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BundleVerificationFailure")
+            .field("code", &self.code.as_str())
+            .finish()
+    }
+}
+
+impl Display for BundleVerificationFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}: {}",
+            self.code,
+            self.definition().safe_report_message
+        )
+    }
+}
+
+impl std::error::Error for BundleVerificationFailure {}
+
+impl From<BundleVerificationCode> for BundleVerificationFailure {
+    fn from(code: BundleVerificationCode) -> Self {
+        Self { code }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ApplyReportResult {
@@ -876,6 +1137,17 @@ impl ApplyReportResult {
             | Self::RejectedValidation
             | Self::RejectedRollback => PostureApplyResult::Rejected,
             Self::InternalError => PostureApplyResult::Failed,
+        }
+    }
+}
+
+impl From<BundleVerificationCode> for ApplyReportResult {
+    fn from(code: BundleVerificationCode) -> Self {
+        match code.0 {
+            BundleVerificationCodeValue::Binding => Self::RejectedBinding,
+            BundleVerificationCodeValue::Rollback => Self::RejectedRollback,
+            BundleVerificationCodeValue::Signature => Self::RejectedSignature,
+            BundleVerificationCodeValue::Validation => Self::RejectedValidation,
         }
     }
 }
@@ -1605,20 +1877,26 @@ pub enum ConfigBootError {
 }
 
 impl ConfigBootError {
-    pub fn bundle_rejection_result(&self) -> &'static str {
+    #[must_use]
+    pub fn bundle_rejection_code(&self) -> BundleVerificationCode {
         match self {
-            Self::Bundle(error) => bundle_verify_rejection_result(error),
+            Self::Bundle(error) => bundle_verify_rejection_code(error),
             Self::NonMonotonicSequence
             | Self::OverrideHashMismatch
             | Self::Store(_)
             | Self::MissingUnsignedConfigPath
-            | Self::UnsignedConfigHashMismatch { .. } => "rejected_rollback",
+            | Self::UnsignedConfigHashMismatch { .. } => BundleVerificationCode::REJECTED_ROLLBACK,
             Self::MissingSignedBundleId
             | Self::MissingSignedBundleManifestHash
             | Self::MissingSignedBundleSequence
             | Self::MissingOverridePin
-            | Self::InvalidOverridePath => "rejected_validation",
+            | Self::InvalidOverridePath => BundleVerificationCode::REJECTED_VALIDATION,
         }
+    }
+
+    /// Compatibility wrapper for existing report producers.
+    pub fn bundle_rejection_result(&self) -> &'static str {
+        self.bundle_rejection_code().as_str()
     }
 
     pub fn break_glass_invalid_reason(&self) -> Option<&'static str> {
@@ -2491,24 +2769,39 @@ pub fn override_pin_posture(pin: &ConfigOverridePin) -> Value {
     })
 }
 
-pub fn bundle_verify_rejection_result(
+/// Classify a bundle verification failure without carrying its source payload
+/// across the public reporting boundary.
+#[must_use]
+pub fn bundle_verify_rejection_code(
     error: &registry_platform_config::ConfigBundleError,
-) -> &'static str {
+) -> BundleVerificationCode {
     match error {
-        registry_platform_config::ConfigBundleError::BindingMismatch(_) => "rejected_binding",
+        registry_platform_config::ConfigBundleError::BindingMismatch(_) => {
+            BundleVerificationCode::REJECTED_BINDING
+        }
         registry_platform_config::ConfigBundleError::SignatureRejected
         | registry_platform_config::ConfigBundleError::InvalidSignatureEnvelope(_)
         | registry_platform_config::ConfigBundleError::InvalidTrustAnchor(_)
         | registry_platform_config::ConfigBundleError::InvalidPermissions(_)
         | registry_platform_config::ConfigBundleError::FileClosure(_)
-        | registry_platform_config::ConfigBundleError::HashMismatch { .. } => "rejected_signature",
+        | registry_platform_config::ConfigBundleError::HashMismatch { .. } => {
+            BundleVerificationCode::REJECTED_SIGNATURE
+        }
         registry_platform_config::ConfigBundleError::Io(_)
         | registry_platform_config::ConfigBundleError::Json(_)
         | registry_platform_config::ConfigBundleError::InvalidManifest(_)
         | registry_platform_config::ConfigBundleError::InvalidBreakGlass(_) => {
-            "rejected_validation"
+            BundleVerificationCode::REJECTED_VALIDATION
         }
     }
+}
+
+/// Compatibility wrapper for existing report producers.
+#[must_use]
+pub fn bundle_verify_rejection_result(
+    error: &registry_platform_config::ConfigBundleError,
+) -> &'static str {
+    bundle_verify_rejection_code(error).as_str()
 }
 
 fn previous_hash_matched(

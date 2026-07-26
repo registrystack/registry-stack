@@ -20,6 +20,6 @@ services:
           family_name: request.target.attributes.family_name
           date_of_birth: request.target.attributes.date_of_birth
     claims:
-      person-registration-accepted:
+      active-registration-exists:
         cel: enrollment.matched && enrollment.registration_status == "active"
         disclosure: predicate

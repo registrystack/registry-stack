@@ -2,6 +2,51 @@
 
 use super::*;
 use crate::test_support::*;
+use registry_notary_server::{NotaryActivationCode, NotaryActivationFailure};
+
+fn assert_value_free_activation_failure(
+    error: &(dyn std::error::Error + 'static),
+    expected_code: NotaryActivationCode,
+    forbidden_values: &[&str],
+) {
+    let failure = error
+        .downcast_ref::<NotaryActivationFailure>()
+        .expect("runtime activation errors use the redacted process boundary");
+    assert_eq!(failure.code(), expected_code);
+    assert!(
+        std::error::Error::source(failure).is_none(),
+        "the public failure must not retain an inner error"
+    );
+    let rendered = failure.to_string();
+    assert!(rendered.contains(expected_code.as_str()));
+    for forbidden in forbidden_values {
+        assert!(
+            !rendered.contains(forbidden),
+            "activation boundary exposed forbidden value {forbidden:?}: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn top_level_server_error_renderer_drops_unknown_error_values() {
+    const SENTINEL: &str = "SENTINEL_PRIVATE_USERNAME_COUNTRY_SECRET_PATH_AND_DIGEST";
+    let unknown = std::io::Error::other(SENTINEL);
+
+    let rendered = crate::top_level_error_message(&unknown, true);
+
+    assert!(rendered.contains(NotaryActivationCode::RUNTIME_ACTIVATION_FAILED.as_str()));
+    assert!(!rendered.contains(SENTINEL));
+}
+
+#[test]
+fn top_level_server_error_renderer_preserves_safe_activation_code() {
+    let failure = NotaryActivationFailure::from(NotaryActivationCode::CONFIGURATION_INVALID);
+
+    let rendered = crate::top_level_error_message(&failure, true);
+
+    assert!(rendered.contains(NotaryActivationCode::CONFIGURATION_INVALID.as_str()));
+    assert!(!rendered.contains("SENTINEL"));
+}
 
 #[test]
 fn boot_bundle_acceptance_audit_failure_aborts_before_antirollback_persist() {
@@ -43,6 +88,32 @@ fn boot_bundle_acceptance_audit_failure_aborts_before_antirollback_persist() {
     assert_eq!(
         err,
         registry_platform_ops::AntiRollbackStoreError::MissingState
+    );
+}
+
+#[tokio::test]
+async fn boot_configuration_boundary_redacts_paths_and_parser_values() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("SENTINEL_PRIVATE_CONFIG_PATH.yaml");
+    fs::write(
+        &config_path,
+        "SENTINEL_COUNTRY_IDENTIFIER: [invalid parser value",
+    )
+    .expect("invalid startup config writes");
+
+    let error = run_server(&config_path, None, false)
+        .await
+        .expect_err("invalid startup config fails closed");
+
+    assert_value_free_activation_failure(
+        error.as_ref(),
+        NotaryActivationCode::CONFIGURATION_INVALID,
+        &[
+            "SENTINEL_PRIVATE_CONFIG_PATH",
+            "SENTINEL_COUNTRY_IDENTIFIER",
+            "invalid parser value",
+            config_path.to_str().expect("config path is UTF-8"),
+        ],
     );
 }
 
@@ -109,11 +180,14 @@ async fn governed_boot_integrity_failure_persists_nothing_and_serves_nothing() {
     let error = run_server(&config_path, None, true)
         .await
         .expect_err("governed boot audit failure aborts startup");
-    assert!(
-        error
-            .to_string()
-            .contains("audit chain verification failed"),
-        "unexpected error: {error}"
+    assert_value_free_activation_failure(
+        error.as_ref(),
+        NotaryActivationCode::RUNTIME_ACTIVATION_FAILED,
+        &[
+            "audit chain verification failed",
+            audit_path.to_str().expect("audit path is UTF-8"),
+            "governed.boot.tampered",
+        ],
     );
     let key = registry_platform_ops::AntiRollbackKey {
         product: "registry-notary".to_string(),
@@ -229,11 +303,14 @@ async fn run_server_compiles_runtime_before_binding_listener() {
         .expect_err("invalid runtime config fails before serving");
     let message = error.to_string();
 
-    assert!(
-        message.contains("TEST_DOCTOR_OAUTH_CLIENT_ID")
-            || message.contains("TEST_DOCTOR_OAUTH_CLIENT_SECRET")
-            || message.contains("audit.hash_secret_env"),
-        "unexpected error: {message}"
+    assert_value_free_activation_failure(
+        error.as_ref(),
+        NotaryActivationCode::CONFIGURATION_INVALID,
+        &[
+            "TEST_DOCTOR_OAUTH_CLIENT_ID",
+            "TEST_DOCTOR_OAUTH_CLIENT_SECRET",
+            "audit.hash_secret_env",
+        ],
     );
     assert!(
         !message.contains("Address already in use"),
@@ -301,10 +378,14 @@ evidence:
         .expect_err("missing signing key env fails before serving");
     let message = error.to_string();
 
-    assert!(
-        message.contains("signing key 'issuer' is invalid")
-            && message.contains("private_jwk_env is missing or empty"),
-        "unexpected error: {message}"
+    assert_value_free_activation_failure(
+        error.as_ref(),
+        NotaryActivationCode::CONFIGURATION_INVALID,
+        &[
+            "signing key 'issuer'",
+            "private_jwk_env",
+            "TEST_STARTUP_ISSUER_JWK",
+        ],
     );
     assert!(
         !message.contains("Address already in use"),

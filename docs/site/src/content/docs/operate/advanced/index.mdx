@@ -1,0 +1,48 @@
+---
+title: Advanced operations
+description: Recoverable operator journeys for configuration, trust, materialization, runtime inspection, diagnostics, and bounded Script sources.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+  - registry-relay
+  - registry-notary
+  - registry-platform
+last_reviewed: "2026-07-26"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Use these task guides after the project fixtures, environment preflight, generated inputs, and
+product activation boundaries are familiar.
+Each guide names the evidence to retain, the limit of each gate, and a recovery path.
+
+## Configuration and trust
+
+- [Rotate credentials, keys, certificates, and trust](rotate-credentials-and-trust/)
+- [Compare a baseline and reapprove a source change](compare-and-reapprove-source-change/)
+
+## State and runtime
+
+- [Refresh and recover a materialization](refresh-and-recover-materialization/)
+- [Recover, restart, upgrade, migrate, and roll back](recover-upgrade-migrate-and-rollback/)
+- [Inspect and diagnose a running deployment](inspect-and-diagnose/)
+
+## Source adaptation
+
+- [Operate bounded Script workers and protocol helpers](operate-script-workers/)
+
+Registry Relay and Registry Notary activate separate product bundles.
+Stage Relay first, stage Notary against that Relay, and admit traffic only after both product
+boundaries pass.
+This sequence is compatible staged admission, not atomic project activation.
+
+{/* Evidence: products/notary/docs/configuration-trust-and-integrity.md and
+    products/notary/docs/deployment-hardening-runbook.md. */}
+
+## Next
+
+- [Verify the project](../../verify/)
+- [Review generated artifacts](../../generated-artifacts/)
+- [Use the operator diagnostic reference](../../reference/diagnostics/operator/)

@@ -1,0 +1,216 @@
+---
+title: Inspect and diagnose a running deployment
+description: Inspect redacted runtime posture, audit, health, readiness, and instance OpenAPI, then classify failures with stable diagnostics.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+  - registry-relay
+  - registry-notary
+  - registry-platform
+last_reviewed: "2026-07-26"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Use this procedure to inspect a running Relay or Notary instance and diagnose source denial,
+policy denial, ambiguity, stale materialization, bundle rejection, or product capability mismatch
+without collecting source rows or secret values.
+
+## Prerequisites
+
+- Use the protected operator network and a least-privilege posture or API credential.
+- Know the active product, environment, stream, instance, and expected bundle sequence.
+- Keep public problem responses, operator diagnostics, restricted posture, and protected audit
+  records in separate access classes.
+- Reproduce with synthetic identifiers unless separate authority permits another probe.
+
+## Ownership and trust boundary
+
+Public problem details give callers stable, minimized classifications.
+The default posture tier is redacted for operational sharing.
+Restricted posture can contain per-resource or provider detail and belongs only to trusted
+operators.
+Relay and Notary write separate audit chains and keep their keys separate.
+
+The generated diagnostic catalogs contain static meanings, rules, remediation, evidence scope,
+and limitations.
+They never need a project, environment, secret, runtime service, received configuration, path,
+hash, credential, source response, or country value.
+
+{/* Evidence: docs/site/src/content/docs/reference/diagnostics/operator.mdx,
+    docs/site/src/content/docs/reference/errors.mdx,
+    crates/registry-relay/docs/ops.md, and
+    products/notary/docs/security-assurance.md. */}
+
+## Inspect the runtime surfaces
+
+Inspect each surface for its own purpose:
+
+| Surface | Use | Boundary |
+| --- | --- | --- |
+| `GET /healthz` | Process liveness | Does not check all dependencies or data freshness |
+| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval |
+| `GET /admin/v1/posture` | Redacted deployment and control observations | Default and restricted tiers expose different detail |
+| Product audit sink | Security and request evidence | Retained chain integrity does not prove complete off-host receipt |
+| `GET /openapi.json` | Concrete API shape for the running instance | Access is product configuration and authentication dependent |
+
+Query health and readiness through the same network path used by traffic admission:
+
+```sh
+curl -fsS https://<relay-host>/healthz
+curl -fsS https://<relay-host>/ready
+curl -fsS https://<notary-host>/healthz
+curl -fsS https://<notary-host>/ready
+```
+
+Read Relay posture only through its protected admin listener:
+
+```sh
+curl -fsS \
+  -H "Authorization: Bearer <ops-read-token>" \
+  http://127.0.0.1:8081/admin/v1/posture
+```
+
+Fetch the concrete Relay or Notary instance OpenAPI only through its configured authenticated
+route.
+Compare the instance document with the reviewed generated input and the
+[Relay API reference](../../../reference/apis/registry-relay/) or
+[Notary API reference](../../../reference/apis/registry-notary/).
+An OpenAPI match does not prove authorization, source behavior, or claim semantics.
+
+## Load the stable diagnostic catalogs
+
+Print the catalogs without opening a project or contacting a runtime:
+
+```sh
+registryctl project diagnostics --catalog operator --format json
+registryctl project diagnostics --catalog fixture --format json
+registryctl project diagnostics --catalog authoring --format json
+```
+
+Use the generated [operator](../../../reference/diagnostics/operator/),
+[fixture](../../../reference/diagnostics/fixture/), and
+[authoring](../../../reference/diagnostics/authoring/) references for the same code definitions.
+Branch on the exact code and response status.
+Do not parse error prose, paths, or type URI segments.
+
+## Diagnose the failure class
+
+### Source denial or source failure
+
+Separate caller authorization from upstream source access.
+Public `auth.*` codes describe Relay caller authentication and scope.
+`relay.consultation.activation.source_credentials_unavailable` and
+`notary.relay.credential_unavailable` describe activation boundaries.
+`notary.relay.credentials_rejected` describes a rejected Notary workload credential.
+Offline fixture failures such as `source.status_rejected`, `source.unavailable`, and
+`authorization.denied` classify synthetic source behavior.
+
+Confirm which boundary denied access before changing a credential or policy.
+Do not widen a source path or caller scope to clear a source credential failure.
+
+### Policy denial
+
+Stable `pdp.*` codes identify policy decisions such as `pdp.purpose_not_permitted`,
+`pdp.assurance_insufficient`, and `pdp.evidence_stale`.
+Use the policy id, hash, checked rule ids, and other redacted audit evidence available to the
+authorized operator.
+Do not turn a policy denial into source unavailability or bypass the rule during diagnosis.
+
+### Ambiguity
+
+`ambiguous` is a valid minimized consultation outcome, not an operator startup failure.
+The result carries no selected output map, and Notary must not choose a source record.
+Reproduce the selector and cardinality with synthetic fixtures.
+Use `source.cardinality_violation` only when the source behavior violates the declared fixture or
+decoder contract.
+
+### Stale materialization
+
+Check restricted `relay.refresh_health`, the last successful load, consecutive failures, and
+`serving_last_good`.
+`pdp.evidence_stale` is a policy decision.
+`schema.resource_unavailable` is a serving failure.
+A last-good table can remain ready while the acquisition path is unhealthy, so readiness alone
+cannot close this diagnosis.
+
+### Bundle rejection
+
+Use the shared stable results `rejected_signature`, `rejected_binding`,
+`rejected_validation`, and `rejected_rollback`.
+Product startup codes include:
+
+- `relay.startup.bundle_signature_rejected`
+- `relay.startup.bundle_binding_rejected`
+- `relay.startup.bundle_validation_rejected`
+- `relay.startup.bundle_rollback_rejected`
+- `notary.configuration.invalid`
+- `notary.runtime.activation_failed`
+
+Correct the signer, binding, closed file set, product validation, or sequence.
+Do not disclose the rejected configuration or delete anti-rollback state.
+
+### Capability or Relay-to-Notary mismatch
+
+Use `relay.consultation.activation.unsupported_plan`,
+`relay.consultation.activation.artifact_registry_invalid`,
+`notary.relay.profile_not_found`, and `notary.relay.profile_mismatch` for activation failures.
+The public admin code `registry.admin.capability.not_supported` means the requested admin
+capability is absent.
+
+Compare the generated capability inventory, public consultation contract, and exact
+`contract_hash`.
+Relay rejects an execute-time contract mismatch before source access.
+Stage compatible product bundles separately and repeat the Notary-to-Relay check.
+
+## Expected evidence
+
+Retain:
+
+- Timestamped health and readiness status without response secrets.
+- Default redacted posture and restricted fields only in the protected operator record.
+- Stable public, operator, fixture, or authoring diagnostic codes.
+- Product, environment, stream, instance, and bundle sequence.
+- Redacted audit correlation ids and the tested synthetic canary outcome.
+- The traffic-admission, quarantine, or escalation decision.
+
+## What this proves
+
+The diagnostic code identifies a stable product-owned failure class and safe remediation.
+Posture reports the controls and observations available to the running product.
+Audit records prove the retained product event chain under the configured sink and keys.
+The instance OpenAPI proves the exposed API description returned by that instance.
+
+These surfaces do not prove off-host audit completeness, legal approval, country acceptance,
+source-domain correctness, backup freshness, or an untested client journey.
+
+## Roll back or recover
+
+Keep traffic blocked while a startup, bundle, capability, or cross-product contract failure
+remains.
+Restore the last verified product recovery set before traffic when recovery does not violate
+anti-rollback or state compatibility.
+After a higher sequence or new correctness-state write, use a reviewed higher-sequence fix-forward
+path unless the release documents safe rollback.
+
+For ambiguity, fix or narrow the reviewed selector or source data.
+Do not select a record manually inside Relay or Notary.
+For stale materialization, follow the materialization recovery procedure without enabling live
+fallback.
+
+## Escalate
+
+Escalate to security when diagnostics or logs expose secret, source, path, hash, identity, or
+country values.
+Escalate to the source owner for unexplained denials, ambiguity, or freshness.
+Escalate to both product owners for contract or capability mismatch.
+Escalate to release operations for a rejection that cannot be resolved without changing
+anti-rollback state or runtime schemas.
+
+## Next
+
+- [Refresh and recover a materialization](../refresh-and-recover-materialization/)
+- [Recover, upgrade, migrate, and roll back](../recover-upgrade-migrate-and-rollback/)
+- [Review the error and status code reference](../../../reference/errors/)

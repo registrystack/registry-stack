@@ -186,15 +186,30 @@ enum AuthoredStringFormat {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum AuthoredCapabilityDeclaration {
-    Http {
-        http: AuthoredHttpDeclaration,
-    },
-    Script {
-        script: AuthoredScriptDeclaration,
-    },
-    Snapshot {
-        snapshot: AuthoredSnapshotDeclaration,
-    },
+    Http(AuthoredHttpCapability),
+    Script(AuthoredScriptCapability),
+    Snapshot(AuthoredSnapshotCapability),
+}
+
+// Each untagged union arm needs its own closed object. Putting
+// `deny_unknown_fields` only on the enum still lets serde select the first arm
+// when an author supplies keys from multiple capability variants.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredHttpCapability {
+    http: AuthoredHttpDeclaration,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredScriptCapability {
+    script: AuthoredScriptDeclaration,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredSnapshotCapability {
+    snapshot: AuthoredSnapshotDeclaration,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -378,26 +393,91 @@ struct AuthoredFixtureRequest {
     body: Option<AuthoredFixtureBody>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum AuthoredFixtureResponse {
-    Http {
-        status: u16,
-        #[serde(default)]
-        headers: BTreeMap<String, String>,
-        #[serde(default)]
-        body: Option<AuthoredFixtureBody>,
-    },
-    Timeout {
-        timeout: String,
-    },
+    Http(AuthoredFixtureHttpResponse),
+    Timeout(AuthoredFixtureTimeoutResponse),
+}
+
+impl<'de> Deserialize<'de> for AuthoredFixtureResponse {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let object = value.as_object().ok_or_else(|| {
+            serde::de::Error::custom(
+                "fixture response must be an HTTP status object or a timeout object",
+            )
+        })?;
+        match (
+            object.contains_key("status"),
+            object.contains_key("timeout"),
+        ) {
+            (true, false) => serde_json::from_value(value)
+                .map(Self::Http)
+                .map_err(serde::de::Error::custom),
+            (false, true) => serde_json::from_value(value)
+                .map(Self::Timeout)
+                .map_err(serde::de::Error::custom),
+            _ => Err(serde::de::Error::custom(
+                "fixture response must contain exactly one of `status` or `timeout`",
+            )),
+        }
+    }
+}
+
+// Response modes are exclusive in the published oneOf schema. Closed wrapper
+// objects keep the production decoder from silently choosing the HTTP arm for
+// a response that also declares `timeout`.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredFixtureHttpResponse {
+    status: u16,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    body: Option<AuthoredFixtureBody>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredFixtureTimeoutResponse {
+    timeout: String,
+}
+
+const FIXTURE_BODY_FILE_REFERENCE_REMEDIATION: &str = "Use exactly `body: { file: bodies/<name>.json }` for a file reference. For inline JSON, rename the reserved top-level `file` field.";
+
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum AuthoredFixtureBody {
-    File { file: PathBuf },
+    File(AuthoredFixtureBodyFile),
     Inline(Value),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredFixtureBodyFile {
+    file: PathBuf,
+}
+
+impl<'de> Deserialize<'de> for AuthoredFixtureBody {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        if value
+            .as_object()
+            .is_some_and(|object| object.contains_key("file"))
+        {
+            let reference = serde_json::from_value::<AuthoredFixtureBodyFile>(value)
+                .map_err(|_| serde::de::Error::custom(FIXTURE_BODY_FILE_REFERENCE_REMEDIATION))?;
+            return Ok(Self::File(reference));
+        }
+        Ok(Self::Inline(value))
+    }
 }
 
 const DEFAULT_SOURCE_RESPONSE_BYTES: u64 = 512 * 1024;
@@ -477,18 +557,18 @@ fn lower_authored_integration(
     };
     let (capability, outputs) = match (&authored.capability, &authored.outputs) {
         (
-            AuthoredCapabilityDeclaration::Http { http },
+            AuthoredCapabilityDeclaration::Http(AuthoredHttpCapability { http }),
             AuthoredOutputsDeclaration::Schemas(outputs),
         ) => lower_http_capability(source, http, outputs)?,
         (
-            AuthoredCapabilityDeclaration::Script { script },
+            AuthoredCapabilityDeclaration::Script(AuthoredScriptCapability { script }),
             AuthoredOutputsDeclaration::Schemas(outputs),
         ) => lower_script_capability(source, script, outputs)?,
         (
-            AuthoredCapabilityDeclaration::Snapshot { .. },
+            AuthoredCapabilityDeclaration::Snapshot(_),
             AuthoredOutputsDeclaration::EntityFields(_),
         ) => bail!("snapshot entity output lowering requires the loaded entity contract"),
-        (AuthoredCapabilityDeclaration::Snapshot { .. }, _) => {
+        (AuthoredCapabilityDeclaration::Snapshot(_), _) => {
             bail!("snapshot outputs must be a non-empty list of entity fields")
         }
         (_, AuthoredOutputsDeclaration::EntityFields(_)) => {
@@ -520,7 +600,7 @@ fn lower_authored_integration(
         bounds: BoundsDeclaration {
             calls: if matches!(
                 &authored.capability,
-                AuthoredCapabilityDeclaration::Http { .. }
+                AuthoredCapabilityDeclaration::Http(_)
             ) || authored
                 .source
                 .as_ref()
@@ -658,7 +738,7 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
         }
     }
     match &authored.capability {
-        AuthoredCapabilityDeclaration::Http { .. } => {
+        AuthoredCapabilityDeclaration::Http(_) => {
             if authored
                 .limits
                 .as_ref()
@@ -668,7 +748,7 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
                 bail!("http performs exactly one call and does not accept limits.calls");
             }
         }
-        AuthoredCapabilityDeclaration::Script { .. } => {
+        AuthoredCapabilityDeclaration::Script(_) => {
             let source = authored
                 .source
                 .as_ref()
@@ -677,7 +757,7 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
                 bail!("script source.allow must contain between one and sixteen rules");
             }
         }
-        AuthoredCapabilityDeclaration::Snapshot { .. } => {
+        AuthoredCapabilityDeclaration::Snapshot(_) => {
             if authored.source.is_some() || authored.limits.is_some() {
                 bail!("snapshot does not declare remote source or HTTP execution limits");
             }

@@ -15,6 +15,7 @@
       "watch",
       "test",
       "check",
+      "compare",
       "build"
     ],
     "integration": "person-record",
@@ -26,6 +27,7 @@
       "registryctl test --project-dir registry-project --integration person-record --fixture active-person --watch",
       "registryctl test --project-dir registry-project",
       "registryctl check --project-dir registry-project --environment local --explain",
+      "registryctl compare --project-dir registry-project --environment local --from-starter",
       "registryctl build --project-dir registry-project --environment local"
     ]
   },
@@ -89,6 +91,7 @@
       "watch",
       "test",
       "check",
+      "compare",
       "build"
     ],
     "integration": "health-record",
@@ -100,6 +103,7 @@
       "registryctl test --project-dir dhis2-project --integration health-record --fixture complete-child-health-evidence --watch",
       "registryctl test --project-dir dhis2-project",
       "registryctl check --project-dir dhis2-project --environment local --explain",
+      "registryctl compare --project-dir dhis2-project --environment local --from-starter",
       "registryctl build --project-dir dhis2-project --environment local"
     ]
   },
@@ -119,6 +123,7 @@
       "watch",
       "test",
       "check",
+      "compare",
       "build"
     ],
     "integration": "coverage",
@@ -130,6 +135,7 @@
       "registryctl test --project-dir fhir-project --integration coverage --fixture coverage-active --watch",
       "registryctl test --project-dir fhir-project",
       "registryctl check --project-dir fhir-project --environment local --explain",
+      "registryctl compare --project-dir fhir-project --environment local --from-starter",
       "registryctl build --project-dir fhir-project --environment local"
     ]
   },
@@ -167,6 +173,7 @@
       "watch",
       "test",
       "check",
+      "compare",
       "build"
     ],
     "integration": "birth-record",
@@ -178,6 +185,7 @@
       "registryctl test --project-dir opencrvs-project --integration birth-record --fixture birth-record-match --watch",
       "registryctl test --project-dir opencrvs-project",
       "registryctl check --project-dir opencrvs-project --environment local --explain",
+      "registryctl compare --project-dir opencrvs-project --environment local --from-starter",
       "registryctl build --project-dir opencrvs-project --environment local"
     ]
   },
@@ -282,6 +290,7 @@
       "watch",
       "test",
       "check",
+      "compare",
       "build"
     ],
     "integration": "person-snapshot",
@@ -293,6 +302,7 @@
       "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-match --watch",
       "registryctl test --project-dir snapshot-project",
       "registryctl check --project-dir snapshot-project --environment local --explain",
+      "registryctl compare --project-dir snapshot-project --environment local --from-starter",
       "registryctl build --project-dir snapshot-project --environment local"
     ]
   },

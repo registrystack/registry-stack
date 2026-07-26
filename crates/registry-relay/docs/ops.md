@@ -386,6 +386,7 @@ ownership, migrations, and recovery decision.
 
 Treat the following items as one Relay recovery set:
 
+- The immutable registry source inputs and the complete Relay ingest cache.
 - The complete consultation database, never a selection of state tables.
 - The Relay release, config, signed artifact closure, and PostgreSQL trust root.
 - The migration login name plus the owner, runtime, keyring-maintenance, and
@@ -394,15 +395,20 @@ Treat the following items as one Relay recovery set:
   inputs, audit HMAC material, and every retained audit-pseudonym key material.
 - The recovery timestamp or write-ahead-log position and the last externally
   acknowledged audit watermark available to the operator.
+- Access-controlled evidence that binds each source-input and cache artifact to
+  the database active pointer and history, exact generation, and restricted
+  content digest.
 
 For a quiesced backup, remove traffic from every Notary that can call this
 Relay, stop the active Relay fence holder, and prevent another Relay process
-from acquiring the fence. Then capture one transactionally consistent database
-backup. If Relay and Notary are recovered as one service, either keep both
-products quiesced while their backups are taken or use a database-platform
-snapshot that gives both product databases one coordinated recovery point.
-Independent live backups can leave Notary with a completion that the restored
-Relay no longer remembers.
+from acquiring the fence. Keep the source inputs and ingest cache unchanged,
+then capture them and the transactionally consistent database backup at one
+coordinated recovery point. If Relay and Notary are recovered as one service,
+either keep both products quiesced while every source, cache, and database
+backup is taken or use a platform snapshot that gives every store one
+coordinated recovery point. Independent live backups can leave the database
+pointer, retained cache generation, source input, or Notary completion out of
+agreement.
 
 A custom-format `pg_dump` is suitable for a database dedicated to Relay and for
 restoring an empty database in the same PostgreSQL cluster, where the four
@@ -438,6 +444,14 @@ retention inputs. `installed_or_attested` plus `identical` means the command
 accepted the existing catalog and keyring. A drift response is not a repair
 instruction. Do not drop either Relay schema or rerun bootstrap with different
 inputs to make the restore pass.
+
+For audited SnapshotExact, verify the access-controlled recovery record before
+startup. Its source-input, ingest-cache, and Relay-database artifact hashes must
+bind the same active pointer and history, exact generation, and restricted
+content digest. Startup reconciles the database-authoritative publication with
+the retained cache before opening a newer source generation. A missing or
+mismatched retained generation keeps the dependent SnapshotExact publication
+unavailable; do not edit the cache or database pointer to make it pass.
 
 Start one Relay without admitting traffic and require `/healthz` and `/ready`
 to return `200`. Readiness attests the current catalog, role binding, keyring,
@@ -556,10 +570,26 @@ Refresh modes:
 - `interval`: reload unconditionally on the configured interval.
 - `manual`: reload only through an admin request.
 
-The original source file is never modified. When a refresh fails after a successful ingest, Relay
-keeps serving the last-good table and `/ready` remains `200`. Relay records the failure against that
-resource without advancing the last successful data-load timestamp. A resource with no successful
-generation remains not ready.
+The original source file is never modified. When an ordinary refresh fails after a successful
+ingest, Relay keeps serving the last-good table and `/ready` remains `200`. Relay records the
+failure against that resource without advancing the last successful data-load timestamp. A
+resource with no successful generation remains not ready.
+
+Audited SnapshotExact adds a separate fail-closed boundary. If durable publication advances but
+local table registration fails, ordinary reads keep their last-good table and global `/ready`
+remains `200` when every other readiness dependency is healthy. Relay makes the affected
+SnapshotExact publication slot unavailable, so every dependent consultation returns
+`consultation.unavailable` instead of using the former handle. A snapshot that exceeds its
+execution-time freshness bound also returns `consultation.unavailable`; that per-execution
+staleness does not change global `/ready`. The next table-specific refresh reconciles the exact
+durable generation and digest before Relay opens the source for a newer generation.
+
+For project-authored audited SnapshotExact, `retain_generations` accepts `1`
+through `16` and includes the active completed cache generation. The setting
+defines a bounded recovery set for cache cleanup and readers. It does not
+provide an operation that selects an arbitrary retained generation for
+rollback. Ordinary resources keep the built-in current and previous cache
+generations.
 
 This refresh-health signal reports whether Relay can still poll and load a source. It does not
 establish semantic or domain freshness. A successful refresh can load source data whose business
@@ -573,14 +603,25 @@ curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
   http://127.0.0.1:8081/admin/v1/datasets/social_registry/tables/individuals_table/reload
 ```
 
-Manual source-resource reload:
+Manual reload-all for deployments without audited SnapshotExact:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
   http://127.0.0.1:8081/admin/v1/reload
 ```
 
-The reload-all response includes `status` and aggregate `counts` for total, succeeded, and failed resources. Reload-all prepares every configured source resource before publishing any of them; if any resource cannot prepare, Relay keeps the previous coherent generation active and returns HTTP 500 with `status: "failed"`. Inspect the audit and operational logs for the resource-level failure context. This route reloads configured source resources, not startup runtime config.
+The reload-all response includes `status` and aggregate `counts` for total, succeeded, and failed
+resources. When any source is bound to the audited SnapshotExact materialization coordinator,
+Relay rejects the whole reload-all request before source access, counts every configured resource
+as failed, returns HTTP `500` with `ingest.materialization_failed`, and refreshes none. Use the
+table-specific endpoint for every intended source. Current Relay does not provide atomic
+multi-materialization refresh.
+
+When no audited SnapshotExact source is configured, reload-all prepares every configured source
+resource before publishing any of them. If any resource cannot prepare, Relay keeps the previous
+coherent ordinary-table generation active and returns HTTP `500` with `status: "failed"`. Inspect
+the audit and operational logs for the resource-level failure context. This route reloads
+configured source resources, not startup runtime config.
 
 ## Admin posture and config bundles
 
@@ -755,7 +796,11 @@ Admin reload fails:
 
 - Confirm `server.admin_bind` is configured and reachable only from the private admin network.
 - Confirm the key has the independent `registry_relay:admin` scope.
-- Check the per-resource `error_code` in the reload-all response. Use the table-specific endpoint to retry one failed source after correcting the underlying data or connectivity issue.
+- When audited SnapshotExact is configured, do not retry reload-all. Use the
+  table-specific endpoint for the intended resource.
+- Without audited SnapshotExact, use the reload-all counts plus protected
+  operational and audit logs to identify the failed resource, then retry only
+  that resource through the table-specific endpoint.
 
 Metrics missing:
 

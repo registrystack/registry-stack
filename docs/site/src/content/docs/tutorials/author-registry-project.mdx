@@ -70,8 +70,18 @@ Next:
 Add `--format json` when another program needs the versioned initialization report.
 
 The copied `registry-stack.yaml` keeps the complete starter provenance,
-including its authored-content digest. Later, `check --explain` reports whether
-the workspace still matches that starter or has intentionally diverged.
+including its authored-content digest. Compare normalized effective state with
+the exact starter embedded in the current registryctl release:
+
+```sh
+registryctl compare \
+  --project-dir registry-project \
+  --environment local \
+  --from-starter
+```
+
+The value-free result distinguishes an equivalent starter from an intentionally
+adapted project. It does not observe runtime behavior or grant approval.
 
 The command creates this authored layout:
 
@@ -309,7 +319,7 @@ registryctl check \
 The human-readable review report starts with:
 
 ```text
-Registry Stack project: fictional-citizen-registry (valid)
+Registry Stack project: fictional-civic-support-registry (valid)
 Environment: local
 Baseline: initial_without_baseline
 ```
@@ -334,29 +344,19 @@ registryctl build \
 The human-readable report starts with the built project and output directory:
 
 ```text
-Built Registry Stack project "fictional-citizen-registry".
+Built Registry Stack project "fictional-civic-support-registry".
   Environment: local
   Output: registry-project/.registry-stack/build/local
 ```
 
 Add `--format json` when another program needs the versioned build report.
 
-The output root contains:
-
-```text
-registry-project/.registry-stack/build/local/
-  reviewable/
-    integration-packs/
-    consultation-contracts/
-    review.json
-  private/
-    relay/
-      config/relay.yaml
-      approval/review.json
-    notary/
-      config/notary.yaml
-      approval/review.json
-```
+The build report identifies
+`registry-project/.registry-stack/build/local/artifact-manifest.json`. Treat that strict
+`registry.project.artifact_manifest.v1` document as the complete tree and classification source.
+It records every reviewable, private, operations, secret-consumer, approval-state, Relay, and
+Notary artifact plus its digest, edit policy, publication boundary, consumers, and regeneration
+command. Do not maintain or automate against a copied directory listing.
 
 The product input directories remain separate and contain secret references, not secret values.
 They are inputs to each product's Config Bundle workflow, not a signed project root or a deployable

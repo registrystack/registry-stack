@@ -1,0 +1,146 @@
+{
+  "schema_version": "registry.project.explanation.v1",
+  "project": "fictional-citizen-registry",
+  "environment": "local",
+  "fields": [
+    {
+      "address": {
+        "document": "integration",
+        "integration": "person-record",
+        "path": "/http/request/timeout"
+      },
+      "source": {
+        "kind": "defaulted",
+        "semantic_rule_id": "registryctl.integration.http.timeout.default"
+      },
+      "state": {
+        "presence": "defaulted",
+        "effect": "effective"
+      },
+      "default": {
+        "source": "semantic_rule",
+        "applied": true,
+        "reported_value": {
+          "state": "public",
+          "value": "5s"
+        }
+      },
+      "constraints": {
+        "schema_refs": [
+          {
+            "schema": "integration",
+            "path": "/$defs/http_request/properties/timeout"
+          }
+        ],
+        "semantic_rule_ids": [
+          "registryctl.integration.http.timeout.bounded"
+        ]
+      },
+      "knowledge": {
+        "path_kind": "property",
+        "semantic_owner": "integration_contract",
+        "human_owner": "integration_maintainers",
+        "sensitivity": "public",
+        "products": [
+          "registryctl",
+          "relay",
+          "editor",
+          "docs"
+        ],
+        "introduced_in": "0.13.0",
+        "availability": "published",
+        "stability": "stable",
+        "migration": "rebuild_project",
+        "consumers": [
+          "registryctl_authoring",
+          "registry_relay",
+          "editor_tooling",
+          "docs_generator"
+        ],
+        "generated_artifacts": [
+          "project_build",
+          "relay_config",
+          "field_reference"
+        ],
+        "review_classes": [
+          "contract",
+          "relay",
+          "documentation"
+        ],
+        "semantic_rules": [
+          "knowledge_only"
+        ]
+      },
+      "reported_value": {
+        "state": "public",
+        "value": "5s"
+      }
+    },
+    {
+      "address": {
+        "document": "environment",
+        "environment": "local",
+        "path": "/integrations/person-record/source/credential"
+      },
+      "source": {
+        "kind": "authored",
+        "address": {
+          "document": "environment",
+          "environment": "local",
+          "path": "/integrations/person-record/source/credential"
+        }
+      },
+      "state": {
+        "presence": "environment_bound",
+        "effect": "effective"
+      },
+      "constraints": {
+        "schema_refs": [
+          {
+            "schema": "environment",
+            "path": "/$defs/source_binding/properties/credential"
+          }
+        ],
+        "semantic_rule_ids": [
+          "registryctl.environment.credential.compatible"
+        ]
+      },
+      "knowledge": {
+        "path_kind": "property",
+        "semantic_owner": "deployment_security",
+        "human_owner": "security_maintainers",
+        "sensitivity": "secret_reference",
+        "products": [
+          "registryctl",
+          "relay"
+        ],
+        "introduced_in": "0.13.0",
+        "availability": "published",
+        "stability": "stable",
+        "migration": "coordinate_deployment",
+        "consumers": [
+          "registryctl_authoring",
+          "registry_relay"
+        ],
+        "generated_artifacts": [
+          "project_build",
+          "relay_config",
+          "field_reference"
+        ],
+        "review_classes": [
+          "security",
+          "relay"
+        ],
+        "semantic_rules": [
+          "secret_never_reportable",
+          "sensitive_operational_metadata"
+        ]
+      },
+      "reported_value": {
+        "state": "redacted",
+        "classification": "secret_reference",
+        "reason": "sensitive_metadata"
+      }
+    }
+  ]
+}

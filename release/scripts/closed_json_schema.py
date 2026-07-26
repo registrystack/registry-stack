@@ -15,9 +15,13 @@ class SchemaValidationError(ValueError):
     """A value does not satisfy the supported closed schema."""
 
 
+class SchemaDefinitionError(SchemaValidationError):
+    """A schema uses an invalid or unsupported rule."""
+
+
 def resolve_ref(schema: dict[str, Any], reference: str) -> dict[str, Any]:
     if not reference.startswith("#/"):
-        raise SchemaValidationError(
+        raise SchemaDefinitionError(
             f"unsupported external schema reference: {reference}"
         )
     value: Any = schema
@@ -25,11 +29,11 @@ def resolve_ref(schema: dict[str, Any], reference: str) -> dict[str, Any]:
         for component in reference[2:].split("/"):
             value = value[component]
     except (KeyError, TypeError):
-        raise SchemaValidationError(
+        raise SchemaDefinitionError(
             f"schema reference does not resolve: {reference}"
         ) from None
     if not isinstance(value, dict):
-        raise SchemaValidationError(
+        raise SchemaDefinitionError(
             f"schema reference does not resolve to an object: {reference}"
         )
     return value
@@ -51,8 +55,7 @@ def json_value_equal(actual: Any, expected: Any) -> bool:
             and isinstance(expected, list)
             and len(actual) == len(expected)
             and all(
-                json_value_equal(left, right)
-                for left, right in zip(actual, expected)
+                json_value_equal(left, right) for left, right in zip(actual, expected)
             )
         )
     if isinstance(actual, dict) or isinstance(expected, dict):
@@ -71,7 +74,7 @@ def validate_against_schema(
     schema: dict[str, Any],
     label: str = "result",
 ) -> None:
-    """Validate the const/enum/closed-object/array/scalar subset used here."""
+    """Validate the closed scalar/container and allOf/if/then/else subset."""
     if "$ref" in rule:
         validate_against_schema(
             value,
@@ -80,6 +83,32 @@ def validate_against_schema(
             label,
         )
         return
+    for index, child in enumerate(rule.get("allOf", [])):
+        if not isinstance(child, dict):
+            raise SchemaDefinitionError(f"{label} has an invalid allOf rule")
+        validate_against_schema(
+            value,
+            child,
+            schema,
+            f"{label}.allOf[{index}]",
+        )
+    if "if" in rule:
+        condition = rule["if"]
+        if not isinstance(condition, dict):
+            raise SchemaDefinitionError(f"{label} has an invalid if rule")
+        try:
+            validate_against_schema(value, condition, schema, label)
+            branch = rule.get("then")
+        except SchemaDefinitionError:
+            raise
+        except SchemaValidationError:
+            branch = rule.get("else")
+        if branch is not None:
+            if not isinstance(branch, dict):
+                raise SchemaDefinitionError(
+                    f"{label} has an invalid conditional branch"
+                )
+            validate_against_schema(value, branch, schema, label)
     if "const" in rule and not json_value_equal(value, rule["const"]):
         raise SchemaValidationError(f"{label} must equal {rule['const']!r}")
     if "enum" in rule and not any(
@@ -144,9 +173,7 @@ def validate_against_schema(
                 parsed = urllib.parse.urlsplit(value)
                 parsed.port
             except ValueError:
-                raise SchemaValidationError(
-                    f"{label} has an invalid URI"
-                ) from None
+                raise SchemaValidationError(f"{label} has an invalid URI") from None
             if not parsed.scheme or not parsed.netloc:
                 raise SchemaValidationError(f"{label} has an invalid URI")
     elif kind == "integer":

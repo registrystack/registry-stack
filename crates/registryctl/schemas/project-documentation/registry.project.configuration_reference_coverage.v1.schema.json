@@ -1,0 +1,275 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registryctl/project-documentation/registry.project.configuration_reference_coverage.v1.schema.json",
+  "title": "Registry Stack configuration reference coverage v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id",
+    "format_version",
+    "status",
+    "source_contract",
+    "coverage",
+    "prose_required_count",
+    "prose_covered_count",
+    "missing_intent"
+  ],
+  "properties": {
+    "schema_id": {
+      "const": "https://id.registrystack.org/schemas/registryctl/project-documentation/registry.project.configuration_reference_coverage.v1.schema.json"
+    },
+    "format_version": {
+      "const": "1.0"
+    },
+    "status": {
+      "enum": [
+        "complete",
+        "incomplete"
+      ]
+    },
+    "source_contract": {
+      "$ref": "#/$defs/sourceContract"
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "prose_required_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "prose_covered_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "missing_intent": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/address"
+      }
+    }
+  },
+  "$defs": {
+    "schemaKind": {
+      "enum": [
+        "project",
+        "environment",
+        "integration",
+        "fixture",
+        "entity",
+        "relay",
+        "notary"
+      ]
+    },
+    "pathKind": {
+      "enum": [
+        "root",
+        "property",
+        "map_key",
+        "map_value",
+        "array_item",
+        "branch"
+      ]
+    },
+    "sourceContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemas",
+        "schema_sources",
+        "field_knowledge",
+        "human_intent",
+        "runtime_intent",
+        "reads_country_workspaces",
+        "reads_runtime_configuration"
+      ],
+      "properties": {
+        "schemas": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/schemaKind"
+          }
+        },
+        "schema_sources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9.-]+\\.schema\\.json$"
+          }
+        },
+        "field_knowledge": {
+          "const": "schemas/project-authoring/parity-coverage.json#field_knowledge"
+        },
+        "human_intent": {
+          "const": "schemas/project-authoring/documentation-intent.json"
+        },
+        "runtime_intent": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "crates/registry-relay/config/documentation-intent.json",
+              "crates/registry-notary-core/config/documentation-intent.json"
+            ]
+          }
+        },
+        "reads_country_workspaces": {
+          "const": false
+        },
+        "reads_runtime_configuration": {
+          "const": false
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_count",
+        "path_count",
+        "reference_count",
+        "by_schema",
+        "by_path_kind",
+        "by_sensitivity"
+        ,"by_intent_source"
+        ,"by_intent_profile"
+      ],
+      "properties": {
+        "schema_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "path_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reference_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "by_schema": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/schemaKind"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "by_path_kind": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/pathKind"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "by_sensitivity": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "public",
+              "internal",
+              "sensitive",
+              "secret_reference",
+              "secret_value",
+              "redacted_fixture",
+              "structural"
+            ]
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "by_intent_source": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "schema_description",
+              "reviewed_override",
+              "structural_taxonomy",
+              "reviewed_profile"
+            ]
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "by_intent_profile": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "address": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "pointer",
+        "path_kind"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/schemaKind"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "key_path": {
+          "type": "string"
+        },
+        "path_kind": {
+          "$ref": "#/$defs/pathKind"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema": {
+                "enum": [
+                  "relay",
+                  "notary"
+                ]
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "key_path": {}
+            },
+            "required": [
+              "key_path"
+            ]
+          },
+          "else": {
+            "not": {
+              "type": "object",
+              "properties": {
+                "key_path": {}
+              },
+              "required": [
+                "key_path"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

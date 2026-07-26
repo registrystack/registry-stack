@@ -1,0 +1,45 @@
+---
+title: Operate
+description: Operate Registry Relay and Registry Notary with explicit trust, state, retention, upgrade, recovery, and security boundaries.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-relay
+  - registry-notary
+last_reviewed: "2026-07-26"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Operate Registry Relay and Registry Notary as separate runtime products with explicit state,
+secrets, trust anchors, health, audit, promotion, and rollback responsibilities.
+
+## Deployment and state
+
+- [Run single-node Compose behind a proxy](single-node-compose-behind-proxy/)
+- [Back up and restore state](backup-and-restore/)
+- [Manage retention and persistent state](retention-and-persistent-state/)
+- [Upgrade and roll back](upgrade-and-rollback/)
+
+## Security operations
+
+- [Harden a deployment](../security/hardening-checklist/)
+- [Review the security support window](../security/support-window/)
+- [Report a vulnerability](../security/report-a-vulnerability/)
+
+## Advanced operations
+
+Use the [advanced operations guides](advanced/) for credential and trust
+rotation, reviewed source changes, materialization recovery, product upgrades
+and rollback, runtime diagnosis, and bounded Script workers.
+
+Generated build output remains unsigned review material until the owning product's signing and
+verification lifecycle binds the exact bytes.
+Runtime readiness does not establish country legal approval or source interoperability.
+
+## Next
+
+- [Verify Registry Stack](../verify/)
+- [Generated artifacts](../generated-artifacts/)
+- [Reference](../reference/)

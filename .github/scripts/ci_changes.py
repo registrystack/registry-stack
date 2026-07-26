@@ -52,11 +52,6 @@ SHARDS = {
 NOTARY_PACKAGES = frozenset(SHARDS["notary"])
 PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
-TUTORIAL_PACKAGES = frozenset(
-    package
-    for shard in ("platform", "manifest", "notary", "relay", "registryctl")
-    for package in SHARDS[shard]
-) | {"registry-config-report"}
 
 ROOT_RUST_INPUTS = {
     "Cargo.lock",
@@ -76,6 +71,51 @@ RELEASE_SECURITY_WORKFLOWS = frozenset(
         ".github/workflows/release-candidate-cleanup.yml",
     }
 )
+REPO_ROOT = Path(__file__).resolve().parents[2]
+STANDARD_JOURNEY_MANIFEST = (
+    REPO_ROOT / "docs/site/src/data/standard-journeys.yaml"
+)
+
+
+def standard_journey_sources(
+    manifest_path: Path = STANDARD_JOURNEY_MANIFEST,
+) -> frozenset[str]:
+    """Extract the exact canonical source paths from the journey manifest.
+
+    The manifest owns this routing inventory. Keeping the deliberately small
+    parser here avoids adding a YAML dependency to the CI classifier.
+    """
+
+    sources: list[str] = []
+    in_canonical_sources = False
+    for line in manifest_path.read_text(encoding="utf-8").splitlines():
+        if line == "    canonical_sources:":
+            in_canonical_sources = True
+            continue
+        if in_canonical_sources and line.startswith("      - "):
+            source = line.removeprefix("      - ").strip()
+            if (
+                not source
+                or source[0] in {"'", '"', "{", "["}
+                or source.startswith(("/", "../"))
+            ):
+                raise ValueError(
+                    "standard journey canonical_sources must contain "
+                    f"unquoted repository-relative paths: {source!r}"
+                )
+            sources.append(source)
+            continue
+        if in_canonical_sources and line and not line.startswith("      "):
+            in_canonical_sources = False
+
+    if not sources:
+        raise ValueError(
+            f"no standard journey canonical_sources found in {manifest_path}"
+        )
+    return frozenset(sources)
+
+
+STANDARD_JOURNEY_SOURCES = standard_journey_sources()
 
 
 class Workspace:
@@ -256,12 +296,48 @@ def classify(
             path,
             "crates/registry-relay/docs/*",
             "crates/registry-relay/openapi/*",
+            "crates/registry-relay/src/api/openapi.rs",
+            "crates/registry-relay/src/config/*",
+            "crates/registryctl/assets/project-starters/*",
+            "crates/registry-notary-core/src/config/*",
+            "crates/registry-notary-server/src/standalone/activation.rs",
+            "crates/registry-platform-ops/src/lib.rs",
+            "crates/registry-relay/src/consultation/*",
+            "crates/registryctl/schemas/project-authoring/*",
+            "crates/registryctl/schemas/project-documentation/*",
+            "crates/registryctl/schemas/project-reports/*",
+            "crates/registryctl/src/templates/*",
+            "crates/registryctl/tests/fixtures/project-authoring/*",
+            "crates/registryctl/tests/fixtures/project-reports/*",
             "docs/site/*",
             "products/manifest/docs/*",
             "products/notary/docs/*",
             "products/notary/openapi/*",
         )
-        or path == ".github/workflows/docs-pages.yml"
+        or path
+        in {
+            ".github/workflows/docs-pages.yml",
+            "crates/registry-notary-core/config/documentation-intent.json",
+            "crates/registry-notary-core/src/config.rs",
+            "crates/registry-notary-core/src/deployment.rs",
+            "crates/registry-relay/config/documentation-intent.json",
+            "crates/registry-relay/src/main.rs",
+            "crates/registry-relay/src/process_startup.rs",
+            "crates/registry-relay/src/server.rs",
+            "crates/registryctl/src/main.rs",
+            "crates/registryctl/src/project_authoring/diagnostic_reference.rs",
+            "crates/registryctl/src/project_authoring/diagnostics.rs",
+            "crates/registryctl/src/project_authoring/fixture_diagnostics.rs",
+            "crates/registryctl/src/project_authoring/preflight.rs",
+            "crates/registryctl/src/project_authoring/documentation.rs",
+            "crates/registryctl/src/project_authoring/knowledge.rs",
+            "crates/registryctl/src/project_authoring/output.rs",
+            "crates/registryctl/src/project_authoring/report_contract.rs",
+            "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
+            "schemas/registry-notary.config.schema.json",
+            "schemas/registry-relay.config.schema.json",
+        }
+        or path in STANDARD_JOURNEY_SOURCES
         for path in paths
     )
     editors = complete or any(path.startswith("editors/") for path in paths)
@@ -285,8 +361,23 @@ def classify(
         or path.startswith("products/notary/")
         for path in paths
     )
+    tutorial_source_under_test = any(
+        matches(
+            path,
+            "crates/registryctl/src/templates/*",
+        )
+        or path
+        in {
+            "crates/registry-relay/src/api/openapi.rs",
+            "crates/registry-relay/src/main.rs",
+            "crates/registry-relay/src/server.rs",
+            "crates/registryctl/src/main.rs",
+            "crates/registryctl/src/project_authoring/output.rs",
+        }
+        for path in paths
+    )
     registryctl_tutorial = (
-        complete or tutorial_infrastructure or bool(affected & TUTORIAL_PACKAGES)
+        complete or tutorial_infrastructure or tutorial_source_under_test
     )
 
     matrix = []

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import subprocess
@@ -9,7 +10,13 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from ci_changes import RELEASE_SECURITY_WORKFLOWS, SHARDS, Workspace, classify
+from ci_changes import (
+    RELEASE_SECURITY_WORKFLOWS,
+    SHARDS,
+    STANDARD_JOURNEY_SOURCES,
+    Workspace,
+    classify,
+)
 from run_cargo_packages import command_args, package_args
 
 
@@ -44,7 +51,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertEqual(shard_names, {"relay", "registryctl"})
         self.assertTrue(outputs["release_tool"])
         self.assertTrue(outputs["release_source_proof"])
-        self.assertTrue(outputs["registryctl_tutorial"])
+        self.assertFalse(outputs["registryctl_tutorial"])
         self.assertFalse(outputs["platform"])
 
     def test_reverse_dependencies_are_included(self) -> None:
@@ -55,6 +62,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-platform-crypto", outputs["rust_packages"])
         self.assertIn("registry-relay", outputs["rust_packages"])
         self.assertIn("registry-notary", outputs["rust_packages"])
+        self.assertFalse(outputs["registryctl_tutorial"])
 
     def test_ci_workflow_change_runs_the_complete_matrix(self) -> None:
         outputs = classify(self.workspace, (".github/workflows/ci.yml",))
@@ -70,6 +78,323 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(outputs["rust"])
         self.assertEqual(outputs["rust_matrix"], {"include": []})
         self.assertTrue(outputs["docs"])
+
+    def test_authoring_reference_inputs_run_docs(self) -> None:
+        for path in (
+            "crates/registryctl/schemas/project-authoring/documentation-intent.json",
+            "crates/registryctl/schemas/project-authoring/project.schema.json",
+            "crates/registryctl/schemas/project-documentation/registry.project.configuration_reference.v1.schema.json",
+            "crates/registryctl/src/project_authoring/documentation.rs",
+            "crates/registryctl/src/project_authoring/knowledge.rs",
+            "crates/registry-relay/config/documentation-intent.json",
+            "crates/registry-relay/src/config/mod.rs",
+            "crates/registry-notary-core/config/documentation-intent.json",
+            "crates/registry-notary-core/src/config.rs",
+            "crates/registry-notary-core/src/config/root.rs",
+            "crates/registry-notary-core/src/deployment.rs",
+            "schemas/registry-relay.config.schema.json",
+            "schemas/registry-notary.config.schema.json",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["docs"])
+
+    def test_docs_pages_watches_authoring_reference_inputs(self) -> None:
+        workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
+        for watched_path in (
+            "crates/registryctl/schemas/project-authoring/**",
+            "crates/registryctl/schemas/project-documentation/**",
+            "crates/registryctl/src/project_authoring/documentation.rs",
+            "crates/registryctl/src/project_authoring/knowledge.rs",
+            "crates/registry-relay/config/documentation-intent.json",
+            "crates/registry-relay/src/config/**",
+            "crates/registry-notary-core/config/documentation-intent.json",
+            "crates/registry-notary-core/src/config.rs",
+            "crates/registry-notary-core/src/config/**",
+            "crates/registry-notary-core/src/deployment.rs",
+            "schemas/registry-relay.config.schema.json",
+            "schemas/registry-notary.config.schema.json",
+        ):
+            with self.subTest(path=watched_path):
+                self.assertIn(f'"{watched_path}"', workflow)
+
+    def test_diagnostic_reference_inputs_run_docs_and_are_watched(self) -> None:
+        watched_paths = (
+            "crates/registry-notary-server/src/standalone/activation.rs",
+            "crates/registry-platform-ops/src/lib.rs",
+            "crates/registry-relay/src/consultation/**",
+            "crates/registry-relay/src/process_startup.rs",
+            "crates/registryctl/schemas/project-reports/**",
+            "crates/registryctl/src/project_authoring/diagnostic_reference.rs",
+            "crates/registryctl/src/project_authoring/diagnostics.rs",
+            "crates/registryctl/src/project_authoring/fixture_diagnostics.rs",
+            "crates/registryctl/src/project_authoring/preflight.rs",
+            "crates/registryctl/tests/fixtures/project-reports/**",
+        )
+        workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
+        for watched_path in watched_paths:
+            with self.subTest(path=watched_path):
+                classifier_path = watched_path.replace("**", "service.rs")
+                self.assertTrue(classify(self.workspace, (classifier_path,))["docs"])
+                self.assertIn(f'"{watched_path}"', workflow)
+
+    def test_first_country_docs_and_journey_routing_matrix(self) -> None:
+        cases = (
+            (
+                "crates/registryctl/assets/project-starters/bounded-http/registry-stack.yaml",
+                {
+                    "docs": True,
+                    "project_authoring": True,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "crates/registryctl/tests/fixtures/project-authoring/opencrvs/registry-stack.yaml",
+                {
+                    "docs": True,
+                    "project_authoring": True,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
+                {
+                    "docs": True,
+                    "project_authoring": True,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "crates/registryctl/src/templates/notary_addon/registry-stack.yaml",
+                {
+                    "docs": True,
+                    "project_authoring": True,
+                    "registryctl_tutorial": True,
+                },
+            ),
+            (
+                "crates/registryctl/schemas/project-reports/registry.project.explanation.v1.schema.json",
+                {
+                    "docs": True,
+                    "project_authoring": True,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "crates/registryctl/tests/fixtures/project-reports/registry.project.explanation.v1.json",
+                {
+                    "docs": True,
+                    "project_authoring": True,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "crates/registryctl/src/project_authoring/report_contract.rs",
+                {
+                    "docs": True,
+                    "project_authoring": True,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "crates/registryctl/src/project_authoring/output.rs",
+                {
+                    "docs": True,
+                    "project_authoring": True,
+                    "registryctl_tutorial": True,
+                },
+            ),
+            (
+                "crates/registryctl/src/main.rs",
+                {
+                    "docs": True,
+                    "project_authoring": True,
+                    "registryctl_tutorial": True,
+                },
+            ),
+            (
+                "crates/registry-relay/src/api/openapi.rs",
+                {
+                    "docs": True,
+                    "relay_contracts": True,
+                    "registryctl_tutorial": True,
+                },
+            ),
+            (
+                "crates/registry-relay/src/server.rs",
+                {
+                    "docs": True,
+                    "relay_contracts": True,
+                    "registryctl_tutorial": True,
+                },
+            ),
+            (
+                "crates/registry-relay/src/main.rs",
+                {
+                    "docs": True,
+                    "relay_contracts": True,
+                    "registryctl_tutorial": True,
+                },
+            ),
+            (
+                "crates/registry-relay/src/config/loader.rs",
+                {
+                    "docs": True,
+                    "relay_contracts": True,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "crates/registry-notary-server/src/standalone/activation.rs",
+                {
+                    "docs": True,
+                    "notary_contracts": True,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "crates/registry-platform-ops/src/lib.rs",
+                {
+                    "docs": True,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "crates/registry-relay/src/consultation/service.rs",
+                {
+                    "docs": True,
+                    "relay_contracts": True,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "crates/registry-relay/src/process_startup.rs",
+                {
+                    "docs": True,
+                    "relay_contracts": True,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "crates/registryctl/src/project_authoring/diagnostic_reference.rs",
+                {
+                    "docs": True,
+                    "project_authoring": True,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "docs/site/src/data/standard-journeys.yaml",
+                {
+                    "docs": True,
+                    "rust": False,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "docs/site/scripts/generate-standard-journeys.mjs",
+                {
+                    "docs": True,
+                    "rust": False,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "docs/site/src/components/JourneyGateMatrix.astro",
+                {
+                    "docs": True,
+                    "rust": False,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "docs/site/src/content/docs/journeys/verify-instance-openapi.mdx",
+                {
+                    "docs": True,
+                    "rust": False,
+                    "registryctl_tutorial": False,
+                },
+            ),
+            (
+                "docs/site/src/content/docs/reference/diagnostics/operator.mdx",
+                {
+                    "docs": True,
+                    "rust": False,
+                    "registryctl_tutorial": False,
+                },
+            ),
+        )
+
+        for path, expected in cases:
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                for output, value in expected.items():
+                    self.assertEqual(outputs[output], value, output)
+
+    def test_unrelated_inputs_do_not_escalate_to_docs_or_docker_journeys(self) -> None:
+        cases = (
+            (
+                "crates/registry-relay/src/state_plane/runtime.rs",
+                {"docs": False, "relay_contracts": True},
+            ),
+            (
+                "crates/registry-platform-crypto/src/lib.rs",
+                {"docs": False},
+            ),
+            (
+                "crates/registryctl/src/project_authoring/project.rs",
+                {"docs": False, "project_authoring": True},
+            ),
+            (
+                "README.md",
+                {"docs": False, "rust": False},
+            ),
+        )
+
+        for path, expected in cases:
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertFalse(outputs["registryctl_tutorial"])
+                for output, value in expected.items():
+                    self.assertEqual(outputs[output], value, output)
+
+    def test_docs_pages_watches_first_country_generation_inputs(self) -> None:
+        workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
+        watched_paths = (
+            "crates/registryctl/assets/project-starters/**",
+            "crates/registryctl/src/main.rs",
+            "crates/registryctl/src/project_authoring/output.rs",
+            "crates/registryctl/src/project_authoring/report_contract.rs",
+            "crates/registryctl/src/templates/**",
+            "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
+            "crates/registryctl/tests/fixtures/project-authoring/**",
+            "crates/registry-relay/src/api/openapi.rs",
+            "crates/registry-relay/src/main.rs",
+            "crates/registry-relay/src/server.rs",
+        )
+
+        for watched_path in watched_paths:
+            with self.subTest(path=watched_path):
+                self.assertIn(f'"{watched_path}"', workflow)
+        self.assertIn(
+            "node scripts/generate-standard-journeys.mjs --check",
+            workflow,
+        )
+
+    def test_every_standard_journey_source_routes_to_docs_and_pages(self) -> None:
+        workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
+        push_paths = re.findall(
+            r'^\s+- "([^"]+)"$',
+            workflow.split("  workflow_dispatch:", 1)[0],
+            flags=re.MULTILINE,
+        )
+
+        for source in sorted(STANDARD_JOURNEY_SOURCES):
+            with self.subTest(source=source):
+                self.assertTrue(classify(self.workspace, (source,))["docs"])
+                self.assertTrue(
+                    any(fnmatch.fnmatchcase(source, pattern) for pattern in push_paths),
+                    f"{source} is not watched by docs-pages.yml",
+                )
 
     def test_other_workflow_changes_do_not_select_the_full_matrix(self) -> None:
         for workflow in sorted(RELEASE_SECURITY_WORKFLOWS):

@@ -1,33 +1,35 @@
 current: latest
 docsets:
   - id: latest
-    label: Latest
+    label: Main source (unreleased)
     path: /
     status: current
+    availability: unreleased
     source: registry-stack-main
     published_at: 2026-06-24
-    description: Current RegistryStack monorepo documentation build.
+    description: Current unreleased RegistryStack source documentation from main; this is not v0.13.0 release proof.
     products:
       registry-stack:
-        version: v0.13.0
+        version: main source (unreleased)
         ref: HEAD
       registry-relay:
-        version: v0.13.0
+        version: main source (unreleased)
         ref: HEAD
       registry-notary:
-        version: v0.13.0
+        version: main source (unreleased)
         ref: HEAD
       registry-manifest:
-        version: v0.13.0
+        version: main source (unreleased)
         ref: HEAD
   - id: v0.13.0
     label: v0.13.0
     path: /v/0.13.0/
     status: archived
+    availability: released
     source: registry-stack-v0.13.0
     repo_docs_source: monorepo
     published_at: 2026-07-25
-    description: RegistryStack v0.13.0 beta-17 documentation set.
+    description: Released RegistryStack v0.13.0 beta-17 documentation set pinned to its immutable source.
     products:
       registry-stack:
         version: v0.13.0
@@ -54,6 +56,7 @@ docsets:
     label: v0.12.2
     path: /v/0.12.2/
     status: archived
+    availability: released
     source: registry-stack-v0.12.2
     repo_docs_source: monorepo
     published_at: 2026-07-20
@@ -84,6 +87,7 @@ docsets:
     label: v0.12.1
     path: /v/0.12.1/
     status: archived
+    availability: released
     source: registry-stack-v0.12.1
     repo_docs_source: monorepo
     published_at: 2026-07-20
@@ -114,6 +118,7 @@ docsets:
     label: v0.12.0
     path: /v/0.12.0/
     status: archived
+    availability: released
     source: registry-stack-v0.12.0
     repo_docs_source: monorepo
     published_at: 2026-07-19
@@ -144,6 +149,7 @@ docsets:
     label: v0.11.0
     path: /v/0.11.0/
     status: archived
+    availability: released
     source: registry-stack-v0.11.0
     repo_docs_source: monorepo
     published_at: 2026-07-18
@@ -174,6 +180,7 @@ docsets:
     label: v0.10.0
     path: /v/0.10.0/
     status: archived
+    availability: released
     source: registry-stack-v0.10.0
     repo_docs_source: monorepo
     published_at: 2026-07-17
@@ -204,6 +211,7 @@ docsets:
     label: v0.9.0
     path: /v/0.9.0/
     status: archived
+    availability: released
     source: registry-stack-v0.9.0
     repo_docs_source: monorepo
     published_at: 2026-07-10
@@ -243,6 +251,7 @@ docsets:
     label: v0.8.4
     path: /v/0.8.4/
     status: archived
+    availability: released
     source: registry-stack-v0.8.4
     repo_docs_source: monorepo
     published_at: 2026-07-04
@@ -282,6 +291,7 @@ docsets:
     label: v0.8.3
     path: /v/0.8.3/
     status: archived
+    availability: released
     source: registry-stack-v0.8.3
     repo_docs_source: monorepo
     published_at: 2026-06-26
@@ -321,6 +331,7 @@ docsets:
     label: v0.8.2
     path: /v/0.8.2/
     status: archived
+    availability: released
     source: registry-stack-v0.8.2
     repo_docs_source: monorepo
     published_at: 2026-06-25
@@ -360,6 +371,7 @@ docsets:
     label: v0.8.1
     path: /v/0.8.1/
     status: archived
+    availability: released
     source: registry-stack-v0.8.1
     repo_docs_source: monorepo
     published_at: 2026-06-25
@@ -399,6 +411,7 @@ docsets:
     label: Beta 5
     path: /v/beta-5/
     status: archived
+    availability: candidate
     source: registry-stack-beta-5
     published_at: 2026-06-24
     description: Beta-5 source-release documentation set prepared for release proof.
@@ -431,6 +444,7 @@ docsets:
     label: Beta 4
     path: /v/beta-4/
     status: archived
+    availability: candidate
     source: registry-stack-beta-4
     published_at: 2026-06-22
     description: Beta-4 source-release documentation set prepared for release proof.
@@ -463,6 +477,7 @@ docsets:
     label: Beta 3
     path: /v/beta-3/
     status: archived
+    availability: candidate
     source: registry-stack-beta-3
     published_at: 2026-06-21
     description: Beta-3 candidate documentation set prepared for release proof.
@@ -495,6 +510,7 @@ docsets:
     label: Beta 2026-06-12
     path: /v/beta-2026-06-12/
     status: archived
+    availability: candidate
     source: registry-stack-beta-2026-06-12
     published_at: 2026-06-12
     description: Frozen public beta documentation set.

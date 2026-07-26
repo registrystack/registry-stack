@@ -72,8 +72,15 @@ REQUIRED_CHECKS = (
     "complete_restore",
     "restored_products_ready",
     "anti_rollback_rejects_older_bundle",
+    "materialization_exact_restart_zero_source_calls",
+    "materialization_missing_cache_fail_closed",
+    "materialization_mismatched_cache_fail_closed",
+    "materialization_pointer_mutation_rejected",
+    "materialization_stale_or_live_fallback_rejected",
 )
 REQUIRED_RECOVERY_ITEMS = (
+    "relay_source_inputs",
+    "relay_ingest_cache",
     "relay_database",
     "notary_database",
     "config_and_bundle",
@@ -145,6 +152,18 @@ def sha256_hex(value: str) -> str:
 
 def canonical_sha256(value: Any) -> str:
     return sha256_bytes(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
+
+
+def materialization_recovery_binding_sha256(value: dict[str, Any]) -> str:
+    return canonical_sha256(
+        {key: item for key, item in value.items() if key != "binding_sha256"}
+    )
+
+
+def record_binding_sha256(value: dict[str, Any]) -> str:
+    return canonical_sha256(
+        {key: item for key, item in value.items() if key != "record_binding_sha256"}
+    )
 
 
 def git_bytes(root: Path, commit: str, path: Path) -> bytes:
@@ -367,6 +386,74 @@ def validate_recovery_set(value: Any, *, template: bool) -> None:
         )
 
 
+def validate_materialization_recovery(
+    value: Any,
+    record: dict[str, Any],
+    *,
+    template: bool,
+) -> None:
+    fields = {
+        "source_inputs_sha256",
+        "ingest_cache_sha256",
+        "relay_database_sha256",
+        "coordinated_recovery_point_sha256",
+        "active_publication_tuple_sha256",
+        "target_release_sha256",
+        "relay_config_schema_sha256",
+        "relay_role_bootstrap_identity_sha256",
+        "recovery_metadata_sha256",
+        "audit_watermark_sha256",
+        "binding_sha256",
+    }
+    recovery = require_object(value, "materialization_recovery", fields)
+    for field in fields:
+        bounded_string(
+            recovery[field],
+            f"materialization_recovery.{field}",
+            SHA256,
+            template=template,
+        )
+    if template:
+        return
+
+    items = {
+        item["item"]: item["artifact_sha256"] for item in record["recovery_set"]
+    }
+    expected_artifacts = {
+        "source_inputs_sha256": items["relay_source_inputs"],
+        "ingest_cache_sha256": items["relay_ingest_cache"],
+        "relay_database_sha256": items["relay_database"],
+    }
+    for field, expected in expected_artifacts.items():
+        if sha256_hex(recovery[field]) != sha256_hex(expected):
+            raise ExerciseError(
+                f"materialization_recovery.{field} does not match recovery_set"
+            )
+
+    expected_release = canonical_sha256(record["target_release"])
+    if sha256_hex(recovery["target_release_sha256"]) != sha256_hex(
+        expected_release
+    ):
+        raise ExerciseError(
+            "materialization_recovery.target_release_sha256 does not "
+            "match the exact target release"
+        )
+    expected_schema = record["config_schemas"]["registry-relay"]["sha256"]
+    if sha256_hex(recovery["relay_config_schema_sha256"]) != sha256_hex(
+        expected_schema
+    ):
+        raise ExerciseError(
+            "materialization_recovery.relay_config_schema_sha256 does not "
+            "match the exact target schema"
+        )
+    expected_binding = materialization_recovery_binding_sha256(recovery)
+    if sha256_hex(recovery["binding_sha256"]) != sha256_hex(expected_binding):
+        raise ExerciseError(
+            "materialization_recovery.binding_sha256 does not bind the closed "
+            "recovery coordinate"
+        )
+
+
 def validate_results(value: Any, *, template: bool) -> None:
     if not isinstance(value, list):
         raise ExerciseError("results must be a list")
@@ -385,7 +472,7 @@ def validate_results(value: Any, *, template: bool) -> None:
         outcome = result["outcome"]
         if outcome not in {"passed", "failed", "not_run"} or template and outcome != "not_run":
             raise ExerciseError(f"results[{index}].outcome is invalid for this record kind")
-        if not template and outcome == "not_run":
+        if outcome == "not_run":
             if any(result[field] is not None for field in (
                 "observed_at", "evidence_label", "evidence_sha256"
             )):
@@ -630,7 +717,9 @@ def validate_record(
             "candidate_artifact_set",
             "topology",
             "recovery_set",
+            "materialization_recovery",
             "results",
+            "record_binding_sha256",
         },
     )
     if record["schema"] != SCHEMA:
@@ -671,10 +760,27 @@ def validate_record(
     validate_artifact_set(record["candidate_artifact_set"], record, template=template)
     validate_topology(record["topology"], template=template)
     validate_recovery_set(record["recovery_set"], template=template)
+    validate_materialization_recovery(
+        record["materialization_recovery"],
+        record,
+        template=template,
+    )
     validate_results(record["results"], template=template)
+    bounded_string(
+        record["record_binding_sha256"],
+        "record_binding_sha256",
+        SHA256,
+        template=template,
+    )
     if not template:
         validate_target_binding(record, root)
         validate_release_asset_bindings(record, root, candidate_asset_root)
+        if sha256_hex(record["record_binding_sha256"]) != sha256_hex(
+            record_binding_sha256(record)
+        ):
+            raise ExerciseError(
+                "record_binding_sha256 does not bind the exact upgrade exercise record"
+            )
     if require_all_passed:
         require_pass(record)
 

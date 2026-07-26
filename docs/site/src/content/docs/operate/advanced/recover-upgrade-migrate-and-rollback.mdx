@@ -1,0 +1,173 @@
+---
+title: Recover, restart, upgrade, migrate, and roll back
+description: Choose the correct recovery path for configuration restart, project migration, product state, software upgrade, and rollback.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+  - registry-relay
+  - registry-notary
+last_reviewed: "2026-07-26"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Use this decision procedure before restarting a product, migrating authored configuration or
+durable state, restoring a backup, upgrading software, or rolling back a failed change.
+The detailed backup, database, and release runbooks remain authoritative.
+
+## Prerequisites
+
+- Pin the current and target software by release or image digest.
+- Preserve the complete current recovery set before a stateful change.
+- Know whether Relay consultation PostgreSQL state and Notary PostgreSQL state are enabled.
+- Keep traffic blocked while a target process or restored database is being attested.
+- Read every intervening release note and migration instruction in order.
+
+## Ownership and trust boundary
+
+Relay owns its cache, consultation schemas, serving fence, materialization publication history,
+audit chain, and product configuration state.
+Notary owns its correctness schemas, signing providers, status and replay state, audit chain, and
+product configuration state.
+The products do not share schemas, runtime roles, keyrings, trust anchors, bundles, or
+anti-rollback files.
+
+The deployment operator owns coordinated recovery points and traffic admission.
+`registryctl migrate` owns reviewed project-authoring compatibility only.
+It does not migrate Relay or Notary runtime databases.
+
+{/* Evidence: docs/site/src/content/docs/operate/backup-and-restore.mdx,
+    docs/site/src/content/docs/operate/upgrade-and-rollback.mdx,
+    crates/registry-relay/docs/ops.md,
+    products/notary/docs/postgresql-state-operations.md, and
+    crates/registryctl/src/project_authoring/migration.rs. */}
+
+## Choose the operation
+
+- Use a restart when secret-plane material changed but the configured references and software
+  contract remain valid.
+- Use `registryctl migrate` when a project contains a catalogued authored-contract transition.
+- Use the Notary state installer and doctor for the exact released Notary schema path.
+- Use Relay `consultation bootstrap-state` to install or attest its exact compiled consultation
+  schema.
+- Use the upgrade procedure for a software or schema change.
+- Use restore only with a complete, matching, isolated recovery set.
+- Use rollback after target traffic only when the target release proves a safe state conversion.
+
+Relay bootstrap is a clean-or-attested installer, not a general migration framework.
+
+## Preserve the recovery set
+
+Follow [Back up and restore a deployment](../../backup-and-restore/) before changing the running
+deployment.
+Preserve:
+
+- Generated secrets and product configuration.
+- Separate signed bundles, trust anchors, and anti-rollback state.
+- Relay source inputs, cache, audit, and complete consultation database when enabled.
+- Notary audit, complete database, role provisioning, and sensitive-state key version.
+- Software identities, PostgreSQL major versions, retained key material, and audit watermarks.
+
+Do not print secret values while recording hashes, owners, modes, and versions.
+
+## Check a project-authoring migration
+
+Inspect the same-v1 compatibility catalog without changing the source project:
+
+```sh
+registryctl migrate \
+  --project-dir <project> \
+  --target-version 1 \
+  --format json
+```
+
+When the report permits candidate emission, write to a new absent directory:
+
+```sh
+registryctl migrate \
+  --project-dir <project> \
+  --target-version 1 \
+  --output <absent-candidate-directory> \
+  --write-candidate \
+  --format json
+```
+
+Review the candidate, disposition, reviews, blocking reasons, and rerun gates.
+The command preserves the source project and does not approve or activate the candidate.
+Use the [registryctl CLI reference](../../../reference/registryctl/) for the current catalogued
+transition.
+
+## Stage a restart or upgrade
+
+1. Run offline fixture, check, preflight, product doctor, and product bundle-verification gates
+   with the target binaries.
+2. Quiesce writers and prevent another product instance from acquiring the active fence.
+3. For Relay consultation state, run the target release's documented
+   `registry-relay consultation bootstrap-state` command with the recorded inputs.
+   Continue only when the exact schema and role capability attest.
+4. For Notary state, run the target release's `state install` as the migration role, then
+   `state doctor` as the runtime role.
+   Do not run old and target Notary writers concurrently across a schema change.
+5. Start one Relay without traffic.
+   Require health, readiness, audit, posture, and a bounded canary.
+6. Start one Notary against that Relay.
+   Require the complete Relay consultation contract, health, readiness, audit, posture, and a
+   bounded evidence canary.
+7. Admit traffic only after both product boundaries pass.
+
+Use [Upgrade and roll back](../../upgrade-and-rollback/) for the exact release procedure and the
+[Notary PostgreSQL operations guide](../../../products/registry-notary/postgresql-state-operations/)
+for role, migration, pruning, and stale-restore controls.
+
+## Expected evidence
+
+Retain:
+
+- Verified current and target software identities.
+- The complete recovery-set inventory and checksums.
+- Project migration report and candidate review when applicable.
+- Relay bootstrap or Notary state-install and doctor results.
+- Separate product bundle verification and anti-rollback sequences.
+- Health, readiness, audit, posture, and canary results before traffic admission.
+- Start, stop, restore, and traffic-admission timestamps.
+
+## What this proves
+
+Project migration gates prove the catalogued authoring transition and generated candidate.
+Database attestation proves the exact schema, role, and capability boundary checked by the product.
+Bundle verification proves the product configuration closure.
+Staged runtime checks prove the tested target process and dependency path.
+
+These gates do not prove backup freshness, every acknowledged write, country acceptance, full live
+interoperability, or a safe downgrade across an undocumented state change.
+`/healthz` proves process liveness only.
+
+## Roll back or recover
+
+Before target traffic, stop the target and restore the complete previous-release set.
+Never start an old binary against a newer unapproved schema or copy anti-rollback state between
+release lineages.
+
+After target traffic writes correctness state, fix forward by default.
+Restore a pre-upgrade database only when no acknowledged target write can be lost or a
+release-specific recovery procedure proves the conversion.
+Keep a potentially stale restore offline until write-ahead-log or point-in-time recovery reaches
+the last acknowledged write and external audit watermark.
+
+Do not delete schemas, audit history, or anti-rollback state to make a target boot.
+
+## Escalate
+
+Escalate to both product owners when a combined topology lacks a coordinated recovery point.
+Escalate to the database owner when role object identities, schema fingerprints, key versions, or
+acknowledged-write coverage cannot be proved.
+Escalate to the release owner when no explicit migration or rollback path covers the source and
+target versions.
+
+## Next
+
+- [Inspect and diagnose the deployment](../inspect-and-diagnose/)
+- [Refresh and recover a materialization](../refresh-and-recover-materialization/)
+- [Review retention and persistent state](../../retention-and-persistent-state/)

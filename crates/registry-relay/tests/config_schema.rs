@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 
 const SCHEMA_ARTIFACT: &str = "../../schemas/registry-relay.config.schema.json";
 const CONFIG_REFERENCE: &str = "docs/configuration.md";
+const DOCUMENTATION_INTENT: &str = "config/documentation-intent.json";
 const KEY_PATHS_START: &str = "{/* registry-relay-config-key-paths:start */}";
 const KEY_PATHS_END: &str = "{/* registry-relay-config-key-paths:end */}";
 const NON_PORTABLE_ENVIRONMENT_NAME: &str = "REGISTRY.RELAY-SCHEMA-RUNTIME-KEY";
@@ -1069,4 +1070,44 @@ fn schema_and_configuration_reference_have_exact_bidirectional_key_path_parity()
         "configuration key paths differ; generated schema paths follow:\n{}",
         schema_paths.iter().cloned().collect::<Vec<_>>().join("\n")
     );
+}
+
+#[test]
+fn product_owned_documentation_intent_has_exact_runtime_key_inventory() {
+    let schema = document();
+    let mut schema_paths = BTreeSet::new();
+    collect_key_paths(&schema, &schema, "", &mut schema_paths, &mut HashSet::new());
+    let intent: Value = serde_json::from_slice(
+        &fs::read(relay_root().join(DOCUMENTATION_INTENT))
+            .expect("Relay documentation intent exists"),
+    )
+    .expect("Relay documentation intent parses");
+    assert_eq!(intent["runtime_schema"], "relay");
+    assert_eq!(intent["schema_id"], CONFIG_SCHEMA_ID);
+    let assignments = intent["assignments"]
+        .as_array()
+        .expect("Relay intent assignments are an array");
+    assert_eq!(assignments.len(), 584);
+    let assigned_paths = assignments
+        .iter()
+        .map(|assignment| {
+            assert_eq!(assignment["schema"], "relay");
+            assert_eq!(assignment["schema_facts_reviewed"], true);
+            assignment["key_path"]
+                .as_str()
+                .expect("assignment key_path is a string")
+                .to_owned()
+        })
+        .filter(|path| !path.is_empty())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(assigned_paths, schema_paths);
+    assert_eq!(
+        assignments
+            .iter()
+            .filter(|assignment| assignment["path_kind"] == "map_value")
+            .count(),
+        6
+    );
+    let text = serde_json::to_string(&intent).expect("intent serializes");
+    assert!(!text.contains("SCHEMA_MUST_NOT_READ_OR_EMIT_THIS_SECRET_VALUE"));
 }

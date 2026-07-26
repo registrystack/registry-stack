@@ -1,0 +1,52 @@
+---
+title: Configure
+description: Configure Registry Stack projects, environments, integrations, fixtures, entities, Relay, and Notary.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+  - registry-relay
+  - registry-notary
+last_reviewed: "2026-07-26"
+doc_type: reference
+locale: en
+standards_referenced: []
+---
+
+Configure human intent in project files, bind operator-owned deployment values in an environment,
+then generate product inputs with `registryctl`.
+
+## Project configuration
+
+Start with [project authoring](../tutorials/author-registry-project/).
+Use the [generated configuration reference](../reference/project-configuration/) for exact
+field purpose, ownership, defaults, environment behavior, sensitivity, validation, and migration
+metadata.
+
+The five authored file classes are:
+
+- `registry-stack.yaml` for the project graph and services
+- `integrations/*/integration.yaml` for source contracts and bounded adaptation
+- `integrations/*/fixtures/*.yaml` for offline synthetic interactions
+- `entities/*.yaml` for materialized entity contracts
+- `environments/*.yaml` for operator-owned trust, secrets, network, callers, state, and deployment
+
+## Adapt a source
+
+- [Configure API-key source authentication](../tutorials/configure-project-api-key-authentication/)
+- [Configure a bounded script adapter](../tutorials/configure-project-script-adapter/)
+- [Configure exact snapshot materialization](../tutorials/configure-project-snapshot-materialization/)
+- [Configure a FHIR R4 integration](../tutorials/configure-project-fhir-r4/)
+
+## Product configuration
+
+Registry Relay owns protected source access and minimized records APIs.
+Registry Notary owns claim evaluation, disclosure, issuance, and evidence provenance.
+Use each product's configuration pages for runtime contracts after `registryctl build` produces
+separate product inputs.
+
+## Next
+
+- [Verify authored configuration](../verify/)
+- [Inspect generated artifacts](../generated-artifacts/)
+- [registryctl CLI reference](../reference/registryctl/)

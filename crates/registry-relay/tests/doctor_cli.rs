@@ -13,7 +13,7 @@ use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 use registry_platform_ops::{
     AntiRollbackKey, AntiRollbackRecord, FileAntiRollbackStore, AUDIT_ACK_CURSOR_FIXTURE_V1,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use tempfile::TempDir;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -341,6 +341,21 @@ fn assert_diagnostic_report(report: &Value) {
     );
     assert_eq!(report["product"], "registry-relay");
     assert_eq!(report["config_schema_version"], "registry.relay.config.v1");
+    assert!(
+        matches!(
+            report["source"]["kind"].as_str(),
+            Some("local_file" | "signed_bundle_file")
+        ),
+        "doctor must report a bounded source classification"
+    );
+    assert!(
+        report.get("hashes").is_none(),
+        "doctor must not expose raw internal config hashes by default"
+    );
+    assert!(
+        report["source"].get("path").is_none(),
+        "doctor must classify its source without exposing its local path"
+    );
 }
 
 fn assert_config_explanation(report: &Value) {
@@ -425,6 +440,7 @@ fn doctor_json_reports_success_and_redacts_env_file_values() {
     );
     let report = parse_stdout_json(&output.stdout);
     assert_diagnostic_report(&report);
+    assert_eq!(report["source"], json!({ "kind": "local_file" }));
     assert_eq!(report["status"], "ok");
     assert!(diagnostic_with_code(&report, "relay.config.loaded").is_some());
     assert!(diagnostic_with_code(&report, "relay.entity_registry.verified").is_some());
@@ -607,6 +623,66 @@ fn doctor_json_reports_config_failure_with_nonzero_exit() {
     assert_diagnostic_report(&report);
     assert_eq!(report["status"], "error");
     assert!(diagnostic_with_code(&report, "config.missing_secret").is_some());
+}
+
+#[test]
+fn doctor_json_redacts_config_path_parser_text_and_hash_from_all_process_output() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sentinel_dir = tmp
+        .path()
+        .join("COUNTRY_PRIVATE")
+        .join("redaction-user@example.test");
+    std::fs::create_dir_all(&sentinel_dir).expect("sentinel directory creates");
+    let config_path = sentinel_dir.join("COUNTRY_CONFIG_PATH.yaml");
+    let parser_sentinel = "COUNTRY_PARSER_ERROR COUNTRY_SECRET_VALUE";
+    std::fs::write(
+        &config_path,
+        format!("deployment:\n  profile: local\n{parser_sentinel}\n\t- invalid"),
+    )
+    .expect("malformed config writes");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-relay"))
+        .args([
+            "doctor",
+            "--config",
+            config_path.to_str().expect("utf-8 path"),
+            "--format=json",
+        ])
+        .output()
+        .expect("doctor command runs");
+
+    assert!(!output.status.success());
+    let report = parse_stdout_json(&output.stdout);
+    assert_diagnostic_report(&report);
+    assert!(diagnostic_with_code(&report, "config.parse_error").is_some());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for sentinel in [
+        parser_sentinel,
+        "COUNTRY_PRIVATE",
+        "redaction-user@example.test",
+        "COUNTRY_CONFIG_PATH",
+        config_path.to_str().expect("utf-8 path"),
+        "internal_config_hash",
+        "sha256:",
+    ] {
+        assert!(
+            !stdout.contains(sentinel),
+            "stdout leaked {sentinel:?}: {stdout}"
+        );
+        assert!(
+            !stderr.contains(sentinel),
+            "stderr leaked {sentinel:?}: {stderr}"
+        );
+    }
+    assert!(
+        stderr.contains("relay.startup.config_document_invalid"),
+        "stderr lacks the product-owned parser classification: {stderr}"
+    );
+    assert!(
+        stderr.contains("relay.startup.doctor_failed"),
+        "stderr lacks the product-owned doctor exit classification: {stderr}"
+    );
 }
 
 #[test]

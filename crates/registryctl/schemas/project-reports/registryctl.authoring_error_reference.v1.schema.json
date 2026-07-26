@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registryctl/project-reports/registryctl.authoring_error_reference.v1.schema.json",
+  "title": "Registryctl Authoring Error Reference v1",
+  "type": "object",
+  "required": ["schema_version", "entries"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "registryctl.authoring_error_reference.v1"
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 17,
+      "maxItems": 17,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "code": {
+      "enum": [
+        "registryctl.authoring.diagnostics.truncated",
+        "registryctl.authoring.entity.invalid",
+        "registryctl.authoring.environment.invalid",
+        "registryctl.authoring.file.too_large",
+        "registryctl.authoring.file.unreadable",
+        "registryctl.authoring.fixture.invalid",
+        "registryctl.authoring.fixture.reserved_body_field",
+        "registryctl.authoring.integration.invalid",
+        "registryctl.authoring.path.unsafe",
+        "registryctl.authoring.project.invalid",
+        "registryctl.authoring.project.scope_collision",
+        "registryctl.authoring.script.closed_contract_violation",
+        "registryctl.authoring.script.invalid_signature",
+        "registryctl.authoring.script.syntax_error",
+        "registryctl.authoring.script.unknown_function",
+        "registryctl.authoring.yaml.invalid_syntax",
+        "registryctl.authoring.yaml.unknown_field"
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "required": [
+        "family",
+        "code",
+        "owner",
+        "product",
+        "phase",
+        "safe_meaning",
+        "rule",
+        "safe_remediation",
+        "field_address_pattern",
+        "evidence_scope",
+        "secret_sensitive_value_policy",
+        "docs_anchor",
+        "lifecycle",
+        "introduced_in",
+        "stability",
+        "evidence_limitation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "const": "authoring_validation"
+        },
+        "code": {
+          "$ref": "#/$defs/code"
+        },
+        "owner": {
+          "const": "registryctl"
+        },
+        "product": {
+          "const": "registryctl"
+        },
+        "phase": {
+          "enum": [
+            "aggregation",
+            "safe_input",
+            "script_validation",
+            "semantic_validation",
+            "syntax"
+          ]
+        },
+        "safe_meaning": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "rule": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "safe_remediation": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "field_address_pattern": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "evidence_scope": {
+          "$ref": "#/$defs/safe_text"
+        },
+        "secret_sensitive_value_policy": {
+          "enum": ["no_received_value", "received_type_only"]
+        },
+        "docs_anchor": {
+          "type": "string",
+          "pattern": "^/reference/diagnostics/authoring/#registryctl--registryctl\\.authoring\\.[a-z0-9_]+(?:\\.[a-z0-9_]+)*$",
+          "maxLength": 512
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/lifecycle"
+        },
+        "introduced_in": {
+          "$ref": "#/$defs/introduced_in"
+        },
+        "stability": {
+          "const": "pre1_stable_code"
+        },
+        "evidence_limitation": {
+          "$ref": "#/$defs/safe_text"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/lifecycle_version"
+        }
+      ]
+    },
+    "safe_text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "lifecycle": {
+      "enum": ["unreleased", "active", "deprecated", "released"]
+    },
+    "introduced_in": {
+      "type": ["string", "null"],
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "lifecycle_version": {
+      "if": {
+        "properties": {
+          "lifecycle": {
+            "const": "unreleased"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "introduced_in": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "introduced_in": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

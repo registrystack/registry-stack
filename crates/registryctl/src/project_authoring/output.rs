@@ -1,5 +1,110 @@
 // SPDX-License-Identifier: Apache-2.0
 
+include!("artifact_manifest.rs");
+
+/// Trusted process-local dependencies used while executing project fixtures.
+///
+/// The worker executable is supplied only by reviewed Rust callers. It is not
+/// derived from authored project state, CLI options, or environment variables.
+#[derive(Clone, Debug)]
+pub struct ProjectExecutionContext {
+    worker_program: PathBuf,
+}
+
+impl ProjectExecutionContext {
+    /// Uses the currently running `registryctl` executable for fixture workers.
+    pub fn for_current_executable() -> Result<Self> {
+        let worker_program =
+            std::env::current_exe().context("current executable is unavailable")?;
+        Self::new(worker_program)
+    }
+
+    /// Creates a context with an explicitly injected worker executable.
+    ///
+    /// The path must be absolute and identify an existing, non-symlink regular
+    /// file with executable permissions. Validation happens before the path can
+    /// reach either Relay or Notary worker configuration.
+    pub fn new(worker_program: impl AsRef<Path>) -> Result<Self> {
+        let worker_program = worker_program.as_ref();
+        if !worker_program.is_absolute() {
+            bail!("project worker executable path must be absolute");
+        }
+        let metadata = fs::symlink_metadata(worker_program)
+            .context("project worker executable is unavailable")?;
+        if metadata.file_type().is_symlink() {
+            bail!("project worker executable must not be a symlink");
+        }
+        if !metadata.file_type().is_file() {
+            bail!("project worker executable is not a regular file");
+        }
+        validate_project_worker_executable_permissions(&metadata)?;
+        Ok(Self {
+            worker_program: worker_program.to_path_buf(),
+        })
+    }
+
+    fn worker_program(&self) -> &Path {
+        &self.worker_program
+    }
+}
+
+#[cfg(unix)]
+fn validate_project_worker_executable_permissions(metadata: &fs::Metadata) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if metadata.permissions().mode() & 0o111 == 0 {
+        bail!("project worker executable is not executable");
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_project_worker_executable_permissions(_metadata: &fs::Metadata) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+mod project_execution_context_tests {
+    use super::*;
+
+    #[test]
+    fn current_executable_is_a_valid_default_worker_program() {
+        ProjectExecutionContext::for_current_executable()
+            .expect("the current executable is an absolute real executable");
+    }
+
+    #[test]
+    fn explicit_worker_program_rejects_missing_relative_and_directory_paths() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let missing = temporary.path().join("missing-worker");
+        assert!(ProjectExecutionContext::new(&missing).is_err());
+        assert!(ProjectExecutionContext::new(Path::new("relative-worker")).is_err());
+        assert!(ProjectExecutionContext::new(temporary.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_worker_program_rejects_symlinks_and_non_executable_files() {
+        use std::os::unix::fs::{symlink, PermissionsExt as _};
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let non_executable = temporary.path().join("non-executable-worker");
+        fs::write(&non_executable, b"not executable").expect("worker file writes");
+        fs::set_permissions(&non_executable, fs::Permissions::from_mode(0o600))
+            .expect("worker permissions update");
+        assert!(ProjectExecutionContext::new(&non_executable).is_err());
+
+        let executable = temporary.path().join("worker");
+        fs::write(&executable, b"#!/bin/sh\nexit 0\n").expect("worker file writes");
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))
+            .expect("worker permissions update");
+        let link = temporary.path().join("worker-link");
+        symlink(&executable, &link).expect("worker symlink creates");
+        assert!(ProjectExecutionContext::new(&link).is_err());
+        ProjectExecutionContext::new(&executable).expect("real executable is accepted");
+    }
+}
+
 fn validate_generated_product_configs(compiled: &CompiledProject) -> Result<()> {
     if compiled.relay_private.is_empty() && compiled.notary_private.is_empty() {
         bail!("generated deployment has no product configuration");
@@ -42,7 +147,7 @@ fn validate_generated_relay(
         .and_then(Value::as_array)
         .is_some_and(|contracts| !contracts.is_empty())
     {
-        compile_generated_relay_fixture(relay_config, files).map(drop)?;
+        compile_generated_relay_fixture(relay_config, files, None).map(drop)?;
     }
     Ok(())
 }
@@ -117,6 +222,7 @@ impl Drop for GeneratedValidationDirectory {
 fn compile_generated_relay_fixture(
     relay_config: &[u8],
     files: &BTreeMap<PathBuf, Box<[u8]>>,
+    worker_program: Option<&Path>,
 ) -> Result<registry_relay::offline_fixture::OfflineRelayFixture> {
     let runtime: registry_relay::config::Config = serde_norway::from_slice(relay_config)
         .context("generated Relay config did not parse with the production model")?;
@@ -148,11 +254,16 @@ fn compile_generated_relay_fixture(
         .collect::<Vec<_>>();
     let bundle = SourcePlanArtifactBundle::new(&public_refs, &pack_refs, &binding_refs)
         .with_evidence(&evidence_refs);
-    registry_relay::offline_fixture::OfflineRelayFixture::compile_with_worker_program(
-        &bundle,
-        project_registryctl_program()?,
-    )
-        .context("generated Relay artifacts failed the production source-plan compiler")
+    match worker_program {
+        Some(worker_program) => {
+            registry_relay::offline_fixture::OfflineRelayFixture::compile_with_worker_program(
+                &bundle,
+                worker_program.to_path_buf(),
+            )
+        }
+        None => registry_relay::offline_fixture::OfflineRelayFixture::compile(&bundle),
+    }
+    .context("generated Relay artifacts failed the production source-plan compiler")
 }
 
 fn generated_pinned_artifacts(
@@ -270,7 +381,10 @@ fn write_compiled_project(
     output: &Path,
     compiled: &CompiledProject,
     runtime_identity: Option<crate::RuntimeIdentity>,
-) -> Result<()> {
+    project: &str,
+    environment: &str,
+    artifact_inputs: &[ArtifactInputDigest],
+) -> Result<ProjectArtifactManifestRef> {
     let expected_parent = root.join(BUILD_ROOT);
     let parent = output
         .parent()
@@ -303,10 +417,7 @@ fn write_compiled_project(
         create_dir_owner_only(&relay_root)?;
         write_file_map(&relay_root, &compiled.relay_private)?;
         write_private_file(&relay_root.join(APPROVAL_REVIEW_PATH), &review_bytes)?;
-        write_private_file(
-            &relay_root.join(APPROVAL_STATE_PATH),
-            &approval_state_bytes,
-        )?;
+        write_private_file(&relay_root.join(APPROVAL_STATE_PATH), &approval_state_bytes)?;
     }
     if !compiled.notary_private.is_empty() {
         let notary_root = temporary.join("private/notary");
@@ -327,6 +438,8 @@ fn write_compiled_project(
             assign_unpublished_runtime_input_owner(&temporary.join(relative), identity)?;
         }
     }
+    let artifact_manifest =
+        write_artifact_manifest(&temporary, project, environment, artifact_inputs)?;
 
     let backup = expected_parent.join(format!(".{name}.previous-{}", std::process::id()));
     if backup.exists() {
@@ -348,7 +461,7 @@ fn write_compiled_project(
         fs::remove_dir_all(&backup)
             .with_context(|| format!("failed to remove prior build {}", backup.display()))?;
     }
-    Ok(())
+    Ok(artifact_manifest)
 }
 
 #[cfg(unix)]
@@ -358,8 +471,12 @@ fn assign_unpublished_runtime_input_owner(
 ) -> Result<()> {
     use std::os::unix::fs::{lchown, MetadataExt};
 
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("failed to inspect unpublished runtime input {}", path.display()))?;
+    let metadata = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "failed to inspect unpublished runtime input {}",
+            path.display()
+        )
+    })?;
     if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
         bail!(
             "unpublished runtime input contains an unsupported file type: {}",
@@ -367,12 +484,18 @@ fn assign_unpublished_runtime_input_owner(
         );
     }
     if metadata.is_dir() {
-        for entry in fs::read_dir(path)
-            .with_context(|| format!("failed to read unpublished runtime input {}", path.display()))?
-        {
+        for entry in fs::read_dir(path).with_context(|| {
+            format!(
+                "failed to read unpublished runtime input {}",
+                path.display()
+            )
+        })? {
             let child = entry
                 .with_context(|| {
-                    format!("failed to read an entry under unpublished runtime input {}", path.display())
+                    format!(
+                        "failed to read an entry under unpublished runtime input {}",
+                        path.display()
+                    )
                 })?
                 .path();
             assign_unpublished_runtime_input_owner(&child, identity)?;
@@ -460,6 +583,185 @@ fn validate_baseline_pair(against: Option<&Path>, anchor: Option<&Path>) -> Resu
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct ApprovedBaselineSetPaths<'a> {
+    against: Option<&'a Path>,
+    anchor: Option<&'a Path>,
+    relay_against: Option<&'a Path>,
+    relay_anchor: Option<&'a Path>,
+    notary_against: Option<&'a Path>,
+    notary_anchor: Option<&'a Path>,
+}
+
+impl<'a> ApprovedBaselineSetPaths<'a> {
+    fn legacy(against: Option<&'a Path>, anchor: Option<&'a Path>) -> Self {
+        Self {
+            against,
+            anchor,
+            relay_against: None,
+            relay_anchor: None,
+            notary_against: None,
+            notary_anchor: None,
+        }
+    }
+
+    fn build(
+        options: &'a ProjectBuildOptions,
+        baselines: Option<&'a ProjectBuildBaselineSetOptions>,
+    ) -> Self {
+        Self {
+            against: options.against.as_deref(),
+            anchor: options.anchor.as_deref(),
+            relay_against: baselines.and_then(|set| set.relay_against.as_deref()),
+            relay_anchor: baselines.and_then(|set| set.relay_anchor.as_deref()),
+            notary_against: baselines.and_then(|set| set.notary_against.as_deref()),
+            notary_anchor: baselines.and_then(|set| set.notary_anchor.as_deref()),
+        }
+    }
+
+    fn promotion(options: &'a ProjectPromotionOptions) -> Self {
+        Self {
+            against: options.against.as_deref(),
+            anchor: options.anchor.as_deref(),
+            relay_against: options.relay_against.as_deref(),
+            relay_anchor: options.relay_anchor.as_deref(),
+            notary_against: options.notary_against.as_deref(),
+            notary_anchor: options.notary_anchor.as_deref(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BaselineSetCompleteness {
+    AnyVerifiedProduct,
+    CompleteTopologyWhenPresent,
+}
+
+impl VerifiedBaselineSet {
+    fn is_empty(&self) -> bool {
+        self.relay.is_none() && self.notary.is_none()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &VerifiedBaseline> {
+        [self.relay.as_ref(), self.notary.as_ref()]
+            .into_iter()
+            .flatten()
+    }
+
+    fn common(&self) -> Option<&VerifiedBaseline> {
+        self.relay.as_ref().or(self.notary.as_ref())
+    }
+
+    fn predecessor_manifest_identities(&self) -> Value {
+        json!({
+            "relay": self.relay.as_ref().map(|baseline| &baseline.verified_manifest),
+            "notary": self.notary.as_ref().map(|baseline| &baseline.verified_manifest),
+        })
+    }
+
+    fn insert(&mut self, baseline: VerifiedBaseline) -> Result<()> {
+        match verified_baseline_product(&baseline)? {
+            PromotionProjectedProduct::Relay if self.relay.is_none() => {
+                self.relay = Some(baseline);
+            }
+            PromotionProjectedProduct::Notary if self.notary.is_none() => {
+                self.notary = Some(baseline);
+            }
+            PromotionProjectedProduct::Relay | PromotionProjectedProduct::Notary => {
+                bail!("approved baseline set contains a duplicate product")
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_common_signed_state(&self) -> Result<()> {
+        let Some(common) = self.common() else {
+            return Ok(());
+        };
+        if self.iter().any(|baseline| {
+            baseline.approval_state != common.approval_state
+                || baseline.approval_state_digest != common.approval_state_digest
+                || baseline.review_digest != common.review_digest
+        }) {
+            bail!("approved product baselines do not share one signed project approval state");
+        }
+        Ok(())
+    }
+}
+
+fn validate_approved_baseline_set_paths(paths: ApprovedBaselineSetPaths<'_>) -> Result<()> {
+    validate_named_baseline_pair("--against", paths.against, "--anchor", paths.anchor)?;
+    validate_named_baseline_pair(
+        "--relay-against",
+        paths.relay_against,
+        "--relay-anchor",
+        paths.relay_anchor,
+    )?;
+    validate_named_baseline_pair(
+        "--notary-against",
+        paths.notary_against,
+        "--notary-anchor",
+        paths.notary_anchor,
+    )?;
+    if paths.against.is_some() && (paths.relay_against.is_some() || paths.notary_against.is_some())
+    {
+        bail!("--against cannot be combined with product-specific baselines");
+    }
+    Ok(())
+}
+
+fn load_verified_approved_baseline_set(
+    paths: ApprovedBaselineSetPaths<'_>,
+    loaded: &LoadedRegistryProject,
+    completeness: BaselineSetCompleteness,
+) -> Result<VerifiedBaselineSet> {
+    validate_approved_baseline_set_paths(paths)?;
+    let mut baselines = VerifiedBaselineSet::default();
+    if let Some(baseline) = load_verified_baseline(paths.against, paths.anchor, loaded)? {
+        baselines.insert(baseline)?;
+    } else {
+        for (against, anchor, expected_product) in [
+            (
+                paths.relay_against,
+                paths.relay_anchor,
+                PromotionProjectedProduct::Relay,
+            ),
+            (
+                paths.notary_against,
+                paths.notary_anchor,
+                PromotionProjectedProduct::Notary,
+            ),
+        ] {
+            if let Some(baseline) = load_verified_baseline(against, anchor, loaded)? {
+                if verified_baseline_product(&baseline)? != expected_product {
+                    bail!("product-specific approved baseline has the wrong product");
+                }
+                baselines.insert(baseline)?;
+            }
+        }
+    }
+    baselines.validate_common_signed_state()?;
+    if matches!(
+        completeness,
+        BaselineSetCompleteness::CompleteTopologyWhenPresent
+    ) && !baselines.is_empty()
+    {
+        let environment = loaded
+            .environment
+            .as_ref()
+            .ok_or_else(|| anyhow!("approved baseline comparison requires an environment"))?;
+        let products = project_promotion_products(environment);
+        let requires_relay = products.contains(&PromotionProjectedProduct::Relay);
+        let requires_notary = products.contains(&PromotionProjectedProduct::Notary);
+        if baselines.relay.is_some() != requires_relay
+            || baselines.notary.is_some() != requires_notary
+        {
+            bail!("approved baseline set is incomplete for the selected product topology");
+        }
+    }
+    Ok(baselines)
+}
+
 fn load_verified_baseline(
     against: Option<&Path>,
     anchor: Option<&Path>,
@@ -481,20 +783,16 @@ fn load_verified_baseline(
     {
         bail!("verified baseline manifest is not bound to this product environment");
     }
-    let review_bytes = read_verified_bundle_payload(
-        bundle,
-        &verified.manifest,
-        APPROVAL_REVIEW_PATH,
-        "review",
-    )?;
+    let review_bytes =
+        read_verified_bundle_payload(bundle, &verified.manifest, APPROVAL_REVIEW_PATH, "review")?;
     let approval_state_bytes = read_verified_bundle_payload(
         bundle,
         &verified.manifest,
         APPROVAL_STATE_PATH,
         "approval state",
     )?;
-    let review = parse_json_strict(&review_bytes)
-        .context("baseline review record is not strict JSON")?;
+    let review =
+        parse_json_strict(&review_bytes).context("baseline review record is not strict JSON")?;
     let approval_state = parse_json_strict(&approval_state_bytes)
         .context("baseline approval state is not strict JSON")?;
     validate_signed_review_record(&review)?;
@@ -502,7 +800,10 @@ fn load_verified_baseline(
     if review.get("schema").and_then(Value::as_str) != Some(REVIEW_SCHEMA) {
         bail!("baseline review record has the wrong schema");
     }
-    if approval_state.get("schema").and_then(Value::as_str) != Some(APPROVAL_STATE_SCHEMA) {
+    if !matches!(
+        approval_state.get("schema").and_then(Value::as_str),
+        Some(APPROVAL_STATE_SCHEMA_V1 | APPROVAL_STATE_SCHEMA_V2 | APPROVAL_STATE_SCHEMA)
+    ) {
         bail!("baseline approval state has the wrong schema");
     }
     for value in [&review, &approval_state] {
@@ -516,17 +817,15 @@ fn load_verified_baseline(
     if approval_state.get("compiler_version") != review.get("compiler_version") {
         bail!("verified baseline review and approval state disagree on compiler version");
     }
-    let review_has_baseline = review.get("baseline").and_then(Value::as_str)
-        == Some("verified_signed_bundle");
+    let review_has_baseline =
+        review.get("baseline").and_then(Value::as_str) == Some("verified_signed_bundle");
     let state_has_baseline = approval_state
         .get("baseline")
         .is_some_and(|baseline| !baseline.is_null());
     if review_has_baseline != state_has_baseline {
         bail!("verified baseline review and approval state disagree on baseline status");
     }
-    if approval_state
-        .get("report_digest")
-        .and_then(Value::as_str)
+    if approval_state.get("report_digest").and_then(Value::as_str)
         != Some(sha256_uri(&review_bytes).as_str())
     {
         bail!("verified baseline approval state does not bind the signed review");
@@ -555,8 +854,10 @@ fn load_verified_baseline(
     validate_verified_product_closure(&approval_state, &verified.manifest)?;
     Ok(Some(VerifiedBaseline {
         approval_state,
+        approval_state_digest: sha256_uri(&approval_state_bytes),
         verified_manifest: serde_json::to_value(verified.manifest)
             .context("failed to retain verified baseline manifest identity")?,
+        review_digest: sha256_uri(&review_bytes),
     }))
 }
 
@@ -567,8 +868,8 @@ fn read_verified_bundle_payload(
     label: &str,
 ) -> Result<Vec<u8>> {
     let path = bundle.join(relative);
-    let bytes = fs::read(&path)
-        .with_context(|| format!("verified baseline lacks {}", path.display()))?;
+    let bytes =
+        fs::read(&path).with_context(|| format!("verified baseline lacks {}", path.display()))?;
     let digest = sha256_uri(&bytes);
     if manifest
         .files
@@ -594,7 +895,9 @@ fn validate_verified_product_closure(
     let expected = approval_state
         .pointer(&format!("/generated_closure_digests/{product}"))
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("verified baseline approval state lacks its {product} closure digest"))?;
+        .ok_or_else(|| {
+            anyhow!("verified baseline approval state lacks its {product} closure digest")
+        })?;
     let mut files = manifest
         .files
         .iter()
@@ -678,9 +981,12 @@ fn validate_signed_review_record(value: &Value) -> Result<()> {
 }
 
 fn validate_signed_approval_state(value: &Value) -> Result<()> {
-    let state = exact_review_object(
-        value,
-        &[
+    let schema = value
+        .get("schema")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("baseline approval state schema must be a string"))?;
+    let expected = match schema {
+        APPROVAL_STATE_SCHEMA_V1 => &[
             "schema",
             "registry",
             "environment",
@@ -692,27 +998,83 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
             "generated_closure_digests",
             "baseline",
             "entity_materializations",
-        ],
-        "baseline approval state",
-    )?;
+        ][..],
+        APPROVAL_STATE_SCHEMA_V2 => &[
+            "schema",
+            "registry",
+            "environment",
+            "compiler_version",
+            "report_digest",
+            "authored_input_digest",
+            "semantic_digests",
+            "disclosure_digest",
+            "promotion_projection",
+            "generated_closure_digests",
+            "baseline",
+            "entity_materializations",
+        ][..],
+        APPROVAL_STATE_SCHEMA => &[
+            "schema",
+            "registry",
+            "environment",
+            "compiler_version",
+            "report_digest",
+            "authored_input_digest",
+            "semantic_digests",
+            "disclosure_digest",
+            "promotion_projection",
+            "generated_closure_digests",
+            "baseline",
+            "entity_materializations",
+        ][..],
+        _ => bail!("baseline approval state has the wrong schema"),
+    };
+    let state = exact_review_object(value, expected, "baseline approval state")?;
     for field in ["schema", "registry", "environment", "compiler_version"] {
         if state.get(field).and_then(Value::as_str).is_none() {
             bail!("baseline approval state field {field} must be a string");
         }
     }
-    for field in ["report_digest", "authored_input_digest", "disclosure_digest"] {
+    for field in [
+        "report_digest",
+        "authored_input_digest",
+        "disclosure_digest",
+    ] {
         validate_review_sha256(state.get(field), field, false)?;
     }
     let semantic = exact_review_object(
         state
             .get("semantic_digests")
             .ok_or_else(|| anyhow!("baseline approval state lacks semantic_digests"))?,
-        &["claim", "integration", "service_policy", "operator_security"],
+        &[
+            "claim",
+            "integration",
+            "service_policy",
+            "operator_security",
+        ],
         "baseline approval semantic_digests",
     )?;
-    for field in ["claim", "integration", "service_policy", "operator_security"] {
+    for field in [
+        "claim",
+        "integration",
+        "service_policy",
+        "operator_security",
+    ] {
         validate_review_sha256(semantic.get(field), field, false)?;
     }
+    let promotion_products =
+        if matches!(schema, APPROVAL_STATE_SCHEMA_V2 | APPROVAL_STATE_SCHEMA) {
+            let promotion_projection: ProjectPromotionProjectionV1 =
+                serde_json::from_value(state.get("promotion_projection").cloned().ok_or_else(
+                    || anyhow!("baseline approval state lacks promotion_projection"),
+                )?)
+                .context("baseline approval promotion_projection is invalid")?;
+            validate_project_promotion_projection_structure(&promotion_projection)
+                .map_err(|error| anyhow!(error))?;
+            Some(promotion_projection.products)
+        } else {
+            None
+        };
     let closure = exact_review_object(
         state
             .get("generated_closure_digests")
@@ -726,7 +1088,28 @@ fn validate_signed_approval_state(value: &Value) -> Result<()> {
             validate_review_sha256(closure.get(field), field, false)?;
         }
     }
-    validate_approval_baseline(state.get("baseline"))?;
+    if let Some(products) = promotion_products.as_ref() {
+        for (field, product) in [
+            ("relay", PromotionProjectedProduct::Relay),
+            ("notary", PromotionProjectedProduct::Notary),
+        ] {
+            let has_closure = closure.get(field).is_some_and(Value::is_string);
+            if has_closure != products.contains(&product) {
+                bail!(
+                    "baseline approval promotion_projection product inventory disagrees with generated_closure_digests"
+                );
+            }
+        }
+    }
+    validate_approval_baseline(
+        state.get("baseline"),
+        schema,
+        state
+            .get("environment")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("baseline approval state environment must be a string"))?,
+        promotion_products.as_deref(),
+    )?;
     if !state
         .get("entity_materializations")
         .is_some_and(Value::is_object)
@@ -802,11 +1185,7 @@ fn validate_semantic_changes(value: &Value) -> Result<()> {
         .ok_or_else(|| anyhow!("baseline semantic_changes must be an array"))?;
     let mut dimensions = BTreeSet::new();
     for change in changes {
-        let change = exact_review_object(
-            change,
-            &["dimension"],
-            "baseline semantic change",
-        )?;
+        let change = exact_review_object(change, &["dimension"], "baseline semantic change")?;
         let dimension = change
             .get("dimension")
             .and_then(Value::as_str)
@@ -827,28 +1206,89 @@ fn validate_semantic_changes(value: &Value) -> Result<()> {
     Ok(())
 }
 
-fn validate_approval_baseline(value: Option<&Value>) -> Result<()> {
+fn validate_approval_baseline(
+    value: Option<&Value>,
+    schema: &str,
+    environment: &str,
+    promotion_products: Option<&[PromotionProjectedProduct]>,
+) -> Result<()> {
     let Some(value) = value else {
         bail!("baseline approval state lacks baseline");
     };
     if value.is_null() {
         return Ok(());
     }
-    let baseline = exact_review_object(
-        value,
-        &["verified_manifest"],
-        "baseline approval state baseline",
-    )?;
-    let manifest: registry_platform_config::ConfigBundleManifest = serde_json::from_value(
-        baseline
-            .get("verified_manifest")
-            .cloned()
-            .ok_or_else(|| anyhow!("baseline approval state lacks verified_manifest"))?,
-    )
-    .context("baseline approval verified_manifest is invalid")?;
-    manifest
-        .validate()
+    if schema == APPROVAL_STATE_SCHEMA {
+        let baseline = exact_review_object(
+            value,
+            &["verified_manifests"],
+            "baseline approval state baseline",
+        )?;
+        let manifests = exact_review_object(
+            baseline
+                .get("verified_manifests")
+                .ok_or_else(|| anyhow!("baseline approval state lacks verified_manifests"))?,
+            &["relay", "notary"],
+            "baseline approval verified_manifests",
+        )?;
+        let mut present = 0_usize;
+        for (field, expected_product, projected_product) in [
+            ("relay", "registry-relay", PromotionProjectedProduct::Relay),
+            (
+                "notary",
+                "registry-notary",
+                PromotionProjectedProduct::Notary,
+            ),
+        ] {
+            let Some(value) = manifests.get(field) else {
+                bail!("baseline approval state lacks a product manifest identity");
+            };
+            if value.is_null() {
+                continue;
+            }
+            let manifest: registry_platform_config::ConfigBundleManifest =
+                serde_json::from_value(value.clone())
+                    .context("baseline approval product manifest identity is invalid")?;
+            manifest
+                .validate()
+                .context("baseline approval product manifest identity is invalid")?;
+            if manifest.product != expected_product || manifest.environment != environment {
+                bail!("baseline approval product manifest identity has the wrong product");
+            }
+            if !promotion_products.is_some_and(|products| products.contains(&projected_product)) {
+                bail!("baseline approval product manifest identity is outside project topology");
+            }
+            present += 1;
+        }
+        if present == 0 {
+            bail!("baseline approval state has no predecessor product manifest identity");
+        }
+        if promotion_products.is_some_and(|products| products.len() != present) {
+            bail!("baseline approval product manifest identity set is incomplete");
+        }
+    } else {
+        // v1 and v2 recorded one predecessor manifest because build accepted
+        // only one unlabelled product baseline. Readers retain that exact
+        // shape, while v3 writes the closed Relay/Notary identity set above.
+        let baseline = exact_review_object(
+            value,
+            &["verified_manifest"],
+            "baseline approval state baseline",
+        )?;
+        let manifest: registry_platform_config::ConfigBundleManifest = serde_json::from_value(
+            baseline
+                .get("verified_manifest")
+                .cloned()
+                .ok_or_else(|| anyhow!("baseline approval state lacks verified_manifest"))?,
+        )
         .context("baseline approval verified_manifest is invalid")?;
+        manifest
+            .validate()
+            .context("baseline approval verified_manifest is invalid")?;
+        if manifest.environment != environment {
+            bail!("baseline approval verified_manifest has the wrong environment");
+        }
+    }
     Ok(())
 }
 
@@ -1017,6 +1457,7 @@ fn load_fixtures(
     root: &Path,
     directory: &Path,
     hasher: &mut Sha256,
+    artifact_inputs: &mut BTreeMap<String, ArtifactInputDigest>,
 ) -> Result<Vec<(PathBuf, FixtureDocument)>> {
     const MAX_FIXTURE_BODY_BYTES: u64 = 8 * 1024 * 1024;
     const MAX_FIXTURE_BODY_CLOSURE_BYTES: u64 = 16 * 1024 * 1024;
@@ -1065,15 +1506,12 @@ fn load_fixtures(
             let relative = path
                 .strip_prefix(root)
                 .map_err(|_| anyhow!("fixture escapes project root"))?;
-            hash_authored_file(
-                hasher,
-                relative
-                    .to_str()
-                    .ok_or_else(|| anyhow!("fixture path is not Unicode"))?,
-                &bytes,
-            );
-            let authored: AuthoredFixtureDocument =
-                parse_yaml(&bytes, &relative.display().to_string())?;
+            let relative = relative
+                .to_str()
+                .ok_or_else(|| anyhow!("fixture path is not Unicode"))?;
+            record_artifact_input(artifact_inputs, relative, &bytes)?;
+            hash_authored_file(hasher, relative, &bytes);
+            let authored: AuthoredFixtureDocument = parse_yaml(&bytes, relative)?;
             let fixture = lower_authored_fixture(
                 root,
                 directory,
@@ -1099,13 +1537,11 @@ fn load_fixtures(
         let relative = path
             .strip_prefix(root)
             .map_err(|_| anyhow!("fixture body escapes project root"))?;
-        hash_authored_file(
-            hasher,
-            relative
-                .to_str()
-                .ok_or_else(|| anyhow!("fixture body path is not Unicode"))?,
-            &bytes,
-        );
+        let relative = relative
+            .to_str()
+            .ok_or_else(|| anyhow!("fixture body path is not Unicode"))?;
+        record_artifact_input(artifact_inputs, relative, &bytes)?;
+        hash_authored_file(hasher, relative, &bytes);
     }
     fixtures.sort_by(|left, right| left.1.name.as_bytes().cmp(right.1.name.as_bytes()));
     Ok(fixtures)
@@ -1130,11 +1566,11 @@ fn lower_authored_fixture(
                 })
                 .transpose()?;
             let respond = match interaction.respond {
-                AuthoredFixtureResponse::Http {
+                AuthoredFixtureResponse::Http(AuthoredFixtureHttpResponse {
                     status,
                     headers,
                     body,
-                } => FixtureSourceResponse::Http {
+                }) => FixtureSourceResponse::Http {
                     status,
                     headers,
                     body: body
@@ -1150,7 +1586,7 @@ fn lower_authored_fixture(
                         .transpose()?
                         .unwrap_or(Value::Null),
                 },
-                AuthoredFixtureResponse::Timeout { timeout } => {
+                AuthoredFixtureResponse::Timeout(AuthoredFixtureTimeoutResponse { timeout }) => {
                     FixtureSourceResponse::Timeout { timeout }
                 }
             };
@@ -1185,7 +1621,7 @@ fn resolve_fixture_body(
 ) -> Result<Value> {
     match body {
         AuthoredFixtureBody::Inline(value) => Ok(value),
-        AuthoredFixtureBody::File { file } => {
+        AuthoredFixtureBody::File(AuthoredFixtureBodyFile { file }) => {
             let mut components = file.components();
             if components.next() != Some(Component::Normal(std::ffi::OsStr::new("bodies")))
                 || components.next().is_none()
@@ -1436,9 +1872,8 @@ fn validate_https_or_local_loopback_origin(
 ) -> Result<()> {
     let origin = url::Url::parse(value).with_context(|| format!("{field} is not a URL"))?;
     let secure = origin.scheme() == "https";
-    let local_loopback = allow_local_loopback
-        && origin.scheme() == "http"
-        && url_host_is_ip_loopback(&origin);
+    let local_loopback =
+        allow_local_loopback && origin.scheme() == "http" && url_host_is_ip_loopback(&origin);
     if (!secure && !local_loopback)
         || origin.host().is_none()
         || !origin.username().is_empty()
@@ -1478,9 +1913,8 @@ fn validate_https_or_local_loopback_resource(
 ) -> Result<()> {
     let resource = url::Url::parse(value).with_context(|| format!("{field} is invalid"))?;
     let secure = resource.scheme() == "https";
-    let local_loopback = allow_local_loopback
-        && resource.scheme() == "http"
-        && url_host_is_ip_loopback(&resource);
+    let local_loopback =
+        allow_local_loopback && resource.scheme() == "http" && url_host_is_ip_loopback(&resource);
     if (!secure && !local_loopback)
         || resource.host().is_none()
         || !resource.username().is_empty()
@@ -1662,9 +2096,9 @@ mod fixture_body_security_tests {
         let result = resolve_fixture_body(
             &root,
             &fixture_directory,
-            AuthoredFixtureBody::File {
+            AuthoredFixtureBody::File(AuthoredFixtureBodyFile {
                 file: PathBuf::from("../outside.json"),
-            },
+            }),
             &mut cache,
             8 * 1024 * 1024,
         );

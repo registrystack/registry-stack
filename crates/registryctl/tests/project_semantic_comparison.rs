@@ -1,0 +1,321 @@
+// SPDX-License-Identifier: Apache-2.0
+
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+
+use registryctl::{
+    compare_registry_project_environments_semantically,
+    compare_registry_project_to_embedded_starter_semantically,
+    compare_registry_projects_semantically, init_registry_project,
+    ProjectEnvironmentSemanticComparisonOptions, ProjectInitOptions,
+    ProjectSemanticComparisonOptions, ProjectStarter, ProjectStarterSemanticComparisonOptions,
+    SemanticComparisonAssurance, SemanticComparisonDimension, SemanticComparisonEquivalence,
+    SemanticComparisonReviewPlanState, SemanticComparisonSchemaFamily,
+};
+use serde_json::Value;
+
+fn init_http_project(root: &Path) {
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Http,
+        directory: root.to_path_buf(),
+    })
+    .expect("HTTP project initializes");
+}
+
+fn rewrite_yaml(path: &Path, update: impl FnOnce(&mut Value)) {
+    let bytes = fs::read(path).expect("YAML reads");
+    let mut document: Value = serde_norway::from_slice(&bytes).expect("YAML parses");
+    update(&mut document);
+    fs::write(
+        path,
+        serde_norway::to_string(&document).expect("YAML serializes"),
+    )
+    .expect("YAML writes");
+}
+
+fn compare_projects(
+    current: &Path,
+    baseline: &Path,
+) -> registryctl::ProjectSemanticComparisonReportV1 {
+    compare_registry_projects_semantically(&ProjectSemanticComparisonOptions {
+        current_project_directory: current.to_path_buf(),
+        current_environment: "local".to_owned(),
+        baseline_project_directory: baseline.to_path_buf(),
+        baseline_environment: "local".to_owned(),
+    })
+    .expect("projects compare")
+}
+
+#[test]
+fn local_project_comparison_is_semantic_and_deterministic() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let baseline = temporary.path().join("baseline");
+    let current = temporary.path().join("current");
+    init_http_project(&baseline);
+    init_http_project(&current);
+
+    rewrite_yaml(&current.join("registry-stack.yaml"), |document| {
+        document["services"]["person-verification"]["purpose"] =
+            Value::String("changed-purpose".to_owned());
+    });
+    let first = compare_projects(&current, &baseline);
+    let second = compare_projects(&current, &baseline);
+    assert_eq!(first.equivalence, SemanticComparisonEquivalence::Different);
+    assert_eq!(
+        first.review_plan.state,
+        SemanticComparisonReviewPlanState::GeneratedPendingReview
+    );
+    assert!(first
+        .changes
+        .iter()
+        .any(|change| change.dimension == SemanticComparisonDimension::ServicePolicy));
+    assert!(first.changes.iter().any(|change| {
+        change.address.schema_family == SemanticComparisonSchemaFamily::GeneratedApproval
+    }));
+    assert_eq!(
+        first.canonical_json_bytes().expect("canonical report"),
+        second.canonical_json_bytes().expect("canonical report")
+    );
+    assert!(first
+        .changes
+        .windows(2)
+        .all(|pair| pair[0].address <= pair[1].address));
+}
+
+#[test]
+fn formatting_and_explicit_equivalent_defaults_produce_zero_changes() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let baseline = temporary.path().join("baseline");
+    let current = temporary.path().join("current");
+    init_http_project(&baseline);
+    init_http_project(&current);
+
+    let project_path = current.join("registry-stack.yaml");
+    let original = fs::read_to_string(&project_path).expect("project reads");
+    fs::write(
+        &project_path,
+        format!("# formatting-only comment\n\n{original}\n"),
+    )
+    .expect("formatting changes");
+    let formatting_only = compare_projects(&current, &baseline);
+    assert_eq!(
+        formatting_only.equivalence,
+        SemanticComparisonEquivalence::Equivalent
+    );
+    assert!(formatting_only.changes.is_empty());
+
+    rewrite_yaml(&current.join("environments/local.yaml"), |document| {
+        document["issuance"]["algorithm"] = Value::String("EdDSA".to_owned());
+    });
+    let report = compare_projects(&current, &baseline);
+    assert_eq!(
+        report.equivalence,
+        SemanticComparisonEquivalence::Equivalent
+    );
+    assert!(report.changes.is_empty());
+    assert!(report.required_actions.is_empty());
+}
+
+#[test]
+fn same_project_environment_comparison_detects_sensitive_changes_without_leaking_them() {
+    const SENTINEL: &str = "SEMANTIC_COMPARISON_SECRET_SENTINEL";
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("project");
+    init_http_project(&project);
+    let current_environment = project.join("environments/candidate.yaml");
+    fs::copy(
+        project.join("environments/local.yaml"),
+        &current_environment,
+    )
+    .expect("environment copies");
+    rewrite_yaml(&current_environment, |document| {
+        document["integrations"]["person-record"]["source"]["credential"]["token"]["secret"] =
+            Value::String(SENTINEL.to_owned());
+    });
+
+    let report = compare_registry_project_environments_semantically(
+        &ProjectEnvironmentSemanticComparisonOptions {
+            project_directory: project,
+            current_environment: "candidate".to_owned(),
+            baseline_environment: "local".to_owned(),
+        },
+    )
+    .expect("environments compare");
+    assert_eq!(report.equivalence, SemanticComparisonEquivalence::Different);
+    assert!(report
+        .changes
+        .iter()
+        .any(|change| change.dimension == SemanticComparisonDimension::OperatorSecurity));
+    let json = String::from_utf8(report.canonical_json_bytes().expect("report serializes"))
+        .expect("report is UTF-8");
+    assert!(!json.contains(SENTINEL));
+    assert!(!report.human_safe_summary().contains(SENTINEL));
+    assert!(!format!("{report:?}").contains(SENTINEL));
+}
+
+#[test]
+fn embedded_starter_comparison_distinguishes_unchanged_adapted_and_stale() {
+    const STALE_SENTINEL: &str = "SEMANTIC_COMPARISON_STALE_SENTINEL";
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("project");
+    init_http_project(&project);
+    let options = ProjectStarterSemanticComparisonOptions {
+        project_directory: project.clone(),
+        environment: "local".to_owned(),
+    };
+    let unchanged = compare_registry_project_to_embedded_starter_semantically(&options)
+        .expect("unchanged starter compares");
+    assert_eq!(
+        unchanged.assurance,
+        SemanticComparisonAssurance::EmbeddedExactRelease
+    );
+    assert_eq!(
+        unchanged.equivalence,
+        SemanticComparisonEquivalence::Equivalent
+    );
+
+    rewrite_yaml(&project.join("registry-stack.yaml"), |document| {
+        document["services"]["person-verification"]["purpose"] =
+            Value::String("adapted-purpose".to_owned());
+    });
+    let adapted = compare_registry_project_to_embedded_starter_semantically(&options)
+        .expect("adapted starter compares");
+    assert_eq!(
+        adapted.equivalence,
+        SemanticComparisonEquivalence::Different
+    );
+
+    rewrite_yaml(&project.join("registry-stack.yaml"), |document| {
+        document["starter"]["release"] = Value::String(STALE_SENTINEL.to_owned());
+    });
+    let error = compare_registry_project_to_embedded_starter_semantically(&options)
+        .expect_err("stale provenance fails closed");
+    let error = format!("{error:#}");
+    assert!(!error.contains(STALE_SENTINEL));
+    assert_eq!(
+        error,
+        "project starter provenance cannot be proved by this binary"
+    );
+}
+
+#[test]
+fn every_public_starter_compares_equivalent_to_its_exact_embedded_release() {
+    for starter in [
+        ProjectStarter::Http,
+        ProjectStarter::Dhis2Tracker,
+        ProjectStarter::OpencrvsDci,
+        ProjectStarter::FhirR4,
+        ProjectStarter::Snapshot,
+    ] {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = temporary.path().join("project");
+        init_registry_project(&ProjectInitOptions {
+            starter,
+            directory: project.clone(),
+        })
+        .unwrap_or_else(|error| panic!("{starter:?} starter initializes: {error:#}"));
+        let report = compare_registry_project_to_embedded_starter_semantically(
+            &ProjectStarterSemanticComparisonOptions {
+                project_directory: project,
+                environment: "local".to_owned(),
+            },
+        )
+        .unwrap_or_else(|error| panic!("{starter:?} starter compares: {error:#}"));
+        assert_eq!(
+            report.assurance,
+            SemanticComparisonAssurance::EmbeddedExactRelease,
+            "{starter:?}"
+        );
+        assert_eq!(
+            report.equivalence,
+            SemanticComparisonEquivalence::Equivalent,
+            "{starter:?}"
+        );
+        assert!(report.changes.is_empty(), "{starter:?}");
+        assert!(report.required_actions.is_empty(), "{starter:?}");
+    }
+}
+
+#[test]
+fn compare_cli_emits_value_free_human_and_strict_json_reports() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("project");
+    init_http_project(&project);
+    let project_argument = project.to_str().expect("temporary path is UTF-8");
+
+    let json_output = Command::new(env!("CARGO_BIN_EXE_registryctl"))
+        .args([
+            "compare",
+            "--project-dir",
+            project_argument,
+            "--environment",
+            "local",
+            "--from-starter",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("registryctl compare runs");
+    assert!(
+        json_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let report: registryctl::ProjectSemanticComparisonReportV1 =
+        serde_json::from_slice(&json_output.stdout).expect("JSON report is strict and typed");
+    assert_eq!(
+        report.equivalence,
+        SemanticComparisonEquivalence::Equivalent
+    );
+    let serialized = String::from_utf8(json_output.stdout).expect("JSON output is UTF-8");
+    assert!(!serialized.contains(project_argument));
+
+    let human_output = Command::new(env!("CARGO_BIN_EXE_registryctl"))
+        .args([
+            "compare",
+            "--project-dir",
+            project_argument,
+            "--environment",
+            "local",
+            "--from-starter",
+        ])
+        .output()
+        .expect("registryctl compare human output runs");
+    assert!(human_output.status.success());
+    let human = String::from_utf8(human_output.stdout).expect("human output is UTF-8");
+    assert!(human.contains("semantic comparison: equivalent"));
+    assert!(human.contains("External approval: not evaluated"));
+    assert!(!human.contains(project_argument));
+}
+
+#[test]
+fn fixture_change_is_included_in_the_generated_pending_review_plan() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let baseline = temporary.path().join("baseline");
+    let current = temporary.path().join("current");
+    init_http_project(&baseline);
+    init_http_project(&current);
+    rewrite_yaml(
+        &current.join("integrations/person-record/fixtures/active.yaml"),
+        |document| {
+            document["interactions"][0]["respond"]["body"]["active"] = Value::Bool(false);
+            document["expect"]["outputs"]["active"] = Value::Bool(false);
+            document["expect"]["claims"]["person-active"] = Value::Bool(false);
+        },
+    );
+    let report = compare_projects(&current, &baseline);
+    assert_eq!(
+        report.review_plan.state,
+        SemanticComparisonReviewPlanState::GeneratedPendingReview
+    );
+    assert!(report
+        .changes
+        .iter()
+        .any(|change| change.dimension == SemanticComparisonDimension::Fixture));
+    assert!(report.changes.iter().any(|change| {
+        change.address.schema_family == SemanticComparisonSchemaFamily::GeneratedApproval
+    }));
+}

@@ -1,0 +1,48 @@
+{
+  "schema_version": "registryctl.project_command.v1",
+  "status": "valid",
+  "project": "fictional-citizen-registry",
+  "environment": "local",
+  "fixtures": [
+    {
+      "integration": "person-record",
+      "fixture": "active-person",
+      "inputs": [
+        "person_id"
+      ],
+      "calls": [
+        "lookup"
+      ],
+      "outputs": [
+        "active"
+      ],
+      "claims": [
+        "is_active"
+      ],
+      "outcome": "matched",
+      "source_access": false,
+      "passed": true
+    }
+  ],
+  "semantic_changes": [
+    {
+      "dimension": "integration"
+    }
+  ],
+  "baseline": "initial_without_baseline",
+  "semantic_impact": {
+    "schema_version": "registry.project.semantic_impact.v1",
+    "baseline": "initial_without_baseline",
+    "changes": []
+  },
+  "artifact_manifest": {
+    "path": ".registry-stack/build/local/artifact-manifest.json",
+    "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+  },
+  "explanation": {
+    "schema_version": "registry.project.explanation.v1",
+    "project": "fictional-citizen-registry",
+    "environment": "local",
+    "fields": []
+  }
+}

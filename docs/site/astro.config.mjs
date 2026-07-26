@@ -247,114 +247,111 @@ export default defineConfig({
           href: 'https://github.com/registrystack/registry-stack/tree/main/docs/site',
         },
       ],
-      // Diataxis IA: Get started, Tutorials, Products, Explanation, Reference.
-      // The per-product groups are generated from src/data/repo-docs.yaml by
-      // scripts/generate-sidebar.mjs (the productSidebar array), so each
-      // product menu follows its doc_type/nav_order and never drifts from the
-      // manifest. Within a product, pages are sub-grouped by Diataxis type
-      // once the product grows past a threshold; smaller products stay flat.
-      // generatedProduct() lifts each group into its own top-level product
-      // section; hand-authored operator tutorials append after the generated
-      // items.
-      //
-      // "Get started" leads with the promoted local first-run journey. The
-      // hosted pages remain visible but held until their fresh-reader gates
-      // pass. Named source-system paths live under Integrations.
+      // Task-oriented IA: Start, Journeys, Configure, Verify, Generated
+      // artifacts, Operate, Reference, and Specifications. The product
+      // groups remain generated from src/data/repo-docs.yaml, so Relay and
+      // Notary retain their complete product navigation while project
+      // authoring is a first-class stack surface rather than an integration
+      // sub-section. Product pages keep their established URLs; the sidebar
+      // changes discovery, not the public route contract.
       sidebar: [
         {
-          label: 'Get started',
+          label: 'Start',
           items: [
-            // Short nav labels to avoid wrapping in the narrow sidebar; page
-            // titles keep the full wording.
             { label: 'Overview', link: '/' },
-            { label: 'Your first registry API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
-            { label: 'Your first claim check', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'When to use', slug: 'start/when-to-use' },
-            { label: 'Run Solmara Lab', slug: 'tutorials/first-run-with-solmara-lab' },
-            { label: 'Hosted Relay demo (held)', slug: 'start/quickstart' },
+            { label: 'Architecture', slug: 'explanation/architecture' },
+            { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
           ],
         },
         {
-          label: 'Registry Relay',
-          collapsed: true,
+          label: 'Journeys',
           items: [
-            ...generatedProduct('Relay').items,
-            { label: 'Deploy with own data', slug: 'tutorials/deploy-standalone-with-own-data' },
+            { label: 'Overview', slug: 'journeys' },
+            { label: 'Spreadsheet protected API', slug: 'journeys/spreadsheet-protected-api' },
+            { label: 'Instance OpenAPI', slug: 'journeys/instance-openapi' },
+            { label: 'Bounded HTTP', slug: 'journeys/bounded-http' },
+            { label: 'Bounded multi-call script', slug: 'journeys/bounded-multi-call-script' },
+            { label: 'Exact snapshot', slug: 'journeys/exact-snapshot' },
+            { label: 'Registry-backed Notary claim', slug: 'journeys/registry-backed-notary-claim' },
+            { label: 'Product-input lifecycle', slug: 'journeys/product-input-lifecycle' },
           ],
         },
         {
-          label: 'Registry Notary',
-          collapsed: true,
+          label: 'Configure',
           items: [
-            ...generatedProduct('Notary').items,
-            { label: 'Production signing', slug: 'tutorials/move-notary-to-production-signing' },
-          ],
-        },
-        {
-          label: 'Registry Manifest',
-          collapsed: true,
-          items: generatedProduct('Manifest').items,
-        },
-        {
-          label: 'Integrations',
-          items: [
+            { label: 'Overview', slug: 'configure' },
             { label: 'Author a Registry Stack project', slug: 'tutorials/author-registry-project' },
             { label: 'API-key source authentication', slug: 'tutorials/configure-project-api-key-authentication' },
             { label: 'FHIR R4 integration', slug: 'tutorials/configure-project-fhir-r4' },
             { label: 'Snapshot materialization', slug: 'tutorials/configure-project-snapshot-materialization' },
             { label: 'Script source adapter', slug: 'tutorials/configure-project-script-adapter' },
-            { label: 'OpenCRVS claims', slug: 'tutorials/verify-opencrvs-claims' },
+            {
+              label: 'Registry Relay',
+              collapsed: true,
+              items: [
+                ...generatedProduct('Relay').items,
+                { label: 'Deploy with own data', slug: 'tutorials/deploy-standalone-with-own-data' },
+              ],
+            },
+            {
+              label: 'Registry Notary',
+              collapsed: true,
+              items: [
+                ...generatedProduct('Notary').items,
+                { label: 'Production signing', slug: 'tutorials/move-notary-to-production-signing' },
+              ],
+            },
           ],
         },
         {
-          label: 'Concepts',
+          label: 'Verify',
+          items: [
+            { label: 'Overview', slug: 'verify' },
+            { label: 'Evaluate a registry-backed claim', slug: 'tutorials/verify-claim-registry-api' },
+            { label: 'Configure OpenCRVS claims', slug: 'tutorials/verify-opencrvs-claims' },
+            { label: 'Security self-assessment', slug: 'security/self-assessment' },
+            { label: 'OpenSSF and release trust', slug: 'security/openssf-evidence' },
+          ],
+        },
+        {
+          label: 'Generated artifacts',
           collapsed: true,
           items: [
-            { label: 'Architecture', slug: 'explanation/architecture' },
-            { label: 'Records stay home', slug: 'explanation/records-stay-home' },
-            { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
-            { label: 'Relay protected read flow', slug: 'explanation/consultation-flow' },
-            { label: 'Evidence issuance', slug: 'explanation/evidence-issuance' },
-            { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
-            { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
-            { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
-            { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
-            { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },
+            { label: 'Overview', slug: 'generated-artifacts' },
+            { label: 'Project configuration', slug: 'reference/project-configuration' },
+            {
+              label: 'Registry Manifest',
+              collapsed: true,
+              items: generatedProduct('Manifest').items,
+            },
+            { label: 'Contracts', slug: 'reference/contracts' },
+            { label: 'API references', slug: 'reference/apis' },
           ],
         },
         {
-          // The reviewer/auditor-facing rail: the enforced model, the threat
-          // model, the canonical limits hub, and the public evidence a
-          // security reviewer can check.
-          label: 'Security',
-          collapsed: true,
-          items: [
-            { label: 'Overview', slug: 'security' },
-            { label: 'Threat model', slug: 'explanation/threat-model' },
-            { label: 'Known limitations', slug: 'explanation/known-limitations' },
-            { label: 'Harden a deployment', slug: 'security/hardening-checklist' },
-            { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
-            { label: 'Security support window', slug: 'security/support-window' },
-            { label: 'Self-assessment', slug: 'security/self-assessment' },
-            { label: 'OpenSSF evidence', slug: 'security/openssf-evidence' },
-          ],
-        },
-        {
-          // Stack-wide operator procedures that span both products. Product-
-          // specific ops pages stay inside each product's generated group.
+          // Stack-wide operator procedures span the runtime products. The
+          // product-specific procedures remain in their Relay and Notary
+          // product navigation under Configure.
           label: 'Operate',
           collapsed: true,
           items: [
+            { label: 'Overview', slug: 'operate' },
             { label: 'Single-node Compose', slug: 'operate/single-node-compose-behind-proxy' },
             { label: 'Backup and restore', slug: 'operate/backup-and-restore' },
             { label: 'Retention and state', slug: 'operate/retention-and-persistent-state' },
             { label: 'Upgrade and roll back', slug: 'operate/upgrade-and-rollback' },
+            { label: 'Advanced operations', slug: 'operate/advanced' },
+            { label: 'Harden a deployment', slug: 'security/hardening-checklist' },
+            { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
+            { label: 'Security support window', slug: 'security/support-window' },
           ],
         },
         {
           label: 'Reference',
           collapsed: true,
           items: [
+            { label: 'Overview', slug: 'reference' },
             {
               label: 'API reference',
               collapsed: true,
@@ -368,13 +365,39 @@ export default defineConfig({
             },
             { label: 'registryctl CLI', slug: 'reference/registryctl' },
             { label: 'Errors and status codes', slug: 'reference/errors' },
+            {
+              label: 'Diagnostic catalogs',
+              collapsed: true,
+              items: [
+                { label: 'Authoring diagnostics', slug: 'reference/diagnostics/authoring' },
+                { label: 'Fixture diagnostics', slug: 'reference/diagnostics/fixture' },
+                { label: 'Operator diagnostics', slug: 'reference/diagnostics/operator' },
+              ],
+            },
             { label: 'Environment variables', slug: 'reference/environment-variables' },
-            { label: 'Contracts', slug: 'reference/contracts' },
             { label: 'API stability and versioning', slug: 'reference/api-stability' },
             { label: 'Deprecation policy', slug: 'reference/deprecation-policy' },
             { label: 'Standards', slug: 'reference/standards' },
             { label: 'ITB and SEMIC evidence', slug: 'reference/itb-semic-evidence' },
             { label: 'Glossary', slug: 'reference/glossary' },
+            {
+              label: 'Concepts',
+              collapsed: true,
+              items: [
+                { label: 'Records stay home', slug: 'explanation/records-stay-home' },
+                { label: 'Relay protected read flow', slug: 'explanation/consultation-flow' },
+                { label: 'Evidence issuance', slug: 'explanation/evidence-issuance' },
+                { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
+                { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },
+                { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
+                { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
+                { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },
+                { label: 'Security overview', slug: 'security' },
+                { label: 'Threat model', slug: 'explanation/threat-model' },
+                { label: 'Known limitations', slug: 'explanation/known-limitations' },
+              ],
+            },
+            { label: 'Changelog', slug: 'changelog' },
           ],
         },
         {
@@ -397,7 +420,6 @@ export default defineConfig({
             { label: 'RS-DM-MANIFEST · Portable metadata model', slug: 'spec/rs-dm-manifest' },
           ],
         },
-        { label: 'Changelog', slug: 'changelog' },
       ],
     }),
     ...(isArchivedBuild ? [disabledSitemap] : [sitemap()]),

@@ -7,4 +7,4 @@ interactions:
 expect:
   outcome: match
   outputs: { registration_status: active }
-  claims: { person-registration-accepted: true }
+  claims: { active-registration-exists: true }

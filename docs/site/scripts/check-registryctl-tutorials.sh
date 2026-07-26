@@ -388,10 +388,10 @@ run_notary_tutorial() {
 	local tutorial_root="$WORK_ROOT/relay-reader"
 	local project_dir="$tutorial_root/my-first-api"
 	local project_name="registryctl-notary-$RUN_ID"
-	local edited_claim="$WORK_ROOT/registry-stack-accept-pending.yaml"
+	local edited_claim="$WORK_ROOT/registry-stack-active-or-pending-exists.yaml"
 
 	node "$HELPER" assert-layout "$NOTARY_TUTORIAL" \
-		'["Add Notary to the project","Inspect the claim","Start Relay and Notary","Load the evaluator key","Evaluate an accepted active registration","Reject a pending registration","Try a non-matching date of birth","Edit the claim rule","Evaluate the edited rule","Stop the stack"]'
+		'["Add Notary to the project","Inspect the claim","Start Relay and Notary","Load the evaluator key","Evaluate an active registration","Evaluate a pending registration","Try a non-matching date of birth","Edit the claim rule","Evaluate the edited rule","Stop the stack"]'
 	node "$HELPER" extract-shell "$NOTARY_TUTORIAL" "$blocks"
 
 	export COMPOSE_PROJECT_NAME="$project_name"
@@ -405,7 +405,8 @@ run_notary_tutorial() {
 	assert_contains "$LAST_OUTPUT" http://127.0.0.1:4255 notary/project/registry-stack.yaml
 	run_block 'Notary 2: Inspect the claim' "$blocks/02.sh" success
 	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Inspect the claim' yaml 1
-	assert_contains "$LAST_OUTPUT" request.target.attributes.given_name request.target.attributes.date_of_birth person-registration-accepted
+	assert_contains "$LAST_OUTPUT" request.target.attributes.given_name request.target.attributes.date_of_birth active-registration-exists
+	assert_not_contains "$LAST_OUTPUT" person-registration-accepted
 	run_block 'Notary 3: Start Relay and Notary' "$blocks/03.sh" success
 	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Start Relay and Notary' text 1
 	run_block 'Notary 4: Load the evaluator key' "$blocks/04.sh" success
@@ -413,13 +414,13 @@ run_notary_tutorial() {
 		printf 'Notary tutorial evaluator credential was not loaded\n' >&2
 		exit 1
 	}
-	run_block 'Notary 5: Evaluate an accepted active registration' "$blocks/05.sh" success
+	run_block 'Notary 5: Evaluate an active registration' "$blocks/05.sh" success
 	assert_http "$LAST_OUTPUT" 200
-	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Evaluate an accepted active registration' 1
+	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Evaluate an active registration' 1
 	assert_not_contains "$LAST_OUTPUT" Jo Elm 2019-02-03 '"active"'
-	run_block 'Notary 6: Reject a pending registration' "$blocks/06.sh" success
+	run_block 'Notary 6: Evaluate a pending registration' "$blocks/06.sh" success
 	assert_http "$LAST_OUTPUT" 200
-	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Reject a pending registration' 1
+	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Evaluate a pending registration' 1
 	assert_not_contains "$LAST_OUTPUT" Nia Stone 1998-03-05 '"pending"'
 	run_block 'Notary 7: Try a non-matching date of birth' "$blocks/07.sh" success
 	assert_http "$LAST_OUTPUT" 200
@@ -428,16 +429,40 @@ run_notary_tutorial() {
 
 	node "$HELPER" replace-once \
 		notary/project/registry-stack.yaml \
+		'active-registration-exists' \
+		'active-or-pending-registration-exists' \
+		"$edited_claim"
+	mv "$edited_claim" notary/project/registry-stack.yaml
+	node "$HELPER" replace-once \
+		notary/project/registry-stack.yaml \
 		'enrollment.registration_status == "active"' \
 		'(enrollment.registration_status == "active" || enrollment.registration_status == "pending")' \
 		"$edited_claim"
 	mv "$edited_claim" notary/project/registry-stack.yaml
 	node "$HELPER" replace-once \
+		notary/project/integrations/person-demographics/fixtures/match.yaml \
+		'claims: { active-registration-exists: true }' \
+		'claims: { active-or-pending-registration-exists: true }' \
+		"$edited_claim"
+	mv "$edited_claim" notary/project/integrations/person-demographics/fixtures/match.yaml
+	node "$HELPER" replace-once \
 		notary/project/integrations/person-demographics/fixtures/pending.yaml \
-		'claims: { person-registration-accepted: false }' \
-		'claims: { person-registration-accepted: true }' \
+		'claims: { active-registration-exists: false }' \
+		'claims: { active-or-pending-registration-exists: true }' \
 		"$edited_claim"
 	mv "$edited_claim" notary/project/integrations/person-demographics/fixtures/pending.yaml
+	node "$HELPER" replace-once \
+		notary/project/integrations/person-demographics/fixtures/no-match.yaml \
+		'claims: { active-registration-exists: false }' \
+		'claims: { active-or-pending-registration-exists: false }' \
+		"$edited_claim"
+	mv "$edited_claim" notary/project/integrations/person-demographics/fixtures/no-match.yaml
+	node "$HELPER" replace-once \
+		notary/pending-registration-request.json \
+		'"claims": ["active-registration-exists"]' \
+		'"claims": ["active-or-pending-registration-exists"]' \
+		"$edited_claim"
+	mv "$edited_claim" notary/pending-registration-request.json
 	run_block 'Notary 8: Restart with the edited claim rule' "$blocks/08.sh" success
 	assert_contains "$LAST_OUTPUT" 'Relay API:' 'Notary API:'
 	run_block 'Notary 9: Evaluate the edited rule' "$blocks/09.sh" success

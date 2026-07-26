@@ -1,4 +1,5 @@
 {
+  "x-registry-field": "root",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://registrystack.example/schemas/project-authoring/integration.v1.json",
   "title": "Registry Stack project integration v1",
@@ -7,45 +8,50 @@
   "additionalProperties": false,
   "required": ["version", "id", "revision", "input", "capability", "outputs"],
   "properties": {
-    "version": { "const": 1, "default": 1, "description": "Integration authoring format version." },
-    "id": { "$ref": "#/$defs/stableId", "description": "Stable project-local identifier for the integration." },
-    "revision": { "type": "integer", "minimum": 1, "description": "Monotonically increasing revision of this integration contract.", "examples": [1] },
-    "source": { "$ref": "#/$defs/source", "description": "Optional source product metadata and transport policy; capabilities remain product-neutral." },
+    "version": {"x-registry-field": "public_property", "const": 1, "default": 1, "description": "Integration authoring format version." },
+    "id": {"x-registry-field": "property", "$ref": "#/$defs/stableId", "description": "Stable project-local identifier for the integration." },
+    "revision": {"x-registry-field": "property", "type": "integer", "minimum": 1, "description": "Monotonically increasing revision of this integration contract.", "examples": [1] },
+    "source": {"x-registry-field": "property", "$ref": "#/$defs/source", "description": "Optional source product metadata and transport policy; capabilities remain product-neutral." },
     "input": {
+      "x-registry-field": "property",
       "description": "Typed selector and parameter inputs accepted by this integration.",
       "type": "object",
       "minProperties": 1,
       "maxProperties": 16,
-      "propertyNames": { "$ref": "#/$defs/inputName" },
-      "additionalProperties": { "$ref": "#/$defs/input" }
+      "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/inputName" },
+      "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/input" }
     },
-    "capability": { "$ref": "#/$defs/capability", "description": "Exactly one bounded execution mechanism for the source adaptation." },
+    "capability": {"x-registry-field": "property", "$ref": "#/$defs/capability", "description": "Exactly one bounded execution mechanism for the source adaptation." },
     "outputs": {
+      "x-registry-field": "property",
       "description": "Named typed outputs, or a shorthand list of output names inferred by the authoring compiler.",
       "oneOf": [
         {
+          "x-registry-field": "branch",
           "type": "object",
           "minProperties": 1,
           "maxProperties": 64,
           "propertyNames": {
+            "x-registry-field": "map_key",
             "allOf": [
-              { "$ref": "#/$defs/inputName" },
-              { "not": { "enum": ["matched", "outcome"] } }
+              {"x-registry-field": "branch", "$ref": "#/$defs/inputName" },
+              {"x-registry-field": "branch", "not": {"x-registry-field": "branch", "enum": ["matched", "outcome"] } }
             ]
           },
-          "additionalProperties": { "$ref": "#/$defs/output" }
+          "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/output" }
         },
         {
+          "x-registry-field": "branch",
           "type": "array",
           "minItems": 1,
           "maxItems": 64,
           "uniqueItems": true,
-          "items": { "$ref": "#/$defs/inputName" }
+          "items": {"x-registry-field": "array_item", "$ref": "#/$defs/inputName" }
         }
       ]
     },
-    "limits": { "$ref": "#/$defs/limits", "description": "Optional tighter resource limits for one integration execution." },
-    "not_applicable": { "$ref": "#/$defs/notApplicable", "description": "Explicit rationale and request-fixture evidence for a normally required outcome that the source contract cannot produce." }
+    "limits": {"x-registry-field": "property", "$ref": "#/$defs/limits", "description": "Optional tighter resource limits for one integration execution." },
+    "not_applicable": {"x-registry-field": "property", "$ref": "#/$defs/notApplicable", "description": "Explicit rationale and request-fixture evidence for a normally required outcome that the source contract cannot produce." }
   },
   "examples": [
     {
@@ -70,8 +76,8 @@
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
-        "ambiguity": { "$ref": "#/$defs/notApplicableReason", "description": "Why the reviewed source contract cannot produce more than one matching record." },
-        "subject_mismatch": { "$ref": "#/$defs/notApplicableReason", "description": "Why the reviewed response contract contains no identifier comparable with a requested selector." }
+        "ambiguity": {"x-registry-field": "property", "$ref": "#/$defs/notApplicableReason", "description": "Why the reviewed source contract cannot produce more than one matching record." },
+        "subject_mismatch": {"x-registry-field": "property", "$ref": "#/$defs/notApplicableReason", "description": "Why the reviewed response contract contains no identifier comparable with a requested selector." }
       }
     },
     "notApplicableReason": {
@@ -80,8 +86,8 @@
       "additionalProperties": false,
       "required": ["rationale", "request_fixture"],
       "properties": {
-        "rationale": { "type": "string", "minLength": 24, "maxLength": 512, "description": "Why the named normally required outcome cannot occur for this source contract." },
-        "request_fixture": { "$ref": "#/$defs/stableId", "description": "Fixture name containing the supporting bounded source request." }
+        "rationale": {"x-registry-field": "property", "type": "string", "minLength": 24, "maxLength": 512, "description": "Why the named normally required outcome cannot occur for this source contract." },
+        "request_fixture": {"x-registry-field": "property", "$ref": "#/$defs/stableId", "description": "Fixture name containing the supporting bounded source request." }
       }
     },
     "stableId": {
@@ -104,19 +110,20 @@
     "byteSize": {
       "description": "Positive byte count expressed as an integer or a KiB/MiB quantity.",
       "oneOf": [
-        { "type": "integer", "minimum": 1 },
-        { "type": "string", "pattern": "^[1-9][0-9]*(?:KiB|MiB)$" }
+        {"x-registry-field": "branch", "type": "integer", "minimum": 1 },
+        {"x-registry-field": "branch", "type": "string", "pattern": "^[1-9][0-9]*(?:KiB|MiB)$" }
       ]
     },
     "scalarType": {
       "description": "Supported scalar type, optionally paired with null for nullable values.",
       "oneOf": [
-        { "enum": ["string", "boolean", "integer"] },
+        {"x-registry-field": "branch", "enum": ["string", "boolean", "integer"] },
         {
+          "x-registry-field": "branch",
           "type": "array",
           "prefixItems": [
-            { "enum": ["string", "boolean", "integer"] },
-            { "const": "null" }
+            {"x-registry-field": "array_item", "enum": ["string", "boolean", "integer"] },
+            {"x-registry-field": "array_item", "const": "null" }
           ],
           "minItems": 2,
           "maxItems": 2,
@@ -130,15 +137,15 @@
       "additionalProperties": false,
       "required": ["role", "type"],
       "properties": {
-        "role": { "enum": ["selector", "parameter"] },
-        "type": { "$ref": "#/$defs/scalarType" },
-        "format": { "const": "date" },
-        "maxLength": { "type": "integer", "minimum": 1, "maximum": 16384 },
-        "minLength": { "type": "integer", "minimum": 0, "maximum": 16384 },
-        "pattern": { "type": "string", "minLength": 1, "maxLength": 16384 },
-        "minimum": { "type": "integer" },
-        "maximum": { "type": "integer" },
-        "canonicalization": { "enum": ["identity", "ascii_lowercase"] }
+        "role": {"x-registry-field": "property", "enum": ["selector", "parameter"] },
+        "type": {"x-registry-field": "property", "$ref": "#/$defs/scalarType" },
+        "format": {"x-registry-field": "property", "const": "date" },
+        "maxLength": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 16384 },
+        "minLength": {"x-registry-field": "property", "type": "integer", "minimum": 0, "maximum": 16384 },
+        "pattern": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 16384 },
+        "minimum": {"x-registry-field": "property", "type": "integer" },
+        "maximum": {"x-registry-field": "property", "type": "integer" },
+        "canonicalization": {"x-registry-field": "property", "enum": ["identity", "ascii_lowercase"] }
       }
     },
     "versions": {
@@ -146,12 +153,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "tested": { "$ref": "#/$defs/versionList" },
-        "unverified": { "$ref": "#/$defs/versionList" }
+        "tested": {"x-registry-field": "property", "$ref": "#/$defs/versionList" },
+        "unverified": {"x-registry-field": "property", "$ref": "#/$defs/versionList" }
       },
       "anyOf": [
-        { "required": ["tested"], "properties": { "tested": { "minItems": 1 } } },
-        { "required": ["unverified"], "properties": { "unverified": { "minItems": 1 } } }
+        {"x-registry-field": "branch", "required": ["tested"], "properties": { "tested": {"x-registry-field": "property", "minItems": 1 } } },
+        {"x-registry-field": "branch", "required": ["unverified"], "properties": { "unverified": {"x-registry-field": "property", "minItems": 1 } } }
       ]
     },
     "versionList": {
@@ -159,50 +166,54 @@
       "type": "array",
       "maxItems": 32,
       "uniqueItems": true,
-      "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+      "items": {"x-registry-field": "array_item", "type": "string", "minLength": 1, "maxLength": 256 }
     },
     "credential": {
       "description": "Authentication mechanism expected by the source adapter, without environment secret values.",
       "oneOf": [
         {
+          "x-registry-field": "branch",
           "type": "object",
           "additionalProperties": false,
           "required": ["type"],
           "properties": {
-            "type": { "enum": ["none", "basic", "static_bearer"] }
+            "type": {"x-registry-field": "property", "enum": ["none", "basic", "static_bearer"] }
           }
         },
         {
+          "x-registry-field": "branch",
           "type": "object",
           "additionalProperties": false,
           "required": ["type", "name", "max_value_bytes"],
           "properties": {
-            "type": { "const": "api_key_header" },
-            "name": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$" },
-            "max_value_bytes": { "type": "integer", "minimum": 1, "maximum": 4096 }
+            "type": {"x-registry-field": "property", "const": "api_key_header" },
+            "name": {"x-registry-field": "property", "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$" },
+            "max_value_bytes": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4096 }
           }
         },
         {
+          "x-registry-field": "branch",
           "type": "object",
           "additionalProperties": false,
           "required": ["type", "name", "max_value_bytes"],
           "properties": {
-            "type": { "const": "api_key_query" },
-            "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9._:~-]{0,95}$" },
-            "max_value_bytes": { "type": "integer", "minimum": 1, "maximum": 4096 }
+            "type": {"x-registry-field": "property", "const": "api_key_query" },
+            "name": {"x-registry-field": "property", "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9._:~-]{0,95}$" },
+            "max_value_bytes": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4096 }
           }
         },
         {
+          "x-registry-field": "branch",
           "type": "object",
           "additionalProperties": false,
           "required": ["type", "request", "response_profile"],
           "properties": {
-            "type": { "const": "oauth2_client_credentials" },
-            "request": { "enum": ["form", "json"] },
-            "response_profile": { "const": "oauth2_bearer" },
-            "scope": { "type": "string", "minLength": 1, "maxLength": 1024 },
-            "audience": { "type": "string", "minLength": 1, "maxLength": 2048 },
-            "refresh_skew": { "type": "string", "pattern": "^[1-9][0-9]*(?:ms|s)$" }
+            "type": {"x-registry-field": "property", "const": "oauth2_client_credentials" },
+            "request": {"x-registry-field": "property", "enum": ["form", "json"] },
+            "response_profile": {"x-registry-field": "property", "const": "oauth2_bearer" },
+            "scope": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 1024 },
+            "audience": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 1, "maxLength": 2048 },
+            "refresh_skew": {"x-registry-field": "property", "type": "string", "pattern": "^[1-9][0-9]*(?:ms|s)$" }
           }
         }
       ]
@@ -213,14 +224,15 @@
       "additionalProperties": false,
       "required": ["method", "path"],
       "properties": {
-        "method": { "enum": ["GET", "POST"] },
+        "method": {"x-registry-field": "property", "enum": ["GET", "POST"] },
         "path": {
+          "x-registry-field": "sensitive_property",
           "type": "string",
           "minLength": 1,
           "maxLength": 4096,
           "pattern": "^/[^?#]*$"
         },
-        "semantics": { "const": "read_only" }
+        "semantics": {"x-registry-field": "property", "const": "read_only" }
       }
     },
     "source": {
@@ -229,36 +241,40 @@
       "additionalProperties": false,
       "required": ["auth"],
       "properties": {
-        "product": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "versions": { "$ref": "#/$defs/versions" },
-        "auth": { "$ref": "#/$defs/credential" },
+        "product": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 256 },
+        "versions": {"x-registry-field": "property", "$ref": "#/$defs/versions" },
+        "auth": {"x-registry-field": "property", "$ref": "#/$defs/credential" },
         "allow": {
+          "x-registry-field": "property",
           "type": "array",
           "minItems": 1,
           "maxItems": 16,
-          "items": { "$ref": "#/$defs/allowRule" }
+          "items": {"x-registry-field": "array_item", "$ref": "#/$defs/allowRule" }
         },
         "request_headers": {
+          "x-registry-field": "property",
           "type": "array",
           "maxItems": 32,
           "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$" }
+          "items": {"x-registry-field": "array_item", "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$" }
         },
         "response_headers": {
+          "x-registry-field": "property",
           "type": "array",
           "maxItems": 32,
           "uniqueItems": true,
-          "items": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$" }
+          "items": {"x-registry-field": "array_item", "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$" }
         },
         "response": {
+          "x-registry-field": "property",
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "format": { "enum": ["json", "text"] },
-            "max_bytes": { "$ref": "#/$defs/byteSize" }
+            "format": {"x-registry-field": "property", "enum": ["json", "text"] },
+            "max_bytes": {"x-registry-field": "property", "$ref": "#/$defs/byteSize" }
           }
         },
-        "protocol": { "$ref": "#/$defs/protocol" }
+        "protocol": {"x-registry-field": "property", "$ref": "#/$defs/protocol" }
       }
     },
     "protocol": {
@@ -267,26 +283,29 @@
       "additionalProperties": false,
       "properties": {
         "signed_dci": {
+          "x-registry-field": "property",
           "type": "object",
           "additionalProperties": false,
           "required": ["profile", "path", "jwks_profile", "sender", "receiver", "registry_type", "record_type", "locale", "selectors"],
           "properties": {
-            "profile": { "const": "dci-search-v1" },
-            "path": { "type": "string", "pattern": "^/[^?#]*$" },
-            "jwks_profile": { "const": "rsa-signing-jwks-v1" },
-            "sender": { "type": "string", "minLength": 1, "maxLength": 256 },
-            "receiver": { "type": "string", "minLength": 1, "maxLength": 256 },
-            "registry_type": { "type": "string", "minLength": 1, "maxLength": 128 },
-            "record_type": { "type": "string", "minLength": 1, "maxLength": 128 },
-            "locale": { "type": "string", "pattern": "^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$" },
+            "profile": {"x-registry-field": "property", "const": "dci-search-v1" },
+            "path": {"x-registry-field": "sensitive_property", "type": "string", "pattern": "^/[^?#]*$" },
+            "jwks_profile": {"x-registry-field": "property", "const": "rsa-signing-jwks-v1" },
+            "sender": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 256 },
+            "receiver": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 256 },
+            "registry_type": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 128 },
+            "record_type": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 128 },
+            "locale": {"x-registry-field": "property", "type": "string", "pattern": "^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$" },
             "selectors": {
+              "x-registry-field": "property",
               "type": "object", "minProperties": 1, "maxProperties": 8,
-              "propertyNames": { "$ref": "#/$defs/inputName" },
+              "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/inputName" },
               "additionalProperties": {
+                "x-registry-field": "map_value",
                 "type": "object", "additionalProperties": false, "required": ["field", "response_pointer"],
                 "properties": {
-                  "field": { "type": "string", "minLength": 1, "maxLength": 160 },
-                  "response_pointer": { "type": "string", "pattern": "^/(?:[^/~]|~[01])+(?:/(?:[^/~]|~[01])+)*$" }
+                  "field": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 160 },
+                  "response_pointer": {"x-registry-field": "property", "type": "string", "pattern": "^/(?:[^/~]|~[01])+(?:/(?:[^/~]|~[01])+)*$" }
                 }
               }
             }
@@ -300,13 +319,13 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["input"],
-      "properties": { "input": { "$ref": "#/$defs/inputName" } }
+      "properties": { "input": {"x-registry-field": "property", "$ref": "#/$defs/inputName" } }
     },
     "inputOrLiteral": {
       "description": "Request value supplied from a declared input or an authored scalar literal.",
       "oneOf": [
-        { "$ref": "#/$defs/inputReference" },
-        { "type": ["string", "boolean", "integer"] }
+        {"x-registry-field": "branch", "$ref": "#/$defs/inputReference" },
+        {"x-registry-field": "branch", "type": ["string", "boolean", "integer"] }
       ]
     },
     "httpRequest": {
@@ -315,12 +334,12 @@
       "additionalProperties": false,
       "required": ["method", "path"],
       "properties": {
-        "method": { "enum": ["GET", "POST"] },
-        "path": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/[^?#]*$" },
-        "semantics": { "const": "read_only" },
-        "query": { "type": "object", "maxProperties": 64, "additionalProperties": { "$ref": "#/$defs/inputOrLiteral" } },
-        "headers": { "type": "object", "maxProperties": 32, "additionalProperties": { "$ref": "#/$defs/inputOrLiteral" } },
-        "body": true
+        "method": {"x-registry-field": "property", "enum": ["GET", "POST"] },
+        "path": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/[^?#]*$" },
+        "semantics": {"x-registry-field": "property", "const": "read_only" },
+        "query": {"x-registry-field": "property", "type": "object", "maxProperties": 64, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/inputOrLiteral" } },
+        "headers": {"x-registry-field": "property", "type": "object", "maxProperties": 32, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/inputOrLiteral" } },
+        "body": { "x-registry-field": "property" }
       }
     },
     "httpResponse": {
@@ -329,25 +348,29 @@
       "additionalProperties": false,
       "properties": {
         "no_match": {
+          "x-registry-field": "property",
           "type": "array",
           "uniqueItems": true,
-          "items": { "type": "integer", "minimum": 100, "maximum": 599 }
+          "items": {"x-registry-field": "array_item", "type": "integer", "minimum": 100, "maximum": 599 }
         },
         "ambiguous": {
+          "x-registry-field": "property",
           "type": "array",
           "uniqueItems": true,
-          "items": { "type": "integer", "minimum": 100, "maximum": 599 }
+          "items": {"x-registry-field": "array_item", "type": "integer", "minimum": 100, "maximum": 599 }
         },
         "shape": {
+          "x-registry-field": "property",
           "oneOf": [
-            { "const": "singleton" },
+            {"x-registry-field": "branch", "const": "singleton" },
             {
+              "x-registry-field": "branch",
               "type": "object",
               "additionalProperties": false,
               "required": ["records", "cardinality"],
               "properties": {
-                "records": { "type": "string", "pattern": "^/(?:[^/~]|~[01])+(?:/(?:[^/~]|~[01])+)*$" },
-                "cardinality": { "const": "probe_two" }
+                "records": {"x-registry-field": "property", "type": "string", "pattern": "^/(?:[^/~]|~[01])+(?:/(?:[^/~]|~[01])+)*$" },
+                "cardinality": {"x-registry-field": "property", "const": "probe_two" }
               }
             }
           ]
@@ -358,60 +381,68 @@
       "description": "Closed choice among direct HTTP, Rhai script, and exact snapshot execution.",
       "oneOf": [
         {
+          "x-registry-field": "branch",
           "type": "object",
           "additionalProperties": false,
           "required": ["http"],
           "properties": {
             "http": {
+              "x-registry-field": "property",
               "type": "object",
               "additionalProperties": false,
               "required": ["request"],
               "properties": {
-                "request": { "$ref": "#/$defs/httpRequest" },
-                "response": { "$ref": "#/$defs/httpResponse" }
+                "request": {"x-registry-field": "property", "$ref": "#/$defs/httpRequest" },
+                "response": {"x-registry-field": "property", "$ref": "#/$defs/httpResponse" }
               }
             }
           }
         },
         {
+          "x-registry-field": "branch",
           "type": "object",
           "additionalProperties": false,
           "required": ["script"],
           "properties": {
             "script": {
+              "x-registry-field": "property",
               "type": "object",
               "additionalProperties": false,
               "required": ["file"],
               "properties": {
-                "file": { "$ref": "#/$defs/relativePath" },
+                "file": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relativePath" },
                 "modules": {
+                  "x-registry-field": "sensitive_property",
                   "type": "array",
                   "maxItems": 32,
                   "uniqueItems": true,
-                  "items": { "$ref": "#/$defs/relativePath" }
+                  "items": {"x-registry-field": "array_item", "$ref": "#/$defs/relativePath" }
                 }
               }
             }
           }
         },
         {
+          "x-registry-field": "branch",
           "type": "object",
           "additionalProperties": false,
           "required": ["snapshot"],
           "properties": {
             "snapshot": {
+              "x-registry-field": "property",
               "type": "object",
               "additionalProperties": false,
               "required": ["entity", "exact", "freshness"],
               "properties": {
-                "entity": { "$ref": "#/$defs/stableId" },
+                "entity": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
                 "exact": {
+                  "x-registry-field": "property",
                   "type": "object",
                   "minProperties": 1,
                   "maxProperties": 8,
-                  "additionalProperties": { "$ref": "#/$defs/inputReference" }
+                  "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/inputReference" }
                 },
-                "freshness": { "type": "string", "pattern": "^[1-9][0-9]*(?:ms|s|m|h|d)$" }
+                "freshness": {"x-registry-field": "property", "type": "string", "pattern": "^[1-9][0-9]*(?:ms|s|m|h|d)$" }
               }
             }
           }
@@ -424,12 +455,13 @@
       "additionalProperties": false,
       "required": ["type"],
       "properties": {
-        "type": { "$ref": "#/$defs/scalarType" },
-        "format": { "const": "date" },
-        "maxLength": { "type": "integer", "minimum": 1, "maximum": 16384 },
-        "minimum": { "type": "integer" },
-        "maximum": { "type": "integer" },
+        "type": {"x-registry-field": "property", "$ref": "#/$defs/scalarType" },
+        "format": {"x-registry-field": "property", "const": "date" },
+        "maxLength": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 16384 },
+        "minimum": {"x-registry-field": "property", "type": "integer" },
+        "maximum": {"x-registry-field": "property", "type": "integer" },
         "x-registry-source": {
+          "x-registry-field": "property",
           "type": "string",
           "pattern": "^/(?:[^/~]|~[01])+(?:/(?:[^/~]|~[01])+)*$"
         }
@@ -440,10 +472,10 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "calls": { "type": "integer", "minimum": 1, "maximum": 16 },
-        "request_bytes": { "$ref": "#/$defs/byteSize" },
-        "source_bytes": { "$ref": "#/$defs/byteSize" },
-        "deadline": { "type": "string", "pattern": "^[1-9][0-9]*(?:ms|s)$" }
+        "calls": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 16 },
+        "request_bytes": {"x-registry-field": "property", "$ref": "#/$defs/byteSize" },
+        "source_bytes": {"x-registry-field": "property", "$ref": "#/$defs/byteSize" },
+        "deadline": {"x-registry-field": "property", "type": "string", "pattern": "^[1-9][0-9]*(?:ms|s)$" }
       }
     }
   }

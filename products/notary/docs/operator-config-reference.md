@@ -777,10 +777,18 @@ mounted secret files and out of command lines and retained logs.
 
 ## Rollout
 
-Activate Relay and Notary as one compatible project generation. For blue-green
-rollout, stage a complete generation without traffic, verify readiness, then
-switch. For a smaller deployment, drain traffic, restart both products,
-verify readiness, and resume. Never serve a mixed semantic contract.
+Relay and Notary use separately built, signed, verified, anti-rollback-tracked,
+and boot-activated product bundles. A combined rollout is compatible staged
+activation, not atomic project activation; current source has no signed
+project-root bundle or activation coordinator.
+
+Verify both product bundles first. Start or stage Relay without admitting
+caller traffic and require its health, readiness, audit, and deployment-posture
+checks to pass. Then start or stage Notary, require startup and readiness to
+validate its Relay contract, and require Notary health, audit, and posture
+checks to pass. Admit caller traffic only when both products are ready and the
+contract check succeeds. An execute-time contract mismatch fails at Relay
+before source access.
 
 The complete generated schema, runtime diagnostics, and OpenAPI are
 authoritative for exact field syntax.

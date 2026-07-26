@@ -1,5 +1,7 @@
 use crate::*;
 
+use registry_notary_server::{NotaryActivationCode, NotaryActivationFailure};
+
 #[derive(Debug)]
 pub(crate) struct LoadedServerConfig {
     pub(crate) config: StandaloneRegistryNotaryConfig,
@@ -74,10 +76,31 @@ pub(crate) fn load_server_config(
     config_path: &Path,
     initialize_state: bool,
 ) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
-    let raw = fs::read_to_string(config_path)?;
-    let bootstrap = parse_config_document(&raw)?;
+    let raw = fs::read_to_string(config_path).map_err(|_| {
+        log_safe_startup_rejection(
+            NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
+            "rejected_validation",
+            None,
+        );
+        configuration_failure()
+    })?;
+    let bootstrap = parse_config_document(&raw).map_err(|_| {
+        log_safe_startup_rejection(
+            NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
+            "rejected_validation",
+            None,
+        );
+        configuration_failure()
+    })?;
     let Some(config_trust) = bootstrap.config.config_trust.as_ref() else {
-        validate_config_document(&bootstrap)?;
+        validate_config_document(&bootstrap).map_err(|_| {
+            log_safe_startup_rejection(
+                NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
+                "rejected_validation",
+                None,
+            );
+            configuration_failure()
+        })?;
         return Ok(LoadedServerConfig {
             config: bootstrap.config,
             config_source: ConfigSource::LocalFile,
@@ -97,7 +120,7 @@ pub(crate) fn load_server_config(
                     return Ok(loaded);
                 }
                 log_bundle_verification_error(&error);
-                return Err(Box::<dyn std::error::Error>::from(error));
+                return Err(configuration_failure());
             }
         };
     match load_verified_bundle_server_config(config_trust, initialize_state, verified) {
@@ -131,35 +154,17 @@ pub(crate) fn load_verified_bundle_server_config(
         initialize_state,
     })
     .map_err(map_config_boot_error)?;
-    let config_text = std::str::from_utf8(&verified.config_bytes).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "signed config bundle primary config is not UTF-8"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
-        Box::<dyn std::error::Error>::from(error)
+    let config_text = std::str::from_utf8(&verified.config_bytes).map_err(|_| {
+        log_safe_startup_rejection("config.bundle_rejected", "rejected_validation", None);
+        configuration_failure()
     })?;
-    let parsed = parse_config_document(config_text).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "signed config bundle primary config failed to parse"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
-        error
+    let parsed = parse_config_document(config_text).map_err(|_| {
+        log_safe_startup_rejection("config.bundle_rejected", "rejected_validation", None);
+        configuration_failure()
     })?;
-    validate_signed_bundle_config_document(&parsed).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "signed config bundle primary config failed product validation"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
-        error
+    validate_signed_bundle_config_document(&parsed).map_err(|_| {
+        log_safe_startup_rejection("config.bundle_rejected", "rejected_validation", None);
+        configuration_failure()
     })?;
     let provenance = ConfigProvenance {
         source: ConfigSource::SignedBundleFile,
@@ -220,35 +225,17 @@ pub(crate) fn load_unsigned_pin_server_config(
     config_trust: &ConfigTrustConfig,
     selection: UnsignedConfigSelection,
 ) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
-    let config_text = std::str::from_utf8(&selection.config_bytes).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "unsigned break-glass config is not UTF-8"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
-        Box::<dyn std::error::Error>::from(error)
+    let config_text = std::str::from_utf8(&selection.config_bytes).map_err(|_| {
+        log_safe_startup_rejection("config.bundle_rejected", "rejected_validation", None);
+        configuration_failure()
     })?;
-    let parsed = parse_config_document(config_text).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "unsigned break-glass config failed to parse"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
-        error
+    let parsed = parse_config_document(config_text).map_err(|_| {
+        log_safe_startup_rejection("config.bundle_rejected", "rejected_validation", None);
+        configuration_failure()
     })?;
-    validate_config_document(&parsed).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "unsigned break-glass config failed product validation"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
-        error
+    validate_config_document(&parsed).map_err(|_| {
+        log_safe_startup_rejection("config.bundle_rejected", "rejected_validation", None);
+        configuration_failure()
     })?;
     let override_pin = Some(selection.pin.clone());
     Ok(LoadedServerConfig {
@@ -291,34 +278,43 @@ pub(crate) fn load_unsigned_pin_server_config(
 
 pub(crate) fn log_bundle_verification_error(error: &ConfigBundleError) {
     let result = bundle_verify_rejection_result(error);
-    tracing::error!(
-        code = "config.bundle_rejected",
-        result,
-        error = %error,
-        "signed config bundle verification failed"
-    );
-    eprintln!("config.bundle_rejected result={result} error={error}");
+    log_safe_startup_rejection("config.bundle_rejected", result, None);
 }
 
 pub(crate) fn map_config_boot_error(error: ConfigBootError) -> Box<dyn std::error::Error> {
     if let Some(reason) = error.break_glass_invalid_reason() {
-        tracing::error!(
-            code = "config.break_glass_invalid",
-            error = %error,
-            reason,
-            "config break-glass override rejected"
+        log_safe_startup_rejection(
+            "config.break_glass_invalid",
+            "rejected_rollback",
+            Some(reason),
         );
-        eprintln!("config.break_glass_invalid error={error}");
     }
     let result = error.bundle_rejection_result();
+    log_safe_startup_rejection("config.bundle_rejected", result, None);
+    configuration_failure()
+}
+
+fn configuration_failure() -> Box<dyn std::error::Error> {
+    Box::new(NotaryActivationFailure::from(
+        NotaryActivationCode::CONFIGURATION_INVALID,
+    ))
+}
+
+fn log_safe_startup_rejection(
+    classification_code: &'static str,
+    result: &'static str,
+    reason: Option<&'static str>,
+) {
+    let definition = NotaryActivationCode::CONFIGURATION_INVALID.definition();
     tracing::error!(
-        code = "config.bundle_rejected",
+        code = classification_code,
         result,
-        error = %error,
-        "config bundle boot state rejected startup"
+        reason = reason.unwrap_or("none"),
+        activation_code = definition.code.as_str(),
+        safe_meaning = definition.meaning,
+        safe_remediation = definition.remediation,
+        "registry notary startup configuration rejected"
     );
-    eprintln!("config.bundle_rejected result={result} error={error}");
-    Box::new(error)
 }
 
 #[derive(Debug)]

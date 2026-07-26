@@ -47,7 +47,7 @@ use registry_notary_core::{
 use registry_notary_server::{
     compile_notary_runtime_with_provenance, notary_routers_from_runtime,
     notary_shared_router_from_runtime, openapi_document, verify_relay_from_config,
-    EvidenceIssuerRegistry, StandaloneServerError,
+    EvidenceIssuerRegistry, NotaryActivationCode, NotaryActivationFailure, StandaloneServerError,
 };
 use registry_platform_config::{
     expand_config_env_vars, reject_deprecated_config_fields, verify_config_bundle,
@@ -249,20 +249,52 @@ struct ConfigVerifyBundleArgs {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match run(Args::parse()).await {
+    let args = Args::parse();
+    let server_startup = args.command.is_none();
+    match run(args).await {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("ERROR {err}");
+            eprintln!(
+                "ERROR {}",
+                top_level_error_message(err.as_ref(), server_startup)
+            );
             ExitCode::FAILURE
         }
     }
 }
 
+// Process diagnostics and governed audit records have different publication
+// boundaries. Diagnostics must be value-free. A configured stdout audit sink is
+// protected operator evidence, so accepted bundle identities, signer ids, and
+// integrity hashes intentionally remain in `config.bundle_accepted` records.
+fn top_level_error_message(
+    error: &(dyn std::error::Error + 'static),
+    server_startup: bool,
+) -> String {
+    if !server_startup {
+        return error.to_string();
+    }
+    error
+        .downcast_ref::<NotaryActivationFailure>()
+        .copied()
+        .unwrap_or_else(|| NotaryActivationCode::RUNTIME_ACTIVATION_FAILED.into())
+        .to_string()
+}
+
 async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let env_report = load_env_file_arg(args.env_file.as_deref(), args.env_file_override)?;
+    let server_startup = args.command.is_none();
+    let doctor_command = matches!(&args.command, Some(Command::Doctor { .. }));
+    let env_report = match load_env_file_arg(args.env_file.as_deref(), args.env_file_override) {
+        Ok(report) => report,
+        Err(error) if server_startup || doctor_command => {
+            return Err(Box::new(value_free_configuration_failure(error)));
+        }
+        Err(error) => return Err(error),
+    };
     match args.command {
         None => {
-            let config_path = required_config_path(args.config.as_deref())?;
+            let config_path = required_config_path(args.config.as_deref())
+                .map_err(value_free_configuration_failure)?;
             run_server(config_path, args.bind, args.initialize_state).await?;
             Ok(ExitCode::SUCCESS)
         }
@@ -365,3 +397,69 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod test_support;
+
+#[cfg(test)]
+mod operator_boundary_tests {
+    use super::*;
+
+    #[test]
+    fn accepted_bundle_audit_keeps_governed_identity_at_the_protected_boundary() {
+        const CONFIG_HASH: &str =
+            "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        const PREVIOUS_HASH: &str =
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let acceptance = PendingBundleAcceptance {
+            state_path: PathBuf::from(
+                "/Users/SENTINEL_USER/SENTINEL_COUNTRY/SENTINEL_SECRET_STATE.json",
+            ),
+            key: registry_platform_ops::AntiRollbackKey {
+                product: "registry-notary".to_string(),
+                instance_id: "SENTINEL_PARSER_INSTANCE".to_string(),
+                environment: "SENTINEL_COUNTRY".to_string(),
+                stream_id: "governed-stream".to_string(),
+            },
+            source: ConfigSource::SignedBundleFile,
+            bundle_id: Some("governed-bundle-42".to_string()),
+            bundle_manifest_hash: Some(
+                "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                    .to_string(),
+            ),
+            sequence: Some(42),
+            config_hash: CONFIG_HASH.to_string(),
+            previous_config_hash: Some(PREVIOUS_HASH.to_string()),
+            previous_hash_matched: Some(true),
+            signer_kids: vec!["governed-signer-kid".to_string()],
+            break_glass: false,
+            state_action: BundleStateAction::Accept,
+            override_pin: None,
+            override_path: None,
+        };
+
+        let rendered =
+            serde_json::to_string(&bundle_acceptance_audit(&acceptance)).expect("audit serializes");
+
+        for governed_value in [
+            "governed-bundle-42",
+            "governed-signer-kid",
+            CONFIG_HASH,
+            PREVIOUS_HASH,
+        ] {
+            assert!(
+                rendered.contains(governed_value),
+                "accepted audit lost governed identity evidence {governed_value:?}: {rendered}"
+            );
+        }
+        for raw_value in [
+            "SENTINEL_USER",
+            "SENTINEL_COUNTRY",
+            "SENTINEL_SECRET",
+            "SENTINEL_PARSER",
+            acceptance.state_path.to_str().expect("test path is UTF-8"),
+        ] {
+            assert!(
+                !rendered.contains(raw_value),
+                "accepted audit crossed its protected boundary with raw value {raw_value:?}: {rendered}"
+            );
+        }
+    }
+}

@@ -2,7 +2,7 @@
 
 fn compile_project(
     loaded: &LoadedRegistryProject,
-    baseline: Option<&VerifiedBaseline>,
+    baselines: Option<&VerifiedBaselineSet>,
 ) -> Result<CompiledProject> {
     let environment = loaded
         .environment
@@ -12,15 +12,16 @@ fn compile_project(
         .environment_name
         .as_deref()
         .ok_or_else(|| anyhow!("project build requires an explicit environment"))?;
-    compile_project_for_environment(loaded, environment_name, environment, baseline)
+    compile_project_for_environment(loaded, environment_name, environment, baselines)
 }
 
 fn compile_project_for_environment(
     loaded: &LoadedRegistryProject,
     environment_name: &str,
     environment: &EnvironmentDocument,
-    baseline: Option<&VerifiedBaseline>,
+    baselines: Option<&VerifiedBaselineSet>,
 ) -> Result<CompiledProject> {
+    let baseline = baselines.and_then(VerifiedBaselineSet::common);
     validate_entity_generation_changes(loaded, environment, baseline)?;
     let mut reviewable = BTreeMap::new();
     let mut relay_private = BTreeMap::new();
@@ -209,11 +210,10 @@ fn compile_project_for_environment(
         &serde_json::to_value(&disclosure_profiles)
             .context("failed to serialize disclosure review profiles")?,
     )?;
-    let semantic_changes = semantic_change_records(
-        loaded,
-        baseline.map(|baseline| &baseline.approval_state),
-        &disclosure_digest,
-    );
+    let baseline_state = baseline.map(|baseline| &baseline.approval_state);
+    let semantic_changes = semantic_change_records(loaded, baseline_state, &disclosure_digest);
+    let semantic_impact =
+        project_semantic_impact_report(loaded, baseline_state, &disclosure_digest);
     let entity_materializations = generated_entity_materialization_review(loaded, environment)?;
     let review = json!({
         "schema": REVIEW_SCHEMA,
@@ -242,13 +242,14 @@ fn compile_project_for_environment(
         "authored_input_digest": loaded.authored_hash,
         "semantic_digests": loaded.semantic_digests,
         "disclosure_digest": disclosure_digest,
+        "promotion_projection": project_promotion_projection(loaded, environment)?,
         "generated_closure_digests": closure_digests,
-        "baseline": baseline.map(|baseline| json!({
-            "verified_manifest": baseline.verified_manifest,
+        "baseline": baselines.filter(|baselines| !baselines.is_empty()).map(|baselines| json!({
+            "verified_manifests": baselines.predecessor_manifest_identities(),
         })),
         "entity_materializations": entity_materializations,
     });
-    let explanation = generated_explanation(loaded, environment_name, &profiles);
+    let explanation = generated_explanation(loaded, environment_name)?;
     let fixture_profiles = profiles
         .iter()
         .map(|profile| FixtureProfile {
@@ -271,6 +272,7 @@ fn compile_project_for_environment(
         explanation,
         fixture_profiles,
         semantic_changes,
+        semantic_impact,
     })
 }
 
@@ -690,7 +692,8 @@ fn generated_script_pack_semantics(
             "response_verifier": "dci_jws_v1",
         })
     });
-    let operation_timeout_ms = parse_duration_ms(&integration.document.bounds.deadline)?.min(10_000);
+    let operation_timeout_ms =
+        parse_duration_ms(&integration.document.bounds.deadline)?.min(10_000);
     let verification_operations = script.signed_dci.as_ref().map_or_else(Vec::new, |_| {
         vec![json!({
             "id": "jwks",
@@ -762,7 +765,14 @@ fn generated_script_pack_semantics(
         "quota_per_minute": 60,
         "quota_burst": integration.document.bounds.concurrency.min(60),
     });
-    Ok((acquisition, reviewed, Value::Object(output), plan, limits, None))
+    Ok((
+        acquisition,
+        reviewed,
+        Value::Object(output),
+        plan,
+        limits,
+        None,
+    ))
 }
 
 fn generated_http_pack_semantics(
@@ -1375,7 +1385,8 @@ fn generated_http_operation(
         .outputs
         .iter()
         .filter_map(|(name, output)| {
-            output.from
+            output
+                .from
                 .as_deref()
                 .and_then(|source| source.split_once('.'))
                 .is_some_and(|(source, _)| source == operation_id)
@@ -1388,7 +1399,8 @@ fn generated_http_operation(
         operation_outputs
             .iter()
             .filter_map(|(_, output)| {
-                output.source_pointer
+                output
+                    .source_pointer
                     .as_deref()
                     .and_then(|pointer| pointer_segments(pointer).ok())
                     .and_then(|segments| segments.into_iter().next())
@@ -1405,7 +1417,8 @@ fn generated_http_operation(
         operation_outputs
             .iter()
             .filter_map(|(name, output)| {
-                output.source_pointer
+                output
+                    .source_pointer
                     .as_ref()
                     .map(|pointer| ((*name).clone(), Value::String(pointer.clone())))
             })

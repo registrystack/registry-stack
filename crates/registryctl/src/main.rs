@@ -5,10 +5,17 @@ use clap::{error::ErrorKind, CommandFactory, Parser, Subcommand, ValueEnum};
 
 use registryctl::{
     AddNotaryReport, AnchorReport, BundleInspectReport, BundleSignOptions, BundleSignReport,
-    BundleVerifyReport, DeploymentProfile, DoctorFormat, InitProjectKind, InitReport, InitSource,
-    ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
-    ProjectEditorSetupReport, ProjectInitOptions, ProjectSchemaKind, ProjectStarter,
-    ProjectTestOptions, ProjectTestSelection, Sample,
+    BundleVerifyReport, ClassifierSafeReportedValue, DeploymentProfile, DoctorFormat,
+    FieldSourceKind, InitProjectKind, InitReport, InitSource, MigrationDisposition,
+    ProjectBuildBaselineSetOptions, ProjectBuildOptions, ProjectCapabilityInventoryReportV1,
+    ProjectCapabilityOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
+    ProjectEditorSetupReport, ProjectEnvironmentSemanticComparisonOptions, ProjectExecutionContext,
+    ProjectFieldAddress, ProjectFieldExplanation, ProjectInitOptions, ProjectMigrationOptions,
+    ProjectMigrationReportV1, ProjectPreflightOptions, ProjectPreflightReportV1,
+    ProjectPromotionOptions, ProjectPromotionReportV1, ProjectSchemaKind,
+    ProjectSemanticComparisonOptions, ProjectSemanticComparisonReportV1, ProjectStarter,
+    ProjectStarterSemanticComparisonOptions, ProjectTestOptions, ProjectTestSelection,
+    PromotionDisposition, RedactionReason, Sample,
 };
 
 fn main() -> Result<()> {
@@ -167,6 +174,188 @@ fn main() -> Result<()> {
                 OutputFormat::Json => print_json(&report)?,
             }
         }
+        Commands::Preflight {
+            project_dir,
+            environment,
+            format,
+        } => {
+            let report = registryctl::preflight_registry_project(&ProjectPreflightOptions {
+                project_directory: project_dir,
+                environment,
+            })?;
+            let ready = report.status == registryctl::PreflightStatus::Ready;
+            match format {
+                OutputFormat::Human => println!("{}", render_preflight_report(&report)?),
+                OutputFormat::Json => print_json(&report)?,
+            }
+            if !ready {
+                std::process::exit(1);
+            }
+        }
+        Commands::Project { command } => match command {
+            ProjectCommand::Diagnostics { catalog, format } => match catalog {
+                DiagnosticCatalog::Authoring => {
+                    let reference = registryctl::authoring_error_reference();
+                    registryctl::validate_authoring_error_reference(&reference).map_err(
+                        |error| {
+                            anyhow::anyhow!(
+                                "authoring diagnostic reference failed closed validation: {error:?}"
+                            )
+                        },
+                    )?;
+                    match format {
+                        OutputFormat::Human => println!(
+                            "{}",
+                            render_diagnostic_reference(
+                                catalog,
+                                &reference.schema_version,
+                                &reference.entries,
+                                &[],
+                            )?
+                        ),
+                        OutputFormat::Json => print_json(&reference)?,
+                    }
+                }
+                DiagnosticCatalog::Fixture => {
+                    let reference = registryctl::fixture_error_reference();
+                    registryctl::validate_fixture_error_reference(&reference).map_err(|error| {
+                        anyhow::anyhow!(
+                            "fixture diagnostic reference failed closed validation: {error:?}"
+                        )
+                    })?;
+                    match format {
+                        OutputFormat::Human => println!(
+                            "{}",
+                            render_diagnostic_reference(
+                                catalog,
+                                &reference.schema_version,
+                                &reference.entries,
+                                &[],
+                            )?
+                        ),
+                        OutputFormat::Json => print_json(&reference)?,
+                    }
+                }
+                DiagnosticCatalog::Operator => {
+                    let reference = registryctl::operator_error_reference();
+                    registryctl::validate_operator_error_reference(&reference).map_err(
+                        |error| {
+                            anyhow::anyhow!(
+                                "operator diagnostic reference failed closed validation: {error:?}"
+                            )
+                        },
+                    )?;
+                    match format {
+                        OutputFormat::Human => println!(
+                            "{}",
+                            render_diagnostic_reference(
+                                catalog,
+                                &reference.schema_version,
+                                &reference.entries,
+                                &reference.omissions,
+                            )?
+                        ),
+                        OutputFormat::Json => print_json(&reference)?,
+                    }
+                }
+            },
+        },
+        Commands::Capabilities {
+            project_dir,
+            environment,
+            format,
+        } => {
+            let report = registryctl::inspect_project_capabilities(&ProjectCapabilityOptions {
+                project_directory: project_dir,
+                environment,
+            })?;
+            print_formatted_report(format, &report, render_capability_inventory)?;
+        }
+        Commands::Compare {
+            project_dir,
+            environment,
+            from_project_dir,
+            from_environment,
+            from_starter,
+            format,
+        } => {
+            let report = if from_starter {
+                registryctl::compare_registry_project_to_embedded_starter_semantically(
+                    &ProjectStarterSemanticComparisonOptions {
+                        project_directory: project_dir,
+                        environment,
+                    },
+                )?
+            } else if let Some(baseline_environment) = from_environment {
+                if let Some(baseline_project_directory) = from_project_dir {
+                    registryctl::compare_registry_projects_semantically(
+                        &ProjectSemanticComparisonOptions {
+                            current_project_directory: project_dir,
+                            current_environment: environment,
+                            baseline_project_directory,
+                            baseline_environment,
+                        },
+                    )?
+                } else {
+                    registryctl::compare_registry_project_environments_semantically(
+                        &ProjectEnvironmentSemanticComparisonOptions {
+                            project_directory: project_dir,
+                            current_environment: environment,
+                            baseline_environment,
+                        },
+                    )?
+                }
+            } else {
+                unreachable!("clap requires exactly one semantic comparison baseline")
+            };
+            print_formatted_report(format, &report, render_semantic_comparison_report)?;
+        }
+        Commands::Promote {
+            project_dir,
+            environment,
+            against,
+            anchor,
+            relay_against,
+            relay_anchor,
+            notary_against,
+            notary_anchor,
+            format,
+        } => {
+            let report = registryctl::promote_registry_project(&ProjectPromotionOptions {
+                project_directory: project_dir,
+                environment,
+                against,
+                anchor,
+                relay_against,
+                relay_anchor,
+                notary_against,
+                notary_anchor,
+            })?;
+            let ready = !matches!(report.disposition, PromotionDisposition::Blocked);
+            print_formatted_report(format, &report, render_promotion_report)?;
+            if !ready {
+                std::process::exit(1);
+            }
+        }
+        Commands::Migrate {
+            project_dir,
+            target_version,
+            output,
+            write_candidate,
+            format,
+        } => {
+            let report = registryctl::migrate_registry_project(&ProjectMigrationOptions {
+                project_directory: project_dir,
+                target_version,
+                output_directory: output,
+                write_candidate,
+            })?;
+            let supported = !matches!(report.disposition, MigrationDisposition::Blocked);
+            print_formatted_report(format, &report, render_migration_report)?;
+            if !supported {
+                std::process::exit(1);
+            }
+        }
         Commands::Authoring { command } => match command {
             AuthoringCommand::Xw { format } => match format {
                 XwFormat::Reference => print!(
@@ -179,6 +368,18 @@ fn main() -> Result<()> {
                 ),
             },
             AuthoringCommand::Schema { kind } => print!("{}", kind.document()),
+            AuthoringCommand::Reference { coverage } => {
+                if coverage {
+                    let report = registryctl::embedded_configuration_reference_coverage()?;
+                    let complete = report.status == registryctl::CoverageStatus::Complete;
+                    print_json(&report)?;
+                    if !complete {
+                        std::process::exit(1);
+                    }
+                } else {
+                    print_json(&registryctl::embedded_configuration_reference()?)?;
+                }
+            }
             AuthoringCommand::Editor {
                 project_dir,
                 format,
@@ -201,14 +402,26 @@ fn main() -> Result<()> {
             environment,
             against,
             anchor,
+            relay_against,
+            relay_anchor,
+            notary_against,
+            notary_anchor,
             format,
         } => {
-            let report = registryctl::build_registry_project(&ProjectBuildOptions {
-                project_directory: project_dir,
-                environment,
-                against,
-                anchor,
-            })?;
+            let report = registryctl::build_registry_project_with_baselines(
+                &ProjectBuildOptions {
+                    project_directory: project_dir,
+                    environment,
+                    against,
+                    anchor,
+                },
+                &ProjectBuildBaselineSetOptions {
+                    relay_against,
+                    relay_anchor,
+                    notary_against,
+                    notary_anchor,
+                },
+            )?;
             print_formatted_report(format, &report, render_build_report)?;
         }
         Commands::Start => registryctl::start_project(&std::env::current_dir()?)?,
@@ -315,11 +528,30 @@ fn watch_project_tests(options: ProjectTestOptions, selection: ProjectTestSelect
 fn watch_project_tests_until(
     options: ProjectTestOptions,
     selection: ProjectTestSelection,
+    should_stop_after_observation: impl FnMut(usize, &std::path::Path) -> Result<bool>,
+) -> Result<()> {
+    let execution_context = ProjectExecutionContext::for_current_executable()?;
+    watch_project_tests_until_with_context(
+        options,
+        selection,
+        &execution_context,
+        should_stop_after_observation,
+    )
+}
+
+fn watch_project_tests_until_with_context(
+    options: ProjectTestOptions,
+    selection: ProjectTestSelection,
+    execution_context: &ProjectExecutionContext,
     mut should_stop_after_observation: impl FnMut(usize, &std::path::Path) -> Result<bool>,
 ) -> Result<()> {
     let mut completed_runs = 0;
     loop {
-        let report = registryctl::test_registry_project_selected(&options, &selection)?;
+        let report = registryctl::test_registry_project_selected_with_context(
+            &options,
+            &selection,
+            execution_context,
+        )?;
         println!("{}", render_test_summary(&report));
         let observed = project_watch_fingerprint(&options.project_directory)?;
         completed_runs += 1;
@@ -403,6 +635,39 @@ fn print_formatted_report<T: serde::Serialize>(
         OutputFormat::Json => print_json(report)?,
     }
     Ok(())
+}
+
+fn render_semantic_comparison_report(report: &ProjectSemanticComparisonReportV1) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(output, "{}", report.human_safe_summary())?;
+    if !report.changes.is_empty() {
+        writeln!(output, "Changes:")?;
+        for change in &report.changes {
+            writeln!(
+                output,
+                "  - {:?} {:?} {:?} {} ({} occurrence{})",
+                change.dimension,
+                change.direction,
+                change.address.schema_family,
+                change.address.field,
+                change.occurrences,
+                if change.occurrences == 1 { "" } else { "s" },
+            )?;
+        }
+    }
+    if !report.required_actions.is_empty() {
+        writeln!(output, "Required actions:")?;
+        for action in &report.required_actions {
+            writeln!(output, "  - {action:?}")?;
+        }
+    }
+    writeln!(
+        output,
+        "External approval: not evaluated; runtime behavior: not observed."
+    )?;
+    Ok(output.trim_end().to_owned())
 }
 
 fn render_add_notary_report(report: &AddNotaryReport) -> Result<String> {
@@ -533,6 +798,260 @@ fn render_editor_setup_report(report: &ProjectEditorSetupReport) -> Result<Strin
         writeln!(output, "    {}", human_path(&path))?;
     }
     Ok(output.trim_end().to_string())
+}
+
+fn render_preflight_report(report: &ProjectPreflightReportV1) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "Registry Stack project {:?} is {} for environment {:?}.",
+        report.project,
+        if report.status == registryctl::PreflightStatus::Ready {
+            "locally ready"
+        } else {
+            "not locally ready"
+        },
+        report.environment
+    )?;
+    writeln!(
+        output,
+        "  Offline boundary: no network, source contact, fixture execution, external process, or build output."
+    )?;
+    writeln!(
+        output,
+        "  Checks: {} static, {} product, {} secret, {} runtime file.",
+        report.static_checks.len(),
+        report.product_validators.len(),
+        report.secret_checks.len(),
+        report.runtime_files.len(),
+    )?;
+    for diagnostic in &report.diagnostics {
+        let code = serde_json::to_value(diagnostic.code)?
+            .as_str()
+            .unwrap_or("registryctl.preflight.unknown")
+            .to_owned();
+        writeln!(output, "  [{code}] {:?}", diagnostic.message)?;
+        for address in &diagnostic.addresses {
+            writeln!(
+                output,
+                "    {}#{}",
+                address.file.as_str(),
+                address.pointer.as_str()
+            )?;
+        }
+        writeln!(output, "    Fix: {:?}", diagnostic.remediation)?;
+    }
+    Ok(output.trim_end().to_owned())
+}
+
+fn render_diagnostic_reference(
+    catalog: DiagnosticCatalog,
+    schema_version: &str,
+    entries: &[registryctl::ErrorReferenceEntry],
+    omissions: &[registryctl::OperatorErrorOmission],
+) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "Registry Stack {} diagnostic reference.",
+        catalog.as_str()
+    )?;
+    writeln!(output, "  Schema: {}", human_line(schema_version))?;
+    writeln!(output, "  Entries: {}", entries.len())?;
+    for entry in entries {
+        writeln!(
+            output,
+            "  [{}/{}/{}]",
+            entry.family.as_str(),
+            entry.product.as_str(),
+            human_line(&entry.code)
+        )?;
+        writeln!(output, "    Meaning: {}", human_line(&entry.safe_meaning))?;
+        writeln!(output, "    Rule: {}", human_line(&entry.rule))?;
+        writeln!(
+            output,
+            "    Remediation: {}",
+            human_line(&entry.safe_remediation)
+        )?;
+        writeln!(
+            output,
+            "    Lifecycle: {:?}; introduced: {}",
+            entry.lifecycle,
+            entry
+                .introduced_in
+                .as_deref()
+                .map_or_else(|| "not released".to_string(), human_line)
+        )?;
+        writeln!(
+            output,
+            "    Evidence limitation: {}",
+            human_line(&entry.evidence_limitation)
+        )?;
+        writeln!(
+            output,
+            "    Documentation: {}",
+            human_line(&entry.docs_anchor)
+        )?;
+    }
+    writeln!(output, "  Omissions: {}", omissions.len())?;
+    for omission in omissions {
+        writeln!(
+            output,
+            "  [omission/{:?}/{}] {}",
+            omission.family,
+            omission.product.as_str(),
+            human_line(&omission.evidence)
+        )?;
+        writeln!(
+            output,
+            "    Required action: {}",
+            human_line(&omission.required_action)
+        )?;
+    }
+    Ok(output.trim_end().to_string())
+}
+
+fn render_promotion_report(report: &ProjectPromotionReportV1) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(output, "Promotion: {:?}", report.disposition)?;
+    writeln!(output, "  Evidence: offline static comparison")?;
+    writeln!(output, "  Classified changes: {}", report.changes.len())?;
+    for change in &report.changes {
+        writeln!(
+            output,
+            "  - {:?}: {:?} ({:?})",
+            change.kind, change.effect, change.boundary
+        )?;
+    }
+    if report.blocking_reasons.is_empty() {
+        writeln!(output, "  Blocking reasons: none")?;
+    } else {
+        writeln!(output, "  Blocking reasons:")?;
+        for reason in &report.blocking_reasons {
+            writeln!(output, "  - {reason:?}")?;
+        }
+    }
+    if report.required_actions.review_classes.is_empty() {
+        writeln!(output, "  Required reviews: none")?;
+    } else {
+        writeln!(
+            output,
+            "  Required reviews: {}",
+            report
+                .required_actions
+                .review_classes
+                .iter()
+                .map(|review| format!("{review:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )?;
+    }
+    writeln!(
+        output,
+        "  Re-sign: {:?}; restart: {:?}; reactivate: {:?}",
+        report.required_actions.re_sign,
+        report.required_actions.restart,
+        report.required_actions.reactivate
+    )?;
+    Ok(output.trim_end().to_owned())
+}
+
+fn render_migration_report(report: &ProjectMigrationReportV1) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(output, "Project migration: {:?}", report.disposition)?;
+    writeln!(output, "  Evidence: offline static validation")?;
+    if report.disposition == MigrationDisposition::ReviewRequired {
+        writeln!(
+            output,
+            "  Result: candidate/check succeeded; pending reviews are not approval or completion"
+        )?;
+    }
+    writeln!(
+        output,
+        "  Changes: {} compatible normalizations, {} semantic",
+        report.compatible_normalizations.len(),
+        report.semantic_changes.len()
+    )?;
+    writeln!(
+        output,
+        "  Candidate: {:?}; emission: {:?}",
+        report.output.candidate_artifact, report.output.candidate_emission
+    )?;
+    writeln!(output, "  Authored files overwritten: no")?;
+    if report.blocking_reasons.is_empty() {
+        writeln!(output, "  Blocking reasons: none")?;
+    } else {
+        writeln!(output, "  Blocking reasons:")?;
+        for reason in &report.blocking_reasons {
+            writeln!(output, "  - {reason:?}")?;
+        }
+    }
+    let pending = report
+        .reviews
+        .iter()
+        .filter(|review| review.status == registryctl::MigrationReviewStatus::RequiredPending)
+        .map(|review| format!("{:?}", review.class))
+        .collect::<Vec<_>>();
+    writeln!(
+        output,
+        "  Required reviews: {}",
+        if pending.is_empty() {
+            "none".to_owned()
+        } else {
+            pending.join(", ")
+        }
+    )?;
+    for gate in &report.rerun_gates {
+        writeln!(output, "  Gate {:?}: {:?}", gate.gate, gate.status)?;
+    }
+    for diagnostic in &report.diagnostics {
+        writeln!(
+            output,
+            "  Diagnostic {:?}/{:?}: {:?}",
+            diagnostic.code, diagnostic.phase, diagnostic.remediation
+        )?;
+    }
+    Ok(output.trim_end().to_owned())
+}
+
+fn render_capability_inventory(report: &ProjectCapabilityInventoryReportV1) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut output = String::from("Registry Stack offline capability inventory.");
+    writeln!(output, "\n  Runtime activation: not evaluated")?;
+    for capability in &report.capabilities {
+        writeln!(
+            output,
+            "  {:?}: installed={:?}, project={:?}, environment={:?}, disposition={:?}",
+            capability.capability,
+            capability.installed_release,
+            capability.project_declaration,
+            capability.environment_enablement,
+            capability.disposition,
+        )?;
+    }
+    if report.missing_support.is_empty() {
+        writeln!(
+            output,
+            "  Missing support: none in evaluated local components"
+        )?;
+    } else {
+        writeln!(
+            output,
+            "  Missing support: {} component(s)",
+            report.missing_support.len()
+        )?;
+    }
+    writeln!(output, "  Image availability: not evaluated")?;
+    Ok(output.trim_end().to_owned())
 }
 
 fn render_bundle_inspect_report(report: &BundleInspectReport) -> Result<String> {
@@ -769,20 +1288,89 @@ fn render_test_summary(report: &ProjectCommandReport) -> String {
     output
 }
 
-fn render_limit(value: &serde_json::Value, unit: &str) -> String {
-    let value = value
-        .as_str()
-        .map(str::to_owned)
-        .unwrap_or_else(|| value.to_string());
-    match unit {
+fn classifier_public_value(field: &ProjectFieldExplanation) -> Option<&serde_json::Value> {
+    match &field.reported_value {
+        ClassifierSafeReportedValue::Public { value } => Some(value.as_value()),
+        ClassifierSafeReportedValue::Redacted { .. } | ClassifierSafeReportedValue::Absent => None,
+    }
+}
+
+fn classifier_public_text(field: &ProjectFieldExplanation) -> Option<&str> {
+    classifier_public_value(field)?.as_str()
+}
+
+fn classifier_public_count(field: &ProjectFieldExplanation) -> Option<u64> {
+    classifier_public_value(field)?.as_u64()
+}
+
+fn render_field_source(source: FieldSourceKind) -> &'static str {
+    match source {
+        FieldSourceKind::Authored => "authored",
+        FieldSourceKind::Defaulted => "defaulted",
+        FieldSourceKind::Detected => "detected",
+        FieldSourceKind::Derived => "derived",
+        FieldSourceKind::EnvironmentBound => "environment-bound",
+        FieldSourceKind::Generated => "generated",
+        FieldSourceKind::Runtime => "runtime",
+        FieldSourceKind::Absent => "absent",
+    }
+}
+
+fn render_limit(field: &ProjectFieldExplanation, unit: &str) -> Option<String> {
+    let value = classifier_public_value(field)?;
+    let value = match value {
+        serde_json::Value::String(value) => value.clone(),
+        serde_json::Value::Number(value) => value.to_string(),
+        _ => return None,
+    };
+    Some(match unit {
         "" | "duration" => value,
         "calls" if value == "1" => "1 call".to_string(),
         _ => format!("{value} {unit}"),
-    }
+    })
 }
 
 fn render_count(count: u64, singular: &str, plural: &str) -> String {
     format!("{count} {}", if count == 1 { singular } else { plural })
+}
+
+fn explanation_pointer_segments(path: &str) -> Option<Vec<String>> {
+    if !path.starts_with('/') {
+        return None;
+    }
+    path[1..]
+        .split('/')
+        .map(|segment| {
+            let mut decoded = String::with_capacity(segment.len());
+            let mut chars = segment.chars();
+            while let Some(character) = chars.next() {
+                if character != '~' {
+                    decoded.push(character);
+                    continue;
+                }
+                match chars.next()? {
+                    '0' => decoded.push('~'),
+                    '1' => decoded.push('/'),
+                    _ => return None,
+                }
+            }
+            Some(decoded)
+        })
+        .collect()
+}
+
+fn rendered_claim_class(
+    has_direct_consultation_output: bool,
+    authoritative_evidence: Option<&str>,
+) -> Option<&'static str> {
+    if has_direct_consultation_output {
+        return Some("consultation_output");
+    }
+    match authoritative_evidence {
+        Some("registry_backed") => Some("registry_backed_evaluation"),
+        Some("self_attested") => Some("source_free_evaluation"),
+        _ => None,
+    }
 }
 
 fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<String> {
@@ -849,15 +1437,43 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
         writeln!(output, "  {integration}: {passed}/{total} passed")?;
     }
 
+    let mut project_fields = std::collections::BTreeMap::new();
+    let mut integration_fields =
+        std::collections::BTreeMap::<&str, std::collections::BTreeMap<&str, _>>::new();
+    let mut environment_fields = std::collections::BTreeMap::new();
+    let mut redacted_sensitive_metadata = 0usize;
+    let mut redacted_secret_material = 0usize;
+    let mut redacted_by_policy = 0usize;
+    for field in &explanation.fields {
+        if let ClassifierSafeReportedValue::Redacted { reason, .. } = &field.reported_value {
+            match reason {
+                RedactionReason::SensitiveMetadata => redacted_sensitive_metadata += 1,
+                RedactionReason::SecretMaterial => redacted_secret_material += 1,
+                RedactionReason::Policy => redacted_by_policy += 1,
+            }
+        }
+        match &field.address {
+            ProjectFieldAddress::Project { path } => {
+                project_fields.insert(path.as_str(), field);
+            }
+            ProjectFieldAddress::Integration { integration, path } => {
+                integration_fields
+                    .entry(integration)
+                    .or_default()
+                    .insert(path.as_str(), field);
+            }
+            ProjectFieldAddress::Environment { path, .. } => {
+                environment_fields.insert(path.as_str(), field);
+            }
+            ProjectFieldAddress::Entity { .. } | ProjectFieldAddress::Fixture { .. } => {}
+        }
+    }
+
     writeln!(output, "Effective authority and limits:")?;
-    if let Some(topology) = explanation
-        .get("topology")
-        .and_then(serde_json::Value::as_object)
-    {
-        let deployment = topology
-            .get("deployment")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown");
+    let deployment = project_fields
+        .get("/topology/deployment")
+        .and_then(|field| classifier_public_text(field));
+    if let Some(deployment) = deployment {
         let topology_label = match deployment {
             "relay_only" => "Relay-only",
             "notary_only" => "Notary-only",
@@ -865,210 +1481,305 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
             _ => "unknown",
         };
         writeln!(output, "  topology: {topology_label}")?;
-        if let Some(relay) = topology.get("relay").and_then(serde_json::Value::as_object) {
-            if relay
-                .get("required")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-            {
-                let integrations = relay
-                    .get("source_integrations")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-                let records_services = relay
-                    .get("records_api_services")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-                let entities = relay
-                    .get("materialized_entities")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-                writeln!(
-                    output,
-                    "  Relay authority: {}, {}, {}",
-                    render_count(integrations, "source integration", "source integrations"),
-                    render_count(
-                        records_services,
-                        "records API service",
-                        "records API services"
-                    ),
-                    render_count(
-                        entities,
-                        "materialized entity definition",
-                        "materialized entity definitions"
-                    ),
-                )?;
-            } else {
-                writeln!(output, "  Relay source authority: not applicable")?;
+        if matches!(deployment, "relay_only" | "combined") {
+            let relay_counts = [
+                (
+                    "/topology/source_integration_count",
+                    "source integration",
+                    "source integrations",
+                ),
+                (
+                    "/topology/records_api_service_count",
+                    "records API service",
+                    "records API services",
+                ),
+                (
+                    "/topology/materialized_entity_count",
+                    "materialized entity definition",
+                    "materialized entity definitions",
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(path, singular, plural)| {
+                project_fields
+                    .get(path)
+                    .and_then(|field| classifier_public_count(field))
+                    .map(|count| render_count(count, singular, plural))
+            })
+            .collect::<Vec<_>>();
+            if !relay_counts.is_empty() {
+                writeln!(output, "  Relay authority: {}", relay_counts.join(", "),)?;
             }
+        } else {
+            writeln!(output, "  Relay source authority: not applicable")?;
         }
-        if let Some(notary) = topology
-            .get("notary")
-            .and_then(serde_json::Value::as_object)
-        {
-            if notary
-                .get("required")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-            {
-                let source_free_evaluation = notary
-                    .get("source_free_evaluation_services")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-                let relay_backed = notary
-                    .get("relay_backed_services")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0);
-                writeln!(
-                    output,
-                    "  Notary authority: {}, {}",
-                    render_count(
-                        source_free_evaluation,
-                        "source-free evaluation service",
-                        "source-free evaluation services"
-                    ),
-                    render_count(
-                        relay_backed,
-                        "compiler-pinned Relay-backed service",
-                        "compiler-pinned Relay-backed services"
-                    ),
-                )?;
+
+        if matches!(deployment, "notary_only" | "combined") {
+            let mut service_ids = std::collections::BTreeSet::new();
+            for (path, field) in &project_fields {
+                if classifier_public_value(field).is_none() {
+                    continue;
+                }
+                let Some(parts) = explanation_pointer_segments(path) else {
+                    continue;
+                };
+                if parts.len() >= 3 && parts[0] == "services" {
+                    service_ids.insert(parts[1].clone());
+                }
             }
+            let mut source_free_evaluation = 0u64;
+            let mut relay_backed = 0u64;
+            for service_id in service_ids {
+                let kind_path = format!("/services/{service_id}/kind");
+                let consultation_count_path = format!("/services/{service_id}/consultation_count");
+                if project_fields
+                    .get(kind_path.as_str())
+                    .and_then(|field| classifier_public_text(field))
+                    != Some("evidence")
+                {
+                    continue;
+                }
+                match project_fields
+                    .get(consultation_count_path.as_str())
+                    .and_then(|field| classifier_public_count(field))
+                {
+                    Some(0) => source_free_evaluation += 1,
+                    Some(_) => relay_backed += 1,
+                    None => {}
+                }
+            }
+            writeln!(
+                output,
+                "  Notary authority: {}, {}",
+                render_count(
+                    source_free_evaluation,
+                    "source-free evaluation service",
+                    "source-free evaluation services"
+                ),
+                render_count(
+                    relay_backed,
+                    "compiler-pinned Relay-backed service",
+                    "compiler-pinned Relay-backed services"
+                ),
+            )?;
         }
     }
-    if let Some(integrations) = explanation
-        .get("integrations")
-        .and_then(serde_json::Value::as_object)
-    {
-        for (name, integration) in integrations {
-            let capability = integration
-                .get("capability")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown");
-            writeln!(output, "  {name}: capability={capability}")?;
-            if let Some(bounds) = integration
-                .get("bounds")
-                .and_then(serde_json::Value::as_object)
-            {
-                let rendered = bounds
-                    .iter()
-                    .map(|(name, bound)| {
-                        let value = bound.get("value").unwrap_or(&serde_json::Value::Null);
-                        let unit = bound
-                            .get("unit")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("");
-                        let source = bound
-                            .get("source")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("intrinsic");
-                        format!("{name}={} ({source})", render_limit(value, unit))
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                writeln!(output, "    limits: {rendered}")?;
-            }
-            if let Some(operations) = integration
-                .get("operations")
-                .and_then(serde_json::Value::as_array)
-            {
-                writeln!(
-                    output,
-                    "    authority: {} bounded operation(s)",
-                    operations.len()
-                )?;
+
+    for (name, fields) in integration_fields {
+        let Some(capability) = fields
+            .get("/capability/type")
+            .and_then(|field| classifier_public_text(field))
+        else {
+            continue;
+        };
+        writeln!(output, "  {name}: capability={capability}")?;
+        let mut limits = Vec::new();
+        for (path, label, unit) in [
+            ("/limits/calls", "calls", "calls"),
+            ("/limits/deadline", "deadline", ""),
+            ("/limits/request_bytes", "request_bytes", "bytes"),
+            ("/limits/source_bytes", "source_bytes", "bytes"),
+            ("/source/response/max_bytes", "response_max_bytes", "bytes"),
+        ] {
+            let Some(field) = fields.get(path) else {
+                continue;
+            };
+            let Some(value) = render_limit(field, unit) else {
+                continue;
+            };
+            limits.push(format!(
+                "{label}={value} ({})",
+                render_field_source(field.source.kind)
+            ));
+        }
+        if !limits.is_empty() {
+            writeln!(output, "    limits: {}", limits.join(", "))?;
+        }
+        match capability {
+            "http" => {
+                let operation_count = fields
+                    .get("/capability/http/operation_count")
+                    .and_then(|field| classifier_public_count(field));
+                if let Some(operation_count) = operation_count {
+                    writeln!(
+                        output,
+                        "    authority: {} bounded operation(s)",
+                        operation_count
+                    )?;
+                }
                 if expanded {
-                    for operation in operations {
-                        writeln!(
-                            output,
-                            "      {} {} {}",
-                            operation
-                                .get("method")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("READ"),
-                            operation
-                                .get("destination")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("source"),
-                            operation
-                                .get("path")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("/")
-                        )?;
+                    let mut roles = std::collections::BTreeMap::new();
+                    for (path, field) in &fields {
+                        let Some(parts) = explanation_pointer_segments(path) else {
+                            continue;
+                        };
+                        if parts.len() == 5
+                            && parts[0] == "capability"
+                            && parts[1] == "http"
+                            && parts[2] == "operations"
+                            && parts[4] == "role"
+                        {
+                            if let (Ok(index), Some(role)) =
+                                (parts[3].parse::<usize>(), classifier_public_text(field))
+                            {
+                                roles.insert(index, role);
+                            }
+                        }
+                    }
+                    for (index, role) in roles {
+                        writeln!(output, "      operation {}: class={role}", index + 1)?;
                     }
                 }
-            } else if let Some(authority) = integration.get("script_authority") {
-                let rules = authority
-                    .get("allow")
-                    .and_then(serde_json::Value::as_array)
-                    .map_or(0, Vec::len);
+            }
+            "script" => {
                 writeln!(
                     output,
-                    "    authority: reviewed script with {rules} source allow rule(s)"
+                    "    authority: reviewed script with bounded source access"
                 )?;
-            } else if capability == "snapshot" {
+            }
+            "snapshot" => {
                 writeln!(
                     output,
                     "    authority: exact local materialized snapshot read"
                 )?;
             }
-            for (field, label) in [
-                ("ambiguity", "ambiguity"),
-                ("subject_mismatch", "subject mismatch"),
-            ] {
-                let Some(reason) = integration
-                    .pointer(&format!("/not_applicable/{field}"))
-                    .and_then(serde_json::Value::as_object)
-                else {
-                    continue;
-                };
-                writeln!(
-                    output,
-                    "    {label} not applicable: {} [request fixture: {}]",
-                    reason
-                        .get("rationale")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("missing rationale"),
-                    reason
-                        .get("request_fixture")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("missing")
-                )?;
-            }
-            if expanded {
-                let outputs = integration
-                    .get("outputs")
-                    .and_then(serde_json::Value::as_object)
-                    .map(|values| values.keys().cloned().collect::<Vec<_>>().join(", "))
-                    .unwrap_or_else(|| "none".to_string());
-                writeln!(output, "    outputs: {outputs}")?;
+            _ => {}
+        }
+        if expanded {
+            let credential_path = format!(
+                "/integrations/{}/source/credential_class",
+                name.replace('~', "~0").replace('/', "~1")
+            );
+            if let Some(credential_class) = environment_fields
+                .get(credential_path.as_str())
+                .and_then(|field| classifier_public_text(field))
+            {
+                writeln!(output, "    credential class: {credential_class}")?;
             }
         }
     }
+
     if expanded {
-        writeln!(output, "Claims and disclosure:")?;
-        if let Some(services) = explanation
-            .get("services")
-            .and_then(serde_json::Value::as_object)
-        {
-            for (service, declaration) in services {
-                writeln!(output, "  {service}:")?;
-                if let Some(claims) = declaration
-                    .get("claims")
-                    .and_then(serde_json::Value::as_object)
-                {
-                    for (claim, value) in claims {
-                        writeln!(
-                            output,
-                            "    {claim}: disclosure={}",
-                            value
-                                .get("disclosure")
-                                .map(serde_json::Value::to_string)
-                                .unwrap_or_else(|| "null".to_string())
-                        )?;
-                    }
+        writeln!(output, "Services, claims, and disclosure:")?;
+        let mut service_ids = std::collections::BTreeSet::new();
+        for (path, field) in &project_fields {
+            if classifier_public_value(field).is_none() {
+                continue;
+            }
+            let Some(parts) = explanation_pointer_segments(path) else {
+                continue;
+            };
+            if parts.len() >= 3 && parts[0] == "services" {
+                service_ids.insert(parts[1].clone());
+            }
+        }
+        for service_id in service_ids {
+            let prefix = format!("/services/{service_id}");
+            let public_text = |suffix: &str| {
+                project_fields
+                    .get(format!("{prefix}/{suffix}").as_str())
+                    .and_then(|field| classifier_public_text(field))
+            };
+            let kind = public_text("kind");
+            writeln!(
+                output,
+                "  {service_id}:{}",
+                kind.map_or_else(String::new, |kind| format!(" kind={kind}"))
+            )?;
+            for (path, label) in [
+                ("purpose", "purpose"),
+                ("legal_basis", "legal basis"),
+                ("consent", "consent"),
+            ] {
+                if let Some(value) = public_text(path) {
+                    writeln!(output, "    {label}: {value}")?;
                 }
             }
+            let mut scopes = std::collections::BTreeMap::new();
+            let mut claim_ids = std::collections::BTreeSet::new();
+            for (path, field) in &project_fields {
+                let Some(parts) = explanation_pointer_segments(path) else {
+                    continue;
+                };
+                if parts.len() == 5
+                    && parts[0] == "services"
+                    && parts[1] == service_id
+                    && parts[2] == "access"
+                    && parts[3] == "scopes"
+                {
+                    if let (Ok(index), Some(scope)) =
+                        (parts[4].parse::<usize>(), classifier_public_text(field))
+                    {
+                        scopes.insert(index, scope);
+                    }
+                }
+                if parts.len() >= 5
+                    && parts[0] == "services"
+                    && parts[1] == service_id
+                    && parts[2] == "claims"
+                    && classifier_public_value(field).is_some()
+                {
+                    claim_ids.insert(parts[3].clone());
+                }
+            }
+            if !scopes.is_empty() {
+                writeln!(
+                    output,
+                    "    scopes: {}",
+                    scopes.into_values().collect::<Vec<_>>().join(", ")
+                )?;
+            }
+            for claim_id in claim_ids {
+                let claim_prefix = format!("{prefix}/claims/{claim_id}");
+                let disclosure = project_fields
+                    .get(format!("{claim_prefix}/disclosure").as_str())
+                    .or_else(|| {
+                        project_fields.get(format!("{claim_prefix}/disclosure/default").as_str())
+                    })
+                    .and_then(|field| classifier_public_text(field));
+                let evidence = project_fields
+                    .get(format!("{claim_prefix}/evidence").as_str())
+                    .and_then(|field| classifier_public_text(field));
+                let claim_class = rendered_claim_class(
+                    project_fields.contains_key(format!("{claim_prefix}/output").as_str()),
+                    evidence,
+                );
+                let mut classes = Vec::new();
+                if let Some(claim_class) = claim_class {
+                    classes.push(format!("class={claim_class}"));
+                }
+                if let Some(disclosure) = disclosure {
+                    classes.push(format!("disclosure={disclosure}"));
+                }
+                if !classes.is_empty() {
+                    writeln!(output, "    claim {claim_id}: {}", classes.join(", "))?;
+                }
+            }
+        }
+        let mut redactions = Vec::new();
+        if redacted_sensitive_metadata > 0 {
+            redactions.push(render_count(
+                redacted_sensitive_metadata as u64,
+                "redacted sensitive metadata field",
+                "redacted sensitive metadata fields",
+            ));
+        }
+        if redacted_secret_material > 0 {
+            redactions.push(render_count(
+                redacted_secret_material as u64,
+                "redacted secret material field",
+                "redacted secret material fields",
+            ));
+        }
+        if redacted_by_policy > 0 {
+            redactions.push(render_count(
+                redacted_by_policy as u64,
+                "policy-redacted field",
+                "policy-redacted fields",
+            ));
+        }
+        if !redactions.is_empty() {
+            writeln!(output, "Redactions: {}", redactions.join(", "))?;
         }
     }
     writeln!(
@@ -1082,6 +1793,23 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
 enum OutputFormat {
     Human,
     Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum DiagnosticCatalog {
+    Authoring,
+    Fixture,
+    Operator,
+}
+
+impl DiagnosticCatalog {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Authoring => "authoring",
+            Self::Fixture => "fixture",
+            Self::Operator => "operator",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -1102,6 +1830,12 @@ enum AuthoringCommand {
         #[arg(long, value_enum)]
         kind: ProjectSchemaKind,
     },
+    /// Print the deterministic project-configuration reference or its coverage audit.
+    Reference {
+        /// Print reviewed human-intent coverage and fail when any field is uncovered.
+        #[arg(long)]
+        coverage: bool,
+    },
     /// Install deterministic local schema mappings for VS Code and Zed.
     Editor {
         /// Project workspace root containing registry-stack.yaml.
@@ -1113,6 +1847,19 @@ enum AuthoringCommand {
     },
     /// Run cross-file Registry Stack navigation over the Language Server Protocol.
     LanguageServer,
+}
+
+#[derive(Debug, Subcommand)]
+enum ProjectCommand {
+    /// Print a static diagnostic catalog without reading a project or runtime.
+    Diagnostics {
+        /// Authoring, offline-fixture, or operator diagnostic reference.
+        #[arg(long, value_enum)]
+        catalog: DiagnosticCatalog,
+        /// Human-readable reference, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -1206,6 +1953,118 @@ enum Commands {
         #[command(subcommand)]
         command: AuthoringCommand,
     },
+    /// Inspect pure Registry Stack project metadata without reading a workspace.
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
+    /// Verify local environment, secret-reference, and runtime-file readiness without network access.
+    Preflight {
+        /// Project workspace root.
+        #[arg(long, default_value = ".")]
+        project_dir: PathBuf,
+        /// Explicit environment binding.
+        #[arg(long)]
+        environment: String,
+        /// Human-readable result, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
+    },
+    /// Inspect compiled, declared, enabled, used, and missing local capabilities.
+    Capabilities {
+        /// Project workspace root.
+        #[arg(long, default_value = ".")]
+        project_dir: PathBuf,
+        /// Explicit environment binding.
+        #[arg(long)]
+        environment: String,
+        /// Human-readable result, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
+    },
+    /// Compare normalized local project state without reading runtime or signed approval state.
+    Compare {
+        /// Current project workspace root.
+        #[arg(long, default_value = ".")]
+        project_dir: PathBuf,
+        /// Current project environment binding.
+        #[arg(long)]
+        environment: String,
+        /// Baseline project workspace root. Omit to compare two environments of this project.
+        #[arg(long, requires = "from_environment", conflicts_with = "from_starter")]
+        from_project_dir: Option<PathBuf>,
+        /// Baseline environment binding for local project comparison.
+        #[arg(
+            long,
+            required_unless_present = "from_starter",
+            conflicts_with = "from_starter"
+        )]
+        from_environment: Option<String>,
+        /// Compare against the exact starter embedded in this registryctl release.
+        #[arg(
+            long,
+            required_unless_present = "from_environment",
+            conflicts_with_all = ["from_project_dir", "from_environment"]
+        )]
+        from_starter: bool,
+        /// Human-readable value-free review plan, or strict machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
+    },
+    /// Compare normalized authored state with a verified reviewed baseline without deployment.
+    Promote {
+        /// Project workspace root.
+        #[arg(long, default_value = ".")]
+        project_dir: PathBuf,
+        /// Explicit environment binding.
+        #[arg(long)]
+        environment: String,
+        /// Previously signed product Config Bundle with review and internal approval state.
+        #[arg(
+            long,
+            conflicts_with_all = ["relay_against", "relay_anchor", "notary_against", "notary_anchor"]
+        )]
+        against: Option<PathBuf>,
+        /// Trust anchor for --against.
+        #[arg(
+            long,
+            conflicts_with_all = ["relay_against", "relay_anchor", "notary_against", "notary_anchor"]
+        )]
+        anchor: Option<PathBuf>,
+        /// Relay Config Bundle baseline for a combined Relay and Notary project.
+        #[arg(long, requires = "relay_anchor")]
+        relay_against: Option<PathBuf>,
+        /// Relay trust anchor for --relay-against.
+        #[arg(long, requires = "relay_against")]
+        relay_anchor: Option<PathBuf>,
+        /// Notary Config Bundle baseline for a combined Relay and Notary project.
+        #[arg(long, requires = "notary_anchor")]
+        notary_against: Option<PathBuf>,
+        /// Notary trust anchor for --notary-against.
+        #[arg(long, requires = "notary_against")]
+        notary_anchor: Option<PathBuf>,
+        /// Human-readable result, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
+    },
+    /// Check a reviewed authoring migration and optionally emit a separate candidate.
+    Migrate {
+        /// Project workspace root.
+        #[arg(long, default_value = ".")]
+        project_dir: PathBuf,
+        /// Target authoring contract version.
+        #[arg(long, default_value_t = 1)]
+        target_version: u32,
+        /// Separate, absent destination for a reviewable candidate.
+        #[arg(long, requires = "write_candidate")]
+        output: Option<PathBuf>,
+        /// Grant authority to write only the separate migration candidate.
+        #[arg(long, requires = "output")]
+        write_candidate: bool,
+        /// Human-readable result, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
+    },
     /// Emit deterministic unsigned Relay and Notary Config Bundle inputs.
     Build {
         /// Project workspace root.
@@ -1215,11 +2074,31 @@ enum Commands {
         #[arg(long)]
         environment: String,
         /// Previously signed product Config Bundle with review and internal approval state.
-        #[arg(long)]
+        #[arg(
+            long,
+            requires = "anchor",
+            conflicts_with_all = ["relay_against", "relay_anchor", "notary_against", "notary_anchor"]
+        )]
         against: Option<PathBuf>,
         /// Trust anchor for --against.
-        #[arg(long)]
+        #[arg(
+            long,
+            requires = "against",
+            conflicts_with_all = ["relay_against", "relay_anchor", "notary_against", "notary_anchor"]
+        )]
         anchor: Option<PathBuf>,
+        /// Relay Config Bundle approved baseline for a combined project comparison.
+        #[arg(long, requires = "relay_anchor")]
+        relay_against: Option<PathBuf>,
+        /// Relay trust anchor for --relay-against.
+        #[arg(long, requires = "relay_against")]
+        relay_anchor: Option<PathBuf>,
+        /// Notary Config Bundle approved baseline for a combined project comparison.
+        #[arg(long, requires = "notary_anchor")]
+        notary_against: Option<PathBuf>,
+        /// Notary trust anchor for --notary-against.
+        #[arg(long, requires = "notary_against")]
+        notary_anchor: Option<PathBuf>,
         /// Human-readable result, or machine-readable JSON.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
@@ -1282,6 +2161,12 @@ impl Commands {
             self,
             Self::Doctor { .. }
                 | Self::Authoring { .. }
+                | Self::Project { .. }
+                | Self::Preflight { .. }
+                | Self::Capabilities { .. }
+                | Self::Compare { .. }
+                | Self::Promote { .. }
+                | Self::Migrate { .. }
                 | Self::Bundle { .. }
                 | Self::Anchor { .. }
                 | Self::UpdateCheck
@@ -1295,6 +2180,30 @@ mod tests {
     use clap::Parser as _;
 
     use super::*;
+
+    #[test]
+    fn pure_project_diagnostic_catalog_cli_accepts_all_catalogs_and_formats() {
+        for catalog in ["authoring", "fixture", "operator"] {
+            for format in ["human", "json"] {
+                let parsed = Cli::try_parse_from([
+                    "registryctl",
+                    "project",
+                    "diagnostics",
+                    "--catalog",
+                    catalog,
+                    "--format",
+                    format,
+                ])
+                .expect("pure diagnostic catalog command parses");
+                assert!(matches!(
+                    parsed.command,
+                    Commands::Project {
+                        command: ProjectCommand::Diagnostics { .. }
+                    }
+                ));
+            }
+        }
+    }
 
     #[test]
     fn project_authoring_cli_accepts_the_documented_commands() {
@@ -1448,6 +2357,97 @@ mod tests {
             }
         ));
 
+        let preflight = Cli::try_parse_from([
+            "registryctl",
+            "preflight",
+            "--project-dir",
+            "registry-project",
+            "--environment",
+            "staging",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            preflight.command,
+            Commands::Preflight {
+                project_dir,
+                environment,
+                format: OutputFormat::Json,
+            } if project_dir == std::path::Path::new("registry-project")
+                && environment == "staging"
+        ));
+
+        let capabilities = Cli::try_parse_from([
+            "registryctl",
+            "capabilities",
+            "--project-dir",
+            "registry-project",
+            "--environment",
+            "staging",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            capabilities.command,
+            Commands::Capabilities {
+                project_dir,
+                environment,
+                format: OutputFormat::Json,
+            } if project_dir == std::path::Path::new("registry-project")
+                && environment == "staging"
+        ));
+
+        let promote = Cli::try_parse_from([
+            "registryctl",
+            "promote",
+            "--project-dir",
+            "registry-project",
+            "--environment",
+            "staging",
+            "--relay-against",
+            "relay-bundle",
+            "--relay-anchor",
+            "relay-anchor.json",
+            "--notary-against",
+            "notary-bundle",
+            "--notary-anchor",
+            "notary-anchor.json",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            promote.command,
+            Commands::Promote {
+                relay_against: Some(relay),
+                relay_anchor: Some(relay_anchor),
+                notary_against: Some(notary),
+                notary_anchor: Some(notary_anchor),
+                format: OutputFormat::Json,
+                ..
+            } if relay == std::path::Path::new("relay-bundle")
+                && relay_anchor == std::path::Path::new("relay-anchor.json")
+                && notary == std::path::Path::new("notary-bundle")
+                && notary_anchor == std::path::Path::new("notary-anchor.json")
+        ));
+        assert!(Cli::try_parse_from([
+            "registryctl",
+            "promote",
+            "--environment",
+            "staging",
+            "--against",
+            "legacy-bundle",
+            "--anchor",
+            "legacy-anchor.json",
+            "--relay-against",
+            "relay-bundle",
+            "--relay-anchor",
+            "relay-anchor.json",
+        ])
+        .is_err());
+
         assert!(Cli::try_parse_from([
             "registryctl",
             "test",
@@ -1491,6 +2491,15 @@ mod tests {
             schema_document["title"],
             "Registry Stack project integration v1"
         );
+
+        let reference =
+            Cli::try_parse_from(["registryctl", "authoring", "reference", "--coverage"]).unwrap();
+        assert!(matches!(
+            reference.command,
+            Commands::Authoring {
+                command: AuthoringCommand::Reference { coverage: true }
+            }
+        ));
 
         let editor = Cli::try_parse_from([
             "registryctl",
@@ -1545,9 +2554,65 @@ mod tests {
                 environment,
                 against: None,
                 anchor: None,
+                relay_against: None,
+                relay_anchor: None,
+                notary_against: None,
+                notary_anchor: None,
                 format: OutputFormat::Human,
             } if project_dir == std::path::Path::new("registry-project") && environment == "staging"
         ));
+        let build_with_product_baselines = Cli::try_parse_from([
+            "registryctl",
+            "build",
+            "--environment",
+            "staging",
+            "--relay-against",
+            "relay-bundle",
+            "--relay-anchor",
+            "relay-anchor.json",
+            "--notary-against",
+            "notary-bundle",
+            "--notary-anchor",
+            "notary-anchor.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            build_with_product_baselines.command,
+            Commands::Build {
+                relay_against: Some(relay),
+                relay_anchor: Some(relay_anchor),
+                notary_against: Some(notary),
+                notary_anchor: Some(notary_anchor),
+                ..
+            } if relay == std::path::Path::new("relay-bundle")
+                && relay_anchor == std::path::Path::new("relay-anchor.json")
+                && notary == std::path::Path::new("notary-bundle")
+                && notary_anchor == std::path::Path::new("notary-anchor.json")
+        ));
+        assert!(Cli::try_parse_from([
+            "registryctl",
+            "build",
+            "--environment",
+            "staging",
+            "--relay-against",
+            "relay-bundle",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "registryctl",
+            "build",
+            "--environment",
+            "staging",
+            "--against",
+            "legacy-bundle",
+            "--anchor",
+            "legacy-anchor.json",
+            "--relay-against",
+            "relay-bundle",
+            "--relay-anchor",
+            "relay-anchor.json",
+        ])
+        .is_err());
     }
 
     #[test]
@@ -1571,43 +2636,20 @@ mod tests {
     }
 
     #[test]
-    fn human_check_report_is_concise_and_explain_adds_review_detail() {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let project_directory = temporary.path().join("registry-project");
-        registryctl::init_registry_project(&ProjectInitOptions {
-            starter: ProjectStarter::Http,
-            directory: project_directory.clone(),
-        })
-        .expect("starter initializes");
-        let report = registryctl::check_registry_project(&ProjectCheckOptions {
-            project_directory,
-            environment: "local".to_string(),
-            explain: true,
-            against: None,
-            anchor: None,
-        })
-        .expect("starter checks");
-        let concise = render_check_report(&report, false).expect("concise report renders");
-        for heading in [
-            "Baseline:",
-            "Semantic changes:",
-            "Fixtures:",
-            "Effective authority and limits:",
-            "Rhai xw.v1 reference:",
-        ] {
-            assert!(concise.contains(heading), "missing {heading}: {concise}");
-        }
-        assert!(!concise.contains("Claims and disclosure:"));
-        assert!(concise.contains("topology: Relay + Notary"));
-        assert!(concise.contains("calls=1 call"));
-        assert!(concise.contains("deadline=15s"));
-        assert!(!concise.contains("1calls"));
-        assert!(!concise.contains("\"15s\"duration"));
-        assert!(concise.contains("subject mismatch not applicable:"));
-        assert!(!concise.contains("ambiguity not applicable: missing rationale"));
-        let expanded = render_check_report(&report, true).expect("expanded report renders");
-        assert!(expanded.contains("outputs:"));
-        assert!(expanded.contains("Claims and disclosure:"));
+    fn human_claim_class_uses_authoritative_evidence_dependency() {
+        assert_eq!(
+            rendered_claim_class(true, Some("registry_backed")),
+            Some("consultation_output")
+        );
+        assert_eq!(
+            rendered_claim_class(false, Some("registry_backed")),
+            Some("registry_backed_evaluation")
+        );
+        assert_eq!(
+            rendered_claim_class(false, Some("self_attested")),
+            Some("source_free_evaluation")
+        );
+        assert_eq!(rendered_claim_class(false, None), None);
     }
 
     #[test]
@@ -1636,11 +2678,15 @@ mod tests {
             anchor: None,
         })
         .expect("Notary-only evaluation project checks");
-        let notary_rendered = render_check_report(&notary_report, false).expect("report renders");
+        let notary_rendered = render_check_report(&notary_report, true).expect("report renders");
         assert!(notary_rendered.contains("topology: Notary-only"));
         assert!(notary_rendered.contains(
             "Notary authority: 1 source-free evaluation service, 0 compiler-pinned Relay-backed services"
         ));
+        assert!(notary_rendered.contains(
+            "claim application-complete: class=source_free_evaluation, disclosure=predicate"
+        ));
+        assert!(!notary_rendered.contains("class=registry_backed_evaluation"));
         assert!(notary_rendered.contains("Relay source authority: not applicable"));
     }
 
@@ -1850,8 +2896,17 @@ mod tests {
                 copy_directory(&source, &project_directory).expect("maintained non-starter copies");
             }
 
+            let current = std::env::current_exe().expect("test executable path");
+            let mut worker = current
+                .parent()
+                .and_then(std::path::Path::parent)
+                .expect("Cargo target directory")
+                .join("registryctl");
+            worker.set_extension(std::env::consts::EXE_EXTENSION);
+            let execution_context = ProjectExecutionContext::new(worker)
+                .expect("Cargo-built registryctl worker is available");
             let mut observed_runs = 0;
-            watch_project_tests_until(
+            watch_project_tests_until_with_context(
                 ProjectTestOptions {
                     project_directory: project_directory.clone(),
                     environment: None,
@@ -1862,6 +2917,7 @@ mod tests {
                     fixture: Some(fixture),
                     trace: false,
                 },
+                &execution_context,
                 |completed_runs, root| {
                     observed_runs = completed_runs;
                     if completed_runs == 1 {
@@ -2279,4 +3335,161 @@ enum BrunoCommand {
     Open,
     /// Run the generated Bruno collection when the Bruno CLI is installed.
     Run,
+}
+
+#[cfg(test)]
+mod migration_cli_tests {
+    use clap::Parser as _;
+
+    use super::{Cli, Commands, OutputFormat};
+
+    #[test]
+    fn migration_cli_requires_explicit_separate_candidate_authority() {
+        let check = Cli::try_parse_from([
+            "registryctl",
+            "migrate",
+            "--project-dir",
+            "registry-project",
+            "--target-version",
+            "1",
+            "--format",
+            "json",
+        ])
+        .expect("check-only migration parses");
+        assert!(matches!(
+            check.command,
+            Commands::Migrate {
+                output: None,
+                write_candidate: false,
+                format: OutputFormat::Json,
+                ..
+            }
+        ));
+
+        let candidate = Cli::try_parse_from([
+            "registryctl",
+            "migrate",
+            "--project-dir",
+            "registry-project",
+            "--output",
+            "registry-project-v1",
+            "--write-candidate",
+        ])
+        .expect("explicit candidate migration parses");
+        assert!(matches!(
+            candidate.command,
+            Commands::Migrate {
+                output: Some(path),
+                write_candidate: true,
+                ..
+            } if path == std::path::Path::new("registry-project-v1")
+        ));
+
+        assert!(
+            Cli::try_parse_from(["registryctl", "migrate", "--output", "registry-project-v1"])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from(["registryctl", "migrate", "--write-candidate"]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod semantic_comparison_cli_tests {
+    use clap::Parser as _;
+
+    use super::{Cli, Commands, OutputFormat};
+
+    #[test]
+    fn compare_cli_requires_exactly_one_local_or_embedded_baseline() {
+        let starter = Cli::try_parse_from([
+            "registryctl",
+            "compare",
+            "--project-dir",
+            "candidate",
+            "--environment",
+            "local",
+            "--from-starter",
+            "--format",
+            "json",
+        ])
+        .expect("embedded starter comparison parses");
+        assert!(matches!(
+            starter.command,
+            Commands::Compare {
+                project_dir,
+                environment,
+                from_starter: true,
+                from_project_dir: None,
+                from_environment: None,
+                format: OutputFormat::Json,
+            } if project_dir == std::path::Path::new("candidate") && environment == "local"
+        ));
+
+        let same_project = Cli::try_parse_from([
+            "registryctl",
+            "compare",
+            "--project-dir",
+            "candidate",
+            "--environment",
+            "candidate",
+            "--from-environment",
+            "local",
+        ])
+        .expect("same-project environment comparison parses");
+        assert!(matches!(
+            same_project.command,
+            Commands::Compare {
+                from_project_dir: None,
+                from_environment: Some(environment),
+                from_starter: false,
+                ..
+            } if environment == "local"
+        ));
+
+        let local_projects = Cli::try_parse_from([
+            "registryctl",
+            "compare",
+            "--project-dir",
+            "candidate",
+            "--environment",
+            "candidate",
+            "--from-project-dir",
+            "reviewed",
+            "--from-environment",
+            "production",
+        ])
+        .expect("project-to-project comparison parses");
+        assert!(matches!(
+            local_projects.command,
+            Commands::Compare {
+                from_project_dir: Some(project),
+                from_environment: Some(environment),
+                from_starter: false,
+                ..
+            } if project == std::path::Path::new("reviewed") && environment == "production"
+        ));
+
+        assert!(
+            Cli::try_parse_from(["registryctl", "compare", "--environment", "local",]).is_err()
+        );
+        assert!(Cli::try_parse_from([
+            "registryctl",
+            "compare",
+            "--environment",
+            "local",
+            "--from-project-dir",
+            "reviewed",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "registryctl",
+            "compare",
+            "--environment",
+            "local",
+            "--from-starter",
+            "--from-environment",
+            "reviewed",
+        ])
+        .is_err());
+    }
 }

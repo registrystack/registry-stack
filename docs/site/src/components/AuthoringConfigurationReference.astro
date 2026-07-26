@@ -1,0 +1,329 @@
+---
+import reference from '../data/generated/configuration-reference.json';
+import coverage from '../data/generated/configuration-reference-coverage.json';
+
+const schemaOrder = ['project', 'environment', 'integration', 'fixture', 'entity', 'relay', 'notary'];
+const schemaLabels: Record<string, string> = {
+  project: 'Project configuration',
+  environment: 'Environment configuration',
+  integration: 'Integration configuration',
+  fixture: 'Fixture configuration',
+  entity: 'Entity configuration',
+  relay: 'Relay runtime configuration',
+  notary: 'Notary runtime configuration',
+};
+const schemaFiles: Record<string, string> = {
+  project: 'registry-stack.yaml',
+  environment: 'environments/*.yaml',
+  integration: 'integrations/*/integration.yaml',
+  fixture: 'integrations/*/fixtures/*.yaml',
+  entity: 'entities/*.yaml',
+  relay: 'registry-relay runtime configuration',
+  notary: 'registry-notary runtime configuration',
+};
+type ReferenceField = (typeof reference.fields)[number] & {
+  address: (typeof reference.fields)[number]['address'] & {
+    key_path?: string;
+  };
+  default: {
+    behavior: string;
+    schema_value?: unknown;
+    reviewed_behavior?: string;
+  };
+  intent_profile?: string;
+  local_reference?: {
+    pointer: string;
+  };
+};
+const fields = reference.fields as ReferenceField[];
+
+if (
+  coverage.status !== 'complete' ||
+  coverage.missing_intent.length !== 0 ||
+  coverage.prose_covered_count !== coverage.prose_required_count
+) {
+  throw new Error('generated authoring reference has incomplete reviewed-intent coverage');
+}
+if (
+  reference.coverage.path_count !== coverage.coverage.path_count ||
+  fields.length !== coverage.coverage.path_count
+) {
+  throw new Error('generated authoring reference and coverage report have drifted');
+}
+
+const fieldsBySchema = Object.fromEntries(
+  schemaOrder.map((schema) => [
+    schema,
+    fields.filter((field) => field.address.schema === schema),
+  ]),
+);
+
+const words = (value: string) => value.replaceAll('_', ' ');
+const list = (values: string[]) => values.map(words).join(', ');
+const fieldType = (field: ReferenceField) => {
+  const types = field.field_type.schema_types;
+  if (types.length > 0) return types.join(' or ');
+  if (field.field_type.local_reference) return `reference to ${field.field_type.local_reference}`;
+  return field.field_type.composed ? 'composed schema' : 'schema-constrained value';
+};
+const defaultValue = (field: ReferenceField) => {
+  if (field.default.reviewed_behavior) return field.default.reviewed_behavior;
+  if (field.default.behavior !== 'schema_default') return words(field.default.behavior);
+  if (!Object.hasOwn(field.default, 'schema_value')) return 'schema default (value omitted)';
+  return `schema default ${JSON.stringify(field.default.schema_value)}`;
+};
+const address = (field: ReferenceField) =>
+  (field.address.key_path !== undefined ? field.address.key_path : field.address.pointer) ||
+  '(document root)';
+const base = import.meta.env.BASE_URL === '/' ? '' : import.meta.env.BASE_URL.replace(/\/$/, '');
+---
+
+<p>
+  Download the
+  <a href={`${base}/generated/configuration-reference.v1.json`}>
+    machine-readable configuration reference
+  </a>
+  or its
+  <a href={`${base}/generated/configuration-reference-coverage.v1.json`}>
+    machine-readable coverage report
+  </a>.
+</p>
+
+<div class="reference-summary">
+  <dl>
+    <div>
+      <dt>Configuration schemas</dt>
+      <dd>{coverage.coverage.schema_count}</dd>
+    </div>
+    <div>
+      <dt>Documented paths</dt>
+      <dd>{coverage.coverage.path_count}</dd>
+    </div>
+    <div>
+      <dt>Reviewed intent</dt>
+      <dd>{coverage.prose_covered_count} of {coverage.prose_required_count}</dd>
+    </div>
+    <div>
+      <dt>Country workspace reads</dt>
+      <dd>None</dd>
+    </div>
+  </dl>
+</div>
+
+<p>
+  Project, environment, integration, fixture, and entity sections describe human-authored country
+  files. Relay and Notary sections describe generated product runtime contracts. The reviewed intent
+  sidecars are documentation knowledge only and are not runtime configuration.
+</p>
+
+{
+  schemaOrder.map((schema) => (
+    <section class="schema-reference">
+      <h2 id={`${schema}-configuration`}>{schemaLabels[schema]}</h2>
+      <p>
+        Configuration surface: <code>{schemaFiles[schema]}</code>. This section contains{' '}
+        {fieldsBySchema[schema].length} documented schema paths.
+      </p>
+      <div class="field-list">
+        {fieldsBySchema[schema].map((field) => (
+          <details class:list={['field-reference', `kind-${field.address.path_kind}`]}>
+            <summary>
+              <code>{address(field)}</code>
+              <span>{field.purpose}</span>
+            </summary>
+            <dl>
+              <div>
+                <dt>Path kind</dt>
+                <dd>{words(field.address.path_kind)}</dd>
+              </div>
+              {
+                field.address.key_path !== undefined && (
+                  <div>
+                    <dt>JSON Schema pointer</dt>
+                    <dd><code>{field.address.pointer || '(document root)'}</code></dd>
+                  </div>
+                )
+              }
+              <div>
+                <dt>Purpose source</dt>
+                <dd>{words(field.purpose_source)}</dd>
+              </div>
+              {
+                field.intent_profile && (
+                  <div>
+                    <dt>Reviewed intent profile</dt>
+                    <dd><code>{field.intent_profile}</code></dd>
+                  </div>
+                )
+              }
+              <div>
+                <dt>Scope</dt>
+                <dd>{field.scope}</dd>
+              </div>
+              <div>
+                <dt>Type</dt>
+                <dd>{fieldType(field)}</dd>
+              </div>
+              <div>
+                <dt>Requiredness</dt>
+                <dd>{words(field.requiredness)}</dd>
+              </div>
+              <div>
+                <dt>Null behavior</dt>
+                <dd>{words(field.null_behavior)}</dd>
+              </div>
+              <div>
+                <dt>Empty behavior</dt>
+                <dd>{words(field.empty_behavior)}</dd>
+              </div>
+              <div>
+                <dt>Default</dt>
+                <dd>{defaultValue(field)}</dd>
+              </div>
+              <div>
+                <dt>Environment behavior</dt>
+                <dd>{words(field.environment_behavior)}</dd>
+              </div>
+              <div>
+                <dt>Configuration state</dt>
+                <dd>{words(field.state)}</dd>
+              </div>
+              <div>
+                <dt>Sensitivity</dt>
+                <dd>{words(field.sensitivity)}</dd>
+              </div>
+              <div>
+                <dt>Owners</dt>
+                <dd>{words(field.semantic_owner)}; {words(field.human_owner)}</dd>
+              </div>
+              <div>
+                <dt>Products</dt>
+                <dd>{list(field.products)}</dd>
+              </div>
+              <div>
+                <dt>Validation stages</dt>
+                <dd>{list(field.validation_stages)}</dd>
+              </div>
+              <div>
+                <dt>Diagnostic</dt>
+                <dd><code>{field.diagnostic}</code></dd>
+              </div>
+              <div>
+                <dt>Availability</dt>
+                <dd>{words(field.availability)}</dd>
+              </div>
+              <div>
+                <dt>Stability</dt>
+                <dd>{words(field.stability)}</dd>
+              </div>
+              <div>
+                <dt>Introduced</dt>
+                <dd><code>{field.introduced_in}</code></dd>
+              </div>
+              <div>
+                <dt>Migration</dt>
+                <dd>{words(field.migration)}. {field.migration_note}</dd>
+              </div>
+              <div>
+                <dt>Example guidance</dt>
+                <dd>{field.example.guidance}</dd>
+              </div>
+              <div>
+                <dt>Consumers</dt>
+                <dd>{list(field.consumers)}</dd>
+              </div>
+              <div>
+                <dt>Generated artifacts</dt>
+                <dd>{list(field.generated_artifacts)}</dd>
+              </div>
+              <div>
+                <dt>Review classes</dt>
+                <dd>{list(field.review_classes)}</dd>
+              </div>
+              {
+                field.local_reference && (
+                  <div>
+                    <dt>Local schema reference</dt>
+                    <dd><code>{field.local_reference.pointer}</code></dd>
+                  </div>
+                )
+              }
+            </dl>
+          </details>
+        ))}
+      </div>
+    </section>
+  ))
+}
+
+<style>
+  .reference-summary dl {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: 0.75rem;
+    margin: 1.5rem 0;
+  }
+
+  .reference-summary dl > div,
+  .field-reference {
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.4rem;
+    padding: 0.75rem;
+  }
+
+  .reference-summary dt,
+  .field-reference dt {
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-xs);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .reference-summary dd,
+  .field-reference dd {
+    margin: 0.15rem 0 0;
+  }
+
+  .schema-reference {
+    margin-block: 2.5rem;
+  }
+
+  .field-list {
+    display: grid;
+    gap: 0.6rem;
+  }
+
+  .field-reference summary {
+    cursor: pointer;
+  }
+
+  .field-reference summary code {
+    display: block;
+    margin-bottom: 0.3rem;
+    overflow-wrap: anywhere;
+  }
+
+  .field-reference summary span {
+    color: var(--sl-color-gray-2);
+  }
+
+  .field-reference dl {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 0.9rem 1.25rem;
+    margin: 1rem 0 0;
+  }
+
+  .field-reference dl > div {
+    min-width: 0;
+  }
+
+  .field-reference dd {
+    overflow-wrap: anywhere;
+  }
+
+  .kind-branch {
+    border-style: dashed;
+  }
+</style>

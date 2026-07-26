@@ -39,6 +39,44 @@ fn config_env_expansion_rejects_invalid_variable_names() {
 }
 
 #[test]
+fn config_boot_error_mapping_drops_hash_values() {
+    const EXPECTED_HASH: &str = "sha256:SENTINEL_EXPECTED_COUNTRY_DIGEST";
+    const ACTUAL_HASH: &str = "sha256:SENTINEL_ACTUAL_COUNTRY_DIGEST";
+    let error = map_config_boot_error(ConfigBootError::UnsignedConfigHashMismatch {
+        expected: EXPECTED_HASH.to_string(),
+        actual: ACTUAL_HASH.to_string(),
+    });
+    let failure = error
+        .downcast_ref::<NotaryActivationFailure>()
+        .expect("config boot errors cross the redacted activation boundary");
+
+    assert_eq!(failure.code(), NotaryActivationCode::CONFIGURATION_INVALID);
+    assert!(std::error::Error::source(failure).is_none());
+    let rendered = format!("{failure} {failure:?}");
+    assert!(rendered.contains(NotaryActivationCode::CONFIGURATION_INVALID.as_str()));
+    assert!(!rendered.contains(EXPECTED_HASH));
+    assert!(!rendered.contains(ACTUAL_HASH));
+}
+
+#[test]
+fn missing_startup_config_path_returns_value_free_failure() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sentinel = "SENTINEL_PRIVATE_COUNTRY_CONFIG_PATH";
+    let config_path = tmp.path().join(sentinel).join("notary.yaml");
+
+    let error = load_server_config(&config_path, false)
+        .expect_err("missing startup config must fail closed");
+    let failure = error
+        .downcast_ref::<NotaryActivationFailure>()
+        .expect("missing startup config uses the redacted activation boundary");
+
+    assert_eq!(failure.code(), NotaryActivationCode::CONFIGURATION_INVALID);
+    let rendered = format!("{failure} {failure:?}");
+    assert!(!rendered.contains(sentinel));
+    assert!(!rendered.contains(config_path.to_string_lossy().as_ref()));
+}
+
+#[test]
 fn signed_bundle_server_config_loads_with_pending_acceptance() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let fixture = write_signed_notary_bundle(&tmp);

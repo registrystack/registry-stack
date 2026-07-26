@@ -84,6 +84,27 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             return self.source_candidate.copy()
         return self.target_candidate.copy()
 
+    def rebind_record(self, record):
+        items = {
+            item["item"]: item["artifact_sha256"]
+            for item in record["recovery_set"]
+        }
+        recovery = record["materialization_recovery"]
+        recovery["source_inputs_sha256"] = items["relay_source_inputs"]
+        recovery["ingest_cache_sha256"] = items["relay_ingest_cache"]
+        recovery["relay_database_sha256"] = items["relay_database"]
+        recovery["target_release_sha256"] = self.module.canonical_sha256(
+            record["target_release"]
+        )
+        recovery["relay_config_schema_sha256"] = record["config_schemas"][
+            "registry-relay"
+        ]["sha256"]
+        recovery["binding_sha256"] = (
+            self.module.materialization_recovery_binding_sha256(recovery)
+        )
+        record["record_binding_sha256"] = self.module.record_binding_sha256(record)
+        return record
+
     def candidate(self):
         def replace(value):
             if isinstance(value, dict):
@@ -124,6 +145,9 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record["candidate_independently_verified"] = True
         for result in record["results"]:
             result["outcome"] = "passed"
+            result["observed_at"] = "2026-07-19T12:00:00Z"
+            result["evidence_label"] = f"{result['check_id']}-evidence"
+            result["evidence_sha256"] = "sha256:" + "b" * 64
         record["source_release"]["source_commit"] = SOURCE_COMMIT
         record["target_release"]["source_commit"] = TARGET_COMMIT
         manifest = self.module.git_bytes(ROOT, TARGET_COMMIT, TARGET_MANIFEST)
@@ -143,10 +167,19 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             ROOT, TARGET_COMMIT
         )
         record["candidate_artifact_set"]["sha256"] = self.module.canonical_sha256(artifacts)
-        return record
+        return self.rebind_record(record)
 
     def test_template_is_valid_preparation_but_not_candidate_evidence(self) -> None:
         self.validate_record(self.template, allow_template=True)
+        self.assertFalse(self.template["candidate_frozen"])
+        self.assertFalse(self.template["candidate_independently_verified"])
+        self.assertTrue(all(
+            result["outcome"] == "not_run"
+            and result["observed_at"] is None
+            and result["evidence_label"] is None
+            and result["evidence_sha256"] is None
+            for result in self.template["results"]
+        ))
         with self.assertRaisesRegex(self.module.ExerciseError, "not candidate evidence"):
             self.validate_record(self.template, allow_template=False)
 
@@ -184,6 +217,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record["candidate_artifact_set"]["sha256"] = self.module.canonical_sha256(
             artifacts
         )
+        self.rebind_record(record)
 
         self.validate_record(
             record, allow_template=False, require_all_passed=True
@@ -194,6 +228,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record["candidate_artifact_set"]["sha256"] = record[
             "candidate_artifact_set"
         ]["sha256"].removeprefix("sha256:")
+        self.rebind_record(record)
 
         self.validate_record(
             record, allow_template=False, require_all_passed=True
@@ -211,6 +246,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record["candidate_artifact_set"]["sha256"] = self.module.canonical_sha256(
             artifacts
         )
+        self.rebind_record(record)
 
         self.validate_record(
             record, allow_template=False, require_all_passed=True
@@ -230,6 +266,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record["candidate_artifact_set"]["sha256"] = self.module.canonical_sha256(
             artifacts
         )
+        self.rebind_record(record)
 
         self.validate_record(
             record, allow_template=False, require_all_passed=True
@@ -382,6 +419,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record["results"][1].update(
             {"outcome": "not_run", "observed_at": None, "evidence_label": None, "evidence_sha256": None}
         )
+        self.rebind_record(record)
         self.validate_record(record, allow_template=False)
         with self.assertRaisesRegex(self.module.ExerciseError, "--require-pass"):
             self.validate_record(
@@ -403,6 +441,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
 
             candidate = self.candidate()
             candidate["results"][0]["outcome"] = "failed"
+            self.rebind_record(candidate)
             (records / "candidate.json").write_text(
                 json.dumps(candidate), encoding="utf-8"
             )
@@ -432,6 +471,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                 record["candidate_artifact_set"]["sha256"] = (
                     self.module.canonical_sha256(artifacts)
                 )
+                self.rebind_record(record)
                 with self.assertRaisesRegex(
                     self.module.ExerciseError,
                     f"--require-pass rejects P/T {product} OCI layout drift",
@@ -444,6 +484,113 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record = self.candidate()
         record["recovery_set"].pop()
         with self.assertRaisesRegex(self.module.ExerciseError, "complete release-specific"):
+            self.validate_record(record, allow_template=False)
+
+    def test_materialization_recovery_binds_one_closed_coordinated_set(self) -> None:
+        record = self.candidate()
+        recovery = record["materialization_recovery"]
+        items = {
+            item["item"]: item["artifact_sha256"]
+            for item in record["recovery_set"]
+        }
+
+        self.assertEqual(
+            items["relay_source_inputs"],
+            recovery["source_inputs_sha256"],
+        )
+        self.assertEqual(
+            items["relay_ingest_cache"],
+            recovery["ingest_cache_sha256"],
+        )
+        self.assertEqual(
+            items["relay_database"],
+            recovery["relay_database_sha256"],
+        )
+        self.assertEqual(
+            self.module.canonical_sha256(record["target_release"]),
+            recovery["target_release_sha256"],
+        )
+        self.assertEqual(
+            record["config_schemas"]["registry-relay"]["sha256"],
+            recovery["relay_config_schema_sha256"],
+        )
+
+    def test_materialization_recovery_rejects_unbound_artifacts_and_coordinates(
+        self,
+    ) -> None:
+        mutations = (
+            (
+                "source_inputs_sha256",
+                "does not match recovery_set",
+            ),
+            (
+                "ingest_cache_sha256",
+                "does not match recovery_set",
+            ),
+            (
+                "relay_database_sha256",
+                "does not match recovery_set",
+            ),
+            (
+                "target_release_sha256",
+                "does not match the exact target release",
+            ),
+            (
+                "relay_config_schema_sha256",
+                "does not match the exact target schema",
+            ),
+        )
+        for field, message in mutations:
+            with self.subTest(field=field):
+                record = self.candidate()
+                record["materialization_recovery"][field] = "sha256:" + "0" * 64
+                with self.assertRaisesRegex(self.module.ExerciseError, message):
+                    self.validate_record(record, allow_template=False)
+
+    def test_materialization_recovery_binding_rejects_commitment_substitution(
+        self,
+    ) -> None:
+        record = self.candidate()
+        record["materialization_recovery"][
+            "active_publication_tuple_sha256"
+        ] = "sha256:" + "0" * 64
+        with self.assertRaisesRegex(
+            self.module.ExerciseError,
+            "does not bind the closed recovery coordinate",
+        ):
+            self.validate_record(record, allow_template=False)
+
+    def test_record_binding_rejects_result_or_recovery_substitution(self) -> None:
+        for mutate in (
+            lambda record: record["results"][0].update({"outcome": "failed"}),
+            lambda record: record["materialization_recovery"].update(
+                {"recovery_metadata_sha256": "sha256:" + "0" * 64}
+            ),
+        ):
+            with self.subTest(mutation=mutate):
+                record = self.candidate()
+                mutate(record)
+                if (
+                    record["materialization_recovery"]["recovery_metadata_sha256"]
+                    == "sha256:" + "0" * 64
+                ):
+                    record["materialization_recovery"]["binding_sha256"] = (
+                        self.module.materialization_recovery_binding_sha256(
+                            record["materialization_recovery"]
+                        )
+                    )
+                with self.assertRaisesRegex(
+                    self.module.ExerciseError,
+                    "record_binding_sha256 does not bind",
+                ):
+                    self.validate_record(record, allow_template=False)
+
+    def test_materialization_recovery_rejects_raw_location_fields(self) -> None:
+        record = self.candidate()
+        record["materialization_recovery"]["source_path"] = (
+            "/private/country/source.csv"
+        )
+        with self.assertRaisesRegex(self.module.ExerciseError, "unknown source_path"):
             self.validate_record(record, allow_template=False)
 
     def test_candidate_uses_historical_schema_not_ambient_checkout(self) -> None:
@@ -492,6 +639,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record["candidate_artifact_set"]["sha256"] = self.module.canonical_sha256(
             record["candidate_artifact_set"]["artifacts"]
         )
+        self.rebind_record(record)
         with self.assertRaisesRegex(self.module.ExerciseError, "identity does not match"):
             self.validate_record(record, allow_template=False)
         record = self.candidate()
@@ -516,6 +664,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
             record["candidate_artifact_set"]["sha256"] = (
                 self.module.canonical_sha256(artifacts)
             )
+            self.rebind_record(record)
             def authenticated_candidate(_manifest_path, lock_path):
                 metadata = self.authenticated_candidate(
                     _manifest_path, lock_path
@@ -628,6 +777,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
                 record["candidate_artifact_set"]["sha256"] = (
                     self.module.canonical_sha256(artifacts)
                 )
+                self.rebind_record(record)
 
                 @contextlib.contextmanager
                 def snapshot(_image_lock_path):
@@ -722,6 +872,7 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         record["candidate_artifact_set"]["sha256"] = (
             self.module.canonical_sha256(artifacts)
         )
+        self.rebind_record(record)
 
         with mock.patch.object(
             self.module, "load_candidate", self.real_load_candidate

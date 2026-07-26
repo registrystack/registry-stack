@@ -80,6 +80,50 @@ pub struct ProjectBuildOptions {
     pub anchor: Option<PathBuf>,
 }
 
+/// Product-labelled approved baselines for a project build.
+///
+/// Relay and Notary remain independently signed product inputs. A combined
+/// project comparison therefore supplies both pairs, while a single-product
+/// project supplies only its product pair. The legacy `against` and `anchor`
+/// fields on [`ProjectBuildOptions`] remain available for single-product
+/// callers.
+#[derive(Debug, Clone, Default)]
+pub struct ProjectBuildBaselineSetOptions {
+    pub relay_against: Option<PathBuf>,
+    pub relay_anchor: Option<PathBuf>,
+    pub notary_against: Option<PathBuf>,
+    pub notary_anchor: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectPreflightOptions {
+    pub project_directory: PathBuf,
+    pub environment: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectCapabilityOptions {
+    pub project_directory: PathBuf,
+    pub environment: String,
+}
+
+/// Options for an offline promotion decision. The comparison baseline must be
+/// a verified product bundle so the decision never treats an unauthenticated
+/// local artifact as reviewed authority.
+#[derive(Debug, Clone)]
+pub struct ProjectPromotionOptions {
+    pub project_directory: PathBuf,
+    pub environment: String,
+    /// One verified product baseline for Relay-only or Notary-only projects.
+    /// Combined projects should use the product-specific pairs below.
+    pub against: Option<PathBuf>,
+    pub anchor: Option<PathBuf>,
+    pub relay_against: Option<PathBuf>,
+    pub relay_anchor: Option<PathBuf>,
+    pub notary_against: Option<PathBuf>,
+    pub notary_anchor: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectCommandReport {
@@ -94,7 +138,13 @@ pub struct ProjectCommandReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub explanation: Option<Value>,
+    pub semantic_impact: Option<ProjectSemanticImpactReportV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_manifest: Option<ProjectArtifactManifestRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixture_coverage: Option<ProjectFixtureCoverageReportV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<ProjectExplanationReportV1>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -120,8 +170,30 @@ pub struct ProjectAuthoringDiagnostic {
     pub schema_hint: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestion: Option<&'static str>,
+    /// Machine-readable project-relative locations. `file` and `field` stay
+    /// available as the stable compatibility projection used by existing CLI
+    /// renderers and integrations.
+    pub addresses: Vec<ProjectAuthoringDiagnosticAddress>,
+    pub phase: &'static str,
+    pub rule: &'static str,
+    pub accepted: &'static str,
+    pub safe_summary_policy: &'static str,
+    pub received_summary: &'static str,
+    pub documentation: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changed_behavior: Option<&'static str>,
     pub cause: &'static str,
     pub remediation: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectAuthoringDiagnosticAddress {
+    pub file: String,
+    /// An RFC 6901 JSON Pointer. The empty pointer identifies the document.
+    pub pointer: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1653,6 +1725,7 @@ struct LoadedRegistryProject {
     integrations: BTreeMap<String, LoadedIntegration>,
     entities: BTreeMap<String, LoadedEntityDefinition>,
     authored_hash: String,
+    artifact_inputs: Vec<ArtifactInputDigest>,
     project_content_digest: String,
     semantic_digests: SemanticDigests,
 }
@@ -1674,9 +1747,10 @@ struct CompiledProject {
     notary_private: BTreeMap<PathBuf, Box<[u8]>>,
     review: Value,
     approval_state: Value,
-    explanation: Value,
+    explanation: ProjectExplanationReportV1,
     fixture_profiles: Vec<FixtureProfile>,
     semantic_changes: Vec<SemanticChange>,
+    semantic_impact: ProjectSemanticImpactReportV1,
 }
 
 struct FixtureProfile {
@@ -1687,9 +1761,18 @@ struct FixtureProfile {
     contract_hash: String,
 }
 
+#[derive(Clone)]
 struct VerifiedBaseline {
     approval_state: Value,
+    approval_state_digest: String,
     verified_manifest: Value,
+    review_digest: String,
+}
+
+#[derive(Default)]
+struct VerifiedBaselineSet {
+    relay: Option<VerifiedBaseline>,
+    notary: Option<VerifiedBaseline>,
 }
 
 #[derive(Debug, Clone, Serialize)]

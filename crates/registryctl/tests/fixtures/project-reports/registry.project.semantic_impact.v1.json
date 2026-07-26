@@ -1,0 +1,51 @@
+{
+  "schema_version": "registry.project.semantic_impact.v1",
+  "baseline": "initial_without_baseline",
+  "changes": [
+    {
+      "precision": "dimension",
+      "dimension": "integration",
+      "direction": "unbaselined",
+      "affected_subjects": [
+        {
+          "kind": "integration",
+          "id": "person-record"
+        },
+        {
+          "kind": "fixture",
+          "id": "person-record.active-person"
+        },
+        {
+          "kind": "product_input",
+          "id": "registry-relay.config"
+        }
+      ],
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "bundle_signer",
+        "deployment_tooling"
+      ],
+      "review_classes": [
+        "semantics",
+        "interoperability",
+        "operations"
+      ],
+      "product_impacts": [
+        {
+          "product": "relay",
+          "impact": "regenerate"
+        },
+        {
+          "product": "docs",
+          "impact": "republish"
+        }
+      ],
+      "requirements": {
+        "signing": "relay_bundle",
+        "activation": "apply_relay_config",
+        "restart": "registry_relay"
+      }
+    }
+  ]
+}

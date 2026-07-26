@@ -40,7 +40,8 @@ evidence:
               id: example.person-status.exact
               contract_hash: {CONTRACT_HASH}
             inputs:
-              tracked_entity: target.id
+              tracked_entity: request.target.identifiers.national_id
+              subject_id: target.id
             outputs:
               status:
                 type: string
@@ -136,6 +137,35 @@ fn relay_configuration_reports_reloadable_credential_and_safe_network_posture() 
 }
 
 #[test]
+fn relay_backed_explanation_satisfies_shared_schema_and_typed_contract() {
+    let (_token_directory, _token_file, config) = relay_config();
+    let explanation = config_explanation_json(
+        Path::new("/etc/registry-notary/config.yaml"),
+        "redacted test config",
+        &config,
+        &EnvFileReport::default(),
+    );
+
+    let schema: Value = serde_json::from_str(registry_config_report::CONFIG_EXPLANATION_SCHEMA_V1)
+        .expect("explanation schema parses");
+    let validator = jsonschema::JSONSchema::compile(&schema).expect("explanation schema compiles");
+    if let Err(errors) = validator.validate(&explanation) {
+        let messages = errors.map(|error| error.to_string()).collect::<Vec<_>>();
+        panic!("Relay-backed explanation should validate: {messages:?}");
+    }
+
+    let typed: registry_config_report::ConfigExplanationDocument =
+        serde_json::from_value(explanation).expect("Relay-backed explanation decodes strictly");
+    assert_eq!(
+        typed.relay_consultations[0]
+            .inputs
+            .get("tracked_entity")
+            .map(String::as_str),
+        Some("request.target.identifiers.national_id")
+    );
+}
+
+#[test]
 fn relay_consultation_report_exposes_only_pinned_operator_contract() {
     let (_token_directory, _token_file, config) = relay_config();
     let report = notary_relay_consultations_report(&config);
@@ -153,7 +183,8 @@ fn relay_consultation_report_exposes_only_pinned_operator_contract() {
             "purpose": "benefit-verification",
             "required_scopes": ["registry:evidence"],
             "inputs": {
-                "tracked_entity": "target.id",
+                "tracked_entity": "request.target.identifiers.national_id",
+                "subject_id": "target.id",
             },
         })]
     );

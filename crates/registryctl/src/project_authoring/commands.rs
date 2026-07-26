@@ -128,7 +128,10 @@ fn publish_staged_project_into_existing(source: &Path, destination: &Path) -> Re
         let source_path = entry.path();
         let target = destination.join(entry.file_name());
         let metadata = fs::symlink_metadata(&source_path).with_context(|| {
-            format!("failed to inspect staged project path {}", source_path.display())
+            format!(
+                "failed to inspect staged project path {}",
+                source_path.display()
+            )
         })?;
         if metadata.file_type().is_symlink() {
             bail!("staged project contains a forbidden symlink");
@@ -241,12 +244,10 @@ mod project_init_staging_tests {
         init_registry_project(&options(destination.clone()))
             .expect_err("late editor publication failure must fail init");
         assert!(destination.is_dir());
-        assert!(
-            fs::read_dir(&destination)
-                .expect("destination reads")
-                .next()
-                .is_none()
-        );
+        assert!(fs::read_dir(&destination)
+            .expect("destination reads")
+            .next()
+            .is_none());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -263,30 +264,34 @@ mod project_init_staging_tests {
     }
 }
 
-fn starter_explanation(loaded: &LoadedRegistryProject) -> Value {
-    match &loaded.project.starter {
-        Some(starter) => json!({
-            "id": starter.id,
-            "release": starter.release,
-            "expected_content_digest": starter.content_digest,
-            "current_content_digest": loaded.project_content_digest,
-            "state": if starter.content_digest == loaded.project_content_digest {
-                "matches"
-            } else {
-                "diverged"
-            },
-        }),
-        None => json!({ "state": "not_initialized_from_starter" }),
-    }
+pub fn test_registry_project(options: &ProjectTestOptions) -> Result<ProjectCommandReport> {
+    let execution_context = ProjectExecutionContext::for_current_executable()?;
+    test_registry_project_with_context(options, &execution_context)
 }
 
-pub fn test_registry_project(options: &ProjectTestOptions) -> Result<ProjectCommandReport> {
-    test_registry_project_selected(options, &ProjectTestSelection::default())
+pub fn test_registry_project_with_context(
+    options: &ProjectTestOptions,
+    execution_context: &ProjectExecutionContext,
+) -> Result<ProjectCommandReport> {
+    test_registry_project_selected_with_context(
+        options,
+        &ProjectTestSelection::default(),
+        execution_context,
+    )
 }
 
 pub fn test_registry_project_selected(
     options: &ProjectTestOptions,
     selection: &ProjectTestSelection,
+) -> Result<ProjectCommandReport> {
+    let execution_context = ProjectExecutionContext::for_current_executable()?;
+    test_registry_project_selected_with_context(options, selection, &execution_context)
+}
+
+pub fn test_registry_project_selected_with_context(
+    options: &ProjectTestOptions,
+    selection: &ProjectTestSelection,
+    execution_context: &ProjectExecutionContext,
 ) -> Result<ProjectCommandReport> {
     if options.live && options.environment.is_none() {
         bail!("live project tests require an explicit non-production --environment");
@@ -303,14 +308,26 @@ pub fn test_registry_project_selected(
     let compiled =
         compile_project_for_environment(&loaded, "offline-fixture", &offline_environment, None)?;
     validate_generated_product_configs(&compiled)?;
-    let mut reports = execute_all_fixtures(
-        &loaded,
-        &compiled,
-        selection.integration.as_deref(),
-        selection.fixture.as_deref(),
-        selection.trace,
-    )?;
+    let (mut reports, generated_observations, call_budget_actual) =
+        execute_all_fixtures_with_coverage_observations(
+            &loaded,
+            &compiled,
+            selection.integration.as_deref(),
+            selection.fixture.as_deref(),
+            selection.trace,
+            execution_context,
+        )?;
     require_passing_fixtures(&reports)?;
+    let fixture_coverage = if selection.integration.is_none() && selection.fixture.is_none() {
+        Some(generate_fixture_coverage_report(
+            &loaded,
+            &reports,
+            &generated_observations,
+            call_budget_actual,
+        )?)
+    } else {
+        None
+    };
     if options.live {
         reports.push(execute_governed_live_test(&loaded)?);
     }
@@ -323,6 +340,9 @@ pub fn test_registry_project_selected(
         semantic_changes: Vec::new(),
         baseline: "initial_without_baseline",
         output: None,
+        semantic_impact: None,
+        artifact_manifest: None,
+        fixture_coverage,
         explanation: None,
     })
 }
@@ -777,12 +797,12 @@ fn validate_live_response(
             || generated_by.claim_id != result_view.claim_id
             || generated_by.claim_version != result_view.claim_version
         {
-            bail!(
-                "governed Notary result provenance does not identify the returned claim result"
-            );
+            bail!("governed Notary result provenance does not identify the returned claim result");
         }
         if generated_by.service_id != request.notary_service_id {
-            bail!("governed Notary result provenance does not identify the selected Notary service");
+            bail!(
+                "governed Notary result provenance does not identify the selected Notary service"
+            );
         }
         if generated_by.policy_id.is_some()
             || generated_by.policy_version.is_some()
@@ -871,8 +891,9 @@ fn validate_live_result_timestamps(
     result: &registry_notary_core::ClaimResultView,
     validation_window: GovernedLiveValidationWindow,
 ) -> Result<()> {
-    let issued_at = OffsetDateTime::parse(&result.issued_at, &Rfc3339)
-        .map_err(|_| anyhow!("governed Notary result timestamps do not match the public date-time schema"))?;
+    let issued_at = OffsetDateTime::parse(&result.issued_at, &Rfc3339).map_err(|_| {
+        anyhow!("governed Notary result timestamps do not match the public date-time schema")
+    })?;
     let expires_at = result
         .expires_at
         .as_deref()
@@ -887,10 +908,8 @@ fn validate_live_result_timestamps(
     if validation_window.response_received_at < validation_window.request_started_at {
         bail!("governed Notary validation window is invalid");
     }
-    let earliest_issued_at =
-        validation_window.request_started_at - GOVERNED_LIVE_REMOTE_CLOCK_SKEW;
-    let latest_issued_at =
-        validation_window.response_received_at + GOVERNED_LIVE_REMOTE_CLOCK_SKEW;
+    let earliest_issued_at = validation_window.request_started_at - GOVERNED_LIVE_REMOTE_CLOCK_SKEW;
+    let latest_issued_at = validation_window.response_received_at + GOVERNED_LIVE_REMOTE_CLOCK_SKEW;
     if issued_at < earliest_issued_at || issued_at > latest_issued_at {
         bail!("governed Notary result timestamps do not bind to the current live evaluation");
     }
@@ -1045,7 +1064,9 @@ fn validate_live_expected_redaction_fields(fields: &Value) -> Result<Vec<String>
         let field = field
             .as_str()
             .filter(|field| is_live_top_level_redaction_field(field))
-            .ok_or_else(|| anyhow!("live expected redacted_fields have an invalid bounded shape"))?;
+            .ok_or_else(|| {
+                anyhow!("live expected redacted_fields have an invalid bounded shape")
+            })?;
         if !unique.insert(field.to_string()) {
             bail!("live expected redacted_fields have an invalid bounded shape");
         }
@@ -1228,9 +1249,9 @@ fn validate_live_request(
             .find(|service| service.claims.contains_key(id))
             .ok_or_else(|| anyhow!("live request contains an unknown project claim"))?;
         let authored_version = service.version.to_string();
-        if requested_version.is_some_and(|version| {
-            version.as_str() != Some(authored_version.as_str())
-        }) {
+        if requested_version
+            .is_some_and(|version| version.as_str() != Some(authored_version.as_str()))
+        {
             bail!("live request claim version does not match the authored project");
         }
         if claim_versions
@@ -1283,6 +1304,14 @@ fn contains_sensitive_request_key(value: &Value) -> bool {
 }
 
 pub fn check_registry_project(options: &ProjectCheckOptions) -> Result<ProjectCommandReport> {
+    let execution_context = ProjectExecutionContext::for_current_executable()?;
+    check_registry_project_with_context(options, &execution_context)
+}
+
+pub fn check_registry_project_with_context(
+    options: &ProjectCheckOptions,
+    execution_context: &ProjectExecutionContext,
+) -> Result<ProjectCommandReport> {
     validate_baseline_pair(options.against.as_deref(), options.anchor.as_deref())?;
     let diagnostics = collect_project_authoring_diagnostics(
         &options.project_directory,
@@ -1306,15 +1335,29 @@ pub fn check_registry_project(options: &ProjectCheckOptions) -> Result<ProjectCo
         )]))
     })?;
     preflight_project_rhai_scripts(&loaded)?;
-    let baseline = load_verified_baseline(
-        options.against.as_deref(),
-        options.anchor.as_deref(),
+    let baselines = load_verified_approved_baseline_set(
+        ApprovedBaselineSetPaths::legacy(options.against.as_deref(), options.anchor.as_deref()),
         &loaded,
+        BaselineSetCompleteness::AnyVerifiedProduct,
     )?;
-    let compiled = compile_project(&loaded, baseline.as_ref())?;
+    let compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
     validate_generated_product_configs(&compiled)?;
-    let fixtures = execute_all_fixtures(&loaded, &compiled, None, None, false)?;
+    let (fixtures, generated_observations, call_budget_actual) =
+        execute_all_fixtures_with_coverage_observations(
+            &loaded,
+            &compiled,
+            None,
+            None,
+            false,
+            execution_context,
+        )?;
     require_passing_fixtures(&fixtures)?;
+    let fixture_coverage = generate_fixture_coverage_report(
+        &loaded,
+        &fixtures,
+        &generated_observations,
+        call_budget_actual,
+    )?;
     Ok(ProjectCommandReport {
         schema_version: PROJECT_COMMAND_REPORT_SCHEMA_VERSION,
         status: "valid",
@@ -1322,18 +1365,1238 @@ pub fn check_registry_project(options: &ProjectCheckOptions) -> Result<ProjectCo
         environment: loaded.environment_name.clone(),
         fixtures,
         semantic_changes: compiled.semantic_changes,
-        baseline: if baseline.is_some() {
+        baseline: if !baselines.is_empty() {
             "verified_signed_bundle"
         } else {
             "initial_without_baseline"
         },
         output: None,
+        semantic_impact: Some(compiled.semantic_impact),
+        artifact_manifest: None,
+        fixture_coverage: Some(fixture_coverage),
         explanation: options.explain.then_some(compiled.explanation),
     })
 }
 
+/// Verify the selected environment's locally available secret and file posture.
+///
+/// This command is intentionally offline. It performs no fixture execution,
+/// build publication, network access, or source contact.
+pub fn preflight_registry_project(
+    options: &ProjectPreflightOptions,
+) -> Result<ProjectPreflightReportV1> {
+    let diagnostics = collect_project_authoring_diagnostics(
+        &options.project_directory,
+        options.environment.as_str(),
+    );
+    if !diagnostics.diagnostics.is_empty() {
+        return Err(anyhow::Error::new(diagnostics));
+    }
+    let loaded = load_registry_project(
+        &options.project_directory,
+        Some(options.environment.as_str()),
+    )?;
+    let compiled = compile_project(&loaded, None)?;
+    validate_generated_product_configs(&compiled)?;
+    let environment = loaded
+        .environment
+        .as_ref()
+        .ok_or_else(|| anyhow!("preflight requires an explicit environment"))?;
+    let mut input = offline_preflight_input(&loaded, environment, &options.environment)?;
+    let (requires_relay, requires_notary) = project_product_topology(&loaded.project);
+    if requires_relay {
+        input.require_product(PreflightProduct::RegistryRelay);
+        input.record_product_validator_available(PreflightProduct::RegistryRelay);
+    }
+    if requires_notary {
+        input.require_product(PreflightProduct::RegistryNotary);
+        input.record_product_validator_available(PreflightProduct::RegistryNotary);
+    }
+    Ok(run_offline_preflight(input))
+}
+
+/// Compare the normalized, environment-bound project state with a verified
+/// reviewed baseline. This command deliberately never exposes digest values,
+/// authored values, environment names, or filesystem paths in its report.
+pub fn promote_registry_project(
+    options: &ProjectPromotionOptions,
+) -> Result<ProjectPromotionReportV1> {
+    validate_promotion_baseline_options(options)?;
+
+    let diagnostics = collect_project_authoring_diagnostics(
+        &options.project_directory,
+        options.environment.as_str(),
+    );
+    if !diagnostics.diagnostics.is_empty() {
+        return Err(anyhow::Error::new(diagnostics));
+    }
+
+    let loaded = load_registry_project(
+        &options.project_directory,
+        Some(options.environment.as_str()),
+    )
+    .map_err(|_| anyhow!("could not load promotion state safely"))?;
+    preflight_project_rhai_scripts(&loaded)
+        .map_err(|_| anyhow!("promotion state could not be validated safely"))?;
+
+    let baselines = load_verified_promotion_baselines(options, &loaded)
+        .map_err(|_| anyhow!("could not establish verified promotion baselines"))?;
+
+    // The compiler and product validators establish that the state being
+    // compared is a valid offline product input. Their detailed errors can
+    // carry local identifiers or paths, so promotion deliberately returns a
+    // value-free boundary error instead.
+    let compiled = compile_project(&loaded, None)
+        .map_err(|_| anyhow!("promotion state could not be compiled safely"))?;
+    validate_generated_product_configs(&compiled)
+        .map_err(|_| anyhow!("promotion compatibility could not be established safely"))?;
+
+    let baseline_values = baselines.iter().cloned().collect::<Vec<_>>();
+    build_promotion_report_from_normalized_state(
+        &loaded,
+        &compiled.approval_state,
+        &baseline_values,
+    )
+    .map_err(|_| anyhow!("promotion comparison could not be classified safely"))
+}
+
+fn validate_promotion_baseline_options(options: &ProjectPromotionOptions) -> Result<()> {
+    validate_approved_baseline_set_paths(ApprovedBaselineSetPaths::promotion(options))
+}
+
+fn validate_named_baseline_pair(
+    against_name: &str,
+    against: Option<&Path>,
+    anchor_name: &str,
+    anchor: Option<&Path>,
+) -> Result<()> {
+    if against.is_some() != anchor.is_some() {
+        bail!("{against_name} and {anchor_name} must be supplied together");
+    }
+    Ok(())
+}
+
+fn load_verified_promotion_baselines(
+    options: &ProjectPromotionOptions,
+    loaded: &LoadedRegistryProject,
+) -> Result<VerifiedBaselineSet> {
+    load_verified_approved_baseline_set(
+        ApprovedBaselineSetPaths::promotion(options),
+        loaded,
+        BaselineSetCompleteness::CompleteTopologyWhenPresent,
+    )
+}
+
+fn build_promotion_report_from_normalized_state(
+    loaded: &LoadedRegistryProject,
+    current_approval_state: &Value,
+    baselines: &[VerifiedBaseline],
+) -> Result<ProjectPromotionReportV1> {
+    let current = promotion_projection_from_approval_state(current_approval_state, true)?;
+    let current_compatibility =
+        promotion_compatibility(loaded, current_approval_state, &current, baselines)?;
+
+    let Some(baseline) = baselines.first() else {
+        return build_project_promotion_report(ProjectPromotionInput {
+            reviewed_revision: ReviewedRevisionComparison::NotProven,
+            changes: Vec::new(),
+            reviewed_ceiling: ReviewedCeilingInput::WithinReviewedCeiling,
+            trust: TrustResolutionInput::Unresolved,
+            compatibility: current_compatibility,
+        })
+        .map_err(|_| anyhow!("promotion comparison exceeded its bounded change capacity"));
+    };
+
+    if baselines.iter().any(|baseline| {
+        baseline
+            .approval_state
+            .get("promotion_projection")
+            .is_none()
+    }) {
+        return build_project_promotion_report(ProjectPromotionInput {
+            reviewed_revision: ReviewedRevisionComparison::NotProven,
+            changes: Vec::new(),
+            reviewed_ceiling: ReviewedCeilingInput::Unresolved,
+            trust: TrustResolutionInput::Unresolved,
+            compatibility: current_compatibility,
+        })
+        .map_err(|_| anyhow!("promotion comparison exceeded its bounded change capacity"));
+    }
+
+    let previous = promotion_projection_from_approval_state(&baseline.approval_state, false)?;
+    if baselines.iter().skip(1).any(|baseline| {
+        match promotion_projection_from_approval_state(&baseline.approval_state, false) {
+            Ok(projection) => projection != previous,
+            Err(_) => true,
+        }
+    }) {
+        return build_project_promotion_report(ProjectPromotionInput {
+            reviewed_revision: ReviewedRevisionComparison::NotProven,
+            changes: Vec::new(),
+            reviewed_ceiling: ReviewedCeilingInput::Unresolved,
+            trust: TrustResolutionInput::Unresolved,
+            compatibility: PromotionCompatibilityInput {
+                schema: PromotionCompatibilityState::Incompatible,
+                ..current_compatibility
+            },
+        })
+        .map_err(|_| anyhow!("promotion comparison exceeded its bounded change capacity"));
+    }
+    let current_fields = current.fields_by_kind();
+    let previous_fields = previous.fields_by_kind();
+    let mut changes = Vec::new();
+    let mut reviewed_ceiling = ReviewedCeilingInput::WithinReviewedCeiling;
+    let mut trust = TrustResolutionInput::Resolved;
+
+    for kind in PromotionChangeKind::ALL {
+        let current = current_fields
+            .get(&kind)
+            .ok_or_else(|| anyhow!("current promotion projection is incomplete"))?;
+        let previous = previous_fields
+            .get(&kind)
+            .ok_or_else(|| anyhow!("baseline promotion projection is incomplete"))?;
+        if current.digest == previous.digest {
+            continue;
+        }
+        let effect = classify_projected_change_effect(kind, previous, current);
+        if kind == PromotionChangeKind::IntegrationCeiling {
+            reviewed_ceiling = match effect {
+                PromotionChangeEffect::Narrowed => ReviewedCeilingInput::Narrowed,
+                PromotionChangeEffect::Widened => ReviewedCeilingInput::Widened,
+                PromotionChangeEffect::ChangedWithinReviewedAuthority => {
+                    ReviewedCeilingInput::WithinReviewedCeiling
+                }
+                PromotionChangeEffect::Unresolved => ReviewedCeilingInput::Unresolved,
+            };
+        }
+        if kind == PromotionChangeKind::Trust && effect == PromotionChangeEffect::Unresolved {
+            trust = TrustResolutionInput::Unresolved;
+        }
+        changes.push(PromotionChangeInput {
+            kind,
+            classification: Some(current.classification),
+            ownership: current.ownership,
+            effect,
+        });
+    }
+
+    // Raw authored-input digests remain outside comparison evidence, so
+    // formatting-only edits do not become a reviewed semantic revision.
+    let reviewed_revision = if changes
+        .iter()
+        .any(|change| change.ownership == PromotionFieldOwnership::ReviewedProjectOwned)
+    {
+        ReviewedRevisionComparison::DifferentReviewedSemanticRevision
+    } else {
+        ReviewedRevisionComparison::SameReviewedSemanticRevision
+    };
+
+    build_project_promotion_report(ProjectPromotionInput {
+        reviewed_revision,
+        changes,
+        reviewed_ceiling,
+        trust,
+        compatibility: current_compatibility,
+    })
+    .map_err(|_| anyhow!("promotion comparison exceeded its bounded change capacity"))
+}
+
+fn promotion_compatibility(
+    loaded: &LoadedRegistryProject,
+    current_approval_state: &Value,
+    current: &ProjectPromotionProjectionV1,
+    baselines: &[VerifiedBaseline],
+) -> Result<PromotionCompatibilityInput> {
+    let closures = current_approval_state
+        .get("generated_closure_digests")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("current approval state lacks generated product closures"))?;
+    let environment = loaded
+        .environment
+        .as_ref()
+        .ok_or_else(|| anyhow!("promotion compatibility requires an environment"))?;
+    let declared_schemas = project_promotion_authoring_schemas(loaded, environment);
+    let declared_products = project_promotion_products(environment);
+    let product = if current.products.is_empty() || current.products != declared_products {
+        PromotionCompatibilityState::Missing
+    } else if [
+        (PromotionProjectedProduct::Relay, "relay"),
+        (PromotionProjectedProduct::Notary, "notary"),
+    ]
+    .into_iter()
+    .all(|(product, name)| {
+        let required = current.products.contains(&product);
+        closures
+            .get(name)
+            .is_some_and(|digest| digest.is_string() == required && (required || digest.is_null()))
+    }) {
+        let baseline_products = baselines
+            .iter()
+            .map(verified_baseline_product)
+            .collect::<Result<BTreeSet<_>>>()?;
+        let current_products = current.products.iter().copied().collect::<BTreeSet<_>>();
+        if baselines.is_empty() || baseline_products == current_products {
+            PromotionCompatibilityState::Compatible
+        } else if baseline_products.is_subset(&current_products) {
+            PromotionCompatibilityState::Missing
+        } else {
+            PromotionCompatibilityState::Incompatible
+        }
+    } else {
+        PromotionCompatibilityState::Missing
+    };
+    let declared_capabilities = project_promotion_capabilities(loaded, environment);
+    let released_capabilities = loaded
+        .integrations
+        .values()
+        .all(|integration| match &integration.document.capability {
+            CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Snapshot { .. } => true,
+            CapabilityDeclaration::Script { script } => {
+                RELEASED_SCRIPT_RUNTIMES.contains(&match script.runtime {
+                    ScriptRuntime::RhaiV1 => ReleasedScriptRuntime::RhaiV1,
+                })
+            }
+        });
+    let capability = if current.capabilities != declared_capabilities {
+        PromotionCompatibilityState::Missing
+    } else if released_capabilities {
+        PromotionCompatibilityState::Compatible
+    } else {
+        PromotionCompatibilityState::Incompatible
+    };
+    let schema = if !baselines.is_empty() {
+        if baselines.iter().any(|baseline| {
+            baseline
+                .approval_state
+                .get("promotion_projection")
+                .is_none()
+        }) {
+            PromotionCompatibilityState::Missing
+        } else {
+            let projections = baselines
+                .iter()
+                .map(|baseline| {
+                    promotion_projection_from_approval_state(&baseline.approval_state, false)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if current.authoring_schemas == declared_schemas
+                && projections.iter().all(|previous| {
+                    previous.authoring_schemas == current.authoring_schemas
+                        && previous.field_knowledge_revision == current.field_knowledge_revision
+                })
+            {
+                PromotionCompatibilityState::Compatible
+            } else {
+                PromotionCompatibilityState::Incompatible
+            }
+        }
+    } else if current.authoring_schemas == declared_schemas {
+        PromotionCompatibilityState::Compatible
+    } else {
+        PromotionCompatibilityState::Incompatible
+    };
+    let abi = if baselines.is_empty() {
+        PromotionCompatibilityState::Unresolved
+    } else if baselines.iter().all(|baseline| {
+        baseline
+            .approval_state
+            .get("compiler_version")
+            .and_then(Value::as_str)
+            == Some(env!("CARGO_PKG_VERSION"))
+    }) {
+        PromotionCompatibilityState::Compatible
+    } else {
+        PromotionCompatibilityState::Incompatible
+    };
+    Ok(PromotionCompatibilityInput {
+        product,
+        capability,
+        schema,
+        abi,
+    })
+}
+
+fn verified_baseline_product(baseline: &VerifiedBaseline) -> Result<PromotionProjectedProduct> {
+    match baseline
+        .verified_manifest
+        .get("product")
+        .and_then(Value::as_str)
+    {
+        Some("registry-relay") => Ok(PromotionProjectedProduct::Relay),
+        Some("registry-notary") => Ok(PromotionProjectedProduct::Notary),
+        _ => Err(anyhow!(
+            "verified promotion baseline has an unsupported product"
+        )),
+    }
+}
+
+fn promotion_projection_from_approval_state(
+    approval_state: &Value,
+    require_current_field_knowledge: bool,
+) -> Result<ProjectPromotionProjectionV1> {
+    let projection: ProjectPromotionProjectionV1 = serde_json::from_value(
+        approval_state
+            .get("promotion_projection")
+            .cloned()
+            .ok_or_else(|| anyhow!("approval state lacks promotion projection"))?,
+    )
+    .context("approval promotion projection is invalid")?;
+    if require_current_field_knowledge {
+        validate_project_promotion_projection(&projection, PROMOTION_FIELD_KNOWLEDGE_REVISION)
+            .map_err(|error| anyhow!(error))?;
+    } else {
+        validate_project_promotion_projection_structure(&projection)
+            .map_err(|error| anyhow!(error))?;
+    }
+    Ok(projection)
+}
+
+#[cfg(test)]
+mod promotion_adapter_tests {
+    use super::*;
+
+    fn current_approval_state(loaded: &LoadedRegistryProject) -> Value {
+        let projection = project_promotion_projection(
+            loaded,
+            loaded
+                .environment
+                .as_ref()
+                .expect("promotion fixture has an environment"),
+        )
+        .expect("projection builds");
+        let relay = projection
+            .products
+            .contains(&PromotionProjectedProduct::Relay)
+            .then_some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let notary = projection
+            .products
+            .contains(&PromotionProjectedProduct::Notary)
+            .then_some("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        json!({
+            "schema": APPROVAL_STATE_SCHEMA,
+            "authored_input_digest": loaded.authored_hash,
+            "compiler_version": env!("CARGO_PKG_VERSION"),
+            "generated_closure_digests": {
+                "relay": relay,
+                "notary": notary,
+            },
+            "promotion_projection": projection,
+        })
+    }
+
+    fn verified_baselines(approval_state: Value) -> Vec<VerifiedBaseline> {
+        vec![
+            VerifiedBaseline {
+                approval_state: approval_state.clone(),
+                approval_state_digest:
+                    "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                        .to_string(),
+                verified_manifest: json!({ "product": "registry-relay" }),
+                review_digest:
+                    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                        .to_string(),
+            },
+            VerifiedBaseline {
+                approval_state,
+                approval_state_digest:
+                    "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                        .to_string(),
+                verified_manifest: json!({ "product": "registry-notary" }),
+                review_digest:
+                    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                        .to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn normalized_promotion_comparison_supports_safe_changes_and_blocks_unresolved_ceiling() {
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/project-starters/bounded-http");
+        let loaded = load_registry_project(&root, Some("local")).expect("starter loads");
+        let current = current_approval_state(&loaded);
+        let serialized_projection =
+            serde_json::to_string(&current["promotion_projection"]).expect("projection serializes");
+        for forbidden in [
+            "fictional-citizen-registry",
+            "citizen-registry.invalid",
+            "FICTIONAL_REGISTRY_TOKEN",
+            "EVIDENCE_CLIENT_TOKEN_HASH",
+            "public-service-person-verification",
+            "person-verification",
+            "person-record",
+            "evidence-client",
+            "fictional-registry-relay",
+            "fictional-registry-notary",
+            "project-issuer-key",
+            root.to_str().expect("starter path is UTF-8"),
+        ] {
+            assert!(!serialized_projection.contains(forbidden));
+        }
+        let projection = promotion_projection_from_approval_state(&current, true)
+            .expect("current projection validates");
+        let projected_kinds = projection
+            .fields
+            .iter()
+            .map(|field| field.kind)
+            .collect::<BTreeSet<_>>();
+        for kind in [
+            PromotionChangeKind::Caller,
+            PromotionChangeKind::Purpose,
+            PromotionChangeKind::Origin,
+            PromotionChangeKind::CredentialBinding,
+            PromotionChangeKind::Operational,
+            PromotionChangeKind::ProductEnablement,
+            PromotionChangeKind::CapabilityEnablement,
+        ] {
+            assert!(projected_kinds.contains(&kind), "{kind:?}");
+        }
+        let mut reviewed_state = current.clone();
+        reviewed_state["authored_input_digest"] = Value::String("different-raw-input".to_owned());
+        let baselines = verified_baselines(reviewed_state);
+        let ready = build_promotion_report_from_normalized_state(&loaded, &current, &baselines)
+            .expect("matching state compares");
+        assert_eq!(ready.disposition, PromotionDisposition::Ready);
+
+        let mut previous = current.clone();
+        let origin_index = PromotionChangeKind::ALL
+            .iter()
+            .position(|kind| *kind == PromotionChangeKind::Origin)
+            .expect("origin index");
+        previous["promotion_projection"]["fields"][origin_index]["digest"] = Value::String(
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_owned(),
+        );
+        let baselines = verified_baselines(previous);
+        let changed = build_promotion_report_from_normalized_state(&loaded, &current, &baselines)
+            .expect("changed state compares");
+        assert_eq!(
+            changed.disposition,
+            PromotionDisposition::ReadyAfterRequiredActions
+        );
+        assert_eq!(changed.changes[0].kind, PromotionChangeKind::Origin);
+        assert_eq!(
+            changed.changes[0].effect,
+            PromotionChangeEffect::ChangedWithinReviewedAuthority
+        );
+
+        let changed_kinds = [
+            PromotionChangeKind::Caller,
+            PromotionChangeKind::Purpose,
+            PromotionChangeKind::Origin,
+            PromotionChangeKind::CredentialBinding,
+            PromotionChangeKind::Operational,
+            PromotionChangeKind::ProductEnablement,
+            PromotionChangeKind::CapabilityEnablement,
+        ];
+        let mut previous = current.clone();
+        for (offset, kind) in changed_kinds.iter().enumerate() {
+            let index = PromotionChangeKind::ALL
+                .iter()
+                .position(|candidate| candidate == kind)
+                .expect("projected kind index");
+            let byte = b'1' + u8::try_from(offset).expect("bounded change offset");
+            previous["promotion_projection"]["fields"][index]["digest"] = Value::String(format!(
+                "sha256:{}",
+                char::from(byte).to_string().repeat(64)
+            ));
+        }
+        let baselines = verified_baselines(previous);
+        let changed = build_promotion_report_from_normalized_state(&loaded, &current, &baselines)
+            .expect("all classified categories compare");
+        assert_eq!(
+            changed.disposition,
+            PromotionDisposition::ReadyAfterRequiredActions
+        );
+        assert_eq!(
+            changed
+                .changes
+                .iter()
+                .map(|change| change.kind)
+                .collect::<BTreeSet<_>>(),
+            changed_kinds.into_iter().collect()
+        );
+        assert!(changed.changes.iter().all(|change| {
+            change.effect == PromotionChangeEffect::ChangedWithinReviewedAuthority
+        }));
+
+        let mut previous = current.clone();
+        let ceiling_index = PromotionChangeKind::ALL
+            .iter()
+            .position(|kind| *kind == PromotionChangeKind::IntegrationCeiling)
+            .expect("ceiling index");
+        previous["promotion_projection"]["fields"][ceiling_index]["digest"] = Value::String(
+            "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_owned(),
+        );
+        let baselines = verified_baselines(previous);
+        let blocked = build_promotion_report_from_normalized_state(&loaded, &current, &baselines)
+            .expect("unresolved ceiling compares");
+        assert_eq!(blocked.disposition, PromotionDisposition::Blocked);
+        assert!(blocked
+            .blocking_reasons
+            .contains(&PromotionBlockingReason::UnresolvedChange));
+        assert!(blocked
+            .blocking_reasons
+            .contains(&PromotionBlockingReason::ReviewedCeilingUnresolved));
+        let serialized = serde_json::to_string(&changed).expect("changed report serializes");
+        assert!(!serialized.contains("citizen-registry.invalid"));
+        assert!(!serialized.contains(root.to_str().expect("starter path is UTF-8")));
+    }
+
+    #[test]
+    fn new_or_changed_published_field_paths_require_promotion_mapping_review() {
+        let revision = validate_promotion_field_knowledge_mapping()
+            .expect("field knowledge mapping is current");
+        assert_eq!(revision, PROMOTION_FIELD_KNOWLEDGE_REVISION);
+
+        let index = knowledge::published_field_knowledge_index().expect("knowledge indexes");
+        // Both the exact path count and the full knowledge-record digest are
+        // intentional review pins. Adding or changing a published path without
+        // updating its closed mapping and reviewed revision fails this test and
+        // `project_promotion_projection`.
+        assert_eq!(index.by_path().len(), 564);
+        let mapped = index
+            .by_path()
+            .keys()
+            .filter_map(promotion_kind_for_field_path)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            mapped,
+            PromotionChangeKind::ALL
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+        );
+        assert!(index.by_path().keys().all(|path| {
+            promotion_kind_for_field_path(path).is_some()
+                || path.schema == knowledge::SchemaKind::Fixture
+        }));
+    }
+
+    #[test]
+    fn snapshot_environment_entity_enablement_is_bound_into_the_signed_capability_projection() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/project-authoring/snapshot-exact");
+        let loaded = load_registry_project(&root, Some("local")).expect("snapshot project loads");
+        let environment = loaded
+            .environment
+            .as_ref()
+            .expect("snapshot project has an environment");
+        let projection =
+            project_promotion_projection(&loaded, environment).expect("projection builds");
+
+        assert_eq!(
+            projection.capabilities,
+            vec![PromotionProjectedCapability::Snapshot]
+        );
+        let capability = projection
+            .fields_by_kind()
+            .get(&PromotionChangeKind::CapabilityEnablement)
+            .copied()
+            .expect("capability field is projected");
+        assert_eq!(capability.authority_members.len(), 1);
+        let integration = loaded
+            .integrations
+            .get("person-snapshot")
+            .expect("snapshot integration exists");
+        assert!(project_promotion_capability_enabled(
+            "person-snapshot",
+            &integration.document.capability,
+            environment,
+        ));
+    }
+
+    #[test]
+    fn promotion_compatibility_is_derived_from_closures_schemas_and_compiler() {
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/project-starters/bounded-http");
+        let loaded = load_registry_project(&root, Some("local")).expect("starter loads");
+        let current = current_approval_state(&loaded);
+
+        let mut missing_product = current.clone();
+        missing_product["generated_closure_digests"]["notary"] = Value::Null;
+        let report = build_promotion_report_from_normalized_state(&loaded, &missing_product, &[])
+            .expect("missing product compatibility reports");
+        assert!(report
+            .blocking_reasons
+            .contains(&PromotionBlockingReason::MissingProduct));
+
+        let mut previous = current.clone();
+        previous["promotion_projection"]["authoring_schemas"]["environment"] = json!(2);
+        let baselines = verified_baselines(previous);
+        let report = build_promotion_report_from_normalized_state(&loaded, &current, &baselines)
+            .expect("schema mismatch reports");
+        assert!(report
+            .blocking_reasons
+            .contains(&PromotionBlockingReason::IncompatibleSchema));
+
+        let mut previous = current.clone();
+        previous["compiler_version"] = json!("0.0.0");
+        let baselines = verified_baselines(previous);
+        let report = build_promotion_report_from_normalized_state(&loaded, &current, &baselines)
+            .expect("compiler mismatch reports");
+        assert!(report
+            .blocking_reasons
+            .contains(&PromotionBlockingReason::IncompatibleAbi));
+
+        let mut legacy = current.clone();
+        legacy["schema"] = json!(APPROVAL_STATE_SCHEMA_V1);
+        legacy
+            .as_object_mut()
+            .expect("legacy state is an object")
+            .remove("promotion_projection");
+        let baselines = verified_baselines(legacy);
+        let report = build_promotion_report_from_normalized_state(&loaded, &current, &baselines)
+            .expect("legacy signed baseline fails closed as a report");
+        assert!(report
+            .blocking_reasons
+            .contains(&PromotionBlockingReason::MissingSchema));
+        assert!(report
+            .blocking_reasons
+            .contains(&PromotionBlockingReason::ReviewedRevisionNotProven));
+
+        let baselines = verified_baselines(current.clone());
+        let report =
+            build_promotion_report_from_normalized_state(&loaded, &current, &baselines[1..])
+                .expect("one product baseline reports missing combined closure");
+        assert!(report
+            .blocking_reasons
+            .contains(&PromotionBlockingReason::MissingProduct));
+
+        let mut conflicting = verified_baselines(current.clone());
+        let origin_index = PromotionChangeKind::ALL
+            .iter()
+            .position(|kind| *kind == PromotionChangeKind::Origin)
+            .expect("origin index");
+        conflicting[1].approval_state["promotion_projection"]["fields"][origin_index]["digest"] =
+            json!("sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
+        let report = build_promotion_report_from_normalized_state(&loaded, &current, &conflicting)
+            .expect("conflicting signed product projections fail closed");
+        assert!(report
+            .blocking_reasons
+            .contains(&PromotionBlockingReason::IncompatibleSchema));
+        assert!(report
+            .blocking_reasons
+            .contains(&PromotionBlockingReason::ReviewedRevisionNotProven));
+    }
+
+    #[test]
+    fn promotion_baseline_options_require_complete_non_conflicting_pairs() {
+        let root = PathBuf::from("/promotion-project");
+        let bundle = PathBuf::from("/baseline");
+        let anchor = PathBuf::from("/anchor");
+        let mut options = ProjectPromotionOptions {
+            project_directory: root,
+            environment: "local".to_owned(),
+            against: None,
+            anchor: None,
+            relay_against: Some(bundle.clone()),
+            relay_anchor: None,
+            notary_against: None,
+            notary_anchor: None,
+        };
+        assert!(validate_promotion_baseline_options(&options).is_err());
+
+        options.relay_anchor = Some(anchor.clone());
+        options.against = Some(bundle);
+        options.anchor = Some(anchor);
+        assert!(validate_promotion_baseline_options(&options).is_err());
+    }
+}
+
+pub fn inspect_project_capabilities(
+    options: &ProjectCapabilityOptions,
+) -> Result<ProjectCapabilityInventoryReportV1> {
+    let loaded = load_registry_project(
+        &options.project_directory,
+        Some(options.environment.as_str()),
+    )?;
+    let environment = loaded
+        .environment
+        .as_ref()
+        .ok_or_else(|| anyhow!("capability inventory requires an explicit environment"))?;
+    let mut input = CapabilityInventoryInput::new();
+
+    for (capability, state, evidence) in capability_inventory::COMPILED_CAPABILITY_RELEASE_FACTS {
+        input.record_installed_capability(capability, state, evidence)?;
+    }
+
+    for (component, state, evidence) in [
+        (
+            SupportComponent::HttpSourceWorker,
+            SupportState::Available,
+            SupportEvidence::LinkedCrate,
+        ),
+        (
+            SupportComponent::RhaiScriptWorker,
+            SupportState::Available,
+            SupportEvidence::LinkedCrate,
+        ),
+        (
+            SupportComponent::SnapshotMaterializationWorker,
+            SupportState::Available,
+            SupportEvidence::LinkedCrate,
+        ),
+        (
+            SupportComponent::RhaiXwProtocolHelper,
+            SupportState::Available,
+            SupportEvidence::LinkedCrate,
+        ),
+        (
+            SupportComponent::RegistryRelayProduct,
+            SupportState::Available,
+            SupportEvidence::LinkedCrate,
+        ),
+        (
+            SupportComponent::RegistryNotaryProduct,
+            SupportState::Available,
+            SupportEvidence::LinkedCrate,
+        ),
+        (
+            SupportComponent::RegistryRelayValidator,
+            SupportState::Available,
+            SupportEvidence::LinkedProductValidator,
+        ),
+        (
+            SupportComponent::RegistryNotaryValidator,
+            SupportState::Available,
+            SupportEvidence::LinkedProductValidator,
+        ),
+        (
+            SupportComponent::ProjectAuthoringSchema,
+            SupportState::Available,
+            SupportEvidence::EmbeddedSchema,
+        ),
+        (
+            SupportComponent::RegistryRelayConfigSchema,
+            SupportState::Available,
+            SupportEvidence::EmbeddedSchema,
+        ),
+        (
+            SupportComponent::RegistryNotaryConfigSchema,
+            SupportState::Available,
+            SupportEvidence::EmbeddedSchema,
+        ),
+        (
+            SupportComponent::RegistryctlDistribution,
+            SupportState::Available,
+            SupportEvidence::ReleaseMetadata,
+        ),
+        (
+            SupportComponent::RegistryRelayImage,
+            SupportState::NotEvaluated,
+            SupportEvidence::NoEvidence,
+        ),
+        (
+            SupportComponent::RegistryNotaryImage,
+            SupportState::NotEvaluated,
+            SupportEvidence::NoEvidence,
+        ),
+    ] {
+        input.record_support(component, state, evidence)?;
+    }
+
+    let mut declarations = BTreeSet::new();
+    let mut enabled = BTreeSet::new();
+    let mut integration_capabilities = BTreeMap::new();
+    for (integration_id, integration) in &loaded.integrations {
+        let capability = match &integration.document.capability {
+            CapabilityDeclaration::Http { .. } => CapabilityId::SourceHttp,
+            CapabilityDeclaration::Script { .. } => CapabilityId::SourceScript,
+            CapabilityDeclaration::Snapshot { .. } => CapabilityId::SourceSnapshot,
+        };
+        declarations.insert(capability);
+        integration_capabilities.insert(integration_id.as_str(), capability);
+        let is_enabled = match &integration.document.capability {
+            CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. } => {
+                environment.integrations.contains_key(integration_id)
+            }
+            CapabilityDeclaration::Snapshot { snapshot } => {
+                environment.entities.contains_key(&snapshot.entity)
+            }
+        };
+        if is_enabled {
+            enabled.insert(capability);
+        }
+    }
+    let (requires_relay, requires_notary) = project_product_topology(&loaded.project);
+    if requires_relay {
+        declarations.insert(CapabilityId::RegistryRelayProduct);
+    }
+    if requires_notary {
+        declarations.insert(CapabilityId::RegistryNotaryProduct);
+    }
+    if environment.deployment.relay.is_some() {
+        enabled.insert(CapabilityId::RegistryRelayProduct);
+    }
+    if environment.deployment.notary.is_some() {
+        enabled.insert(CapabilityId::RegistryNotaryProduct);
+    }
+    for capability in declarations {
+        input.record_project_declaration(capability)?;
+    }
+    for capability in enabled {
+        input.record_environment_enablement(capability)?;
+    }
+
+    let mut usage = BTreeMap::<CapabilityId, CapabilityUsageCounts>::new();
+    for service in loaded.project.services.values() {
+        let mut service_capabilities = BTreeSet::new();
+        for consultation in service.consultations.values() {
+            if let Some(capability) =
+                integration_capabilities.get(consultation.integration.as_str())
+            {
+                service_capabilities.insert(*capability);
+                let counts = usage.entry(*capability).or_default();
+                counts.consultations = counts.consultations.checked_add(1).ok_or_else(|| {
+                    anyhow!("capability consultation count exceeds the report cap")
+                })?;
+            }
+        }
+        for capability in service_capabilities {
+            let counts = usage.entry(capability).or_default();
+            counts.services = counts
+                .services
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("capability service count exceeds the report cap"))?;
+        }
+        for claim in service.claims.values() {
+            if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
+                continue;
+            }
+            let consultation_name = claim_consultation_name(service, claim)?;
+            let consultation = service
+                .consultations
+                .get(consultation_name)
+                .ok_or_else(|| anyhow!("registry-backed claim consultation is unavailable"))?;
+            let capability = *integration_capabilities
+                .get(consultation.integration.as_str())
+                .ok_or_else(|| anyhow!("consultation capability is unavailable"))?;
+            let counts = usage.entry(capability).or_default();
+            counts.claims = counts
+                .claims
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("capability claim count exceeds the report cap"))?;
+        }
+        let product = match service.kind {
+            ServiceKind::RecordsApi => CapabilityId::RegistryRelayProduct,
+            ServiceKind::Evidence => CapabilityId::RegistryNotaryProduct,
+        };
+        let counts = usage.entry(product).or_default();
+        counts.services = counts
+            .services
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("product service count exceeds the report cap"))?;
+        counts.consultations = counts
+            .consultations
+            .checked_add(u32::try_from(service.consultations.len())?)
+            .ok_or_else(|| anyhow!("product consultation count exceeds the report cap"))?;
+        counts.claims = counts
+            .claims
+            .checked_add(u32::try_from(service.claims.len())?)
+            .ok_or_else(|| anyhow!("product claim count exceeds the report cap"))?;
+    }
+    if let Some(script_usage) = usage.get(&CapabilityId::SourceScript).copied() {
+        usage.insert(CapabilityId::RhaiRuntime, script_usage);
+        usage.insert(CapabilityId::RhaiAbi, script_usage);
+    }
+    for (capability, counts) in usage {
+        if counts != CapabilityUsageCounts::default() {
+            input.record_usage(capability, counts)?;
+        }
+    }
+    build_capability_inventory(input).map_err(anyhow::Error::from)
+}
+
+fn offline_preflight_input(
+    loaded: &LoadedRegistryProject,
+    environment: &EnvironmentDocument,
+    environment_name: &str,
+) -> Result<OfflinePreflightInput> {
+    let environment_file = format!("environments/{environment_name}.yaml");
+    let root = PreflightFieldAddress::new(PROJECT_FILE, "")?;
+    let environment_root = PreflightFieldAddress::new(&environment_file, "")?;
+    let mut input =
+        OfflinePreflightInput::new(&loaded.project.registry.id, environment_name.to_owned())?;
+    for capability in [
+        PreflightStaticCapability::ProjectModel,
+        PreflightStaticCapability::EnvironmentCompleteness,
+        PreflightStaticCapability::OriginRelationships,
+        PreflightStaticCapability::NonWideningBounds,
+    ] {
+        input.record_static_validation(capability, [root.clone(), environment_root.clone()]);
+    }
+
+    for (integration_id, integration) in &environment.integrations {
+        let integration = &integration.source;
+        let prefix = format!(
+            "/integrations/{}/source",
+            escape_explanation_pointer_segment(integration_id)
+        );
+        if let Some(credential) = &integration.credential {
+            for (reference, consumer, field) in [
+                (
+                    credential.username.as_ref(),
+                    PreflightSecretConsumer::SourceBasicUsername,
+                    "username",
+                ),
+                (
+                    credential.password.as_ref(),
+                    PreflightSecretConsumer::SourceBasicPassword,
+                    "password",
+                ),
+                (
+                    credential.token.as_ref(),
+                    PreflightSecretConsumer::SourceBearerToken,
+                    "token",
+                ),
+                (
+                    credential.client_id.as_ref(),
+                    PreflightSecretConsumer::SourceOauthClientId,
+                    "client_id",
+                ),
+                (
+                    credential.client_secret.as_ref(),
+                    PreflightSecretConsumer::SourceOauthClientSecret,
+                    "client_secret",
+                ),
+                (
+                    credential.value.as_ref(),
+                    PreflightSecretConsumer::SourceApiKeyValue,
+                    "value",
+                ),
+            ] {
+                if let Some(reference) = reference {
+                    add_preflight_secret(
+                        &mut input,
+                        &environment_file,
+                        &format!("{prefix}/credential/{field}/secret"),
+                        reference,
+                        consumer,
+                    )?;
+                }
+            }
+        }
+        add_preflight_transport_files(
+            &mut input,
+            &environment_file,
+            &prefix,
+            integration.ca.as_ref(),
+            integration.mtls.as_ref(),
+            PreflightRuntimeFileKind::SourceCa,
+            PreflightRuntimeFileKind::SourceMtlsCertificate,
+            PreflightSecretConsumer::SourceMtlsPrivateKey,
+        )?;
+        for (name, endpoint, ca_kind, certificate_kind, private_key_consumer) in [
+            (
+                "oauth",
+                integration.oauth.as_ref(),
+                PreflightRuntimeFileKind::SourceOauthCa,
+                PreflightRuntimeFileKind::SourceOauthMtlsCertificate,
+                PreflightSecretConsumer::SourceOauthMtlsPrivateKey,
+            ),
+            (
+                "jwks",
+                integration.jwks.as_ref(),
+                PreflightRuntimeFileKind::SourceJwksCa,
+                PreflightRuntimeFileKind::SourceJwksMtlsCertificate,
+                PreflightSecretConsumer::SourceJwksMtlsPrivateKey,
+            ),
+        ] {
+            if let Some(endpoint) = endpoint {
+                add_preflight_transport_files(
+                    &mut input,
+                    &environment_file,
+                    &format!("{prefix}/{name}"),
+                    endpoint.ca.as_ref(),
+                    endpoint.mtls.as_ref(),
+                    ca_kind,
+                    certificate_kind,
+                    private_key_consumer,
+                )?;
+            }
+        }
+    }
+
+    for (entity_id, entity) in &environment.entities {
+        if let RecordProvider::Postgres { connection, .. } = &entity.provider {
+            add_preflight_secret(
+                &mut input,
+                &environment_file,
+                &format!(
+                    "/entities/{}/provider/connection/secret",
+                    escape_explanation_pointer_segment(entity_id)
+                ),
+                connection,
+                PreflightSecretConsumer::EntityPostgresConnection,
+            )?;
+        }
+    }
+    if let Some(issuance) = &environment.issuance {
+        add_preflight_secret(
+            &mut input,
+            &environment_file,
+            "/issuance/signing_key/secret",
+            &issuance.signing_key,
+            PreflightSecretConsumer::IssuanceSigningKey,
+        )?;
+    }
+    for (caller_id, caller) in &environment.callers {
+        add_preflight_secret(
+            &mut input,
+            &environment_file,
+            &format!(
+                "/callers/{}/api_key_fingerprint/secret",
+                escape_explanation_pointer_segment(caller_id)
+            ),
+            &caller.api_key_fingerprint,
+            PreflightSecretConsumer::CallerApiKeyFingerprint,
+        )?;
+    }
+    if let Some(binding) = &environment.notary_relay {
+        add_preflight_runtime_file(
+            &mut input,
+            &environment_file,
+            "/notary_relay/token_file",
+            &binding.token_file,
+            PreflightRuntimeFileKind::NotaryToRelayToken,
+        )?;
+    }
+    if let Some(binding) = &environment.relay_state {
+        add_preflight_runtime_file(
+            &mut input,
+            &environment_file,
+            "/relay_state/postgresql/root_certificate_path",
+            &binding.postgresql.root_certificate_path,
+            PreflightRuntimeFileKind::RelayStateRootCertificate,
+        )?;
+    }
+    if let Some(binding) = &environment.notary_state {
+        add_preflight_runtime_file(
+            &mut input,
+            &environment_file,
+            "/notary_state/postgresql/root_certificate_path",
+            &binding.postgresql.root_certificate_path,
+            PreflightRuntimeFileKind::NotaryStateRootCertificate,
+        )?;
+    }
+    if let Some(oid4vci) = &environment.oid4vci {
+        for (reference, consumer, pointer) in [
+            (
+                &oid4vci.client.signing_key,
+                PreflightSecretConsumer::Oid4vciClientSigningKey,
+                "/oid4vci/client/signing_key/secret",
+            ),
+            (
+                &oid4vci.access_token.signing_key,
+                PreflightSecretConsumer::Oid4vciAccessTokenSigningKey,
+                "/oid4vci/access_token/signing_key/secret",
+            ),
+            (
+                &oid4vci.sensitive_state_key,
+                PreflightSecretConsumer::Oid4vciSensitiveStateKey,
+                "/oid4vci/sensitive_state_key/secret",
+            ),
+        ] {
+            add_preflight_secret(&mut input, &environment_file, pointer, reference, consumer)?;
+        }
+    }
+    Ok(input)
+}
+
+// Keeping the paired CA and mTLS classifications explicit at each call site
+// makes ownership mistakes visible during review.
+#[allow(clippy::too_many_arguments)]
+fn add_preflight_transport_files(
+    input: &mut OfflinePreflightInput,
+    environment_file: &str,
+    prefix: &str,
+    ca: Option<&CertificateAuthorityBinding>,
+    mtls: Option<&MutualTlsBinding>,
+    ca_kind: PreflightRuntimeFileKind,
+    certificate_kind: PreflightRuntimeFileKind,
+    private_key_consumer: PreflightSecretConsumer,
+) -> Result<()> {
+    if let Some(ca) = ca {
+        add_preflight_runtime_file(
+            input,
+            environment_file,
+            &format!("{prefix}/ca/file"),
+            &ca.file,
+            ca_kind,
+        )?;
+    }
+    if let Some(mtls) = mtls {
+        add_preflight_runtime_file(
+            input,
+            environment_file,
+            &format!("{prefix}/mtls/certificate_file"),
+            &mtls.certificate_file,
+            certificate_kind,
+        )?;
+        add_preflight_secret(
+            input,
+            environment_file,
+            &format!("{prefix}/mtls/private_key/secret"),
+            &mtls.private_key,
+            private_key_consumer,
+        )?;
+    }
+    Ok(())
+}
+
+fn add_preflight_secret(
+    input: &mut OfflinePreflightInput,
+    file: &str,
+    pointer: &str,
+    reference: &SecretReference,
+    consumer: PreflightSecretConsumer,
+) -> Result<()> {
+    input
+        .add_secret_reference(
+            &reference.secret,
+            consumer,
+            PreflightFieldAddress::new(file, pointer)?,
+        )
+        .map_err(anyhow::Error::from)
+}
+
+fn add_preflight_runtime_file(
+    input: &mut OfflinePreflightInput,
+    file: &str,
+    pointer: &str,
+    path: &Path,
+    kind: PreflightRuntimeFileKind,
+) -> Result<()> {
+    input
+        .add_runtime_file(path, kind, PreflightFieldAddress::new(file, pointer)?)
+        .map_err(anyhow::Error::from)
+}
+
 pub fn build_registry_project(options: &ProjectBuildOptions) -> Result<ProjectCommandReport> {
-    build_registry_project_inner(options, false, None)
+    let execution_context = ProjectExecutionContext::for_current_executable()?;
+    build_registry_project_with_context(options, &execution_context)
+}
+
+pub fn build_registry_project_with_baselines(
+    options: &ProjectBuildOptions,
+    baselines: &ProjectBuildBaselineSetOptions,
+) -> Result<ProjectCommandReport> {
+    let execution_context = ProjectExecutionContext::for_current_executable()?;
+    build_registry_project_with_baselines_and_context(options, baselines, &execution_context)
+}
+
+pub fn build_registry_project_with_context(
+    options: &ProjectBuildOptions,
+    execution_context: &ProjectExecutionContext,
+) -> Result<ProjectCommandReport> {
+    build_registry_project_inner(options, None, false, None, execution_context)
+}
+
+pub fn build_registry_project_with_baselines_and_context(
+    options: &ProjectBuildOptions,
+    baselines: &ProjectBuildBaselineSetOptions,
+    execution_context: &ProjectExecutionContext,
+) -> Result<ProjectCommandReport> {
+    build_registry_project_inner(options, Some(baselines), false, None, execution_context)
 }
 
 /// Build the closed local tutorial runtime in one atomic publication.
@@ -1347,37 +2610,109 @@ pub(crate) fn build_registry_project_for_local_tutorial(
     options: &ProjectBuildOptions,
     runtime_identity: Option<crate::RuntimeIdentity>,
 ) -> Result<ProjectCommandReport> {
-    build_registry_project_inner(options, true, runtime_identity)
+    let execution_context = ProjectExecutionContext::for_current_executable()?;
+    build_registry_project_inner(options, None, true, runtime_identity, &execution_context)
 }
 
-fn build_registry_project_inner(
+/// Compile, statically validate, and publish the local tutorial project without
+/// executing its authored fixtures.
+///
+/// This reduced-scope seam exists only for unit tests whose process is not a
+/// `registryctl` worker executable. It is not a complete project build and must
+/// not be used by production commands or end-to-end conformance tests.
+#[cfg(test)]
+pub(crate) fn build_registry_project_static_validation_only_for_unit_test(
     options: &ProjectBuildOptions,
-    local_tutorial_runtime: bool,
     runtime_identity: Option<crate::RuntimeIdentity>,
-) -> Result<ProjectCommandReport> {
-    validate_baseline_pair(options.against.as_deref(), options.anchor.as_deref())?;
+) -> Result<()> {
+    let baseline_paths = ApprovedBaselineSetPaths::build(options, None);
+    validate_approved_baseline_set_paths(baseline_paths)?;
     let loaded = load_registry_project(
         &options.project_directory,
         Some(options.environment.as_str()),
     )?;
     preflight_project_rhai_scripts(&loaded)?;
-    let baseline = load_verified_baseline(
-        options.against.as_deref(),
-        options.anchor.as_deref(),
+    let baselines = load_verified_approved_baseline_set(
+        baseline_paths,
         &loaded,
-    )?;
-    let mut compiled = compile_project(&loaded, baseline.as_ref())?;
-    if local_tutorial_runtime {
-        apply_local_tutorial_runtime_overrides(&mut compiled)?;
-    }
+        BaselineSetCompleteness::CompleteTopologyWhenPresent,
+    )
+    .map_err(|_| anyhow!("could not establish verified build baselines"))?;
+    let mut compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
+    apply_local_tutorial_runtime_overrides(&mut compiled)?;
     validate_generated_product_configs(&compiled)?;
-    let fixtures = execute_all_fixtures(&loaded, &compiled, None, None, false)?;
-    require_passing_fixtures(&fixtures)?;
     let output = loaded
         .root
         .join(BUILD_ROOT)
         .join(options.environment.as_str());
-    write_compiled_project(&loaded.root, &output, &compiled, runtime_identity)?;
+    write_compiled_project(
+        &loaded.root,
+        &output,
+        &compiled,
+        runtime_identity,
+        &loaded.project.registry.id,
+        &options.environment,
+        &loaded.artifact_inputs,
+    )?;
+    Ok(())
+}
+
+fn build_registry_project_inner(
+    options: &ProjectBuildOptions,
+    baseline_options: Option<&ProjectBuildBaselineSetOptions>,
+    local_tutorial_runtime: bool,
+    runtime_identity: Option<crate::RuntimeIdentity>,
+    execution_context: &ProjectExecutionContext,
+) -> Result<ProjectCommandReport> {
+    let baseline_paths = ApprovedBaselineSetPaths::build(options, baseline_options);
+    validate_approved_baseline_set_paths(baseline_paths)?;
+    let loaded = load_registry_project(
+        &options.project_directory,
+        Some(options.environment.as_str()),
+    )?;
+    preflight_project_rhai_scripts(&loaded)?;
+    let baselines = load_verified_approved_baseline_set(
+        baseline_paths,
+        &loaded,
+        BaselineSetCompleteness::CompleteTopologyWhenPresent,
+    )
+    .map_err(|_| anyhow!("could not establish verified build baselines"))?;
+    let mut compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
+    if local_tutorial_runtime {
+        apply_local_tutorial_runtime_overrides(&mut compiled)?;
+    }
+    validate_generated_product_configs(&compiled)?;
+    let (fixtures, generated_observations, call_budget_actual) =
+        execute_all_fixtures_with_coverage_observations(
+            &loaded,
+            &compiled,
+            None,
+            None,
+            false,
+            execution_context,
+        )?;
+    require_passing_fixtures(&fixtures)?;
+    let fixture_coverage = generate_fixture_coverage_report(
+        &loaded,
+        &fixtures,
+        &generated_observations,
+        call_budget_actual,
+    )?;
+    let output = loaded
+        .root
+        .join(BUILD_ROOT)
+        .join(options.environment.as_str());
+    let artifact_manifest = write_compiled_project(
+        &loaded.root,
+        &output,
+        &compiled,
+        runtime_identity,
+        &loaded.project.registry.id,
+        &options.environment,
+        &loaded.artifact_inputs,
+    )?;
+    let reported_output = ProjectRelativePath::new(format!("{BUILD_ROOT}/{}", options.environment))
+        .map_err(|error| anyhow!("invalid project-relative build output path: {error}"))?;
     Ok(ProjectCommandReport {
         schema_version: PROJECT_COMMAND_REPORT_SCHEMA_VERSION,
         status: "built",
@@ -1385,12 +2720,15 @@ fn build_registry_project_inner(
         environment: loaded.environment_name.clone(),
         fixtures,
         semantic_changes: compiled.semantic_changes,
-        baseline: if baseline.is_some() {
+        baseline: if !baselines.is_empty() {
             "verified_signed_bundle"
         } else {
             "initial_without_baseline"
         },
-        output: Some(output.display().to_string()),
+        output: Some(reported_output.as_str().to_string()),
+        semantic_impact: Some(compiled.semantic_impact),
+        artifact_manifest: Some(artifact_manifest),
+        fixture_coverage: Some(fixture_coverage),
         explanation: None,
     })
 }
@@ -1400,10 +2738,9 @@ fn apply_local_tutorial_runtime_overrides(compiled: &mut CompiledProject) -> Res
         .notary_private
         .get_mut(Path::new("config/notary.yaml"))
         .ok_or_else(|| anyhow!("generated local Notary config is absent"))?;
-    let mut notary_config: serde_norway::Value = serde_norway::from_slice(notary)
-        .context("generated local Notary config did not parse")?;
-    notary_config["server"]["bind"] =
-        serde_norway::Value::String("0.0.0.0:8081".to_string());
+    let mut notary_config: serde_norway::Value =
+        serde_norway::from_slice(notary).context("generated local Notary config did not parse")?;
+    notary_config["server"]["bind"] = serde_norway::Value::String("0.0.0.0:8081".to_string());
     notary_config["state"] = serde_norway::from_str("storage: in_memory\n")?;
     notary_config["evidence"]["signing_keys"] = serde_norway::from_str(&format!(
         "relay-workload:\n  provider: local_jwk_env\n  private_jwk_env: {}\n  alg: EdDSA\n  kid: {}\n  status: active\n",
@@ -1421,10 +2758,8 @@ fn apply_local_tutorial_runtime_overrides(compiled: &mut CompiledProject) -> Res
         .ok_or_else(|| anyhow!("generated local consultation Relay config is absent"))?;
     let mut relay_config: serde_norway::Value = serde_norway::from_slice(relay)
         .context("generated local consultation Relay config did not parse")?;
-    relay_config["server"]["bind"] =
-        serde_norway::Value::String("0.0.0.0:8082".to_string());
-    relay_config["auth"]["oidc"]["allow_dev_insecure_fetch_urls"] =
-        serde_norway::Value::Bool(true);
+    relay_config["server"]["bind"] = serde_norway::Value::String("0.0.0.0:8082".to_string());
+    relay_config["auth"]["oidc"]["allow_dev_insecure_fetch_urls"] = serde_norway::Value::Bool(true);
     relay_config["consultation"]["state_plane"]["root_certificate_path"] =
         serde_norway::Value::String("/run/registry-tls/state-plane-ca.pem".to_string());
     *relay = serde_norway::to_string(&relay_config)

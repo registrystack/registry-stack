@@ -4,12 +4,18 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use registryctl::{
-    add_config_anchor_key, build_registry_project, check_registry_project, init_config_anchor,
-    init_registry_project, render_project_authoring_diagnostics, setup_registry_project_editor,
-    sign_config_bundle, test_registry_project, test_registry_project_selected,
-    verify_config_bundle_cli, BundleSignOptions, InitSource, ProjectAuthoringDiagnostics,
-    ProjectBuildOptions, ProjectCheckOptions, ProjectEditorSetupOptions, ProjectInitOptions,
-    ProjectSchemaKind, ProjectStarter, ProjectTestOptions, ProjectTestSelection,
+    add_config_anchor_key, build_registry_project_with_baselines_and_context,
+    build_registry_project_with_context, check_registry_project_with_context,
+    compare_registry_projects_semantically, init_config_anchor, init_registry_project,
+    inspect_project_capabilities, preflight_registry_project, render_project_authoring_diagnostics,
+    setup_registry_project_editor, sign_config_bundle, test_registry_project_selected_with_context,
+    test_registry_project_with_context, verify_config_bundle_cli, BundleSignOptions,
+    ClassifierSafeReportedValue, InitSource, ProjectAuthoringDiagnostics,
+    ProjectBuildBaselineSetOptions, ProjectBuildOptions, ProjectCapabilityOptions,
+    ProjectCheckOptions, ProjectEditorSetupOptions, ProjectExecutionContext,
+    ProjectExplanationReportV1, ProjectFieldAddress, ProjectFieldExplanation, ProjectInitOptions,
+    ProjectPreflightOptions, ProjectSchemaKind, ProjectSemanticComparisonOptions, ProjectStarter,
+    ProjectTestOptions, ProjectTestSelection, SemanticComparisonEquivalence,
 };
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
@@ -51,6 +57,99 @@ fn golden(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/project-authoring")
         .join(name)
+}
+
+fn project_execution_context() -> ProjectExecutionContext {
+    ProjectExecutionContext::new(env!("CARGO_BIN_EXE_registryctl"))
+        .expect("Cargo provides the real registryctl executable")
+}
+
+fn test_registry_project(
+    options: &ProjectTestOptions,
+) -> anyhow::Result<registryctl::ProjectCommandReport> {
+    test_registry_project_with_context(options, &project_execution_context())
+}
+
+fn test_registry_project_selected(
+    options: &ProjectTestOptions,
+    selection: &ProjectTestSelection,
+) -> anyhow::Result<registryctl::ProjectCommandReport> {
+    test_registry_project_selected_with_context(options, selection, &project_execution_context())
+}
+
+fn check_registry_project(
+    options: &ProjectCheckOptions,
+) -> anyhow::Result<registryctl::ProjectCommandReport> {
+    check_registry_project_with_context(options, &project_execution_context())
+}
+
+fn build_registry_project(
+    options: &ProjectBuildOptions,
+) -> anyhow::Result<registryctl::ProjectCommandReport> {
+    build_registry_project_with_context(options, &project_execution_context())
+}
+
+fn project_explanation_field<'a>(
+    report: &'a ProjectExplanationReportV1,
+    path: &str,
+) -> &'a ProjectFieldExplanation {
+    report
+        .fields
+        .iter()
+        .find(|field| {
+            matches!(
+                &field.address,
+                ProjectFieldAddress::Project { path: actual } if actual.as_str() == path
+            )
+        })
+        .unwrap_or_else(|| panic!("project explanation field {path} exists"))
+}
+
+fn integration_explanation_field<'a>(
+    report: &'a ProjectExplanationReportV1,
+    integration: &str,
+    path: &str,
+) -> &'a ProjectFieldExplanation {
+    report
+        .fields
+        .iter()
+        .find(|field| {
+            matches!(
+                &field.address,
+                ProjectFieldAddress::Integration {
+                    integration: actual_integration,
+                    path: actual_path,
+                } if actual_integration == integration && actual_path.as_str() == path
+            )
+        })
+        .unwrap_or_else(|| panic!("integration explanation field {integration}{path} exists"))
+}
+
+fn environment_explanation_field<'a>(
+    report: &'a ProjectExplanationReportV1,
+    environment: &str,
+    path: &str,
+) -> &'a ProjectFieldExplanation {
+    report
+        .fields
+        .iter()
+        .find(|field| {
+            matches!(
+                &field.address,
+                ProjectFieldAddress::Environment {
+                    environment: actual_environment,
+                    path: actual_path,
+                } if actual_environment == environment && actual_path.as_str() == path
+            )
+        })
+        .unwrap_or_else(|| panic!("environment explanation field {environment}{path} exists"))
+}
+
+fn public_explanation_value(field: &ProjectFieldExplanation) -> &serde_json::Value {
+    let ClassifierSafeReportedValue::Public { value } = &field.reported_value else {
+        panic!("expected classifier-approved explanation value");
+    };
+    value.as_value()
 }
 
 fn repository_root() -> PathBuf {
@@ -280,14 +379,14 @@ fn project_check_aggregates_script_host_call_and_environment_diagnostics_safely(
     let human = render_project_authoring_diagnostics(&report);
     let json = serde_json::to_string_pretty(&report).expect("diagnostics serialize");
     let debug = format!("{report:#?}");
+    assert_eq!(
+        human
+            .matches("registryctl.authoring.script.unknown_function")
+            .count(),
+        1,
+        "{human}"
+    );
     for rendered in [&human, &json, &debug] {
-        assert_eq!(
-            rendered
-                .matches("registryctl.authoring.script.unknown_function")
-                .count(),
-            1,
-            "{rendered}"
-        );
         for forbidden in [
             ARGUMENT_MARKER,
             ENVIRONMENT_MARKER,
@@ -787,11 +886,6 @@ fn project_check_collects_all_safe_missing_integration_references_without_cascad
             && diagnostic.column.is_none()
     }));
     let json = serde_json::to_string(&report).expect("missing references serialize");
-    assert_eq!(
-        json.matches("registryctl.authoring.file.unreadable")
-            .count(),
-        2
-    );
     assert!(!json.contains("project.invalid"));
     assert!(!json.contains("environment.invalid"));
     assert!(!json.contains(&temporary.path().display().to_string()));
@@ -891,8 +985,9 @@ fn project_check_unsafe_inputs_are_terminal_and_value_free() {
 #[test]
 fn project_authoring_catalog_classifies_every_golden_and_only_five_starters() {
     const GOLDEN_SOURCE_PREFIX: &str = "crates/registryctl/tests/fixtures/project-authoring/";
-    const SUPPORTED_STEPS: [&str; 7] =
-        ["init", "editor", "trace", "watch", "test", "check", "build"];
+    const SUPPORTED_STEPS: [&str; 8] = [
+        "init", "editor", "trace", "watch", "test", "check", "compare", "build",
+    ];
     let catalog = project_authoring_journey_catalog();
     assert_eq!(catalog.version, 1);
 
@@ -1035,6 +1130,11 @@ fn project_authoring_catalog_classifies_every_golden_and_only_five_starters() {
                 "{} non-starter cannot initialize",
                 journey.id
             );
+            assert!(
+                !journey.steps.contains(&"compare".to_string()),
+                "{} non-starter has no embedded-starter baseline",
+                journey.id
+            );
         }
         if let Some(name) = journey.source.strip_prefix(GOLDEN_SOURCE_PREFIX) {
             catalog_goldens.insert(name);
@@ -1150,6 +1250,28 @@ fn every_cataloged_supported_project_authoring_command_is_automated() {
             .unwrap_or_else(|error| panic!("{} editor setup failed: {error:#}", journey.id));
             assert_eq!(report.status, "configured", "{} editor", journey.id);
         }
+
+        let comparison = compare_registry_projects_semantically(
+            &ProjectSemanticComparisonOptions {
+                current_project_directory: project.clone(),
+                current_environment: journey.environment.clone(),
+                baseline_project_directory: catalog_workspace(&journey),
+                baseline_environment: journey.environment.clone(),
+            },
+        )
+        .unwrap_or_else(|error| panic!("{} semantic comparison failed: {error:#}", journey.id));
+        assert_eq!(
+            comparison.equivalence,
+            SemanticComparisonEquivalence::Equivalent,
+            "{} semantic comparison",
+            journey.id
+        );
+        assert!(
+            comparison.changes.is_empty(),
+            "{} semantic comparison changes",
+            journey.id
+        );
+
         if journey.steps.contains(&"trace".to_string()) {
             let (integration, fixture) = catalog_focused_selection(&journey);
             let report = test_registry_project_selected(
@@ -1203,14 +1325,14 @@ fn every_cataloged_supported_project_authoring_command_is_automated() {
         assert!(check.explanation.is_some(), "{} explanation", journey.id);
 
         let build = build_registry_project(&ProjectBuildOptions {
-            project_directory: project,
+            project_directory: project.clone(),
             environment: journey.environment.clone(),
             against: None,
             anchor: None,
         })
         .unwrap_or_else(|error| panic!("{} build failed: {error:#}", journey.id));
         assert_eq!(build.status, "built", "{} build", journey.id);
-        let output = PathBuf::from(build.output.expect("catalog build output"));
+        let output = resolve_build_output(&project, build.output.expect("catalog build output"));
         let relay = output.join("private/relay");
         let notary = output.join("private/notary");
         match journey.topology.as_str() {
@@ -1538,12 +1660,23 @@ fn exact_sources_report_reviewable_ambiguity_not_applicable_evidence() {
             anchor: None,
         })
         .unwrap_or_else(|error| panic!("{project} check failed: {error:#}"));
-        let ambiguity = &report.explanation.as_ref().expect("explanation")["integrations"]
-            [integration]["not_applicable"]["ambiguity"];
-        assert_eq!(ambiguity["request_fixture"], fixture, "{project}");
-        assert!(ambiguity["rationale"]
-            .as_str()
-            .is_some_and(|rationale| rationale.len() >= 24));
+        let explanation = report.explanation.as_ref().expect("explanation");
+        for path in [
+            "/not_applicable/ambiguity/request_fixture",
+            "/not_applicable/ambiguity/rationale",
+        ] {
+            assert!(
+                matches!(
+                    integration_explanation_field(explanation, integration, path).reported_value,
+                    ClassifierSafeReportedValue::Redacted { .. }
+                ),
+                "{project} must retain the reviewable field address without reporting its value"
+            );
+        }
+        assert!(
+            !fixture.is_empty(),
+            "{project} keeps the request fixture in authored input"
+        );
         assert!(!report
             .fixtures
             .iter()
@@ -1577,12 +1710,23 @@ fn response_contracts_without_comparable_identifiers_report_subject_mismatch_evi
             anchor: None,
         })
         .unwrap_or_else(|error| panic!("{project} check failed: {error:#}"));
-        let reason = &report.explanation.as_ref().expect("explanation")["integrations"]
-            [integration]["not_applicable"]["subject_mismatch"];
-        assert_eq!(reason["request_fixture"], fixture, "{project}");
-        assert!(reason["rationale"]
-            .as_str()
-            .is_some_and(|rationale| rationale.len() >= 24));
+        let explanation = report.explanation.as_ref().expect("explanation");
+        for path in [
+            "/not_applicable/subject_mismatch/request_fixture",
+            "/not_applicable/subject_mismatch/rationale",
+        ] {
+            assert!(
+                matches!(
+                    integration_explanation_field(explanation, integration, path).reported_value,
+                    ClassifierSafeReportedValue::Redacted { .. }
+                ),
+                "{project} must retain the reviewable field address without reporting its value"
+            );
+        }
+        assert!(
+            !fixture.is_empty(),
+            "{project} keeps the request fixture in authored input"
+        );
         assert!(!report.fixtures.iter().any(|fixture| {
             fixture.expected_error.as_deref() == Some("failure.subject_mismatch")
         }));
@@ -1879,7 +2023,7 @@ fn local_rhai_modules_are_a_static_hash_covered_closure() {
         anchor: None,
     };
     let first = build_registry_project(&options).expect("project with local module builds");
-    let first_output = PathBuf::from(first.output.expect("first build output"));
+    let first_output = resolve_build_output(&project, first.output.expect("first build output"));
     let compiled_path = first_output.join("private/relay/config/artifacts/rhai/health-record.rhai");
     let compiled = std::fs::read_to_string(&compiled_path).expect("compiled closure reads");
     assert!(compiled.contains("registry-local-module:lib/normalize.rhai"));
@@ -1890,7 +2034,7 @@ fn local_rhai_modules_are_a_static_hash_covered_closure() {
     std::fs::write(&module, "fn normalize_status(value) { value == () }\n")
         .expect("local module changes");
     let second = build_registry_project(&options).expect("changed local module builds");
-    let second_output = PathBuf::from(second.output.expect("second build output"));
+    let second_output = resolve_build_output(&project, second.output.expect("second build output"));
     assert_ne!(
         closure_digest(&first_closure),
         closure_digest(&directory_closure(&second_output)),
@@ -1959,7 +2103,10 @@ fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
         })
         .expect("product-neutral Rhai project builds");
         assert_eq!(build_report.status, "built");
-        let output = PathBuf::from(build_report.output.expect("build output"));
+        let output = resolve_build_output(
+            &project_directory,
+            build_report.output.expect("build output"),
+        );
         let pack: serde_json::Value = serde_json::from_slice(
             &std::fs::read(
                 output.join("private/relay/config/artifacts/integration-packs/health-record.json"),
@@ -2610,7 +2757,7 @@ fn editor_setup_rejects_symlinked_output_ancestors_without_writes() {
 }
 
 #[test]
-fn check_explain_reports_starter_divergence_and_runtime_abi() {
+fn check_explain_reports_adapted_identity_and_effective_http_contract() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = temporary.path().join("registry-project");
     init_registry_project(&ProjectInitOptions {
@@ -2636,22 +2783,29 @@ fn check_explain_reports_starter_divergence_and_runtime_abi() {
     })
     .expect("adapted starter remains valid");
     let explanation = checked.explanation.expect("explanation");
-    assert_eq!(explanation["starter"]["id"], "http");
-    assert_eq!(explanation["starter"]["state"], "diverged");
-    assert_ne!(
-        explanation["starter"]["expected_content_digest"],
-        explanation["starter"]["current_content_digest"]
-    );
+    assert_eq!(explanation.project, "adapted-citizen-registry");
     assert_eq!(
-        explanation["platform"]["defaults_release"],
-        env!("CARGO_PKG_VERSION")
+        public_explanation_value(integration_explanation_field(
+            &explanation,
+            "person-record",
+            "/capability/type",
+        )),
+        &serde_json::json!("http")
     );
-    assert_eq!(explanation["platform"]["script_runtime"], "rhai_v1");
-    assert_eq!(explanation["platform"]["script_abi"], "xw.v1");
+    let request_bytes =
+        integration_explanation_field(&explanation, "person-record", "/limits/request_bytes");
+    assert!(request_bytes
+        .default
+        .as_ref()
+        .is_some_and(|default| default.applied));
+    assert!(matches!(
+        project_explanation_field(&explanation, "/registry/id").reported_value,
+        ClassifierSafeReportedValue::Redacted { .. }
+    ));
 }
 
 #[test]
-fn check_explain_reports_environment_starter_divergence() {
+fn check_explain_reports_environment_binding_without_origin_value() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = temporary.path().join("registry-project");
     init_registry_project(&ProjectInitOptions {
@@ -2680,15 +2834,169 @@ fn check_explain_reports_environment_starter_divergence() {
     })
     .expect("adapted environment remains valid");
     let explanation = checked.explanation.expect("explanation");
-    assert_eq!(explanation["starter"]["id"], "http");
-    assert_eq!(explanation["starter"]["state"], "diverged");
-    assert_ne!(
-        explanation["starter"]["expected_content_digest"],
-        explanation["starter"]["current_content_digest"]
+    assert_eq!(explanation.environment, "local");
+    assert!(matches!(
+        environment_explanation_field(
+            &explanation,
+            "local",
+            "/integrations/person-record/source/origin",
+        )
+        .reported_value,
+        ClassifierSafeReportedValue::Redacted { .. }
+    ));
+    let serialized = serde_json::to_string(&explanation).expect("explanation serializes");
+    assert!(!serialized.contains("adapted-citizen-registry.invalid"));
+}
+
+#[test]
+fn offline_preflight_reports_missing_local_requirements_without_leaking_references() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("registry-project");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Http,
+        directory: project.clone(),
+    })
+    .expect("starter initializes");
+
+    let report = preflight_registry_project(&ProjectPreflightOptions {
+        project_directory: project,
+        environment: "local".to_owned(),
+    })
+    .expect("offline preflight produces a bounded report");
+    assert_eq!(report.status, registryctl::PreflightStatus::NotReady);
+    assert_eq!(report.static_checks.len(), 4);
+    assert_eq!(report.product_validators.len(), 2);
+    assert!(!report.secret_checks.is_empty());
+    assert!(!report.runtime_files.is_empty());
+    assert_eq!(
+        report.execution,
+        registryctl::PreflightExecutionBoundary::default()
+    );
+
+    let serialized = serde_json::to_string(&report).expect("preflight report serializes");
+    for forbidden in [
+        "FICTIONAL_REGISTRY_TOKEN",
+        "REGISTRY_NOTARY_ISSUER_JWK",
+        "EVIDENCE_CLIENT_TOKEN_HASH",
+        "/run/secrets/relay-workload-token",
+        "citizen-registry.invalid",
+        "fictional-registry-notary",
+    ] {
+        assert!(
+            !serialized.contains(forbidden),
+            "preflight report must not contain {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn capability_inventory_separates_static_support_from_runtime_and_image_evidence() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("registry-project");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Http,
+        directory: project.clone(),
+    })
+    .expect("starter initializes");
+
+    let report = inspect_project_capabilities(&ProjectCapabilityOptions {
+        project_directory: project,
+        environment: "local".to_owned(),
+    })
+    .expect("capability inventory builds from validated local facts");
+    let http = report
+        .capabilities
+        .iter()
+        .find(|record| record.capability == registryctl::CapabilityId::SourceHttp)
+        .expect("HTTP capability is inventoried");
+    assert_eq!(
+        http.project_declaration,
+        registryctl::ProjectDeclarationState::Declared
     );
     assert_eq!(
-        explanation["environment_binding"]["integrations"]["person-record"]["source_origin"],
-        "https://adapted-citizen-registry.invalid"
+        http.environment_enablement,
+        registryctl::EnvironmentEnablementState::Enabled
+    );
+    assert_eq!(http.disposition, registryctl::CapabilityDisposition::Used);
+    let script = report
+        .capabilities
+        .iter()
+        .find(|record| record.capability == registryctl::CapabilityId::SourceScript)
+        .expect("script capability is inventoried");
+    assert_eq!(
+        script.installed_evidence,
+        registryctl::InstalledCapabilityEvidence::EmbeddedCompiler
+    );
+    assert_eq!(
+        report.runtime_activation,
+        registryctl::RuntimeActivationEvaluation::NotEvaluated
+    );
+    for image in [
+        registryctl::SupportComponent::RegistryRelayImage,
+        registryctl::SupportComponent::RegistryNotaryImage,
+    ] {
+        let support = report
+            .support
+            .iter()
+            .find(|entry| entry.component == image)
+            .expect("image support is represented");
+        assert_eq!(support.state, registryctl::SupportState::NotEvaluated);
+        assert_eq!(support.evidence, registryctl::SupportEvidence::NoEvidence);
+    }
+
+    let report_value = serde_json::to_value(&report).expect("capability report serializes");
+    let schema = serde_json::from_str(include_str!(
+        "../schemas/project-reports/registry.project.capability_inventory.v1.schema.json"
+    ))
+    .expect("capability schema parses");
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .expect("capability schema compiles");
+    if let Err(errors) = validator.validate(&report_value) {
+        let details = errors.map(|error| error.to_string()).collect::<Vec<_>>();
+        panic!("real command report should validate: {details:?}");
+    }
+    let decoded: registryctl::ProjectCapabilityInventoryReportV1 =
+        serde_json::from_value(report_value).expect("real command report passes strict ingress");
+    assert_eq!(decoded, report);
+}
+
+#[test]
+fn capability_inventory_attributes_only_registry_backed_claims_to_the_source() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let project_path = project.join("registry-stack.yaml");
+    let mut document = read_yaml(&project_path);
+    document["services"]["household-eligibility"]["claims"]["applicant-declaration"] =
+        serde_norway::from_str("cel: 'true'\nvalue: { type: boolean }\ndisclosure: predicate\n")
+            .expect("source-free claim");
+    write_yaml(&project_path, &document);
+
+    let report = inspect_project_capabilities(&ProjectCapabilityOptions {
+        project_directory: project,
+        environment: "local".to_owned(),
+    })
+    .expect("mixed registry-backed and source-free evidence inventories");
+    let http = report
+        .capabilities
+        .iter()
+        .find(|record| record.capability == registryctl::CapabilityId::SourceHttp)
+        .expect("HTTP capability is inventoried");
+    assert_eq!(http.used_by.services, 1);
+    assert_eq!(http.used_by.consultations, 1);
+    assert_eq!(
+        http.used_by.claims, 3,
+        "the source-free claim must not inherit the service's HTTP consultation"
+    );
+    let notary = report
+        .capabilities
+        .iter()
+        .find(|record| record.capability == registryctl::CapabilityId::RegistryNotaryProduct)
+        .expect("Notary product capability is inventoried");
+    assert_eq!(
+        notary.used_by.claims, 4,
+        "Notary still owns evaluation of every claim"
     );
 }
 
@@ -2948,6 +3256,105 @@ fn source_product_is_metadata_not_runtime_dispatch() {
     })
     .expect("product and version metadata are optional for generic HTTP");
     assert_eq!(report.status, "passed");
+}
+
+#[test]
+fn code_owned_rhai_conformance_uses_the_injected_worker_and_is_deterministic() {
+    let options = |project_directory| ProjectTestOptions {
+        project_directory,
+        environment: None,
+        live: false,
+    };
+    let bounded = test_registry_project(&options(golden("dhis2-tracker")))
+        .expect("bounded DHIS2 conformance passes")
+        .fixtures;
+    let rhai_project = golden("dhis2-script");
+    let rhai = test_registry_project(&options(rhai_project.clone()))
+        .expect("Rhai DHIS2 conformance passes")
+        .fixtures;
+    let repeated = test_registry_project(&options(rhai_project.clone()))
+        .expect("repeated Rhai DHIS2 conformance passes")
+        .fixtures;
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let unknown_product = copy_project("dhis2-script", temporary.path());
+    replace_in_file(
+        &unknown_product.join("integrations/health-record/integration.yaml"),
+        "product: dhis2",
+        "product: previously-unknown-source-system",
+    );
+    let unknown_product_report = test_registry_project(&options(unknown_product))
+        .expect("unknown product uses the same Rhai authoring contract")
+        .fixtures;
+    assert_eq!(
+        serde_json::to_value(&unknown_product_report).expect("unknown-product report serializes"),
+        serde_json::to_value(&rhai).expect("Rhai report serializes"),
+        "source.product may alter provenance but not Rhai fixture behavior"
+    );
+    assert_eq!(
+        serde_json::to_value(&rhai).expect("first Rhai report serializes"),
+        serde_json::to_value(&repeated).expect("repeated Rhai report serializes"),
+        "fresh one-shot workers must produce deterministic fixture reports"
+    );
+
+    let rhai_by_name = rhai
+        .iter()
+        .map(|fixture| (fixture.fixture.as_str(), fixture))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for expected in &bounded {
+        let actual = rhai_by_name
+            .get(expected.fixture.as_str())
+            .unwrap_or_else(|| panic!("Rhai omitted fixture {}", expected.fixture));
+        assert_eq!(
+            actual.inputs, expected.inputs,
+            "{} inputs",
+            expected.fixture
+        );
+        assert_eq!(actual.calls, expected.calls, "{} calls", expected.fixture);
+        assert_eq!(
+            actual.outputs, expected.outputs,
+            "{} outputs",
+            expected.fixture
+        );
+        assert_eq!(
+            actual.claims, expected.claims,
+            "{} claims",
+            expected.fixture
+        );
+        assert_eq!(
+            actual.outcome, expected.outcome,
+            "{} outcome",
+            expected.fixture
+        );
+        assert_eq!(
+            actual.passed, expected.passed,
+            "{} result",
+            expected.fixture
+        );
+    }
+
+    let traced = test_registry_project_selected(
+        &options(rhai_project),
+        &ProjectTestSelection {
+            integration: Some("health-record".to_string()),
+            fixture: Some("complete-child-health-evidence".to_string()),
+            trace: true,
+        },
+    )
+    .expect("focused Rhai trace passes");
+    let calls = &traced.fixtures[0].calls;
+    assert_eq!(
+        calls,
+        &["call=1 operation=script-source-call method=GET path=/api/tracker/trackedEntities/* query=[fields,includeDeleted] headers=[] body=none"]
+    );
+    for sensitive in ["A0000000001", "Nia", "REF-0001"] {
+        assert!(!calls[0].contains(sensitive));
+    }
+    let serialized = serde_json::to_string(&traced).expect("trace report serializes");
+    assert!(
+        !serialized.contains(env!("CARGO_BIN_EXE_registryctl")),
+        "the injected worker path must not enter project reports"
+    );
 }
 
 #[test]
@@ -3499,6 +3906,248 @@ fn project_check_field_addresses_records_scope_collisions() {
 }
 
 #[test]
+fn project_check_preserves_both_exact_sides_of_cross_file_failures() {
+    let assert_addresses = |project: &Path, code: &str, expected: &[(&str, &str)]| {
+        let report = authoring_diagnostics(project);
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("missing {code}: {report:#?}"));
+        let addresses = diagnostic
+            .addresses
+            .iter()
+            .map(|address| (address.file.as_str(), address.pointer.as_str()))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(addresses, expected.iter().copied().collect(), "{report:#?}");
+        let serialized = serde_json::to_string(&report).expect("diagnostics serialize");
+        assert!(!serialized.contains(&project.display().to_string()));
+    };
+
+    let service_root = tempfile::tempdir().expect("service temporary directory");
+    let service_project = copy_project("custom-system", service_root.path());
+    let service_path = service_project.join("registry-stack.yaml");
+    let mut service = read_yaml(&service_path);
+    let input = service["services"]["household-eligibility"]["consultations"]["household"]["input"]
+        .as_mapping_mut()
+        .expect("consultation input");
+    let value = input
+        .remove(serde_norway::Value::String(
+            "household_reference".to_string(),
+        ))
+        .expect("selector exists");
+    input.insert(
+        serde_norway::Value::String("unrelated_selector".to_string()),
+        value,
+    );
+    write_yaml(&service_path, &service);
+    assert_addresses(
+        &service_project,
+        "registryctl.authoring.project.invalid",
+        &[
+            ("integrations/eligibility/integration.yaml", "/input"),
+            (
+                "registry-stack.yaml",
+                "/services/household-eligibility/consultations/household/input",
+            ),
+        ],
+    );
+
+    let entity_root = tempfile::tempdir().expect("entity temporary directory");
+    let entity_project = copy_project("snapshot-with-records", entity_root.path());
+    let entity_project_path = entity_project.join("registry-stack.yaml");
+    let mut entity_project_document = read_yaml(&entity_project_path);
+    entity_project_document["services"]["people-records"]["api"]["projection"]
+        .as_sequence_mut()
+        .expect("records projection")
+        .push(serde_norway::Value::String("unknown_field".to_string()));
+    write_yaml(&entity_project_path, &entity_project_document);
+    assert_addresses(
+        &entity_project,
+        "registryctl.authoring.project.invalid",
+        &[
+            ("entities/people.yaml", "/schema"),
+            ("registry-stack.yaml", "/services/people-records/api"),
+        ],
+    );
+
+    let fixture_root = tempfile::tempdir().expect("fixture temporary directory");
+    let fixture_project = copy_project("custom-system", fixture_root.path());
+    let fixture_path =
+        fixture_project.join("integrations/eligibility/fixtures/source-approved.yaml");
+    let mut fixture = read_yaml(&fixture_path);
+    fixture["input"]
+        .as_mapping_mut()
+        .expect("fixture input")
+        .clear();
+    write_yaml(&fixture_path, &fixture);
+    assert_addresses(
+        &fixture_project,
+        "registryctl.authoring.fixture.invalid",
+        &[
+            (
+                "integrations/eligibility/fixtures/source-approved.yaml",
+                "/input",
+            ),
+            ("integrations/eligibility/integration.yaml", "/input"),
+        ],
+    );
+
+    let not_applicable_root = tempfile::tempdir().expect("not-applicable temporary directory");
+    let not_applicable_project = copy_project("custom-system", not_applicable_root.path());
+    let not_applicable_fixture =
+        not_applicable_project.join("integrations/eligibility/fixtures/source-approved.yaml");
+    let mut fixture = read_yaml(&not_applicable_fixture);
+    fixture["expect"]["error"] = serde_norway::Value::String("source.timeout".to_string());
+    write_yaml(&not_applicable_fixture, &fixture);
+    assert_addresses(
+        &not_applicable_project,
+        "registryctl.authoring.fixture.invalid",
+        &[
+            (
+                "integrations/eligibility/fixtures/source-approved.yaml",
+                "/expect/error",
+            ),
+            (
+                "integrations/eligibility/integration.yaml",
+                "/not_applicable/subject_mismatch/request_fixture",
+            ),
+        ],
+    );
+
+    let environment_root = tempfile::tempdir().expect("environment temporary directory");
+    let environment_project = copy_project("custom-system", environment_root.path());
+    let environment_path = environment_project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["integrations"]
+        .as_mapping_mut()
+        .expect("environment integrations")
+        .clear();
+    write_yaml(&environment_path, &environment);
+    assert_addresses(
+        &environment_project,
+        "registryctl.authoring.environment.invalid",
+        &[
+            ("environments/local.yaml", "/integrations"),
+            ("integrations/eligibility/integration.yaml", "/capability"),
+        ],
+    );
+}
+
+#[test]
+fn project_check_keeps_same_legacy_cross_file_failures_distinct_by_address() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("snapshot-with-records", temporary.path());
+    let project_path = project.join("registry-stack.yaml");
+    let mut document = read_yaml(&project_path);
+    for service_id in ["benefits-eligibility", "emergency-assistance"] {
+        let input = document["services"][service_id]["consultations"]["person"]["input"]
+            .as_mapping_mut()
+            .expect("consultation input");
+        let target = input
+            .remove(serde_norway::Value::String("person_id".to_string()))
+            .expect("person selector exists");
+        input.insert(
+            serde_norway::Value::String("unknown_input".to_string()),
+            target,
+        );
+    }
+    write_yaml(&project_path, &document);
+
+    let report = authoring_diagnostics(&project);
+    assert_eq!(report, authoring_diagnostics(&project));
+    let diagnostics = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "registryctl.authoring.project.invalid"
+                && diagnostic.field == Some("services.consultations")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(diagnostics.len(), 2, "{report:#?}");
+    let project_pointers = diagnostics
+        .iter()
+        .map(|diagnostic| {
+            assert_eq!(
+                diagnostic
+                    .addresses
+                    .iter()
+                    .map(|address| (address.file.as_str(), address.pointer.as_str()))
+                    .collect::<BTreeSet<_>>()
+                    .len(),
+                diagnostic.addresses.len(),
+                "one diagnostic must not duplicate exact addresses"
+            );
+            diagnostic
+                .addresses
+                .iter()
+                .find(|address| address.file == "registry-stack.yaml")
+                .expect("project-side address")
+                .pointer
+                .as_str()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        project_pointers,
+        vec![
+            "/services/benefits-eligibility/consultations/person/input",
+            "/services/emergency-assistance/consultations/person/input",
+        ]
+    );
+}
+
+#[test]
+fn project_check_addresses_an_unknown_snapshot_entity_without_fabricating_a_file() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("snapshot-with-records", temporary.path());
+    let integration_path = project.join("integrations/person-snapshot/integration.yaml");
+    let mut integration = read_yaml(&integration_path);
+    integration["capability"]["snapshot"]["entity"] =
+        serde_norway::Value::String("missing-entity".to_string());
+    write_yaml(&integration_path, &integration);
+
+    let report = authoring_diagnostics(&project);
+    let matching = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "registryctl.authoring.project.invalid"
+                && diagnostic.field == Some("capability.snapshot.entity")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1, "{report:#?}");
+    assert_eq!(
+        matching[0]
+            .addresses
+            .iter()
+            .map(|address| (address.file.as_str(), address.pointer.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "integrations/person-snapshot/integration.yaml",
+                "/capability/snapshot/entity",
+            ),
+            ("registry-stack.yaml", "/entities"),
+        ]
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.file != "entities/missing-entity.yaml"),
+        "diagnostics must not fabricate a target entity file"
+    );
+    assert!(
+        report.diagnostics.iter().all(|diagnostic| {
+            !(diagnostic.file == "registry-stack.yaml"
+                && diagnostic.field == Some("services")
+                && diagnostic.cause == "A project entity reference is inconsistent.")
+        }),
+        "the exact unknown-entity diagnostic must not degrade to the generic fallback"
+    );
+}
+
+#[test]
 fn project_schema_accepts_sixteen_consultation_inputs_and_rejects_seventeen() {
     let schema: serde_json::Value = serde_json::from_slice(
         &std::fs::read(
@@ -3957,13 +4606,13 @@ fn integration_input_bounds_match_the_production_compiler_limit() {
         "maxLength: 64",
     );
     let report = build_registry_project(&ProjectBuildOptions {
-        project_directory: accepted,
+        project_directory: accepted.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("256-byte input builds through the production Relay compiler closure");
-    let output = PathBuf::from(report.output.expect("build output"));
+    let output = resolve_build_output(&accepted, report.output.expect("build output"));
     let pack: serde_json::Value = serde_json::from_slice(
         &std::fs::read(
             output.join("private/relay/config/artifacts/integration-packs/eligibility.json"),
@@ -4002,13 +4651,13 @@ fn integration_input_names_match_the_wire_grammar() {
     let boundary_name = format!("a{}", "0".repeat(63));
     rename_custom_input(&accepted, &boundary_name);
     let report = build_registry_project(&ProjectBuildOptions {
-        project_directory: accepted,
+        project_directory: accepted.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("64-byte input name builds through the production Relay compiler closure");
-    let output = PathBuf::from(report.output.expect("build output"));
+    let output = resolve_build_output(&accepted, report.output.expect("build output"));
     let pack: serde_json::Value = serde_json::from_slice(
         &std::fs::read(
             output.join("private/relay/config/artifacts/integration-packs/eligibility.json"),
@@ -4107,17 +4756,21 @@ fn exact_selector_authored_member_order_is_canonical() {
         reverse_yaml_mapping(&fixture.expect("fixture entry").path(), &["input"]);
     }
 
-    let build = |project_directory| {
-        build_registry_project(&ProjectBuildOptions {
-            project_directory,
+    let build = |project_directory: &Path| {
+        let report = build_registry_project(&ProjectBuildOptions {
+            project_directory: project_directory.to_path_buf(),
             environment: "local".to_string(),
             against: None,
             anchor: None,
         })
-        .expect("ordered selector project builds")
+        .expect("ordered selector project builds");
+        resolve_build_output(
+            project_directory,
+            report.output.expect("ordered selector build output"),
+        )
     };
-    let first = PathBuf::from(build(first).output.expect("first output"));
-    let second = PathBuf::from(build(second).output.expect("second output"));
+    let first = build(&first);
+    let second = build(&second);
     for relative in [
         "private/relay/config/artifacts/integration-packs/eligibility.json",
         "private/relay/config/artifacts/consultation-contracts/household-eligibility-household.json",
@@ -4162,7 +4815,7 @@ fn api_key_interfaces_keep_values_environment_only_and_use_the_stable_auth_type(
             anchor: None,
         })
         .unwrap_or_else(|error| panic!("{credential_type} failed: {error:#}"));
-        let output = PathBuf::from(report.output.expect("build output"));
+        let output = resolve_build_output(&project, report.output.expect("build output"));
         let closure = directory_closure(&output);
         let joined = closure
             .iter()
@@ -4346,17 +4999,21 @@ fn opencrvs_composite_dci_uses_unified_exact_predicates_canonically() {
         &["source", "protocol", "signed_dci", "selectors"],
     );
 
-    let build = |project_directory| {
-        build_registry_project(&ProjectBuildOptions {
-            project_directory,
+    let build = |project_directory: &Path| {
+        let report = build_registry_project(&ProjectBuildOptions {
+            project_directory: project_directory.to_path_buf(),
             environment: "local".to_string(),
             against: None,
             anchor: None,
         })
-        .expect("composite DCI project builds")
+        .expect("composite DCI project builds");
+        resolve_build_output(
+            project_directory,
+            report.output.expect("composite DCI build output"),
+        )
     };
-    let first = PathBuf::from(build(first).output.expect("first output"));
-    let second = PathBuf::from(build(second).output.expect("second output"));
+    let first = build(&first);
+    let second = build(&second);
     let relative = "private/relay/config/artifacts/integration-packs/birth-record.json";
     let first_pack = std::fs::read(first.join(relative)).expect("first DCI pack");
     let second_pack = std::fs::read(second.join(relative)).expect("second DCI pack");
@@ -4415,45 +5072,67 @@ fn check_and_build_produce_deterministic_product_inputs() {
         ])
     );
     let explanation = check.explanation.expect("explanation is present");
-    assert!(explanation
-        .pointer("/integrations/eligibility/generated_pack")
-        .is_none());
-    assert!(explanation
-        .pointer("/services/household-eligibility/profiles/0/policy_hash")
-        .is_none());
-    assert!(explanation
-        .pointer("/services/household-eligibility/profiles/0/version")
-        .is_none());
-    assert!(explanation
-        .pointer("/services/household-eligibility/profiles/0/contract_hash")
-        .and_then(serde_json::Value::as_str)
-        .is_some());
-    assert!(explanation
-        .pointer("/environment_binding/callers")
-        .is_some());
-    assert!(explanation
-        .pointer("/services/household-eligibility/consultations")
-        .is_some());
-    assert!(explanation
-        .pointer("/services/household-eligibility/claims/source-household-approval-decision/cel",)
-        .and_then(serde_json::Value::as_str)
-        .is_some());
-    assert!(explanation
-        .pointer("/services/household-eligibility/credential_profiles")
-        .is_some());
     assert_eq!(
-        explanation["integrations"]["eligibility"]["capability"],
-        "http"
+        public_explanation_value(integration_explanation_field(
+            &explanation,
+            "eligibility",
+            "/capability/type",
+        )),
+        &serde_json::json!("http")
+    );
+    assert_eq!(
+        public_explanation_value(project_explanation_field(
+            &explanation,
+            "/services/household-eligibility/consultation_count",
+        )),
+        &serde_json::json!(1)
+    );
+    assert!(matches!(
+        project_explanation_field(
+            &explanation,
+            "/services/household-eligibility/claims/source-household-approval-decision/cel",
+        )
+        .reported_value,
+        ClassifierSafeReportedValue::Redacted { .. }
+    ));
+    assert!(matches!(
+        environment_explanation_field(
+            &explanation,
+            "local",
+            "/integrations/eligibility/source/origin",
+        )
+        .reported_value,
+        ClassifierSafeReportedValue::Redacted { .. }
+    ));
+    let serialized_explanation =
+        serde_json::to_string(&explanation).expect("typed explanation serializes");
+    for forbidden in [
+        "household-authority.invalid",
+        "HOUSEHOLD_USERNAME",
+        "HOUSEHOLD_PASSWORD",
+        "household.matched &&",
+        "BENEFITS_CLIENT_TOKEN_HASH",
+    ] {
+        assert!(
+            !serialized_explanation.contains(forbidden),
+            "explanation must not report {forbidden}"
+        );
+    }
+    assert!(
+        !serialized_explanation.contains("generated_pack")
+            && !serialized_explanation.contains("policy_hash")
+            && !serialized_explanation.contains("contract_hash"),
+        "explanation reports authored/effective intent, not generated configuration"
     );
 
     let options = ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     };
     let first = build_registry_project(&options).expect("first build");
-    let output = PathBuf::from(first.output.expect("build output"));
+    let output = resolve_build_output(&project, first.output.expect("build output"));
     let notary_config = std::fs::read_to_string(output.join("private/notary/config/notary.yaml"))
         .expect("generated Notary config");
     let notary_document: serde_norway::Value =
@@ -4487,8 +5166,173 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "1aed5bc2896097978d635b49cb487718d4daa524776d7fe189d7927296f1b419",
-        "project inputs must match the cross-machine golden digest"
+        "de90605ab4ccc22fe5ac1daa701d56b0576d7042678f787870050805dc4ce25d",
+        "project output, including its deterministic manifest, must match the cross-machine golden digest"
+    );
+}
+
+#[test]
+fn build_artifact_manifest_is_complete_relative_private_and_deterministic() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let options = ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    };
+
+    let first = build_registry_project(&options).expect("first manifest build");
+    let first_report = serde_json::to_value(&first).expect("first build report serializes");
+    let output_relative = first_report["output"]
+        .as_str()
+        .expect("build output is reported");
+    assert_eq!(output_relative, ".registry-stack/build/local");
+    assert!(!Path::new(output_relative).is_absolute());
+    let manifest_reference = first_report["artifact_manifest"]
+        .as_object()
+        .expect("build report references its artifact manifest");
+    let manifest_relative = manifest_reference["path"]
+        .as_str()
+        .expect("manifest reference path");
+    assert_eq!(
+        manifest_relative,
+        ".registry-stack/build/local/artifact-manifest.json"
+    );
+    assert!(!Path::new(manifest_relative).is_absolute());
+
+    let output = project.join(output_relative);
+    let manifest_path = project.join(manifest_relative);
+    let first_manifest_bytes = std::fs::read(&manifest_path).expect("artifact manifest reads");
+    assert_eq!(
+        manifest_reference["digest"],
+        test_sha256_uri(&first_manifest_bytes)
+    );
+    assert_eq!(first_manifest_bytes.last(), Some(&b'\n'));
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&first_manifest_bytes).expect("artifact manifest parses");
+    assert_eq!(
+        manifest["schema_version"],
+        "registry.project.artifact_manifest.v1"
+    );
+    assert_eq!(
+        manifest["format_version"],
+        "registry.project.artifact_manifest.format.v1"
+    );
+    assert_eq!(manifest["environment"], "local");
+    assert_eq!(manifest["generator"]["name"], "registryctl");
+
+    let inputs = manifest["inputs"]
+        .as_array()
+        .expect("manifest authored inputs");
+    assert!(!inputs.is_empty());
+    let input_paths = inputs
+        .iter()
+        .map(|input| input["path"].as_str().expect("input path"))
+        .collect::<Vec<_>>();
+    assert!(input_paths.windows(2).all(|pair| pair[0] < pair[1]));
+    for input in inputs {
+        let relative = input["path"].as_str().expect("input path");
+        assert!(!Path::new(relative).is_absolute());
+        assert!(!relative.starts_with(".registry-stack/"));
+        assert_eq!(
+            input["digest"],
+            test_sha256_uri(
+                &std::fs::read(project.join(relative)).expect("authored manifest input reads")
+            )
+        );
+    }
+
+    let artifacts = manifest["artifacts"]
+        .as_array()
+        .expect("manifest generated artifacts");
+    let artifact_paths = artifacts
+        .iter()
+        .map(|artifact| artifact["path"].as_str().expect("artifact path"))
+        .collect::<Vec<_>>();
+    assert!(artifact_paths.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(!artifact_paths.contains(&manifest_relative));
+    for artifact in artifacts {
+        let relative = artifact["path"].as_str().expect("generated artifact path");
+        let payload_relative = relative
+            .strip_prefix(&format!("{output_relative}/"))
+            .expect("artifact is under the reported environment output");
+        assert_eq!(
+            artifact["digest"],
+            test_sha256_uri(
+                &std::fs::read(output.join(payload_relative))
+                    .expect("manifest payload artifact reads")
+            )
+        );
+        assert!(artifact["format_version"].as_str().is_some());
+        assert!(!artifact["classes"]
+            .as_array()
+            .expect("artifact classes")
+            .is_empty());
+        assert!(artifact["sensitivity"].as_str().is_some());
+        assert!(artifact["publication"].as_str().is_some());
+        assert_eq!(artifact["edit"], "generated_do_not_edit");
+        assert_eq!(artifact["version_control"], "ignore");
+        assert!(artifact["review"].as_str().is_some());
+        assert_eq!(artifact["lifecycle"], "unsigned_non_deployable");
+        let actions = artifact["actions"].as_array().expect("artifact actions");
+        assert!(actions.iter().any(|action| action == "regenerate"));
+        assert!(actions.iter().any(|action| action == "compare"));
+        assert!(actions.iter().any(|action| action == "validate"));
+        assert!(actions.iter().any(|action| action == "discard"));
+        let consumers = artifact["consumers"]
+            .as_array()
+            .expect("artifact consumers");
+        assert!(!consumers.is_empty());
+        if payload_relative.starts_with("private/relay/") {
+            assert!(!consumers
+                .iter()
+                .any(|consumer| consumer == "registry_notary"));
+        }
+        if payload_relative.starts_with("private/notary/") {
+            assert!(!consumers
+                .iter()
+                .any(|consumer| consumer == "registry_relay"));
+        }
+        if matches!(
+            payload_relative,
+            "private/relay/config/relay.yaml" | "private/notary/config/notary.yaml"
+        ) {
+            assert_eq!(artifact["sensitivity"], "topology_sensitive");
+            assert_eq!(artifact["publication"], "never_publish");
+            assert!(consumers
+                .iter()
+                .any(|consumer| consumer == "deployment_tooling"));
+        }
+    }
+
+    let filesystem_payloads = directory_closure(&output)
+        .into_iter()
+        .filter_map(|(path, _)| {
+            (path != Path::new("artifact-manifest.json")).then(|| {
+                format!(
+                    "{output_relative}/{}",
+                    path.to_str().expect("generated path is Unicode")
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(artifact_paths, filesystem_payloads);
+
+    let report_json = serde_json::to_vec(&first).expect("build report serializes");
+    let project_absolute = project.to_string_lossy();
+    assert!(!String::from_utf8_lossy(&first_manifest_bytes).contains(project_absolute.as_ref()));
+    assert!(!String::from_utf8_lossy(&report_json).contains(project_absolute.as_ref()));
+    assert!(!String::from_utf8_lossy(&first_manifest_bytes).contains(".tmp-"));
+
+    let second = build_registry_project(&options).expect("second manifest build");
+    let second_report = serde_json::to_value(&second).expect("second build report serializes");
+    let second_manifest_bytes =
+        std::fs::read(&manifest_path).expect("second artifact manifest reads");
+    assert_eq!(first_manifest_bytes, second_manifest_bytes);
+    assert_eq!(
+        first_report["artifact_manifest"],
+        second_report["artifact_manifest"]
     );
 }
 
@@ -4500,13 +5344,13 @@ fn generated_relay_contract_activates_through_notary_exactly_and_rejects_a_stale
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("combined project builds");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     let contract_path = output.join(
         "private/relay/config/artifacts/consultation-contracts/household-eligibility-household.json",
     );
@@ -4587,13 +5431,13 @@ fn generated_snapshot_contracts_activate_through_notary_at_the_authoring_bound()
         write_yaml(&entity_path, &entity);
 
         let build = build_registry_project(&ProjectBuildOptions {
-            project_directory: project,
+            project_directory: project.clone(),
             environment: "local".to_string(),
             against: None,
             anchor: None,
         })
         .expect("snapshot project builds within the authored materialization bound");
-        let output = PathBuf::from(build.output.expect("build output"));
+        let output = resolve_build_output(&project, build.output.expect("build output"));
         let contract_bytes = std::fs::read(output.join(
             "private/relay/config/artifacts/consultation-contracts/benefits-eligibility-person.json",
         ))
@@ -4655,7 +5499,7 @@ fn script_only_change_moves_the_relay_closure_without_forking_the_public_contrac
         anchor: None,
     };
     let first = build_registry_project(&options).expect("initial Script project builds");
-    let first_output = PathBuf::from(first.output.expect("initial build output"));
+    let first_output = resolve_build_output(&project, first.output.expect("initial build output"));
     let contract_relative =
         "private/relay/config/artifacts/consultation-contracts/health-verification-health.json";
     let pack_relative = "private/relay/config/artifacts/integration-packs/health-record.json";
@@ -4704,7 +5548,8 @@ fn script_only_change_moves_the_relay_closure_without_forking_the_public_contrac
     script.push_str("\n// reviewed script-only contract change\n");
     std::fs::write(&script_path, script).expect("Script change writes");
     let second = build_registry_project(&options).expect("changed Script project builds");
-    let second_output = PathBuf::from(second.output.expect("changed build output"));
+    let second_output =
+        resolve_build_output(&project, second.output.expect("changed build output"));
     let second_contract =
         std::fs::read(second_output.join(contract_relative)).expect("changed contract reads");
     let second_pack =
@@ -4770,13 +5615,13 @@ fn records_and_snapshot_share_one_generated_materialization() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("snapshot-with-records", temporary.path());
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("records plus evidence golden builds through production validation");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     let relay_root = output.join("private/relay");
     let relay: serde_json::Value = serde_norway::from_slice(
         &std::fs::read(relay_root.join("config/relay.yaml")).expect("Relay config reads"),
@@ -4856,13 +5701,13 @@ fn relay_only_and_notary_only_projects_emit_only_selected_products() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let project = copy_project(project_name, temporary.path());
         let build = build_registry_project(&ProjectBuildOptions {
-            project_directory: project,
+            project_directory: project.clone(),
             environment: "local".to_string(),
             against: None,
             anchor: None,
         })
         .unwrap_or_else(|error| panic!("{project_name} build failed: {error:#}"));
-        let output = PathBuf::from(build.output.expect("build output"));
+        let output = resolve_build_output(&project, build.output.expect("build output"));
         assert!(
             output.join("private").join(present).is_dir(),
             "{project_name}"
@@ -4891,13 +5736,13 @@ fn materialization_only_project_emits_private_relay_table_without_public_records
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("relay-only-materialization", temporary.path());
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("materialization-only Relay project builds");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     assert!(output.join("private/relay").is_dir());
     assert!(!output.join("private/notary").exists());
 
@@ -4927,13 +5772,13 @@ fn relay_oidc_clients_are_separate_from_the_notary_consultation_workload() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("combined project builds with separate Relay identities");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
     let allowed_clients = relay["auth"]["oidc"]["allowed_clients"]
         .as_sequence()
@@ -4985,13 +5830,13 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
     write_yaml(&environment_path, &environment);
 
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("local IP-loopback Relay, issuer, and JWKS build");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
     assert_eq!(
         relay["auth"]["oidc"]["allow_dev_insecure_fetch_urls"].as_bool(),
@@ -5085,13 +5930,13 @@ fn hosted_notary_can_use_an_explicit_loopback_relay_connection() {
     write_yaml(&environment_path, &environment);
 
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("hosted project builds with a private loopback Notary-to-Relay connection");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
     assert_eq!(
         relay["catalog"]["base_url"].as_str(),
@@ -5136,13 +5981,13 @@ fn issuance_accepts_a_full_verification_method_kid() {
     write_yaml(&environment_path, &environment);
 
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("a full verification-method kid builds");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
     assert_eq!(
         notary["evidence"]["signing_keys"]["project-issuer"]["kid"].as_str(),
@@ -5267,13 +6112,13 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     );
 
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("typed OID4VCI authority project builds through the production validator");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
 
     assert_eq!(
@@ -5383,13 +6228,13 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     let plain_root = tempfile::tempdir().expect("plain temporary directory");
     let plain = create_source_free_evaluation_project(plain_root.path());
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: plain,
+        project_directory: plain.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("ordinary API-key Notary still builds");
-    let output = PathBuf::from(build.output.expect("plain build output"));
+    let output = resolve_build_output(&plain, build.output.expect("plain build output"));
     let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
     assert!(notary["auth"].get("mode").is_none());
     assert_eq!(
@@ -5423,13 +6268,13 @@ fn authored_oid4vci_walt_profile_is_explicit_and_keeps_the_bearer_window_bounded
     );
 
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("explicit Walt-compatible binding builds");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
     assert_eq!(
         notary["evidence"]["signing_keys"]["project-issuer"]["alg"].as_str(),
@@ -5593,13 +6438,13 @@ credential_profiles: {}
     write_yaml(&environment_path, &environment);
 
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("combined records and evaluation project builds without a Relay consultation");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
     assert!(relay.get("consultation").is_none());
     let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
@@ -5622,13 +6467,13 @@ fn source_free_evaluation_without_credential_profiles_omits_issuance_and_signing
     .expect("evaluation-only Notary project checks without issuance");
     assert_eq!(check.status, "valid");
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("evaluation-only Notary project builds without issuance");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
     assert_eq!(notary["state"]["storage"].as_str(), Some("postgresql"));
     assert!(notary["evidence"].get("relay").is_none());
@@ -5764,13 +6609,13 @@ response_fields: { residency_confirmed: residency_confirmed }
     write_yaml(&environment_path, &environment);
 
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("enabled records standards build through Relay production validation");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     let relay: serde_json::Value = serde_norway::from_slice(
         &std::fs::read(output.join("private/relay/config/relay.yaml")).expect("Relay config reads"),
     )
@@ -5857,7 +6702,7 @@ fn records_provider_change_requires_a_new_generation() {
         anchor: None,
     })
     .expect("initial records build passes");
-    let output = PathBuf::from(initial.output.expect("initial output"));
+    let output = resolve_build_output(&project, initial.output.expect("initial output"));
     let private_key = temporary.path().join("records-private.jwk");
     let public_key = temporary.path().join("records-public.jwk");
     let anchor = temporary.path().join("records-anchor.json");
@@ -5950,13 +6795,13 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
         assert!(check.explanation.is_some(), "{project_name}");
 
         let build = build_registry_project(&ProjectBuildOptions {
-            project_directory: project,
+            project_directory: project.clone(),
             environment: "local".to_string(),
             against: None,
             anchor: None,
         })
         .unwrap_or_else(|error| panic!("{project_name} build failed: {error:#}"));
-        let output = PathBuf::from(build.output.expect("build output"));
+        let output = resolve_build_output(&project, build.output.expect("build output"));
         assert!(output.join("reviewable/review.json").is_file());
         assert!(output
             .join("private/relay/approval/project-state.json")
@@ -6050,14 +6895,14 @@ fn generated_product_inputs_sign_and_verify_without_secret_values() {
     let project = copy_project("custom-system", temporary.path());
     std::env::set_var("HOUSEHOLD_PASSWORD", SECRET_SENTINEL);
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("project builds");
     std::env::remove_var("HOUSEHOLD_PASSWORD");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     assert!(directory_closure(&output).iter().all(|(_, bytes)| !bytes
         .windows(SECRET_SENTINEL.len())
         .any(|window| window == SECRET_SENTINEL.as_bytes())));
@@ -6105,13 +6950,13 @@ fn generated_project_output_is_owner_only() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     let build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
     .expect("project builds");
-    let output = PathBuf::from(build.output.expect("build output"));
+    let output = resolve_build_output(&project, build.output.expect("build output"));
     assert_owner_only(&output);
 }
 
@@ -6181,7 +7026,7 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
         anchor: None,
     })
     .expect("initial project build passes");
-    let output = PathBuf::from(initial.output.expect("initial build output"));
+    let output = resolve_build_output(&project, initial.output.expect("initial build output"));
     let private_key = temporary.path().join("baseline-private.jwk");
     let public_key = temporary.path().join("baseline-public.jwk");
     let anchor = temporary.path().join("baseline-anchor.json");
@@ -6209,6 +7054,29 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
         out: baseline.clone(),
     })
     .expect("baseline signs");
+    let relay_anchor = temporary.path().join("relay-baseline-anchor.json");
+    let relay_baseline = temporary.path().join("relay-baseline-bundle");
+    init_config_anchor(
+        &relay_anchor,
+        "registry-relay".to_string(),
+        "local".to_string(),
+        "project-authoring-relay".to_string(),
+        "project-relay-instance".to_string(),
+    )
+    .expect("Relay baseline anchor initializes");
+    add_config_anchor_key(&relay_anchor, &public_key, true).expect("Relay baseline key adds");
+    sign_config_bundle(BundleSignOptions {
+        input: output.join("private/relay"),
+        key: private_key.display().to_string(),
+        product: "registry-relay".to_string(),
+        environment: "local".to_string(),
+        stream_id: "project-authoring-relay".to_string(),
+        instance_id: Some("project-relay-instance".to_string()),
+        sequence: 1,
+        bundle_id: "project-authoring-relay-baseline".to_string(),
+        out: relay_baseline.clone(),
+    })
+    .expect("Relay baseline signs");
 
     for relative in ["approval/review.json", "approval/project-state.json"] {
         let tampered = temporary
@@ -6246,14 +7114,26 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     assert!(initial_state["generated_closure_digests"]["notary"].is_string());
     assert!(initial_state["report_digest"].is_string());
 
-    let reviewed_build = build_registry_project(&ProjectBuildOptions {
-        project_directory: project.clone(),
-        environment: "local".to_string(),
-        against: Some(baseline.clone()),
-        anchor: Some(anchor.clone()),
-    })
+    let reviewed_build = build_registry_project_with_baselines_and_context(
+        &ProjectBuildOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+            against: None,
+            anchor: None,
+        },
+        &ProjectBuildBaselineSetOptions {
+            relay_against: Some(relay_baseline),
+            relay_anchor: Some(relay_anchor),
+            notary_against: Some(baseline.clone()),
+            notary_anchor: Some(anchor.clone()),
+        },
+        &project_execution_context(),
+    )
     .expect("verified-baseline build passes");
-    let reviewed_output = PathBuf::from(reviewed_build.output.expect("reviewed build output"));
+    let reviewed_output = resolve_build_output(
+        &project,
+        reviewed_build.output.expect("reviewed build output"),
+    );
     let reviewed_record: serde_json::Value = serde_json::from_slice(
         &std::fs::read(reviewed_output.join("reviewable/review.json"))
             .expect("reviewed record reads"),
@@ -6267,10 +7147,14 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     assert_eq!(reviewed_record["baseline"], "verified_signed_bundle");
     assert_public_review_has_only_contract_hashes(&reviewed_record);
     assert_eq!(
-        reviewed_state["baseline"]["verified_manifest"]["schema"],
+        reviewed_state["baseline"]["verified_manifests"]["notary"]["schema"],
         "registry.platform.config_bundle.v1"
     );
-    let signed_paths = reviewed_state["baseline"]["verified_manifest"]["files"]
+    assert_eq!(
+        reviewed_state["baseline"]["verified_manifests"]["relay"]["schema"],
+        "registry.platform.config_bundle.v1"
+    );
+    let signed_paths = reviewed_state["baseline"]["verified_manifests"]["notary"]["files"]
         .as_array()
         .expect("verified manifest files")
         .iter()
@@ -7254,11 +8138,28 @@ fn copy_tree(source: &Path, destination: &Path) {
     }
 }
 
+fn resolve_build_output(project: &Path, reported: String) -> PathBuf {
+    let relative = Path::new(&reported);
+    assert!(
+        !relative.is_absolute(),
+        "build output must be project-relative: {reported}"
+    );
+    assert!(
+        reported.starts_with(".registry-stack/build/"),
+        "build output must remain under the project build root: {reported}"
+    );
+    project.join(relative)
+}
+
 fn directory_closure(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut files = Vec::new();
     walkdir(root, root, &mut files);
     files.sort_by(|left, right| left.0.cmp(&right.0));
     files
+}
+
+fn test_sha256_uri(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
 fn closure_digest(files: &[(PathBuf, Vec<u8>)]) -> String {

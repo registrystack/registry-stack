@@ -271,16 +271,12 @@
         },
         "profile": {
           "type": "object",
-          "required": ["id", "version", "contract_hash"],
+          "required": ["id", "contract_hash"],
           "additionalProperties": false,
           "properties": {
             "id": {
               "type": "string",
               "pattern": "^[a-z][a-z0-9._-]{0,95}$"
-            },
-            "version": {
-              "type": "string",
-              "pattern": "^[1-9][0-9]{0,9}$"
             },
             "contract_hash": {
               "$ref": "#/$defs/sha256_hash"
@@ -307,12 +303,13 @@
         "inputs": {
           "type": "object",
           "minProperties": 1,
-          "maxProperties": 1,
+          "maxProperties": 16,
           "propertyNames": {
             "pattern": "^[a-z][a-z0-9_]{0,95}$"
           },
           "additionalProperties": {
-            "const": "target.id"
+            "type": "string",
+            "pattern": "^(target\\.id|request\\.requester\\.id|request\\.(target|requester)\\.identifiers\\.[A-Za-z][A-Za-z0-9._-]{0,95}|request\\.target\\.attributes\\.[a-z][a-z0-9_]{0,63})$"
           }
         }
       }

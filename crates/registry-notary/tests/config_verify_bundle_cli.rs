@@ -12,7 +12,7 @@ use registry_platform_config::{
 use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 use registry_platform_ops::{
     AntiRollbackKey, AntiRollbackRecord, ConfigOverrideMode, ConfigOverridePin,
-    FileAntiRollbackStore,
+    FileAntiRollbackStore, BUNDLE_VERIFICATION_CODE_DEFINITIONS,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -22,6 +22,19 @@ const TEST_TOKEN_HASH: &str =
     "sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b";
 const TEST_AUDIT_HASH_SECRET: &str = "registry-notary-cli-audit-secret-32-bytes";
 const ZERO_HASH: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+const USER_SENTINEL: &str = "redaction-user@example.test";
+const COUNTRY_SENTINEL: &str = "REDACTION_COUNTRY_VALUE";
+const STREAM_ID: &str = "notary-test-stream";
+const BUNDLE_ID: &str = "notary-test-bundle";
+const ERROR_MESSAGE_SENTINELS: &[&str] = &[
+    USER_SENTINEL,
+    COUNTRY_SENTINEL,
+    TEST_AUDIT_HASH_SECRET,
+    "REDACTION_SECRET_VALUE",
+    "REDACTION_PARSER_STRING",
+    "REDACTION_LOCAL_PATH",
+    "/Users/",
+];
 
 struct BundleFixture {
     bundle_dir: PathBuf,
@@ -29,6 +42,7 @@ struct BundleFixture {
     state_path: PathBuf,
     config_path: PathBuf,
     config_hash: String,
+    signer_kid: String,
 }
 
 #[test]
@@ -48,10 +62,16 @@ fn config_verify_bundle_cli_reports_verified_signed_bundle() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "verified");
     assert_eq!(report["component"], "registry-notary");
-    assert_eq!(report["stream_id"], "notary-test-stream");
-    assert_eq!(report["bundle_id"], "notary-test-bundle");
+    assert_eq!(report["stream_id"], STREAM_ID);
+    assert_eq!(report["bundle_id"], BUNDLE_ID);
     assert_eq!(report["bundle_sequence"], 1);
+    assert_eq!(report["previous_config_hash"], ZERO_HASH);
     assert_eq!(report["config_hash"], fixture.config_hash);
+    assert_eq!(report["errors"], serde_json::json!([]));
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr is UTF-8"),
+        ""
+    );
 }
 
 #[test]
@@ -67,6 +87,7 @@ fn config_verify_bundle_cli_reports_rejected_rollback() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "rejected_rollback");
     assert_eq!(report["errors"][0]["code"], "rejected_rollback");
+    assert_rejected_output_boundary(&output, &report, "rejected_rollback", &fixture, &[]);
 }
 
 #[test]
@@ -80,7 +101,7 @@ fn config_verify_bundle_cli_rejects_expired_override_pin() {
                 product: "registry-notary".to_string(),
                 instance_id: "notary-cli".to_string(),
                 environment: "development".to_string(),
-                stream_id: "notary-test-stream".to_string(),
+                stream_id: STREAM_ID.to_string(),
             },
             last_sequence: 2,
             last_config_hash:
@@ -96,8 +117,10 @@ fn config_verify_bundle_cli_rejects_expired_override_pin() {
                 config_path: None,
                 expires_at: Some("2026-07-07T10:00:00Z".to_string()),
                 used_at: "2026-07-07T09:00:00Z".to_string(),
-                operator: "jeremi".to_string(),
-                reason: "expired rollback".to_string(),
+                operator: USER_SENTINEL.to_string(),
+                reason: format!(
+                    "{COUNTRY_SENTINEL} REDACTION_SECRET_VALUE REDACTION_PARSER_STRING REDACTION_LOCAL_PATH"
+                ),
             }),
             break_glass: Default::default(),
             local_approvals: Default::default(),
@@ -114,6 +137,7 @@ fn config_verify_bundle_cli_rejects_expired_override_pin() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "rejected_rollback");
     assert_eq!(report["errors"][0]["code"], "rejected_rollback");
+    assert_rejected_output_boundary(&output, &report, "rejected_rollback", &fixture, &[]);
 }
 
 #[test]
@@ -129,13 +153,16 @@ fn config_verify_bundle_cli_reports_rejected_binding() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "rejected_binding");
     assert_eq!(report["errors"][0]["code"], "rejected_binding");
+    assert_rejected_output_boundary(&output, &report, "rejected_binding", &fixture, &[]);
 }
 
 #[test]
 fn config_verify_bundle_cli_reports_rejected_signature_for_hash_mismatch() {
     let temp = TempDir::new().expect("tempdir");
     let fixture = write_bundle_fixture(&temp, "registry-notary", 0);
-    std::fs::write(&fixture.config_path, b"changed config bytes").expect("config changes");
+    let changed = b"changed config bytes";
+    let actual_hash = sha256_uri(changed);
+    std::fs::write(&fixture.config_path, changed).expect("config changes");
 
     let output = verify_bundle_command(&fixture)
         .output()
@@ -145,6 +172,123 @@ fn config_verify_bundle_cli_reports_rejected_signature_for_hash_mismatch() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "rejected_signature");
     assert_eq!(report["errors"][0]["code"], "rejected_signature");
+    assert_rejected_output_boundary(
+        &output,
+        &report,
+        "rejected_signature",
+        &fixture,
+        &[
+            "config/notary.yaml",
+            fixture.config_hash.as_str(),
+            actual_hash.as_str(),
+            fixture.config_path.to_str().expect("path is UTF-8"),
+        ],
+    );
+}
+
+#[test]
+fn config_verify_bundle_cli_malformed_anchor_has_value_free_stdout_and_stderr() {
+    let temp = TempDir::new().expect("tempdir");
+    let mut fixture = write_bundle_fixture(&temp, "registry-notary", 0);
+    let private_dir = temp
+        .path()
+        .join(format!("REDACTION_LOCAL_PATH-{USER_SENTINEL}"));
+    std::fs::create_dir_all(&private_dir).expect("private anchor dir");
+    fixture.anchor_path = private_dir.join(format!("{COUNTRY_SENTINEL}-anchor.json"));
+    std::fs::write(
+        &fixture.anchor_path,
+        "{\"secret\":\"REDACTION_SECRET_VALUE\",\"parser\":[\"REDACTION_PARSER_STRING\"",
+    )
+    .expect("malformed anchor writes");
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_rejected_output_boundary(
+        &output,
+        &report,
+        "rejected_validation",
+        &fixture,
+        &[fixture.anchor_path.to_str().expect("path is UTF-8")],
+    );
+}
+
+#[test]
+fn config_verify_bundle_cli_file_closure_has_value_free_stdout_and_stderr() {
+    let temp = TempDir::new().expect("tempdir");
+    let fixture = write_bundle_fixture(&temp, "registry-notary", 0);
+    let unexpected_path = fixture
+        .bundle_dir
+        .join("config")
+        .join(format!("{COUNTRY_SENTINEL}-REDACTION_SECRET_VALUE.yaml"));
+    std::fs::write(
+        &unexpected_path,
+        format!("{USER_SENTINEL} REDACTION_PARSER_STRING"),
+    )
+    .expect("unexpected bundle file writes");
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_rejected_output_boundary(
+        &output,
+        &report,
+        "rejected_signature",
+        &fixture,
+        &[unexpected_path.to_str().expect("path is UTF-8")],
+    );
+}
+
+#[test]
+fn config_verify_bundle_cli_config_parser_failure_has_value_free_stdout_and_stderr() {
+    let temp = TempDir::new().expect("tempdir");
+    let malformed_config = format!(
+        "country: {COUNTRY_SENTINEL}\nsecret: [REDACTION_SECRET_VALUE\nparser: REDACTION_PARSER_STRING\nuser: {USER_SENTINEL}\n"
+    );
+    let fixture =
+        write_bundle_fixture_with_config(&temp, "registry-notary", 0, malformed_config.clone());
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_rejected_output_boundary(
+        &output,
+        &report,
+        "rejected_validation",
+        &fixture,
+        &[malformed_config.as_str()],
+    );
+}
+
+#[test]
+fn config_verify_bundle_cli_non_utf8_config_has_value_free_stdout_and_stderr() {
+    let temp = TempDir::new().expect("tempdir");
+    let mut fixture = write_bundle_fixture(&temp, "registry-notary", 0);
+    let invalid_utf8 = b"\xffREDACTION_SECRET_VALUE REDACTION_PARSER_STRING";
+    resign_config_bytes(&mut fixture, invalid_utf8);
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_rejected_output_boundary(
+        &output,
+        &report,
+        "rejected_validation",
+        &fixture,
+        &["REDACTION_SECRET_VALUE", "REDACTION_PARSER_STRING"],
+    );
 }
 
 #[test]
@@ -205,6 +349,7 @@ fn config_verify_bundle_cli_shared_parity_matrix() {
             assert_eq!(report["component"], "registry-notary", "{name}");
         } else {
             assert_eq!(report["errors"][0]["code"], expected, "{name}");
+            assert_rejected_output_boundary(&output, &report, expected, &fixture, &[]);
         }
     }
 }
@@ -223,10 +368,13 @@ fn config_verify_bundle_cli_runs_deployment_gates() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "rejected_validation");
     assert_eq!(report["errors"][0]["code"], "rejected_validation");
-    assert!(report["errors"][0]["message"]
-        .as_str()
-        .expect("error message")
-        .contains("notary.audit.sink_missing"));
+    assert_rejected_output_boundary(
+        &output,
+        &report,
+        "rejected_validation",
+        &fixture,
+        &["notary.audit.sink_missing"],
+    );
 }
 
 #[test]
@@ -246,10 +394,85 @@ fn config_verify_bundle_cli_rejects_governed_shared_admin_listener() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "rejected_validation");
     assert_eq!(report["errors"][0]["code"], "rejected_validation");
-    assert!(report["errors"][0]["message"]
-        .as_str()
-        .expect("error message")
-        .contains("server.admin_listener.mode = dedicated"));
+    assert_rejected_output_boundary(
+        &output,
+        &report,
+        "rejected_validation",
+        &fixture,
+        &["server.admin_listener.mode = dedicated"],
+    );
+}
+
+fn bundle_code_definition(
+    expected_code: &str,
+) -> &'static registry_platform_ops::BundleVerificationCodeDefinition {
+    BUNDLE_VERIFICATION_CODE_DEFINITIONS
+        .iter()
+        .find(|definition| definition.code.as_str() == expected_code)
+        .expect("published code has a catalog definition")
+}
+
+fn assert_rejected_output_boundary(
+    output: &std::process::Output,
+    report: &Value,
+    expected_code: &str,
+    fixture: &BundleFixture,
+    extra_sentinels: &[&str],
+) {
+    assert_eq!(report["result"], expected_code);
+    assert_eq!(report["errors"][0]["code"], expected_code);
+    let definition = bundle_code_definition(expected_code);
+    assert_eq!(
+        report["errors"][0]["message"], definition.safe_report_message,
+        "public message must be the reviewed static catalog meaning and remediation"
+    );
+    assert_eq!(report["stream_id"], "unknown");
+    for field in [
+        "bundle_id",
+        "bundle_sequence",
+        "previous_config_hash",
+        "config_hash",
+    ] {
+        assert_eq!(
+            report[field],
+            Value::Null,
+            "rejected report must not publish manifest-derived {field}"
+        );
+    }
+    let stderr = String::from_utf8(output.stderr.clone()).expect("stderr is UTF-8");
+    assert_eq!(
+        stderr,
+        format!(
+            "ERROR {expected_code}: {}\n",
+            definition.safe_report_message
+        ),
+        "child stderr must contain only the stable catalog failure"
+    );
+    let full_output = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for sentinel in ERROR_MESSAGE_SENTINELS
+        .iter()
+        .copied()
+        .chain([
+            STREAM_ID,
+            BUNDLE_ID,
+            ZERO_HASH,
+            fixture.config_hash.as_str(),
+            fixture.signer_kid.as_str(),
+            fixture.config_path.to_str().expect("path is UTF-8"),
+            fixture.bundle_dir.to_str().expect("path is UTF-8"),
+            fixture.state_path.to_str().expect("path is UTF-8"),
+        ])
+        .chain(extra_sentinels.iter().copied())
+    {
+        assert!(
+            !full_output.contains(sentinel),
+            "rejected command leaked sentinel {sentinel:?}: {full_output}"
+        );
+    }
 }
 
 fn verify_bundle_command(fixture: &BundleFixture) -> Command {
@@ -298,9 +521,9 @@ fn write_bundle_fixture_with_config(
         schema: "registry.platform.config_bundle.v1".to_string(),
         product: manifest_product.to_string(),
         environment: "development".to_string(),
-        stream_id: "notary-test-stream".to_string(),
+        stream_id: STREAM_ID.to_string(),
         instance_id: None,
-        bundle_id: "notary-test-bundle".to_string(),
+        bundle_id: BUNDLE_ID.to_string(),
         sequence: 1,
         previous_config_hash: Some(ZERO_HASH.to_string()),
         config_hash: config_hash.clone(),
@@ -316,10 +539,10 @@ fn write_bundle_fixture_with_config(
         schema: "registry.platform.config_trust_anchor.v1".to_string(),
         product: "registry-notary".to_string(),
         environment: "development".to_string(),
-        stream_id: "notary-test-stream".to_string(),
+        stream_id: STREAM_ID.to_string(),
         instance_id: "notary-cli".to_string(),
         signers: vec![ConfigTrustAnchorSigner {
-            kid,
+            kid: kid.clone(),
             jwk: public,
             enabled: true,
         }],
@@ -338,7 +561,7 @@ fn write_bundle_fixture_with_config(
                 product: "registry-notary".to_string(),
                 instance_id: "notary-cli".to_string(),
                 environment: "development".to_string(),
-                stream_id: "notary-test-stream".to_string(),
+                stream_id: STREAM_ID.to_string(),
             },
             last_sequence,
             last_config_hash: if last_sequence == 0 {
@@ -362,7 +585,27 @@ fn write_bundle_fixture_with_config(
         state_path,
         config_path,
         config_hash,
+        signer_kid: kid,
     }
+}
+
+fn resign_config_bytes(fixture: &mut BundleFixture, config_bytes: &[u8]) {
+    std::fs::write(&fixture.config_path, config_bytes).expect("config bytes write");
+    let config_hash = sha256_uri(config_bytes);
+    let manifest_path = fixture.bundle_dir.join("manifest.json");
+    let mut manifest: ConfigBundleManifest =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest reads"))
+            .expect("manifest parses");
+    manifest.config_hash = config_hash.clone();
+    manifest.files[0].sha256 = config_hash.clone();
+    let private = PrivateJwk::parse(PRIVATE_JWK).expect("private JWK parses");
+    write_manifest_and_signature(
+        &fixture.bundle_dir,
+        &manifest,
+        &private,
+        &fixture.signer_kid,
+    );
+    fixture.config_hash = config_hash;
 }
 
 fn write_manifest_and_signature(

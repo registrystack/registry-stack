@@ -37,12 +37,128 @@ use zeroize::Zeroizing;
 mod project_authoring;
 
 pub use project_authoring::{
-    build_registry_project, check_registry_project, init_registry_project,
-    render_project_authoring_diagnostics, setup_registry_project_editor, test_registry_project,
-    test_registry_project_selected, ProjectAuthoringDiagnostic, ProjectAuthoringDiagnostics,
-    ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
-    ProjectEditorSetupReport, ProjectInitOptions, ProjectSchemaKind, ProjectStarter,
-    ProjectTestOptions, ProjectTestSelection, SemanticChange,
+    authoring_error_reference, fixture_error_reference, operator_error_reference,
+    validate_authoring_error_reference, validate_fixture_error_reference,
+    validate_operator_error_reference, AuthoringErrorReferenceV1, ErrorReferenceEntry,
+    ErrorReferenceFamily, ErrorReferenceLifecycle, ErrorReferenceOwner, ErrorReferenceProduct,
+    ErrorReferenceStability, ErrorReferenceValidationError, ErrorReferenceValuePolicy,
+    FixtureErrorReferenceV1, OperatorErrorOmission, OperatorErrorOmissionFamily,
+    OperatorErrorOmissionReason, OperatorErrorReferenceV1,
+    AUTHORING_ERROR_REFERENCE_SCHEMA_VERSION_V1, FIXTURE_ERROR_REFERENCE_SCHEMA_VERSION_V1,
+    OPERATOR_ERROR_REFERENCE_SCHEMA_VERSION_V1,
+};
+pub use project_authoring::{
+    build_project_migration_report, build_project_promotion_report, build_registry_project,
+    build_registry_project_with_baselines, build_registry_project_with_baselines_and_context,
+    build_registry_project_with_context, check_registry_project,
+    check_registry_project_with_context, embedded_configuration_reference,
+    embedded_configuration_reference_coverage, init_registry_project, inspect_project_capabilities,
+    migrate_registry_project, migrate_registry_project_with_context, preflight_registry_project,
+    promote_registry_project, render_project_authoring_diagnostics, setup_registry_project_editor,
+    test_registry_project, test_registry_project_selected,
+    test_registry_project_selected_with_context, test_registry_project_with_context,
+    AuthoredSemanticFixtureCoverage, AuthoringContract, AuthoringVersionSet, CapabilityDisposition,
+    CapabilityId, CapabilityInventoryEvidenceGrade, CapabilityInventoryRecord, CapabilityKind,
+    CapabilityMaturity, CapabilityOwner, CapabilityUsageCounts, ClassifierSafeReportedValue,
+    ConfigurationFieldReference, ConfigurationReferenceCoverageV1, ConfigurationReferenceV1,
+    ConfigurationState, CoverageInvariant, CoverageStatus, DefaultBehavior, DefaultDocumentation,
+    DocumentationDomainIntent, DocumentationError, DocumentationFieldAddress,
+    DocumentationIntentCatalog, DocumentationIntentPolicy, DocumentationSchema,
+    DocumentationSchemaAddress, EmptyBehavior,
+    EnvironmentBehavior as DocumentationEnvironmentBehavior, EnvironmentEnablementState,
+    ExampleDocumentation, FieldIntentOverride, FieldSensitivity, FieldSourceKind,
+    FieldTypeDocumentation, FixtureCapability, FixtureCompatibilityClaim,
+    FixtureCoverageChangeImpact, FixtureCoverageChangeKind, FixtureCoverageClassification,
+    FixtureCoverageComparisonInput, FixtureCoverageDimensions, FixtureCoverageEvidence,
+    FixtureCoverageEvidenceKind, FixtureCoverageGapReason, FixtureCoverageNotApplicableReason,
+    FixtureCoverageNotEvaluatedReason, FixtureCoverageRequirementCounts,
+    FixtureCoverageRequirementState, FixtureCoverageSemanticComparison, FixtureCoverageSummary,
+    FixtureCoverageTarget, FixtureCoverageTargetComparisonInput, FixtureCoverageTargetIdentity,
+    FixtureCoverageTargetSetState, FixtureDisclosureMode, FixtureEvidenceScope, FixtureLimit,
+    FixtureMutationTargetClass, FixturePassState, FixtureProtocolHelper,
+    FixtureRequirementCoverage, FixtureSafeCode, FixtureSemanticExpectation,
+    FixtureSemanticOutcome, FixtureSetState, FixtureStatusMapping, FixtureStatusOutcome,
+    GeneratedFixtureCoverage, GeneratedNotApplicableReason, GeneratedRecipeApplicability,
+    GeneratedSourceFixture, GeneratorRecipe, GeneratorRecipeId, GeneratorRecipeVersion,
+    HumanIntentSource, InactiveOrUnusedDeclaration, InactiveOrUnusedReason,
+    InstalledCapabilityEvidence, InstalledCapabilityState, LiveCompatibilityEvaluation,
+    MigrationAffectedCount, MigrationAffectedState, MigrationAffectedSurfaces,
+    MigrationApplicationPolicy, MigrationArtifact, MigrationAuthoredFilePolicy,
+    MigrationBlockingReason, MigrationCandidateArtifact, MigrationCandidateEligibility,
+    MigrationCandidateEmission, MigrationChange, MigrationChangeInput, MigrationCompatibility,
+    MigrationDecisionKind, MigrationDecisionOwner, MigrationDecisionScope, MigrationDiagnostic,
+    MigrationDiagnosticCode, MigrationDiagnosticPhase, MigrationDiagnosticRemediation,
+    MigrationDisposition, MigrationDocument, MigrationEvidenceGrade, MigrationEvidenceLimitation,
+    MigrationExecution, MigrationField, MigrationFieldAddress, MigrationFieldClassification,
+    MigrationFieldPath, MigrationGateAssessment, MigrationGateResults, MigrationGateStatus,
+    MigrationOperation, MigrationOutputMode, MigrationOutputPlan, MigrationOutputRequest,
+    MigrationOwner, MigrationReplacement, MigrationReplacementDisposition,
+    MigrationReplacementInput, MigrationRerunGate, MigrationReviewAssessment, MigrationReviewClass,
+    MigrationReviewStatus, MigrationSafety, MigrationSemanticEffect, MigrationVersionDirection,
+    MigrationVersionSupport, MigrationVersionSupportAssessment, MigrationVersionTransition,
+    MigrationWriteAuthority, MissingSupport, NullBehavior, PlatformCoverageComponent,
+    PlatformGeneratedCaseId, PlatformGeneratedFixtureCoverage, PreflightAttemptState,
+    PreflightCheckState, PreflightContact, PreflightDiagnostic, PreflightDiagnosticCode,
+    PreflightDiagnosticMessage, PreflightExecutionBoundary, PreflightFieldAddress,
+    PreflightGenerationState, PreflightJsonPointer, PreflightMode, PreflightPermissionInvariant,
+    PreflightPhase, PreflightProduct, PreflightProductCapability, PreflightProductValidatorCheck,
+    PreflightProjectRelativeFile, PreflightRemediation, PreflightReportLimits, PreflightRuleId,
+    PreflightRuntimeBoundary, PreflightRuntimeFileCheck, PreflightRuntimeFileKind,
+    PreflightRuntimeScope, PreflightSecretCheck, PreflightSecretConsumer, PreflightSeverity,
+    PreflightStaticCapability, PreflightStaticCheck, PreflightStatus, PreflightWriteState,
+    ProhibitedIntentSource, ProjectArtifactManifestRef, ProjectArtifactManifestV1,
+    ProjectAuthoringDiagnostic, ProjectAuthoringDiagnostics, ProjectBuildBaselineSetOptions,
+    ProjectBuildOptions, ProjectCapabilityInventoryReportV1,
+    ProjectCapabilityInventorySchemaVersion, ProjectCapabilityOptions, ProjectCheckOptions,
+    ProjectCommandReport, ProjectCommandReportV1, ProjectDeclarationState,
+    ProjectEditorSetupOptions, ProjectEditorSetupReport, ProjectExecutionContext,
+    ProjectExplanationReportV1, ProjectFieldAddress, ProjectFieldExplanation,
+    ProjectFixtureCoverageReportV1, ProjectFixtureCoverageSchemaVersion, ProjectInitOptions,
+    ProjectMigrationBuildError, ProjectMigrationInput, ProjectMigrationOptions,
+    ProjectMigrationReportV1, ProjectMigrationSchemaVersion, ProjectPreflightOptions,
+    ProjectPreflightReportV1, ProjectPreflightSchemaVersion, ProjectPromotionBuildError,
+    ProjectPromotionInput, ProjectPromotionOptions, ProjectPromotionReportV1,
+    ProjectPromotionSchemaVersion, ProjectRelativePath, ProjectSchemaKind,
+    ProjectSemanticImpactReportV1, ProjectStarter, ProjectTestOptions, ProjectTestSelection,
+    PromotionActivationEvaluation, PromotionBlockingReason, PromotionBoundaryAssessment,
+    PromotionChange, PromotionChangeEffect, PromotionChangeInput, PromotionChangeKind,
+    PromotionCompatibilityAssessment, PromotionCompatibilityComponent, PromotionCompatibilityInput,
+    PromotionCompatibilityState, PromotionDeploymentEvaluation, PromotionDisposition,
+    PromotionDocument, PromotionEvidenceGrade, PromotionEvidenceLimitation, PromotionFieldAddress,
+    PromotionFieldClassification, PromotionFieldOwnership, PromotionFieldPath,
+    PromotionProductAction, PromotionRequiredActions, PromotionReviewClass, RedactionReason,
+    ReferenceCoverageSummary, ReferenceSourceContract, RequiredFixtureCoverageRequirement,
+    Requiredness, ReviewedCeilingAssessment, ReviewedCeilingInput, ReviewedRevisionComparison,
+    RuntimeActivationEvaluation, SchemaConstraint, SemanticChange, SourceAccessAssertion,
+    SourceCallExpectation, StructuralIntent, SupportAssessment, SupportComponent, SupportEvidence,
+    SupportKind, SupportState, SupportedCapabilityVersion, TrustResolutionAssessment,
+    TrustResolutionInput, UnresolvedMigrationDecision, ValidationStage, VersionChange,
+    VersionHistoryEntry, CONFIGURATION_REFERENCE_COVERAGE_SCHEMA_ID,
+    CONFIGURATION_REFERENCE_FORMAT_VERSION, CONFIGURATION_REFERENCE_SCHEMA_ID,
+    PROJECT_ARTIFACT_MANIFEST_FORMAT_VERSION_V1, PROJECT_ARTIFACT_MANIFEST_SCHEMA_VERSION_V1,
+    PROJECT_CAPABILITY_INVENTORY_SCHEMA_VERSION_V1, PROJECT_COMMAND_REPORT_SCHEMA_VERSION_V1,
+    PROJECT_EXPLANATION_SCHEMA_VERSION_V1, PROJECT_FIXTURE_COVERAGE_SCHEMA_VERSION_V1,
+    PROJECT_MIGRATION_SCHEMA_VERSION_V1, PROJECT_PREFLIGHT_SCHEMA_VERSION_V1,
+    PROJECT_PROMOTION_SCHEMA_VERSION_V1, PROJECT_SEMANTIC_IMPACT_SCHEMA_VERSION_V1,
+};
+pub use project_authoring::{
+    compare_registry_project_environments_semantically,
+    compare_registry_project_to_embedded_starter_semantically,
+    compare_registry_projects_semantically, ProjectEnvironmentSemanticComparisonOptions,
+    ProjectSemanticComparisonChange, ProjectSemanticComparisonOptions,
+    ProjectSemanticComparisonReportV1, ProjectSemanticComparisonSchemaVersion,
+    ProjectStarterSemanticComparisonOptions, SemanticComparisonActivationRequirement,
+    SemanticComparisonAffectedSubject, SemanticComparisonAffectedSubjectKind,
+    SemanticComparisonAssurance, SemanticComparisonChangeSource, SemanticComparisonConsumer,
+    SemanticComparisonDimension, SemanticComparisonDirection, SemanticComparisonEquivalence,
+    SemanticComparisonEvidenceGrade, SemanticComparisonEvidenceLimitation,
+    SemanticComparisonExternalApproval, SemanticComparisonFieldAddress,
+    SemanticComparisonGeneratedArtifact, SemanticComparisonKind, SemanticComparisonPrecision,
+    SemanticComparisonRequiredAction, SemanticComparisonRequirements,
+    SemanticComparisonRestartRequirement, SemanticComparisonReviewClass,
+    SemanticComparisonReviewPlan, SemanticComparisonReviewPlanState,
+    SemanticComparisonSchemaFamily, SemanticComparisonSigningRequirement,
+    PROJECT_SEMANTIC_COMPARISON_SCHEMA_VERSION_V1,
 };
 
 pub use crate::sample::Sample;
@@ -1947,6 +2063,14 @@ pub fn add_notary_to_project(
     project_dir: &Path,
     image_lock: &RegistryctlImageLock,
 ) -> Result<AddNotaryReport> {
+    add_notary_to_project_with_runtime_preparer(project_dir, image_lock, prepare_notary_runtime)
+}
+
+fn add_notary_to_project_with_runtime_preparer(
+    project_dir: &Path,
+    image_lock: &RegistryctlImageLock,
+    prepare_runtime: fn(&Path) -> Result<()>,
+) -> Result<AddNotaryReport> {
     let mut project = Project::load(project_dir)?;
     if project.relay.is_none() {
         bail!("add notary requires a generated Relay spreadsheet project");
@@ -1996,7 +2120,7 @@ pub fn add_notary_to_project(
         write_local_postgres_tls(project_dir)?;
         add_notary_local_secrets(project_dir)?;
         create_notary_state_dirs(project_dir)?;
-        prepare_notary_runtime(project_dir)?;
+        prepare_runtime(project_dir)?;
         merge_notary_compose(project_dir, image_lock)?;
 
         project.project.products.push("registry-notary".to_string());
@@ -2245,6 +2369,26 @@ fn prepare_notary_runtime(project_dir: &Path) -> Result<()> {
     #[cfg(not(unix))]
     let runtime_identity = None;
     project_authoring::build_registry_project_for_local_tutorial(
+        &ProjectBuildOptions {
+            project_directory: project_dir.join(NOTARY_PROJECT_DIR),
+            environment: "local".to_string(),
+            against: None,
+            anchor: None,
+        },
+        runtime_identity,
+    )?;
+    refresh_notary_relay_token(project_dir, runtime_identity)
+}
+
+/// Unit-test-only publication path that deliberately performs static product
+/// validation but does not execute authored project fixtures.
+#[cfg(test)]
+fn prepare_notary_runtime_static_validation_only_for_unit_test(project_dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    let runtime_identity = Some(compose_runtime_identity_values(project_dir)?);
+    #[cfg(not(unix))]
+    let runtime_identity = None;
+    project_authoring::build_registry_project_static_validation_only_for_unit_test(
         &ProjectBuildOptions {
             project_directory: project_dir.join(NOTARY_PROJECT_DIR),
             environment: "local".to_string(),
@@ -4639,13 +4783,96 @@ mod tests {
     }
 
     #[test]
+    fn notary_addon_no_match_false_requires_a_positive_bounded_existence_claim() {
+        let project: Value =
+            serde_norway::from_str(include_str!("templates/notary_addon/registry-stack.yaml"))
+                .unwrap();
+        let claims = project["services"]["registration-verification"]["claims"]
+            .as_mapping()
+            .unwrap();
+        assert_eq!(claims.len(), 1);
+        let (claim_id, claim) = claims.iter().next().unwrap();
+        let claim_id = claim_id.as_str().unwrap();
+
+        assert_eq!(claim_id, "active-registration-exists");
+        assert!(
+            claim_id.ends_with("-exists"),
+            "a no-match false result must use an explicit positive existence predicate"
+        );
+        for forbidden in [
+            "accepted",
+            "absent",
+            "denied",
+            "does-not-exist",
+            "eligible",
+            "fraud",
+            "ineligible",
+            "missing",
+            "nonexistent",
+            "not-found",
+            "rejected",
+        ] {
+            assert!(
+                !claim_id.contains(forbidden),
+                "no-match false must not imply the broader fact {forbidden:?}: {claim_id}"
+            );
+        }
+        assert_eq!(
+            claim["cel"],
+            r#"enrollment.matched && enrollment.registration_status == "active""#
+        );
+
+        for (fixture, expected) in [
+            (
+                include_str!(
+                    "templates/notary_addon/integrations/person-demographics/fixtures/match.yaml"
+                ),
+                true,
+            ),
+            (
+                include_str!(
+                    "templates/notary_addon/integrations/person-demographics/fixtures/pending.yaml"
+                ),
+                false,
+            ),
+            (
+                include_str!(
+                    "templates/notary_addon/integrations/person-demographics/fixtures/no-match.yaml"
+                ),
+                false,
+            ),
+        ] {
+            let fixture: Value = serde_norway::from_str(fixture).unwrap();
+            assert_eq!(
+                fixture["expect"]["claims"][claim_id].as_bool(),
+                Some(expected)
+            );
+        }
+        let ambiguous: Value = serde_norway::from_str(include_str!(
+            "templates/notary_addon/integrations/person-demographics/fixtures/ambiguous.yaml"
+        ))
+        .unwrap();
+        assert!(
+            ambiguous["expect"]["claims"]
+                .as_mapping()
+                .is_some_and(serde_norway::Mapping::is_empty),
+            "ambiguous consultation outcomes must not be converted into a false claim"
+        );
+    }
+
+    #[test]
     fn add_notary_builds_an_editable_live_tutorial_addon() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
         let image_lock = test_image_lock();
         init_spreadsheet_api(&project, Sample::Benefits, &image_lock).unwrap();
 
-        let report = add_notary_to_project(&project, &image_lock).unwrap();
+        let report = add_notary_to_project_with_runtime_preparer(
+            &project,
+            &image_lock,
+            prepare_notary_runtime_static_validation_only_for_unit_test,
+        )
+        .unwrap();
 
         assert_eq!(report.status, "added");
         for path in [
@@ -4752,9 +4979,31 @@ mod tests {
         let claim_source = fs::read_to_string(project.join(NOTARY_CLAIM_FILE)).unwrap();
         assert!(claim_source.contains("request.target.attributes.given_name"));
         assert!(claim_source.contains("request.target.attributes.date_of_birth"));
-        assert!(claim_source.contains("person-registration-accepted"));
+        assert!(claim_source.contains("active-registration-exists"));
+        assert!(!claim_source.contains("person-registration-accepted"));
         assert!(claim_source.contains("enrollment.registration_status == \"active\""));
         assert!(!claim_source.contains("age_on"));
+        let explanation = project_authoring::generated_explanation_for_test(
+            &project.join("notary/project"),
+            "local",
+        )
+        .unwrap();
+        let claim_evidence = explanation
+            .fields
+            .iter()
+            .find(|field| {
+                matches!(
+                    &field.address,
+                    ProjectFieldAddress::Project { path }
+                        if path.as_str()
+                            == "/services/registration-verification/claims/active-registration-exists/evidence"
+                )
+            })
+            .expect("generated Notary claim evidence is explained");
+        let ClassifierSafeReportedValue::Public { value } = &claim_evidence.reported_value else {
+            panic!("claim evidence classification is value-free and public");
+        };
+        assert_eq!(value.as_value(), &serde_json::json!("registry_backed"));
         let integration = fs::read_to_string(
             project.join("notary/project/integrations/person-demographics/integration.yaml"),
         )
@@ -4785,22 +5034,37 @@ mod tests {
             "registry:consult:registration-verification"
         );
         let claim_path = project.join(NOTARY_CLAIM_FILE);
-        let claim = fs::read_to_string(&claim_path).unwrap().replace(
-            "enrollment.registration_status == \"active\"",
-            "(enrollment.registration_status == \"active\" || enrollment.registration_status == \"pending\")",
-        );
+        let claim = fs::read_to_string(&claim_path)
+            .unwrap()
+            .replace(
+                "active-registration-exists",
+                "active-or-pending-registration-exists",
+            )
+            .replace(
+                "enrollment.registration_status == \"active\"",
+                "(enrollment.registration_status == \"active\" || enrollment.registration_status == \"pending\")",
+            );
         fs::write(&claim_path, claim).unwrap();
-        let fixture_path =
-            project.join("notary/project/integrations/person-demographics/fixtures/pending.yaml");
-        let fixture = fs::read_to_string(&fixture_path).unwrap().replace(
-            "claims: { person-registration-accepted: false }",
-            "claims: { person-registration-accepted: true }",
-        );
-        fs::write(&fixture_path, fixture).unwrap();
-        prepare_notary_runtime(&project).unwrap();
+        for (fixture_name, expected_before, expected_after) in [
+            ("match.yaml", "true", "true"),
+            ("pending.yaml", "false", "true"),
+            ("no-match.yaml", "false", "false"),
+        ] {
+            let fixture_path = project
+                .join("notary/project/integrations/person-demographics/fixtures")
+                .join(fixture_name);
+            let fixture = fs::read_to_string(&fixture_path).unwrap().replace(
+                &format!("claims: {{ active-registration-exists: {expected_before} }}"),
+                &format!("claims: {{ active-or-pending-registration-exists: {expected_after} }}"),
+            );
+            fs::write(&fixture_path, fixture).unwrap();
+        }
+        prepare_notary_runtime_static_validation_only_for_unit_test(&project).unwrap();
         assert_notary_runtime_input_owners_match_project(&project);
         let notary_config_text = fs::read_to_string(project.join(NOTARY_CONFIG_PATH)).unwrap();
-        assert!(notary_config_text.contains("person-registration-accepted"));
+        assert!(notary_config_text.contains("active-or-pending-registration-exists"));
+        assert!(!notary_config_text.contains("active-registration-exists"));
+        assert!(!notary_config_text.contains("person-registration-accepted"));
         assert!(notary_config_text.contains("pending"));
         let notary_config: Value = serde_norway::from_str(&notary_config_text).unwrap();
         assert_eq!(notary_config["server"]["bind"], "0.0.0.0:8081");
@@ -4828,7 +5092,12 @@ mod tests {
         .unwrap();
         assert_eq!(consultation_relay_config["server"]["bind"], "0.0.0.0:8082");
 
-        let error = add_notary_to_project(&project, &image_lock).unwrap_err();
+        let error = add_notary_to_project_with_runtime_preparer(
+            &project,
+            &image_lock,
+            prepare_notary_runtime_static_validation_only_for_unit_test,
+        )
+        .unwrap_err();
         assert!(format!("{error:#}").contains("already has a Notary"));
     }
 
@@ -4848,7 +5117,12 @@ mod tests {
         let original_secrets = fs::read_to_string(&secrets_path).unwrap();
         let original_manifest = fs::read_to_string(&manifest_path).unwrap();
 
-        let error = add_notary_to_project(&project, &image_lock).unwrap_err();
+        let error = add_notary_to_project_with_runtime_preparer(
+            &project,
+            &image_lock,
+            prepare_notary_runtime_static_validation_only_for_unit_test,
+        )
+        .unwrap_err();
 
         assert!(format!("{error:#}").contains("already contains a generated Notary entry"));
         assert!(!project.join("notary").exists());

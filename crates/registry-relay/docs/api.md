@@ -54,7 +54,17 @@ POST /admin/v1/reload
 
 `GET /admin/v1/posture` returns a redacted operations posture document for callers with `registry_relay:ops_read`. Pass `?tier=restricted` only to trusted operations users who need the restricted posture projection.
 
-`POST /admin/v1/reload` reloads every configured source resource and returns a compact `status` plus `counts` summary. It requires `registry_relay:admin`, does not reload startup runtime config, and has a table-specific companion route when you need to reload only one source. Reload-all publishes as one coherent generation: if any source resource cannot prepare, Relay keeps the previous generation active and returns `500` with `status: "failed"`.
+`POST /admin/v1/reload` requires `registry_relay:admin` and does not reload startup runtime
+config. Relay supports this route only when no configured source is bound to the audited
+SnapshotExact materialization coordinator. When any audited SnapshotExact source is configured,
+Relay rejects the whole request before opening a source, returns `500` with
+`ingest.materialization_failed`, counts every configured resource as failed, and refreshes none.
+Use the table-specific route for each intended resource. Current Relay does not provide atomic
+multi-materialization reload.
+
+Without audited SnapshotExact, reload-all prepares every configured source before publication. If
+any source cannot prepare, Relay retains the previous coherent ordinary-table generation and
+returns `500` with `status: "failed"`.
 
 Relay no longer exposes admin config verify, dry-run, or apply routes. Signed
 config bundles are verified only at boot from the local paths in
@@ -170,6 +180,11 @@ The public failure taxonomy is deliberately small:
 | `503` | `consultation.unavailable` |
 
 Treat `429` according to its bounded `Retry-After` header. Treat `503` as indeterminate and do not infer whether a source request began. Relay publishes a successful result only after the matching durable completion is committed.
+
+For SnapshotExact, Relay checks snapshot age during execution. A stale snapshot returns
+`503 consultation.unavailable` without live source fallback. This request-specific staleness does
+not change global `/ready`, which can remain `200`; use a bounded consultation canary to verify the
+materialization that a workload depends on.
 
 ## Entity reads
 

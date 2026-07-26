@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registryctl/project-reports/registry.project.artifact_manifest.v1.schema.json",
+  "title": "Registry Project Artifact Manifest v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "format_version",
+    "project",
+    "environment",
+    "generator",
+    "inputs",
+    "artifacts"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "registry.project.artifact_manifest.v1"
+    },
+    "format_version": {
+      "const": "registry.project.artifact_manifest.format.v1"
+    },
+    "project": {
+      "$ref": "#/$defs/identifier"
+    },
+    "environment": {
+      "$ref": "#/$defs/identifier"
+    },
+    "generator": {
+      "$ref": "#/$defs/generator"
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/input_digest"
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_relative_path": {
+      "type": "string",
+      "pattern": "^([A-Za-z0-9_-][A-Za-z0-9._-]*|\\.[A-Za-z0-9_-][A-Za-z0-9._-]*)(/([A-Za-z0-9_-][A-Za-z0-9._-]*|\\.[A-Za-z0-9_-][A-Za-z0-9._-]*))*$"
+    },
+    "sha256_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "generator": {
+      "type": "object",
+      "required": ["name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "const": "registryctl"
+        },
+        "version": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "input_digest": {
+      "type": "object",
+      "required": ["path", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/project_relative_path"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256_digest"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "path",
+        "format_version",
+        "digest",
+        "classes",
+        "sensitivity",
+        "publication",
+        "edit",
+        "version_control",
+        "review",
+        "lifecycle",
+        "actions",
+        "consumers"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/project_relative_path"
+        },
+        "format_version": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256_digest"
+        },
+        "classes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "runtime_config",
+              "consultation_contract",
+              "source_plan",
+              "claim_configuration",
+              "deployment_input",
+              "review_record",
+              "documentation"
+            ]
+          }
+        },
+        "sensitivity": {
+          "enum": ["public", "internal", "topology_sensitive"]
+        },
+        "publication": {
+          "enum": ["public", "operator_only", "never_publish"]
+        },
+        "edit": {
+          "enum": [
+            "generated_do_not_edit",
+            "generated_review_before_edit",
+            "hand_maintained"
+          ]
+        },
+        "version_control": {
+          "enum": ["commit", "ignore", "project_decision"]
+        },
+        "review": {
+          "enum": [
+            "generated_candidate",
+            "needs_review",
+            "reviewed",
+            "ready_candidate",
+            "released",
+            "deprecated"
+          ]
+        },
+        "lifecycle": {
+          "enum": [
+            "unsigned_non_deployable",
+            "signed_candidate",
+            "verified_deployable",
+            "review_evidence",
+            "publication_output"
+          ]
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "enum": ["regenerate", "compare", "validate", "sign", "verify", "discard"]
+          }
+        },
+        "consumers": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "registry_relay",
+              "registry_notary",
+              "bundle_signer",
+              "deployment_tooling",
+              "project_documentation",
+              "operator"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

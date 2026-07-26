@@ -9,7 +9,7 @@ workspaces:
     starter: http
     project_dir: registry-project
     focused_fixture_file: active.yaml
-    steps: [init, editor, trace, watch, test, check, build]
+    steps: [init, editor, trace, watch, test, check, compare, build]
     environment: local
     check_explain: true
 
@@ -45,7 +45,7 @@ workspaces:
     starter: dhis2-tracker
     project_dir: dhis2-project
     focused_fixture_file: match.yaml
-    steps: [init, editor, trace, watch, test, check, build]
+    steps: [init, editor, trace, watch, test, check, compare, build]
     environment: local
     check_explain: true
 
@@ -58,7 +58,7 @@ workspaces:
     starter: fhir-r4
     project_dir: fhir-project
     focused_fixture_file: match.yaml
-    steps: [init, editor, trace, watch, test, check, build]
+    steps: [init, editor, trace, watch, test, check, compare, build]
     environment: local
     check_explain: true
 
@@ -83,7 +83,7 @@ workspaces:
     starter: opencrvs-dci
     project_dir: opencrvs-project
     focused_fixture_file: match.yaml
-    steps: [init, editor, trace, watch, test, check, build]
+    steps: [init, editor, trace, watch, test, check, compare, build]
     environment: local
     check_explain: true
 
@@ -143,7 +143,7 @@ workspaces:
     starter: snapshot
     project_dir: snapshot-project
     focused_fixture_file: match.yaml
-    steps: [init, editor, trace, watch, test, check, build]
+    steps: [init, editor, trace, watch, test, check, compare, build]
     environment: local
     check_explain: true
 

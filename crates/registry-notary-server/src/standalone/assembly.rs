@@ -73,12 +73,10 @@ impl NotaryRuntimeSnapshot {
             ) {
                 tracing::error!(
                     code = crate::AUDIT_CHAIN_INCONSISTENT_CODE,
-                    error = %error,
                     "audit chain failed eager integrity verification"
                 );
             } else {
                 tracing::warn!(
-                    error = %error,
                     "audit chain eager verification encountered a retryable operational failure"
                 );
             }

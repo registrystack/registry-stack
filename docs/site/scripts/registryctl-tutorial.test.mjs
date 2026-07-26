@@ -162,3 +162,50 @@ test('source tutorial image staging includes the dedicated Notary CEL worker', (
   assert.match(script, new RegExp(`dist/image-bin/${worker}`));
   assert.match(script, new RegExp(`chmod 0755[\\s\\S]*dist/image-bin/${worker}`));
 });
+
+test('Notary tutorial keeps no-match false bounded and renames broadened semantics', () => {
+  const tutorial = readFileSync(
+    new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
+    'utf8',
+  );
+  const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
+
+  assert.match(tutorial, /active-registration-exists/);
+  assert.match(
+    tutorial,
+    /false` means no active matching record was found by this[\s\S]*selected registry source/,
+  );
+  for (const broaderNegative of [
+    'global nonexistence',
+    'identity fraud',
+    'ineligibility',
+    'legal negative',
+  ]) {
+    assert.match(tutorial, new RegExp(broaderNegative));
+  }
+  assert.match(tutorial, /active-or-pending-registration-exists/);
+  for (const fixture of ['match.yaml', 'pending.yaml', 'no-match.yaml']) {
+    assert.match(script, new RegExp(`fixtures/${fixture.replace('.', '\\.')}`));
+  }
+  assert.match(script, /pending-registration-request\.json/);
+});
+
+test('Notary tutorial does not pair the unreleased claim with v0.13.0 assets', () => {
+  const tutorial = readFileSync(
+    new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(tutorial, /^status: draft$/m);
+  assert.match(tutorial, /Registry Stack Main checkout pinned to one exact commit/);
+  assert.match(tutorial, /git rev-parse HEAD/);
+  assert.match(tutorial, /manifest_source_ref/);
+  assert.match(tutorial, /tag_target/);
+  assert.match(tutorial, /v0\.13\.0 is incompatible with these instructions/);
+  assert.match(
+    tutorial,
+    /registryctl --version` reports a[\s\S]*does not establish source revision or artifact identity/,
+  );
+  assert.doesNotMatch(tutorial, /Matching Registry Stack v0\.13\.0/);
+  assert.doesNotMatch(tutorial, /same Registry Stack `v0\.13\.0` release/);
+});

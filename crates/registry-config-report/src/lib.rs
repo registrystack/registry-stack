@@ -4,6 +4,8 @@
 //! crate owns only the report envelopes, schema assets, shared vocabulary, and
 //! redaction helpers used when those product-owned decisions are reported.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
@@ -174,6 +176,7 @@ impl LiveApplyClass {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigSourceRef {
     pub kind: ConfigSourceKind,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -183,12 +186,14 @@ pub struct ConfigSourceRef {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DiagnosticSummary {
     pub error_count: u64,
     pub warning_count: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigDiagnostic {
     pub code: String,
     pub severity: DiagnosticSeverity,
@@ -216,6 +221,7 @@ pub struct ConfigDiagnostic {
 /// [`RequiredEnvVar::public_safe_entries`], which omits sensitive entries
 /// entirely so names, presence, and counts are not disclosed.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RequiredEnvVar {
     pub name: String,
     pub classification: ConfigValueClassification,
@@ -260,6 +266,7 @@ impl RequiredEnvVar {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigHashes {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub internal_config_hash: Option<String>,
@@ -305,6 +312,7 @@ impl TrustedValueSource {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextConstraintLegalBasisReport {
     pub required: bool,
     pub approved_value_check: bool,
@@ -313,6 +321,7 @@ pub struct ContextConstraintLegalBasisReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextConstraintConsentReport {
     pub required: bool,
     pub approved_value_check: bool,
@@ -321,12 +330,14 @@ pub struct ContextConstraintConsentReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextConstraintJurisdictionReport {
     pub permitted_count: u64,
     pub trusted_value_source: TrustedValueSource,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextConstraintAssuranceReport {
     pub allowed_count: u64,
     pub minimum: Option<String>,
@@ -335,6 +346,7 @@ pub struct ContextConstraintAssuranceReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextConstraintSourceFreshnessReport {
     pub max_age_seconds: Option<u64>,
     pub observation_field: Option<String>,
@@ -343,6 +355,7 @@ pub struct ContextConstraintSourceFreshnessReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextConstraintsReportEntry {
     pub container_path: String,
     pub product: String,
@@ -366,6 +379,7 @@ pub struct ContextConstraintsReportEntry {
 /// products emit explicit `null`s rather than omitting them when there is no
 /// cursor to observe.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuditShippingReport {
     pub sink_type: String,
     pub shipping_target_configured: bool,
@@ -375,6 +389,7 @@ pub struct AuditShippingReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigDiagnosticReport {
     pub schema_version: String,
     pub product: String,
@@ -397,12 +412,14 @@ pub struct ConfigDiagnosticReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigDefault {
     pub path: String,
     pub value: Value,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct OptionalSection {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -410,9 +427,84 @@ pub struct OptionalSection {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LiveApplyComponent {
     pub path: String,
     pub class: LiveApplyClass,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RelayConnectionCredentialMode {
+    ReloadableTokenFile,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RelayConnectionCredentialReload {
+    PerOperation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RelayConnectionOfflineFileStatus {
+    Present,
+    Missing,
+    NotRegular,
+    Unreadable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelayConnectionCredentialReport {
+    pub mode: RelayConnectionCredentialMode,
+    pub reload: RelayConnectionCredentialReload,
+    pub offline_file_status: RelayConnectionOfflineFileStatus,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RelayConnectionTransport {
+    Https,
+    LoopbackHttp,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelayConnectionNetworkReport {
+    pub transport: RelayConnectionTransport,
+    pub allowed_private_cidr_count: u64,
+    pub allow_insecure_localhost: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelayConnectionReport {
+    pub credential: RelayConnectionCredentialReport,
+    pub network: RelayConnectionNetworkReport,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelayConsultationProfileReport {
+    pub id: String,
+    pub contract_hash: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelayConsultationReport {
+    pub container_path: String,
+    pub claim_id: String,
+    pub consultation: String,
+    pub profile: RelayConsultationProfileReport,
+    pub purpose: String,
+    pub required_scopes: Vec<String>,
+    pub inputs: BTreeMap<String, String>,
 }
 
 /// A configuration tree that is guaranteed to have passed through redaction.
@@ -469,6 +561,7 @@ impl RedactedConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigExplanation {
     pub schema_version: String,
     pub product: String,
@@ -486,6 +579,10 @@ pub struct ConfigExplanation {
     pub live_apply: Vec<LiveApplyComponent>,
     #[serde(default)]
     pub context_constraints: Vec<ContextConstraintsReportEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_connection: Option<RelayConnectionReport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relay_consultations: Vec<RelayConsultationReport>,
     pub resolved_config: RedactedConfig,
     #[serde(skip_serializing_if = "config_hashes_option_is_empty")]
     pub hashes: Option<ConfigHashes>,
@@ -498,6 +595,7 @@ pub struct ConfigExplanation {
 /// wire format but does not claim that its `resolved_config` was produced by
 /// [`RedactedConfig::redacted`].
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigExplanationDocument {
     pub schema_version: String,
     pub product: String,
@@ -513,18 +611,24 @@ pub struct ConfigExplanationDocument {
     pub live_apply: Vec<LiveApplyComponent>,
     #[serde(default)]
     pub context_constraints: Vec<ContextConstraintsReportEntry>,
+    #[serde(default)]
+    pub relay_connection: Option<RelayConnectionReport>,
+    #[serde(default)]
+    pub relay_consultations: Vec<RelayConsultationReport>,
     pub resolved_config: Value,
     pub hashes: Option<ConfigHashes>,
     pub generated_at: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegistryctlProjectRef {
     pub path: String,
     pub profile: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegistryctlProductReport {
     pub product: String,
     pub status: ReportStatus,
@@ -532,6 +636,7 @@ pub struct RegistryctlProductReport {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegistryctlValidationReport {
     pub schema_version: String,
     pub project: RegistryctlProjectRef,
