@@ -1749,7 +1749,7 @@ fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
                 FIXTURE_BODY_FILE_REFERENCE_REMEDIATION
             } else {
                 match kind {
-                    "project" => "Correct the project YAML using the project authoring schema.",
+                    "project" => "Correct the project YAML using the project authoring schema. If this project passed with an earlier registryctl, run `registryctl migrate --project-dir <project-directory> --target-version 1` to check the reviewed compatibility catalog. It does not change or approve the source project; any candidate is separate and requires review.",
                     "entity" => "Correct the entity YAML using the entity authoring schema.",
                     "integration" => {
                         "Correct the integration YAML using the integration authoring schema."

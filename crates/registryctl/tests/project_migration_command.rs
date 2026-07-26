@@ -10,8 +10,8 @@ use registryctl::{
     migrate_registry_project_with_context, AuthoringContract, MigrationBlockingReason,
     MigrationCandidateEmission, MigrationDiagnosticCode, MigrationDisposition, MigrationFieldPath,
     MigrationGateStatus, MigrationOperation, MigrationReviewStatus, MigrationVersionDirection,
-    ProjectCheckOptions, ProjectExecutionContext, ProjectInitOptions, ProjectMigrationOptions,
-    ProjectStarter,
+    ProjectAuthoringDiagnostics, ProjectCheckOptions, ProjectExecutionContext, ProjectInitOptions,
+    ProjectMigrationOptions, ProjectStarter,
 };
 
 const OLD_ATTRIBUTE_RELEASE: &str = "tests/fixtures/project-migration/old-40ec7a-attribute-release";
@@ -136,6 +136,37 @@ fn historical_attribute_release_emits_only_the_reviewable_catalog_transform() {
     let project = historical_attribute_release_project(temporary.path());
     let before = file_snapshot(&project);
     let execution_context = worker();
+    let check_error = check_registry_project_with_context(
+        &ProjectCheckOptions {
+            project_directory: project.clone(),
+            environment: "local".to_owned(),
+            explain: false,
+            against: None,
+            anchor: None,
+        },
+        &execution_context,
+    )
+    .expect_err("historical project requires a reviewed migration");
+    let diagnostics = check_error
+        .downcast::<ProjectAuthoringDiagnostics>()
+        .expect("historical project returns typed authoring diagnostics");
+    assert_eq!(diagnostics.diagnostics.len(), 1, "{diagnostics:#?}");
+    let diagnostic = &diagnostics.diagnostics[0];
+    assert_eq!(
+        diagnostic.code, "registryctl.authoring.project.invalid",
+        "{diagnostics:#?}"
+    );
+    assert_eq!(
+        diagnostic.remediation,
+        "Correct the project YAML using the project authoring schema. If this project passed with an earlier registryctl, run `registryctl migrate --project-dir <project-directory> --target-version 1` to check the reviewed compatibility catalog. It does not change or approve the source project; any candidate is separate and requires review."
+    );
+    let rendered = diagnostic.remediation;
+    assert!(rendered.contains("<project-directory>"));
+    assert!(!rendered.contains(project.to_string_lossy().as_ref()));
+    assert!(!rendered.contains("solmara-nia-userinfo"));
+    assert!(!rendered.contains("individual_id"));
+    assert!(!rendered.contains("max_age_seconds"));
+
     let checked = migrate_registry_project_with_context(
         &ProjectMigrationOptions {
             project_directory: project.clone(),
