@@ -570,6 +570,12 @@ mod schema_authority_tests {
 
     #[test]
     fn committed_dto_shape_contract_is_byte_exact_generated_output() {
+        assert!(
+            include_str!("../../../../Cargo.toml")
+                .lines()
+                .any(|line| line.trim() == r#"schemars = { version = "=1.2.1" }"#),
+            "DTO contract generator metadata must match the exact workspace schemars pin"
+        );
         assert_eq!(
             include_bytes!(
                 "../../schemas/project-authoring/dto-shape-contract.v1.json"
