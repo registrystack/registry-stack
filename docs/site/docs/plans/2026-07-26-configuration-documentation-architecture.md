@@ -36,11 +36,18 @@ resulting Registry Stack documentation architecture.
 
 Five findings recur, and they are the load-bearing ones.
 
-1. **The smallest first configuration is two or three fields.** Kong teaches a service with a name and
-   a URL. Tyk teaches a listen path and an upstream URL. Airbyte teaches an endpoint URL and a method.
-   SpiceDB teaches six lines with two relations and two permissions. Terraform teaches a provider and
-   two resources with no variables, no outputs, and no backend. None of them opens with a complete
-   object.
+1. **Five of six open with a deliberately incomplete configuration, and the exception is instructive.**
+   Three teach two or three fields: Kong a service with a name and a URL, Tyk a listen path and an
+   upstream URL, Airbyte an endpoint URL and a method. Two teach a small but multi-part artifact:
+   SpiceDB six lines with two relations and two permissions, Terraform a provider and two resources with
+   no variables, no outputs, and no backend. What the five share is not a field count, it is that the
+   first artifact is knowingly partial.
+
+   The OpenTelemetry Collector is the counterexample, in both directions. Its quick start ships zero
+   YAML and runs the image's built-in configuration, and the configuration page's first example is
+   already three pipelines and three extensions. The reader therefore never authors a partial
+   configuration, and the first hand-written pipeline they meet is on the troubleshooting page. Zero to
+   maximal with nothing between is the shape to avoid.
 2. **Naming one schema as the authority is common; generating the reference from it is not.** Three of
    the six name a single authority: Kong points readers at the live `/schemas` endpoint rather than
    copying defaults into prose, Airbyte names `declarative_component_schema.yaml` as the validator, and
@@ -1292,11 +1299,17 @@ short-term benchmarks, correctness tests, long-running stability tests and maxim
 ([testbed/README](https://raw.githubusercontent.com/open-telemetry/opentelemetry-collector-contrib/main/testbed/README.md)).
 
 Two concrete drift facts are worth carrying away. The contrib `examples/` directory has no target that
-validates its configurations. And the site deliberately hardcodes an insecure value: an accepted issue
-asked to "update all examples in opentelemetry.io to explicitly set the endpoint to `0.0.0.0`"
-([opentelemetry.io issue 3839](https://github.com/open-telemetry/opentelemetry.io/issues/3839)), so
-every site example now permanently contradicts the security page's `localhost` recommendation, by
-design, to shield readers from a default change.
+validates its configurations. And the site hardcodes a value its own security page argues against. A
+closed issue asked to "update all examples in opentelemetry.io to explicitly set the endpoint to
+`0.0.0.0`" ([opentelemetry.io issue 3839](https://github.com/open-telemetry/opentelemetry.io/issues/3839)),
+and on the configuration page five receiver endpoints do use `0.0.0.0`, against one `localhost` in a
+Prometheus scrape target
+([configuration.md at `main`](https://raw.githubusercontent.com/open-telemetry/opentelemetry.io/main/content/en/docs/collector/configuration.md),
+read 2026-07-26). The scope is what was verified on that page, not a claim about every example on the
+site. To the project's credit the page annotates the divergence rather than hiding it, noting that
+`localhost` is preferable while the examples use the unspecified address as a convenience. The cost
+remains: the reader copies the value, not the annotation, and the security page's recommendation and the
+examples now disagree in the same corpus.
 
 ### Friction
 
@@ -1406,7 +1419,29 @@ moves; the rest of the architecture is unchanged.
 
 ## B.1 Configuration-domain map to document
 
-Three planes, and the documentation should never let a reader confuse them.
+Two authoring workflows exist today, and the plane model only describes one of them. That is the
+largest correction this proposal has to make to itself.
+
+**Workflow A, the project model.** `registryctl init --from <starter>` produces the five authored YAML
+surfaces, and `build` compiles them into product configuration the adopter does not hand-edit. Rungs 3
+and 4 live here, and the three planes describe it.
+
+**Workflow B, the direct Relay project.** `registryctl init relay <dir>` writes `registryctl.yaml`,
+`compose.yaml`, and `relay/config.yaml`, plus `secrets/local.env` and a sample workbook
+(`crates/registryctl/src/lib.rs:2483`). There is no project file, no integration, no environment, and no
+`build` step. The adopter edits Relay runtime configuration directly, and the tutorial says so in as many
+words: "The floor that hid east and west is configuration you own. Open `relay/config.yaml`"
+(`tutorials/publish-spreadsheet-secured-registry-api`). Rungs 1 and 2 live here.
+
+Under workflow B, a file that is generated output in workflow A is authored input. The documentation must
+say that plainly rather than presenting one unified model, and the journey chooser must tell a reader
+which workflow their source shape puts them in. Two consequences for the pages proposed later: the
+ownership table needs a workflow column, and the spreadsheet rung cannot link to the authored-surface
+reference for `relay/config.yaml`, because there that file is the runtime configuration reference's
+subject. Whether the two workflows should converge is a product question, not a documentation one, and
+this plan does not answer it.
+
+The three planes that follow describe workflow A.
 
 **Plane 1, authored intent.** Five YAML surfaces, each with a strict schema printable from
 `registryctl authoring schema --kind` and wired into VS Code and Zed by `init`, plus a script adapter
@@ -1637,14 +1672,23 @@ Already in place and worth naming in the docs as the reason examples can be trus
 
 Three additions this proposal depends on:
 
-1. **Generate the two reference sections from schema.** A `generate-config-reference.mjs` step that
-   reads the five authoring schemas from `registryctl authoring schema --kind <kind>` and the two
-   runtime schemas from the committed `schemas/*.config.schema.json`, then writes
-   `src/data/generated/`. The runtime half is nearly free: `just config-schema-generate` and
-   `just config-schema-check` in `crates/registry-relay/justfile` and `products/notary/justfile`
-   already reproduce those two files from each product's typed config graph and fail CI on drift, so
-   the docs step consumes an artifact that is already gated rather than adding a second source of
-   truth.
+1. **Generate the two reference sections from schema, reading committed files only.** A
+   `generate-config-reference.mjs` step that reads the two runtime schemas from the committed
+   `schemas/*.config.schema.json` and the five authoring schemas from committed copies alongside them.
+
+   It must not shell out to `registryctl authoring schema --kind <kind>`. The Docs checks job in
+   `.github/workflows/ci.yml` runs checkout, Node setup, `npm ci`, `npm test`, and `npm run check`, with
+   no Rust toolchain and no built CLI, so a generator that invoked the binary would fail every docs
+   build. The existing `generate-project-starters.mjs` already models the right shape: it reads committed
+   fixture files rather than running the CLI. So the authoring schemas need the treatment the runtime
+   schemas already have, a `just`-style generate-and-check pair on the CLI side that commits the five
+   files and fails Rust CI on drift, after which the docs step consumes committed artifacts.
+
+   The generator writes `src/data/generated/`. The runtime half is nearly free, because
+   `just config-schema-generate` and `just config-schema-check` in `crates/registry-relay/justfile` and
+   `products/notary/justfile` already reproduce those two files from each product's typed config graph
+   and fail CI on drift, so the docs step consumes an artifact that is already gated rather than adding
+   a second source of truth.
 
    The gate needs one more piece than the phrase "fails `npm run check`" implies. `npm run check` begins
    with `npm run generate`, the existing generators overwrite `src/data/generated/` in place, and the
