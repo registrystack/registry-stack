@@ -7,11 +7,15 @@ use std::process::Command;
 use registryctl::{
     compare_registry_project_environments_semantically,
     compare_registry_project_to_embedded_starter_semantically,
-    compare_registry_projects_semantically, init_registry_project,
+    compare_registry_projects_semantically, init_registry_project, FieldSensitivity,
     ProjectEnvironmentSemanticComparisonOptions, ProjectInitOptions,
     ProjectSemanticComparisonOptions, ProjectStarter, ProjectStarterSemanticComparisonOptions,
-    SemanticComparisonAssurance, SemanticComparisonDimension, SemanticComparisonEquivalence,
-    SemanticComparisonReviewPlanState, SemanticComparisonSchemaFamily,
+    SemanticComparisonActivationRequirement, SemanticComparisonAssurance,
+    SemanticComparisonChangeSource, SemanticComparisonConsumer, SemanticComparisonDimension,
+    SemanticComparisonDirection, SemanticComparisonEquivalence,
+    SemanticComparisonGeneratedArtifact, SemanticComparisonRequiredAction,
+    SemanticComparisonRestartRequirement, SemanticComparisonReviewPlanState,
+    SemanticComparisonSchemaFamily, SemanticComparisonSigningRequirement,
 };
 use serde_json::Value;
 
@@ -115,6 +119,106 @@ fn formatting_and_explicit_equivalent_defaults_produce_zero_changes() {
     );
     assert!(report.changes.is_empty());
     assert!(report.required_actions.is_empty());
+}
+
+#[test]
+fn registry_id_change_requires_redeploying_both_products_without_reporting_values() {
+    const BASELINE_ID: &str = "semantic-comparison-baseline";
+    const CURRENT_ID: &str = "semantic-comparison-current";
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let baseline = temporary.path().join("baseline");
+    let current = temporary.path().join("current");
+    init_http_project(&baseline);
+    init_http_project(&current);
+    rewrite_yaml(&baseline.join("registry-stack.yaml"), |document| {
+        document["registry"]["id"] = Value::String(BASELINE_ID.to_owned());
+    });
+    rewrite_yaml(&current.join("registry-stack.yaml"), |document| {
+        document["registry"]["id"] = Value::String(CURRENT_ID.to_owned());
+    });
+
+    let report = compare_projects(&current, &baseline);
+    assert_eq!(report.equivalence, SemanticComparisonEquivalence::Different);
+    let registry_id_change = report
+        .changes
+        .iter()
+        .find(|change| {
+            change.address.schema_family == SemanticComparisonSchemaFamily::Project
+                && change.address.field.as_str() == "/properties/registry/properties/id"
+        })
+        .expect("registry.id change is classified");
+    assert_eq!(
+        registry_id_change.source,
+        SemanticComparisonChangeSource::Authored
+    );
+    assert_eq!(
+        registry_id_change.dimension,
+        SemanticComparisonDimension::Project
+    );
+    assert_eq!(
+        registry_id_change.direction,
+        SemanticComparisonDirection::Changed
+    );
+    assert_eq!(registry_id_change.sensitivity, FieldSensitivity::Internal);
+    assert_eq!(registry_id_change.occurrences, 1);
+    assert_eq!(
+        registry_id_change.consumers,
+        vec![
+            SemanticComparisonConsumer::RegistryctlAuthoring,
+            SemanticComparisonConsumer::RegistryRelay,
+            SemanticComparisonConsumer::RegistryNotary,
+            SemanticComparisonConsumer::EditorTooling,
+            SemanticComparisonConsumer::DocsGenerator,
+            SemanticComparisonConsumer::BundleSigner,
+            SemanticComparisonConsumer::DeploymentTooling,
+            SemanticComparisonConsumer::Operator,
+        ]
+    );
+    assert_eq!(
+        registry_id_change.generated_artifacts,
+        vec![
+            SemanticComparisonGeneratedArtifact::EditorSchemas,
+            SemanticComparisonGeneratedArtifact::ProjectBuild,
+            SemanticComparisonGeneratedArtifact::RelayConfig,
+            SemanticComparisonGeneratedArtifact::NotaryConfig,
+            SemanticComparisonGeneratedArtifact::FieldReference,
+        ]
+    );
+    assert_eq!(
+        registry_id_change.requirements.signing,
+        SemanticComparisonSigningRequirement::RelayAndNotaryBundles
+    );
+    assert_eq!(
+        registry_id_change.requirements.activation,
+        SemanticComparisonActivationRequirement::ApplyRelayAndNotaryConfig
+    );
+    assert_eq!(
+        registry_id_change.requirements.restart,
+        SemanticComparisonRestartRequirement::RegistryRelayAndNotary
+    );
+    assert_eq!(
+        report.required_actions,
+        vec![
+            SemanticComparisonRequiredAction::ReviewSemanticChanges,
+            SemanticComparisonRequiredAction::RunAffectedFixtures,
+            SemanticComparisonRequiredAction::RegenerateGeneratedArtifacts,
+            SemanticComparisonRequiredAction::ResignRelayBundle,
+            SemanticComparisonRequiredAction::ResignNotaryBundle,
+            SemanticComparisonRequiredAction::ReactivateRelayConfiguration,
+            SemanticComparisonRequiredAction::ReactivateNotaryConfiguration,
+            SemanticComparisonRequiredAction::RestartRegistryRelay,
+            SemanticComparisonRequiredAction::RestartRegistryNotary,
+        ]
+    );
+
+    let json = String::from_utf8(report.canonical_json_bytes().expect("report serializes"))
+        .expect("JSON is UTF-8");
+    for value in [BASELINE_ID, CURRENT_ID] {
+        assert!(!json.contains(value));
+        assert!(!report.human_safe_summary().contains(value));
+        assert!(!format!("{report:?}").contains(value));
+    }
 }
 
 #[test]

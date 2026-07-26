@@ -638,6 +638,11 @@ jobs:
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
+      - name: Install docs system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes zsh
+
       - name: Install docs dependencies
         working-directory: docs/site
         run: npm ci

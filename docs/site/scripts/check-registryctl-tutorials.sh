@@ -304,7 +304,7 @@ run_relay_tutorial() {
 	mkdir -p "$tutorial_root"
 
 	node "$HELPER" assert-layout "$RELAY_TUTORIAL" \
-		'["Install registryctl","Create the sample project","Start the local stack","Run the smoke check","Load local demo keys","Make one denied request","Make one allowed request","Read one protected record","Read one protected record","Read restricted identity fields","Read restricted identity fields","Inspect the generated contract","Inspect the generated contract","Run an aggregate","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Stop the stack"]'
+		'["Install registryctl","Create the sample project","Start the local stack","Run the smoke check","Load local demo keys","Make one denied request","Make one allowed request","Read one protected record","Read one protected record","Read restricted identity fields","Read restricted identity fields","Inspect the editable local scaffold","Inspect the editable local scaffold","Run an aggregate","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Stop the stack"]'
 	node "$HELPER" extract-shell "$RELAY_TUTORIAL" "$blocks"
 
 	expected_install=$'curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.13.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.13.0 bash\nregistryctl --version'
@@ -354,9 +354,9 @@ run_relay_tutorial() {
 	assert_http "$LAST_OUTPUT" 200
 	assert_contains "$LAST_OUTPUT" Fae Elm FAKE-856648 '595 River Rd, Southvale'
 	assert_json_fence_subset "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Read restricted identity fields' 2
-	run_block 'Relay 12: Inspect the generated contract' "$blocks/12.sh" success
+	run_block 'Relay 12: Inspect the editable local scaffold' "$blocks/12.sh" success
 	run_block 'Relay 13: Open the runtime API reference' "$blocks/13.sh" success
-	assert_fence_lines "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Inspect the generated contract' text 1
+	assert_fence_lines "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Inspect the editable local scaffold' text 1
 	run_block 'Relay 14: Run an aggregate' "$blocks/14.sh" success
 	assert_http "$LAST_OUTPUT" 200
 	assert_json_fence_subset "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Run an aggregate' 1

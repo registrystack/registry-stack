@@ -1,24 +1,32 @@
 import assert from 'node:assert/strict';
+import { execFile as execFileCallback } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
+import { promisify } from 'node:util';
 
 import YAML from 'yaml';
 
 const siteRoot = resolve(import.meta.dirname, '..');
+const repositoryRoot = resolve(siteRoot, '../..');
+const execFile = promisify(execFileCallback);
 
 async function readSite(relative) {
   return readFile(resolve(siteRoot, relative), 'utf8');
 }
 
 test('current-source registryctl docs do not attribute unreleased commands to v0.13.0', async () => {
-  const [docsetsSource, generatedDocsetsSource, registryctl, configuration, tutorial] =
+  const [docsetsSource, generatedDocsetsSource, registryctl, configuration, tutorial, releaseSource] =
     await Promise.all([
       readSite('src/data/docsets.yaml'),
       readSite('src/data/generated/docsets.json'),
       readSite('src/content/docs/reference/registryctl.mdx'),
       readSite('src/content/docs/reference/project-configuration.mdx'),
       readSite('src/content/docs/tutorials/author-registry-project.mdx'),
+      execFile('git', ['show', 'v0.13.0:crates/registryctl/src/main.rs'], {
+        cwd: repositoryRoot,
+        maxBuffer: 4 * 1024 * 1024,
+      }).then(({ stdout }) => stdout),
     ]);
   const docsets = YAML.parse(docsetsSource);
   const generatedDocsets = JSON.parse(generatedDocsetsSource);
@@ -70,7 +78,28 @@ test('current-source registryctl docs do not attribute unreleased commands to v0
 
   assert.match(tutorial, /documents Main source \(unreleased\)/);
   assert.match(tutorial, /has not been designated as a release candidate/);
-  assert.match(tutorial, /The `v0\.13\.0` binary cannot complete this workflow/);
+  assert.match(tutorial, /The `v0\.13\.0` `registryctl` command-tree source does not define/);
+  const releaseCommands = releaseSource
+    .split('enum Commands {')[1]
+    .split('#[derive(Debug, Args)]')[0];
+  for (const command of [
+    'Preflight',
+    'Capabilities',
+    'Compare',
+    'Promote',
+    'Migrate',
+    'ProjectDiagnostics',
+  ]) {
+    assert.doesNotMatch(
+      releaseCommands,
+      new RegExp(`\\b${command}\\b`),
+      `${command} must remain absent from the v0.13.0 command tree`,
+    );
+  }
+  const releaseAuthoring = releaseSource
+    .split('enum AuthoringCommand {')[1]
+    .split('#[derive(Debug, Parser)]')[0];
+  assert.doesNotMatch(releaseAuthoring, /\bReference\b/);
   assert.match(
     tutorial,
     /`Registry Stack 0\.13\.0` value printed by `init` is bundled starter provenance/,

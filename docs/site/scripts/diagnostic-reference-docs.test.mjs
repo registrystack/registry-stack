@@ -16,7 +16,7 @@ const execFileAsync = promisify(execFile);
 const expectedCounts = {
   authoring: 17,
   fixture: 16,
-  operator: 53,
+  operator: 59,
 };
 
 async function artifactBytes(catalog) {

@@ -143,7 +143,7 @@ journeys:
     evidence_lifecycle: main_unreleased
     availability: { status: current_unreleased, proof: source_tree, release: null }
     canonical_sources:
-      - docs/site/openapi/registry-relay.openapi.json
+      - crates/registry-relay/openapi/registry-relay.openapi.json
       - crates/registry-relay/tests/api_docs.rs
       - crates/registryctl/src/templates/relay_config.yaml.tmpl
     canonical_workspace:
@@ -166,7 +166,7 @@ journeys:
         human_edit: true
         version_control: true
         note: Exact configuration emitted by the disposable init step. It explicitly selects the local public OpenAPI opt-out and becomes operator-owned after scaffolding.
-      - path: docs/site/openapi/registry-relay.openapi.json
+      - path: crates/registry-relay/openapi/registry-relay.openapi.json
         classification: generated_unsigned
         owner: registry_relay
         human_edit: false
@@ -600,9 +600,9 @@ journeys:
       - name: check
         proves: Static snapshot and evidence contracts are coherent.
         does_not_prove: Runtime snapshot files are available.
-      - name: materialization
-        proves: One runtime loaded a concrete snapshot generation.
-        does_not_prove: Upstream collection is complete or correct.
+      - name: build
+        proves: Unsigned Relay input contains the reviewed snapshot materialization requirements.
+        does_not_prove: A runtime loaded a concrete snapshot generation or the upstream collection is complete.
     production_delta: *runtime_delta
     troubleshooting:
       - registryctl.authoring.project.invalid
@@ -843,9 +843,9 @@ journeys:
       - name: fixture and check
         proves: Maintained behavior and static contracts are coherent.
         does_not_prove: Runtime readiness or live source compatibility.
-      - name: preflight
-        proves: Declared files, references, bindings, and non-widening posture are ready offline.
-        does_not_prove: DNS, token exchange, source reachability, or runtime health.
+      - name: preflight diagnostic
+        proves: A clean workspace reports missing operator files and secret references through the value-free offline contract.
+        does_not_prove: Operator inputs are provisioned, preflight passes, or the runtime is healthy.
       - name: bundle verification
         proves: One immutable product closure has accepted signature and target binding.
         does_not_prove: The other product is valid or activation succeeds.

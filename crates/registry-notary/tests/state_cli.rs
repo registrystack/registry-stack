@@ -23,7 +23,7 @@ fn state_doctor_configuration_failure_is_stable_and_value_free() {
     let stderr = String::from_utf8(output.stderr).expect("stderr is UTF-8");
     assert_eq!(
         stderr,
-        "ERROR registry-notary PostgreSQL state is not ready: configuration_invalid\n"
+        "ERROR notary.configuration.invalid: Registry Notary runtime configuration is invalid; next action: run registry-notary doctor, correct the reviewed configuration or binding, and retry activation\n"
     );
     assert!(!stderr.contains(sentinel));
     assert!(!stderr.contains(&config_path.display().to_string()));

@@ -11,8 +11,8 @@
     },
     "entries": {
       "type": "array",
-      "minItems": 53,
-      "maxItems": 53,
+      "minItems": 59,
+      "maxItems": 59,
       "uniqueItems": true,
       "items": {
         "allOf": [
@@ -169,11 +169,17 @@
                 "notary.relay.configuration_invalid",
                 "notary.relay.credential_unavailable",
                 "notary.relay.credentials_rejected",
-                "notary.relay.profile_mismatch",
-                "notary.relay.profile_not_found",
-                "notary.relay.unavailable",
-                "notary.runtime.activation_failed",
-                "notary.runtime.activation_required"
+            "notary.relay.profile_mismatch",
+            "notary.relay.profile_not_found",
+            "notary.relay.unavailable",
+            "notary.runtime.activation_failed",
+            "notary.runtime.activation_required",
+            "notary.state.postgresql.database_read_only",
+            "notary.state.postgresql.database_unavailable",
+            "notary.state.postgresql.database_unsupported",
+            "notary.state.postgresql.durability_unsafe",
+            "notary.state.postgresql.role_incompatible",
+            "notary.state.postgresql.schema_incompatible"
               ]
             },
             "owner": {

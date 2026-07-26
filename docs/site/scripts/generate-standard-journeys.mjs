@@ -941,7 +941,7 @@ function buildSteps(journey, matrixById) {
     {
       id: "lifecycle-preflight",
       kind: "readiness_gate",
-      label: "Pass offline environment readiness before operator handoff",
+      label: "Inspect missing offline requirements before operator handoff",
       cwd: ".",
       argv: [
         "registryctl",
@@ -950,8 +950,10 @@ function buildSteps(journey, matrixById) {
         matrixEntry.project_dir,
         "--environment",
         "local",
+        "--format",
+        "json",
       ],
-      note: "A clean synthetic workspace is expected to report missing operator-provisioned runtime files or secret references. Provision the reviewed environment bindings, rerun this command, and require a passing report before signing, verification, promotion, or activation handoff. Build may remain offline and unsigned.",
+      note: "This clean-workspace step is expected to exit 1 with a value-free not_ready report because operator-provisioned runtime files and secret references are absent. It proves the diagnostic boundary, not readiness. Provision the reviewed environment bindings, rerun this command, and require a passing report before signing, verification, promotion, or activation handoff.",
     },
     commandStep(
       "lifecycle-capabilities",

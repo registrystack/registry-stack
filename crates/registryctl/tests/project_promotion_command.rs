@@ -7,12 +7,16 @@ use registryctl::{
     add_config_anchor_key, build_registry_project_with_context, init_config_anchor,
     init_registry_project, promote_registry_project, sign_config_bundle, BundleSignOptions,
     ProjectBuildOptions, ProjectExecutionContext, ProjectInitOptions, ProjectPromotionOptions,
-    ProjectStarter, PromotionBlockingReason, PromotionChangeEffect, PromotionChangeKind,
-    PromotionDisposition, PromotionProductAction,
+    ProjectPromotionReportV1, ProjectStarter, PromotionBlockingReason, PromotionChangeEffect,
+    PromotionChangeKind, PromotionCompatibilityComponent, PromotionCompatibilityState,
+    PromotionDisposition, PromotionProductAction, ReviewedCeilingAssessment,
+    ReviewedRevisionComparison, TrustResolutionAssessment,
 };
 
 const TEST_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
 const TEST_PUBLIC_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
+const PROMOTION_SCHEMA: &str =
+    include_str!("../schemas/project-reports/registry.project.promotion.v1.schema.json");
 
 #[derive(Clone)]
 struct SignedProductBaseline {
@@ -103,6 +107,22 @@ fn promotion_options(project: &Path, baselines: &SignedBaselines) -> ProjectProm
         relay_anchor: Some(baselines.relay.anchor.clone()),
         notary_against: Some(baselines.notary.bundle.clone()),
         notary_anchor: Some(baselines.notary.anchor.clone()),
+    }
+}
+
+fn legacy_promotion_options(
+    project: &Path,
+    baseline: &SignedProductBaseline,
+) -> ProjectPromotionOptions {
+    ProjectPromotionOptions {
+        project_directory: project.to_path_buf(),
+        environment: "local".to_owned(),
+        against: Some(baseline.bundle.clone()),
+        anchor: Some(baseline.anchor.clone()),
+        relay_against: None,
+        relay_anchor: None,
+        notary_against: None,
+        notary_anchor: None,
     }
 }
 
@@ -201,6 +221,118 @@ fn copy_tree(source: &Path, destination: &Path) {
         } else {
             std::fs::copy(&source_path, &destination_path).expect("fixture file copies");
         }
+    }
+}
+
+fn assert_conservative_blocked_report(report: &ProjectPromotionReportV1, forbidden: &[&str]) {
+    assert_eq!(report.disposition, PromotionDisposition::Blocked);
+    assert_eq!(
+        report.reviewed_revision,
+        ReviewedRevisionComparison::NotProven
+    );
+    assert!(report.changes.is_empty());
+    assert_eq!(
+        report.reviewed_ceiling,
+        ReviewedCeilingAssessment::UnresolvedBlocked
+    );
+    assert_eq!(report.trust, TrustResolutionAssessment::UnresolvedBlocked);
+    assert_eq!(
+        report
+            .compatibility
+            .iter()
+            .map(|assessment| (assessment.component, assessment.state))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                PromotionCompatibilityComponent::Product,
+                PromotionCompatibilityState::Unresolved,
+            ),
+            (
+                PromotionCompatibilityComponent::Capability,
+                PromotionCompatibilityState::Unresolved,
+            ),
+            (
+                PromotionCompatibilityComponent::Schema,
+                PromotionCompatibilityState::Unresolved,
+            ),
+            (
+                PromotionCompatibilityComponent::Abi,
+                PromotionCompatibilityState::Unresolved,
+            ),
+        ]
+    );
+    for reason in [
+        PromotionBlockingReason::ReviewedRevisionNotProven,
+        PromotionBlockingReason::ComparisonEvidenceIncomplete,
+        PromotionBlockingReason::ReviewedCeilingUnresolved,
+        PromotionBlockingReason::TrustUnresolved,
+        PromotionBlockingReason::CompatibilityUnresolved,
+    ] {
+        assert!(
+            report.blocking_reasons.contains(&reason),
+            "blocked report lacks {reason:?}"
+        );
+    }
+    assert!(report.required_actions.review_classes.is_empty());
+    assert_eq!(
+        report.required_actions.re_sign,
+        PromotionProductAction::None
+    );
+    assert_eq!(
+        report.required_actions.reactivate,
+        PromotionProductAction::None
+    );
+    assert_eq!(
+        report.required_actions.restart,
+        PromotionProductAction::None
+    );
+
+    let document = serde_json::to_value(report).expect("blocked report serializes");
+    let schema: serde_json::Value =
+        serde_json::from_str(PROMOTION_SCHEMA).expect("promotion schema parses");
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .expect("promotion schema compiles");
+    if let Err(errors) = validator.validate(&document) {
+        let details = errors.map(|error| error.to_string()).collect::<Vec<_>>();
+        panic!("blocked report must validate against the promotion schema: {details:?}");
+    }
+    let serialized = serde_json::to_string(&document).expect("blocked report JSON serializes");
+    let reparsed: ProjectPromotionReportV1 =
+        serde_json::from_str(&serialized).expect("blocked report decision evidence validates");
+    assert_eq!(&reparsed, report);
+    for sentinel in forbidden {
+        assert!(
+            !serialized.contains(sentinel),
+            "blocked report must not contain {sentinel:?}"
+        );
+    }
+}
+
+fn assert_conservative_blocked_cli(output: &std::process::Output, forbidden: &[&str]) {
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: ProjectPromotionReportV1 =
+        serde_json::from_slice(&output.stdout).expect("blocked CLI JSON parses");
+    assert_conservative_blocked_report(&report, forbidden);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for sentinel in forbidden {
+        assert!(
+            !stdout.contains(sentinel) && !stderr.contains(sentinel),
+            "blocked CLI output must not contain {sentinel:?}"
+        );
     }
 }
 
@@ -407,25 +539,32 @@ fn combined_topology_requires_separate_product_owned_baselines() {
     })
     .expect("starter initializes");
     let baselines = signed_baselines(&project, temporary.path());
+    let temporary_path = temporary.path().to_str().expect("temporary path is UTF-8");
+    let forbidden = [
+        "combined-promotion-project",
+        "fictional-citizen-registry",
+        "FICTIONAL_REGISTRY_TOKEN",
+        "https://citizen-registry.invalid",
+        "public-service-person-verification",
+        "promotion-notary-baseline",
+        temporary_path,
+    ];
 
     let missing_relay = run_promote_legacy(&project, &baselines.notary, "json");
-    assert_eq!(missing_relay.status.code(), Some(1));
-    assert!(missing_relay.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&missing_relay.stderr)
-        .contains("could not establish verified promotion baselines"));
+    assert_conservative_blocked_cli(&missing_relay, &forbidden);
 
     let wrong_owner = promote_registry_project(&ProjectPromotionOptions {
-        project_directory: project,
+        project_directory: project.clone(),
         environment: "local".to_owned(),
         against: None,
         anchor: None,
-        relay_against: Some(baselines.notary.bundle),
-        relay_anchor: Some(baselines.notary.anchor),
-        notary_against: Some(baselines.relay.bundle),
-        notary_anchor: Some(baselines.relay.anchor),
+        relay_against: Some(baselines.notary.bundle.clone()),
+        relay_anchor: Some(baselines.notary.anchor.clone()),
+        notary_against: Some(baselines.relay.bundle.clone()),
+        notary_anchor: Some(baselines.relay.anchor.clone()),
     })
-    .expect_err("product-specific baselines must match their product ownership");
-    assert!(format!("{wrong_owner:#}").contains("could not establish verified promotion baselines"));
+    .expect("wrong-product baselines fail closed as a report");
+    assert_conservative_blocked_report(&wrong_owner, &forbidden);
 }
 
 #[test]
@@ -466,7 +605,11 @@ fn relay_only_and_notary_only_topologies_accept_their_product_baseline() {
 }
 
 #[test]
-fn signed_projection_and_post_signature_bundle_tampering_are_rejected() {
+fn invalid_signed_baselines_fail_closed_with_valid_value_free_reports() {
+    const TAMPERED_BASELINE_SENTINEL: &str = "TAMPERED_BASELINE_VALUE_SENTINEL";
+    const MALFORMED_PROJECTION_SENTINEL: &str =
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
     let temporary = tempfile::tempdir().expect("temporary directory creates");
     let project = temporary.path().join("tamper-promotion-project");
     init_registry_project(&ProjectInitOptions {
@@ -487,20 +630,43 @@ fn signed_projection_and_post_signature_bundle_tampering_are_rejected() {
     copy_tree(&baseline.bundle, &tampered_bundle);
     let tampered_state = tampered_bundle.join("approval/project-state.json");
     let mut bytes = std::fs::read(&tampered_state).expect("signed approval state reads");
-    bytes.push(b' ');
+    bytes.extend_from_slice(TAMPERED_BASELINE_SENTINEL.as_bytes());
     std::fs::write(&tampered_state, bytes).expect("signed approval state tampers");
-    let tampered = run_promote_legacy(
-        &project,
-        &SignedProductBaseline {
-            bundle: tampered_bundle,
-            anchor: baseline.anchor.clone(),
-        },
-        "json",
-    );
-    assert_eq!(tampered.status.code(), Some(1));
-    assert!(tampered.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&tampered.stderr)
-        .contains("could not establish verified promotion baselines"));
+    let temporary_path = temporary.path().to_str().expect("temporary path is UTF-8");
+    let forbidden = [
+        "tamper-promotion-project",
+        "fictional-citizen-registry",
+        "FICTIONAL_REGISTRY_TOKEN",
+        "https://citizen-registry.invalid",
+        "public-service-person-verification",
+        "tampered-notary-bundle",
+        "notary-legacy-v1",
+        TAMPERED_BASELINE_SENTINEL,
+        temporary_path,
+    ];
+    let tampered_baseline = SignedProductBaseline {
+        bundle: tampered_bundle,
+        anchor: baseline.anchor.clone(),
+    };
+    let tampered = run_promote_legacy(&project, &tampered_baseline, "json");
+    assert_conservative_blocked_cli(&tampered, &forbidden);
+    let tampered_direct =
+        promote_registry_project(&legacy_promotion_options(&project, &tampered_baseline))
+            .expect("tampered baseline fails closed as a report");
+    assert_conservative_blocked_report(&tampered_direct, &forbidden);
+
+    let project_path = project.join("registry-stack.yaml");
+    let valid_project = std::fs::read_to_string(&project_path).expect("current project reads");
+    let invalid_project =
+        valid_project.replace("version: 1", "version: CURRENT_STATE_VALUE_SENTINEL");
+    write(&project_path, &invalid_project);
+    promote_registry_project(&legacy_promotion_options(&project, &tampered_baseline))
+        .expect_err("invalid current state remains an ordinary error");
+    let invalid_current = run_promote_legacy(&project, &tampered_baseline, "json");
+    assert_eq!(invalid_current.status.code(), Some(1));
+    assert!(invalid_current.stdout.is_empty());
+    assert!(!invalid_current.stderr.is_empty());
+    write(&project_path, &valid_project);
 
     let approval_path = output.join("private/notary/approval/project-state.json");
     let mut approval: serde_json::Value = serde_json::from_slice(
@@ -547,14 +713,14 @@ fn signed_projection_and_post_signature_bundle_tampering_are_rejected() {
         "notary-legacy-v1",
     );
     let legacy = run_promote_legacy(&project, &legacy_baseline, "json");
-    assert_eq!(legacy.status.code(), Some(1));
-    assert!(legacy.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&legacy.stderr)
-        .contains("could not establish verified promotion baselines"));
+    assert_conservative_blocked_cli(&legacy, &forbidden);
+    let legacy_direct =
+        promote_registry_project(&legacy_promotion_options(&project, &legacy_baseline))
+            .expect("legacy baseline fails closed as a report");
+    assert_conservative_blocked_report(&legacy_direct, &forbidden);
 
-    approval["promotion_projection"]["fields"][0]["digest"] = serde_json::json!(
-        "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-    );
+    approval["promotion_projection"]["fields"][0]["digest"] =
+        serde_json::json!(format!("sha256:{MALFORMED_PROJECTION_SENTINEL}"));
     let mut malformed = serde_json::to_vec_pretty(&approval).expect("approval state serializes");
     malformed.push(b'\n');
     std::fs::write(&approval_path, malformed).expect("malformed projection writes");
@@ -566,8 +732,19 @@ fn signed_projection_and_post_signature_bundle_tampering_are_rejected() {
         "notary-malformed-projection",
     );
     let malformed = run_promote_legacy(&project, &malformed_projection, "json");
-    assert_eq!(malformed.status.code(), Some(1));
-    assert!(malformed.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&malformed.stderr)
-        .contains("could not establish verified promotion baselines"));
+    let malformed_forbidden = [
+        "tamper-promotion-project",
+        "fictional-citizen-registry",
+        "FICTIONAL_REGISTRY_TOKEN",
+        "https://citizen-registry.invalid",
+        "public-service-person-verification",
+        "notary-malformed-projection",
+        MALFORMED_PROJECTION_SENTINEL,
+        temporary_path,
+    ];
+    assert_conservative_blocked_cli(&malformed, &malformed_forbidden);
+    let malformed_direct =
+        promote_registry_project(&legacy_promotion_options(&project, &malformed_projection))
+            .expect("malformed baseline fails closed as a report");
+    assert_conservative_blocked_report(&malformed_direct, &malformed_forbidden);
 }

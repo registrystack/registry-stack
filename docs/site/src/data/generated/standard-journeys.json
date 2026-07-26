@@ -322,7 +322,7 @@
       "release": null
     },
     "canonical_sources": [
-      "docs/site/openapi/registry-relay.openapi.json",
+      "crates/registry-relay/openapi/registry-relay.openapi.json",
       "crates/registry-relay/tests/api_docs.rs",
       "crates/registryctl/src/templates/relay_config.yaml.tmpl"
     ],
@@ -361,7 +361,7 @@
         "note": "Exact configuration emitted by the disposable init step. It explicitly selects the local public OpenAPI opt-out and becomes operator-owned after scaffolding."
       },
       {
-        "path": "docs/site/openapi/registry-relay.openapi.json",
+        "path": "crates/registry-relay/openapi/registry-relay.openapi.json",
         "classification": "generated_unsigned",
         "owner": "registry_relay",
         "human_edit": false,
@@ -1590,9 +1590,9 @@
         "does_not_prove": "Runtime snapshot files are available."
       },
       {
-        "name": "materialization",
-        "proves": "One runtime loaded a concrete snapshot generation.",
-        "does_not_prove": "Upstream collection is complete or correct."
+        "name": "build",
+        "proves": "Unsigned Relay input contains the reviewed snapshot materialization requirements.",
+        "does_not_prove": "A runtime loaded a concrete snapshot generation or the upstream collection is complete."
       }
     ],
     "production_delta": {
@@ -2350,9 +2350,9 @@
         "does_not_prove": "Runtime readiness or live source compatibility."
       },
       {
-        "name": "preflight",
-        "proves": "Declared files, references, bindings, and non-widening posture are ready offline.",
-        "does_not_prove": "DNS, token exchange, source reachability, or runtime health."
+        "name": "preflight diagnostic",
+        "proves": "A clean workspace reports missing operator files and secret references through the value-free offline contract.",
+        "does_not_prove": "Operator inputs are provisioned, preflight passes, or the runtime is healthy."
       },
       {
         "name": "bundle verification",
@@ -2624,7 +2624,7 @@
       {
         "id": "lifecycle-preflight",
         "kind": "readiness_gate",
-        "label": "Pass offline environment readiness before operator handoff",
+        "label": "Inspect missing offline requirements before operator handoff",
         "cwd": ".",
         "argv": [
           "registryctl",
@@ -2632,9 +2632,11 @@
           "--project-dir",
           "registry-project",
           "--environment",
-          "local"
+          "local",
+          "--format",
+          "json"
         ],
-        "note": "A clean synthetic workspace is expected to report missing operator-provisioned runtime files or secret references. Provision the reviewed environment bindings, rerun this command, and require a passing report before signing, verification, promotion, or activation handoff. Build may remain offline and unsigned."
+        "note": "This clean-workspace step is expected to exit 1 with a value-free not_ready report because operator-provisioned runtime files and secret references are absent. It proves the diagnostic boundary, not readiness. Provision the reviewed environment bindings, rerun this command, and require a passing report before signing, verification, promotion, or activation handoff."
       },
       {
         "id": "lifecycle-capabilities",

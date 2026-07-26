@@ -313,7 +313,7 @@ export default defineConfig({
           label: 'Verify',
           items: [
             { label: 'Overview', slug: 'verify' },
-            { label: 'Evaluate a registry-backed claim', slug: 'journeys/registry-backed-notary-claim' },
+            { label: 'Evaluate a registry-backed claim', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'Configure OpenCRVS claims', slug: 'tutorials/verify-opencrvs-claims' },
             { label: 'Security self-assessment', slug: 'security/self-assessment' },
             { label: 'OpenSSF and release trust', slug: 'security/openssf-evidence' },

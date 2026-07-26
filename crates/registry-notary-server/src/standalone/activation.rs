@@ -4,6 +4,7 @@
 use std::fmt;
 
 use super::assembly::StandaloneServerError;
+use crate::state_plane::{NotaryPostgresStatePlaneReadiness, SensitiveStateError};
 
 const VALUE_FREE_EVIDENCE_POLICY: &str = "Emit only this code and static definition. Do not emit inner errors, paths, URLs, hashes, credentials, identifiers, parser text, or country values.";
 const ACTIVATION_EVIDENCE_LIMITATION: &str = "The category confirms only the failed activation boundary; it does not disclose paths, URLs, hashes, credentials, identifiers, parser text, authored values, source responses, or country values.";
@@ -22,6 +23,12 @@ enum NotaryActivationCodeKind {
     RelayUnavailable,
     RuntimeActivationFailed,
     RuntimeActivationRequired,
+    PostgresqlDatabaseReadOnly,
+    PostgresqlDatabaseUnavailable,
+    PostgresqlDatabaseUnsupported,
+    PostgresqlDurabilityUnsafe,
+    PostgresqlRoleIncompatible,
+    PostgresqlSchemaIncompatible,
 }
 
 /// Closed, product-owned code for a Registry Notary runtime activation failure.
@@ -48,6 +55,18 @@ impl NotaryActivationCode {
         Self(NotaryActivationCodeKind::RuntimeActivationFailed);
     pub const RUNTIME_ACTIVATION_REQUIRED: Self =
         Self(NotaryActivationCodeKind::RuntimeActivationRequired);
+    pub const POSTGRESQL_DATABASE_READ_ONLY: Self =
+        Self(NotaryActivationCodeKind::PostgresqlDatabaseReadOnly);
+    pub const POSTGRESQL_DATABASE_UNAVAILABLE: Self =
+        Self(NotaryActivationCodeKind::PostgresqlDatabaseUnavailable);
+    pub const POSTGRESQL_DATABASE_UNSUPPORTED: Self =
+        Self(NotaryActivationCodeKind::PostgresqlDatabaseUnsupported);
+    pub const POSTGRESQL_DURABILITY_UNSAFE: Self =
+        Self(NotaryActivationCodeKind::PostgresqlDurabilityUnsafe);
+    pub const POSTGRESQL_ROLE_INCOMPATIBLE: Self =
+        Self(NotaryActivationCodeKind::PostgresqlRoleIncompatible);
+    pub const POSTGRESQL_SCHEMA_INCOMPATIBLE: Self =
+        Self(NotaryActivationCodeKind::PostgresqlSchemaIncompatible);
 
     /// Every published code in stable lexical order.
     pub const ALL: &'static [Self] = &[
@@ -62,6 +81,12 @@ impl NotaryActivationCode {
         Self::RELAY_UNAVAILABLE,
         Self::RUNTIME_ACTIVATION_FAILED,
         Self::RUNTIME_ACTIVATION_REQUIRED,
+        Self::POSTGRESQL_DATABASE_READ_ONLY,
+        Self::POSTGRESQL_DATABASE_UNAVAILABLE,
+        Self::POSTGRESQL_DATABASE_UNSUPPORTED,
+        Self::POSTGRESQL_DURABILITY_UNSAFE,
+        Self::POSTGRESQL_ROLE_INCOMPATIBLE,
+        Self::POSTGRESQL_SCHEMA_INCOMPATIBLE,
     ];
 
     #[must_use]
@@ -85,6 +110,24 @@ impl NotaryActivationCode {
             NotaryActivationCodeKind::RuntimeActivationFailed => "notary.runtime.activation_failed",
             NotaryActivationCodeKind::RuntimeActivationRequired => {
                 "notary.runtime.activation_required"
+            }
+            NotaryActivationCodeKind::PostgresqlDatabaseReadOnly => {
+                "notary.state.postgresql.database_read_only"
+            }
+            NotaryActivationCodeKind::PostgresqlDatabaseUnavailable => {
+                "notary.state.postgresql.database_unavailable"
+            }
+            NotaryActivationCodeKind::PostgresqlDatabaseUnsupported => {
+                "notary.state.postgresql.database_unsupported"
+            }
+            NotaryActivationCodeKind::PostgresqlDurabilityUnsafe => {
+                "notary.state.postgresql.durability_unsafe"
+            }
+            NotaryActivationCodeKind::PostgresqlRoleIncompatible => {
+                "notary.state.postgresql.role_incompatible"
+            }
+            NotaryActivationCodeKind::PostgresqlSchemaIncompatible => {
+                "notary.state.postgresql.schema_incompatible"
             }
         }
     }
@@ -145,7 +188,7 @@ pub struct NotaryActivationCodeDefinition {
 }
 
 /// Product-owned source for generated operator references.
-pub static NOTARY_ACTIVATION_CODE_DEFINITIONS: [NotaryActivationCodeDefinition; 11] = [
+pub static NOTARY_ACTIVATION_CODE_DEFINITIONS: [NotaryActivationCodeDefinition; 17] = [
     NotaryActivationCodeDefinition {
         code: NotaryActivationCode::CONFIGURATION_INVALID,
         lifecycle: NotaryActivationCodeLifecycle::Unreleased,
@@ -278,7 +321,99 @@ pub static NOTARY_ACTIVATION_CODE_DEFINITIONS: [NotaryActivationCodeDefinition; 
         evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
         docs_slug: "runtime-activation-required",
     },
+    NotaryActivationCodeDefinition {
+        code: NotaryActivationCode::POSTGRESQL_DATABASE_READ_ONLY,
+        lifecycle: NotaryActivationCodeLifecycle::Unreleased,
+        phase: "runtime_activation",
+        meaning: "Registry Notary PostgreSQL state database is read-only or recovering",
+        rule: "Serving requires a writable PostgreSQL primary for correctness-state transactions",
+        remediation: "restore a writable PostgreSQL primary, run registry-notary state doctor, and retry activation",
+        evidence_scope: "PostgreSQL writeability and recovery posture",
+        evidence_policy: VALUE_FREE_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "postgresql-database-read-only",
+    },
+    NotaryActivationCodeDefinition {
+        code: NotaryActivationCode::POSTGRESQL_DATABASE_UNAVAILABLE,
+        lifecycle: NotaryActivationCodeLifecycle::Unreleased,
+        phase: "runtime_activation",
+        meaning: "Registry Notary PostgreSQL state database is unavailable",
+        rule: "Serving requires a reachable PostgreSQL service with an accepted TLS trust chain",
+        remediation: "check PostgreSQL reachability, TLS trust, and service health, then run registry-notary state doctor",
+        evidence_scope: "PostgreSQL transport, TLS trust, and service availability",
+        evidence_policy: VALUE_FREE_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "postgresql-database-unavailable",
+    },
+    NotaryActivationCodeDefinition {
+        code: NotaryActivationCode::POSTGRESQL_DATABASE_UNSUPPORTED,
+        lifecycle: NotaryActivationCodeLifecycle::Unreleased,
+        phase: "runtime_activation",
+        meaning: "Registry Notary PostgreSQL server major is unsupported",
+        rule: "Serving requires a PostgreSQL major covered by the Registry Notary compatibility contract",
+        remediation: "move the state database to a supported PostgreSQL major, run registry-notary state doctor, and retry activation",
+        evidence_scope: "PostgreSQL server-major compatibility",
+        evidence_policy: VALUE_FREE_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "postgresql-database-unsupported",
+    },
+    NotaryActivationCodeDefinition {
+        code: NotaryActivationCode::POSTGRESQL_DURABILITY_UNSAFE,
+        lifecycle: NotaryActivationCodeLifecycle::Unreleased,
+        phase: "runtime_activation",
+        meaning: "Registry Notary PostgreSQL durability settings are unsafe",
+        rule: "Serving requires the documented PostgreSQL durability settings for correctness state",
+        remediation: "restore the required PostgreSQL durability settings, run registry-notary state doctor, and retry activation",
+        evidence_scope: "PostgreSQL durability posture",
+        evidence_policy: VALUE_FREE_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "postgresql-durability-unsafe",
+    },
+    NotaryActivationCodeDefinition {
+        code: NotaryActivationCode::POSTGRESQL_ROLE_INCOMPATIBLE,
+        lifecycle: NotaryActivationCodeLifecycle::Unreleased,
+        phase: "runtime_activation",
+        meaning: "Registry Notary PostgreSQL runtime role contract is incompatible",
+        rule: "Serving requires the documented restricted runtime role and its attested schema binding",
+        remediation: "restore the documented runtime grants and role binding, run registry-notary state doctor, and retry activation",
+        evidence_scope: "PostgreSQL runtime-role attributes, grants, and schema binding",
+        evidence_policy: VALUE_FREE_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "postgresql-role-incompatible",
+    },
+    NotaryActivationCodeDefinition {
+        code: NotaryActivationCode::POSTGRESQL_SCHEMA_INCOMPATIBLE,
+        lifecycle: NotaryActivationCodeLifecycle::Unreleased,
+        phase: "runtime_activation",
+        meaning: "Registry Notary PostgreSQL state schema contract is incompatible",
+        rule: "Serving requires the exact product-owned schema, catalog, fingerprint, and privilege contract",
+        remediation: "restore or install the matching Registry Notary state schema, run registry-notary state doctor, and retry activation",
+        evidence_scope: "PostgreSQL state schema, catalog, fingerprint, and privilege contract",
+        evidence_policy: VALUE_FREE_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "postgresql-schema-incompatible",
+    },
 ];
+
+impl NotaryPostgresStatePlaneReadiness {
+    /// Map a value-free PostgreSQL readiness classification to its public
+    /// activation code and static operator guidance.
+    #[must_use]
+    pub const fn activation_code(self) -> NotaryActivationCode {
+        match self {
+            Self::ConfigurationInvalid => NotaryActivationCode::CONFIGURATION_INVALID,
+            Self::DatabaseUnavailable | Self::Shutdown => {
+                NotaryActivationCode::POSTGRESQL_DATABASE_UNAVAILABLE
+            }
+            Self::UnsupportedServerMajor => NotaryActivationCode::POSTGRESQL_DATABASE_UNSUPPORTED,
+            Self::DatabaseNotWritable => NotaryActivationCode::POSTGRESQL_DATABASE_READ_ONLY,
+            Self::UnsafeDurability => NotaryActivationCode::POSTGRESQL_DURABILITY_UNSAFE,
+            Self::SchemaIncompatible => NotaryActivationCode::POSTGRESQL_SCHEMA_INCOMPATIBLE,
+            Self::RoleIncompatible => NotaryActivationCode::POSTGRESQL_ROLE_INCOMPATIBLE,
+            Self::Ready => NotaryActivationCode::RUNTIME_ACTIVATION_FAILED,
+        }
+    }
+}
 
 /// Redacted process-boundary error that deliberately retains no inner error.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -363,7 +498,13 @@ impl StandaloneServerError {
             Self::AuditChainVerificationRequired | Self::PostgresqlStateActivationRequired => {
                 NotaryActivationCode::RUNTIME_ACTIVATION_REQUIRED
             }
-            Self::Audit(_) | Self::StatePlane(_) | Self::SensitiveState(_) => {
+            Self::StatePlane(error) => {
+                NotaryPostgresStatePlaneReadiness::from_error(*error).activation_code()
+            }
+            Self::SensitiveState(SensitiveStateError::StatePlane(error)) => {
+                NotaryPostgresStatePlaneReadiness::from_error(*error).activation_code()
+            }
+            Self::Audit(_) | Self::SensitiveState(_) => {
                 NotaryActivationCode::RUNTIME_ACTIVATION_FAILED
             }
             #[cfg(feature = "registry-notary-cel")]
@@ -514,7 +655,7 @@ mod tests {
                 StandaloneServerError::StatePlane(
                     NotaryPostgresStatePlaneError::DatabaseUrlUnavailable,
                 ),
-                NotaryActivationCode::RUNTIME_ACTIVATION_FAILED,
+                NotaryActivationCode::POSTGRESQL_DATABASE_UNAVAILABLE,
             ),
             (
                 StandaloneServerError::SensitiveState(
@@ -637,6 +778,77 @@ mod tests {
     }
 
     #[test]
+    fn postgresql_failures_keep_cause_specific_public_classification() {
+        let cases = [
+            (
+                NotaryPostgresStatePlaneError::DatabaseUnavailable,
+                NotaryActivationCode::POSTGRESQL_DATABASE_UNAVAILABLE,
+            ),
+            (
+                NotaryPostgresStatePlaneError::DatabaseNotWritable,
+                NotaryActivationCode::POSTGRESQL_DATABASE_READ_ONLY,
+            ),
+            (
+                NotaryPostgresStatePlaneError::UnsupportedServerMajor,
+                NotaryActivationCode::POSTGRESQL_DATABASE_UNSUPPORTED,
+            ),
+            (
+                NotaryPostgresStatePlaneError::UnsafeDurability,
+                NotaryActivationCode::POSTGRESQL_DURABILITY_UNSAFE,
+            ),
+            (
+                NotaryPostgresStatePlaneError::SchemaIncompatible,
+                NotaryActivationCode::POSTGRESQL_SCHEMA_INCOMPATIBLE,
+            ),
+            (
+                NotaryPostgresStatePlaneError::RoleIncompatible,
+                NotaryActivationCode::POSTGRESQL_ROLE_INCOMPATIBLE,
+            ),
+        ];
+
+        for (error, expected) in cases {
+            let direct = StandaloneServerError::StatePlane(error);
+            let sensitive =
+                StandaloneServerError::SensitiveState(SensitiveStateError::StatePlane(error));
+            assert_eq!(direct.activation_code(), expected);
+            assert_eq!(sensitive.activation_code(), expected);
+
+            let failure = NotaryActivationFailure::from(direct);
+            let rendered = format!("{failure:?} {failure}");
+            assert!(rendered.contains(expected.as_str()));
+            assert!(!rendered.contains(SENTINEL));
+            assert!(!rendered.contains("postgresql://"));
+        }
+    }
+
+    #[test]
+    fn postgresql_public_diagnostics_have_static_meaning_and_remediation() {
+        let codes = [
+            NotaryActivationCode::POSTGRESQL_DATABASE_READ_ONLY,
+            NotaryActivationCode::POSTGRESQL_DATABASE_UNAVAILABLE,
+            NotaryActivationCode::POSTGRESQL_DATABASE_UNSUPPORTED,
+            NotaryActivationCode::POSTGRESQL_DURABILITY_UNSAFE,
+            NotaryActivationCode::POSTGRESQL_ROLE_INCOMPATIBLE,
+            NotaryActivationCode::POSTGRESQL_SCHEMA_INCOMPATIBLE,
+        ];
+
+        for code in codes {
+            let definition = code.definition();
+            let failure = NotaryActivationFailure::from(code);
+            let display = failure.to_string();
+            assert!(display.contains(code.as_str()));
+            assert!(display.contains(definition.meaning));
+            assert!(display.contains(definition.remediation));
+            for forbidden in [SENTINEL, "postgresql://", "/run/", "registry_notary_"] {
+                assert!(
+                    !display.contains(forbidden),
+                    "public PostgreSQL diagnostic exposed forbidden value {forbidden:?}: {display}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn established_doctor_code_strings_remain_exact() {
         assert_eq!(
             NotaryActivationCode::RELAY_CREDENTIAL_UNAVAILABLE.as_str(),
@@ -665,6 +877,26 @@ mod tests {
         assert_eq!(
             NotaryActivationCode::RELAY_ACTIVATION_FAILED.as_str(),
             "notary.relay.activation_failed"
+        );
+        assert_eq!(
+            NotaryActivationCode::POSTGRESQL_DATABASE_READ_ONLY.as_str(),
+            "notary.state.postgresql.database_read_only"
+        );
+        assert_eq!(
+            NotaryActivationCode::POSTGRESQL_DATABASE_UNAVAILABLE.as_str(),
+            "notary.state.postgresql.database_unavailable"
+        );
+        assert_eq!(
+            NotaryActivationCode::POSTGRESQL_DATABASE_UNSUPPORTED.as_str(),
+            "notary.state.postgresql.database_unsupported"
+        );
+        assert_eq!(
+            NotaryActivationCode::POSTGRESQL_ROLE_INCOMPATIBLE.as_str(),
+            "notary.state.postgresql.role_incompatible"
+        );
+        assert_eq!(
+            NotaryActivationCode::POSTGRESQL_SCHEMA_INCOMPATIBLE.as_str(),
+            "notary.state.postgresql.schema_incompatible"
         );
     }
 

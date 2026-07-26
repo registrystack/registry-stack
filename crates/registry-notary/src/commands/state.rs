@@ -78,11 +78,9 @@ fn state_doctor_completion(
 fn state_doctor_error(
     readiness: registry_notary_server::state_plane::NotaryPostgresStatePlaneReadiness,
 ) -> Box<dyn std::error::Error> {
-    format!(
-        "registry-notary PostgreSQL state is not ready: {}",
-        readiness.doctor_component_code()
-    )
-    .into()
+    Box::new(registry_notary_server::NotaryActivationFailure::from(
+        readiness.activation_code(),
+    ))
 }
 
 #[cfg(test)]

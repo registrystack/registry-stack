@@ -273,6 +273,10 @@ impl std_fmt::Display for ReportedConfigLoadFailure {
 
 impl StdError for ReportedConfigLoadFailure {}
 
+fn reported_config_load<T>(result: Result<T, Error>) -> Result<T, ReportedConfigLoadFailure> {
+    result.map_err(|_| ReportedConfigLoadFailure)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperationalLogFormat {
     Text,
@@ -514,7 +518,7 @@ async fn run_openapi(
     env_file: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     load_env_file_arg(env_file.as_deref())?;
-    let config = config::load(&config_path)?;
+    let config = reported_config_load(config::load(&config_path))?;
     let registry = EntityRegistry::from_config(&config)?;
     let document = registry_relay::api::openapi::release_artifact_document(&config, &registry);
     println!("{}", serde_json::to_string_pretty(&document)?);
@@ -548,10 +552,10 @@ async fn run_explain_config(
     match format {
         OutputFormat::Json => {
             load_env_file_arg(env_file.as_deref())?;
+            let config = reported_config_load(config::load(&config_path))?;
             let raw = fs::read_to_string(&config_path)?;
             let expanded = expand_config_env_vars(&raw)?;
             let resolved_config = redacted_resolved_config(&expanded)?;
-            let config = config::load(&config_path)?;
             let report = json!({
                 "schema_version": "registry.config.explanation.v1",
                 "product": "registry-relay",
@@ -1406,8 +1410,10 @@ async fn compile_relay_runtime_with_options(
 ) -> Result<RelayRuntimeSnapshot, Box<dyn std::error::Error + Send + Sync>> {
     info!("loading registry-relay config");
 
-    let loaded = config::load_with_metadata_options(&config_path, load_options)
-        .map_err(|_| ReportedConfigLoadFailure)?;
+    let loaded = reported_config_load(config::load_with_metadata_options(
+        &config_path,
+        load_options,
+    ))?;
     let config_provenance = loaded.provenance.clone();
     let pending_bundle_acceptance = loaded.pending_bundle_acceptance.clone();
     let compiled_metadata = loaded.metadata.map(Arc::new);

@@ -39,6 +39,9 @@ regexes = [
   '''let key = Pkcs1RsaPrivateKey''',
   '''chain_key_epoch_id:\s*[a-z0-9-]+-chain-1''',
   '''"dci_crvs_api":\s*"5e31d1e381d4bd8c7c74112d714fd49d263c6df7"''',
+  '''"key_path":\s*"oid4vci\.(?:enabled|nonce\.ttl_seconds|proof\.max_age_seconds)"''',
+  '''"AKIAABCDEFGHIJKLMNOP"''',
+  '''"eyJhbGciOiJSUzI1NiJ9\.eyJzdWIiOiJzdWJqZWN0In0\.abcdefghijklmnop"''',
 ]
 
 [[allowlists]]

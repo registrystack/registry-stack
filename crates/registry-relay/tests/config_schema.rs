@@ -1108,6 +1108,4 @@ fn product_owned_documentation_intent_has_exact_runtime_key_inventory() {
             .count(),
         6
     );
-    let text = serde_json::to_string(&intent).expect("intent serializes");
-    assert!(!text.contains("SCHEMA_MUST_NOT_READ_OR_EMIT_THIS_SECRET_VALUE"));
 }

@@ -414,6 +414,90 @@ fn public_trust_and_private_material_apply_distinct_unix_modes() {
 
 #[cfg(unix)]
 #[test]
+fn entity_provider_files_enforce_private_posture_and_relay_default_size_bound() {
+    use std::os::unix::fs::{symlink, PermissionsExt as _};
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let relay_sized = directory.path().join("relay-sized.csv");
+    let shared = directory.path().join("shared.xlsx");
+    let oversized = directory.path().join("oversized.parquet");
+    let symlink_target = directory.path().join("target.parquet");
+    let symlink_path = directory.path().join("link.parquet");
+    fs::File::create(&relay_sized)
+        .expect("Relay-sized file creates")
+        .set_len(1024 * 1024 + 1)
+        .expect("Relay-sized file extends");
+    fs::write(&shared, b"workbook").expect("shared file writes");
+    fs::File::create(&oversized)
+        .expect("oversized entity file creates")
+        .set_len(256 * 1024 * 1024 + 1)
+        .expect("oversized entity file extends");
+    fs::write(&symlink_target, b"parquet").expect("symlink target writes");
+    fs::set_permissions(&relay_sized, fs::Permissions::from_mode(0o600))
+        .expect("Relay-sized mode sets");
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o644)).expect("shared mode sets");
+    fs::set_permissions(&oversized, fs::Permissions::from_mode(0o600))
+        .expect("oversized mode sets");
+    fs::set_permissions(&symlink_target, fs::Permissions::from_mode(0o600))
+        .expect("symlink target mode sets");
+    symlink(&symlink_target, &symlink_path).expect("symlink creates");
+
+    let mut input = validated_input();
+    for (path, kind, pointer) in [
+        (
+            relay_sized.as_path(),
+            PreflightRuntimeFileKind::EntityCsv,
+            "/entities/csv/provider/path",
+        ),
+        (
+            shared.as_path(),
+            PreflightRuntimeFileKind::EntityXlsx,
+            "/entities/xlsx/provider/path",
+        ),
+        (
+            oversized.as_path(),
+            PreflightRuntimeFileKind::EntityParquet,
+            "/entities/oversized/provider/path",
+        ),
+        (
+            symlink_path.as_path(),
+            PreflightRuntimeFileKind::EntityParquet,
+            "/entities/symlink/provider/path",
+        ),
+    ] {
+        input
+            .add_runtime_file(path, kind, address("environments/production.yaml", pointer))
+            .expect("entity provider file records");
+    }
+
+    let report = run_with(input, &BTreeMap::new());
+    let states = report
+        .runtime_files
+        .iter()
+        .map(|check| (check.addresses[0].pointer.as_str(), check.state))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        states["/entities/csv/provider/path"],
+        PreflightCheckState::Available,
+        "entity files may use Relay's larger default source-file bound"
+    );
+    assert_eq!(
+        states["/entities/xlsx/provider/path"],
+        PreflightCheckState::UnsafeMode,
+        "entity files are private material"
+    );
+    assert_eq!(
+        states["/entities/oversized/provider/path"],
+        PreflightCheckState::NotRegular
+    );
+    assert_eq!(
+        states["/entities/symlink/provider/path"],
+        PreflightCheckState::NotRegular
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn undeclared_generations_are_never_inferred_for_state_roots_or_workload_token() {
     use std::os::unix::fs::PermissionsExt as _;
 
@@ -582,6 +666,109 @@ fn command_adapter_keeps_invalid_endpoints_offline_and_has_no_build_side_effects
         assert!(
             !serialized.contains(forbidden),
             "report must not expose {forbidden}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn command_adapter_checks_csv_xlsx_and_parquet_entity_provider_paths() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for (provider_type, extension, kind) in [
+        (
+            "csv",
+            "csv",
+            registryctl::PreflightRuntimeFileKind::EntityCsv,
+        ),
+        (
+            "xlsx",
+            "xlsx",
+            registryctl::PreflightRuntimeFileKind::EntityXlsx,
+        ),
+        (
+            "parquet",
+            "parquet",
+            registryctl::PreflightRuntimeFileKind::EntityParquet,
+        ),
+    ] {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let project = directory.path().join(format!("{provider_type}-project"));
+        copy_tree(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project-authoring/relay-only-materialization")
+                .as_path(),
+            &project,
+        );
+        let provider_path = directory.path().join(format!("people.{extension}"));
+        let provider = match provider_type {
+            "csv" => format!(
+                "{{ type: csv, path: {}, header_row: 1 }}",
+                provider_path.display()
+            ),
+            "xlsx" => format!(
+                "{{ type: xlsx, path: {}, sheet: People, header_row: 1 }}",
+                provider_path.display()
+            ),
+            "parquet" => format!("{{ type: parquet, path: {} }}", provider_path.display()),
+            _ => unreachable!("provider table is closed"),
+        };
+        let environment_file = project.join("environments/local.yaml");
+        let original = fs::read_to_string(&environment_file).expect("environment reads");
+        let authored = original.replace(
+            "    provider: { type: csv, path: /var/lib/registry/people.csv, header_row: 1 }",
+            &format!("    provider: {provider}"),
+        );
+        assert_ne!(authored, original, "provider fixture replacement applies");
+        fs::write(&environment_file, authored).expect("environment writes");
+
+        let options = registryctl::ProjectPreflightOptions {
+            project_directory: project,
+            environment: "local".to_string(),
+        };
+        let missing =
+            registryctl::preflight_registry_project(&options).expect("missing preflight reports");
+        assert_eq!(missing.status, registryctl::PreflightStatus::NotReady);
+        assert_eq!(missing.runtime_files.len(), 1);
+        assert_eq!(missing.runtime_files[0].kind, kind);
+        assert_eq!(
+            missing.runtime_files[0].generation,
+            registryctl::PreflightGenerationState::Declared
+        );
+        assert_eq!(
+            missing.runtime_files[0].state,
+            registryctl::PreflightCheckState::Missing
+        );
+        assert_eq!(missing.runtime_files[0].addresses.len(), 1);
+        assert_eq!(
+            missing.runtime_files[0].addresses[0].file.as_str(),
+            "environments/local.yaml"
+        );
+        assert_eq!(
+            missing.runtime_files[0].addresses[0].pointer.as_str(),
+            "/entities/people/provider/path"
+        );
+        assert!(missing.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == registryctl::PreflightDiagnosticCode::RuntimeFileMissing
+                && diagnostic.addresses == missing.runtime_files[0].addresses
+        }));
+        assert_schema_valid(&serde_json::to_value(&missing).expect("missing report serializes"));
+
+        fs::write(&provider_path, b"bounded entity data").expect("provider file writes");
+        fs::set_permissions(&provider_path, fs::Permissions::from_mode(0o600))
+            .expect("provider mode sets");
+        let available =
+            registryctl::preflight_registry_project(&options).expect("available preflight reports");
+        assert_eq!(available.status, registryctl::PreflightStatus::Ready);
+        assert_eq!(available.runtime_files.len(), 1);
+        assert_eq!(available.runtime_files[0].kind, kind);
+        assert_eq!(
+            available.runtime_files[0].state,
+            registryctl::PreflightCheckState::Available
+        );
+        assert!(available.diagnostics.is_empty());
+        assert_schema_valid(
+            &serde_json::to_value(&available).expect("available report serializes"),
         );
     }
 }

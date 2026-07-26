@@ -477,18 +477,64 @@ while ! grep --fixed-strings --line-regexp --quiet ready "${work_dir}/negative-l
   sleep 0.1
 done
 
-expect_startup_failure() {
+assert_postgresql_public_diagnostic() {
   local label="$1"
-  local expected_error="$2"
+  local log_file="$2"
+  local code="$3"
+  local meaning="$4"
+  local remediation="$5"
+  local expected="${code}: ${meaning}; next action: ${remediation}"
+  local line_count
+  line_count="$(wc -l <"${log_file}" | tr -d '[:space:]')"
+  if [[ "${line_count}" != "1" ]] \
+    || ! grep --fixed-strings --line-regexp --quiet -- "ERROR ${expected}" "${log_file}"; then
+    sed -n '1,120p' "${log_file}" >&2
+    fail "${label} did not report the expected public PostgreSQL diagnostic"
+  fi
+  local forbidden
+  for forbidden in \
+    "${runtime_database_url}" \
+    "${migrator_database_url}" \
+    "${runtime_password}" \
+    "${migrator_password}" \
+    "${admin_password}" \
+    "${sensitive_state_key}" \
+    "${audit_secret}" \
+    "${api_key}" \
+    "${config_path}" \
+    "${work_dir}" \
+    registry_notary_owner \
+    registry_notary_runtime \
+    registry_notary_migrator; do
+    if [[ -n "${forbidden}" ]] && grep --fixed-strings --quiet -- "${forbidden}" "${log_file}"; then
+      sed -n '1,120p' "${log_file}" >&2
+      fail "${label} public PostgreSQL diagnostic exposed a governed path or value"
+    fi
+  done
+}
+
+expect_postgresql_failure() {
+  local label="$1"
+  local code="$2"
+  local meaning="$3"
+  local remediation="$4"
+  local doctor_log="${work_dir}/doctor-${label}.log"
   local log_file="${work_dir}/startup-${label}.log"
-  if "${notary_bin}" --config "${config_path}" \
+
+  if RUST_LOG=off REGISTRY_NOTARY_LOG_FORMAT=text \
+    "${notary_bin}" --config "${config_path}" state doctor >"${doctor_log}" 2>&1; then
+    fail "${label} state doctor accepted the failed PostgreSQL posture"
+  fi
+  assert_postgresql_public_diagnostic \
+    "${label} state doctor" "${doctor_log}" "${code}" "${meaning}" "${remediation}"
+
+  if RUST_LOG=off REGISTRY_NOTARY_LOG_FORMAT=text \
+    "${notary_bin}" --config "${config_path}" \
     --bind "127.0.0.1:${notary_negative_port}" >"${log_file}" 2>&1; then
     fail "${label} state failure allowed startup"
   fi
-  if ! grep --fixed-strings --quiet -- "${expected_error}" "${log_file}"; then
-    sed -n '1,120p' "${log_file}" >&2
-    fail "${label} startup did not report the expected closed error"
-  fi
+  assert_postgresql_public_diagnostic \
+    "${label} startup" "${log_file}" "${code}" "${meaning}" "${remediation}"
   if grep --extended-regexp --quiet -- 'Address already in use|os error (48|98)' "${log_file}"; then
     fail "${label} reached listener binding before state activation failed"
   fi
@@ -766,10 +812,11 @@ admin_sql postgres \
     WHERE datname = 'registry_notary'
       AND usename = 'registry_notary_runtime';"
 wait_not_ready "${url_a}" || fail "read-only PostgreSQL did not fail readiness"
-if "${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-read-only.log" 2>&1; then
-  fail "state doctor accepted read-only PostgreSQL"
-fi
-expect_startup_failure read-only "Notary PostgreSQL database is unavailable"
+expect_postgresql_failure \
+  read-only \
+  notary.state.postgresql.database_read_only \
+  "Registry Notary PostgreSQL state database is read-only or recovering" \
+  "restore a writable PostgreSQL primary, run registry-notary state doctor, and retry activation"
 admin_sql postgres 'ALTER DATABASE registry_notary RESET default_transaction_read_only;'
 wait_ready "${url_a}" "${notary_pid_a}" || fail "readiness did not recover after read-only repair"
 "${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-read-only-recovered.log" 2>&1 \
@@ -778,10 +825,11 @@ wait_ready "${url_a}" "${notary_pid_a}" || fail "readiness did not recover after
 admin_sql registry_notary \
   'ALTER FUNCTION registry_notary_api.replay_insert_v1(bytea, bytea, timestamptz) IMMUTABLE;'
 wait_not_ready "${url_a}" || fail "schema drift did not fail readiness"
-if "${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-schema-drift.log" 2>&1; then
-  fail "state doctor accepted schema drift"
-fi
-expect_startup_failure catalog-drift "Notary PostgreSQL state schema is incompatible"
+expect_postgresql_failure \
+  catalog-drift \
+  notary.state.postgresql.schema_incompatible \
+  "Registry Notary PostgreSQL state schema contract is incompatible" \
+  "restore or install the matching Registry Notary state schema, run registry-notary state doctor, and retry activation"
 admin_sql registry_notary \
   'ALTER FUNCTION registry_notary_api.replay_insert_v1(bytea, bytea, timestamptz) VOLATILE;'
 wait_ready "${url_a}" "${notary_pid_a}" || fail "readiness did not recover after schema repair"
@@ -797,11 +845,11 @@ admin_sql registry_notary \
       SET schema_fingerprint = repeat('0', 64)
     WHERE singleton = TRUE;"
 wait_not_ready "${url_a}" || fail "metadata fingerprint drift did not fail readiness"
-if "${notary_bin}" --config "${config_path}" state doctor \
-  >"${work_dir}/doctor-fingerprint-drift.log" 2>&1; then
-  fail "state doctor accepted metadata fingerprint drift"
-fi
-expect_startup_failure fingerprint-drift "Notary PostgreSQL state schema is incompatible"
+expect_postgresql_failure \
+  fingerprint-drift \
+  notary.state.postgresql.schema_incompatible \
+  "Registry Notary PostgreSQL state schema contract is incompatible" \
+  "restore or install the matching Registry Notary state schema, run registry-notary state doctor, and retry activation"
 if "${notary_bin}" --config "${config_path}" state install \
   --migration-url-env REGISTRY_NOTARY_POSTGRES_MIGRATOR_URL \
   --owner-role registry_notary_owner \
@@ -826,10 +874,11 @@ wait_ready "${url_a}" "${notary_pid_a}" \
 admin_sql registry_notary \
   'REVOKE EXECUTE ON FUNCTION registry_notary_api.nonce_consume_v1(bytea, bytea, bigint) FROM registry_notary_runtime;'
 wait_not_ready "${url_a}" || fail "runtime permission drift did not fail readiness"
-if "${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-permission-drift.log" 2>&1; then
-  fail "state doctor accepted runtime permission drift"
-fi
-expect_startup_failure permission-drift "Notary PostgreSQL state schema is incompatible"
+expect_postgresql_failure \
+  permission-drift \
+  notary.state.postgresql.schema_incompatible \
+  "Registry Notary PostgreSQL state schema contract is incompatible" \
+  "restore or install the matching Registry Notary state schema, run registry-notary state doctor, and retry activation"
 admin_sql registry_notary \
   'GRANT EXECUTE ON FUNCTION registry_notary_api.nonce_consume_v1(bytea, bytea, bigint) TO registry_notary_runtime;'
 wait_ready "${url_a}" "${notary_pid_a}" || fail "readiness did not recover after permission repair"
@@ -845,13 +894,11 @@ admin_sql registry_notary \
       SET runtime_role_oid = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = 'postgres')
     WHERE singleton = TRUE;"
 wait_not_ready "${url_a}" || fail "wrong runtime role did not fail readiness"
-if "${notary_bin}" --config "${config_path}" state doctor \
-  >"${work_dir}/doctor-role-incompatible.log" 2>&1; then
-  fail "state doctor accepted the wrong runtime role"
-fi
-grep --fixed-strings --quiet role_incompatible "${work_dir}/doctor-role-incompatible.log" \
-  || fail "state doctor did not report the role-incompatible component"
-expect_startup_failure role-incompatible "Notary PostgreSQL runtime role is incompatible"
+expect_postgresql_failure \
+  role-incompatible \
+  notary.state.postgresql.role_incompatible \
+  "Registry Notary PostgreSQL runtime role contract is incompatible" \
+  "restore the documented runtime grants and role binding, run registry-notary state doctor, and retry activation"
 admin_sql registry_notary \
   "UPDATE registry_notary_private.schema_metadata
       SET runtime_role_oid = ${bound_runtime_role_oid}
@@ -889,11 +936,11 @@ if [[ "${postgresql_major}" == "18" ]]; then
   (( SECONDS < unsupported_deadline )) \
     || fail "unsupported PostgreSQL test server did not become ready"
   wait_not_ready "${url_a}" || fail "unsupported PostgreSQL major did not fail readiness"
-  if "${notary_bin}" --config "${config_path}" state doctor \
-    >"${work_dir}/doctor-unsupported-major.log" 2>&1; then
-    fail "state doctor accepted an unsupported PostgreSQL major"
-  fi
-  expect_startup_failure unsupported-major "Notary PostgreSQL server major is unsupported"
+  expect_postgresql_failure \
+    unsupported-major \
+    notary.state.postgresql.database_unsupported \
+    "Registry Notary PostgreSQL server major is unsupported" \
+    "move the state database to a supported PostgreSQL major, run registry-notary state doctor, and retry activation"
   docker rm -f "${unsupported_postgres_container}" >/dev/null
   docker start "${postgres_container}" >/dev/null
   wait_for_postgres
@@ -903,18 +950,20 @@ fi
 
 docker stop --time 20 "${postgres_container}" >/dev/null
 wait_not_ready "${url_a}" || fail "unavailable PostgreSQL did not fail readiness"
-if "${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-unavailable.log" 2>&1; then
-  fail "state doctor accepted unavailable PostgreSQL"
-fi
-expect_startup_failure unavailable "Notary PostgreSQL database is unavailable"
+expect_postgresql_failure \
+  unavailable \
+  notary.state.postgresql.database_unavailable \
+  "Registry Notary PostgreSQL state database is unavailable" \
+  "check PostgreSQL reachability, TLS trust, and service health, then run registry-notary state doctor"
 install_postgres_certificate untrusted-server
 docker start "${postgres_container}" >/dev/null
 wait_for_postgres
 wait_not_ready "${url_a}" || fail "untrusted PostgreSQL certificate did not fail readiness"
-if "${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-tls.log" 2>&1; then
-  fail "state doctor accepted an untrusted PostgreSQL certificate"
-fi
-expect_startup_failure tls "Notary PostgreSQL database is unavailable"
+expect_postgresql_failure \
+  tls \
+  notary.state.postgresql.database_unavailable \
+  "Registry Notary PostgreSQL state database is unavailable" \
+  "check PostgreSQL reachability, TLS trust, and service health, then run registry-notary state doctor"
 docker stop --time 20 "${postgres_container}" >/dev/null
 install_postgres_certificate server
 docker start "${postgres_container}" >/dev/null

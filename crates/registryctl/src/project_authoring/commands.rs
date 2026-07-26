@@ -1852,9 +1852,6 @@ pub fn promote_registry_project(
     preflight_project_rhai_scripts(&loaded)
         .map_err(|_| anyhow!("promotion state could not be validated safely"))?;
 
-    let baselines = load_verified_promotion_baselines(options, &loaded)
-        .map_err(|_| anyhow!("could not establish verified promotion baselines"))?;
-
     // The compiler and product validators establish that the state being
     // compared is a valid offline product input. Their detailed errors can
     // carry local identifiers or paths, so promotion deliberately returns a
@@ -1863,6 +1860,14 @@ pub fn promote_registry_project(
         .map_err(|_| anyhow!("promotion state could not be compiled safely"))?;
     validate_generated_product_configs(&compiled)
         .map_err(|_| anyhow!("promotion compatibility could not be established safely"))?;
+
+    let baselines = match load_verified_promotion_baselines(options, &loaded) {
+        Ok(baselines) => baselines,
+        Err(_) if promotion_baseline_supplied(options) => {
+            return unresolved_promotion_baseline_report();
+        }
+        Err(_) => return Err(anyhow!("could not establish verified promotion baselines")),
+    };
 
     let baseline_values = baselines.iter().cloned().collect::<Vec<_>>();
     build_promotion_report_from_normalized_state(
@@ -1875,6 +1880,26 @@ pub fn promote_registry_project(
 
 fn validate_promotion_baseline_options(options: &ProjectPromotionOptions) -> Result<()> {
     validate_approved_baseline_set_paths(ApprovedBaselineSetPaths::promotion(options))
+}
+
+fn promotion_baseline_supplied(options: &ProjectPromotionOptions) -> bool {
+    options.against.is_some() || options.relay_against.is_some() || options.notary_against.is_some()
+}
+
+fn unresolved_promotion_baseline_report() -> Result<ProjectPromotionReportV1> {
+    build_project_promotion_report(ProjectPromotionInput {
+        reviewed_revision: ReviewedRevisionComparison::NotProven,
+        changes: Vec::new(),
+        reviewed_ceiling: ReviewedCeilingInput::Unresolved,
+        trust: TrustResolutionInput::Unresolved,
+        compatibility: PromotionCompatibilityInput {
+            product: PromotionCompatibilityState::Unresolved,
+            capability: PromotionCompatibilityState::Unresolved,
+            schema: PromotionCompatibilityState::Unresolved,
+            abi: PromotionCompatibilityState::Unresolved,
+        },
+    })
+    .map_err(|_| anyhow!("promotion comparison exceeded its bounded change capacity"))
 }
 
 fn validate_named_baseline_pair(
@@ -2830,17 +2855,39 @@ fn offline_preflight_input(
     }
 
     for (entity_id, entity) in &environment.entities {
-        if let RecordProvider::Postgres { connection, .. } = &entity.provider {
-            add_preflight_secret(
+        let entity_prefix = format!(
+            "/entities/{}/provider",
+            escape_explanation_pointer_segment(entity_id)
+        );
+        match &entity.provider {
+            RecordProvider::Csv { path, .. } => add_preflight_runtime_file(
                 &mut input,
                 &environment_file,
-                &format!(
-                    "/entities/{}/provider/connection/secret",
-                    escape_explanation_pointer_segment(entity_id)
-                ),
+                &format!("{entity_prefix}/path"),
+                path,
+                PreflightRuntimeFileKind::EntityCsv,
+            )?,
+            RecordProvider::Xlsx { path, .. } => add_preflight_runtime_file(
+                &mut input,
+                &environment_file,
+                &format!("{entity_prefix}/path"),
+                path,
+                PreflightRuntimeFileKind::EntityXlsx,
+            )?,
+            RecordProvider::Parquet { path } => add_preflight_runtime_file(
+                &mut input,
+                &environment_file,
+                &format!("{entity_prefix}/path"),
+                path,
+                PreflightRuntimeFileKind::EntityParquet,
+            )?,
+            RecordProvider::Postgres { connection, .. } => add_preflight_secret(
+                &mut input,
+                &environment_file,
+                &format!("{entity_prefix}/connection/secret"),
                 connection,
                 PreflightSecretConsumer::EntityPostgresConnection,
-            )?;
+            )?,
         }
     }
     if let Some(issuance) = &environment.issuance {

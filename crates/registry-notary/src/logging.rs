@@ -31,6 +31,7 @@ pub(crate) fn log_env_filter() -> EnvFilter {
 pub(crate) fn init_tracing() -> Result<(), Box<dyn std::error::Error>> {
     let result = match log_format_from_env()? {
         LogFormat::Text => tracing_subscriber::fmt()
+            .with_ansi(false)
             .with_env_filter(log_env_filter())
             .try_init(),
         LogFormat::Json => tracing_subscriber::fmt()

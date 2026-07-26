@@ -18,6 +18,10 @@ pub const PROJECT_PREFLIGHT_SCHEMA_VERSION_V1: &str = "registryctl.project_prefl
 pub(crate) const MAX_PREFLIGHT_CHECKS: usize = 256;
 pub(crate) const MAX_PREFLIGHT_DIAGNOSTICS: usize = 256;
 const MAX_RUNTIME_FILE_BYTES: u64 = 1024 * 1024;
+// Relay accepts source files up to 256 MiB by default. Preflight uses the same ceiling so a
+// Relay-compatible country dataset is not rejected before startup while still bounding local
+// metadata checks deterministically.
+const MAX_ENTITY_PROVIDER_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_REPORT_STRING_BYTES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -121,6 +125,9 @@ pub enum PreflightRuntimeFileKind {
     SourceOauthMtlsCertificate,
     SourceJwksCa,
     SourceJwksMtlsCertificate,
+    EntityCsv,
+    EntityXlsx,
+    EntityParquet,
     RelayStateRootCertificate,
     NotaryStateRootCertificate,
     NotaryToRelayToken,
@@ -129,7 +136,11 @@ pub enum PreflightRuntimeFileKind {
 impl PreflightRuntimeFileKind {
     const fn posture(self) -> RuntimeFilePosture {
         match self {
-            Self::NotaryToRelayToken => RuntimeFilePosture::PrivateMaterial,
+            // Entity source files can contain country-held person data, so they retain the same
+            // owner-only posture as private credential material.
+            Self::EntityCsv | Self::EntityXlsx | Self::EntityParquet | Self::NotaryToRelayToken => {
+                RuntimeFilePosture::PrivateMaterial
+            }
             Self::SourceCa
             | Self::SourceMtlsCertificate
             | Self::SourceOauthCa
@@ -138,6 +149,23 @@ impl PreflightRuntimeFileKind {
             | Self::SourceJwksMtlsCertificate
             | Self::RelayStateRootCertificate
             | Self::NotaryStateRootCertificate => RuntimeFilePosture::PublicTrustMaterial,
+        }
+    }
+
+    const fn max_bytes(self) -> u64 {
+        match self {
+            Self::EntityCsv | Self::EntityXlsx | Self::EntityParquet => {
+                MAX_ENTITY_PROVIDER_FILE_BYTES
+            }
+            Self::SourceCa
+            | Self::SourceMtlsCertificate
+            | Self::SourceOauthCa
+            | Self::SourceOauthMtlsCertificate
+            | Self::SourceJwksCa
+            | Self::SourceJwksMtlsCertificate
+            | Self::RelayStateRootCertificate
+            | Self::NotaryStateRootCertificate
+            | Self::NotaryToRelayToken => MAX_RUNTIME_FILE_BYTES,
         }
     }
 
@@ -151,7 +179,10 @@ impl PreflightRuntimeFileKind {
             | Self::SourceOauthCa
             | Self::SourceOauthMtlsCertificate
             | Self::SourceJwksCa
-            | Self::SourceJwksMtlsCertificate => PreflightGenerationState::Declared,
+            | Self::SourceJwksMtlsCertificate
+            | Self::EntityCsv
+            | Self::EntityXlsx
+            | Self::EntityParquet => PreflightGenerationState::Declared,
         }
     }
 }
@@ -1143,13 +1174,14 @@ fn collect_runtime_file_checks(
     grouped.truncate(MAX_PREFLIGHT_CHECKS);
 
     let mut inspection_cache =
-        BTreeMap::<(RuntimePath, RuntimeFilePosture), PreflightCheckState>::new();
+        BTreeMap::<(RuntimePath, RuntimeFilePosture, u64), PreflightCheckState>::new();
     let mut checks = Vec::with_capacity(grouped.len());
     for ((path, kind), grouped) in grouped {
         let posture = kind.posture();
+        let max_bytes = kind.max_bytes();
         let state = *inspection_cache
-            .entry((path.clone(), posture))
-            .or_insert_with(|| inspect_runtime_file(&path.0, posture));
+            .entry((path.clone(), posture, max_bytes))
+            .or_insert_with(|| inspect_runtime_file(&path.0, posture, max_bytes));
         let addresses = grouped.addresses.into_iter().collect::<Vec<_>>();
         if let Some(diagnostic) = runtime_file_diagnostic(state, addresses.clone()) {
             diagnostics.push(diagnostic);
@@ -1226,7 +1258,11 @@ fn runtime_file_diagnostic(
 }
 
 #[cfg(unix)]
-fn inspect_runtime_file(path: &Path, posture: RuntimeFilePosture) -> PreflightCheckState {
+fn inspect_runtime_file(
+    path: &Path,
+    posture: RuntimeFilePosture,
+    max_bytes: u64,
+) -> PreflightCheckState {
     use rustix::fs::{Mode, OFlags};
     use std::os::unix::fs::MetadataExt as _;
 
@@ -1270,7 +1306,7 @@ fn inspect_runtime_file(path: &Path, posture: RuntimeFilePosture) -> PreflightCh
     if metadata.len() == 0 {
         return PreflightCheckState::Empty;
     }
-    if metadata.len() > MAX_RUNTIME_FILE_BYTES {
+    if metadata.len() > max_bytes {
         return PreflightCheckState::NotRegular;
     }
 
@@ -1290,7 +1326,11 @@ fn inspect_runtime_file(path: &Path, posture: RuntimeFilePosture) -> PreflightCh
 }
 
 #[cfg(not(unix))]
-fn inspect_runtime_file(_path: &Path, _posture: RuntimeFilePosture) -> PreflightCheckState {
+fn inspect_runtime_file(
+    _path: &Path,
+    _posture: RuntimeFilePosture,
+    _max_bytes: u64,
+) -> PreflightCheckState {
     // The Unix ownership and access-bit invariant cannot be proved portably. Do not silently
     // weaken it or report a pass on another platform.
     PreflightCheckState::NotChecked

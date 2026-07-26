@@ -118,7 +118,7 @@ test('legacy entry points redirect to current task-flow pages', () => {
   );
 });
 
-test('homepage follows the canonical generated first-country journeys while detailed tutorials remain available', () => {
+test('homepage uses generated journey summaries while Verify leads to the complete runtime tutorial', () => {
   const spreadsheetIndex = homepageSource.indexOf('](journeys/spreadsheet-protected-api/)');
   const openapiIndex = homepageSource.indexOf('](journeys/instance-openapi/)');
   const notaryIndex = homepageSource.indexOf('](journeys/registry-backed-notary-claim/)');
@@ -126,11 +126,11 @@ test('homepage follows the canonical generated first-country journeys while deta
   assert.ok(openapiIndex > spreadsheetIndex);
   assert.ok(notaryIndex > openapiIndex);
   assert.doesNotMatch(homepageSource, /\]\(tutorials\/verify-claim-registry-api\/\)/);
-  assert.match(
+  assert.doesNotMatch(
     sidebarSource,
     /label: 'Evaluate a registry-backed claim', slug: 'journeys\/registry-backed-notary-claim'/,
   );
-  assert.doesNotMatch(
+  assert.match(
     sidebarSource,
     /label: 'Evaluate a registry-backed claim', slug: 'tutorials\/verify-claim-registry-api'/,
   );

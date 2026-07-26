@@ -65,23 +65,51 @@ fn state_command_output_reports_attested_versions_without_claiming_every_install
 }
 
 #[test]
-fn state_doctor_failures_use_only_closed_value_free_component_codes() {
+fn state_doctor_failures_use_cause_specific_value_free_operator_diagnostics() {
     use registry_notary_server::state_plane::NotaryPostgresStatePlaneReadiness as Readiness;
 
     let cases = [
-        (Readiness::ConfigurationInvalid, "configuration_invalid"),
-        (Readiness::DatabaseUnavailable, "database_unavailable"),
-        (Readiness::UnsupportedServerMajor, "database_unavailable"),
-        (Readiness::DatabaseNotWritable, "database_unavailable"),
-        (Readiness::UnsafeDurability, "database_unavailable"),
-        (Readiness::SchemaIncompatible, "schema_incompatible"),
-        (Readiness::RoleIncompatible, "role_incompatible"),
-        (Readiness::Shutdown, "database_unavailable"),
+        (
+            Readiness::ConfigurationInvalid,
+            NotaryActivationCode::CONFIGURATION_INVALID,
+        ),
+        (
+            Readiness::DatabaseUnavailable,
+            NotaryActivationCode::POSTGRESQL_DATABASE_UNAVAILABLE,
+        ),
+        (
+            Readiness::UnsupportedServerMajor,
+            NotaryActivationCode::POSTGRESQL_DATABASE_UNSUPPORTED,
+        ),
+        (
+            Readiness::DatabaseNotWritable,
+            NotaryActivationCode::POSTGRESQL_DATABASE_READ_ONLY,
+        ),
+        (
+            Readiness::UnsafeDurability,
+            NotaryActivationCode::POSTGRESQL_DURABILITY_UNSAFE,
+        ),
+        (
+            Readiness::SchemaIncompatible,
+            NotaryActivationCode::POSTGRESQL_SCHEMA_INCOMPATIBLE,
+        ),
+        (
+            Readiness::RoleIncompatible,
+            NotaryActivationCode::POSTGRESQL_ROLE_INCOMPATIBLE,
+        ),
+        (
+            Readiness::Shutdown,
+            NotaryActivationCode::POSTGRESQL_DATABASE_UNAVAILABLE,
+        ),
     ];
-    for (readiness, expected) in cases {
+    for (readiness, code) in cases {
+        let definition = code.definition();
         assert_eq!(
             state_doctor_error(readiness).to_string(),
-            format!("registry-notary PostgreSQL state is not ready: {expected}")
+            format!(
+                "{}: {}; next action: {}",
+                code, definition.meaning, definition.remediation
+            )
         );
     }
 }

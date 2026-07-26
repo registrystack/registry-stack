@@ -269,6 +269,9 @@
         "source_oauth_mtls_certificate",
         "source_jwks_ca",
         "source_jwks_mtls_certificate",
+        "entity_csv",
+        "entity_xlsx",
+        "entity_parquet",
         "relay_state_root_certificate",
         "notary_state_root_certificate",
         "notary_to_relay_token"

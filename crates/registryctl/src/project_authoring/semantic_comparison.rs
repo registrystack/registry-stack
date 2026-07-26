@@ -890,8 +890,7 @@ fn snapshot_scope(address: &ProjectFieldAddress) -> (SnapshotScope, String) {
 
 fn comparison_ignores_field(scope: &SnapshotScope, instance_field: &str) -> bool {
     matches!(scope, SnapshotScope::Project)
-        && (instance_field == "/registry/id"
-            || instance_field == "/starter"
+        && (instance_field == "/starter"
             || instance_field.starts_with("/starter/")
             || ((instance_field.starts_with("/integrations/")
                 || instance_field.starts_with("/entities/"))

@@ -173,6 +173,50 @@ fn typed_config_document_failure_emits_exact_value_free_terminal_guidance() {
 }
 
 #[test]
+fn openapi_malformed_config_matches_serve_classification() {
+    assert_subcommand_config_failure_is_exact(
+        "openapi",
+        "COUNTRY_OPENAPI_MALFORMED_PATH.yaml",
+        "deployment:\n  profile: local\nCOUNTRY_OPENAPI_PARSER_SENTINEL\n\t- invalid",
+        ProcessStartupCode::CONFIG_DOCUMENT_INVALID,
+        &["COUNTRY_OPENAPI_PARSER_SENTINEL"],
+    );
+}
+
+#[test]
+fn openapi_typed_invalid_config_matches_serve_classification() {
+    assert_subcommand_config_failure_is_exact(
+        "openapi",
+        "COUNTRY_OPENAPI_TYPED_PATH.yaml",
+        "server:\n  bind: 127.0.0.1:0\nCOUNTRY_OPENAPI_TYPED_FIELD: COUNTRY_OPENAPI_TYPED_VALUE\n",
+        ProcessStartupCode::CONFIG_DOCUMENT_INVALID,
+        &["COUNTRY_OPENAPI_TYPED_FIELD", "COUNTRY_OPENAPI_TYPED_VALUE"],
+    );
+}
+
+#[test]
+fn explain_config_malformed_config_matches_serve_classification() {
+    assert_subcommand_config_failure_is_exact(
+        "explain-config",
+        "COUNTRY_EXPLAIN_MALFORMED_PATH.yaml",
+        "deployment:\n  profile: local\nCOUNTRY_EXPLAIN_PARSER_SENTINEL\n\t- invalid",
+        ProcessStartupCode::CONFIG_DOCUMENT_INVALID,
+        &["COUNTRY_EXPLAIN_PARSER_SENTINEL"],
+    );
+}
+
+#[test]
+fn explain_config_typed_invalid_config_matches_serve_classification() {
+    assert_subcommand_config_failure_is_exact(
+        "explain-config",
+        "COUNTRY_EXPLAIN_TYPED_PATH.yaml",
+        "server:\n  bind: 127.0.0.1:0\nCOUNTRY_EXPLAIN_TYPED_FIELD: COUNTRY_EXPLAIN_TYPED_VALUE\n",
+        ProcessStartupCode::CONFIG_DOCUMENT_INVALID,
+        &["COUNTRY_EXPLAIN_TYPED_FIELD", "COUNTRY_EXPLAIN_TYPED_VALUE"],
+    );
+}
+
+#[test]
 fn config_validation_does_not_repeat_environment_or_authored_values() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_path = tmp.path().join("COUNTRY_VALIDATION_PATH.yaml");
@@ -484,6 +528,34 @@ audit:
         ),
     )
     .expect("listener config writes");
+}
+
+fn assert_subcommand_config_failure_is_exact(
+    subcommand: &str,
+    file_name: &str,
+    document: &str,
+    expected_code: ProcessStartupCode,
+    forbidden_values: &[&str],
+) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join(file_name);
+    std::fs::write(&config_path, document).expect("invalid config writes");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-relay"))
+        .env("RUST_LOG", "off")
+        .env_remove("REGISTRY_RELAY_ENV_FILE")
+        .args([
+            subcommand,
+            "--config",
+            config_path.to_str().expect("config path is UTF-8"),
+        ])
+        .output()
+        .expect("Relay subcommand runs");
+
+    let mut forbidden_values = forbidden_values.to_vec();
+    forbidden_values.push(file_name);
+    forbidden_values.push(config_path.to_str().expect("config path is UTF-8"));
+    assert_failed_terminal_output_is_exact(&output, expected_code, &forbidden_values);
 }
 
 fn assert_failed_terminal_output_is_exact(

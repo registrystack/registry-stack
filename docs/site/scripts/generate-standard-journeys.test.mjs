@@ -352,6 +352,28 @@ test("keeps runtime and product activation claims bounded to traceable evidence"
   );
   assert.equal(openapi.evidence.runtime.status, "not_claimed");
 
+  const snapshot = journeys["exact-snapshot"];
+  assert.equal(snapshot.evidence.runtime.status, "not_claimed");
+  const snapshotMaterializationGate = snapshot.gates.find(
+    (gate) => gate.name === "build",
+  );
+  assert.equal(
+    snapshotMaterializationGate.proves,
+    "Unsigned Relay input contains the reviewed snapshot materialization requirements.",
+  );
+  assert.equal(
+    snapshotMaterializationGate.does_not_prove,
+    "A runtime loaded a concrete snapshot generation or the upstream collection is complete.",
+  );
+  assert.doesNotMatch(
+    [
+      snapshotMaterializationGate.proves,
+      JSON.stringify(snapshot.configuration_files),
+      JSON.stringify(snapshot.artifacts),
+    ].join(" "),
+    /runtime (?:loaded|accepted) (?:a )?(?:concrete )?snapshot generation/u,
+  );
+
   const lifecycle = journeys["product-input-lifecycle"];
   assert.equal(lifecycle.evidence.runtime.status, "not_claimed");
   assert.doesNotMatch(
@@ -380,7 +402,7 @@ test("keeps runtime and product activation claims bounded to traceable evidence"
   assert.equal(lifecyclePreflight.kind, "readiness_gate");
   assert.match(
     lifecyclePreflight.note,
-    /require a passing report before signing, verification, promotion, or activation handoff/u,
+    /expected to exit 1 with a value-free not_ready report/u,
   );
   assert.equal(
     lifecycle.steps.indexOf(governedPromotion) > lifecycleBuildIndex,
@@ -609,22 +631,48 @@ test(
             2,
           )}\n`,
         );
-        for (const step of commandSteps(journey)) {
+        const executableSteps = journey.steps.filter((step) =>
+          ["command", "readiness_gate"].includes(step.kind),
+        );
+        for (const step of executableSteps) {
           const cwd = resolve(temporary, step.cwd);
-          const result = await execFile(registryctlBinary, step.argv.slice(1), {
-            cwd,
-            env: {
-              ...process.env,
-              REGISTRYCTL_IMAGE_LOCK: imageLock,
-              REGISTRYCTL_NO_UPDATE_CHECK: "1",
-            },
-            encoding: "utf8",
-          });
-          assert.equal(
-            result.stderr,
-            "",
-            `${journey.id}:${step.id} wrote stderr`,
-          );
+          const execution = execFile(registryctlBinary, step.argv.slice(1), {
+              cwd,
+              env: {
+                ...process.env,
+                REGISTRYCTL_IMAGE_LOCK: imageLock,
+                REGISTRYCTL_NO_UPDATE_CHECK: "1",
+              },
+              encoding: "utf8",
+            });
+          if (step.kind === "readiness_gate") {
+            await assert.rejects(execution, (error) => {
+              assert.equal(error.code, 1, `${journey.id}:${step.id} exit`);
+              assert.equal(error.stderr, "", `${journey.id}:${step.id} wrote stderr`);
+              const report = JSON.parse(error.stdout);
+              assert.equal(report.schema_version, "registryctl.project_preflight.v1");
+              assert.equal(report.status, "not_ready");
+              const diagnosticCodes = new Set(
+                report.diagnostics.map((diagnostic) => diagnostic.code),
+              );
+              assert.equal(
+                diagnosticCodes.has("registryctl.preflight.secret_missing"),
+                true,
+              );
+              assert.equal(
+                diagnosticCodes.has("registryctl.preflight.runtime_file_missing"),
+                true,
+              );
+              return true;
+            });
+          } else {
+            const result = await execution;
+            assert.equal(
+              result.stderr,
+              "",
+              `${journey.id}:${step.id} wrote stderr`,
+            );
+          }
         }
       } finally {
         await rm(temporary, { force: true, recursive: true });

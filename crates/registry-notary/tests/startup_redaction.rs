@@ -16,10 +16,15 @@ fn registry_notary_command() -> Command {
 }
 
 fn registry_notary_command_with_log(rust_log: &str) -> Command {
+    registry_notary_command_with_log_format(rust_log, "text")
+}
+
+fn registry_notary_command_with_log_format(rust_log: &str, log_format: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_registry-notary"));
     command
         .env_remove("REGISTRY_NOTARY_CONFIG")
         .env_remove("REGISTRY_NOTARY_ENV_FILE")
+        .env("REGISTRY_NOTARY_LOG_FORMAT", log_format)
         .env("RUST_LOG", rust_log);
     command
 }
@@ -261,28 +266,44 @@ fn signed_bundle_boot_failure_does_not_expose_governed_paths_or_values() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let fixture = write_missing_bundle_fixture(&tmp);
 
-    let output = run_server(&fixture.config_path);
+    for log_format in ["text", "json"] {
+        let output = registry_notary_command_with_log_format("info", log_format)
+            .arg("--config")
+            .arg(&fixture.config_path)
+            .output()
+            .expect("registry-notary starts");
 
-    assert_safe_configuration_failure(
-        &output,
-        &[
-            SENTINEL_COUNTRY,
-            SENTINEL_USERNAME,
-            SENTINEL_SECRET,
-            SENTINEL_DIGEST,
-            fixture.trust_path.to_string_lossy().as_ref(),
-            fixture.bundle_path.to_string_lossy().as_ref(),
-            fixture.state_path.to_string_lossy().as_ref(),
-            fixture.override_path.to_string_lossy().as_ref(),
-        ],
-    );
-    let combined = combined_output(&output);
-    let code = BundleVerificationCode::REJECTED_VALIDATION;
-    let definition = code.definition();
-    assert!(combined.contains(&format!("result=\"{}\"", code.as_str())));
-    assert!(combined.contains(&format!("safe_meaning=\"{}\"", definition.safe_meaning)));
-    assert!(combined.contains(&format!(
-        "safe_remediation=\"{}\"",
-        definition.safe_remediation
-    )));
+        assert_safe_configuration_failure(
+            &output,
+            &[
+                SENTINEL_COUNTRY,
+                SENTINEL_USERNAME,
+                SENTINEL_SECRET,
+                SENTINEL_DIGEST,
+                fixture.trust_path.to_string_lossy().as_ref(),
+                fixture.bundle_path.to_string_lossy().as_ref(),
+                fixture.state_path.to_string_lossy().as_ref(),
+                fixture.override_path.to_string_lossy().as_ref(),
+            ],
+        );
+        let combined = combined_output(&output);
+        let code = BundleVerificationCode::REJECTED_VALIDATION;
+        let definition = code.definition();
+        assert!(
+            combined.contains(code.as_str()),
+            "{log_format} startup log omitted the stable rejection code: {combined}"
+        );
+        assert!(
+            combined.contains(definition.safe_meaning),
+            "{log_format} startup log omitted the static safe meaning: {combined}"
+        );
+        assert!(
+            combined.contains(definition.safe_remediation),
+            "{log_format} startup log omitted the static safe remediation: {combined}"
+        );
+        assert!(
+            !combined.as_bytes().contains(&0x1b),
+            "{log_format} startup log contained ANSI escape bytes: {combined:?}"
+        );
+    }
 }
