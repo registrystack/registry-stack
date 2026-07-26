@@ -1,0 +1,71 @@
+coverage:
+  status:
+    default_rules:
+      flag_coverage_not_uploaded_behavior: exclude
+    project:
+      default: off
+      platform:
+        flags:
+          - platform
+        informational: true
+      notary-postgres:
+        flags:
+          - notary-postgres
+        informational: true
+    patch:
+      default: off
+      platform:
+        flags:
+          - platform
+        informational: true
+      notary-postgres:
+        flags:
+          - notary-postgres
+        informational: true
+
+flags:
+  platform:
+    paths:
+      - "crates/registry-platform-*/**"
+    carryforward: true
+  notary-postgres:
+    paths:
+      - "crates/registry-notary/"
+      - "crates/registry-notary-server/"
+    carryforward: true
+  manifest-unit:
+    paths:
+      - "crates/registry-manifest-*/**"
+    carryforward: true
+  notary-unit:
+    paths:
+      - "crates/registry-notary*/**"
+      - "products/notary/xtask/**"
+    carryforward: true
+  notary-cel:
+    paths:
+      - "crates/registry-notary*/**"
+    carryforward: true
+  relay-unit:
+    paths:
+      - "crates/registry-relay/**"
+    carryforward: true
+  relay-postgres:
+    paths:
+      - "crates/registry-relay/**"
+    carryforward: true
+  developer-tools:
+    paths:
+      - "crates/registry-config-report/**"
+      - "crates/registry-language-server/**"
+    carryforward: true
+  registryctl-unit:
+    paths:
+      - "crates/registryctl/**"
+    carryforward: true
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default
+  require_changes: true
+  show_carryforward_flags: true

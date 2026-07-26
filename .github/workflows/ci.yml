@@ -188,10 +188,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.platform == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
+          fetch-depth: 0
           persist-credentials: false
           submodules: false
 
@@ -213,6 +217,28 @@ jobs:
           -p 'registry-platform-*'
           --all-features
           --fail-under-lines 80
+
+      - name: Export platform coverage
+        run: |
+          set -euo pipefail
+          coverage_dir="target/platform-coverage"
+          mkdir -p "${coverage_dir}"
+          cargo llvm-cov report --locked \
+            -p registry-config-report \
+            -p 'registry-platform-*' \
+            --lcov \
+            --output-path "${coverage_dir}/platform.lcov"
+
+      - name: Upload platform coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          disable_search: true
+          fail_ci_if_error: false
+          files: target/platform-coverage/platform.lcov
+          flags: platform
+          name: platform
+          use_oidc: true
+          version: v11.3.1
 
   platform-hygiene:
     name: Platform hygiene and config inventory
