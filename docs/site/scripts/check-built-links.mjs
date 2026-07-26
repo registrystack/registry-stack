@@ -7,6 +7,14 @@ const distDir = 'dist';
 const attrPattern = /\s(?:href|src)=["']([^"']+)["']/g;
 const idPattern = /\sid=["']([^"']+)["']/g;
 
+function scopeFromArgs(args) {
+  if (args.length === 0) return 'all';
+  if (args.length === 2 && args[0] === '--scope' && ['all', 'current'].includes(args[1])) {
+    return args[1];
+  }
+  throw new Error('usage: check-built-links.mjs [--scope current|all]');
+}
+
 async function exists(path) {
   try {
     await stat(path);
@@ -93,15 +101,21 @@ const errors = [];
 let checked = 0;
 const idsByFile = new Map();
 const evidencePaths = await currentEvidencePaths();
+const scope = scopeFromArgs(process.argv.slice(2));
+const archivedRootPattern = /^\/v\/[^/]+\//;
 
-for (const file of await htmlFiles(distDir)) {
+const files = (await htmlFiles(distDir)).filter(
+  (file) => scope === 'all' || archiveRoot(file) === null,
+);
+
+for (const file of files) {
   const html = await readFile(file, 'utf8');
   const ids = new Set();
   for (const match of html.matchAll(idPattern)) ids.add(match[1]);
   idsByFile.set(file, ids);
 }
 
-for (const file of await htmlFiles(distDir)) {
+for (const file of files) {
   const html = await readFile(file, 'utf8');
   for (const match of html.matchAll(attrPattern)) {
     const raw = match[1];
@@ -120,6 +134,7 @@ for (const file of await htmlFiles(distDir)) {
 
     const url = resolveInternal(raw, file);
     if (!url) continue;
+    if (scope === 'current' && archivedRootPattern.test(splitUrl(url)[0])) continue;
 
     checked += 1;
     const [path, fragment] = splitUrl(url);

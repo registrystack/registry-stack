@@ -264,6 +264,27 @@ def classify(
         or path == ".github/workflows/docs-pages.yml"
         for path in paths
     )
+    docs_archives = any(
+        path
+        in {
+            ".github/workflows/ci.yml",
+            ".github/workflows/docs-pages.yml",
+            ".github/workflows/release.yml",
+            "docs/site/astro.config.mjs",
+            "docs/site/package-lock.json",
+            "docs/site/package.json",
+            "docs/site/scripts/apply-archive-seo.mjs",
+            "docs/site/scripts/archive-bundle.mjs",
+            "docs/site/scripts/archive-lock.mjs",
+            "docs/site/scripts/assemble-archives.mjs",
+            "docs/site/scripts/build-archive.mjs",
+            "docs/site/scripts/build-archives.mjs",
+            "docs/site/src/data/archive-lock.yaml",
+            "docs/site/src/data/docsets.yaml",
+            "docs/site/src/data/repo-docs.yaml",
+        }
+        for path in paths
+    )
     editors = complete or any(path.startswith("editors/") for path in paths)
 
     tutorial_infrastructure = any(
@@ -313,6 +334,7 @@ def classify(
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
         "docs": docs,
+        "docs_archives": docs_archives,
         "editors": editors,
         "registryctl_tutorial": registryctl_tutorial,
     }

@@ -138,6 +138,7 @@ jobs:
             "${{ steps.release.outputs.tag_target }}" refs/remotes/origin/main
           release/scripts/registry-release validate \
             "${{ steps.release.outputs.manifest }}"
+          release/scripts/registry-release validate-docsets
           release/scripts/registry-release validate-source \
             "${{ steps.release.outputs.manifest }}" \
             --tag "${{ steps.release.outputs.tag }}" \
@@ -149,6 +150,53 @@ jobs:
             --version "${{ steps.release.outputs.version }}"
           REGISTRY_RELEASE_SOURCE_MODE=monorepo \
             release/scripts/check-release-source-model.sh
+
+  docs-archive:
+    name: Build immutable release docs archive
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact tag target without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ needs.verify.outputs.tag_target }}
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4.4.0
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Install locked docs dependencies
+        working-directory: docs/site
+        run: npm ci
+
+      - name: Build and verify the tag-bound docs bundle
+        working-directory: docs/site
+        env:
+          DOCS_DOCSET: ${{ needs.verify.outputs.tag }}
+          DOCS_ARCHIVE_OUTPUT: ${{ runner.temp }}/registry-docs-${{ needs.verify.outputs.tag }}.tar.gz
+        run: |
+          set -euo pipefail
+          npm run build:archive
+          npm run archive:snapshot -- \
+            "${DOCS_DOCSET}" \
+            --output "${DOCS_ARCHIVE_OUTPUT}" \
+            --verify-lock
+
+      - name: Upload verified docs bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-docs-${{ needs.verify.outputs.tag }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/registry-docs-${{ needs.verify.outputs.tag }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
 
   verify-candidate:
     name: Verify exact candidate before any public write
@@ -464,6 +512,7 @@ jobs:
     needs:
       - verify
       - verify-candidate
+      - docs-archive
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -603,6 +652,7 @@ jobs:
       - verify
       - verify-candidate
       - publish-images
+      - docs-archive
     runs-on: ubuntu-24.04
     outputs:
       provenance_subjects: ${{ steps.provenance-subjects.outputs.base64_subjects }}
@@ -626,6 +676,12 @@ jobs:
         with:
           name: ${{ needs.verify-candidate.outputs.bundle_name }}
           path: promotion
+
+      - name: Download unprivileged docs archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: registry-docs-${{ needs.verify.outputs.tag }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: docs-archive
 
       - name: Reverify candidate file inventory without executing product binaries
         env:
@@ -743,6 +799,27 @@ jobs:
           payload="promotion/artifacts/${payload_name}/dist"
           mkdir -p dist/{bin,image-evidence,binary-sbom,release-capsule}
           cp -R "${payload}/bin/." dist/bin/
+          docs_archive="docs-archive/registry-docs-${{ needs.verify.outputs.tag }}.tar.gz"
+          test -f "${docs_archive}"
+          python3 - \
+            "docs/site/src/data/archive-lock.yaml" \
+            "${{ needs.verify.outputs.tag }}" \
+            "${docs_archive}" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+          import yaml
+
+          lock_path, docset_id, bundle_path = sys.argv[1:]
+          lock = yaml.safe_load(pathlib.Path(lock_path).read_text(encoding="utf-8"))
+          expected = lock["archives"][docset_id]["bundle_sha256"]
+          actual = hashlib.sha256(pathlib.Path(bundle_path).read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit(
+                  f"docs archive digest {actual} does not match immutable lock {expected}"
+              )
+          PY
+          cp "${docs_archive}" dist/bin/
           cp -R "${payload}/images/." dist/image-evidence/
           cp -R "${payload}/sbom/." dist/image-evidence/
           cp -R "${payload}/grype/." dist/image-evidence/
@@ -801,7 +878,8 @@ jobs:
             --default-branch-protection unverified \
             --repo . \
             --default-branch origin/main \
-            --require-registryctl-image-lock
+            --require-registryctl-image-lock \
+            --require-registry-docs-archive
 
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.1

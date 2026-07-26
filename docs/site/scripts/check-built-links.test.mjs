@@ -39,8 +39,8 @@ function fixture(t, archivedHref) {
   return root;
 }
 
-function run(root) {
-  return spawnSync(process.execPath, [checker], { cwd: root, encoding: 'utf8' });
+function run(root, args = []) {
+  return spawnSync(process.execPath, [checker, ...args], { cwd: root, encoding: 'utf8' });
 }
 
 test('allows an archived standards page to cite root-relative current evidence', (t) => {
@@ -53,4 +53,14 @@ test('keeps rejecting unrelated links that escape an archive', (t) => {
   const result = run(fixture(t, '/not-evidence/'));
   assert.equal(result.status, 1);
   assert.match(result.stderr, /links outside its archive/);
+});
+
+test('current scope defers immutable archive targets to the archive gate', (t) => {
+  const root = fixture(t, '/explanation/current/');
+  write(root, 'dist/index.html', '<html><a href="/v/missing/">Release</a></html>');
+  const current = run(root, ['--scope', 'current']);
+  const all = run(root);
+  assert.equal(current.status, 0, current.stderr);
+  assert.equal(all.status, 1);
+  assert.match(all.stderr, /links to missing/);
 });
