@@ -213,6 +213,29 @@ test('redacts generated env values and credential headers before output is print
   assert.match(redacted, /REDACTED:ROW_READER_RAW/);
 });
 
+test('Relay disclosure-floor rejection uses the value-free startup contract', () => {
+  const tutorial = readFileSync(
+    new URL(
+      '../src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
+
+  assert.match(tutorial, /relay\.startup\.config_validation_rejected/);
+  assert.doesNotMatch(tutorial, /code="config\.validation_error"/);
+  assert.doesNotMatch(tutorial, /requires disclosure_control\.min_cell_size >= 2/);
+  assert.match(
+    script,
+    /assert_contains "\$LAST_OUTPUT" relay\.startup\.config_validation_rejected/,
+  );
+  assert.match(
+    script,
+    /assert_not_contains "\$LAST_OUTPUT" config\.validation_error 'min_cell_size >= 2'/,
+  );
+});
+
 test('source tutorial image staging includes the dedicated Relay Rhai worker', () => {
   const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
   const worker = 'registry-relay-rhai-worker';

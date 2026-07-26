@@ -638,10 +638,19 @@ jobs:
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
-      - name: Install docs system dependencies
+      - name: Install docs shell dependency
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --yes zsh
+
+      - name: Assert docs shell dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v sh
+          command -v bash
+          command -v zsh
 
       - name: Install docs dependencies
         working-directory: docs/site
@@ -967,6 +976,19 @@ jobs:
           node-version: 22.12.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
+
+      - name: Install docs shell dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes zsh
+
+      - name: Assert docs shell dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v sh
+          command -v bash
+          command -v zsh
 
       - name: Install docs dependencies
         working-directory: docs/site

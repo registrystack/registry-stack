@@ -420,17 +420,21 @@ Ask the logs why:
 registryctl logs
 ```
 
-The Relay container exited during config validation:
+The Relay container exited during product validation.
+The public diagnostic is a stable, value-free code:
 
 ```text
-ERROR aggregate_only_execution on personal, confidential, or secret datasets requires disclosure_control.min_cell_size >= 2 code="config.validation_error" dataset_id=benefits_casework aggregate_id=by_district
+relay.startup.config_validation_rejected
 ```
 
-The dataset is marked `sensitivity: personal` in the same file, and Relay refuses to run
-an aggregate-only definition over personal data with a disclosure floor under 2.
-You can raise the rule; you cannot weaken it past the floor.
-The error names `min_cell_size`, the API field that corresponds to the `min_group_size`
-config key; the aggregate response uses the API name too.
+The code establishes that the parsed Relay configuration failed a product invariant.
+It does not repeat configured identifiers, values, or raw validation text.
+In this controlled exercise, the only configuration edit was changing `min_group_size`
+from 3 to 1.
+The dataset is marked `sensitivity: personal` in the same file, so restore the documented
+floor instead of trying to diagnose the rule from private process output.
+Use the [operator diagnostic reference](../../reference/diagnostics/operator/) for the
+code's static meaning, evidence limit, and remediation.
 
 Restore `min_group_size` to 2 and restart once more:
 

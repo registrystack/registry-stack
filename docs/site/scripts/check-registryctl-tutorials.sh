@@ -371,7 +371,8 @@ run_relay_tutorial() {
 	run_block 'Relay 17: Reject a disclosure floor below the invariant' "$blocks/17.sh" failure
 	assert_contains "$LAST_OUTPUT" 'Relay did not become healthy and ready before timeout'
 	run_block 'Relay 18: Explain the rejected configuration' "$blocks/18.sh" success
-	assert_contains "$LAST_OUTPUT" config.validation_error 'min_cell_size >= 2'
+	assert_contains "$LAST_OUTPUT" relay.startup.config_validation_rejected
+	assert_not_contains "$LAST_OUTPUT" config.validation_error 'min_cell_size >= 2'
 
 	node "$HELPER" set-relay-min-group-size relay/config.yaml benefits_casework by_district 2
 	run_block 'Relay 19: Restore the valid disclosure floor' "$blocks/19.sh" success

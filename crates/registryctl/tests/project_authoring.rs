@@ -2062,7 +2062,7 @@ fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
     replace_in_file(
         &project.join("integrations/health-record/integration.yaml"),
         "versions: { unverified: [2.41.9] }",
-        "versions: { unverified: [7.3] }",
+        "versions: { unverified: ['7.3'] }",
     );
 
     let metadata_free = copy_project("dhis2-script", &absent_root);
