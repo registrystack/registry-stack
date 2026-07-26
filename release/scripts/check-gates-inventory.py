@@ -274,7 +274,9 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Product-input lifecycle record discovery",
-        "run: python3 release/scripts/validate-product-input-lifecycle.py --discover release/exercises",
+        "python3 release/scripts/validate-product-input-lifecycle.py\n"
+        "          --discover release/exercises\n"
+        "          --candidate-asset-root target/candidate-release-assets",
     ),
     (
         "First-country acceptance validator tests",
@@ -285,20 +287,36 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 release/scripts/validate-first-country-acceptance.py check-packet",
     ),
     (
-        "Upgrade exercise asset preparation tests",
+        "Candidate evidence asset preparation tests",
         "run: python3 -m unittest release/scripts/test_prepare_upgrade_exercise_assets.py",
     ),
     (
-        "Upgrade exercise candidate asset preparation",
+        "Candidate evidence asset preparation",
         "python3 release/scripts/prepare-upgrade-exercise-assets.py\n"
         "          --discover release/exercises\n"
-        "          --asset-root target/upgrade-exercise-assets",
+        "          --product-input-records "
+        "release/exercises/product-input-lifecycle\n"
+        "          --asset-root target/candidate-release-assets",
+    ),
+    (
+        "Product-input lifecycle candidate asset preparation",
+        "--product-input-records release/exercises/product-input-lifecycle",
+    ),
+    (
+        "Candidate evidence Cosign installation",
+        "name: Install cosign for committed candidate evidence\n"
+        "        if: steps.candidate-assets.outputs.has_candidates == 'true'",
+    ),
+    (
+        "Candidate evidence SLSA verifier installation",
+        "name: Install SLSA verifier for committed candidate evidence\n"
+        "        if: steps.candidate-assets.outputs.has_candidates == 'true'",
     ),
     (
         "Upgrade exercise record discovery",
-        "python3 release/scripts/validate-upgrade-exercise.py --discover "
-        "release/exercises --candidate-asset-root "
-        "target/upgrade-exercise-assets",
+        "python3 release/scripts/validate-upgrade-exercise.py\n"
+        "          --discover release/exercises\n"
+        "          --candidate-asset-root target/candidate-release-assets",
     ),
     (
         "Base-reference compatibility input",

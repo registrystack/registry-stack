@@ -227,10 +227,22 @@ def require_regular_file(path: Path, *, max_bytes: int) -> None:
         )
 
 
+def closed_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build a JSON object without accepting ambiguous duplicate fields."""
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise AcceptanceError("JSON objects must not contain duplicate fields")
+        value[key] = item
+    return value
+
+
 def load_json(path: Path, *, max_bytes: int = MAX_RECORD_BYTES) -> Any:
     require_regular_file(path, max_bytes=max_bytes)
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=closed_object
+        )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise AcceptanceError(f"could not read valid JSON: {exc}") from exc
 

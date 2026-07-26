@@ -192,6 +192,36 @@ class FirstCountryAcceptanceTest(TestCase):
         ):
             self.module.assert_closed_schema(schema)
 
+    def test_load_json_rejects_duplicate_provenance_fields(self) -> None:
+        cases = (
+            (
+                "acceptance binding",
+                '{"acceptance_binding_sha256":"sha256:'
+                + "a" * 64
+                + '","acceptance_binding_sha256":"sha256:'
+                + "b" * 64
+                + '"}',
+            ),
+            (
+                "candidate source commit",
+                '{"binding":{"candidate":{"source_commit":"'
+                + "1" * 40
+                + '","source_commit":"'
+                + "2" * 40
+                + '"}}}',
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            record_path = Path(temporary) / "record.json"
+            for label, source in cases:
+                with self.subTest(label=label):
+                    record_path.write_text(source, encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        self.module.AcceptanceError,
+                        "JSON objects must not contain duplicate fields",
+                    ):
+                        self.module.load_json(record_path)
+
     def test_template_binding_is_canonical_and_repeated_for_every_case(self) -> None:
         digest = self.module.canonical_binding_sha256(self.template["binding"])
         self.assertEqual(digest, self.template["acceptance_binding_sha256"])

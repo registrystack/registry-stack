@@ -768,7 +768,7 @@ class GateInventoryTest(unittest.TestCase):
 
     def test_missing_upgrade_exercise_record_discovery_is_reported(self) -> None:
         text = self.workflow.replace(
-            "python3 release/scripts/validate-upgrade-exercise.py --discover release/exercises",
+            "python3 release/scripts/validate-upgrade-exercise.py",
             "python3 release/scripts/validate-upgrade-exercise.py --skip-discovery",
         )
         self.assertIn(
@@ -791,8 +791,9 @@ class GateInventoryTest(unittest.TestCase):
         self,
     ) -> None:
         text = self.workflow.replace(
-            "python3 release/scripts/validate-product-input-lifecycle.py --discover release/exercises",
-            "python3 release/scripts/validate-product-input-lifecycle.py --skip-discovery",
+            "--candidate-asset-root target/candidate-release-assets",
+            "--candidate-asset-root target/unauthenticated-assets",
+            1,
         )
         self.assertIn(
             "Product-input lifecycle record discovery",
@@ -829,17 +830,56 @@ class GateInventoryTest(unittest.TestCase):
             "python3 release/scripts/skip-upgrade-exercise-assets.py",
         )
         self.assertIn(
-            "Upgrade exercise candidate asset preparation",
+            "Candidate evidence asset preparation",
+            self.module.missing_gates(text),
+        )
+
+    def test_product_input_candidates_enable_cosign_installation(self) -> None:
+        text = self.workflow.replace(
+            "if: steps.candidate-assets.outputs.has_candidates == 'true'",
+            "if: steps.upgrade-assets.outputs.has_candidates == 'true'",
+            1,
+        )
+        self.assertIn(
+            "Candidate evidence Cosign installation",
+            self.module.missing_gates(text),
+        )
+
+    def test_product_input_candidates_enable_slsa_verifier_installation(
+        self,
+    ) -> None:
+        marker = "if: steps.candidate-assets.outputs.has_candidates == 'true'"
+        first = self.workflow.index(marker)
+        second = self.workflow.index(marker, first + len(marker))
+        text = self.workflow[:second] + self.workflow[second:].replace(
+            marker,
+            "if: steps.upgrade-assets.outputs.has_candidates == 'true'",
+            1,
+        )
+        self.assertIn(
+            "Candidate evidence SLSA verifier installation",
             self.module.missing_gates(text),
         )
 
     def test_missing_upgrade_exercise_asset_root_is_reported(self) -> None:
         text = self.workflow.replace(
-            "--candidate-asset-root target/upgrade-exercise-assets",
+            "--candidate-asset-root target/candidate-release-assets",
             "--candidate-asset-root target/unauthenticated-assets",
         )
         self.assertIn(
             "Upgrade exercise record discovery", self.module.missing_gates(text)
+        )
+
+    def test_missing_product_input_lifecycle_asset_preparation_is_reported(
+        self,
+    ) -> None:
+        text = self.workflow.replace(
+            "--product-input-records release/exercises/product-input-lifecycle",
+            "--product-input-records release/exercises/removed-lifecycle",
+        )
+        self.assertIn(
+            "Candidate evidence asset preparation",
+            self.module.missing_gates(text),
         )
 
     def test_missing_stable_error_registry_path_filter_is_reported(self) -> None:

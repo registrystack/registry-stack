@@ -52,6 +52,11 @@ SHARDS = {
 NOTARY_PACKAGES = frozenset(SHARDS["notary"])
 PLATFORM_PACKAGES = frozenset(SHARDS["platform"])
 MANIFEST_PACKAGES = frozenset(SHARDS["manifest"])
+TUTORIAL_PACKAGES = frozenset(
+    package
+    for shard in ("platform", "manifest", "notary", "relay", "registryctl")
+    for package in SHARDS[shard]
+) | {"registry-config-report"}
 
 ROOT_RUST_INPUTS = {
     "Cargo.lock",
@@ -522,7 +527,10 @@ def classify(
         for path in paths
     )
     registryctl_tutorial = (
-        complete or tutorial_infrastructure or tutorial_source_under_test
+        complete
+        or tutorial_infrastructure
+        or tutorial_source_under_test
+        or bool(affected & TUTORIAL_PACKAGES)
     )
 
     matrix = []

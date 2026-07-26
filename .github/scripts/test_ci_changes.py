@@ -54,7 +54,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertEqual(shard_names, {"relay", "registryctl"})
         self.assertTrue(outputs["release_tool"])
         self.assertTrue(outputs["release_source_proof"])
-        self.assertFalse(outputs["registryctl_tutorial"])
+        self.assertTrue(outputs["registryctl_tutorial"])
         self.assertFalse(outputs["platform"])
 
     def test_reverse_dependencies_are_included(self) -> None:
@@ -65,7 +65,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn("registry-platform-crypto", outputs["rust_packages"])
         self.assertIn("registry-relay", outputs["rust_packages"])
         self.assertIn("registry-notary", outputs["rust_packages"])
-        self.assertFalse(outputs["registryctl_tutorial"])
+        self.assertTrue(outputs["registryctl_tutorial"])
 
     def test_ci_workflow_change_runs_the_complete_matrix(self) -> None:
         outputs = classify(self.workspace, (".github/workflows/ci.yml",))
@@ -235,7 +235,7 @@ class CiChangesTest(unittest.TestCase):
                 {
                     "docs": True,
                     "project_authoring": True,
-                    "registryctl_tutorial": False,
+                    "registryctl_tutorial": True,
                 },
             ),
             (
@@ -243,7 +243,7 @@ class CiChangesTest(unittest.TestCase):
                 {
                     "docs": True,
                     "project_authoring": True,
-                    "registryctl_tutorial": False,
+                    "registryctl_tutorial": True,
                 },
             ),
             (
@@ -251,7 +251,7 @@ class CiChangesTest(unittest.TestCase):
                 {
                     "docs": True,
                     "project_authoring": True,
-                    "registryctl_tutorial": False,
+                    "registryctl_tutorial": True,
                 },
             ),
             (
@@ -267,7 +267,7 @@ class CiChangesTest(unittest.TestCase):
                 {
                     "docs": True,
                     "project_authoring": True,
-                    "registryctl_tutorial": False,
+                    "registryctl_tutorial": True,
                 },
             ),
             (
@@ -275,7 +275,7 @@ class CiChangesTest(unittest.TestCase):
                 {
                     "docs": True,
                     "project_authoring": True,
-                    "registryctl_tutorial": False,
+                    "registryctl_tutorial": True,
                 },
             ),
             (
@@ -283,7 +283,7 @@ class CiChangesTest(unittest.TestCase):
                 {
                     "docs": True,
                     "project_authoring": True,
-                    "registryctl_tutorial": False,
+                    "registryctl_tutorial": True,
                 },
             ),
             (
@@ -331,7 +331,7 @@ class CiChangesTest(unittest.TestCase):
                 {
                     "docs": True,
                     "relay_contracts": True,
-                    "registryctl_tutorial": False,
+                    "registryctl_tutorial": True,
                 },
             ),
             (
@@ -370,7 +370,7 @@ class CiChangesTest(unittest.TestCase):
                 "crates/registry-platform-ops/src/lib.rs",
                 {
                     "docs": True,
-                    "registryctl_tutorial": False,
+                    "registryctl_tutorial": True,
                 },
             ),
             (
@@ -378,7 +378,7 @@ class CiChangesTest(unittest.TestCase):
                 {
                     "docs": True,
                     "relay_contracts": True,
-                    "registryctl_tutorial": False,
+                    "registryctl_tutorial": True,
                 },
             ),
             (
@@ -386,7 +386,7 @@ class CiChangesTest(unittest.TestCase):
                 {
                     "docs": True,
                     "relay_contracts": True,
-                    "registryctl_tutorial": False,
+                    "registryctl_tutorial": True,
                 },
             ),
             (
@@ -394,7 +394,7 @@ class CiChangesTest(unittest.TestCase):
                 {
                     "docs": True,
                     "project_authoring": True,
-                    "registryctl_tutorial": False,
+                    "registryctl_tutorial": True,
                 },
             ),
             (
@@ -445,34 +445,45 @@ class CiChangesTest(unittest.TestCase):
                 for output, value in expected.items():
                     self.assertEqual(outputs[output], value, output)
 
-    def test_unrelated_inputs_do_not_escalate_to_docs_or_docker_journeys(self) -> None:
+    def test_tutorial_package_dependencies_route_the_source_journey(self) -> None:
         cases = (
             (
                 "crates/registry-relay/src/state_plane/runtime.rs",
-                {"docs": False, "relay_contracts": True},
+                {
+                    "docs": False,
+                    "relay_contracts": True,
+                    "registryctl_tutorial": True,
+                },
             ),
             (
                 "crates/registry-platform-crypto/src/lib.rs",
-                {"docs": False},
+                {"docs": False, "registryctl_tutorial": True},
             ),
             (
                 "crates/registryctl/src/project_authoring/project.rs",
-                {"docs": False, "project_authoring": True},
+                {
+                    "docs": False,
+                    "project_authoring": True,
+                    "registryctl_tutorial": True,
+                },
             ),
             (
                 "README.md",
-                {"docs": False, "rust": False},
+                {"docs": False, "rust": False, "registryctl_tutorial": False},
             ),
             (
                 "crates/registry-notary-client/src/lib.rs",
-                {"docs": False, "notary_contracts": True},
+                {
+                    "docs": False,
+                    "notary_contracts": True,
+                    "registryctl_tutorial": True,
+                },
             ),
         )
 
         for path, expected in cases:
             with self.subTest(path=path):
                 outputs = classify(self.workspace, (path,))
-                self.assertFalse(outputs["registryctl_tutorial"])
                 for output, value in expected.items():
                     self.assertEqual(outputs[output], value, output)
 

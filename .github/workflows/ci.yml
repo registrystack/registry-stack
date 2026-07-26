@@ -749,9 +749,6 @@ jobs:
       - name: Test product-input lifecycle validator
         run: python3 -m unittest release/scripts/test_validate_product_input_lifecycle.py
 
-      - name: Validate product-input lifecycle records
-        run: python3 release/scripts/validate-product-input-lifecycle.py --discover release/exercises
-
       - name: Test first-country acceptance validator
         run: python3 -m unittest release/scripts/test_validate_first_country_acceptance.py
 
@@ -761,22 +758,23 @@ jobs:
       - name: Test upgrade exercise asset preparation
         run: python3 -m unittest release/scripts/test_prepare_upgrade_exercise_assets.py
 
-      - name: Prepare committed upgrade candidate assets
-        id: upgrade-assets
+      - name: Prepare committed candidate assets
+        id: candidate-assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           python3 release/scripts/prepare-upgrade-exercise-assets.py
           --discover release/exercises
-          --asset-root target/upgrade-exercise-assets
+          --product-input-records release/exercises/product-input-lifecycle
+          --asset-root target/candidate-release-assets
           --github-output "${GITHUB_OUTPUT}"
 
-      - name: Install cosign for committed upgrade evidence
-        if: steps.upgrade-assets.outputs.has_candidates == 'true'
+      - name: Install cosign for committed candidate evidence
+        if: steps.candidate-assets.outputs.has_candidates == 'true'
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
-      - name: Install SLSA verifier for committed upgrade evidence
-        if: steps.upgrade-assets.outputs.has_candidates == 'true'
+      - name: Install SLSA verifier for committed candidate evidence
+        if: steps.candidate-assets.outputs.has_candidates == 'true'
         env:
           SLSA_VERIFIER_SHA256: 946dbec729094195e88ef78e1734324a27869f03e2c6bd2f61cbc06bd5350339
           SLSA_VERIFIER_VERSION: v2.7.1
@@ -792,8 +790,17 @@ jobs:
           chmod 0755 "${tools_dir}/slsa-verifier"
           echo "${tools_dir}" >> "${GITHUB_PATH}"
 
+      - name: Validate product-input lifecycle records
+        run: >-
+          python3 release/scripts/validate-product-input-lifecycle.py
+          --discover release/exercises
+          --candidate-asset-root target/candidate-release-assets
+
       - name: Validate committed upgrade exercise records
-        run: python3 release/scripts/validate-upgrade-exercise.py --discover release/exercises --candidate-asset-root target/upgrade-exercise-assets
+        run: >-
+          python3 release/scripts/validate-upgrade-exercise.py
+          --discover release/exercises
+          --candidate-asset-root target/candidate-release-assets
 
       - name: Stable surface compatibility
         env:
