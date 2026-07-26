@@ -5652,6 +5652,7 @@ dependencies = [
  "base64",
  "bytes",
  "calamine",
+ "cel",
  "chrono",
  "criterion",
  "crosswalk-core",
@@ -5726,6 +5727,7 @@ version = "0.13.0"
 dependencies = [
  "anyhow",
  "base64",
+ "cel",
  "clap",
  "crc32fast",
  "ed25519-dalek",

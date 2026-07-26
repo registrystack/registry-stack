@@ -434,6 +434,20 @@ async fn resolve_rejects_duplicate_and_over_bound_claim_lists() {
 }
 
 #[tokio::test]
+async fn resolve_rejects_subset_missing_required_claims() {
+    let server = server().await;
+    let response = server
+        .post(RESOLVE_PATH)
+        .json(&json!({
+            "subject": { "id_type": "NATIONAL_ID", "value": "NID-1" },
+            "claims": ["full_name"]
+        }))
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(response.json::<Value>()["code"], "filter.invalid_value");
+}
+
+#[tokio::test]
 async fn resolve_unknown_requested_claim_is_denied() {
     let server = server().await;
     let response = server

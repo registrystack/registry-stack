@@ -5352,7 +5352,8 @@ fn attribute_release_resolve_request_schema() -> Value {
                 "description": "Optional subset of claim names to return. Absent means the \
                                 profile default set; an empty array is rejected (400); \
                                 duplicate or over-bound arrays are rejected (400); any \
-                                unknown claim name is denied.",
+                                explicit subset must include every required claim; any unknown \
+                                claim name is denied.",
                 "items": { "type": "string" },
                 "minItems": 1,
                 "maxItems": MAX_ATTRIBUTE_RELEASE_CLAIMS,

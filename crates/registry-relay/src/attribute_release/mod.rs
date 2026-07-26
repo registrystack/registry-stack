@@ -64,6 +64,7 @@ pub use disabled::{
 mod enabled {
     use super::AttributeReleaseError;
 
+    use cel::common::ast::{EntryExpr, Expr, IdedExpr};
     use std::collections::{BTreeSet, HashMap};
     use std::sync::{Arc, RwLock};
 
@@ -260,73 +261,82 @@ mod enabled {
         Ok(())
     }
 
-    /// Collect dotted or bracketed CEL member roots while ignoring quoted string
-    /// contents and CEL line comments. The reserved `context` root is collected
-    /// even when bare.
+    /// Collect global CEL roots from the parsed expression while excluding
+    /// comprehension variables introduced by CEL collection macros.
     /// This mirrors Registryctl's authoring validator so direct Relay config and
     /// generated config enforce the same source-only authority boundary.
     fn cel_member_roots(expression: &str) -> Result<BTreeSet<String>, ()> {
-        let bytes = expression.as_bytes();
+        let program = cel::Program::compile(expression).map_err(|_| ())?;
         let mut roots = BTreeSet::new();
-        let mut index = 0;
-        while index < bytes.len() {
-            if bytes[index] == b'/' && matches!(bytes.get(index + 1), Some(b'/')) {
-                index += 2;
-                while index < bytes.len() && !matches!(bytes[index], b'\n' | b'\r') {
-                    index += 1;
-                }
-                continue;
-            }
-            if matches!(bytes[index], b'\'' | b'"') {
-                let quote = bytes[index];
-                index += 1;
-                let mut escaped = false;
-                let mut closed = false;
-                while index < bytes.len() {
-                    let byte = bytes[index];
-                    index += 1;
-                    if escaped {
-                        escaped = false;
-                    } else if byte == b'\\' {
-                        escaped = true;
-                    } else if byte == quote {
-                        closed = true;
-                        break;
-                    }
-                }
-                if !closed {
-                    return Err(());
-                }
-                continue;
-            }
-            if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
-                let start = index;
-                index += 1;
-                while index < bytes.len()
-                    && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
-                {
-                    index += 1;
-                }
-                let mut member_index = index;
-                while bytes.get(member_index).is_some_and(u8::is_ascii_whitespace) {
-                    member_index += 1;
-                }
-                let mut root_index = start;
-                while root_index > 0 && bytes[root_index - 1].is_ascii_whitespace() {
-                    root_index -= 1;
-                }
-                let follows_member_access = root_index > 0 && bytes[root_index - 1] == b'.';
-                if !follows_member_access
-                    && (&expression[start..index] == "context"
-                        || matches!(bytes.get(member_index), Some(b'.' | b'[')))
-                {
-                    roots.insert(expression[start..index].to_string());
-                }
-                continue;
-            }
-            index += 1;
-        }
+        collect_cel_roots(program.expression(), &BTreeSet::new(), &mut roots);
         Ok(roots)
+    }
+
+    fn collect_cel_roots(
+        expression: &IdedExpr,
+        locals: &BTreeSet<String>,
+        roots: &mut BTreeSet<String>,
+    ) {
+        match &expression.expr {
+            Expr::Unspecified | Expr::Literal(_) => {}
+            Expr::Ident(name) => {
+                if !name.starts_with('@') && !locals.contains(name) {
+                    roots.insert(name.clone());
+                }
+            }
+            Expr::Select(select) => collect_cel_roots(&select.operand, locals, roots),
+            Expr::Call(call) => {
+                if let Some(target) = &call.target {
+                    collect_cel_roots(target, locals, roots);
+                }
+                for argument in &call.args {
+                    collect_cel_roots(argument, locals, roots);
+                }
+            }
+            Expr::List(list) => {
+                for element in &list.elements {
+                    collect_cel_roots(element, locals, roots);
+                }
+            }
+            Expr::Map(map) => {
+                for entry in &map.entries {
+                    collect_cel_entry_roots(&entry.expr, locals, roots);
+                }
+            }
+            Expr::Struct(value) => {
+                for entry in &value.entries {
+                    collect_cel_entry_roots(&entry.expr, locals, roots);
+                }
+            }
+            Expr::Comprehension(comprehension) => {
+                collect_cel_roots(&comprehension.iter_range, locals, roots);
+                collect_cel_roots(&comprehension.accu_init, locals, roots);
+
+                let mut scoped_locals = locals.clone();
+                scoped_locals.insert(comprehension.iter_var.clone());
+                if let Some(iter_var) = &comprehension.iter_var2 {
+                    scoped_locals.insert(iter_var.clone());
+                }
+                scoped_locals.insert(comprehension.accu_var.clone());
+                collect_cel_roots(&comprehension.loop_cond, &scoped_locals, roots);
+                collect_cel_roots(&comprehension.loop_step, &scoped_locals, roots);
+                collect_cel_roots(&comprehension.result, &scoped_locals, roots);
+            }
+        }
+    }
+
+    fn collect_cel_entry_roots(
+        entry: &EntryExpr,
+        locals: &BTreeSet<String>,
+        roots: &mut BTreeSet<String>,
+    ) {
+        match entry {
+            EntryExpr::StructField(field) => collect_cel_roots(&field.value, locals, roots),
+            EntryExpr::MapEntry(entry) => {
+                collect_cel_roots(&entry.key, locals, roots);
+                collect_cel_roots(&entry.value, locals, roots);
+            }
+        }
     }
 
     /// Evaluate a release **predicate** over a subject record. Fails closed:
@@ -572,6 +582,24 @@ mod enabled {
                     panic!("source-only expression must compile: {expression}")
                 });
             }
+        }
+
+        #[test]
+        fn expression_authority_scopes_cel_macro_locals() {
+            let expression = "source.items.exists(item, item.active)";
+            assert_eq!(
+                cel_member_roots(expression).expect("CEL roots parse"),
+                BTreeSet::from(["source".to_string()])
+            );
+            validate_release_expression(expression).expect("macro local derives from source");
+
+            assert_eq!(
+                cel_member_roots(
+                    "source.items.exists(item, item.active) && item.secret == 'outside'"
+                )
+                .expect("CEL roots parse"),
+                BTreeSet::from(["item".to_string(), "source".to_string()])
+            );
         }
 
         #[test]

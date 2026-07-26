@@ -1268,7 +1268,7 @@
         "description": "Request body for resolving an attribute release profile against one subject.",
         "properties": {
           "claims": {
-            "description": "Optional subset of claim names to return. Absent means the profile default set; an empty array is rejected (400); duplicate or over-bound arrays are rejected (400); any unknown claim name is denied.",
+            "description": "Optional subset of claim names to return. Absent means the profile default set; an empty array is rejected (400); duplicate or over-bound arrays are rejected (400); any explicit subset must include every required claim; any unknown claim name is denied.",
             "items": {
               "type": "string"
             },

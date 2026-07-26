@@ -92,7 +92,8 @@ where
 /// Inbound resolve request body. JSON only; a wrong/absent `Content-Type`
 /// yields 415 and a malformed body 400 through the axum `Json` extractor's
 /// default rejection. `claims` absent ⇒ profile default set; an explicit empty
-/// list is rejected with 400; any unknown requested claim denies.
+/// list or a subset missing a required claim is rejected with 400; any unknown
+/// requested claim denies.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResolveRequest {
@@ -205,6 +206,20 @@ struct ResolveRunError {
 }
 
 impl ResolveRunError {
+    fn invalid_claim_request(
+        subject_id_raw: Option<String>,
+        pdp_audit: Option<PdpDecisionAudit>,
+    ) -> Self {
+        Self {
+            error: FilterError::InvalidValue.into(),
+            audit: ResolveAudit {
+                subject_id_raw,
+                pdp_audit,
+                ..ResolveAudit::default()
+            },
+        }
+    }
+
     /// Build a release-error denial. `ar_internal_outcome` carries the distinct
     /// internal label; `ar_released_claims` is the empty list on a denied
     /// outcome so the audit trail records "nothing released".
@@ -505,7 +520,8 @@ fn subject_audit_raw(value: &Value) -> Option<String> {
 
 /// Resolve the effective claim set. Absent ⇒ the profile default (all
 /// configured claims); an empty, duplicate, or over-bound list ⇒ 400 invalid
-/// value; any name not in the profile ⇒ deny (`release.subject_denied`).
+/// value; an explicit subset missing a required claim ⇒ 400 invalid value; any
+/// name not in the profile ⇒ deny (`release.subject_denied`).
 #[allow(clippy::result_large_err)]
 fn resolve_requested_claims<'a>(
     route: &'a RouteState,
@@ -517,17 +533,19 @@ fn resolve_requested_claims<'a>(
         return Ok(route.profile.claims.iter().collect());
     };
     if names.is_empty() || names.len() > MAX_ATTRIBUTE_RELEASE_CLAIMS {
-        return Err(ResolveRunError::from(Error::from(
-            FilterError::InvalidValue,
-        )));
+        return Err(ResolveRunError::invalid_claim_request(
+            subject_id_raw.clone(),
+            pdp_audit.clone(),
+        ));
     }
     let mut resolved = Vec::with_capacity(names.len());
     let mut unique_names = BTreeSet::new();
     for name in names {
         if !unique_names.insert(name.as_str()) {
-            return Err(ResolveRunError::from(Error::from(
-                FilterError::InvalidValue,
-            )));
+            return Err(ResolveRunError::invalid_claim_request(
+                subject_id_raw.clone(),
+                pdp_audit.clone(),
+            ));
         }
         match route
             .profile
@@ -549,6 +567,17 @@ fn resolve_requested_claims<'a>(
                 ));
             }
         }
+    }
+    if route
+        .profile
+        .claims
+        .iter()
+        .any(|claim| claim.required && !unique_names.contains(claim.name.as_str()))
+    {
+        return Err(ResolveRunError::invalid_claim_request(
+            subject_id_raw.clone(),
+            pdp_audit.clone(),
+        ));
     }
     Ok(resolved)
 }
@@ -872,6 +901,13 @@ mod tests {
         // Non-scalars carry no audit raw (and are rejected before any read).
         assert_eq!(subject_audit_raw(&json!(null)), None);
         assert_eq!(subject_audit_raw(&json!({"a": 1})), None);
+    }
+
+    #[test]
+    fn invalid_claim_request_preserves_subject_for_audit_hashing() {
+        let error = ResolveRunError::invalid_claim_request(Some("NID-1".to_string()), None);
+        assert_eq!(error.audit.subject_id_raw.as_deref(), Some("NID-1"));
+        assert_eq!(error.error.code(), "filter.invalid_value");
     }
 
     #[test]

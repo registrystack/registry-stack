@@ -18,7 +18,7 @@ ignored = ["humantime-serde"]
 # recipes still select the exact canonical features explicitly so changing this
 # developer default cannot silently expand a published binary.
 default = ["attribute-release"]
-attribute-release = ["crosswalk-runtime"]
+attribute-release = ["crosswalk-runtime", "dep:cel"]
 crosswalk-runtime = ["dep:crosswalk-core"]
 standards-cel-mapping = ["crosswalk-runtime"]
 spdci-api-standards = ["dep:jsonschema"]
@@ -66,6 +66,7 @@ native-tls = { version = "0.2" }
 # relying on a re-export path.
 futures = { version = "0.3" }
 bytes = { version = "1" }
+cel = { workspace = true, optional = true }
 # Atomic state swap for IngestPlan readiness (single-writer, many-reader).
 arc-swap = { version = "1" }
 # Implements DataFusion's async TableProvider delegation for atomic swaps.

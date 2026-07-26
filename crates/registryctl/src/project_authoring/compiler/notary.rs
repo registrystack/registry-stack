@@ -859,66 +859,78 @@ fn claim_consultation_name<'a>(
 }
 
 fn cel_member_roots(expression: &str) -> Result<BTreeSet<String>> {
-    let bytes = expression.as_bytes();
+    let program = cel::Program::compile(expression)
+        .map_err(|_| anyhow!("CEL expression contains invalid syntax"))?;
     let mut roots = BTreeSet::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'/' && matches!(bytes.get(index + 1), Some(b'/')) {
-            index += 2;
-            while index < bytes.len() && !matches!(bytes[index], b'\n' | b'\r') {
-                index += 1;
-            }
-            continue;
-        }
-        if matches!(bytes[index], b'\'' | b'"') {
-            let quote = bytes[index];
-            index += 1;
-            let mut escaped = false;
-            let mut closed = false;
-            while index < bytes.len() {
-                let byte = bytes[index];
-                index += 1;
-                if escaped {
-                    escaped = false;
-                } else if byte == b'\\' {
-                    escaped = true;
-                } else if byte == quote {
-                    closed = true;
-                    break;
-                }
-            }
-            if !closed {
-                bail!("CEL expression contains an unterminated string literal");
-            }
-            continue;
-        }
-        if bytes[index].is_ascii_alphabetic() || bytes[index] == b'_' {
-            let start = index;
-            index += 1;
-            while index < bytes.len()
-                && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
-            {
-                index += 1;
-            }
-            let mut member_index = index;
-            while bytes.get(member_index).is_some_and(u8::is_ascii_whitespace) {
-                member_index += 1;
-            }
-            let mut root_index = start;
-            while root_index > 0 && bytes[root_index - 1].is_ascii_whitespace() {
-                root_index -= 1;
-            }
-            let follows_member_access = root_index > 0 && bytes[root_index - 1] == b'.';
-            if !follows_member_access
-                && matches!(bytes.get(member_index), Some(b'.' | b'['))
-            {
-                roots.insert(expression[start..index].to_string());
-            }
-            continue;
-        }
-        index += 1;
-    }
+    collect_cel_roots(program.expression(), &BTreeSet::new(), &mut roots);
     Ok(roots)
+}
+
+fn collect_cel_roots(
+    expression: &IdedExpr,
+    locals: &BTreeSet<String>,
+    roots: &mut BTreeSet<String>,
+) {
+    match &expression.expr {
+        Expr::Unspecified | Expr::Literal(_) => {}
+        Expr::Ident(name) => {
+            if !name.starts_with('@') && !locals.contains(name) {
+                roots.insert(name.clone());
+            }
+        }
+        Expr::Select(select) => collect_cel_roots(&select.operand, locals, roots),
+        Expr::Call(call) => {
+            if let Some(target) = &call.target {
+                collect_cel_roots(target, locals, roots);
+            }
+            for argument in &call.args {
+                collect_cel_roots(argument, locals, roots);
+            }
+        }
+        Expr::List(list) => {
+            for element in &list.elements {
+                collect_cel_roots(element, locals, roots);
+            }
+        }
+        Expr::Map(map) => {
+            for entry in &map.entries {
+                collect_cel_entry_roots(&entry.expr, locals, roots);
+            }
+        }
+        Expr::Struct(value) => {
+            for entry in &value.entries {
+                collect_cel_entry_roots(&entry.expr, locals, roots);
+            }
+        }
+        Expr::Comprehension(comprehension) => {
+            collect_cel_roots(&comprehension.iter_range, locals, roots);
+            collect_cel_roots(&comprehension.accu_init, locals, roots);
+
+            let mut scoped_locals = locals.clone();
+            scoped_locals.insert(comprehension.iter_var.clone());
+            if let Some(iter_var) = &comprehension.iter_var2 {
+                scoped_locals.insert(iter_var.clone());
+            }
+            scoped_locals.insert(comprehension.accu_var.clone());
+            collect_cel_roots(&comprehension.loop_cond, &scoped_locals, roots);
+            collect_cel_roots(&comprehension.loop_step, &scoped_locals, roots);
+            collect_cel_roots(&comprehension.result, &scoped_locals, roots);
+        }
+    }
+}
+
+fn collect_cel_entry_roots(
+    entry: &EntryExpr,
+    locals: &BTreeSet<String>,
+    roots: &mut BTreeSet<String>,
+) {
+    match entry {
+        EntryExpr::StructField(field) => collect_cel_roots(&field.value, locals, roots),
+        EntryExpr::MapEntry(entry) => {
+            collect_cel_roots(&entry.key, locals, roots);
+            collect_cel_roots(&entry.value, locals, roots);
+        }
+    }
 }
 
 fn expanded_disclosure(disclosure: &DisclosureDeclaration) -> (&str, Vec<&str>) {

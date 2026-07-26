@@ -2193,6 +2193,18 @@ outputs:
             .expect("commented CEL roots parse"),
             BTreeSet::from(["another".to_string(), "person".to_string()])
         );
+        assert_eq!(
+            cel_member_roots("person.items.exists(item, item.active)")
+                .expect("macro-local CEL roots parse"),
+            BTreeSet::from(["person".to_string()])
+        );
+        assert_eq!(
+            cel_member_roots(
+                "person.items.exists(item, item.active) && item.secret == 'outside'"
+            )
+            .expect("out-of-scope CEL roots parse"),
+            BTreeSet::from(["item".to_string(), "person".to_string()])
+        );
         assert!(cel_member_roots("person.exists && 'unterminated").is_err());
     }
 

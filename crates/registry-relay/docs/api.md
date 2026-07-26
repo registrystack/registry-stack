@@ -460,7 +460,8 @@ Request body:
 
 `claims` is optional: absent resolves the profile's full default claim set. An
 explicit list must contain between 1 and 32 unique claim names; an invalid
-list returns `400 filter.invalid_value`. A name outside the profile's
+list returns `400 filter.invalid_value`. Every claim listed by discovery as
+required must be present in an explicit list. A name outside the profile's
 configured claims is denied. `subject.value` accepts
 only a non-blank scalar (string, number, or boolean); `subject.id_type` must
 match the profile's configured type. Either failure returns
