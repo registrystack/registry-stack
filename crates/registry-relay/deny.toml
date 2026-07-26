@@ -70,7 +70,9 @@ workspace-default-features = "allow"
 external-default-features = "allow"
 allow = []
 allow-workspace = false
-deny = []
+deny = [
+    { name = "cel", deny-multiple-versions = true },
+]
 skip = []
 skip-tree = []
 

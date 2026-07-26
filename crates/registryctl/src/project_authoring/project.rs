@@ -1471,7 +1471,7 @@ fn validate_record_attribute_release_profiles(
                 "attribute release profile id must match [a-z][a-z0-9_-]{{0,95}}"
             );
         }
-        validate_token(&profile.version, "attribute release profile version", 64)?;
+        validate_release_version(&profile.version, "attribute release profile version")?;
         if let Some(title) = &profile.title {
             validate_authored_text(title, "attribute release profile title")?;
         }

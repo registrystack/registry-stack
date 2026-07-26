@@ -109,10 +109,11 @@ def load_release_features() -> set[str]:
         not release_features
         or any(not RELEASE_FEATURE_RE.fullmatch(feature) for feature in release_features)
         or len(set(release_features)) != len(release_features)
+        or release_features != sorted(release_features)
     ):
         fail(
-            "canonical-release-features.txt must contain unique comma-separated "
-            "Cargo feature names"
+            "canonical-release-features.txt must contain unique, sorted, "
+            "comma-separated Cargo feature names"
         )
 
     enabled = set(release_features)

@@ -5498,7 +5498,7 @@
                 }
               }
             },
-            "description": "Invalid request: missing Data-Purpose header, malformed body, unknown id_type, or empty claims list."
+            "description": "Invalid request: missing Data-Purpose header, malformed or schema-invalid body, unknown id_type, or invalid claims list."
           },
           "401": {
             "content": {

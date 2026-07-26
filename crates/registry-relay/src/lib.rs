@@ -49,25 +49,13 @@ pub mod spdci;
 mod state_plane;
 pub mod table_provider;
 
-/// Exact Cargo feature set compiled into this Relay binary. Operators can read
-/// the same list through the protected admin capabilities endpoint, and release
-/// image metadata records the canonical production value independently.
+include!(concat!(env!("OUT_DIR"), "/compiled_cargo_features.rs"));
+
+/// Exact Cargo feature set compiled into this Relay binary. The inventory is
+/// generated from Cargo's active feature environment, so operators can compare
+/// the protected admin capabilities endpoint with release image metadata
+/// without maintaining a second feature list in Rust.
 #[must_use]
 pub fn compiled_cargo_features() -> &'static [&'static str] {
-    &[
-        #[cfg(feature = "attribute-release")]
-        "attribute-release",
-        #[cfg(feature = "crosswalk-runtime")]
-        "crosswalk-runtime",
-        #[cfg(feature = "standards-cel-mapping")]
-        "standards-cel-mapping",
-        #[cfg(feature = "spdci-api-standards")]
-        "spdci-api-standards",
-        #[cfg(feature = "ogcapi-features")]
-        "ogcapi-features",
-        #[cfg(feature = "ogcapi-edr")]
-        "ogcapi-edr",
-        #[cfg(feature = "ogcapi-records")]
-        "ogcapi-records",
-    ]
+    COMPILED_CARGO_FEATURES
 }

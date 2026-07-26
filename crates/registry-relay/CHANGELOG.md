@@ -7,7 +7,9 @@
   subject-type bindings; remove inert pre-1.0 configuration fields; evaluate
   release expressions only over redacted rows; prevent profile enumeration;
   disable response storage; and publish compiled feature evidence through the
-  admin capabilities document and Relay image metadata.
+  admin capabilities document and Relay image metadata. Profile versions use a
+  portable URL-path grammar, and resolve JSON rejections now return Relay
+  Problem Details with non-storable headers.
 
 ## 0.13.0 - 2026-07-25
 

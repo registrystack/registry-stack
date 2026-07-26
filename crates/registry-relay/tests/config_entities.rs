@@ -578,6 +578,26 @@ fn release_profile_empty_version_is_rejected() {
 
 #[cfg(feature = "attribute-release")]
 #[test]
+fn release_profile_version_must_be_a_portable_path_segment() {
+    for invalid in [
+        "v1/preview",
+        "v1?draft",
+        "v1#draft",
+        "v1%2Fpreview",
+        "vérsion",
+    ] {
+        let profile =
+            valid_release_profile().replace("version: \"1\"", &format!("version: \"{invalid}\""));
+        let err =
+            load_release_dataset(&profile).expect_err("reserved path character must be rejected");
+        assert_eq!(err, "config.validation_error", "accepted {invalid:?}");
+    }
+    let profile = valid_release_profile().replace("version: \"1\"", "version: \"v1.2_rc-1\"");
+    load_release_dataset(&profile).expect("portable version segment accepted");
+}
+
+#[cfg(feature = "attribute-release")]
+#[test]
 fn release_profile_requires_at_least_one_required_claim() {
     let profile = valid_release_profile().replace("                required: true\n", "");
     let err = load_release_dataset(&profile).expect_err("at least one required claim");

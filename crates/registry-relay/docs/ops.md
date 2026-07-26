@@ -204,14 +204,14 @@ currently `attribute-release,crosswalk-runtime`. A custom
 release or lab images must retain the canonical features explicitly:
 
 ```sh
-REGISTRY_RELAY_FEATURES=attribute-release,crosswalk-runtime,spdci-api-standards,standards-cel-mapping,ogcapi-edr \
+REGISTRY_RELAY_FEATURES=attribute-release,crosswalk-runtime,ogcapi-edr,spdci-api-standards,standards-cel-mapping \
   scripts/build-image.sh registry-relay:<version>-standards
 ```
 
-Custom profiles use unique comma-separated Cargo feature names and must name
-transitive product features explicitly. Both `attribute-release` and
-`standards-cel-mapping` require `crosswalk-runtime`; the image build rejects an
-incomplete profile so its feature label stays consistent with
+Custom profiles use unique comma-separated Cargo feature names in alphabetical
+order and must name the complete transitive product feature closure. The Cargo
+build rejects any requested profile that differs from the effective compiled
+set, so its feature label stays consistent with
 `/admin/v1/capabilities`.
 
 If release notes claim SP DCI, standards CEL mapping, or OGC EDR support, record

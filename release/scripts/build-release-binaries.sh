@@ -68,7 +68,8 @@ docker run --rm \
     cp target/release/registryctl "dist/bin/registryctl-${RELEASE_TAG}-linux-amd64"
     cp target/release/registry-manifest "dist/bin/registry-manifest-${RELEASE_TAG}-linux-amd64"
 
-    cargo build --release --locked \
+    REGISTRY_RELAY_FEATURES="${RELEASE_RELAY_FEATURES}" \
+      cargo build --release --locked \
       -p registry-relay \
       --no-default-features \
       --features "${RELEASE_RELAY_FEATURES}"

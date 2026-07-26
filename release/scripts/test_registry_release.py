@@ -387,6 +387,10 @@ class RegistryReleaseTest(unittest.TestCase):
             '--env RELEASE_RELAY_FEATURES="${relay_release_features}"',
             binary_recipe,
         )
+        self.assertIn(
+            'REGISTRY_RELAY_FEATURES="${RELEASE_RELAY_FEATURES}"',
+            binary_recipe,
+        )
         self.assertIn('--features "${RELEASE_RELAY_FEATURES}"', relay_commands[0])
         feature_check = (
             "python3 release/scripts/check-release-relay-features.py "

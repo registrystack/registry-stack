@@ -3707,6 +3707,16 @@ fn is_bounded_release_token(value: &str, max_bytes: usize) -> bool {
             .any(|character| character.is_control() || character.is_whitespace())
 }
 
+fn is_valid_release_version(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    !value.is_empty()
+        && value.len() <= 64
+        && matches!(bytes.next(), Some(b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'))
+        && bytes.all(
+            |byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'),
+        )
+}
+
 fn is_bounded_release_text(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 2048
@@ -3769,9 +3779,10 @@ fn validate_entity_release_profile(
     if profile.id.len() > 96 || !is_valid_profile_id(&profile.id) {
         return release_error("attribute_release_profiles id must match ^[a-z][a-z0-9_-]{0,95}$");
     }
-    if !is_bounded_release_token(&profile.version, 64) {
+    if !is_valid_release_version(&profile.version) {
         return release_error(
-            "attribute_release_profiles version must be one bounded token of at most 64 bytes",
+            "attribute_release_profiles version must match \
+             ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ for portable URL path use",
         );
     }
     if profile

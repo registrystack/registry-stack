@@ -77,11 +77,12 @@ def check_feature_profile_script(path: Path) -> list[str]:
     cases = [
         ("", True),
         ("attribute-release,crosswalk-runtime", True),
-        ("standards-cel-mapping,crosswalk-runtime", True),
+        ("crosswalk-runtime,standards-cel-mapping", True),
         ("ogcapi-edr", True),
-        ("attribute-release", False),
-        ("standards-cel-mapping", False),
+        ("attribute-release", True),
+        ("standards-cel-mapping", True),
         ("attribute-release,crosswalk-runtime,attribute-release", False),
+        ("crosswalk-runtime,attribute-release", False),
         ("attribute-release crosswalk-runtime", False),
     ]
     for profile, expected_success in cases:
@@ -140,7 +141,8 @@ def main() -> int:
     failures.extend(
         require(
             dockerfile,
-            'cargo build --release --locked --no-default-features --features "$REGISTRY_RELAY_FEATURES"',
+            'REGISTRY_RELAY_FEATURES="$REGISTRY_RELAY_FEATURES" \\\n'
+            '            cargo build --release --locked --no-default-features --features "$REGISTRY_RELAY_FEATURES"',
             "feature-enabled cargo build path",
         )
     )
@@ -154,8 +156,15 @@ def main() -> int:
     failures.extend(
         require(
             dockerfile,
+            "COPY build.rs build_support.rs ./",
+            "Cargo-derived compiled feature inventory",
+        )
+    )
+    failures.extend(
+        require(
+            dockerfile,
             'sh scripts/validate-feature-profile.sh "$REGISTRY_RELAY_FEATURES"',
-            "feature dependency closure validation",
+            "feature profile syntax validation",
         )
     )
     failures.extend(
@@ -168,7 +177,7 @@ def main() -> int:
     failures.extend(
         require(
             dockerfile,
-            "cargo build --release --locked --no-default-features",
+            'REGISTRY_RELAY_FEATURES="" cargo build --release --locked --no-default-features',
             "explicit minimal cargo build path",
         )
     )

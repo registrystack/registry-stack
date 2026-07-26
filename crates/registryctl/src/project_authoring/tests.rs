@@ -526,6 +526,39 @@ outputs:
     }
 
     #[test]
+    fn attribute_release_version_must_be_a_portable_path_segment() {
+        let mut loaded = load_registry_project(
+            &project_golden("nia-attribute-release"),
+            Some("local"),
+        )
+        .expect("NIA release project loads");
+        loaded
+            .project
+            .services
+            .get_mut("nia-population-records")
+            .and_then(|service| service.api.as_mut())
+            .and_then(|api| {
+                api.attribute_release_profiles
+                    .get_mut("solmara-nia-userinfo")
+            })
+            .expect("release profile exists")
+            .version = "v1/preview".to_string();
+
+        let error = validate_project_entity_links(
+            &loaded.project,
+            &loaded.integrations,
+            &loaded.entities,
+        )
+        .expect_err("path-reserved profile version must fail during authoring");
+        assert!(
+            error
+                .to_string()
+                .contains("version must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}"),
+            "unexpected diagnostic: {error:#}"
+        );
+    }
+
+    #[test]
     fn attribute_release_prerequisites_fail_during_authoring() {
         for case in ["required principal filters", "pagination max_limit"] {
             let mut loaded = load_registry_project(

@@ -110,9 +110,9 @@ The production image is distroless, non-root, and built with the feature set in
 [`canonical-release-features.txt`](canonical-release-features.txt), currently
 `attribute-release,crosswalk-runtime`. A custom
 `REGISTRY_RELAY_FEATURES` value replaces that exact set. Custom profiles must
-list transitive product features explicitly, so `attribute-release` and
-`standards-cel-mapping` each require `crosswalk-runtime`; incomplete or
-duplicate profiles fail the image build. Build steps, sibling-checkout
+list product features in alphabetical order and include Cargo's complete
+transitive feature closure. Incomplete, unordered, or duplicate profiles fail
+the image build before an inaccurate feature label can be published. Build steps, sibling-checkout
 requirements, and promotion gates are in
 [docs/ops.md](docs/ops.md#build-and-release); image publication, tagging, and
 signing policy are in [docs/security-assurance.md](docs/security-assurance.md).

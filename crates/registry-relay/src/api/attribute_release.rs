@@ -20,6 +20,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{FromRequestParts, Json, Path};
 use axum::http::request::Parts;
 use axum::http::HeaderMap;
@@ -82,18 +83,21 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/v1/attribute-releases", get(discovery))
         .route(
             "/v1/attribute-releases/{profile_id}/versions/{version}/resolve",
             post(resolve),
         )
+        .route_layer(axum::middleware::map_response(|response| async move {
+            with_release_cache_headers(response)
+        }))
+        .route("/v1/attribute-releases", get(discovery))
 }
 
 /// Inbound resolve request body. JSON only; a wrong/absent `Content-Type`
-/// yields 415 and a malformed body 400 through the axum `Json` extractor's
-/// default rejection. `claims` absent ⇒ profile default set; an explicit empty
-/// list or a subset missing a required claim is rejected with 400; any unknown
-/// requested claim denies.
+/// yields 415 and a malformed or schema-invalid body yields 400 through the
+/// Relay Problem Details contract. `claims` absent ⇒ profile default set; an
+/// explicit empty list or a subset missing a required claim is rejected with
+/// 400; any unknown requested claim denies.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResolveRequest {
@@ -113,7 +117,7 @@ async fn resolve(
     Path((profile_id, version)): Path<(String, String)>,
     headers: HeaderMap,
     deps: RouteDeps,
-    Json(body): Json<ResolveRequest>,
+    request: Result<Json<ResolveRequest>, JsonRejection>,
 ) -> Response {
     let RouteDeps { runtime, principal } = deps;
     let Some(principal) = principal else {
@@ -144,6 +148,28 @@ async fn resolve(
         );
         return with_release_cache_headers(response);
     }
+    let body = match request {
+        Ok(Json(body)) => body,
+        Err(rejection) => {
+            let error = if rejection.status() == axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE {
+                Error::from(ReleaseError::UnsupportedMediaType)
+            } else if rejection.status() == axum::http::StatusCode::PAYLOAD_TOO_LARGE {
+                Error::from(crate::error::InternalError::PayloadTooLarge)
+            } else {
+                Error::from(ReleaseError::InvalidRequest)
+            };
+            let internal_outcome = error.code().to_string();
+            let response = with_audit_context(
+                error.into_response(),
+                &route,
+                ResolveAudit {
+                    internal_outcome: Some(internal_outcome),
+                    ..ResolveAudit::default()
+                },
+            );
+            return with_release_cache_headers(response);
+        }
+    };
     let result = run_resolve(&runtime, &route, &headers, Some(principal), body).await;
     match result {
         Ok(success) => {
@@ -206,6 +232,16 @@ struct ResolveRunError {
 }
 
 impl ResolveRunError {
+    fn governed_request(error: impl Into<Error>, pdp_audit: Option<PdpDecisionAudit>) -> Self {
+        Self {
+            error: error.into(),
+            audit: ResolveAudit {
+                pdp_audit,
+                ..ResolveAudit::default()
+            },
+        }
+    }
+
     fn invalid_claim_request(
         subject_id_raw: Option<String>,
         pdp_audit: Option<PdpDecisionAudit>,
@@ -280,9 +316,10 @@ async fn run_resolve(
 ) -> Result<ResolveSuccess, ResolveRunError> {
     let principal_ref = principal.as_ref().map(|Extension(principal)| principal);
 
-    // 1 + 2: authenticate, then require the dataset-bound release scope. The
-    // release scope is distinct from the entity read scope, so a caller holding
-    // only `:rows` is denied here before any source read.
+    // Defence in depth: the handler already authenticates and checks this scope
+    // to preserve profile anti-enumeration. Recheck it here before governed
+    // access and any source read so this internal runner remains safe if reused.
+    // The release scope is distinct from the entity read scope.
     require_release_scope(principal_ref, &route.profile.release_scope)?;
 
     // 3 + 4: purpose + ODRL policy enforced atomically. `DeferredOutput`
@@ -309,12 +346,16 @@ async fn run_resolve(
     match purpose_header_value(headers) {
         Some(value) if value == route.profile.purpose => {}
         Some(_) => {
-            return Err(ResolveRunError::from(Error::from(AuthError::PurposeDenied)));
+            return Err(ResolveRunError::governed_request(
+                AuthError::PurposeDenied,
+                pdp_audit,
+            ));
         }
         None => {
-            return Err(ResolveRunError::from(Error::from(
+            return Err(ResolveRunError::governed_request(
                 AuthError::PurposeRequired,
-            )));
+                pdp_audit,
+            ));
         }
     }
 
@@ -908,6 +949,18 @@ mod tests {
         let error = ResolveRunError::invalid_claim_request(Some("NID-1".to_string()), None);
         assert_eq!(error.audit.subject_id_raw.as_deref(), Some("NID-1"));
         assert_eq!(error.error.code(), "filter.invalid_value");
+    }
+
+    #[test]
+    fn profile_purpose_denial_preserves_prior_pdp_audit() {
+        let audit = PdpDecisionAudit {
+            policy_id: "release-policy".to_string(),
+            ..PdpDecisionAudit::default()
+        };
+        let error =
+            ResolveRunError::governed_request(AuthError::PurposeDenied, Some(audit.clone()));
+        assert_eq!(error.error.code(), "auth.purpose_denied");
+        assert_eq!(error.audit.pdp_audit, Some(audit));
     }
 
     #[test]

@@ -439,7 +439,8 @@ profile's `release_scope`. The response never includes source internals
 
 `POST /v1/attribute-releases/{profile_id}/versions/{version}/resolve` resolves
 one subject against the named `(profile_id, version)` pair, which is globally
-unique and has no "latest" alias. Each profile declares its own
+unique and has no "latest" alias. Profile versions use the portable path
+segment grammar `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Each profile declares its own
 `release_scope`, a dataset-bound scope that must differ from the entity's
 `read_scope`; the required scope for this capability is
 `<dataset_id>:identity_release`, one of the scope levels an API key can be
@@ -466,6 +467,12 @@ configured claims is denied. `subject.value` accepts
 only a non-blank scalar (string, number, or boolean); `subject.id_type` must
 match the profile's configured type. Either failure returns
 `400 release.subject_invalid`.
+
+The body must use `Content-Type: application/json`. A missing or unsupported
+media type returns `415 release.unsupported_media_type`; malformed JSON or a
+body outside the closed request schema returns `400 release.invalid_request`.
+Both use Relay Problem Details and carry the same non-storable response headers
+as every other resolve outcome.
 
 Successful response (`200`):
 

@@ -4153,8 +4153,8 @@ fn insert_attribute_release_paths(paths: &mut Map<String, Value>) {
                         }
                     },
                     "400": problem_response(
-                        "Invalid request: missing Data-Purpose header, malformed body, unknown \
-                         id_type, or empty claims list."
+                        "Invalid request: missing Data-Purpose header, malformed or \
+                         schema-invalid body, unknown id_type, or invalid claims list."
                     ),
                     "401": problem_response("Missing or invalid bearer credential."),
                     "403": problem_response(

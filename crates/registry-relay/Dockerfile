@@ -16,6 +16,7 @@ COPY --from=crosswalk /Cargo.toml /Cargo.lock /workspace/crosswalk/
 COPY --from=crosswalk /crates /workspace/crosswalk/crates
 COPY benches ./benches
 COPY resources ./resources
+COPY build.rs build_support.rs ./
 COPY scripts/validate-feature-profile.sh ./scripts/validate-feature-profile.sh
 COPY src ./src
 
@@ -24,9 +25,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     find src benches resources -type f -exec touch {} + && \
     sh scripts/validate-feature-profile.sh "$REGISTRY_RELAY_FEATURES" && \
     if [ -n "$REGISTRY_RELAY_FEATURES" ]; then \
-        cargo build --release --locked --no-default-features --features "$REGISTRY_RELAY_FEATURES"; \
+        REGISTRY_RELAY_FEATURES="$REGISTRY_RELAY_FEATURES" \
+            cargo build --release --locked --no-default-features --features "$REGISTRY_RELAY_FEATURES"; \
     else \
-        cargo build --release --locked --no-default-features; \
+        REGISTRY_RELAY_FEATURES="" cargo build --release --locked --no-default-features; \
     fi && \
     cp /workspace/registry_relay/target/release/registry-relay /usr/local/bin/registry-relay && \
     cp /workspace/registry_relay/target/release/registry-relay-rhai-worker /usr/local/bin/registry-relay-rhai-worker && \

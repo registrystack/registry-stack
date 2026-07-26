@@ -10,7 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Attribute-release project authoring now emits the stable Relay profile
   contract with required purpose, exact subject type, and exact-one lookup
-  semantics.
+  semantics. It rejects non-portable profile version path segments and Relay
+  cross-field prerequisites before product activation.
 
 ### Removed
 

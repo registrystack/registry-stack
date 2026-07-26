@@ -16,6 +16,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use axum::Extension;
 use axum_test::TestServer;
+use bytes::Bytes;
 use datafusion::arrow::array::StringArray;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -818,6 +819,61 @@ async fn resolve_rejects_non_json_content_type() {
     let server = server().await;
     let response = server.post(RESOLVE_PATH).text("subject=NID-1").await;
     response.assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert_eq!(
+        response.json::<Value>()["code"],
+        "release.unsupported_media_type"
+    );
+    assert_eq!(
+        response.header("cache-control").to_str().expect("ascii"),
+        "private, no-store"
+    );
+    assert_eq!(
+        response.header("vary").to_str().expect("ascii"),
+        "Authorization"
+    );
+}
+
+#[tokio::test]
+async fn resolve_normalizes_json_data_errors_to_problem_details() {
+    let server = server().await;
+    let response = server
+        .post(RESOLVE_PATH)
+        .json(&json!({
+            "subject": {
+                "id_type": "NATIONAL_ID"
+            }
+        }))
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let body = response.json::<Value>();
+    assert_eq!(body["code"], "release.invalid_request");
+    assert_eq!(body["status"], 400);
+    assert_eq!(
+        response.header("cache-control").to_str().expect("ascii"),
+        "private, no-store"
+    );
+    assert_eq!(
+        response.header("vary").to_str().expect("ascii"),
+        "Authorization"
+    );
+}
+
+#[tokio::test]
+async fn resolve_normalizes_json_syntax_errors_to_problem_details() {
+    let server = server().await;
+    let response = server
+        .post(RESOLVE_PATH)
+        .add_header("content-type", "application/json")
+        .bytes(Bytes::from_static(b"{"))
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let body = response.json::<Value>();
+    assert_eq!(body["code"], "release.invalid_request");
+    assert_eq!(body["status"], 400);
+    assert_eq!(
+        response.header("cache-control").to_str().expect("ascii"),
+        "private, no-store"
+    );
 }
 
 #[tokio::test]

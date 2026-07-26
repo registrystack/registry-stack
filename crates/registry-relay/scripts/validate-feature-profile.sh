@@ -18,14 +18,8 @@ case "$features" in
     ;;
 esac
 
-has_feature() {
-  case ",$features," in
-    *,"$1",*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
 seen=","
+previous=""
 if [ -n "$features" ]; then
   previous_ifs=$IFS
   IFS=,
@@ -34,12 +28,10 @@ if [ -n "$features" ]; then
       *,"$feature",*) fail "duplicate feature: $feature" ;;
     esac
     seen="${seen}${feature},"
+    if [ -n "$previous" ] && [ "$previous" \> "$feature" ]; then
+      fail "feature list must use canonical alphabetical order"
+    fi
+    previous=$feature
   done
   IFS=$previous_ifs
 fi
-
-for feature in attribute-release standards-cel-mapping; do
-  if has_feature "$feature" && ! has_feature crosswalk-runtime; then
-    fail "$feature requires crosswalk-runtime"
-  fi
-done
