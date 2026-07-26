@@ -90,6 +90,16 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(archive_lock["docs_archives"])
         self.assertTrue(archive_assembler["docs_archives"])
 
+    def test_archive_dependent_scripts_select_archive_verification(self) -> None:
+        for path in (
+            "docs/site/scripts/check-built-links.mjs",
+            "docs/site/scripts/check-seo.mjs",
+            "docs/site/scripts/docsets.mjs",
+        ):
+            with self.subTest(path=path):
+                outputs = classify(self.workspace, (path,))
+                self.assertTrue(outputs["docs_archives"])
+
     def test_run_all_does_not_rebuild_immutable_archives_without_changed_paths(self) -> None:
         outputs = classify(self.workspace, (), run_all=True)
         self.assertTrue(outputs["docs"])
