@@ -44,6 +44,12 @@ For the full walkthroughs, use the Registry Docs tutorials:
 
 ## Registry Stack project authoring
 
+The project-authoring workflow in this section documents the current
+unreleased source revision. The `v0.13.0` installer shown earlier does not
+contain the complete workflow. Build `registryctl` from the same reviewed
+Registry Stack source revision as these instructions until a later release
+publishes this surface.
+
 Start from a built-in Registry Stack project starter, run its closed offline
 fixtures, inspect the redacted generated plan, and build deterministic Relay
 and Notary inputs. Available starters are `http`, `dhis2-tracker`,

@@ -611,6 +611,9 @@ jobs:
           key: project-authoring-${{ matrix.arch }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Build the Registryctl journey binary
+        run: cargo build --locked -p registryctl --bin registryctl
+
       - name: Verify cross-machine project inputs
         run: >-
           cargo test --locked -p registryctl --test project_authoring
@@ -627,9 +630,6 @@ jobs:
         run: >-
           cargo test --locked -p registryctl --test project_authoring
           every_cataloged_supported_project_authoring_command_is_automated -- --exact
-
-      - name: Build the Registryctl journey binary
-        run: cargo build --locked -p registryctl --bin registryctl
 
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e

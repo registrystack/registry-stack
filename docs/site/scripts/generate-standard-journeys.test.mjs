@@ -374,6 +374,14 @@ test("keeps runtime and product activation claims bounded to traceable evidence"
   const lifecycleBuildIndex = lifecycle.steps.findIndex(
     (step) => step.kind === "command" && step.argv[1] === "build",
   );
+  const lifecyclePreflight = lifecycle.steps.find(
+    (step) => step.id === "lifecycle-preflight",
+  );
+  assert.equal(lifecyclePreflight.kind, "readiness_gate");
+  assert.match(
+    lifecyclePreflight.note,
+    /require a passing report before signing, verification, promotion, or activation handoff/u,
+  );
   assert.equal(
     lifecycle.steps.indexOf(governedPromotion) > lifecycleBuildIndex,
     true,
@@ -514,7 +522,11 @@ test("emits only typed safe steps and product-owned diagnostics", async () => {
   const journeys = await buildStandardJourneys(repoRoot);
   for (const journey of journeys) {
     for (const step of journey.steps) {
-      if (["command", "alternative", "long_running"].includes(step.kind)) {
+      if (
+        ["command", "alternative", "long_running", "readiness_gate"].includes(
+          step.kind,
+        )
+      ) {
         validateStandardJourneyCommand(step.argv);
         assert.equal(step.argv[0], "registryctl");
         assert.doesNotMatch(renderStandardJourneyCommand(step), /[<>;&|`]|\$\(/u);
@@ -539,7 +551,9 @@ test("every rendered command and combined block parses in POSIX sh, Bash, and Zs
   const commands = journeys.flatMap((journey) =>
     journey.steps
       .filter((step) =>
-        ["command", "alternative", "long_running"].includes(step.kind),
+        ["command", "alternative", "long_running", "readiness_gate"].includes(
+          step.kind,
+        ),
       )
       .map(renderStandardJourneyCommand),
   );
@@ -630,6 +644,7 @@ test("renders the same ten-section component through exactly seven wrapper pages
       new RegExp(`journey\\.section_headings\\[${index}\\]`, "u"),
     );
   }
+  assert.match(component, /Required readiness gates/u);
 
   const manifest = await readManifest();
   for (const journey of manifest.journeys) {

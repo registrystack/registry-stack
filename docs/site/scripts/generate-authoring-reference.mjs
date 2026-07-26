@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,27 +9,19 @@ const execFileAsync = promisify(execFile);
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const defaultDocsRoot = resolve(scriptDir, '..');
 const defaultRepoRoot = resolve(defaultDocsRoot, '../..');
+const sourceManifest = JSON.parse(
+  readFileSync(new URL('./authoring-reference-sources.json', import.meta.url), 'utf8'),
+);
 
 const referenceSchemaId =
   'https://id.registrystack.org/schemas/registryctl/project-documentation/registry.project.configuration_reference.v1.schema.json';
 const coverageSchemaId =
   'https://id.registrystack.org/schemas/registryctl/project-documentation/registry.project.configuration_reference_coverage.v1.schema.json';
-const schemaOrder = ['project', 'environment', 'integration', 'fixture', 'entity', 'relay', 'notary'];
-const schemaSources = [
-  'project.schema.json',
-  'environment.schema.json',
-  'integration.schema.json',
-  'fixture.schema.json',
-  'entity.schema.json',
-  'registry-relay.config.schema.json',
-  'registry-notary.config.schema.json',
-];
-const fieldKnowledgeSource = 'schemas/project-authoring/parity-coverage.json#field_knowledge';
-const humanIntentSource = 'schemas/project-authoring/documentation-intent.json';
-const runtimeIntentSources = [
-  'crates/registry-relay/config/documentation-intent.json',
-  'crates/registry-notary-core/config/documentation-intent.json',
-];
+const schemaOrder = sourceManifest.schema_order;
+const schemaSources = sourceManifest.schema_sources;
+const fieldKnowledgeSource = sourceManifest.field_knowledge;
+const humanIntentSource = sourceManifest.human_intent;
+const runtimeIntentSources = sourceManifest.runtime_intent;
 const runtimeSchemas = new Set(['relay', 'notary']);
 const pathKinds = ['root', 'property', 'map_key', 'map_value', 'array_item', 'branch'];
 

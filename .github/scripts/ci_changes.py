@@ -75,6 +75,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 STANDARD_JOURNEY_MANIFEST = (
     REPO_ROOT / "docs/site/src/data/standard-journeys.yaml"
 )
+AUTHORING_REFERENCE_MANIFEST = (
+    REPO_ROOT / "docs/site/scripts/authoring-reference-sources.json"
+)
 
 
 def standard_journey_sources(
@@ -116,6 +119,126 @@ def standard_journey_sources(
 
 
 STANDARD_JOURNEY_SOURCES = standard_journey_sources()
+
+
+def authoring_reference_contract_sources(
+    manifest_path: Path = AUTHORING_REFERENCE_MANIFEST,
+) -> tuple[str, ...]:
+    """Derive repository inputs from the published reference source contract."""
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    schema_sources = manifest.get("schema_sources")
+    field_knowledge = manifest.get("field_knowledge")
+    human_intent = manifest.get("human_intent")
+    runtime_intent = manifest.get("runtime_intent")
+    if (
+        not isinstance(schema_sources, list)
+        or not schema_sources
+        or not all(isinstance(source, str) and source for source in schema_sources)
+        or not isinstance(field_knowledge, str)
+        or not field_knowledge
+        or not isinstance(human_intent, str)
+        or not human_intent
+        or not isinstance(runtime_intent, list)
+        or not runtime_intent
+        or not all(isinstance(source, str) and source for source in runtime_intent)
+    ):
+        raise ValueError(
+            f"authoring-reference manifest has an invalid source contract: {manifest_path}"
+        )
+
+    sources = [
+        (
+            f"schemas/{source}"
+            if source.startswith("registry-")
+            else f"crates/registryctl/schemas/project-authoring/{source}"
+        )
+        for source in schema_sources
+    ]
+    for source in (field_knowledge.split("#", 1)[0], human_intent):
+        sources.append(
+            source if source.startswith("crates/") else f"crates/registryctl/{source}"
+        )
+    sources.extend(runtime_intent)
+    if any(source.startswith(("/", "../")) for source in sources):
+        raise ValueError(
+            "authoring-reference source contract must use repository-relative paths"
+        )
+    if len(sources) != len(set(sources)):
+        raise ValueError("authoring-reference source contract paths must be unique")
+    return tuple(sources)
+
+
+def validate_authoring_reference_routing(
+    contract_sources: tuple[str, ...],
+    inputs: tuple[tuple[str, str], ...],
+) -> None:
+    """Fail when a source-contract input can change without rebuilding docs."""
+
+    missing = [
+        source
+        for source in contract_sources
+        if not any(fnmatch.fnmatchcase(source, pattern) for pattern, _ in inputs)
+    ]
+    if missing:
+        raise ValueError(
+            "authoring-reference CI inputs do not route source-contract paths: "
+            f"{missing}"
+        )
+
+
+def authoring_reference_inputs(
+    manifest_path: Path = AUTHORING_REFERENCE_MANIFEST,
+) -> tuple[tuple[str, str], ...]:
+    """Load the authoring-reference CI routing inventory from its owner."""
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    inputs = manifest.get("ci_inputs")
+    if not isinstance(inputs, list) or not inputs:
+        raise ValueError(
+            f"authoring-reference manifest has no ci_inputs: {manifest_path}"
+        )
+
+    parsed: list[tuple[str, str]] = []
+    for index, entry in enumerate(inputs):
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"authoring-reference ci_inputs[{index}] must be an object"
+            )
+        pattern = entry.get("pattern")
+        sample = entry.get("sample")
+        if (
+            not isinstance(pattern, str)
+            or not pattern
+            or not isinstance(sample, str)
+            or not sample
+            or pattern.startswith(("/", "../"))
+            or sample.startswith(("/", "../"))
+            or not fnmatch.fnmatchcase(sample, pattern)
+        ):
+            raise ValueError(
+                "authoring-reference CI inputs must have matching "
+                f"repository-relative pattern/sample pairs: {entry!r}"
+            )
+        parsed.append((pattern, sample))
+
+    patterns = [pattern for pattern, _ in parsed]
+    samples = [sample for _, sample in parsed]
+    if len(patterns) != len(set(patterns)) or len(samples) != len(set(samples)):
+        raise ValueError("authoring-reference CI patterns and samples must be unique")
+    result = tuple(parsed)
+    validate_authoring_reference_routing(
+        authoring_reference_contract_sources(manifest_path),
+        result,
+    )
+    return result
+
+
+AUTHORING_REFERENCE_CONTRACT_SOURCES = authoring_reference_contract_sources()
+AUTHORING_REFERENCE_INPUTS = authoring_reference_inputs()
+AUTHORING_REFERENCE_PATTERNS = tuple(
+    pattern for pattern, _ in AUTHORING_REFERENCE_INPUTS
+)
 
 
 class Workspace:
@@ -297,14 +420,10 @@ def classify(
             "crates/registry-relay/docs/*",
             "crates/registry-relay/openapi/*",
             "crates/registry-relay/src/api/openapi.rs",
-            "crates/registry-relay/src/config/*",
             "crates/registryctl/assets/project-starters/*",
-            "crates/registry-notary-core/src/config/*",
             "crates/registry-notary-server/src/standalone/activation.rs",
             "crates/registry-platform-ops/src/lib.rs",
             "crates/registry-relay/src/consultation/*",
-            "crates/registryctl/schemas/project-authoring/*",
-            "crates/registryctl/schemas/project-documentation/*",
             "crates/registryctl/schemas/project-reports/*",
             "crates/registryctl/src/templates/*",
             "crates/registryctl/tests/fixtures/project-authoring/*",
@@ -313,14 +432,11 @@ def classify(
             "products/manifest/docs/*",
             "products/notary/docs/*",
             "products/notary/openapi/*",
+            *AUTHORING_REFERENCE_PATTERNS,
         )
         or path
         in {
             ".github/workflows/docs-pages.yml",
-            "crates/registry-notary-core/config/documentation-intent.json",
-            "crates/registry-notary-core/src/config.rs",
-            "crates/registry-notary-core/src/deployment.rs",
-            "crates/registry-relay/config/documentation-intent.json",
             "crates/registry-relay/src/main.rs",
             "crates/registry-relay/src/process_startup.rs",
             "crates/registry-relay/src/server.rs",
@@ -328,10 +444,8 @@ def classify(
             "crates/registryctl/src/project_authoring/capability_inventory.rs",
             "crates/registryctl/src/project_authoring/diagnostic_reference.rs",
             "crates/registryctl/src/project_authoring/diagnostics.rs",
-            "crates/registryctl/src/project_authoring/documentation.rs",
             "crates/registryctl/src/project_authoring/fixture_diagnostics.rs",
             "crates/registryctl/src/project_authoring/fixture_coverage.rs",
-            "crates/registryctl/src/project_authoring/knowledge.rs",
             "crates/registryctl/src/project_authoring/migration.rs",
             "crates/registryctl/src/project_authoring/output.rs",
             "crates/registryctl/src/project_authoring/preflight.rs",
@@ -339,8 +453,6 @@ def classify(
             "crates/registryctl/src/project_authoring/report_contract.rs",
             "crates/registryctl/src/project_authoring/semantic_comparison.rs",
             "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
-            "schemas/registry-notary.config.schema.json",
-            "schemas/registry-relay.config.schema.json",
         }
         or path in STANDARD_JOURNEY_SOURCES
         for path in paths

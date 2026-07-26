@@ -90,6 +90,7 @@ const stepKinds = new Set([
   "command",
   "long_running",
   "operator_interface",
+  "readiness_gate",
   "runtime_interface",
 ]);
 const unsafeCommandPattern = /[\n\r;&|`<>]|\$\(/u;
@@ -939,8 +940,8 @@ function buildSteps(journey, matrixById) {
     0,
     {
       id: "lifecycle-preflight",
-      kind: "alternative",
-      label: "Inspect offline environment readiness",
+      kind: "readiness_gate",
+      label: "Pass offline environment readiness before operator handoff",
       cwd: ".",
       argv: [
         "registryctl",
@@ -950,7 +951,7 @@ function buildSteps(journey, matrixById) {
         "--environment",
         "local",
       ],
-      note: "Preflight is intentionally separate because a clean synthetic workspace can report missing operator-provisioned runtime files or secret references.",
+      note: "A clean synthetic workspace is expected to report missing operator-provisioned runtime files or secret references. Provision the reviewed environment bindings, rerun this command, and require a passing report before signing, verification, promotion, or activation handoff. Build may remain offline and unsigned.",
     },
     commandStep(
       "lifecycle-capabilities",
@@ -1030,7 +1031,11 @@ function validateStep(step, path) {
   enumValue(step.kind, `${path}.kind`, stepKinds);
   string(step.id, `${path}.id`);
   string(step.label, `${path}.label`);
-  if (["command", "alternative", "long_running"].includes(step.kind)) {
+  if (
+    ["command", "alternative", "long_running", "readiness_gate"].includes(
+      step.kind,
+    )
+  ) {
     const fields =
       step.kind === "command"
         ? ["id", "kind", "label", "cwd", "argv"]
@@ -1090,7 +1095,9 @@ export function validateStandardJourneyCommand(command) {
 
 export function renderStandardJourneyCommand(step) {
   invariant(
-    ["command", "alternative", "long_running"].includes(step.kind),
+    ["command", "alternative", "long_running", "readiness_gate"].includes(
+      step.kind,
+    ),
     `${step.id} is not a command-bearing step`,
   );
   validateCommandArgv(step.argv, `${step.id}.argv`);

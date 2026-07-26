@@ -109,8 +109,22 @@ test('legacy entry points redirect to current task-flow pages', () => {
   );
 });
 
-test('homepage starts with the maintained spreadsheet journey while the detailed tutorial remains available', () => {
-  assert.match(homepageSource, /\]\(journeys\/spreadsheet-protected-api\/\)/);
-  assert.match(sidebarSource, /slug: 'journeys\/spreadsheet-protected-api'/);
+test('homepage follows the canonical generated first-country journeys while detailed tutorials remain available', () => {
+  const spreadsheetIndex = homepageSource.indexOf('](journeys/spreadsheet-protected-api/)');
+  const openapiIndex = homepageSource.indexOf('](journeys/instance-openapi/)');
+  const notaryIndex = homepageSource.indexOf('](journeys/registry-backed-notary-claim/)');
+  assert.ok(spreadsheetIndex >= 0);
+  assert.ok(openapiIndex > spreadsheetIndex);
+  assert.ok(notaryIndex > openapiIndex);
+  assert.doesNotMatch(homepageSource, /\]\(tutorials\/verify-claim-registry-api\/\)/);
+  assert.match(
+    sidebarSource,
+    /label: 'Evaluate a registry-backed claim', slug: 'journeys\/registry-backed-notary-claim'/,
+  );
+  assert.doesNotMatch(
+    sidebarSource,
+    /label: 'Evaluate a registry-backed claim', slug: 'tutorials\/verify-claim-registry-api'/,
+  );
   assert.ok(hasDocForSlug('tutorials/publish-spreadsheet-secured-registry-api'));
+  assert.ok(hasDocForSlug('tutorials/verify-claim-registry-api'));
 });

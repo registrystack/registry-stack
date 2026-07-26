@@ -11,11 +11,14 @@ import unittest
 from pathlib import Path
 
 from ci_changes import (
+    AUTHORING_REFERENCE_CONTRACT_SOURCES,
+    AUTHORING_REFERENCE_INPUTS,
     RELEASE_SECURITY_WORKFLOWS,
     SHARDS,
     STANDARD_JOURNEY_SOURCES,
     Workspace,
     classify,
+    validate_authoring_reference_routing,
 )
 from run_cargo_packages import command_args, package_args
 
@@ -124,40 +127,48 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(outputs["docs_archives"])
 
     def test_authoring_reference_inputs_run_docs(self) -> None:
-        for path in (
-            "crates/registryctl/schemas/project-authoring/documentation-intent.json",
-            "crates/registryctl/schemas/project-authoring/project.schema.json",
-            "crates/registryctl/schemas/project-documentation/registry.project.configuration_reference.v1.schema.json",
-            "crates/registryctl/src/project_authoring/documentation.rs",
-            "crates/registryctl/src/project_authoring/knowledge.rs",
-            "crates/registry-relay/config/documentation-intent.json",
-            "crates/registry-relay/src/config/mod.rs",
-            "crates/registry-notary-core/config/documentation-intent.json",
-            "crates/registry-notary-core/src/config.rs",
-            "crates/registry-notary-core/src/config/root.rs",
-            "crates/registry-notary-core/src/deployment.rs",
-            "schemas/registry-relay.config.schema.json",
-            "schemas/registry-notary.config.schema.json",
-        ):
+        for _, path in AUTHORING_REFERENCE_INPUTS:
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["docs"])
 
+    def test_authoring_reference_source_contract_has_independent_ci_coverage(self) -> None:
+        self.assertEqual(
+            AUTHORING_REFERENCE_CONTRACT_SOURCES,
+            (
+                "crates/registryctl/schemas/project-authoring/project.schema.json",
+                "crates/registryctl/schemas/project-authoring/environment.schema.json",
+                "crates/registryctl/schemas/project-authoring/integration.schema.json",
+                "crates/registryctl/schemas/project-authoring/fixture.schema.json",
+                "crates/registryctl/schemas/project-authoring/entity.schema.json",
+                "schemas/registry-relay.config.schema.json",
+                "schemas/registry-notary.config.schema.json",
+                "crates/registryctl/schemas/project-authoring/parity-coverage.json",
+                "crates/registryctl/schemas/project-authoring/documentation-intent.json",
+                "crates/registry-relay/config/documentation-intent.json",
+                "crates/registry-notary-core/config/documentation-intent.json",
+            ),
+        )
+        validate_authoring_reference_routing(
+            AUTHORING_REFERENCE_CONTRACT_SOURCES,
+            AUTHORING_REFERENCE_INPUTS,
+        )
+        without_project_authoring_schemas = tuple(
+            item
+            for item in AUTHORING_REFERENCE_INPUTS
+            if item[0] != "crates/registryctl/schemas/project-authoring/**"
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "do not route source-contract paths",
+        ):
+            validate_authoring_reference_routing(
+                AUTHORING_REFERENCE_CONTRACT_SOURCES,
+                without_project_authoring_schemas,
+            )
+
     def test_docs_pages_watches_authoring_reference_inputs(self) -> None:
         workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
-        for watched_path in (
-            "crates/registryctl/schemas/project-authoring/**",
-            "crates/registryctl/schemas/project-documentation/**",
-            "crates/registryctl/src/project_authoring/documentation.rs",
-            "crates/registryctl/src/project_authoring/knowledge.rs",
-            "crates/registry-relay/config/documentation-intent.json",
-            "crates/registry-relay/src/config/**",
-            "crates/registry-notary-core/config/documentation-intent.json",
-            "crates/registry-notary-core/src/config.rs",
-            "crates/registry-notary-core/src/config/**",
-            "crates/registry-notary-core/src/deployment.rs",
-            "schemas/registry-relay.config.schema.json",
-            "schemas/registry-notary.config.schema.json",
-        ):
+        for watched_path, _ in AUTHORING_REFERENCE_INPUTS:
             with self.subTest(path=watched_path):
                 self.assertIn(f'"{watched_path}"', workflow)
 

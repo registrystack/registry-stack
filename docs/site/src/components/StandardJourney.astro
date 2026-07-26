@@ -17,7 +17,7 @@ interface CommandStep {
 
 interface AnnotatedCommandStep {
   id: string;
-  kind: 'alternative' | 'long_running';
+  kind: 'alternative' | 'long_running' | 'readiness_gate';
   label: string;
   cwd: string;
   argv: string[];
@@ -99,6 +99,10 @@ const alternativeSteps =
 const longRunningSteps =
   journeySteps.filter(
     (step): step is AnnotatedCommandStep => step.kind === 'long_running',
+  );
+const readinessSteps =
+  journeySteps.filter(
+    (step): step is AnnotatedCommandStep => step.kind === 'readiness_gate',
   );
 const interfaceSteps =
   journeySteps.filter(
@@ -252,6 +256,21 @@ const interfaceSteps =
         <h3>Optional alternatives</h3>
         <ul>
           {alternativeSteps.map((step) => (
+            <li>
+              <strong>{step.label}</strong>: {step.note}
+              <p>Working directory: <code>{step.cwd}</code></p>
+              <pre aria-label={`${journey.title} ${step.label}`}><code class="language-sh">{renderCommand(step.argv)}</code></pre>
+            </li>
+          ))}
+        </ul>
+      </>
+    )}
+
+    {readinessSteps.length > 0 && (
+      <>
+        <h3>Required readiness gates</h3>
+        <ul>
+          {readinessSteps.map((step) => (
             <li>
               <strong>{step.label}</strong>: {step.note}
               <p>Working directory: <code>{step.cwd}</code></p>

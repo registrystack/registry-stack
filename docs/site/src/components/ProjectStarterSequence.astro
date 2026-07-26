@@ -3,9 +3,10 @@ import starters from '../data/generated/project-starters.json';
 
 interface Props {
   starter?: string;
+  adaptationStep?: string;
 }
 
-const { starter } = Astro.props;
+const { starter, adaptationStep } = Astro.props;
 const selected = starter ? starters.filter((item) => item.starter === starter) : starters;
 if (selected.length === 0) {
   throw new Error(`Unknown Registry Stack project starter: ${starter}`);
@@ -19,6 +20,12 @@ if (selected.length === 0) {
   <code>Ctrl+C</code> after its initial passing report. The final three commands test every fixture,
   explain the redacted plan, and build the unsigned product inputs.
 </p>
+
+{adaptationStep && (
+  <p>
+    <strong>Authoring pause:</strong> {adaptationStep}
+  </p>
+)}
 
 {selected.map((item) => (
   <section class="starter-sequence">

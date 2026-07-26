@@ -809,7 +809,7 @@
         "status": "verified",
         "source_path": "crates/registryctl/tests/project_authoring.rs",
         "test_id": "every_cataloged_supported_project_authoring_command_is_automated",
-        "command": "cargo test --locked -p registryctl --test project_authoring every_cataloged_supported_project_authoring_command_is_automated -- --exact",
+        "command": "cargo build --locked -p registryctl --bin registryctl && cargo test --locked -p registryctl --test project_authoring every_cataloged_supported_project_authoring_command_is_automated -- --exact",
         "workflow": ".github/workflows/ci.yml#project-authoring-determinism",
         "revision": "main",
         "lifecycle": "current_unreleased"
@@ -1238,7 +1238,7 @@
         "status": "verified",
         "source_path": "crates/registryctl/tests/project_authoring.rs",
         "test_id": "every_cataloged_supported_project_authoring_command_is_automated",
-        "command": "cargo test --locked -p registryctl --test project_authoring every_cataloged_supported_project_authoring_command_is_automated -- --exact",
+        "command": "cargo build --locked -p registryctl --bin registryctl && cargo test --locked -p registryctl --test project_authoring every_cataloged_supported_project_authoring_command_is_automated -- --exact",
         "workflow": ".github/workflows/ci.yml#project-authoring-determinism",
         "revision": "main",
         "lifecycle": "current_unreleased"
@@ -1655,7 +1655,7 @@
         "status": "verified",
         "source_path": "crates/registryctl/tests/project_authoring.rs",
         "test_id": "every_cataloged_supported_project_authoring_command_is_automated",
-        "command": "cargo test --locked -p registryctl --test project_authoring every_cataloged_supported_project_authoring_command_is_automated -- --exact",
+        "command": "cargo build --locked -p registryctl --bin registryctl && cargo test --locked -p registryctl --test project_authoring every_cataloged_supported_project_authoring_command_is_automated -- --exact",
         "workflow": ".github/workflows/ci.yml#project-authoring-determinism",
         "revision": "main",
         "lifecycle": "current_unreleased"
@@ -2458,7 +2458,7 @@
         "status": "verified",
         "source_path": "crates/registryctl/tests/project_authoring.rs",
         "test_id": "every_cataloged_supported_project_authoring_command_is_automated",
-        "command": "cargo test --locked -p registryctl --test project_authoring every_cataloged_supported_project_authoring_command_is_automated -- --exact",
+        "command": "cargo build --locked -p registryctl --bin registryctl && cargo test --locked -p registryctl --test project_authoring every_cataloged_supported_project_authoring_command_is_automated -- --exact",
         "workflow": ".github/workflows/ci.yml#project-authoring-determinism",
         "revision": "main",
         "lifecycle": "current_unreleased"
@@ -2623,8 +2623,8 @@
       },
       {
         "id": "lifecycle-preflight",
-        "kind": "alternative",
-        "label": "Inspect offline environment readiness",
+        "kind": "readiness_gate",
+        "label": "Pass offline environment readiness before operator handoff",
         "cwd": ".",
         "argv": [
           "registryctl",
@@ -2634,7 +2634,7 @@
           "--environment",
           "local"
         ],
-        "note": "Preflight is intentionally separate because a clean synthetic workspace can report missing operator-provisioned runtime files or secret references."
+        "note": "A clean synthetic workspace is expected to report missing operator-provisioned runtime files or secret references. Provision the reviewed environment bindings, rerun this command, and require a passing report before signing, verification, promotion, or activation handoff. Build may remain offline and unsigned."
       },
       {
         "id": "lifecycle-capabilities",

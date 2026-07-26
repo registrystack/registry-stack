@@ -358,7 +358,7 @@ journeys:
         status: verified
         source_path: crates/registryctl/tests/project_authoring.rs
         test_id: every_cataloged_supported_project_authoring_command_is_automated
-        command: cargo test --locked -p registryctl --test project_authoring every_cataloged_supported_project_authoring_command_is_automated -- --exact
+        command: cargo build --locked -p registryctl --bin registryctl && cargo test --locked -p registryctl --test project_authoring every_cataloged_supported_project_authoring_command_is_automated -- --exact
         workflow: .github/workflows/ci.yml#project-authoring-determinism
         revision: main
         lifecycle: current_unreleased
