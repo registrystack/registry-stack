@@ -38,37 +38,37 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1736,
-    "reference_count": 478,
+    "path_count": 1758,
+    "reference_count": 482,
     "by_schema": {
       "project": 219,
       "environment": 191,
       "integration": 138,
-      "fixture": 40,
+      "fixture": 62,
       "entity": 35,
       "relay": 584,
       "notary": 529
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1391,
-      "map_key": 24,
-      "map_value": 45,
-      "array_item": 175,
-      "branch": 94
+      "property": 1406,
+      "map_key": 25,
+      "map_value": 47,
+      "array_item": 177,
+      "branch": 96
     },
     "by_sensitivity": {
       "public": 16,
       "internal": 1140,
       "sensitive": 396,
       "secret_reference": 41,
-      "redacted_fixture": 30,
-      "structural": 113
+      "redacted_fixture": 50,
+      "structural": 115
     },
     "by_intent_source": {
-      "schema_description": 486,
+      "schema_description": 503,
       "reviewed_override": 243,
-      "structural_taxonomy": 116,
+      "structural_taxonomy": 121,
       "reviewed_profile": 891
     },
     "by_intent_profile": {
@@ -52568,6 +52568,1733 @@
     {
       "address": {
         "schema": "fixture",
+        "pointer": "/$defs/governedClaimRef/oneOf/0",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedClaimRef/oneOf/1",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "object"
+        ],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "required",
+          "value": [
+            "id"
+          ]
+        },
+        {
+          "keyword": "type",
+          "value": "object"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedClaimRef/oneOf/1/properties/id",
+        "path_kind": "property"
+      },
+      "purpose": "Names one authored claim requested by this fixture witness.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedClaimRef/oneOf/1/properties/version",
+        "path_kind": "property"
+      },
+      "purpose": "Pins the requested claim to one authored claim-policy version.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedIdentifier/properties/scheme",
+        "path_kind": "property"
+      },
+      "purpose": "Names the authored identifier scheme selected by a consultation input mapping.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxLength",
+          "value": 96
+        },
+        {
+          "keyword": "minLength",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedIdentifier/properties/value",
+        "path_kind": "property"
+      },
+      "purpose": "Supplies the synthetic string value bound to this identifier scheme.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedRequest/properties/claims",
+        "path_kind": "property"
+      },
+      "purpose": "Lists the authored claims evaluated by this synthetic request witness.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "array"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxItems",
+          "value": 64
+        },
+        {
+          "keyword": "minItems",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": "array"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedRequest/properties/claims/items",
+        "path_kind": "array_item"
+      },
+      "purpose": "A requested claim ID, optionally pinned to one authored claim version.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "object",
+          "string"
+        ],
+        "local_reference": "#/$defs/governedClaimRef",
+        "composed": false
+      },
+      "requiredness": "not_applicable",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [],
+      "local_reference": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedClaimRef"
+      }
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedRequest/properties/disclosure",
+        "path_kind": "property"
+      },
+      "purpose": "Selects the disclosure mode requested from the authored claim policy.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedRequest/properties/format",
+        "path_kind": "property"
+      },
+      "purpose": "Selects the claim-result media type requested from the governed Notary path.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedRequest/properties/purpose",
+        "path_kind": "property"
+      },
+      "purpose": "Names the authored service purpose exercised by this synthetic request witness.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxLength",
+          "value": 256
+        },
+        {
+          "keyword": "minLength",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedRequest/properties/target",
+        "path_kind": "property"
+      },
+      "purpose": "The synthetic subject target presented to the same governed request boundary as a live Notary evaluation.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "object"
+        ],
+        "local_reference": "#/$defs/governedTarget",
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "required",
+          "value": [
+            "type"
+          ]
+        },
+        {
+          "keyword": "type",
+          "value": "object"
+        }
+      ],
+      "local_reference": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedTarget"
+      }
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedRequest/properties/variables",
+        "path_kind": "property"
+      },
+      "purpose": "Supplies synthetic date variables to the governed evaluation request.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "object"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxProperties",
+          "value": 16
+        },
+        {
+          "keyword": "type",
+          "value": "object"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedRequest/properties/variables/additionalProperties",
+        "path_kind": "map_value"
+      },
+      "purpose": "Defines the contract shared by every author-controlled value in the enclosing typed map.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "not_applicable",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted",
+        "arbitrary_map_keys_not_fixed_properties"
+      ],
+      "constraints": [
+        {
+          "keyword": "format",
+          "value": "date"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedRequest/properties/variables/propertyNames",
+        "path_kind": "map_key"
+      },
+      "purpose": "Names one author-controlled entry in the enclosing typed map; the key is data, not an extension field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "not_applicable",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted",
+        "arbitrary_map_keys_not_fixed_properties"
+      ],
+      "constraints": [
+        {
+          "keyword": "pattern",
+          "value": "^[a-z][a-z0-9._-]{0,95}$"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedTarget/properties/attributes",
+        "path_kind": "property"
+      },
+      "purpose": "Supplies independently authored typed target attributes for consultation input mapping.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "object"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxProperties",
+          "value": 16
+        },
+        {
+          "keyword": "type",
+          "value": "object"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedTarget/properties/attributes/additionalProperties",
+        "path_kind": "map_value"
+      },
+      "purpose": "Defines the contract shared by every author-controlled value in the enclosing typed map.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "boolean",
+          "integer",
+          "null",
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "not_applicable",
+      "null_behavior": "conditional",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted",
+        "arbitrary_map_keys_not_fixed_properties"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": [
+            "string",
+            "boolean",
+            "integer",
+            "null"
+          ]
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedTarget/properties/id",
+        "path_kind": "property"
+      },
+      "purpose": "Supplies an optional synthetic direct target identifier.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedTarget/properties/identifiers",
+        "path_kind": "property"
+      },
+      "purpose": "Supplies independently authored synthetic identifiers for consultation input mapping.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "array"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxItems",
+          "value": 16
+        },
+        {
+          "keyword": "type",
+          "value": "array"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedTarget/properties/identifiers/items",
+        "path_kind": "array_item"
+      },
+      "purpose": "One synthetic target identifier with an authored scheme and string value.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "object"
+        ],
+        "local_reference": "#/$defs/governedIdentifier",
+        "composed": false
+      },
+      "requiredness": "not_applicable",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "required",
+          "value": [
+            "scheme",
+            "value"
+          ]
+        },
+        {
+          "keyword": "type",
+          "value": "object"
+        }
+      ],
+      "local_reference": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedIdentifier"
+      }
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedTarget/properties/type",
+        "path_kind": "property"
+      },
+      "purpose": "Names the authored target entity type used for claim evaluation.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxLength",
+          "value": 64
+        },
+        {
+          "keyword": "minLength",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
         "pointer": "/$defs/interaction/properties/expect",
         "path_kind": "property"
       },
@@ -54889,6 +56616,97 @@
           "value": "string"
         }
       ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/properties/request",
+        "path_kind": "property"
+      },
+      "purpose": "Optional independently authored synthetic Notary request used to prove the request-to-consultation binding before Relay access.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "object"
+        ],
+        "local_reference": "#/$defs/governedRequest",
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "required",
+          "value": [
+            "target",
+            "claims",
+            "purpose"
+          ]
+        },
+        {
+          "keyword": "type",
+          "value": "object"
+        }
+      ],
+      "local_reference": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedRequest"
+      }
     },
     {
       "address": {
