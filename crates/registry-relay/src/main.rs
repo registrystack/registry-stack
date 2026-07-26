@@ -44,7 +44,7 @@ use registry_config_report::{
 };
 use registry_platform_audit::AuditChainProfile;
 use registry_platform_authcommon::{fingerprint_api_key, CredentialFingerprintProvider};
-use registry_platform_config::{expand_config_env_vars, verify_config_bundle};
+use registry_platform_config::{expand_config_env_vars, sha256_uri, verify_config_bundle};
 use registry_platform_ops::{
     antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_code,
     internal_config_hash, persist_bundle_acceptance as persist_config_bundle_acceptance,
@@ -156,6 +156,7 @@ const ANCHOR_PATH_FLAG: &str = "--anchor-path";
 const STATE_PATH_FLAG: &str = "--state-path";
 const FORMAT_FLAG: &str = "--format";
 const PROFILE_FLAG: &str = "--profile";
+const EXPECTED_CONFIG_DIGEST_FLAG: &str = "--expected-config-digest";
 const INITIALIZE_STATE_FLAG: &str = "--initialize-state";
 const RELAY_CONFIG_SCHEMA_VERSION: &str = "registry.relay.config.v1";
 
@@ -182,6 +183,7 @@ enum CliCommand {
         env_file: Option<PathBuf>,
         format: OutputFormat,
         profile_override: Option<DeploymentProfile>,
+        expected_config_digest: Option<ExpectedConfigDigest>,
     },
     ExplainConfig {
         config_path: PathBuf,
@@ -209,6 +211,39 @@ enum OutputFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GenerateApiKeyCommand {
     id: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ExpectedConfigDigest(String);
+
+impl ExpectedConfigDigest {
+    fn parse(value: &str) -> Result<Self, CliError> {
+        let Some(digest) = value.strip_prefix("sha256:") else {
+            return Err(CliError(format!(
+                "{EXPECTED_CONFIG_DIGEST_FLAG} requires a sha256 digest"
+            )));
+        };
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(CliError(format!(
+                "{EXPECTED_CONFIG_DIGEST_FLAG} requires a sha256 digest"
+            )));
+        }
+        Ok(Self(value.to_string()))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std_fmt::Debug for ExpectedConfigDigest {
+    fn fmt(&self, formatter: &mut std_fmt::Formatter<'_>) -> std_fmt::Result {
+        formatter.write_str("ExpectedConfigDigest(<configured>)")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,7 +395,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             env_file,
             format,
             profile_override,
-        } => run_doctor(config_path, env_file, format, profile_override).await,
+            expected_config_digest,
+        } => {
+            run_doctor(
+                config_path,
+                env_file,
+                format,
+                profile_override,
+                expected_config_digest,
+            )
+            .await
+        }
         CliCommand::ExplainConfig {
             config_path,
             env_file,
@@ -530,10 +575,16 @@ async fn run_doctor(
     env_file: Option<PathBuf>,
     format: OutputFormat,
     profile_override: Option<DeploymentProfile>,
+    expected_config_digest: Option<ExpectedConfigDigest>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match format {
         OutputFormat::Json => {
-            let report = build_doctor_report(&config_path, env_file.as_deref(), profile_override);
+            let report = build_doctor_report(
+                &config_path,
+                env_file.as_deref(),
+                profile_override,
+                expected_config_digest.as_ref(),
+            );
             println!("{}", serde_json::to_string_pretty(&report.output)?);
             if report.exit_success {
                 Ok(())
@@ -594,6 +645,7 @@ fn build_doctor_report(
     config_path: &std::path::Path,
     env_file: Option<&std::path::Path>,
     profile_override: Option<DeploymentProfile>,
+    expected_config_digest: Option<&ExpectedConfigDigest>,
 ) -> DoctorReport {
     let mut checks = Vec::new();
     let mut report_source = ConfigSource::LocalFile;
@@ -616,6 +668,16 @@ fn build_doctor_report(
 
     if checks.iter().any(|check| check.status == "failed") {
         return DoctorReport::new(checks, None, profile_override, report_source);
+    }
+
+    if let Some(expected_config_digest) = expected_config_digest {
+        checks.push(expected_config_generation_check(
+            config_path,
+            expected_config_digest,
+        ));
+        if checks.iter().any(|check| check.status == "failed") {
+            return DoctorReport::new(checks, None, profile_override, report_source);
+        }
     }
 
     let loaded_config = match config::load_with_metadata(config_path) {
@@ -713,6 +775,32 @@ fn build_doctor_report(
         profile_override,
         report_source,
     )
+}
+
+fn expected_config_generation_check(
+    config_path: &std::path::Path,
+    expected_config_digest: &ExpectedConfigDigest,
+) -> DoctorCheck {
+    match fs::read(config_path) {
+        Ok(bytes) if sha256_uri(&bytes) == expected_config_digest.as_str() => DoctorCheck::passed(
+            "config_generation",
+            "relay.config.generation_verified",
+            "the mounted configuration is the expected generated revision",
+            None,
+        ),
+        Ok(_) => DoctorCheck::failed(
+            "config_generation",
+            "relay.config.generation_mismatch",
+            "the mounted configuration is not the expected generated revision",
+            Some("wait for the container filesystem view to refresh, then retry"),
+        ),
+        Err(_) => DoctorCheck::failed(
+            "config_generation",
+            "relay.config.generation_unavailable",
+            "the expected generated configuration is not readable",
+            Some("check the generated configuration mount, then retry"),
+        ),
+    }
 }
 
 fn parse_doctor_config_without_validation(config_path: &std::path::Path) -> Option<Config> {
@@ -1196,7 +1284,7 @@ async fn run_consultation_bootstrap_state(
     command: ConsultationBootstrapStateCommand,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     load_env_file_arg(command.env_file.as_deref())?;
-    let config = config::load(&command.config_path)?;
+    let config = reported_config_load(config::load(&command.config_path))?;
     let result: BootstrapStateResult = bootstrap_state(BootstrapStateRequest {
         config: &config,
         migration_database_url_env: &command.migration_database_url_env,
@@ -1963,6 +2051,7 @@ fn parse_doctor_command(args: &[String]) -> Result<CliCommand, CliError> {
     let mut env_file: Option<PathBuf> = None;
     let mut format = OutputFormat::Json;
     let mut profile_override: Option<DeploymentProfile> = None;
+    let mut expected_config_digest: Option<ExpectedConfigDigest> = None;
     let mut index = 0;
     while index < args.len() {
         let arg = &args[index];
@@ -1993,6 +2082,18 @@ fn parse_doctor_command(args: &[String]) -> Result<CliCommand, CliError> {
                 index,
                 PROFILE_FLAG,
             )?)?);
+        } else if let Some(value) = flag_value(arg, EXPECTED_CONFIG_DIGEST_FLAG) {
+            expected_config_digest = Some(ExpectedConfigDigest::parse(&required_string_value(
+                EXPECTED_CONFIG_DIGEST_FLAG,
+                value,
+            )?)?);
+        } else if arg == EXPECTED_CONFIG_DIGEST_FLAG {
+            index += 1;
+            expected_config_digest = Some(ExpectedConfigDigest::parse(&required_string_arg(
+                args,
+                index,
+                EXPECTED_CONFIG_DIGEST_FLAG,
+            )?)?);
         } else {
             return Err(CliError(format!(
                 "unknown {DOCTOR_COMMAND} argument: {arg}"
@@ -2008,6 +2109,7 @@ fn parse_doctor_command(args: &[String]) -> Result<CliCommand, CliError> {
         env_file,
         format,
         profile_override,
+        expected_config_digest,
     })
 }
 
@@ -2696,13 +2798,14 @@ fn install_sigterm_listener() -> io::Result<tokio::signal::unix::Signal> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_audit_chain_profile, build_audit_sink, compile_relay_runtime,
+        build_audit_chain_profile, build_audit_sink, build_doctor_report, compile_relay_runtime,
         consultation_activation_doctor_check, doctor_check_diagnostic, load_env_file_arg,
         parse_cli_command_from, parse_env_file_value, redacted_resolved_config,
         relay_config_value_classification, relay_live_apply_classes, render_generated_api_key,
-        required_env_report, run_audit_quarantine, run_healthcheck, url_contains_userinfo,
-        CliCommand, ConfigValueClassification, ConsultationBootstrapStateCommand,
-        ConsultationServiceActivationError, GenerateApiKeyCommand, OperationalLogFormat,
+        required_env_report, run_audit_quarantine, run_consultation_bootstrap_state,
+        run_healthcheck, url_contains_userinfo, CliCommand, ConfigValueClassification,
+        ConsultationBootstrapStateCommand, ConsultationServiceActivationError,
+        ExpectedConfigDigest, GenerateApiKeyCommand, OperationalLogFormat,
         OperatorSafeConsultationActivationFailure, OutputFormat, ReportedConfigLoadFailure,
         DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL, MAX_EXACT_JSON_INTEGER,
     };
@@ -3475,6 +3578,7 @@ audit:
             env_file,
             format,
             profile_override,
+            expected_config_digest,
         } = command
         else {
             panic!("expected doctor command");
@@ -3489,6 +3593,103 @@ audit:
         );
         assert_eq!(format, OutputFormat::Json);
         assert!(profile_override.is_none());
+        assert!(expected_config_digest.is_none());
+    }
+
+    #[test]
+    fn doctor_cli_accepts_a_redacted_expected_config_digest() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "doctor",
+            "--expected-config-digest",
+            &digest,
+        ]))
+        .expect("doctor expected digest parses");
+
+        let CliCommand::Doctor {
+            expected_config_digest: Some(expected_config_digest),
+            ..
+        } = command
+        else {
+            panic!("expected doctor command with config digest");
+        };
+        assert_eq!(expected_config_digest.as_str(), digest);
+        assert_eq!(
+            format!("{expected_config_digest:?}"),
+            "ExpectedConfigDigest(<configured>)"
+        );
+        assert!(!format!("{expected_config_digest:?}").contains(&digest));
+    }
+
+    #[test]
+    fn doctor_cli_rejects_an_invalid_expected_digest_without_echoing_it() {
+        let sentinel = "sha256:sentinel-private-config-identity";
+        let error = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "doctor",
+            "--expected-config-digest",
+            sentinel,
+        ]))
+        .expect_err("invalid expected digest is rejected");
+
+        assert_eq!(
+            error.to_string(),
+            "--expected-config-digest requires a sha256 digest"
+        );
+        assert!(!error.to_string().contains(sentinel));
+    }
+
+    #[test]
+    fn doctor_rejects_a_stale_but_valid_config_generation() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("relay.yaml");
+        let config = runtime_config_yaml("REGISTRY_RELAY_TEST_GENERATION_AUDIT_HASH");
+        std::fs::write(&config_path, &config).expect("config writes");
+        let next_generation = ExpectedConfigDigest::parse(&sha256_uri(b"distinct next generation"))
+            .expect("test digest parses");
+
+        let report = build_doctor_report(
+            &config_path,
+            None,
+            Some(DeploymentProfile::Local),
+            Some(&next_generation),
+        );
+
+        assert!(!report.exit_success);
+        assert!(report.output["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "relay.config.generation_mismatch"));
+        assert!(!report.output["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "relay.config.loaded"));
+    }
+
+    #[test]
+    fn doctor_verifies_the_expected_config_generation_before_loading() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("relay.yaml");
+        let config = runtime_config_yaml("REGISTRY_RELAY_TEST_GENERATION_MATCH_AUDIT_HASH");
+        std::fs::write(&config_path, &config).expect("config writes");
+        let expected = ExpectedConfigDigest::parse(&sha256_uri(config.as_bytes()))
+            .expect("test digest parses");
+
+        let report = build_doctor_report(&config_path, None, None, Some(&expected));
+
+        assert!(report.output["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "relay.config.generation_verified"));
+        assert!(report.output["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "relay.config.loaded"));
     }
 
     #[test]
@@ -3704,6 +3905,37 @@ audit:
         assert!(!rendered.contains("sentinel"));
         assert!(!rendered.contains("1900000000000"));
         assert!(!rendered.contains("31536000000"));
+    }
+
+    #[tokio::test]
+    async fn consultation_bootstrap_state_preserves_loader_owned_failure_category() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("relay.yaml");
+        std::fs::write(&config_path, "{}\n").expect("invalid config writes");
+        let command = ConsultationBootstrapStateCommand {
+            config_path,
+            env_file: None,
+            migration_database_url_env: "SENTINEL_MIGRATION".to_string(),
+            owner_role: "sentinel_owner".to_string(),
+            keyring_maintenance_database_url_env: "SENTINEL_MAINTENANCE".to_string(),
+            keyring_reader_database_url_env: "SENTINEL_READER".to_string(),
+            active_key_id: "sentinel-key".to_string(),
+            active_write_deadline_unix_ms: 1_900_000_000_000,
+            audit_event_retention_ms: 31_536_000_000,
+        };
+
+        let error = run_consultation_bootstrap_state(command)
+            .await
+            .expect_err("invalid config must fail before bootstrap");
+
+        assert!(
+            error.downcast_ref::<ReportedConfigLoadFailure>().is_some(),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "configuration load failure was already reported"
+        );
     }
 
     #[test]

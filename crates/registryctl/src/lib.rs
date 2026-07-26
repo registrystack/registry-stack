@@ -245,6 +245,9 @@ pub struct InitReport {
     pub artifacts: InitArtifacts,
 }
 const NOTARY_PROJECT_DIR: &str = "notary/project";
+const NOTARY_RUNTIME_VISIBILITY_SERVICE: &str = "registry-relay-consultation-bootstrap";
+const NOTARY_RUNTIME_VISIBILITY_ATTEMPTS: usize = 8;
+const NOTARY_RUNTIME_VISIBILITY_RETRY_DELAY: Duration = Duration::from_millis(500);
 #[cfg(test)]
 const NOTARY_CONFIG_DIR: &str = "notary/project/.registry-stack/build/local/private/notary/config";
 const NOTARY_CONFIG_PATH: &str =
@@ -1361,6 +1364,9 @@ fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<(
         project = Project::load(project_dir)?;
     }
     validate_project_fingerprints(project_dir, &project)?;
+    if project.notary.is_some() {
+        wait_for_notary_runtime_visibility(project_dir, &project)?;
+    }
     run_compose_for_project(project_dir, &project, &["up", "-d"])?;
     if project.relay.is_some() {
         let relay_base_url = project.relay_base_url()?;
@@ -3482,16 +3488,203 @@ fn upsert_env_values(contents: &str, values: &[(String, String)]) -> String {
 }
 
 fn run_compose_for_project(project_dir: &Path, project: &Project, args: &[&str]) -> Result<()> {
+    let platform_override =
+        compose_platform_for_project(project, "docker", should_probe_compose_platform(args));
+    run_compose_command_with_platform(project_dir, "docker", args, platform_override)
+}
+
+fn compose_platform_for_project(
+    project: &Project,
+    binary: &str,
+    probe_server_platform: bool,
+) -> Option<&'static str> {
     let explicit_platform = std::env::var("DOCKER_DEFAULT_PLATFORM").ok();
-    let server_platform = should_probe_compose_platform(args)
-        .then(|| docker_server_platform("docker"))
+    let server_platform = probe_server_platform
+        .then(|| docker_server_platform(binary))
         .flatten();
-    let platform_override = compose_platform_override(
+    compose_platform_override(
         project,
         explicit_platform.as_deref(),
         server_platform.as_deref(),
+    )
+}
+
+fn wait_for_notary_runtime_visibility(project_dir: &Path, project: &Project) -> Result<()> {
+    let platform_override = compose_platform_for_project(project, "docker", true);
+    let relay_config_path = project_dir.join(CONSULTATION_RELAY_CONFIG_PATH);
+    let expected_config_digest = sha256_uri(
+        &fs::read(&relay_config_path)
+            .with_context(|| "failed to read generated Relay consultation configuration")?,
     );
-    run_compose_command_with_platform(project_dir, "docker", args, platform_override)
+    retry_verified_runtime_closure(
+        NOTARY_RUNTIME_VISIBILITY_ATTEMPTS,
+        NOTARY_RUNTIME_VISIBILITY_RETRY_DELAY,
+        || {
+            run_compose_probe_with_platform(
+                project_dir,
+                "docker",
+                &[
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "-T",
+                    NOTARY_RUNTIME_VISIBILITY_SERVICE,
+                    "doctor",
+                    "--config",
+                    "/etc/registry-relay/relay.yaml",
+                    "--format",
+                    "json",
+                    "--profile",
+                    "local",
+                    "--expected-config-digest",
+                    &expected_config_digest,
+                ],
+                platform_override,
+            )
+        },
+    )
+}
+
+fn retry_verified_runtime_closure<F>(
+    attempts: usize,
+    retry_delay: Duration,
+    mut check: F,
+) -> Result<()>
+where
+    F: FnMut() -> Result<RuntimeClosureProbe>,
+{
+    if attempts == 0 {
+        bail!("generated Notary runtime visibility check has no configured attempts");
+    }
+    let mut last_failure = RuntimeClosureProbeFailure::ComposeVerificationFailed;
+    for attempt in 0..attempts {
+        match check()? {
+            RuntimeClosureProbe::Verified => return Ok(()),
+            RuntimeClosureProbe::Rejected(failure) => last_failure = failure,
+        }
+        if attempt + 1 < attempts {
+            thread::sleep(retry_delay);
+        }
+    }
+    bail!(last_failure.message())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeClosureProbe {
+    Verified,
+    Rejected(RuntimeClosureProbeFailure),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeClosureProbeFailure {
+    GenerationMismatch,
+    GenerationUnavailable,
+    ConsultationArtifactsRejected,
+    ConfigurationRejected,
+    EnvironmentRejected,
+    ComposeVerificationFailed,
+}
+
+impl RuntimeClosureProbeFailure {
+    fn message(self) -> &'static str {
+        match self {
+            Self::GenerationMismatch => {
+                "Docker did not expose the just-generated Relay consultation configuration before the bounded verification retry expired"
+            }
+            Self::GenerationUnavailable => {
+                "Docker could not read the generated Relay consultation configuration before the bounded verification retry expired"
+            }
+            Self::ConsultationArtifactsRejected => {
+                "Docker rejected the generated Relay consultation artifact closure; run registryctl check for the authored project, correct it, and retry"
+            }
+            Self::ConfigurationRejected => {
+                "Docker rejected the generated Relay consultation configuration; run registryctl check for the authored project, correct it, and retry"
+            }
+            Self::EnvironmentRejected => {
+                "Docker could not verify the Relay consultation environment bindings; run registryctl doctor --profile local, correct the reported requirement, and retry"
+            }
+            Self::ComposeVerificationFailed => {
+                "Docker Compose could not verify the generated Relay consultation artifact closure before the bounded retry expired"
+            }
+        }
+    }
+}
+
+fn run_compose_probe_with_platform(
+    project_dir: &Path,
+    binary: &str,
+    args: &[&str],
+    platform_override: Option<&str>,
+) -> Result<RuntimeClosureProbe> {
+    let command_args = compose_command_args("compose.yaml", args);
+    let mut command = Command::new(binary);
+    command.args(&command_args).current_dir(project_dir);
+    if let Some(platform) = platform_override {
+        command.env("DOCKER_DEFAULT_PLATFORM", platform);
+    }
+    let output = command
+        .output()
+        .with_context(|| format!("failed to run {binary} compose visibility check"))?;
+    if output.status.success() {
+        Ok(RuntimeClosureProbe::Verified)
+    } else {
+        Ok(RuntimeClosureProbe::Rejected(
+            runtime_closure_probe_failure(&output.stdout),
+        ))
+    }
+}
+
+fn runtime_closure_probe_failure(stdout: &[u8]) -> RuntimeClosureProbeFailure {
+    let codes = serde_json::from_slice::<serde_json::Value>(stdout)
+        .ok()
+        .and_then(|report| report["diagnostics"].as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|diagnostic| diagnostic["severity"] == "error")
+        .filter_map(|diagnostic| diagnostic["code"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+
+    if codes
+        .iter()
+        .any(|code| code == "relay.config.generation_mismatch")
+    {
+        RuntimeClosureProbeFailure::GenerationMismatch
+    } else if codes
+        .iter()
+        .any(|code| code == "relay.config.generation_unavailable")
+    {
+        RuntimeClosureProbeFailure::GenerationUnavailable
+    } else if codes.iter().any(|code| {
+        code == "relay.env_file.failed"
+            || code == "config.missing_secret"
+            || code.starts_with("relay.startup.environment_")
+            || code.starts_with("relay.startup.secret_")
+            || matches!(
+                code.as_str(),
+                "relay.consultation.activation.pseudonym_material_unavailable"
+                    | "relay.consultation.activation.source_credentials_unavailable"
+                    | "relay.consultation.activation.state_plane_unavailable"
+            )
+    }) {
+        RuntimeClosureProbeFailure::EnvironmentRejected
+    } else if codes.iter().any(|code| {
+        code.starts_with("relay.consultation_artifacts.")
+            || code.starts_with("relay.consultation.activation.")
+            || code == "relay.startup.consultation_artifacts_rejected"
+    }) {
+        RuntimeClosureProbeFailure::ConsultationArtifactsRejected
+    } else if codes.iter().any(|code| {
+        code.starts_with("config.")
+            || code.contains(".config.")
+            || code.starts_with("relay.config.")
+            || code.starts_with("relay.startup.config_")
+            || code == "relay.entity_registry.failed"
+            || code.starts_with("deployment.")
+    }) {
+        RuntimeClosureProbeFailure::ConfigurationRejected
+    } else {
+        RuntimeClosureProbeFailure::ComposeVerificationFailed
+    }
 }
 
 fn run_compose_command_with_platform(
@@ -5635,9 +5828,51 @@ mod tests {
 
     #[test]
     fn compose_command_arguments_are_stable() {
+        let expected_config_digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         assert_eq!(
             compose_command_args("compose.yaml", &["up", "-d"]),
             ["compose", "-f", "compose.yaml", "up", "-d"]
+        );
+        assert_eq!(
+            compose_command_args(
+                "compose.yaml",
+                &[
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "-T",
+                    NOTARY_RUNTIME_VISIBILITY_SERVICE,
+                    "doctor",
+                    "--config",
+                    "/etc/registry-relay/relay.yaml",
+                    "--format",
+                    "json",
+                    "--profile",
+                    "local",
+                    "--expected-config-digest",
+                    expected_config_digest,
+                ],
+            ),
+            [
+                "compose",
+                "-f",
+                "compose.yaml",
+                "run",
+                "--rm",
+                "--no-deps",
+                "-T",
+                "registry-relay-consultation-bootstrap",
+                "doctor",
+                "--config",
+                "/etc/registry-relay/relay.yaml",
+                "--format",
+                "json",
+                "--profile",
+                "local",
+                "--expected-config-digest",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ]
         );
     }
 
@@ -5650,6 +5885,119 @@ mod tests {
             run_compose_command_with_platform(temp.path(), "false", &["ps"], None).unwrap_err();
 
         assert!(error.to_string().contains("false compose exited"));
+    }
+
+    #[test]
+    fn compose_visibility_check_returns_process_outcome() {
+        let temp = TempDir::new().unwrap();
+
+        assert_eq!(
+            run_compose_probe_with_platform(temp.path(), "true", &["ps"], None).unwrap(),
+            RuntimeClosureProbe::Verified
+        );
+        assert_eq!(
+            run_compose_probe_with_platform(temp.path(), "false", &["ps"], None).unwrap(),
+            RuntimeClosureProbe::Rejected(RuntimeClosureProbeFailure::ComposeVerificationFailed)
+        );
+    }
+
+    #[test]
+    fn runtime_visibility_retry_waits_for_the_just_generated_verified_closure() {
+        let mut calls = 0;
+
+        retry_verified_runtime_closure(3, Duration::from_millis(0), || {
+            calls += 1;
+            Ok(if calls == 2 {
+                RuntimeClosureProbe::Verified
+            } else {
+                RuntimeClosureProbe::Rejected(RuntimeClosureProbeFailure::GenerationMismatch)
+            })
+        })
+        .unwrap();
+
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn runtime_visibility_retry_fails_closed_after_its_bound() {
+        let mut calls = 0;
+
+        let error = retry_verified_runtime_closure(3, Duration::from_millis(0), || {
+            calls += 1;
+            Ok(RuntimeClosureProbe::Rejected(
+                RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
+            ))
+        })
+        .unwrap_err();
+
+        assert_eq!(calls, 3);
+        assert_eq!(
+            error.to_string(),
+            "Docker rejected the generated Relay consultation artifact closure; run registryctl check for the authored project, correct it, and retry"
+        );
+    }
+
+    #[test]
+    fn runtime_visibility_failure_classification_is_value_free_and_specific() {
+        for (code, expected) in [
+            (
+                "relay.config.generation_mismatch",
+                RuntimeClosureProbeFailure::GenerationMismatch,
+            ),
+            (
+                "relay.config.generation_unavailable",
+                RuntimeClosureProbeFailure::GenerationUnavailable,
+            ),
+            (
+                "relay.consultation.activation.artifact_registry_invalid",
+                RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
+            ),
+            (
+                "relay.startup.consultation_artifacts_rejected",
+                RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
+            ),
+            (
+                "relay.env_file.failed",
+                RuntimeClosureProbeFailure::EnvironmentRejected,
+            ),
+            (
+                "config.missing_secret",
+                RuntimeClosureProbeFailure::EnvironmentRejected,
+            ),
+            (
+                "relay.consultation.activation.source_credentials_unavailable",
+                RuntimeClosureProbeFailure::EnvironmentRejected,
+            ),
+            (
+                "relay.startup.environment_binding_rejected",
+                RuntimeClosureProbeFailure::EnvironmentRejected,
+            ),
+            (
+                "config.validation_error",
+                RuntimeClosureProbeFailure::ConfigurationRejected,
+            ),
+            (
+                "relay.startup.config_document_invalid",
+                RuntimeClosureProbeFailure::ConfigurationRejected,
+            ),
+        ] {
+            let output = serde_json::to_vec(&serde_json::json!({
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": code,
+                    "message": "sentinel supplied value"
+                }]
+            }))
+            .unwrap();
+            let actual = runtime_closure_probe_failure(&output);
+
+            assert_eq!(actual, expected);
+            assert!(!actual.message().contains("sentinel"));
+        }
+        assert_eq!(
+            runtime_closure_probe_failure(b"not JSON"),
+            RuntimeClosureProbeFailure::ComposeVerificationFailed
+        );
     }
 
     #[test]

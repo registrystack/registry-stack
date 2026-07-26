@@ -19,6 +19,10 @@
   operating-system class, while configuration failures distinguish source,
   environment, document, deprecated-field, validation, bundle, and
   consultation-closure phases without rendering runtime values.
+- Let Relay doctor bind an orchestration preflight to the exact expected
+  configuration digest. Registryctl uses this to wait for Docker to expose the
+  just-generated consultation configuration and its complete verified artifact
+  closure before local Notary startup.
 
 ## 0.13.0 - 2026-07-25
 
