@@ -24,6 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Semantic comparison now preserves exact JSON-integer ordering when
+  classifying policy bounds, while retaining floating-point comparison for
+  non-integer numbers.
 - **BREAKING:** Before the Registry Stack 1.0 compatibility promise takes
   effect, `registry.project.fixture_coverage.v1` now distinguishes
   mapping-derived fixtures from independently executed, per-consultation

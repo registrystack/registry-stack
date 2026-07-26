@@ -122,6 +122,78 @@ fn formatting_and_explicit_equivalent_defaults_produce_zero_changes() {
 }
 
 #[test]
+fn authored_integer_limit_changes_keep_their_security_direction() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let baseline = temporary.path().join("baseline");
+    let current = temporary.path().join("current");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Snapshot,
+        directory: baseline.clone(),
+    })
+    .expect("baseline Snapshot project initializes");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Snapshot,
+        directory: current.clone(),
+    })
+    .expect("current Snapshot project initializes");
+
+    const JSON_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    let baseline_limit = JSON_SAFE_INTEGER;
+    let current_limit = baseline_limit - 1;
+    let configure_integer_output = |project: &Path, maximum: i64| {
+        rewrite_yaml(&project.join("entities/people.yaml"), |document| {
+            let status = document["schema"]["properties"]["registration_status"]
+                .as_object_mut()
+                .expect("registration_status is an object");
+            status.insert(
+                "type".to_owned(),
+                Value::Array(vec![
+                    Value::String("integer".to_owned()),
+                    Value::String("null".to_owned()),
+                ]),
+            );
+            status.remove("maxLength");
+            status.insert("minimum".to_owned(), Value::from(-JSON_SAFE_INTEGER));
+            status.insert("maximum".to_owned(), Value::from(maximum));
+        });
+        rewrite_yaml(
+            &project.join("integrations/person-snapshot/fixtures/match.yaml"),
+            |document| {
+                document["interactions"][0]["respond"]["body"]["registration_status"] =
+                    Value::from(1_i64);
+                document["expect"]["outputs"]["registration_status"] = Value::from(1_i64);
+                document["expect"]["claims"]["population-registration-status"] = Value::from(1_i64);
+            },
+        );
+    };
+    configure_integer_output(&baseline, baseline_limit);
+    configure_integer_output(&current, current_limit);
+
+    let limit_change = |report: registryctl::ProjectSemanticComparisonReportV1| {
+        report
+            .changes
+            .into_iter()
+            .find(|change| {
+                change.address.schema_family == SemanticComparisonSchemaFamily::Entity
+                    && change
+                        .address
+                        .field
+                        .as_str()
+                        .ends_with("/properties/maximum")
+            })
+            .expect("entity output maximum change is classified")
+    };
+    assert_eq!(
+        limit_change(compare_projects(&current, &baseline)).direction,
+        SemanticComparisonDirection::Narrowed
+    );
+    assert_eq!(
+        limit_change(compare_projects(&baseline, &current)).direction,
+        SemanticComparisonDirection::Widened
+    );
+}
+
+#[test]
 fn registry_id_change_requires_redeploying_both_products_without_reporting_values() {
     const BASELINE_ID: &str = "semantic-comparison-baseline";
     const CURRENT_ID: &str = "semantic-comparison-current";

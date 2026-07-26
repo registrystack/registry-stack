@@ -9,6 +9,7 @@
 //! published schema addresses. It also compares the compiler's in-memory
 //! review and approval projections. It never reads a build directory.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
@@ -1202,18 +1203,19 @@ fn direction_for_values(
     current: &Value,
     baseline: &Value,
 ) -> SemanticComparisonDirection {
-    let current_number = current.as_f64();
-    let baseline_number = baseline.as_f64();
-    if let (Some(current), Some(baseline)) = (current_number, baseline_number) {
+    if let Some(ordering) = numeric_ordering(current, baseline) {
+        if ordering == Ordering::Equal {
+            return SemanticComparisonDirection::Changed;
+        }
         if lower_bound_field(schema_field) {
-            return if current > baseline {
+            return if ordering == Ordering::Greater {
                 SemanticComparisonDirection::Narrowed
             } else {
                 SemanticComparisonDirection::Widened
             };
         }
         if upper_bound_field(schema_field) {
-            return if current < baseline {
+            return if ordering == Ordering::Less {
                 SemanticComparisonDirection::Narrowed
             } else {
                 SemanticComparisonDirection::Widened
@@ -1247,6 +1249,21 @@ fn direction_for_values(
         }
     }
     SemanticComparisonDirection::Changed
+}
+
+fn numeric_ordering(current: &Value, baseline: &Value) -> Option<Ordering> {
+    let current = current.as_number()?;
+    let baseline = baseline.as_number()?;
+    let exact_integer = |number: &serde_json::Number| {
+        number
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| number.as_u64().map(i128::from))
+    };
+    match (exact_integer(current), exact_integer(baseline)) {
+        (Some(current), Some(baseline)) => Some(current.cmp(&baseline)),
+        _ => current.as_f64()?.partial_cmp(&baseline.as_f64()?),
+    }
 }
 
 fn lower_bound_field(field: &str) -> bool {
@@ -1552,6 +1569,63 @@ mod tests {
         );
         assert_eq!(
             direction_for_values(lower, &Value::from(4), &Value::from(8)),
+            SemanticComparisonDirection::Widened
+        );
+    }
+
+    #[test]
+    fn integer_bound_direction_is_exact_above_f64_precision() {
+        let upper = "/$defs/materialization/properties/max_records";
+        let smaller = Value::from(9_007_199_254_740_992_u64);
+        let larger = Value::from(9_007_199_254_740_993_u64);
+        assert_eq!(
+            direction_for_values(upper, &smaller, &larger),
+            SemanticComparisonDirection::Narrowed
+        );
+        assert_eq!(
+            direction_for_values(upper, &larger, &smaller),
+            SemanticComparisonDirection::Widened
+        );
+        assert_eq!(
+            direction_for_values(upper, &Value::from(u64::MAX - 1), &Value::from(u64::MAX),),
+            SemanticComparisonDirection::Narrowed
+        );
+        assert_eq!(
+            direction_for_values(
+                upper,
+                &Value::from(-9_007_199_254_740_993_i64),
+                &Value::from(-9_007_199_254_740_992_i64),
+            ),
+            SemanticComparisonDirection::Narrowed
+        );
+        assert_eq!(
+            direction_for_values(upper, &Value::from(-1_i64), &Value::from(0_u64)),
+            SemanticComparisonDirection::Narrowed
+        );
+        assert_eq!(
+            direction_for_values(upper, &Value::from(8.5_f64), &Value::from(16.0_f64)),
+            SemanticComparisonDirection::Narrowed
+        );
+        assert_eq!(
+            direction_for_values(upper, &Value::from(16_u64), &Value::from(16.0_f64)),
+            SemanticComparisonDirection::Changed
+        );
+
+        let lower = "/$defs/schema/properties/minimum";
+        assert_eq!(
+            direction_for_values(lower, &larger, &smaller),
+            SemanticComparisonDirection::Narrowed
+        );
+        assert_eq!(
+            direction_for_values(lower, &smaller, &larger),
+            SemanticComparisonDirection::Widened
+        );
+        assert_eq!(
+            direction_for_values(lower, &Value::from(i64::MIN + 1), &Value::from(i64::MIN),),
+            SemanticComparisonDirection::Narrowed
+        );
+        assert_eq!(
+            direction_for_values(lower, &Value::from(i64::MIN), &Value::from(i64::MIN + 1),),
             SemanticComparisonDirection::Widened
         );
     }
