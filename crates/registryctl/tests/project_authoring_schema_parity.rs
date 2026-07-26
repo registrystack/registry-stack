@@ -250,7 +250,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
             (SchemaKind::Project, 219),
             (SchemaKind::Environment, 191),
             (SchemaKind::Integration, 138),
-            (SchemaKind::Fixture, 40),
+            (SchemaKind::Fixture, 62),
             (SchemaKind::Entity, 35),
         ]
         .into_iter()
@@ -261,11 +261,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_path_kind(),
         [
             (FieldPathKind::Root, 5),
-            (FieldPathKind::Property, 440),
-            (FieldPathKind::MapKey, 24),
-            (FieldPathKind::MapValue, 30),
-            (FieldPathKind::ArrayItem, 30),
-            (FieldPathKind::Branch, 94),
+            (FieldPathKind::Property, 455),
+            (FieldPathKind::MapKey, 25),
+            (FieldPathKind::MapValue, 32),
+            (FieldPathKind::ArrayItem, 32),
+            (FieldPathKind::Branch, 96),
         ]
         .into_iter()
         .collect(),
@@ -278,8 +278,8 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
             (Sensitivity::Internal, 410),
             (Sensitivity::Sensitive, 64),
             (Sensitivity::SecretReference, 14),
-            (Sensitivity::RedactedFixture, 30),
-            (Sensitivity::Structural, 99),
+            (Sensitivity::RedactedFixture, 50),
+            (Sensitivity::Structural, 101),
         ]
         .into_iter()
         .collect(),
@@ -287,12 +287,12 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     );
     assert_eq!(
         index.by_path().len(),
-        623,
+        645,
         "the field-knowledge gate covers every published schema path"
     );
     assert_eq!(
         index.references().len(),
-        253,
+        257,
         "every published local reference remains resolved in the deterministic reference index"
     );
     assert_eq!(
@@ -341,7 +341,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     );
     assert_eq!(
         index.coverage_by_sensitivity()[&Sensitivity::RedactedFixture],
-        30,
+        50,
         "fixture request, response, input, body, and expected values remain redacted"
     );
     walk_schema(
@@ -846,26 +846,26 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
             (
                 "fixture",
                 PublishedStructuralInventory {
-                    nodes: 45,
-                    local_refs: 6,
-                    union_nodes: 3,
-                    union_branches: 6,
+                    nodes: 71,
+                    local_refs: 10,
+                    union_nodes: 4,
+                    union_branches: 8,
                     conditionals: 0,
-                    objects: 15,
-                    closed_objects: 7,
-                    typed_maps: 5,
+                    objects: 21,
+                    closed_objects: 11,
+                    typed_maps: 7,
                     open_maps: 3,
-                    arrays: 2,
-                    scalar_types: 21,
-                    nullable_nodes: 3,
+                    arrays: 4,
+                    scalar_types: 36,
+                    nullable_nodes: 4,
                     integer_lower_bounds: 1,
                     integer_upper_bounds: 1,
-                    string_length_bounds: 6,
-                    string_patterns: 6,
-                    array_size_bounds: 2,
+                    string_length_bounds: 9,
+                    string_patterns: 7,
+                    array_size_bounds: 4,
                     unique_arrays: 0,
-                    object_size_bounds: 8,
-                    property_name_constraints: 3,
+                    object_size_bounds: 10,
+                    property_name_constraints: 4,
                     enums: 2,
                     consts: 1,
                     defaults: 0,

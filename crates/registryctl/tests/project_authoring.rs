@@ -2096,7 +2096,7 @@ fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
         assert_eq!(check_report.status, "valid");
 
         let build_report = build_registry_project(&ProjectBuildOptions {
-            project_directory,
+            project_directory: project_directory.clone(),
             environment: "local".to_string(),
             against: None,
             anchor: None,
@@ -2343,6 +2343,10 @@ fn typed_target_attribute_executes_through_the_offline_notary_journey() {
     for entry in std::fs::read_dir(&fixture_directory).expect("starter fixtures") {
         let path = entry.expect("fixture entry").path();
         let fixture = std::fs::read_to_string(&path).expect("fixture file");
+        let fixture = fixture.replace(
+            "    identifiers: [{ scheme: registry_person_id, value: AB-123456 }]",
+            "    attributes: { person_sequence: 1 }",
+        );
         std::fs::write(&path, fixture.replace("AB-123456", "1")).expect("typed fixture writes");
     }
 
@@ -4047,6 +4051,211 @@ fn project_check_preserves_both_exact_sides_of_cross_file_failures() {
 }
 
 #[test]
+fn project_check_points_to_representative_semantic_reference_and_value_failures() {
+    let assert_exact_pointer =
+        |project: &Path, cause: &str, expected_file: &str, expected_pointer: &str| {
+            let report = authoring_diagnostics(project);
+            let diagnostic = report
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.cause == cause)
+                .unwrap_or_else(|| panic!("missing {cause}: {report:#?}"));
+            assert!(
+                diagnostic.addresses.iter().any(|address| {
+                    address.file == expected_file && address.pointer == expected_pointer
+                }),
+                "missing {expected_file}#{expected_pointer}: {diagnostic:#?}"
+            );
+            assert!(
+                diagnostic
+                    .addresses
+                    .iter()
+                    .all(|address| !address.pointer.is_empty()),
+                "a precise semantic diagnostic degraded to a document-root address: {diagnostic:#?}"
+            );
+        };
+
+    let integration_root = tempfile::tempdir().expect("integration temporary directory");
+    let integration_project = copy_project("custom-system", integration_root.path());
+    let project_path = integration_project.join("registry-stack.yaml");
+    let mut project = read_yaml(&project_path);
+    project["services"]["household-eligibility"]["consultations"]["household"]["integration"] =
+        serde_norway::Value::String("missing-integration".to_string());
+    write_yaml(&project_path, &project);
+    assert_exact_pointer(
+        &integration_project,
+        "A service consultation references an unknown integration.",
+        "registry-stack.yaml",
+        "/services/household-eligibility/consultations/household/integration",
+    );
+
+    let credential_root = tempfile::tempdir().expect("credential temporary directory");
+    let credential_project = copy_project("custom-system", credential_root.path());
+    let project_path = credential_project.join("registry-stack.yaml");
+    let mut project = read_yaml(&project_path);
+    project["services"]["household-eligibility"]["credential_profiles"]["household-eligibility"]
+        ["claims"][0] = serde_norway::Value::String("missing-claim".to_string());
+    write_yaml(&project_path, &project);
+    assert_exact_pointer(
+        &credential_project,
+        "A credential profile references an unknown claim.",
+        "registry-stack.yaml",
+        "/services/household-eligibility/credential_profiles/household-eligibility/claims/0",
+    );
+
+    let cel_root = tempfile::tempdir().expect("CEL temporary directory");
+    let cel_project = copy_project("custom-system", cel_root.path());
+    let project_path = cel_project.join("registry-stack.yaml");
+    let mut project = read_yaml(&project_path);
+    project["services"]["household-eligibility"]["claims"]["household-record-exists"]["cel"] =
+        serde_norway::Value::String("missing_consultation.matched".to_string());
+    write_yaml(&project_path, &project);
+    assert_exact_pointer(
+        &cel_project,
+        "A claim evaluation does not resolve to a declared consultation.",
+        "registry-stack.yaml",
+        "/services/household-eligibility/claims/household-record-exists/cel",
+    );
+
+    let validity_root = tempfile::tempdir().expect("validity temporary directory");
+    let validity_project = copy_project("custom-system", validity_root.path());
+    let project_path = validity_project.join("registry-stack.yaml");
+    let mut project = read_yaml(&project_path);
+    project["services"]["household-eligibility"]["credential_profiles"]["household-eligibility"]
+        ["validity"] = serde_norway::Value::String("ten-minutes".to_string());
+    write_yaml(&project_path, &project);
+    assert_exact_pointer(
+        &validity_project,
+        "The YAML document does not satisfy its canonical authoring schema.",
+        "registry-stack.yaml",
+        "/services/household-eligibility/credential_profiles/household-eligibility/validity",
+    );
+
+    let disclosure_root = tempfile::tempdir().expect("disclosure temporary directory");
+    let disclosure_project = copy_project("custom-system", disclosure_root.path());
+    let project_path = disclosure_project.join("registry-stack.yaml");
+    let mut project = read_yaml(&project_path);
+    project["services"]["household-eligibility"]["claims"]["household-record-exists"]
+        ["disclosure"] = serde_norway::Value::String("unsupported-mode".to_string());
+    write_yaml(&project_path, &project);
+    assert_exact_pointer(
+        &disclosure_project,
+        "The YAML document does not satisfy its canonical authoring schema.",
+        "registry-stack.yaml",
+        "/services/household-eligibility/claims/household-record-exists/disclosure",
+    );
+}
+
+#[test]
+fn project_check_moves_unknown_direct_outputs_into_exact_typed_diagnostics() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let project_path = project.join("registry-stack.yaml");
+    let mut authored = read_yaml(&project_path);
+    authored["services"]["household-eligibility"]["claims"]["household-category"]["output"] =
+        serde_norway::Value::String("household.unknown-output".to_string());
+    write_yaml(&project_path, &authored);
+
+    let report = authoring_diagnostics(&project);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.cause == "A direct claim references an unknown integration output."
+        })
+        .unwrap_or_else(|| panic!("missing direct-output diagnostic: {report:#?}"));
+    assert_eq!(
+        diagnostic
+            .addresses
+            .iter()
+            .map(|address| (address.file.as_str(), address.pointer.as_str()))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            ("integrations/eligibility/integration.yaml", "/outputs"),
+            (
+                "registry-stack.yaml",
+                "/services/household-eligibility/claims/household-category/output",
+            ),
+        ])
+    );
+}
+
+#[test]
+fn project_check_rejects_unresolvable_request_paths_and_string_source_type_mismatches() {
+    let path_root = tempfile::tempdir().expect("path temporary directory");
+    let path_project = copy_project("custom-system", path_root.path());
+    let project_path = path_project.join("registry-stack.yaml");
+    let mut project = read_yaml(&project_path);
+    project["services"]["household-eligibility"]["consultations"]["household"]["input"]
+        ["household_reference"] = serde_norway::Value::String("request.ghost_field".to_string());
+    write_yaml(&project_path, &project);
+    let report = authoring_diagnostics(&path_project);
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.addresses.iter().any(|address| {
+                address.pointer
+                    == "/services/household-eligibility/consultations/household/input/household_reference"
+            })
+        }),
+        "{report:#?}"
+    );
+
+    let type_root = tempfile::tempdir().expect("type temporary directory");
+    let type_project = copy_project("custom-system", type_root.path());
+    let integration_path = type_project.join("integrations/eligibility/integration.yaml");
+    let mut integration = read_yaml(&integration_path);
+    integration["input"]["household_reference"]["type"] =
+        serde_norway::Value::String("boolean".to_string());
+    integration["input"]["household_reference"]
+        .as_mapping_mut()
+        .expect("input schema is a map")
+        .remove(serde_norway::Value::String("maxLength".to_string()));
+    integration["input"]["household_reference"]
+        .as_mapping_mut()
+        .expect("input schema is a map")
+        .remove(serde_norway::Value::String("pattern".to_string()));
+    write_yaml(&integration_path, &integration);
+    for fixture in std::fs::read_dir(type_project.join("integrations/eligibility/fixtures"))
+        .expect("fixture directory reads")
+    {
+        let path = fixture.expect("fixture entry").path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
+            continue;
+        }
+        let mut fixture = read_yaml(&path);
+        fixture["input"]["household_reference"] = serde_norway::Value::Bool(true);
+        write_yaml(&path, &fixture);
+    }
+
+    let report = authoring_diagnostics(&type_project);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.cause
+                == "A governed request string source is incompatible with its integration input."
+        })
+        .unwrap_or_else(|| panic!("missing source-type diagnostic: {report:#?}"));
+    assert_eq!(
+        diagnostic
+            .addresses
+            .iter()
+            .map(|address| (address.file.as_str(), address.pointer.as_str()))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            (
+                "integrations/eligibility/integration.yaml",
+                "/input/household_reference/type",
+            ),
+            (
+                "registry-stack.yaml",
+                "/services/household-eligibility/consultations/household/input/household_reference",
+            ),
+        ])
+    );
+}
+
+#[test]
 fn project_check_keeps_same_legacy_cross_file_failures_distinct_by_address() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("snapshot-with-records", temporary.path());
@@ -5176,7 +5385,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "6b6cd57e5676d7ab5cdc0e9a02a27afedd932e8d037f451867201e4870829459",
+        "44b7218cd4d0b4739e74b756dfbaa26cdfb837ef14985ec9b1248823f99ded9b",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }
@@ -7382,6 +7591,11 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
         "request.target.identifiers.household_reference",
         "request.target.identifiers.household_case_number",
     );
+    replace_in_file(
+        &consultation_project.join("integrations/eligibility/fixtures/source-approved.yaml"),
+        "scheme: household_reference",
+        "scheme: household_case_number",
+    );
     assert_change_dimensions(
         consultation_project,
         &baseline,
@@ -7563,6 +7777,19 @@ fn extend_exact_selector(project: &Path, golden_name: &str, size: usize) {
                     serde_norway::Value::String(format!("selector_{component}")),
                     serde_norway::Value::String(value.clone()),
                 );
+            if let Some(identifiers) = document
+                .get_mut("request")
+                .and_then(|request| request.get_mut("target"))
+                .and_then(|target| target.get_mut("identifiers"))
+                .and_then(serde_norway::Value::as_sequence_mut)
+            {
+                identifiers.push(
+                    serde_norway::from_str(&format!(
+                        "{{ scheme: selector_{component}, value: {value:?} }}"
+                    ))
+                    .expect("fixture request selector"),
+                );
+            }
             if golden_name == "custom-system" {
                 if let Some(interactions) = document
                     .get_mut("interactions")
@@ -7691,30 +7918,41 @@ fn duplicate_project_integration(project: &Path, source_alias: &str, target_alia
         .as_str()
         .expect("consultation name is a string");
     let reference = format!("{consultation_name}.");
-    let (source_claim_name, mut duplicated_claim) = service["claims"]
+    let duplicated_claims = service["claims"]
         .as_mapping()
-        .and_then(|claims| {
-            claims.iter().find_map(|(name, claim)| {
-                yaml_contains_string(claim, &reference).then(|| (name.clone(), claim.clone()))
-            })
+        .map(|claims| {
+            claims
+                .iter()
+                .filter_map(|(name, claim)| {
+                    let source_claim = name.as_str()?;
+                    if !yaml_contains_string(claim, &reference) {
+                        return None;
+                    }
+                    let mut duplicated_claim = claim.clone();
+                    replace_yaml_strings(
+                        &mut duplicated_claim,
+                        &reference,
+                        &format!("{target_alias}."),
+                    );
+                    Some((
+                        source_claim.to_string(),
+                        format!("{target_alias}-{source_claim}"),
+                        duplicated_claim,
+                    ))
+                })
+                .collect::<Vec<_>>()
         })
-        .expect("source consultation claim");
-    replace_yaml_strings(
-        &mut duplicated_claim,
-        &reference,
-        &format!("{target_alias}."),
-    );
-    let claim_name = format!(
-        "{target_alias}-{}",
-        source_claim_name.as_str().expect("claim name is a string")
-    );
-    service["claims"]
-        .as_mapping_mut()
-        .expect("project claims mapping")
-        .insert(
-            serde_norway::Value::String(claim_name.clone()),
-            duplicated_claim,
-        );
+        .filter(|claims| !claims.is_empty())
+        .expect("source consultation claims");
+    for (_, target_claim, duplicated_claim) in &duplicated_claims {
+        service["claims"]
+            .as_mapping_mut()
+            .expect("project claims mapping")
+            .insert(
+                serde_norway::Value::String(target_claim.clone()),
+                duplicated_claim.clone(),
+            );
+    }
     for credential in service["credential_profiles"]
         .as_mapping_mut()
         .expect("project credential profiles")
@@ -7723,18 +7961,23 @@ fn duplicate_project_integration(project: &Path, source_alias: &str, target_alia
         credential["claims"]
             .as_sequence_mut()
             .expect("credential profile claims")
-            .push(serde_norway::Value::String(claim_name.clone()));
+            .extend(
+                duplicated_claims
+                    .iter()
+                    .map(|(_, target_claim, _)| serde_norway::Value::String(target_claim.clone())),
+            );
     }
     write_yaml(&project_path, &project_document);
+    let claim_translations = duplicated_claims
+        .iter()
+        .map(|(source, target, _)| (source.clone(), target.clone()))
+        .collect::<Vec<_>>();
     rewrite_duplicated_fixture_claims(
         &project
             .join("integrations")
             .join(target_alias)
             .join("fixtures"),
-        source_claim_name
-            .as_str()
-            .expect("source claim name is a string"),
-        &claim_name,
+        &claim_translations,
     );
 
     let environment_path = project.join("environments/local.yaml");
@@ -7751,25 +7994,43 @@ fn duplicate_project_integration(project: &Path, source_alias: &str, target_alia
     write_yaml(&environment_path, &environment);
 }
 
-fn rewrite_duplicated_fixture_claims(fixtures: &Path, source_claim: &str, target_claim: &str) {
+fn rewrite_duplicated_fixture_claims(fixtures: &Path, translations: &[(String, String)]) {
+    let translate = |claim: &str| {
+        translations
+            .iter()
+            .find_map(|(source, target)| (source == claim).then_some(target.as_str()))
+    };
     for entry in std::fs::read_dir(fixtures).expect("duplicated fixtures directory reads") {
         let path = entry.expect("duplicated fixture entry reads").path();
         if path.extension().and_then(std::ffi::OsStr::to_str) != Some("yaml") {
             continue;
         }
         let mut fixture = read_yaml(&path);
-        let Some(claims) = fixture["expect"]["claims"].as_mapping_mut() else {
-            continue;
-        };
-        let source_key = serde_norway::Value::String(source_claim.to_string());
-        let Some(expected) = claims.get(&source_key).cloned() else {
-            continue;
-        };
-        claims.clear();
-        claims.insert(
-            serde_norway::Value::String(target_claim.to_string()),
-            expected,
-        );
+        if let Some(claims) = fixture["expect"]["claims"].as_mapping_mut() {
+            let rewritten = claims
+                .iter()
+                .map(|(claim, expected)| {
+                    let claim = claim.as_str().expect("fixture claim is a string");
+                    (
+                        serde_norway::Value::String(translate(claim).unwrap_or(claim).to_string()),
+                        expected.clone(),
+                    )
+                })
+                .collect::<serde_norway::Mapping>();
+            *claims = rewritten;
+        }
+        if let Some(request_claims) = fixture
+            .get_mut("request")
+            .and_then(|request| request.get_mut("claims"))
+            .and_then(serde_norway::Value::as_sequence_mut)
+        {
+            for claim in request_claims {
+                let source_claim = claim.as_str().expect("request claim is a string");
+                if let Some(target_claim) = translate(source_claim) {
+                    *claim = serde_norway::Value::String(target_claim.to_string());
+                }
+            }
+        }
         write_yaml(&path, &fixture);
     }
 }
@@ -7973,6 +8234,15 @@ place: request.target.identifiers.place
             "uin: '0000000001'\nfamily: Example\nplace: Fictional District\n",
         )
         .expect("composite DCI fixture inputs");
+        if fixture.get("request").is_some() {
+            fixture["request"]["target"]["identifiers"] = serde_norway::from_str(
+                r#"- { scheme: uin, value: "0000000001" }
+- { scheme: family, value: Example }
+- { scheme: place, value: Fictional District }
+"#,
+            )
+            .expect("composite DCI request identifiers");
+        }
         let data_interaction = fixture["interactions"]
             .as_sequence_mut()
             .and_then(|interactions| {

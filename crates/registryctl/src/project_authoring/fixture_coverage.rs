@@ -19,6 +19,7 @@ pub(crate) const MAX_FIXTURE_COVERAGE_AUTHORED_RECORDS: usize = 1_024;
 pub(crate) const MAX_FIXTURE_COVERAGE_GENERATED_RECORDS: usize =
     MAX_FIXTURE_COVERAGE_AUTHORED_RECORDS * GeneratorRecipeId::ALL.len();
 pub(crate) const MAX_FIXTURE_COVERAGE_PLATFORM_RECORDS: usize = PlatformGeneratedCaseId::ALL.len();
+pub(crate) const MAX_FIXTURE_COVERAGE_CONSULTATIONS: usize = 512;
 
 const INVALID_REPORT: &str = "fixture coverage report violates the closed v1 invariants";
 const INVALID_COMPARISON: &str =
@@ -46,6 +47,14 @@ pub enum FixtureCompatibilityClaim {
 #[serde(rename_all = "snake_case")]
 pub enum LiveCompatibilityEvaluation {
     NotEvaluated,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GovernedRequestEvidence {
+    /// Proof method only. Per-target requirement state remains authoritative
+    /// about whether every reachable consultation has a passing witness.
+    PerConsultationAuthoredRequestWitnessEvaluation,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -243,6 +252,34 @@ pub struct AuthoredSemanticFixtureCoverage {
     pub exercised_status_mappings: Vec<FixtureStatusMapping>,
     pub classification: FixtureCoverageClassification,
     pub pass_state: FixturePassState,
+    pub request_to_consultation_binding: FixtureRequestBindingCoverage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixtureRequestBindingState {
+    NotAuthored,
+    NotExecuted,
+    Passed,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureRequestBindingCoverage {
+    pub state: FixtureRequestBindingState,
+    /// Safe authored identities selected by a passing production Notary plan.
+    /// Values, selectors, and rendered requests never enter this report.
+    pub consultations: Vec<FixtureConsultationIdentity>,
+    pub actual_relay_consultations: Option<u32>,
+    pub safe_error_code: Option<FixtureSafeCode>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureConsultationIdentity {
+    pub service_id: String,
+    pub consultation_id: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -469,6 +506,10 @@ pub struct FixtureCoverageTargetContract {
     /// operation cardinality, not a source endpoint or authored path.
     pub source_operation_count: Option<u32>,
     pub reviewed_not_applicable: Vec<FixtureCoverageReviewedNotApplicable>,
+    /// Every registry-backed consultation reachable through claims for this
+    /// integration. Coverage must include an independently authored passing
+    /// request for each identity, not merely any passing fixture.
+    pub registry_backed_consultations: Vec<FixtureConsultationIdentity>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
@@ -482,6 +523,7 @@ pub enum RequiredFixtureCoverageRequirement {
     AuthorizationDenial,
     SourceFailure,
     RequestRendering,
+    RequestToConsultationBinding,
     ExpectedSourceInteractions,
     SourceInteractionOrder,
     OutputFields,
@@ -511,7 +553,7 @@ pub enum RequiredFixtureCoverageRequirement {
 }
 
 impl RequiredFixtureCoverageRequirement {
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::SemanticMatch,
         Self::SemanticNoMatch,
         Self::SemanticAmbiguity,
@@ -520,6 +562,7 @@ impl RequiredFixtureCoverageRequirement {
         Self::AuthorizationDenial,
         Self::SourceFailure,
         Self::RequestRendering,
+        Self::RequestToConsultationBinding,
         Self::ExpectedSourceInteractions,
         Self::SourceInteractionOrder,
         Self::OutputFields,
@@ -755,6 +798,7 @@ pub struct ProjectFixtureCoverageReportV1 {
     pub evidence_scope: FixtureEvidenceScope,
     pub compatibility_claim: FixtureCompatibilityClaim,
     pub live_compatibility: LiveCompatibilityEvaluation,
+    pub governed_request_evidence: GovernedRequestEvidence,
     pub targets: Vec<FixtureCoverageTarget>,
     pub summary: FixtureCoverageSummary,
 }
@@ -768,6 +812,7 @@ struct UncheckedProjectFixtureCoverageReportV1 {
     evidence_scope: FixtureEvidenceScope,
     compatibility_claim: FixtureCompatibilityClaim,
     live_compatibility: LiveCompatibilityEvaluation,
+    governed_request_evidence: GovernedRequestEvidence,
     targets: Vec<FixtureCoverageTarget>,
     summary: FixtureCoverageSummary,
 }
@@ -786,6 +831,8 @@ impl ProjectFixtureCoverageReportV1 {
             evidence_scope: FixtureEvidenceScope::OfflineSynthetic,
             compatibility_claim: FixtureCompatibilityClaim::None,
             live_compatibility: LiveCompatibilityEvaluation::NotEvaluated,
+            governed_request_evidence:
+                GovernedRequestEvidence::PerConsultationAuthoredRequestWitnessEvaluation,
             targets,
             summary,
         };
@@ -833,6 +880,7 @@ impl ProjectFixtureCoverageReportV1 {
             evidence_scope: self.evidence_scope,
             compatibility_claim: self.compatibility_claim,
             live_compatibility: self.live_compatibility,
+            governed_request_evidence: self.governed_request_evidence,
             targets: self.targets,
             summary: self.summary,
         };
@@ -852,6 +900,7 @@ impl TryFrom<UncheckedProjectFixtureCoverageReportV1> for ProjectFixtureCoverage
             evidence_scope: value.evidence_scope,
             compatibility_claim: value.compatibility_claim,
             live_compatibility: value.live_compatibility,
+            governed_request_evidence: value.governed_request_evidence,
             targets: value.targets,
             summary: value.summary,
         })
@@ -1226,6 +1275,10 @@ fn validate_authored_fixture(
                 target.identity.integration, fixture.fixture_id
             )
         && fixture.evidence.digest == fixture.fixture_digest
+        && valid_request_binding(
+            &fixture.request_to_consultation_binding,
+            &target.contract.registry_backed_consultations,
+        )
 }
 
 fn valid_target_contract(
@@ -1236,12 +1289,49 @@ fn valid_target_contract(
         .reviewed_not_applicable
         .windows(2)
         .all(|pair| pair[0] < pair[1])
+        && valid_consultation_identities(&contract.registry_backed_consultations)
         && match identity.capability {
             FixtureCapability::DeclarativeHttp => contract.source_operation_count.is_some(),
             FixtureCapability::Script | FixtureCapability::Snapshot => {
                 contract.source_operation_count.is_none()
             }
         }
+}
+
+fn valid_request_binding(
+    binding: &FixtureRequestBindingCoverage,
+    declared: &[FixtureConsultationIdentity],
+) -> bool {
+    valid_consultation_identities(&binding.consultations)
+        && slice_is_subset(&binding.consultations, declared)
+        && match binding.state {
+            FixtureRequestBindingState::NotAuthored | FixtureRequestBindingState::NotExecuted => {
+                binding.consultations.is_empty()
+                    && binding.actual_relay_consultations.is_none()
+                    && binding.safe_error_code.is_none()
+            }
+            FixtureRequestBindingState::Passed => {
+                !binding.consultations.is_empty()
+                    && binding
+                        .actual_relay_consultations
+                        .is_some_and(|count| count > 0)
+                    && binding.safe_error_code.is_none()
+            }
+            FixtureRequestBindingState::Failed => {
+                binding.consultations.is_empty()
+                    && binding.actual_relay_consultations.is_some()
+                    && binding.safe_error_code.is_some()
+            }
+        }
+}
+
+fn valid_consultation_identities(identities: &[FixtureConsultationIdentity]) -> bool {
+    identities.len() <= MAX_FIXTURE_COVERAGE_CONSULTATIONS
+        && identities.windows(2).all(|pair| pair[0] < pair[1])
+        && identities.iter().all(|identity| {
+            is_report_identifier(&identity.service_id)
+                && is_report_identifier(&identity.consultation_id)
+        })
 }
 
 fn validate_generated_case(
@@ -1399,12 +1489,17 @@ fn comparison_absence_reason(
     if has_comparison {
         return Ok(FixtureCoverageNotEvaluatedReason::ComparisonInputAbsent);
     }
-    let mut reasons = requirements.iter().skip(30).map(|coverage| match coverage {
-        FixtureRequirementCoverage::NotEvaluated {
-            reason, evidence, ..
-        } if evidence.is_empty() => Ok(*reason),
-        _ => Err(INVALID_REPORT),
-    });
+    let comparison_requirement_start =
+        RequiredFixtureCoverageRequirement::ALL.len() - FixtureCoverageChangeKind::ALL.len();
+    let mut reasons = requirements
+        .iter()
+        .skip(comparison_requirement_start)
+        .map(|coverage| match coverage {
+            FixtureRequirementCoverage::NotEvaluated {
+                reason, evidence, ..
+            } if evidence.is_empty() => Ok(*reason),
+            _ => Err(INVALID_REPORT),
+        });
     let first = reasons.next().transpose()?.ok_or(INVALID_REPORT)?;
     if reasons.any(|reason| reason != Ok(first)) {
         return Err(INVALID_REPORT);
@@ -1552,6 +1647,40 @@ fn derive_fixture_coverage_requirement(
                     GeneratorRecipeId::RequestAuthority,
                     fixture_gap,
                 )
+            }
+        }
+        Requirement::RequestToConsultationBinding => {
+            let required = &target.contract.registry_backed_consultations;
+            if required.is_empty() {
+                no_claims_not_applicable(target, requirement)
+            } else {
+                let passing = target
+                    .fixture_inventory
+                    .iter()
+                    .filter(|fixture| {
+                        fixture.pass_state == FixturePassState::Passed
+                            && fixture.request_to_consultation_binding.state
+                                == FixtureRequestBindingState::Passed
+                    })
+                    .collect::<Vec<_>>();
+                let covered_consultations = passing
+                    .iter()
+                    .flat_map(|fixture| {
+                        fixture.request_to_consultation_binding.consultations.iter()
+                    })
+                    .collect::<BTreeSet<_>>();
+                let evidence = passing
+                    .into_iter()
+                    .map(|fixture| fixture.evidence.clone())
+                    .collect::<Vec<_>>();
+                if required
+                    .iter()
+                    .all(|consultation| covered_consultations.contains(consultation))
+                {
+                    covered(requirement, evidence)
+                } else {
+                    missing(requirement, fixture_gap, evidence)
+                }
             }
         }
         Requirement::ExpectedSourceInteractions => {
@@ -2260,4 +2389,14 @@ pub(crate) struct GeneratedFixtureObservation {
     pub actual_safe_code: Option<FixtureSafeCode>,
     pub pass_state: FixturePassState,
     pub actual_source_calls: Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct AuthoredRequestBindingObservation {
+    pub integration: String,
+    pub source_fixture_id: String,
+    pub pass_state: FixturePassState,
+    pub consultations: Vec<FixtureConsultationIdentity>,
+    pub actual_safe_code: Option<FixtureSafeCode>,
+    pub actual_relay_consultations: Option<u32>,
 }

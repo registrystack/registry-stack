@@ -1,5 +1,14 @@
 name: provincial-birth-match
 classification: synthetic
+request:
+  target:
+    type: Person
+    identifiers: [{ scheme: birth_registration_number, value: BR-ZZ-0000001 }]
+  variables: { as_of_date: 2026-01-01 }
+  claims: [birth-record-exists]
+  disclosure: predicate
+  format: application/vnd.registry-notary.claim-result+json
+  purpose: provincial-birth-attribute-verification
 input: { registration_number: BR-ZZ-0000001 }
 variables: { as_of_date: 2026-01-01 }
 interactions:

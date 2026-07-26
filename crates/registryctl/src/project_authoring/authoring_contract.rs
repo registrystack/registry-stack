@@ -393,6 +393,8 @@ impl AuthoredByteSize {
 struct AuthoredFixtureDocument {
     name: String,
     classification: AuthoredFixtureClassification,
+    #[serde(default)]
+    request: Option<GovernedLiveRequest>,
     input: BTreeMap<String, Value>,
     #[serde(default)]
     variables: BTreeMap<String, Value>,

@@ -177,6 +177,24 @@ pub fn render_project_authoring_diagnostics(report: &ProjectAuthoringDiagnostics
     output
 }
 
+/// Produces the value-free strict JSON fallback for a `check` failure that did
+/// not already carry exact typed authoring diagnostics.
+///
+/// Human output retains the underlying local error. Portable output cannot
+/// serialize arbitrary `anyhow` chains because they may contain paths,
+/// authored values, or runtime details.
+#[must_use]
+pub fn redacted_project_check_failure_diagnostics() -> ProjectAuthoringDiagnostics {
+    finalized_diagnostics(vec![invalid_diagnostic(
+        "registryctl.authoring.project.invalid",
+        PROJECT_FILE,
+        None,
+        "The offline project check could not complete safely.",
+        "Correct the reported project or option issue, then run the check again with trusted local human output if more detail is needed.",
+        Some(PROJECT_SCHEMA_HINT),
+    )])
+}
+
 fn collect_project_authoring_diagnostics(
     project_directory: &Path,
     environment_name: &str,
@@ -204,6 +222,11 @@ fn collect_project_authoring_diagnostics(
                 return finalized_diagnostics(diagnostics);
             }
         };
+    diagnostics.extend(project_declaration_semantic_diagnostics(&project));
+    if !diagnostics.is_empty() {
+        collect_selected_environment_syntax(&root, environment_name, &mut diagnostics);
+        return finalized_diagnostics(diagnostics);
+    }
 
     for reference in project
         .entities
@@ -419,6 +442,10 @@ fn collect_project_authoring_diagnostics(
             &project,
             &integrations,
         ));
+        diagnostics.extend(claim_integration_link_diagnostics(
+            &project,
+            &integrations,
+        ));
         if validate_project_entity_links(&project, &integrations, &entities).is_err() {
             if let Some(collision) = project_records_scope_collision(&project, &entities) {
                 let (field, cause, remediation) = match collision.kind {
@@ -492,6 +519,178 @@ fn collect_project_authoring_diagnostics(
         }
     }
     finalized_diagnostics(diagnostics)
+}
+
+fn project_declaration_semantic_diagnostics(
+    project: &RegistryProject,
+) -> Vec<ProjectAuthoringDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for (service_id, service) in project
+        .services
+        .iter()
+        .filter(|(_, service)| service.kind == ServiceKind::Evidence)
+    {
+        for (consultation_id, consultation) in &service.consultations {
+            if !project.integrations.contains_key(&consultation.integration) {
+                diagnostics.push(cross_file_diagnostic(
+                    "registryctl.authoring.project.invalid",
+                    PROJECT_FILE,
+                    Some("services.consultations.integration"),
+                    "A service consultation references an unknown integration.",
+                    "Reference one integration declared by the project.",
+                    Some(PROJECT_SCHEMA_HINT),
+                    vec![
+                        diagnostic_address(
+                            PROJECT_FILE,
+                            &[
+                                "services",
+                                service_id,
+                                "consultations",
+                                consultation_id,
+                                "integration",
+                            ],
+                        ),
+                        diagnostic_address(PROJECT_FILE, &["integrations"]),
+                    ],
+                ));
+            }
+            for (input_id, mapping) in &consultation.input {
+                if validate_request_mapping(mapping).is_err() {
+                    diagnostics.push(cross_file_diagnostic(
+                        "registryctl.authoring.project.invalid",
+                        PROJECT_FILE,
+                        Some("services.consultations.input"),
+                        "A consultation input uses an unsupported governed request path.",
+                        "Use request.target.id, request.target.identifiers.<scheme>, or request.target.attributes.<name>.",
+                        Some(PROJECT_SCHEMA_HINT),
+                        vec![diagnostic_address(
+                            PROJECT_FILE,
+                            &[
+                                "services",
+                                service_id,
+                                "consultations",
+                                consultation_id,
+                                "input",
+                                input_id,
+                            ],
+                        )],
+                    ));
+                }
+            }
+        }
+
+        for (claim_id, claim) in &service.claims {
+            if let Some(output) = claim.output.as_deref() {
+                let consultation = output.split_once('.').map(|(name, _)| name);
+                if consultation.is_none()
+                    || consultation.is_some_and(|name| !service.consultations.contains_key(name))
+                {
+                    diagnostics.push(cross_file_diagnostic(
+                        "registryctl.authoring.project.invalid",
+                        PROJECT_FILE,
+                        Some("services.claims.output"),
+                        "A direct claim output does not name a declared consultation.",
+                        "Use <consultation>.<output> with a consultation declared by this service.",
+                        Some(PROJECT_SCHEMA_HINT),
+                        vec![
+                            diagnostic_address(
+                                PROJECT_FILE,
+                                &["services", service_id, "claims", claim_id, "output"],
+                            ),
+                            diagnostic_address(
+                                PROJECT_FILE,
+                                &["services", service_id, "consultations"],
+                            ),
+                        ],
+                    ));
+                }
+            } else if let Some(expression) = claim.cel.as_deref() {
+                let roots = cel_member_roots(expression);
+                if roots.as_ref().is_err()
+                    || (claim.value.is_none()
+                        && roots.is_ok_and(|roots| {
+                            !service
+                                .consultations
+                                .keys()
+                                .any(|name| roots.contains(name.as_str()))
+                        }))
+                {
+                    diagnostics.push(cross_file_diagnostic(
+                        "registryctl.authoring.project.invalid",
+                        PROJECT_FILE,
+                        Some("services.claims.cel"),
+                        "A claim evaluation does not resolve to a declared consultation.",
+                        "Reference one declared consultation or add the explicit source-free value contract.",
+                        Some(PROJECT_SCHEMA_HINT),
+                        vec![
+                            diagnostic_address(
+                                PROJECT_FILE,
+                                &["services", service_id, "claims", claim_id, "cel"],
+                            ),
+                            diagnostic_address(
+                                PROJECT_FILE,
+                                &["services", service_id, "consultations"],
+                            ),
+                        ],
+                    ));
+                }
+            }
+        }
+
+        for (profile_id, profile) in &service.credential_profiles {
+            for (index, claim_id) in profile.claims.iter().enumerate() {
+                if !service.claims.contains_key(claim_id) {
+                    let index = index.to_string();
+                    diagnostics.push(cross_file_diagnostic(
+                        "registryctl.authoring.project.invalid",
+                        PROJECT_FILE,
+                        Some("services.credential_profiles.claims"),
+                        "A credential profile references an unknown claim.",
+                        "Reference only claims declared by this service.",
+                        Some(PROJECT_SCHEMA_HINT),
+                        vec![
+                            diagnostic_address(
+                                PROJECT_FILE,
+                                &[
+                                    "services",
+                                    service_id,
+                                    "credential_profiles",
+                                    profile_id,
+                                    "claims",
+                                    &index,
+                                ],
+                            ),
+                            diagnostic_address(
+                                PROJECT_FILE,
+                                &["services", service_id, "claims"],
+                            ),
+                        ],
+                    ));
+                }
+            }
+            if parse_validity_seconds(&profile.validity).is_err() {
+                diagnostics.push(cross_file_diagnostic(
+                    "registryctl.authoring.project.invalid",
+                    PROJECT_FILE,
+                    Some("services.credential_profiles.validity"),
+                    "A credential profile validity is invalid.",
+                    "Use a positive bounded validity in seconds, minutes, or hours.",
+                    Some(PROJECT_SCHEMA_HINT),
+                    vec![diagnostic_address(
+                        PROJECT_FILE,
+                        &[
+                            "services",
+                            service_id,
+                            "credential_profiles",
+                            profile_id,
+                            "validity",
+                        ],
+                    )],
+                ));
+            }
+        }
+    }
+    diagnostics
 }
 
 fn collect_selected_environment_syntax(
@@ -746,7 +945,105 @@ fn service_integration_link_diagnostics(
                 .ne(integration.document.input.keys());
             let non_injective = consultation.input.values().collect::<BTreeSet<_>>().len()
                 != consultation.input.len();
-            if !input_set_mismatch && !non_injective {
+            if input_set_mismatch || non_injective {
+                let Some(reference) = project.integrations.get(&consultation.integration) else {
+                    continue;
+                };
+                let integration_file = relative_path_string(&reference.file)
+                    .unwrap_or_else(|| PROJECT_FILE.to_string());
+                diagnostics.push(cross_file_diagnostic(
+                    "registryctl.authoring.project.invalid",
+                    PROJECT_FILE,
+                    Some("services.consultations"),
+                    "A service consultation does not match its integration.",
+                    "Align each consultation input with its referenced integration.",
+                    Some(PROJECT_SCHEMA_HINT),
+                    vec![
+                        diagnostic_address(
+                            PROJECT_FILE,
+                            &[
+                                "services",
+                                service_id,
+                                "consultations",
+                                consultation_id,
+                                "input",
+                            ],
+                        ),
+                        diagnostic_address(&integration_file, &["input"]),
+                    ],
+                ));
+                continue;
+            }
+            for (input_id, mapping) in &consultation.input {
+                let Some(declaration) = integration.document.input.get(input_id) else {
+                    continue;
+                };
+                let request_source_is_string = mapping == "request.target.id"
+                    || mapping.starts_with("request.target.identifiers.");
+                if !request_source_is_string
+                    || matches!(
+                        declaration.input_type,
+                        InputType::String | InputType::FullDate
+                    )
+                {
+                    continue;
+                }
+                let Some(reference) = project.integrations.get(&consultation.integration) else {
+                    continue;
+                };
+                let integration_file = relative_path_string(&reference.file)
+                    .unwrap_or_else(|| PROJECT_FILE.to_string());
+                diagnostics.push(cross_file_diagnostic(
+                    "registryctl.authoring.project.invalid",
+                    PROJECT_FILE,
+                    Some("services.consultations.input"),
+                    "A governed request string source is incompatible with its integration input.",
+                    "Map target ids and identifiers only to String or full-date integration inputs; use a target attribute for other scalar types.",
+                    Some(PROJECT_SCHEMA_HINT),
+                    vec![
+                        diagnostic_address(
+                            PROJECT_FILE,
+                            &[
+                                "services",
+                                service_id,
+                                "consultations",
+                                consultation_id,
+                                "input",
+                                input_id,
+                            ],
+                        ),
+                        diagnostic_address(&integration_file, &["input", input_id, "type"]),
+                    ],
+                ));
+            }
+        }
+    }
+    diagnostics
+}
+
+fn claim_integration_link_diagnostics(
+    project: &RegistryProject,
+    integrations: &BTreeMap<String, LoadedIntegration>,
+) -> Vec<ProjectAuthoringDiagnostic> {
+    let mut diagnostics = Vec::new();
+    for (service_id, service) in project
+        .services
+        .iter()
+        .filter(|(_, service)| service.kind == ServiceKind::Evidence)
+    {
+        for (claim_id, claim) in &service.claims {
+            let Some((consultation_id, output_id)) =
+                claim.output.as_deref().and_then(|output| output.split_once('.'))
+            else {
+                continue;
+            };
+            let Some(consultation) = service.consultations.get(consultation_id) else {
+                continue;
+            };
+            let Some(integration) = integrations.get(&consultation.integration) else {
+                continue;
+            };
+            if integration.document.outputs.contains_key(output_id) {
                 continue;
             }
             let Some(reference) = project.integrations.get(&consultation.integration) else {
@@ -757,22 +1054,16 @@ fn service_integration_link_diagnostics(
             diagnostics.push(cross_file_diagnostic(
                 "registryctl.authoring.project.invalid",
                 PROJECT_FILE,
-                Some("services.consultations"),
-                "A service consultation does not match its integration.",
-                "Align each consultation input with its referenced integration.",
+                Some("services.claims.output"),
+                "A direct claim references an unknown integration output.",
+                "Reference an output declared by the selected consultation's integration.",
                 Some(PROJECT_SCHEMA_HINT),
                 vec![
                     diagnostic_address(
                         PROJECT_FILE,
-                        &[
-                            "services",
-                            service_id,
-                            "consultations",
-                            consultation_id,
-                            "input",
-                        ],
+                        &["services", service_id, "claims", claim_id, "output"],
                     ),
-                    diagnostic_address(&integration_file, &["input"]),
+                    diagnostic_address(&integration_file, &["outputs"]),
                 ],
             ));
         }
@@ -1720,7 +2011,8 @@ fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
             ProjectSchemaKind::Entity => "registryctl.authoring.entity.invalid",
         };
         let (line, column) = error.location();
-        Box::new(make_diagnostic(
+        let instance_path = error.instance_path().map(str::to_string);
+        let mut diagnostic = make_diagnostic(
             if reserved_fixture_body {
                 "registryctl.authoring.fixture.reserved_body_field"
             } else if unknown_field {
@@ -1762,7 +2054,14 @@ fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
                 }
             },
             Vec::new(),
-        ))
+        );
+        if let Some(pointer) = instance_path {
+            diagnostic.addresses = vec![ProjectAuthoringDiagnosticAddress {
+                file: file.to_string(),
+                pointer,
+            }];
+        }
+        Box::new(diagnostic)
     })
 }
 

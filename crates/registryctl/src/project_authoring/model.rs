@@ -1992,11 +1992,92 @@ struct ServiceBinding {
 struct FixtureDocument {
     name: String,
     classification: AuthoredFixtureClassification,
+    #[serde(default)]
+    request: Option<GovernedLiveRequest>,
     input: BTreeMap<String, Value>,
     #[serde(default)]
     variables: BTreeMap<String, Value>,
     interactions: Vec<FixtureInteraction>,
     expect: FixtureExpectation,
+}
+
+/// The closed governed request accepted by both `project test --live` and an
+/// independently authored synthetic fixture witness.
+///
+/// Keeping one internal request type prevents fixture authoring from drifting
+/// into a looser contract than the live Notary boundary.
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GovernedLiveRequest {
+    target: GovernedLiveTarget,
+    #[cfg_attr(test, schemars(with = "BTreeMap<String, String>"))]
+    #[serde(
+        default,
+        skip_serializing_if = "registry_notary_core::RequestVariables::is_empty"
+    )]
+    variables: registry_notary_core::RequestVariables,
+    claims: Vec<registry_notary_core::ClaimRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    disclosure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+    purpose: String,
+}
+
+impl GovernedLiveRequest {
+    fn to_evaluate_request(&self) -> registry_notary_core::EvaluateRequest {
+        registry_notary_core::EvaluateRequest {
+            requester: None,
+            target: Some(registry_notary_core::EvidenceEntity {
+                entity_type: self.target.entity_type.clone(),
+                id: self.target.id.clone(),
+                identifiers: self
+                    .target
+                    .identifiers
+                    .iter()
+                    .map(|identifier| registry_notary_core::EvidenceIdentifier {
+                        scheme: identifier.scheme.clone(),
+                        value: identifier.value.clone(),
+                        issuer: None,
+                        country: None,
+                    })
+                    .collect(),
+                attributes: self.target.attributes.clone(),
+                assurance: None,
+                profile: None,
+            }),
+            relationship: None,
+            on_behalf_of: None,
+            variables: self.variables.clone(),
+            claims: self.claims.clone(),
+            disclosure: self.disclosure.clone(),
+            format: self.format.clone(),
+            purpose: Some(self.purpose.clone()),
+        }
+    }
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GovernedLiveTarget {
+    #[serde(rename = "type")]
+    entity_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    identifiers: Vec<GovernedLiveIdentifier>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    attributes: BTreeMap<String, Value>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GovernedLiveIdentifier {
+    scheme: String,
+    value: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2078,6 +2159,7 @@ struct CompiledProject {
 
 struct FixtureProfile {
     service_id: String,
+    consultation_id: String,
     integration_alias: String,
     id: String,
     version: String,

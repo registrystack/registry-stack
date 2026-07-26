@@ -10,6 +10,11 @@
   "properties": {
     "name": {"x-registry-field": "public_property", "type": "string", "minLength": 1, "maxLength": 256, "description": "Human-readable scenario name shown in test output.", "examples": ["existing household matches"] },
     "classification": {"x-registry-field": "public_property", "const": "synthetic", "description": "Declares that fixture data is synthetic and safe for offline testing." },
+    "request": {
+      "x-registry-field": "redacted_fixture_property",
+      "$ref": "#/$defs/governedRequest",
+      "description": "Optional independently authored synthetic Notary request used to prove the request-to-consultation binding before Relay access."
+    },
     "input": {
       "x-registry-field": "redacted_fixture_property",
       "description": "Typed consultation inputs supplied to the adapter under test.",
@@ -55,6 +60,84 @@
     }
   ],
   "$defs": {
+    "governedRequest": {
+      "description": "The same closed governed request shape accepted by project test --live.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "claims", "purpose"],
+      "properties": {
+        "target": {"x-registry-field": "redacted_fixture_property", "$ref": "#/$defs/governedTarget" },
+        "variables": {
+          "x-registry-field": "redacted_fixture_property",
+          "description": "Supplies synthetic date variables to the governed evaluation request.",
+          "type": "object",
+          "maxProperties": 16,
+          "propertyNames": {"x-registry-field": "redacted_fixture_map_key", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
+          "additionalProperties": {"x-registry-field": "redacted_fixture_map_value", "type": "string", "format": "date" }
+        },
+        "claims": {
+          "x-registry-field": "redacted_fixture_property",
+          "description": "Lists the authored claims evaluated by this synthetic request witness.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"x-registry-field": "redacted_fixture_array_item", "$ref": "#/$defs/governedClaimRef" }
+        },
+        "disclosure": {"x-registry-field": "redacted_fixture_property", "type": "string", "description": "Selects the disclosure mode requested from the authored claim policy." },
+        "format": {"x-registry-field": "redacted_fixture_property", "type": "string", "description": "Selects the claim-result media type requested from the governed Notary path." },
+        "purpose": {"x-registry-field": "redacted_fixture_property", "type": "string", "minLength": 1, "maxLength": 256, "description": "Names the authored service purpose exercised by this synthetic request witness." }
+      }
+    },
+    "governedTarget": {
+      "description": "The synthetic subject target presented to the same governed request boundary as a live Notary evaluation.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {"x-registry-field": "redacted_fixture_property", "type": "string", "minLength": 1, "maxLength": 64, "description": "Names the authored target entity type used for claim evaluation." },
+        "id": {"x-registry-field": "redacted_fixture_property", "type": "string", "description": "Supplies an optional synthetic direct target identifier." },
+        "identifiers": {
+          "x-registry-field": "redacted_fixture_property",
+          "description": "Supplies independently authored synthetic identifiers for consultation input mapping.",
+          "type": "array",
+          "maxItems": 16,
+          "items": {"x-registry-field": "redacted_fixture_array_item", "$ref": "#/$defs/governedIdentifier" }
+        },
+        "attributes": {
+          "x-registry-field": "redacted_fixture_property",
+          "description": "Supplies independently authored typed target attributes for consultation input mapping.",
+          "type": "object",
+          "maxProperties": 16,
+          "additionalProperties": {"x-registry-field": "redacted_fixture_map_value", "type": ["string", "boolean", "integer", "null"] }
+        }
+      }
+    },
+    "governedIdentifier": {
+      "description": "One synthetic target identifier with an authored scheme and string value.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scheme", "value"],
+      "properties": {
+        "scheme": {"x-registry-field": "redacted_fixture_property", "type": "string", "minLength": 1, "maxLength": 96, "description": "Names the authored identifier scheme selected by a consultation input mapping." },
+        "value": {"x-registry-field": "redacted_fixture_property", "type": "string", "description": "Supplies the synthetic string value bound to this identifier scheme." }
+      }
+    },
+    "governedClaimRef": {
+      "description": "A requested claim ID, optionally pinned to one authored claim version.",
+      "oneOf": [
+        {"x-registry-field": "branch", "type": "string"},
+        {
+          "x-registry-field": "branch",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id"],
+          "properties": {
+            "id": {"x-registry-field": "redacted_fixture_property", "type": "string", "description": "Names one authored claim requested by this fixture witness."},
+            "version": {"x-registry-field": "redacted_fixture_property", "type": "string", "description": "Pins the requested claim to one authored claim-policy version."}
+          }
+        }
+      ]
+    },
     "interaction": {
       "description": "One expected upstream request paired with its synthetic response.",
       "type": "object",

@@ -1,5 +1,15 @@
 name: complete-child-health-evidence
 classification: synthetic
+request:
+  target:
+    type: Person
+    identifiers: [{ scheme: dhis2_tracked_entity, value: A0000000001 }]
+    attributes: { include_inactive: true }
+  variables: { as_of_date: 2026-01-01 }
+  claims: [child-program-active]
+  disclosure: predicate
+  format: application/vnd.registry-notary.claim-result+json
+  purpose: programme-enrollment-verification
 input: { tracked_entity: A0000000001, include_inactive: true }
 variables: { as_of_date: 2026-01-01 }
 interactions:

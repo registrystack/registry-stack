@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::OnceLock;
 
 use jsonschema::error::ValidationErrorKind;
+use jsonschema::output::BasicOutput;
 
 /// A safe authoring-boundary failure.
 ///
@@ -17,6 +18,7 @@ enum AuthoringDocumentError {
         column: Option<usize>,
     },
     Schema {
+        instance_path: String,
         schema_path: String,
         keyword: &'static str,
         reserved_fixture_body: bool,
@@ -38,6 +40,15 @@ impl AuthoringDocumentError {
         match self {
             Self::Schema { keyword, .. } => Some(keyword),
             Self::Syntax { .. } | Self::TypedModel { .. } => None,
+        }
+    }
+
+    fn instance_path(&self) -> Option<&str> {
+        match self {
+            Self::Schema { instance_path, .. } if !instance_path.is_empty() => {
+                Some(instance_path)
+            }
+            Self::Schema { .. } | Self::Syntax { .. } | Self::TypedModel { .. } => None,
         }
     }
 
@@ -267,32 +278,47 @@ fn fixture_body_uses_reserved_file_key(
     instance_path: &str,
     document: &Value,
 ) -> bool {
-    if !is_reserved_fixture_body_path(kind, instance_path) {
+    if kind != ProjectSchemaKind::Fixture {
         return false;
     }
-    let mut segments = instance_path.split('/').skip(1);
-    let _interactions = segments.next();
-    let Some(index) = segments
-        .next()
-        .and_then(|segment| segment.parse::<usize>().ok())
-    else {
-        return false;
+    let selected_body = if is_reserved_fixture_body_path(kind, instance_path) {
+        let mut segments = instance_path.split('/').skip(1);
+        let _interactions = segments.next();
+        segments
+            .next()
+            .and_then(|segment| segment.parse::<usize>().ok())
+            .zip(segments.next())
+            .and_then(|(index, side)| {
+                document
+                    .get("interactions")
+                    .and_then(|interactions| interactions.get(index))
+                    .and_then(|interaction| interaction.get(side))
+                    .and_then(|message| message.get("body"))
+            })
+    } else {
+        None
     };
-    let Some(side) = segments.next() else {
-        return false;
+    let body_is_invalid_reserved_reference = |body: &Value| {
+        body.as_object()
+            .is_some_and(|object| object.contains_key("file"))
+            && fixture_body_validator().is_ok_and(|validator| !validator.is_valid(body))
     };
-    let Some(body) = document
+    if selected_body.is_some_and(body_is_invalid_reserved_reference) {
+        return true;
+    }
+    document
         .get("interactions")
-        .and_then(|interactions| interactions.get(index))
-        .and_then(|interaction| interaction.get(side))
-        .and_then(|message| message.get("body"))
-    else {
-        return false;
-    };
-    body.as_object()
-        .is_some_and(|object| object.contains_key("file"))
-        && fixture_body_validator()
-            .is_ok_and(|validator| !validator.is_valid(body))
+        .and_then(Value::as_array)
+        .is_some_and(|interactions| {
+            interactions.iter().any(|interaction| {
+                ["expect", "respond"].iter().any(|side| {
+                    interaction
+                        .get(side)
+                        .and_then(|message| message.get("body"))
+                        .is_some_and(body_is_invalid_reserved_reference)
+                })
+            })
+        })
 }
 
 fn is_unsafe_authored_path_constraint(
@@ -324,22 +350,136 @@ fn schema_validation_error(
     kind: ProjectSchemaKind,
     document: &Value,
     error: jsonschema::ValidationError<'_>,
+    instance_path: String,
 ) -> AuthoringDocumentError {
-    let instance_path = error.instance_path.to_string();
     let schema_path = error.schema_path.to_string();
     let unsafe_authored_path = is_unsafe_authored_path_constraint(kind, &schema_path);
+    let reserved_fixture_body =
+        fixture_body_uses_reserved_file_key(kind, &instance_path, document);
     AuthoringDocumentError::Schema {
+        instance_path,
         schema_path,
         keyword: validation_keyword(&error.kind),
-        reserved_fixture_body: fixture_body_uses_reserved_file_key(
-            kind,
-            &instance_path,
-            document,
-        ),
+        reserved_fixture_body,
         unsafe_authored_path,
         line: None,
         column: None,
     }
+}
+
+fn most_specific_validation_instance_path(
+    validator: &jsonschema::JSONSchema,
+    document: &Value,
+) -> Option<String> {
+    let BasicOutput::Invalid(errors) = validator.apply(document).basic() else {
+        return None;
+    };
+    errors
+        .iter()
+        .map(|error| error.instance_location().to_string())
+        .max_by(|left, right| {
+            left.matches('/')
+                .count()
+                .cmp(&right.matches('/').count())
+                .then_with(|| left.len().cmp(&right.len()))
+                .then_with(|| right.as_bytes().cmp(left.as_bytes()))
+        })
+}
+
+fn escape_json_pointer_segment(segment: &str) -> String {
+    segment.replace('~', "~0").replace('/', "~1")
+}
+
+fn project_target_request_mapping_validation_instance_path(
+    services: &serde_json::Map<String, Value>,
+    definitions: &Value,
+) -> Option<String> {
+    let mut mapping_schema = definitions.get("targetRequestMapping")?.clone();
+    let mapping_schema_object = mapping_schema.as_object_mut()?;
+    mapping_schema_object.insert(
+        "$schema".to_string(),
+        Value::String("https://json-schema.org/draft/2020-12/schema".to_string()),
+    );
+    mapping_schema_object.insert("$defs".to_string(), definitions.clone());
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&mapping_schema)
+        .ok()?;
+
+    for (service_id, service) in services {
+        let Some(consultations) = service.get("consultations").and_then(Value::as_object) else {
+            continue;
+        };
+        for (consultation_id, consultation) in consultations {
+            let Some(inputs) = consultation.get("input").and_then(Value::as_object) else {
+                continue;
+            };
+            for (input_id, mapping) in inputs {
+                if !validator.is_valid(mapping) {
+                    return Some(format!(
+                        "/services/{}/consultations/{}/input/{}",
+                        escape_json_pointer_segment(service_id),
+                        escape_json_pointer_segment(consultation_id),
+                        escape_json_pointer_segment(input_id),
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn project_service_validation_instance_path(document: &Value) -> Option<String> {
+    let services = document.get("services")?.as_object()?;
+    let root_schema: Value = serde_json::from_str(ProjectSchemaKind::Project.document()).ok()?;
+    let definitions = root_schema.get("$defs")?.clone();
+    if let Some(pointer) =
+        project_target_request_mapping_validation_instance_path(services, &definitions)
+    {
+        return Some(pointer);
+    }
+    for (service_id, service) in services {
+        let branch = match service.get("kind").and_then(Value::as_str) {
+            Some("evidence") => "evidenceService",
+            Some("records_api") => "recordsService",
+            Some(_) => {
+                return Some(format!(
+                    "/services/{}/kind",
+                    escape_json_pointer_segment(service_id)
+                ));
+            }
+            None => continue,
+        };
+        let mut branch_schema = definitions.get(branch)?.clone();
+        let branch_object = branch_schema.as_object_mut()?;
+        branch_object.insert(
+            "$schema".to_string(),
+            Value::String("https://json-schema.org/draft/2020-12/schema".to_string()),
+        );
+        branch_object.insert("$defs".to_string(), definitions.clone());
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&branch_schema)
+            .ok()?;
+        if validator.is_valid(service) {
+            continue;
+        }
+        let nested = most_specific_validation_instance_path(&validator, service)
+            .or_else(|| {
+                validator
+                    .validate(service)
+                    .err()
+                    .and_then(|mut errors| errors.next())
+                    .map(|error| error.instance_path.to_string())
+            })
+            .unwrap_or_default();
+        return Some(format!(
+            "/services/{}{}",
+            escape_json_pointer_segment(service_id),
+            nested
+        ));
+    }
+    None
 }
 
 fn parse_authoring_value(
@@ -359,6 +499,7 @@ fn parse_authoring_value(
             column: None,
         })?;
     let validator = validator(kind).map_err(|_| AuthoringDocumentError::Schema {
+        instance_path: String::new(),
         schema_path: String::new(),
         keyword: "schema",
         reserved_fixture_body: false,
@@ -368,7 +509,15 @@ fn parse_authoring_value(
     })?;
     if let Err(mut errors) = validator.validate(&value) {
         let error = errors.next().expect("schema validation returned an error");
-        return Err(schema_validation_error(kind, &value, error));
+        let collapsed_project_union = kind == ProjectSchemaKind::Project
+            && matches!(&error.kind, ValidationErrorKind::OneOfNotValid);
+        let instance_path = if collapsed_project_union {
+            project_service_validation_instance_path(&value)
+        } else {
+            None
+        }
+        .unwrap_or_else(|| error.instance_path.to_string());
+        return Err(schema_validation_error(kind, &value, error, instance_path));
     }
     Ok(value)
 }
@@ -425,6 +574,7 @@ fn assert_current_authoring_value_reaches_typed_model(
 ) -> std::result::Result<(), AuthoringDocumentError> {
     validator(kind)
         .map_err(|_| AuthoringDocumentError::Schema {
+            instance_path: String::new(),
             schema_path: String::new(),
             keyword: "schema",
             reserved_fixture_body: false,
@@ -435,7 +585,8 @@ fn assert_current_authoring_value_reaches_typed_model(
         .validate(&value)
         .map_err(|mut errors| {
             let error = errors.next().expect("schema validation returned an error");
-            schema_validation_error(kind, &value, error)
+            let instance_path = error.instance_path.to_string();
+            schema_validation_error(kind, &value, error, instance_path)
         })?;
     match kind {
         ProjectSchemaKind::Project => {
@@ -576,16 +727,20 @@ mod schema_authority_tests {
                 .any(|line| line.trim() == r#"schemars = { version = "=1.2.1" }"#),
             "DTO contract generator metadata must match the exact workspace schemars pin"
         );
-        assert_eq!(
-            include_bytes!(
-                "../../schemas/project-authoring/dto-shape-contract.v1.json"
-            )
-            .as_slice(),
-            generated_dto_shape_contract(),
+        let committed = include_bytes!(
+            "../../schemas/project-authoring/dto-shape-contract.v1.json"
+        )
+        .as_slice();
+        let generated = generated_dto_shape_contract();
+        assert!(
+            committed == generated,
             "run `cargo test -p registryctl --lib \
              project_authoring::schema_authority_tests::\
              regenerate_dto_shape_contract_from_five_rust_roots \
-             -- --ignored --exact` and review the complete DTO-shape diff"
+             -- --ignored --exact` and review the complete DTO-shape diff \
+             (committed bytes: {}, generated bytes: {})",
+            committed.len(),
+            generated.len()
         );
     }
 

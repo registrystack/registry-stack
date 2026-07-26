@@ -335,6 +335,18 @@
     },
     {
       "schema": "fixture",
+      "pointer": "/$defs/governedRequest/properties/variables",
+      "kind": "typed_map",
+      "rationale": "Governed request variable names are project-defined and values use the closed bounded string contract."
+    },
+    {
+      "schema": "fixture",
+      "pointer": "/$defs/governedTarget/properties/attributes",
+      "kind": "typed_map",
+      "rationale": "Governed target attribute names are project-defined and values use the closed bounded scalar contract."
+    },
+    {
+      "schema": "fixture",
       "pointer": "/$defs/request/properties/query",
       "kind": "typed_map",
       "rationale": "HTTP query parameter names are protocol-defined and values use the bounded query value schema."

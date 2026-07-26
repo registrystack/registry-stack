@@ -275,14 +275,14 @@ fn canonical_representative_fixture_validates_and_roundtrips_exactly() {
         decoded.summary.target_set_state,
         FixtureCoverageTargetSetState::TargetsPresent
     );
-    assert_eq!(decoded.summary.requirements.total, 34);
-    assert_eq!(decoded.targets[0].requirements.len(), 34);
+    assert_eq!(decoded.summary.requirements.total, 35);
+    assert_eq!(decoded.targets[0].requirements.len(), 35);
     assert!(!decoded.targets[0].fixture_inventory.is_empty());
     assert!(!decoded.targets[0].generated_cases.is_empty());
     assert!(decoded.targets[0]
         .requirements
         .iter()
-        .skip(30)
+        .skip(RequiredFixtureCoverageRequirement::ALL.len() - FixtureCoverageChangeKind::ALL.len(),)
         .all(|coverage| {
             matches!(
                 coverage,
@@ -308,6 +308,19 @@ fn canonical_representative_fixture_is_byte_reproducible_from_the_executable() {
 }
 
 #[test]
+#[ignore = "explicit maintainer regeneration; byte-exact reproduction runs by default"]
+fn regenerate_canonical_representative_fixture_from_the_executable() {
+    let generated = executable_fixture_coverage(&project_root("bounded-http-starter"));
+    let bytes = format!("{}\n", serde_json::to_string_pretty(&generated).unwrap());
+    fs::write(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/project-reports/registry.project.fixture_coverage.v1.json"),
+        bytes,
+    )
+    .expect("canonical representative fixture writes");
+}
+
+#[test]
 fn explicit_no_target_fixture_validates_and_roundtrips_exactly() {
     let document = parse(NO_TARGET_FIXTURE);
     assert_schema_valid(&document);
@@ -323,7 +336,7 @@ fn explicit_no_target_fixture_validates_and_roundtrips_exactly() {
 }
 
 #[test]
-fn generated_targets_have_exact_ordered_34_requirement_contracts() {
+fn generated_targets_have_exact_ordered_35_requirement_contracts() {
     for (project, capability) in [
         ("bounded-http-starter", FixtureCapability::DeclarativeHttp),
         ("dhis2-script", FixtureCapability::Script),
@@ -339,7 +352,7 @@ fn generated_targets_have_exact_ordered_34_requirement_contracts() {
         );
         let target = only_target(&report);
         assert_eq!(target.identity.capability, capability);
-        assert_eq!(target.requirements.len(), 34);
+        assert_eq!(target.requirements.len(), 35);
         assert_eq!(
             target
                 .requirements
@@ -355,9 +368,11 @@ fn generated_targets_have_exact_ordered_34_requirement_contracts() {
                 .map(FixtureRequirementCoverage::requirement)
                 .collect::<BTreeSet<_>>()
                 .len(),
-            34
+            35
         );
-        for requirement in target.requirements.iter().skip(30) {
+        for requirement in target.requirements.iter().skip(
+            RequiredFixtureCoverageRequirement::ALL.len() - FixtureCoverageChangeKind::ALL.len(),
+        ) {
             assert!(matches!(
                 requirement,
                 FixtureRequirementCoverage::NotEvaluated {
@@ -367,7 +382,7 @@ fn generated_targets_have_exact_ordered_34_requirement_contracts() {
                 } if evidence.is_empty()
             ));
         }
-        assert_eq!(report.summary.requirements.total, 34);
+        assert_eq!(report.summary.requirements.total, 35);
     }
 }
 
@@ -441,7 +456,7 @@ fn no_targets_and_a_fixtureless_target_are_distinct_states() {
         report.summary.target_set_state,
         FixtureCoverageTargetSetState::TargetsPresent
     );
-    assert_eq!(report.targets[0].requirements.len(), 34);
+    assert_eq!(report.targets[0].requirements.len(), 35);
 }
 
 #[test]
@@ -555,7 +570,7 @@ fn multi_target_evidence_cannot_cross_integration_boundaries() {
         ProjectFixtureCoverageReportV1::from_targets("multi-target".to_owned(), None, targets)
             .expect("disjoint targets form one valid report");
     assert_eq!(report.targets.len(), 2);
-    assert_eq!(report.summary.requirements.total, 68);
+    assert_eq!(report.summary.requirements.total, 70);
 
     let mut document = serde_json::to_value(report).unwrap();
     let foreign_evidence = document["targets"][1]["fixture_inventory"][0]["evidence"].clone();
@@ -635,6 +650,10 @@ fn fixed_scope_sentinels_and_evidence_kinds_cannot_claim_live_compatibility() {
         ("evidence_scope", json!("live_country_source")),
         ("compatibility_claim", json!("source_interoperable")),
         ("live_compatibility", json!("compatible")),
+        (
+            "governed_request_evidence",
+            json!("independent_caller_contract_compatible"),
+        ),
     ] {
         let mut document = serde_json::to_value(&report).unwrap();
         document[field] = value;
@@ -642,10 +661,76 @@ fn fixed_scope_sentinels_and_evidence_kinds_cannot_claim_live_compatibility() {
         assert_typed_invalid(document);
     }
 
+    let mut omitted_boundary = serde_json::to_value(&report).unwrap();
+    omitted_boundary
+        .as_object_mut()
+        .expect("coverage report is an object")
+        .remove("governed_request_evidence");
+    assert_schema_invalid(&omitted_boundary);
+    assert_typed_invalid(omitted_boundary);
+
     let mut wrong_kind = serde_json::to_value(report).unwrap();
     wrong_kind["targets"][0]["fixture_inventory"][0]["evidence"]["kind"] =
         json!("semantic_comparison");
     assert_typed_invalid(wrong_kind);
+}
+
+#[test]
+fn pre_witness_v1_report_is_intentionally_rejected_during_pre_one_point_zero() {
+    // The public compatibility promise starts at registryctl v1.0.0:
+    // docs/site/src/content/docs/spec/rs-pr-registryctl.mdx. Before that
+    // boundary, this closed report is replaced deliberately instead of being
+    // accepted with a misleading mapping-derived request claim.
+    let mut legacy = parse(REPRESENTATIVE_FIXTURE);
+    legacy
+        .as_object_mut()
+        .expect("legacy report is an object")
+        .remove("governed_request_evidence");
+    let targets = legacy["targets"]
+        .as_array_mut()
+        .expect("targets are an array");
+    let mut removed_states = Vec::new();
+    for target in targets {
+        target["contract"]
+            .as_object_mut()
+            .expect("target contract is an object")
+            .remove("registry_backed_consultations");
+        for fixture in target["fixture_inventory"]
+            .as_array_mut()
+            .expect("fixture inventory is an array")
+        {
+            fixture
+                .as_object_mut()
+                .expect("fixture record is an object")
+                .remove("request_to_consultation_binding");
+        }
+        let requirements = target["requirements"]
+            .as_array_mut()
+            .expect("requirements are an array");
+        let position = requirements
+            .iter()
+            .position(|coverage| coverage["requirement"] == "request_to_consultation_binding")
+            .expect("new request requirement is present");
+        let removed = requirements.remove(position);
+        removed_states.push(
+            removed["state"]
+                .as_str()
+                .expect("removed requirement state is a string")
+                .to_owned(),
+        );
+    }
+    let counts = legacy["summary"]["requirements"]
+        .as_object_mut()
+        .expect("summary counts are an object");
+    for state in removed_states {
+        let count = counts[&state].as_u64().expect("state count is numeric");
+        counts.insert(state, json!(count - 1));
+        let total = counts["total"].as_u64().expect("total count is numeric");
+        counts.insert("total".to_owned(), json!(total - 1));
+    }
+
+    assert_schema_invalid(&legacy);
+    assert_typed_invalid(legacy);
 }
 
 #[test]
@@ -776,10 +861,14 @@ fn comparison_input_is_strict_and_default_reports_do_not_fake_affected_sets() {
     let target_report = generated_coverage_project("dhis2-script");
     let target = only_target(&target_report);
     assert!(target.comparison.is_none());
-    assert!(target.requirements.iter().skip(30).all(|coverage| {
-        coverage.state() == FixtureCoverageRequirementState::NotEvaluated
-            && coverage.evidence().is_empty()
-    }));
+    assert!(target
+        .requirements
+        .iter()
+        .skip(RequiredFixtureCoverageRequirement::ALL.len() - FixtureCoverageChangeKind::ALL.len(),)
+        .all(|coverage| {
+            coverage.state() == FixtureCoverageRequirementState::NotEvaluated
+                && coverage.evidence().is_empty()
+        }));
 }
 
 #[test]
@@ -920,11 +1009,19 @@ fn comparison_enabled_generation_validates_all_impacts_and_keeps_targets_isolate
                 target.identity.integration
             )));
         }
-        assert!(target.requirements.iter().skip(30).all(|coverage| {
-            !matches!(coverage, FixtureRequirementCoverage::NotEvaluated { .. })
-                && coverage.evidence().len() == 1
-                && coverage.evidence()[0].kind == FixtureCoverageEvidenceKind::SemanticComparison
-        }));
+        assert!(target
+            .requirements
+            .iter()
+            .skip(
+                RequiredFixtureCoverageRequirement::ALL.len()
+                    - FixtureCoverageChangeKind::ALL.len(),
+            )
+            .all(|coverage| {
+                !matches!(coverage, FixtureRequirementCoverage::NotEvaluated { .. })
+                    && coverage.evidence().len() == 1
+                    && coverage.evidence()[0].kind
+                        == FixtureCoverageEvidenceKind::SemanticComparison
+            }));
     }
 
     let mut forged_comparison_state = document;

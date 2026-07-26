@@ -2,8 +2,7 @@
 //! Product-owned Notary evidence path for environment-free authoring fixtures.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
@@ -262,6 +261,7 @@ pub struct OfflineNotaryEvidence {
     product_error_code: Option<&'static str>,
     relay_calls: u64,
     consultation_count: usize,
+    relay_profile_ids: Vec<String>,
 }
 
 impl OfflineNotaryEvidence {
@@ -289,6 +289,14 @@ impl OfflineNotaryEvidence {
     pub const fn consultation_count(&self) -> usize {
         self.consultation_count
     }
+
+    /// Compiled Relay profile identities selected by the production request
+    /// planner. These are value-free configuration identities, not request
+    /// values or runtime consultation ULIDs.
+    #[must_use]
+    pub fn relay_profile_ids(&self) -> &[String] {
+        &self.relay_profile_ids
+    }
 }
 
 impl std::fmt::Debug for OfflineNotaryEvidence {
@@ -307,6 +315,7 @@ impl std::fmt::Debug for OfflineNotaryEvidence {
             .field("product_error_code", &self.product_error_code)
             .field("relay_calls", &self.relay_calls)
             .field("consultation_count", &self.consultation_count)
+            .field("relay_profile_ids", &self.relay_profile_ids)
             .finish()
     }
 }
@@ -387,7 +396,6 @@ impl OfflineNotaryHarness {
     }
 
     pub async fn evaluate(&self, offline: OfflineNotaryRequest) -> OfflineNotaryEvidence {
-        let relay_before = self.relay.calls.load(Ordering::SeqCst);
         let scopes = match offline.authentication {
             OfflineAuthentication::Valid => required_scopes(&self.evidence, &offline.request),
             OfflineAuthentication::InsufficientScope => {
@@ -399,7 +407,7 @@ impl OfflineNotaryHarness {
         };
         let scopes = match scopes {
             Ok(scopes) => scopes,
-            Err(error) => return self.evidence_from_error(error, relay_before, 0),
+            Err(error) => return self.evidence_from_error(error, &[]),
         };
         let fingerprint = fingerprint_api_key(self.api_key.as_str());
         let credential = ResolvedCredential {
@@ -429,7 +437,7 @@ impl OfflineNotaryHarness {
         );
         let principal = match principal {
             Ok(principal) => principal,
-            Err(error) => return self.evidence_from_error(error, relay_before, 0),
+            Err(error) => return self.evidence_from_error(error, &[]),
         };
         let (result, audit) = self
             .runtime
@@ -447,33 +455,26 @@ impl OfflineNotaryHarness {
                 claims: claims.into_iter().map(OfflineClaimView::from).collect(),
                 error_class: None,
                 product_error_code: None,
-                relay_calls: self
-                    .relay
-                    .calls
-                    .load(Ordering::SeqCst)
-                    .saturating_sub(relay_before),
+                relay_calls: u64::try_from(consultation_ids.len()).unwrap_or(u64::MAX),
                 consultation_count: consultation_ids.len(),
+                relay_profile_ids: self.relay.take_profile_ids_for(&consultation_ids),
             },
-            Err(error) => self.evidence_from_error(error, relay_before, consultation_ids.len()),
+            Err(error) => self.evidence_from_error(error, &consultation_ids),
         }
     }
 
     fn evidence_from_error(
         &self,
         error: EvidenceError,
-        relay_before: u64,
-        consultation_count: usize,
+        consultation_ids: &[String],
     ) -> OfflineNotaryEvidence {
         OfflineNotaryEvidence {
             claims: Vec::new(),
             error_class: Some(error_class(&error)),
             product_error_code: Some(error.code()),
-            relay_calls: self
-                .relay
-                .calls
-                .load(Ordering::SeqCst)
-                .saturating_sub(relay_before),
-            consultation_count,
+            relay_calls: u64::try_from(consultation_ids.len()).unwrap_or(u64::MAX),
+            consultation_count: consultation_ids.len(),
+            relay_profile_ids: self.relay.take_profile_ids_for(consultation_ids),
         }
     }
 }
@@ -557,7 +558,7 @@ struct OfflineRelayEntry {
 
 struct OfflineActivatedRelay {
     entries: BTreeMap<OfflineRelayKey, OfflineRelayEntry>,
-    calls: AtomicU64,
+    profile_by_consultation_id: Mutex<BTreeMap<String, String>>,
 }
 
 impl OfflineActivatedRelay {
@@ -607,8 +608,21 @@ impl OfflineActivatedRelay {
         }
         Ok(Self {
             entries,
-            calls: AtomicU64::new(0),
+            profile_by_consultation_id: Mutex::new(BTreeMap::new()),
         })
+    }
+
+    fn take_profile_ids_for(&self, consultation_ids: &[String]) -> Vec<String> {
+        let mut profile_by_consultation_id = self
+            .profile_by_consultation_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        consultation_ids
+            .iter()
+            .filter_map(|id| profile_by_consultation_id.remove(id))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     fn entry_for(
@@ -639,7 +653,7 @@ impl std::fmt::Debug for OfflineActivatedRelay {
         formatter
             .debug_struct("OfflineActivatedRelay")
             .field("entries", &"[REDACTED]")
-            .field("calls", &self.calls.load(Ordering::Relaxed))
+            .field("profile_by_consultation_id", &"[REDACTED]")
             .finish()
     }
 }
@@ -663,7 +677,6 @@ impl ActivatedRelayConsultations for OfflineActivatedRelay {
         key: &ConsultationGroupKeyV1,
     ) -> Result<RuntimeRelayConsultationResult, RelayClientError> {
         let entry = self.entry_for(key)?;
-        self.calls.fetch_add(1, Ordering::SeqCst);
         let (outcome, match_data) = match entry.outcome {
             OfflineRelayOutcome::Match => (
                 RuntimeRelayOutcome::Match,
@@ -674,12 +687,18 @@ impl ActivatedRelayConsultations for OfflineActivatedRelay {
             OfflineRelayOutcome::NoMatch => (RuntimeRelayOutcome::NoMatch, None),
             OfflineRelayOutcome::Ambiguous => (RuntimeRelayOutcome::Ambiguous, None),
         };
-        RuntimeRelayConsultationResult::new(
-            ulid::Ulid::new(),
+        let consultation_id = ulid::Ulid::new();
+        let result = RuntimeRelayConsultationResult::new(
+            consultation_id,
             outcome,
             match_data,
             OffsetDateTime::now_utc(),
-        )
+        )?;
+        self.profile_by_consultation_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(consultation_id.to_string(), key.profile_id().to_owned());
+        Ok(result)
     }
 }
 

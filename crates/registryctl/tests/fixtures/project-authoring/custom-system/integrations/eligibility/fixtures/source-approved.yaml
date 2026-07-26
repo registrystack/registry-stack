@@ -1,5 +1,13 @@
 name: source-approved-household
 classification: synthetic
+request:
+  target:
+    type: Person
+    identifiers: [{ scheme: household_reference, value: HH-AB12CD34 }]
+  claims: [household-record-exists]
+  disclosure: predicate
+  format: application/vnd.registry-notary.claim-result+json
+  purpose: household-support-screening
 input: { household_reference: HH-AB12CD34 }
 interactions:
   - expect:

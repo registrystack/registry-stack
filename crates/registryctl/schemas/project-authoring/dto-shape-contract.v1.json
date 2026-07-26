@@ -3461,6 +3461,28 @@
             ],
             "type": "object"
           },
+          "ClaimRef": {
+            "$ref": "#/$defs/WireClaimRef"
+          },
+          "ClaimRefObject": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "version": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
           "FixtureExpectation": {
             "additionalProperties": false,
             "properties": {
@@ -3491,12 +3513,108 @@
             },
             "type": "object"
           },
+          "GovernedLiveIdentifier": {
+            "additionalProperties": false,
+            "properties": {
+              "scheme": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "scheme",
+              "value"
+            ],
+            "type": "object"
+          },
+          "GovernedLiveRequest": {
+            "additionalProperties": false,
+            "description": "The closed governed request accepted by both `project test --live` and an\nindependently authored synthetic fixture witness.\n\nKeeping one internal request type prevents fixture authoring from drifting\ninto a looser contract than the live Notary boundary.",
+            "properties": {
+              "claims": {
+                "items": {
+                  "$ref": "#/$defs/ClaimRef"
+                },
+                "type": "array"
+              },
+              "disclosure": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "format": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/$defs/GovernedLiveTarget"
+              },
+              "variables": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "target",
+              "claims",
+              "purpose"
+            ],
+            "type": "object"
+          },
+          "GovernedLiveTarget": {
+            "additionalProperties": false,
+            "properties": {
+              "attributes": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "identifiers": {
+                "items": {
+                  "$ref": "#/$defs/GovernedLiveIdentifier"
+                },
+                "type": "array"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
           "ReadMethod": {
             "enum": [
               "GET",
               "POST"
             ],
             "type": "string"
+          },
+          "WireClaimRef": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/ClaimRefObject"
+              }
+            ]
           }
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3521,6 +3639,17 @@
           },
           "name": {
             "type": "string"
+          },
+          "request": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GovernedLiveRequest"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "variables": {
             "additionalProperties": true,

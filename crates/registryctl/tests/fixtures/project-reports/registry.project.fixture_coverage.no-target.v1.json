@@ -5,6 +5,7 @@
   "evidence_scope": "offline_synthetic",
   "compatibility_claim": "none",
   "live_compatibility": "not_evaluated",
+  "governed_request_evidence": "per_consultation_authored_request_witness_evaluation",
   "targets": [],
   "summary": {
     "target_set_state": "no_targets",

@@ -254,6 +254,7 @@ fn compile_project_for_environment(
         .iter()
         .map(|profile| FixtureProfile {
             service_id: profile.service_id.clone(),
+            consultation_id: profile.consultation_name.clone(),
             integration_alias: profile.integration_alias.clone(),
             id: profile.id.clone(),
             version: profile.version.clone(),

@@ -1554,6 +1554,18 @@ fn lower_authored_fixture(
     body_cache: &mut BTreeMap<PathBuf, Value>,
     max_body_bytes: u64,
 ) -> Result<FixtureDocument> {
+    if let Some(request) = authored.request.as_ref() {
+        if authored.classification != AuthoredFixtureClassification::Synthetic {
+            bail!("fixture governed requests require classification: synthetic");
+        }
+        let request = serde_json::to_value(request)
+            .context("failed to inspect the governed synthetic fixture request")?;
+        if contains_sensitive_request_key(&request)
+            || contains_fixture_secret_reference(&request)
+        {
+            bail!("fixture governed request contains a forbidden credential-like field");
+        }
+    }
     let interactions = authored
         .interactions
         .into_iter()
@@ -1605,11 +1617,27 @@ fn lower_authored_fixture(
     Ok(FixtureDocument {
         name: authored.name,
         classification: authored.classification,
+        request: authored.request,
         input: authored.input,
         variables: authored.variables,
         interactions,
         expect: authored.expect,
     })
+}
+
+fn contains_fixture_secret_reference(value: &Value) -> bool {
+    match value {
+        Value::String(value) => {
+            let lower = value.to_ascii_lowercase();
+            value.starts_with("${")
+                || lower.starts_with("secret://")
+                || lower.starts_with("env://")
+                || lower.starts_with("vault://")
+        }
+        Value::Array(values) => values.iter().any(contains_fixture_secret_reference),
+        Value::Object(object) => object.values().any(contains_fixture_secret_reference),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
 }
 
 fn resolve_fixture_body(

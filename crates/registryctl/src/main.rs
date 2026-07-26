@@ -6,16 +6,17 @@ use clap::{error::ErrorKind, CommandFactory, Parser, Subcommand, ValueEnum};
 use registryctl::{
     AddNotaryReport, AnchorReport, BundleInspectReport, BundleSignOptions, BundleSignReport,
     BundleVerifyReport, ClassifierSafeReportedValue, DeploymentProfile, DoctorFormat,
-    FieldSourceKind, InitProjectKind, InitReport, InitSource, MigrationDisposition,
-    ProjectBuildBaselineSetOptions, ProjectBuildOptions, ProjectCapabilityInventoryReportV1,
-    ProjectCapabilityOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
-    ProjectEditorSetupReport, ProjectEnvironmentSemanticComparisonOptions, ProjectExecutionContext,
-    ProjectFieldAddress, ProjectFieldExplanation, ProjectInitOptions, ProjectMigrationOptions,
-    ProjectMigrationReportV1, ProjectPreflightOptions, ProjectPreflightReportV1,
-    ProjectPromotionOptions, ProjectPromotionReportV1, ProjectSchemaKind,
-    ProjectSemanticComparisonOptions, ProjectSemanticComparisonReportV1, ProjectStarter,
-    ProjectStarterSemanticComparisonOptions, ProjectTestOptions, ProjectTestSelection,
-    ProjectTrustedLocalAuthoredValue, PromotionDisposition, RedactionReason, Sample,
+    FieldSourceKind, FixtureRequestBindingState, InitProjectKind, InitReport, InitSource,
+    MigrationDisposition, ProjectBuildBaselineSetOptions, ProjectBuildOptions,
+    ProjectCapabilityInventoryReportV1, ProjectCapabilityOptions, ProjectCheckOptions,
+    ProjectCommandReport, ProjectEditorSetupOptions, ProjectEditorSetupReport,
+    ProjectEnvironmentSemanticComparisonOptions, ProjectExecutionContext, ProjectFieldAddress,
+    ProjectFieldExplanation, ProjectInitOptions, ProjectMigrationOptions, ProjectMigrationReportV1,
+    ProjectPreflightOptions, ProjectPreflightReportV1, ProjectPromotionOptions,
+    ProjectPromotionReportV1, ProjectSchemaKind, ProjectSemanticComparisonOptions,
+    ProjectSemanticComparisonReportV1, ProjectStarter, ProjectStarterSemanticComparisonOptions,
+    ProjectTestOptions, ProjectTestSelection, ProjectTrustedLocalAuthoredValue,
+    PromotionDisposition, RedactionReason, Sample,
 };
 
 fn main() -> Result<()> {
@@ -143,9 +144,6 @@ fn main() -> Result<()> {
             against,
             anchor,
         } => {
-            if show_authored_values && format != OutputFormat::Human {
-                anyhow::bail!("--show-authored-values requires --format human");
-            }
             let options = ProjectCheckOptions {
                 project_directory: project_dir,
                 environment,
@@ -153,7 +151,11 @@ fn main() -> Result<()> {
                 against,
                 anchor,
             };
-            let checked = if show_authored_values {
+            let checked = if show_authored_values && format != OutputFormat::Human {
+                Err(anyhow::anyhow!(
+                    "--show-authored-values requires --format human"
+                ))
+            } else if show_authored_values {
                 registryctl::check_registry_project_with_trusted_local_authored_values(&options)
                     .map(|trusted| (trusted.report, Some(trusted.authored_values)))
             } else {
@@ -172,6 +174,10 @@ fn main() -> Result<()> {
                             ),
                             OutputFormat::Json => print_json(report)?,
                         }
+                        std::process::exit(1);
+                    }
+                    if format == OutputFormat::Json {
+                        print_json(&registryctl::redacted_project_check_failure_diagnostics())?;
                         std::process::exit(1);
                     }
                     return Err(error);
@@ -1438,9 +1444,49 @@ fn render_check_report(
         .count();
     writeln!(
         output,
-        "Fixtures: {passed}/{} passed",
+        "Fixtures: {passed}/{} passed (offline synthetic)",
         report.fixtures.len()
     )?;
+    let fixture_coverage = report
+        .fixture_coverage
+        .as_ref()
+        .context("human check output requires fixture coverage")?;
+    let mut authored_requests = 0usize;
+    let mut passed_authored_requests = 0usize;
+    let mut mapping_derived_fixtures = 0usize;
+    for target in &fixture_coverage.targets {
+        for fixture in &target.fixture_inventory {
+            match fixture.request_to_consultation_binding.state {
+                FixtureRequestBindingState::NotAuthored => mapping_derived_fixtures += 1,
+                FixtureRequestBindingState::Passed => {
+                    authored_requests += 1;
+                    passed_authored_requests += 1;
+                }
+                FixtureRequestBindingState::NotExecuted | FixtureRequestBindingState::Failed => {
+                    authored_requests += 1;
+                }
+            }
+        }
+    }
+    if authored_requests == 0 {
+        writeln!(
+            output,
+            "Fixture request witnesses: none authored; {mapping_derived_fixtures} fixture(s) use mapping-derived governed request inputs."
+        )?;
+        writeln!(
+            output,
+            "Fixture proof boundary: mapping-derived fixtures exercise consultation and source behavior only. Independent external/live caller compatibility is not evaluated."
+        )?;
+    } else {
+        writeln!(
+            output,
+            "Fixture request witnesses: {passed_authored_requests}/{authored_requests} independently authored offline request-to-consultation bindings passed; {mapping_derived_fixtures} fixture(s) remain mapping-derived."
+        )?;
+        writeln!(
+            output,
+            "Fixture proof boundary: independently authored fixture requests exercise offline request-to-consultation bindings; mapping-derived fixtures exercise consultation and source behavior only. External/live caller compatibility is not evaluated."
+        )?;
+    }
     let mut by_integration = std::collections::BTreeMap::<&str, (usize, usize)>::new();
     for fixture in &report.fixtures {
         let totals = by_integration

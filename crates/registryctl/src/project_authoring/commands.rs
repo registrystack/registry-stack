@@ -308,7 +308,7 @@ pub fn test_registry_project_selected_with_context(
     let compiled =
         compile_project_for_environment(&loaded, "offline-fixture", &offline_environment, None)?;
     validate_generated_product_configs(&compiled)?;
-    let (mut reports, generated_observations, call_budget_actual) =
+    let (mut reports, generated_observations, request_observations, call_budget_actual) =
         execute_all_fixtures_with_coverage_observations(
             &loaded,
             &compiled,
@@ -323,6 +323,7 @@ pub fn test_registry_project_selected_with_context(
             &loaded,
             &reports,
             &generated_observations,
+            &request_observations,
             call_budget_actual,
         )?)
     } else {
@@ -1198,43 +1199,6 @@ struct PreparedGovernedLiveRequest {
     body: Vec<u8>,
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct GovernedLiveRequest {
-    target: GovernedLiveTarget,
-    #[serde(
-        default,
-        skip_serializing_if = "registry_notary_core::RequestVariables::is_empty"
-    )]
-    variables: registry_notary_core::RequestVariables,
-    claims: Vec<registry_notary_core::ClaimRef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    disclosure: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    format: Option<String>,
-    purpose: String,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct GovernedLiveTarget {
-    #[serde(rename = "type")]
-    entity_type: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    identifiers: Vec<GovernedLiveIdentifier>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    attributes: BTreeMap<String, Value>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct GovernedLiveIdentifier {
-    scheme: String,
-    value: String,
-}
-
 #[derive(Clone, Copy)]
 struct GovernedLiveInputContract<'a> {
     name: &'a str,
@@ -1271,12 +1235,32 @@ fn validate_live_request_boundary(
     }
     let outbound: GovernedLiveRequest = serde_json::from_value(request.clone())
         .map_err(|_| anyhow!("live request does not match the closed governed schema"))?;
+    let validated = validate_governed_request(loaded, &outbound, true)?;
+    Ok((validated, outbound))
+}
+
+fn validate_governed_request(
+    loaded: &LoadedRegistryProject,
+    outbound: &GovernedLiveRequest,
+    require_notary_service: bool,
+) -> Result<ValidatedLiveRequest> {
     let notary_service_id = loaded
         .environment
         .as_ref()
         .and_then(|environment| environment.deployment.notary.as_ref())
         .map(|notary| notary.service.clone())
-        .ok_or_else(|| anyhow!("live request environment does not declare a Notary service"))?;
+        .map_or_else(
+            || {
+                if require_notary_service {
+                    Err(anyhow!(
+                        "live request environment does not declare a Notary service"
+                    ))
+                } else {
+                    Ok("offline-fixture".to_owned())
+                }
+            },
+            Ok,
+        )?;
     let purpose = outbound.purpose.as_str();
     let services = loaded
         .project
@@ -1361,14 +1345,11 @@ fn validate_live_request_boundary(
         &outbound.target,
         &outbound.variables,
     )?;
-    Ok((
-        ValidatedLiveRequest {
-            claims: ids,
-            claim_versions,
-            notary_service_id,
-        },
-        outbound,
-    ))
+    Ok(ValidatedLiveRequest {
+        claims: ids,
+        claim_versions,
+        notary_service_id,
+    })
 }
 
 fn validate_governed_live_target(
@@ -1764,7 +1745,7 @@ fn check_registry_project_internal(
     )?;
     let compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
     validate_generated_product_configs(&compiled)?;
-    let (fixtures, generated_observations, call_budget_actual) =
+    let (fixtures, generated_observations, request_observations, call_budget_actual) =
         execute_all_fixtures_with_coverage_observations(
             &loaded,
             &compiled,
@@ -1778,6 +1759,7 @@ fn check_registry_project_internal(
         &loaded,
         &fixtures,
         &generated_observations,
+        &request_observations,
         call_budget_actual,
     )?;
     let authored_values = if include_trusted_local_authored_values {
@@ -2384,7 +2366,7 @@ mod promotion_adapter_tests {
         // intentional review pins. Adding or changing a published path without
         // updating its closed mapping and reviewed revision fails this test and
         // `project_promotion_projection`.
-        assert_eq!(index.by_path().len(), 623);
+        assert_eq!(index.by_path().len(), 645);
         let mapped = index
             .by_path()
             .keys()
@@ -3113,7 +3095,7 @@ fn build_registry_project_inner(
         apply_local_tutorial_runtime_overrides(&mut compiled)?;
     }
     validate_generated_product_configs(&compiled)?;
-    let (fixtures, generated_observations, call_budget_actual) =
+    let (fixtures, generated_observations, request_observations, call_budget_actual) =
         execute_all_fixtures_with_coverage_observations(
             &loaded,
             &compiled,
@@ -3127,6 +3109,7 @@ fn build_registry_project_inner(
         &loaded,
         &fixtures,
         &generated_observations,
+        &request_observations,
         call_budget_actual,
     )?;
     let output = loaded

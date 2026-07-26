@@ -24,6 +24,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **BREAKING:** Before the Registry Stack 1.0 compatibility promise takes
+  effect, `registry.project.fixture_coverage.v1` now distinguishes
+  mapping-derived fixtures from independently executed, per-consultation
+  governed-request witnesses. The closed report adds governed-request proof scope,
+  reachable service/consultation identities, per-fixture binding evidence, and
+  the `request_to_consultation_binding` requirement. Previously saved v1
+  reports are intentionally rejected. Regenerate them with
+  `registryctl test --project-dir <project> --format json` and update consumers
+  to use the per-target requirement state as the authoritative pass or missing
+  result.
 - Attribute-release project authoring now emits the stable Relay profile
   contract with required purpose, exact subject type, and exact-one lookup
   semantics. It rejects non-portable profile version path segments and Relay
