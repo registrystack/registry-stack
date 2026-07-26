@@ -26,9 +26,31 @@ test('committed internal and public reference artifacts are exact and complete',
   validateAuthoringReference(reference, coverage);
   assert.deepEqual(publicReference, reference);
   assert.deepEqual(publicCoverage, coverage);
-  assert.equal(reference.fields.length, 1677);
+  assert.equal(reference.fields.length, 1736);
+  assert.equal(coverage.reviewed_intent_assignment_required_count, 1736);
+  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1736);
+  assert.equal(coverage.distinct_reviewed_intent_count, 566);
+  assert.equal(coverage.distinct_reviewed_intents_reused_count, 83);
+  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1253);
+  assert.deepEqual(reference.reference_baseline, {
+    generator_lifecycle: 'unreleased',
+    published_release: null,
+    field_history_status: 'not_verified',
+    history_verification_method: null,
+    compared_releases: [],
+  });
+  assert.ok(
+    reference.fields.every(
+      (field) =>
+        field.history_status === 'not_verified' &&
+        field.introduced_in === null &&
+        field.version_history.length === 0 &&
+        !Object.hasOwn(field.default, 'source_version'),
+    ),
+    'unverified release history must remain explicit and cannot contain a fabricated version',
+  );
   assert.deepEqual(reference.coverage.by_schema, {
-    project: 160,
+    project: 219,
     environment: 191,
     integration: 138,
     fixture: 40,
@@ -38,11 +60,11 @@ test('committed internal and public reference artifacts are exact and complete',
   });
   assert.deepEqual(reference.coverage.by_path_kind, {
     root: 7,
-    property: 1339,
-    map_key: 23,
-    map_value: 44,
-    array_item: 172,
-    branch: 92,
+    property: 1391,
+    map_key: 24,
+    map_value: 45,
+    array_item: 175,
+    branch: 94,
   });
   assert.equal(
     Object.values(reference.coverage.by_intent_profile).reduce(
@@ -67,12 +89,18 @@ test('published reference page identifies generated sources and the no-country-v
   assert.match(page, /does not inspect a project, live runtime configuration, environment variables/);
   assert.match(page, /five project-authoring sections describe configuration people commit/);
   assert.match(page, /intent sidecars are documentation knowledge\s+only/);
+  assert.match(page, /Field release history: not verified/);
+  assert.match(page, /Assignment coverage does not claim that every path has unique prose/);
   assert.match(component, /configuration-reference-coverage\.json/);
   assert.match(component, /generated\/configuration-reference\.v1\.json/);
   assert.match(component, /Reviewed intent profile/);
   assert.match(component, /JSON Schema pointer/);
   assert.match(component, /human-authored country\s+files/);
   assert.match(component, /not runtime configuration/);
+  assert.match(component, /Reviewed intent assignments/);
+  assert.match(component, /Distinct reviewed intents/);
+  assert.match(component, /Release history/);
+  assert.match(component, /Not verified/);
   assert.match(packageJson.scripts.generate, /generate-authoring-reference\.mjs/);
 });
 

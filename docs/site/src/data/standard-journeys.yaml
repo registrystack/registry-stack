@@ -104,7 +104,7 @@ journeys:
     troubleshooting:
       - relay.startup.config_document_invalid
       - relay.startup.config_validation_rejected
-      - relay.startup.listener_unavailable
+      - relay.startup.data_listener_unavailable
       - relay.startup.doctor_failed
     next_task:
       label: Inspect the instance OpenAPI
@@ -211,7 +211,7 @@ journeys:
         does_not_prove: Runtime health or production data correctness.
     production_delta: *runtime_delta
     troubleshooting:
-      - relay.startup.listener_unavailable
+      - relay.startup.data_listener_unavailable
       - relay.startup.config_validation_rejected
       - rejected_binding
     next_task:

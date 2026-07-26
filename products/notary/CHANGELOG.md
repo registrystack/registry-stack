@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added product-owned, value-free activation diagnostics and stateful Config
+  Bundle verification with explicit anti-rollback state. Startup and doctor
+  boundaries retain stable classifications without exposing sensitive
+  configuration values or paths.
+
 ## [0.13.0] - 2026-07-25
 
 ### Changed

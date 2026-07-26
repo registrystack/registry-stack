@@ -161,6 +161,42 @@ class CiChangesTest(unittest.TestCase):
             with self.subTest(path=watched_path):
                 self.assertIn(f'"{watched_path}"', workflow)
 
+    def test_public_project_authoring_modules_run_docs_and_are_watched(self) -> None:
+        project_authoring = Path("crates/registryctl/src/project_authoring.rs").read_text(
+            encoding="utf-8"
+        )
+        public_modules = re.findall(
+            r"^pub use ([a-z][a-z0-9_]*)::\*;$",
+            project_authoring,
+            flags=re.MULTILINE,
+        )
+        self.assertTrue(public_modules)
+
+        workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
+        push_paths = re.findall(
+            r'^\s+- "([^"]+)"$',
+            workflow.split("  workflow_dispatch:", 1)[0],
+            flags=re.MULTILINE,
+        )
+        for module in public_modules:
+            source = f"crates/registryctl/src/project_authoring/{module}.rs"
+            with self.subTest(source=source):
+                self.assertTrue(classify(self.workspace, (source,))["docs"])
+                self.assertTrue(
+                    any(fnmatch.fnmatchcase(source, pattern) for pattern in push_paths),
+                    f"{source} is not watched by docs-pages.yml",
+                )
+        self.assertFalse(
+            any(
+                fnmatch.fnmatchcase(
+                    "crates/registryctl/src/project_authoring/project.rs",
+                    pattern,
+                )
+                for pattern in push_paths
+            ),
+            "implementation-only project.rs should not rebuild Pages",
+        )
+
     def test_diagnostic_reference_inputs_run_docs_and_are_watched(self) -> None:
         watched_paths = (
             "crates/registry-notary-server/src/standalone/activation.rs",
@@ -292,7 +328,31 @@ class CiChangesTest(unittest.TestCase):
                 {
                     "docs": True,
                     "notary_contracts": True,
-                    "registryctl_tutorial": False,
+                    "registryctl_tutorial": True,
+                },
+            ),
+            (
+                "crates/registry-notary/src/config_loader.rs",
+                {
+                    "docs": False,
+                    "notary_contracts": True,
+                    "registryctl_tutorial": True,
+                },
+            ),
+            (
+                "crates/registry-notary-core/src/config/root.rs",
+                {
+                    "docs": True,
+                    "notary_contracts": True,
+                    "registryctl_tutorial": True,
+                },
+            ),
+            (
+                "crates/registry-notary-server/src/runtime/evaluation.rs",
+                {
+                    "docs": False,
+                    "notary_contracts": True,
+                    "registryctl_tutorial": True,
                 },
             ),
             (
@@ -392,6 +452,10 @@ class CiChangesTest(unittest.TestCase):
                 "README.md",
                 {"docs": False, "rust": False},
             ),
+            (
+                "crates/registry-notary-client/src/lib.rs",
+                {"docs": False, "notary_contracts": True},
+            ),
         )
 
         for path, expected in cases:
@@ -423,6 +487,15 @@ class CiChangesTest(unittest.TestCase):
             "node scripts/generate-standard-journeys.mjs --check",
             workflow,
         )
+
+    def test_docs_job_fetches_ignored_openapi_inputs_before_script_tests(self) -> None:
+        workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
+        docs_job = workflow.split("\n  docs:\n", 1)[1].split("\n  docs-required:\n", 1)[0]
+        fetch = "run: node scripts/fetch-openapi.mjs"
+        test_scripts = "run: npm test"
+
+        self.assertIn(fetch, docs_job)
+        self.assertLess(docs_job.index(fetch), docs_job.index(test_scripts))
 
     def test_every_standard_journey_source_routes_to_docs_and_pages(self) -> None:
         workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")

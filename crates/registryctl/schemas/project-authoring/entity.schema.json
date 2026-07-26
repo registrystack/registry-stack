@@ -8,9 +8,9 @@
   "additionalProperties": false,
   "required": ["version", "id", "revision", "primary_key", "schema", "materialization"],
   "properties": {
-    "version": {"x-registry-field": "public_property", "const": 1, "default": 1, "description": "Entity authoring format version." },
+    "version": {"x-registry-field": "public_property", "const": 1, "description": "Entity authoring format version." },
     "id": {"x-registry-field": "property", "$ref": "#/$defs/stableId", "description": "Stable project-local identifier for the entity." },
-    "revision": {"x-registry-field": "property", "type": "integer", "minimum": 1, "description": "Monotonically increasing revision of this entity definition.", "examples": [1] },
+    "revision": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4294967295, "description": "Monotonically increasing revision of this entity definition.", "examples": [1] },
     "primary_key": {"x-registry-field": "property", "$ref": "#/$defs/stableId", "description": "Field whose value uniquely identifies each materialized record.", "examples": ["person_id"] },
     "schema": {"x-registry-field": "property", "$ref": "#/$defs/objectSchema", "description": "Closed JSON object schema for materialized records." },
     "materialization": {
@@ -20,13 +20,13 @@
       "additionalProperties": false,
       "required": ["max_records", "max_bytes", "refresh", "retain_generations"],
       "properties": {
-        "max_records": {"x-registry-field": "property", "type": "integer", "minimum": 1, "description": "Maximum number of records allowed in one generation.", "examples": [10000] },
+        "max_records": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615, "description": "Maximum number of records allowed in one generation.", "examples": [10000] },
         "max_bytes": {
           "x-registry-field": "property",
           "description": "Maximum encoded size of one generation, as bytes or a KiB/MiB quantity.",
           "examples": ["16MiB"],
           "oneOf": [
-            {"x-registry-field": "branch", "type": "integer", "minimum": 1 },
+            {"x-registry-field": "branch", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
             {"x-registry-field": "branch", "type": "string", "pattern": "^[1-9][0-9]*(?:KiB|MiB)$" }
           ]
         },
@@ -96,8 +96,8 @@
         "const": {"x-registry-field": "property"},
         "minLength": {"x-registry-field": "property", "type": "integer", "minimum": 0, "maximum": 65536 },
         "maxLength": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 65536 },
-        "minimum": {"x-registry-field": "property", "type": "number" },
-        "maximum": {"x-registry-field": "property", "type": "number" },
+        "minimum": {"x-registry-field": "property", "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
+        "maximum": {"x-registry-field": "property", "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
         "pattern": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 1024 }
       }
     },

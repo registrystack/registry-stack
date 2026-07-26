@@ -10,6 +10,15 @@
   admin capabilities document and Relay image metadata. Profile versions use a
   portable URL-path grammar, and resolve JSON rejections now return Relay
   Problem Details with non-storable headers.
+- Add product-owned, value-free startup and activation diagnostic catalogs,
+  stateful Config Bundle verification with explicit anti-rollback state, and
+  execute-time consultation contract verification before any source
+  continuation. A stale contract hash returns
+  `consultation.contract_mismatch` with zero source calls. Listener startup
+  failures identify the data-plane or administration field and a bounded
+  operating-system class, while configuration failures distinguish source,
+  environment, document, deprecated-field, validation, bundle, and
+  consultation-closure phases without rendering runtime values.
 
 ## 0.13.0 - 2026-07-25
 

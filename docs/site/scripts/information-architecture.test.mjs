@@ -11,6 +11,7 @@ import { test } from 'node:test';
 const here = dirname(fileURLToPath(import.meta.url));
 const siteRoot = resolve(here, '..');
 const configSource = readFileSync(resolve(siteRoot, 'astro.config.mjs'), 'utf8');
+const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
 const sidebarSource = configSource.match(/sidebar: \[([\s\S]*?)\n      \],\n    \}\),/)?.[1];
 
 assert.ok(sidebarSource, 'could not isolate the Starlight sidebar configuration');
@@ -96,10 +97,20 @@ test('legacy entry points redirect to current task-flow pages', () => {
   assert.match(configSource, /'\/start\/': internalRedirect\('\/'\)/);
   assert.match(
     configSource,
+    /'\/start\/see-it-live\/': internalRedirect\('\/journeys\/spreadsheet-protected-api\/'\)/,
+  );
+  assert.match(
+    configSource,
     /'\/start\/your-first-call\/': internalRedirect\('\/tutorials\/first-run-with-solmara-lab\/'\)/,
   );
   assert.match(
     configSource,
     /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/tutorials\/first-run-with-solmara-lab\/'\)/,
   );
+});
+
+test('homepage starts with the maintained spreadsheet journey while the detailed tutorial remains available', () => {
+  assert.match(homepageSource, /\]\(journeys\/spreadsheet-protected-api\/\)/);
+  assert.match(sidebarSource, /slug: 'journeys\/spreadsheet-protected-api'/);
+  assert.ok(hasDocForSlug('tutorials/publish-spreadsheet-secured-registry-api'));
 });

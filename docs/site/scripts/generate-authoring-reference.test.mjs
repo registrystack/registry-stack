@@ -31,6 +31,13 @@ const sourceContract = {
   reads_country_workspaces: false,
   reads_runtime_configuration: false,
 };
+const referenceBaseline = {
+  generator_lifecycle: 'unreleased',
+  published_release: null,
+  field_history_status: 'not_verified',
+  history_verification_method: null,
+  compared_releases: [],
+};
 const counts = {
   schema_count: 7,
   path_count: 7,
@@ -59,16 +66,21 @@ function fixtureData() {
       'https://id.registrystack.org/schemas/registryctl/project-documentation/registry.project.configuration_reference_coverage.v1.schema.json',
     format_version: '1.0',
     status: 'complete',
+    reference_baseline: referenceBaseline,
     source_contract: sourceContract,
     coverage: counts,
-    prose_required_count: 7,
-    prose_covered_count: 7,
+    reviewed_intent_assignment_required_count: 7,
+    reviewed_intent_assignment_covered_count: 7,
+    distinct_reviewed_intent_count: 7,
+    distinct_reviewed_intents_reused_count: 0,
+    reviewed_intent_assignments_using_reused_intent_count: 0,
     missing_intent: [],
   };
   const reference = {
     schema_id:
       'https://id.registrystack.org/schemas/registryctl/project-documentation/registry.project.configuration_reference.v1.schema.json',
     format_version: '1.0',
+    reference_baseline: referenceBaseline,
     source_contract: sourceContract,
     coverage: counts,
     fields: schemas.map((schema) => ({
@@ -83,6 +95,9 @@ function fixtureData() {
         ? { intent_profile: `${schema}_runtime_root` }
         : {}),
       default: { behavior: 'not_applicable' },
+      history_status: 'not_verified',
+      introduced_in: null,
+      version_history: [],
       example: { contains_country_values: false },
     })),
   };
@@ -152,10 +167,10 @@ test('publishes identical internal and raw public artifacts only after validatio
   }
 });
 
-test('fails closed on incomplete prose coverage before requesting the reference', async () => {
+test('fails closed on incomplete reviewed-intent assignment coverage before requesting the reference', async () => {
   const data = fixtureData();
   data.coverage.status = 'incomplete';
-  data.coverage.prose_covered_count = 4;
+  data.coverage.reviewed_intent_assignment_covered_count = 4;
   data.coverage.missing_intent = [
     { schema: 'project', pointer: '/properties/version', path_kind: 'property' },
   ];
@@ -171,6 +186,30 @@ test('fails closed on incomplete prose coverage before requesting the reference'
     /coverage is incomplete \(1 missing intents\)/,
   );
   assert.deepEqual(calls, [['authoring', 'reference', '--coverage']]);
+});
+
+test('rejects fabricated field history and inconsistent intent-reuse counts', () => {
+  const fabricatedHistory = fixtureData();
+  fabricatedHistory.reference.fields[0].introduced_in = '0.13.0';
+  assert.throws(
+    () =>
+      validateAuthoringReference(
+        fabricatedHistory.reference,
+        fabricatedHistory.coverage,
+      ),
+    /fabricates unverified release history/,
+  );
+
+  const falseUniqueness = fixtureData();
+  falseUniqueness.coverage.distinct_reviewed_intent_count = 6;
+  assert.throws(
+    () =>
+      validateAuthoringReference(
+        falseUniqueness.reference,
+        falseUniqueness.coverage,
+      ),
+    /reviewed-intent reuse differs/,
+  );
 });
 
 test('rejects duplicated paths and country-value-bearing example metadata', () => {

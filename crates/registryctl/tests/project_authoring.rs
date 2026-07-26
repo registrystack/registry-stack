@@ -1251,15 +1251,14 @@ fn every_cataloged_supported_project_authoring_command_is_automated() {
             assert_eq!(report.status, "configured", "{} editor", journey.id);
         }
 
-        let comparison = compare_registry_projects_semantically(
-            &ProjectSemanticComparisonOptions {
+        let comparison =
+            compare_registry_projects_semantically(&ProjectSemanticComparisonOptions {
                 current_project_directory: project.clone(),
                 current_environment: journey.environment.clone(),
                 baseline_project_directory: catalog_workspace(&journey),
                 baseline_environment: journey.environment.clone(),
-            },
-        )
-        .unwrap_or_else(|error| panic!("{} semantic comparison failed: {error:#}", journey.id));
+            })
+            .unwrap_or_else(|error| panic!("{} semantic comparison failed: {error:#}", journey.id));
         assert_eq!(
             comparison.equivalence,
             SemanticComparisonEquivalence::Equivalent,
@@ -3531,7 +3530,12 @@ fn authored_unknown_fields_and_traversal_fail_closed() {
         live: false,
     })
     .expect_err("implementation conformance mode must not be authored");
-    assert!(format!("{error:#}").contains("worker_probe"));
+    let diagnostic = format!("{error:#}");
+    assert!(diagnostic.contains("unknown field"), "{diagnostic}");
+    assert!(
+        !diagnostic.contains("worker_probe"),
+        "unknown country-authored field names remain value-free"
+    );
 
     let traversal = temporary.path().join("traversal");
     init_registry_project(&ProjectInitOptions {

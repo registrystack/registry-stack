@@ -85,23 +85,27 @@ Run the focused trace, complete fixture set, semantic explanation, preflight, an
 inventory:
 
 ```sh
+PROJECT_DIR=registry-project
+ENVIRONMENT=local
+INTEGRATION_ID=person-record
+FIXTURE_ID=active-person
 registryctl test \
-  --project-dir <project> \
-  --integration <integration> \
-  --fixture <fixture> \
+  --project-dir "$PROJECT_DIR" \
+  --integration "$INTEGRATION_ID" \
+  --fixture "$FIXTURE_ID" \
   --trace
-registryctl test --project-dir <project>
+registryctl test --project-dir "$PROJECT_DIR"
 registryctl check \
-  --project-dir <project> \
-  --environment <environment> \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
   --explain
 registryctl preflight \
-  --project-dir <project> \
-  --environment <environment> \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
   --format json
 registryctl capabilities \
-  --project-dir <project> \
-  --environment <environment> \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
   --format json
 ```
 

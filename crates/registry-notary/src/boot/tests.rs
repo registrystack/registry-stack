@@ -3,6 +3,7 @@
 use super::*;
 use crate::test_support::*;
 use registry_notary_server::{NotaryActivationCode, NotaryActivationFailure};
+use registry_platform_ops::{BundleVerificationCode, BundleVerificationFailure};
 
 fn assert_value_free_activation_failure(
     error: &(dyn std::error::Error + 'static),
@@ -45,6 +46,17 @@ fn top_level_server_error_renderer_preserves_safe_activation_code() {
     let rendered = crate::top_level_error_message(&failure, true);
 
     assert!(rendered.contains(NotaryActivationCode::CONFIGURATION_INVALID.as_str()));
+    assert!(!rendered.contains("SENTINEL"));
+}
+
+#[test]
+fn top_level_server_error_renderer_preserves_safe_bundle_verification_code() {
+    let failure = BundleVerificationFailure::from(BundleVerificationCode::REJECTED_SIGNATURE);
+
+    let rendered = crate::top_level_error_message(&failure, true);
+
+    assert_eq!(rendered, failure.to_string());
+    assert!(rendered.contains(BundleVerificationCode::REJECTED_SIGNATURE.as_str()));
     assert!(!rendered.contains("SENTINEL"));
 }
 

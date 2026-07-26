@@ -189,7 +189,7 @@ just build
 Build a container image:
 
 ```sh
-scripts/build-image.sh registry-relay:<version>
+scripts/build-image.sh registry-relay:local
 ```
 
 The helper verifies that the local `registry-manifest` build context is a clean
@@ -205,7 +205,7 @@ release or lab images must retain the canonical features explicitly:
 
 ```sh
 REGISTRY_RELAY_FEATURES=attribute-release,crosswalk-runtime,ogcapi-edr,spdci-api-standards,standards-cel-mapping \
-  scripts/build-image.sh registry-relay:<version>-standards
+  scripts/build-image.sh registry-relay:local-standards
 ```
 
 Custom profiles use unique comma-separated Cargo feature names in alphabetical
@@ -744,6 +744,59 @@ Recommended scrape posture:
 - Alert on three consecutive refresh failures by default, even while `/ready` remains `200`.
 
 ## Troubleshooting
+
+### Startup diagnostics and generated input ownership
+
+Relay startup failures cross the process boundary as one product-owned
+`relay.startup.*` code with static meaning and remediation. The terminal failure
+line remains visible when `RUST_LOG=off`. Listener codes identify the owning
+field and a closed bind-failure category without printing the configured
+address, port, service identity, or operating-system error:
+
+- `relay.startup.data_listener_address_in_use`,
+  `relay.startup.data_listener_permission_denied`, and
+  `relay.startup.data_listener_unavailable` refer to `server.bind`.
+- `relay.startup.admin_listener_address_in_use`,
+  `relay.startup.admin_listener_permission_denied`, and
+  `relay.startup.admin_listener_unavailable` refer to `server.admin_bind`.
+
+Configuration loading is classified by the safe phase that failed:
+
+- `relay.startup.config_source_unavailable` covers an unreadable `--config`
+  source or configured split metadata source.
+- `relay.startup.config_environment_binding_rejected` covers unsafe or
+  unresolved environment expansion.
+- `relay.startup.config_deprecated_field_rejected` distinguishes a field that
+  the current runtime no longer accepts.
+- `relay.startup.config_document_invalid` covers document syntax, unknown
+  fields, and typed-schema mismatches.
+- `relay.startup.config_validation_rejected` covers cross-field and runtime
+  binding invariants after the document is typed.
+- `relay.startup.bundle_*` and
+  `relay.startup.consultation_artifacts_rejected` retain the governed bundle and
+  consultation-closure boundaries.
+
+Relay deliberately has no raw or verbose startup-error escape hatch. Parser,
+validator, source, and operating-system errors can contain country-local paths,
+URLs, environment names, identifiers, supplied values, or secret-bearing
+excerpts. Those values must not reach stderr, collected logs, CI output, or
+support bundles. This is the concrete confidentiality invariant behind
+suppressed source diagnostics. These terminal categories do not claim to emit a
+field path. Run authored-project validation for field-addressed guidance.
+
+When Relay input was generated from a Registry Stack project, do not edit the
+generated runtime file to clear a startup error. Validate the human-authored
+project, correct the reported field or environment binding there, and regenerate
+the complete product input:
+
+```sh
+registryctl check --project-dir registry-project --environment local --explain
+registryctl build --project-dir registry-project --environment local
+```
+
+For a directly authored Relay configuration, make the equivalent correction in
+its owning source and run the normal validation and review gate before
+restarting.
 
 Config fails at startup:
 

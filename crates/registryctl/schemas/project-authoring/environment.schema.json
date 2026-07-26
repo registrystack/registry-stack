@@ -8,14 +8,14 @@
   "additionalProperties": false,
   "required": ["version", "deployment"],
   "properties": {
-    "version": {"x-registry-field": "public_property", "const": 1, "default": 1, "description": "Environment authoring format version." },
+    "version": {"x-registry-field": "public_property", "const": 1, "description": "Environment authoring format version." },
     "integrations": {"x-registry-field": "property", "type": "object", "maxProperties": 16, "description": "Environment bindings keyed by authored integration identifier.", "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" }, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/integration" } },
     "entities": {"x-registry-field": "property", "type": "object", "maxProperties": 32, "description": "Environment-specific source bindings keyed by entity identifier.", "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" }, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/entity" } },
     "issuance": {
       "x-registry-field": "property",
       "description": "Notary issuer and signing-key bindings for credential issuance.",
       "type": "object", "additionalProperties": false, "required": ["issuer", "signing_key", "signing_kid", "generation"],
-      "properties": { "issuer": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 1 }, "signing_key": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "signing_kid": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/token2048" }, "algorithm": {"x-registry-field": "property", "enum": ["EdDSA", "ES256"], "default": "EdDSA", "description": "Credential issuer signing algorithm. Holder proof remains EdDSA with did:jwk." }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1 } }
+      "properties": { "issuer": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 1 }, "signing_key": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "signing_kid": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/token2048" }, "algorithm": {"x-registry-field": "property", "enum": ["EdDSA", "ES256"], "default": "EdDSA", "description": "Credential issuer signing algorithm. Holder proof remains EdDSA with did:jwk." }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } }
     },
     "callers": {
       "x-registry-field": "property",
@@ -259,12 +259,12 @@
     "ca": {
       "description": "Pinned certificate-authority file and its rotation generation.",
       "type": "object", "additionalProperties": false, "required": ["file", "generation"],
-      "properties": { "file": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1 } }
+      "properties": { "file": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } }
     },
     "mtls": {
       "description": "Client certificate and private-key reference for mutual TLS.",
       "type": "object", "additionalProperties": false, "required": ["certificate_file", "private_key", "generation"],
-      "properties": { "certificate_file": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" }, "private_key": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1 } }
+      "properties": { "certificate_file": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" }, "private_key": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } }
     },
     "endpoint": {
       "description": "Security-bound HTTPS endpoint with optional private-network, CA, and mTLS policy.",
@@ -275,23 +275,23 @@
         "allowed_private_cidrs": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/privateCidrs" },
         "ca": {"x-registry-field": "property", "$ref": "#/$defs/ca" },
         "mtls": {"x-registry-field": "property", "$ref": "#/$defs/mtls" },
-        "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1 }
+        "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
       }
     },
     "credential": {
       "description": "One supported source credential shape, containing references rather than values.",
       "oneOf": [
-        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["username", "password", "generation"], "properties": { "username": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "password": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1 } } },
-        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["token", "generation"], "properties": { "token": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1 } } },
-        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["client_id", "client_secret", "generation"], "properties": { "client_id": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "client_secret": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1 } } },
-        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["value", "generation"], "properties": { "value": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1 } } }
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["username", "password", "generation"], "properties": { "username": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "password": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } } },
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["token", "generation"], "properties": { "token": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } } },
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["client_id", "client_secret", "generation"], "properties": { "client_id": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "client_secret": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } } },
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["value", "generation"], "properties": { "value": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } } }
       ]
     },
     "provider": {
       "description": "Environment-specific physical provider for a materialized entity.",
       "oneOf": [
-        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": {"x-registry-field": "property", "const": "csv" }, "path": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" }, "header_row": {"x-registry-field": "property", "type": "integer", "minimum": 1 }, "delimiter": {"x-registry-field": "property", "type": "integer", "minimum": 0, "maximum": 255 }, "quote": {"x-registry-field": "property", "type": "integer", "minimum": 0, "maximum": 255 } } },
-        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["type", "path", "sheet"], "properties": { "type": {"x-registry-field": "property", "const": "xlsx" }, "path": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" }, "sheet": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 256 }, "header_row": {"x-registry-field": "property", "type": "integer", "minimum": 1 }, "data_range": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 256 } } },
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": {"x-registry-field": "property", "const": "csv" }, "path": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" }, "header_row": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4294967295 }, "delimiter": {"x-registry-field": "property", "type": "integer", "minimum": 0, "maximum": 255 }, "quote": {"x-registry-field": "property", "type": "integer", "minimum": 0, "maximum": 255 } } },
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["type", "path", "sheet"], "properties": { "type": {"x-registry-field": "property", "const": "xlsx" }, "path": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" }, "sheet": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 256 }, "header_row": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4294967295 }, "data_range": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 256 } } },
         {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": {"x-registry-field": "property", "const": "parquet" }, "path": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" } } },
         {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["type", "connection", "schema", "table"], "properties": { "type": {"x-registry-field": "property", "const": "postgres" }, "connection": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "schema": {"x-registry-field": "property", "$ref": "#/$defs/postgresIdentifier" }, "table": {"x-registry-field": "property", "$ref": "#/$defs/postgresIdentifier" } } }
       ]

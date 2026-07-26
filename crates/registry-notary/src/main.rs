@@ -55,12 +55,13 @@ use registry_platform_config::{
 };
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
 use registry_platform_ops::{
-    antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_result,
+    antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_code,
     evaluate_ack_health, load_unsigned_break_glass_or_pin,
     persist_bundle_acceptance as persist_config_bundle_acceptance,
     posture_safe_runtime_config_hash, resolve_bundle_state_action, verify_bundle_state_read_only,
-    AuditSinkKind, BundleStateAction, BundleStateRequest, ConfigBootError, ConfigOverrideMode,
-    ConfigProvenance, ConfigSource, PendingBundleAcceptance, UnsignedConfigSelection,
+    AuditSinkKind, BundleStateAction, BundleStateRequest, BundleVerificationCode,
+    BundleVerificationFailure, ConfigBootError, ConfigOverrideMode, ConfigProvenance, ConfigSource,
+    PendingBundleAcceptance, UnsignedConfigSelection,
 };
 use serde_json::{json, Value};
 use serve::{serve_listener, ServeLimits};
@@ -273,6 +274,9 @@ fn top_level_error_message(
 ) -> String {
     if !server_startup {
         return error.to_string();
+    }
+    if let Some(failure) = error.downcast_ref::<BundleVerificationFailure>() {
+        return failure.to_string();
     }
     error
         .downcast_ref::<NotaryActivationFailure>()

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 
 import { parse } from 'yaml';
@@ -18,6 +19,9 @@ import {
   replaceLiteralOnce,
   setRelayMinGroupSize,
 } from './registryctl-tutorial.mjs';
+
+const siteRoot = resolve(import.meta.dirname, '..');
+const repoRoot = resolve(siteRoot, '../..');
 
 test('extracts shell fences with headings, occurrences, and multiline commands intact', () => {
   const markdown = `## Start
@@ -161,6 +165,142 @@ test('source tutorial image staging includes the dedicated Notary CEL worker', (
   assert.match(script, new RegExp(`\\$LINUX_TARGET/\\$BUILD_PROFILE/${worker}`));
   assert.match(script, new RegExp(`dist/image-bin/${worker}`));
   assert.match(script, new RegExp(`chmod 0755[\\s\\S]*dist/image-bin/${worker}`));
+});
+
+test('HTTP authoring tutorial output stays synchronized with the current starter', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'registryctl-http-trace-'));
+  const projectDirectory = join(directory, 'registry-project');
+  try {
+    execFileSync(
+      'cargo',
+      [
+        'run',
+        '--locked',
+        '--quiet',
+        '-p',
+        'registryctl',
+        '--',
+        'init',
+        '--from',
+        'http',
+        '--project-dir',
+        projectDirectory,
+      ],
+      { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+    );
+    const actual = execFileSync(
+      'cargo',
+      [
+        'run',
+        '--locked',
+        '--quiet',
+        '-p',
+        'registryctl',
+        '--',
+        'test',
+        '--project-dir',
+        projectDirectory,
+        '--integration',
+        'person-record',
+        '--fixture',
+        'active-person',
+        '--trace',
+      ],
+      { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+    ).trimEnd();
+    const tutorial = readFileSync(
+      resolve(siteRoot, 'src/content/docs/tutorials/author-registry-project.mdx'),
+      'utf8',
+    );
+    const documented = extractFencedBlocks(tutorial).find(
+      (block) => block.heading === 'Trace one fixture offline' && block.language === 'text',
+    );
+    assert.ok(documented, 'tutorial trace output block is missing');
+    assert.equal(documented.content, actual);
+
+    assert.match(actual, /^PASS: 8\/8 fixtures passed$/m);
+    assert.deepEqual(
+      actual
+        .split('\n')
+        .filter((line) => line.startsWith('  PASS person-record.'))
+        .map((line) => line.trim().slice('PASS person-record.'.length)),
+      [
+        'active-person',
+        'active-person::derived/request_authority',
+        'active-person::derived/status_rejection',
+        'active-person::derived/malformed_decode',
+        'active-person::derived/byte_ceiling',
+        'active-person::derived/timeout',
+        'active-person::derived/authorization_before_source',
+        'active-person::derived/output_minimization',
+      ],
+    );
+
+    const built = execFileSync(
+      'cargo',
+      [
+        'run',
+        '--locked',
+        '--quiet',
+        '-p',
+        'registryctl',
+        '--',
+        'build',
+        '--project-dir',
+        projectDirectory,
+        '--environment',
+        'local',
+      ],
+      { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+    ).trimEnd();
+    const documentedBuild = extractFencedBlocks(tutorial).find(
+      (block) => block.heading === 'Build unsigned product inputs' && block.language === 'text',
+    );
+    assert.ok(documentedBuild, 'tutorial build output block is missing');
+    assertOutputContainsLines(built, documentedBuild.content.split('\n').slice(1).join('\n'));
+    assert.match(built, /^  Output: \.registry-stack\/build\/local$/m);
+    assert.match(tutorial, /An artifact action of `regenerate` is lifecycle metadata/);
+
+    const trustedLocal = execFileSync(
+      'cargo',
+      [
+        'run',
+        '--locked',
+        '--quiet',
+        '-p',
+        'registryctl',
+        '--',
+        'check',
+        '--project-dir',
+        projectDirectory,
+        '--environment',
+        'local',
+        '--explain',
+        '--show-authored-values',
+      ],
+      { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+    ).trimEnd();
+    const documentedTrustedLocal = extractFencedBlocks(tutorial).find(
+      (block) =>
+        block.heading === 'Review the generated plan' &&
+        block.language === 'text' &&
+        block.content.startsWith('WARNING: trusted-local authored values follow.'),
+    );
+    assert.ok(documentedTrustedLocal, 'trusted-local safety output block is missing');
+    assertOutputContainsLines(trustedLocal, documentedTrustedLocal.content);
+
+    const checkHelp = execFileSync(
+      'cargo',
+      ['run', '--locked', '--quiet', '-p', 'registryctl', '--', 'check', '--help'],
+      { cwd: repoRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+    );
+    assert.match(
+      checkHelp,
+      /--show-authored-values[\s\S]*Show directly authored non-secret values for trusted-local terminal review/,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('Notary tutorial keeps no-match false bounded and renames broadened semantics', () => {

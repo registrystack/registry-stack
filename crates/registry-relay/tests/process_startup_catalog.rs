@@ -18,16 +18,23 @@ fn process_startup_catalog_is_complete_unique_and_lexically_ordered() {
     assert_eq!(
         codes,
         [
+            "relay.startup.admin_listener_address_in_use",
+            "relay.startup.admin_listener_permission_denied",
+            "relay.startup.admin_listener_unavailable",
             "relay.startup.bundle_binding_rejected",
             "relay.startup.bundle_rollback_rejected",
             "relay.startup.bundle_signature_rejected",
             "relay.startup.bundle_validation_rejected",
+            "relay.startup.config_deprecated_field_rejected",
             "relay.startup.config_document_invalid",
+            "relay.startup.config_environment_binding_rejected",
             "relay.startup.config_source_unavailable",
             "relay.startup.config_validation_rejected",
             "relay.startup.consultation_artifacts_rejected",
+            "relay.startup.data_listener_address_in_use",
+            "relay.startup.data_listener_permission_denied",
+            "relay.startup.data_listener_unavailable",
             "relay.startup.doctor_failed",
-            "relay.startup.listener_unavailable",
             "relay.startup.runtime_initialization_failed",
         ]
     );
@@ -88,6 +95,41 @@ fn process_startup_catalog_metadata_is_static_complete_and_unreleased() {
         assert!(failure.contains(definition.safe_meaning));
         assert!(failure.contains(definition.safe_remediation));
         assert_safe_value_free(&failure);
+    }
+}
+
+#[test]
+fn listener_bind_errors_map_to_closed_value_free_categories() {
+    for (error_kind, data_code, admin_code) in [
+        (
+            std::io::ErrorKind::AddrInUse,
+            ProcessStartupCode::DATA_LISTENER_ADDRESS_IN_USE,
+            ProcessStartupCode::ADMIN_LISTENER_ADDRESS_IN_USE,
+        ),
+        (
+            std::io::ErrorKind::PermissionDenied,
+            ProcessStartupCode::DATA_LISTENER_PERMISSION_DENIED,
+            ProcessStartupCode::ADMIN_LISTENER_PERMISSION_DENIED,
+        ),
+        (
+            std::io::ErrorKind::AddrNotAvailable,
+            ProcessStartupCode::DATA_LISTENER_UNAVAILABLE,
+            ProcessStartupCode::ADMIN_LISTENER_UNAVAILABLE,
+        ),
+        (
+            std::io::ErrorKind::Other,
+            ProcessStartupCode::DATA_LISTENER_UNAVAILABLE,
+            ProcessStartupCode::ADMIN_LISTENER_UNAVAILABLE,
+        ),
+    ] {
+        assert_eq!(
+            ProcessStartupCode::from_data_listener_bind(error_kind),
+            data_code
+        );
+        assert_eq!(
+            ProcessStartupCode::from_admin_listener_bind(error_kind),
+            admin_code
+        );
     }
 }
 

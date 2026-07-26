@@ -159,23 +159,23 @@ test('bundle verification separates stateless closure from product rollback elig
 
   assert.match(
     source,
-    /registryctl bundle verify[\s\S]*?--bundle-dir <signed-product-bundle>[\s\S]*?--anchor-path <product-trust-anchor>/,
+    /SIGNED_PRODUCT_BUNDLE=operator-inputs\/signed-relay-bundle[\s\S]*?PRODUCT_TRUST_ANCHOR=operator-inputs\/relay-trust-anchor\.json[\s\S]*?registryctl bundle verify[\s\S]*?--bundle-dir "\$SIGNED_PRODUCT_BUNDLE"[\s\S]*?--anchor-path "\$PRODUCT_TRUST_ANCHOR"/,
   );
   assert.match(
     source,
     /does not read product anti-rollback state or establish local rollback eligibility/,
   );
-  for (const [product, bundle, anchor, state] of [
-    ['registry-relay', 'signed-relay-bundle', 'relay-trust-anchor', 'relay-anti-rollback-state'],
-    ['registry-notary', 'signed-notary-bundle', 'notary-trust-anchor', 'notary-anti-rollback-state'],
+  for (const [product, bundleVariable, anchorVariable, stateVariable] of [
+    ['registry-relay', 'SIGNED_RELAY_BUNDLE', 'RELAY_TRUST_ANCHOR', 'RELAY_ROLLBACK_STATE'],
+    ['registry-notary', 'SIGNED_NOTARY_BUNDLE', 'NOTARY_TRUST_ANCHOR', 'NOTARY_ROLLBACK_STATE'],
   ]) {
     assert.match(
       source,
       new RegExp(
         `${product} config verify-bundle[\\s\\S]*?` +
-          `--bundle-dir <${bundle}>[\\s\\S]*?` +
-          `--anchor-path <${anchor}>[\\s\\S]*?` +
-          `--state-path <${state}>`,
+          `--bundle-dir "\\$${bundleVariable}"[\\s\\S]*?` +
+          `--anchor-path "\\$${anchorVariable}"[\\s\\S]*?` +
+          `--state-path "\\$${stateVariable}"`,
       ),
     );
   }

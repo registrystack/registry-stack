@@ -21,11 +21,6 @@ use field_knowledge::{
 };
 
 const COVERAGE_FILE: &str = "schemas/project-authoring/parity-coverage.json";
-const KNOWN_EVIDENCE: [&str; 3] = [
-    "schemas_compile_and_all_catalog_documents_pass_schema_and_runtime",
-    "closed_object_policy_has_only_named_map_exceptions",
-    "representative_mutations_fail_schema_and_runtime",
-];
 const SCHEMA_METADATA_KEYWORDS: [&str; 11] = [
     "$comment",
     "$id",
@@ -54,7 +49,6 @@ struct ParityCoverage {
     version: u8,
     schemas: Vec<SchemaEntry>,
     field_knowledge: FieldKnowledgeCatalog,
-    rule_coverage: Vec<RuleCoverage>,
     open_object_exceptions: Vec<OpenObjectException>,
     parity_cases: Vec<ParityCase>,
 }
@@ -64,13 +58,6 @@ struct ParityCoverage {
 struct SchemaEntry {
     kind: String,
     file: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RuleCoverage {
-    keywords: Vec<String>,
-    evidence: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,6 +85,7 @@ struct ParityCase {
     source: String,
     document: String,
     mutation: Mutation,
+    expected_failing_keywords: Vec<String>,
     #[serde(default)]
     expected_error_code: Option<String>,
     #[serde(default)]
@@ -259,7 +247,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     assert_eq!(
         index.coverage_by_schema(),
         [
-            (SchemaKind::Project, 160),
+            (SchemaKind::Project, 219),
             (SchemaKind::Environment, 191),
             (SchemaKind::Integration, 138),
             (SchemaKind::Fixture, 40),
@@ -273,11 +261,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_path_kind(),
         [
             (FieldPathKind::Root, 5),
-            (FieldPathKind::Property, 388),
-            (FieldPathKind::MapKey, 23),
-            (FieldPathKind::MapValue, 29),
-            (FieldPathKind::ArrayItem, 27),
-            (FieldPathKind::Branch, 92),
+            (FieldPathKind::Property, 440),
+            (FieldPathKind::MapKey, 24),
+            (FieldPathKind::MapValue, 30),
+            (FieldPathKind::ArrayItem, 30),
+            (FieldPathKind::Branch, 94),
         ]
         .into_iter()
         .collect(),
@@ -287,11 +275,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_sensitivity(),
         [
             (Sensitivity::Public, 6),
-            (Sensitivity::Internal, 353),
+            (Sensitivity::Internal, 410),
             (Sensitivity::Sensitive, 64),
             (Sensitivity::SecretReference, 14),
             (Sensitivity::RedactedFixture, 30),
-            (Sensitivity::Structural, 97),
+            (Sensitivity::Structural, 99),
         ]
         .into_iter()
         .collect(),
@@ -299,12 +287,12 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     );
     assert_eq!(
         index.by_path().len(),
-        564,
+        623,
         "the field-knowledge gate covers every published schema path"
     );
     assert_eq!(
         index.references().len(),
-        201,
+        253,
         "every published local reference remains resolved in the deterministic reference index"
     );
     assert_eq!(
@@ -657,8 +645,435 @@ fn is_object_schema(schema: &Value) -> bool {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct PublishedStructuralInventory {
+    nodes: usize,
+    local_refs: usize,
+    union_nodes: usize,
+    union_branches: usize,
+    conditionals: usize,
+    objects: usize,
+    closed_objects: usize,
+    typed_maps: usize,
+    open_maps: usize,
+    arrays: usize,
+    scalar_types: usize,
+    nullable_nodes: usize,
+    integer_lower_bounds: usize,
+    integer_upper_bounds: usize,
+    string_length_bounds: usize,
+    string_patterns: usize,
+    array_size_bounds: usize,
+    unique_arrays: usize,
+    object_size_bounds: usize,
+    property_name_constraints: usize,
+    enums: usize,
+    consts: usize,
+    defaults: usize,
+    deprecations: usize,
+}
+
+fn published_structural_inventory(schema: &Value) -> PublishedStructuralInventory {
+    let mut inventory = PublishedStructuralInventory::default();
+    walk_schema(schema, "", &mut |node, _| {
+        inventory.nodes += 1;
+        let Some(object) = node.as_object() else {
+            return;
+        };
+        inventory.local_refs += usize::from(object.contains_key("$ref"));
+        for keyword in ["anyOf", "oneOf"] {
+            if let Some(branches) = object.get(keyword).and_then(Value::as_array) {
+                inventory.union_nodes += 1;
+                inventory.union_branches += branches.len();
+            }
+        }
+        inventory.conditionals += usize::from(object.contains_key("if"));
+        inventory.arrays += usize::from(match object.get("type") {
+            Some(Value::String(kind)) => kind == "array",
+            Some(Value::Array(kinds)) => kinds.iter().any(|kind| kind.as_str() == Some("array")),
+            _ => false,
+        });
+        let types = match object.get("type") {
+            Some(Value::String(kind)) => vec![kind.as_str()],
+            Some(Value::Array(kinds)) => kinds.iter().filter_map(Value::as_str).collect(),
+            _ => Vec::new(),
+        };
+        inventory.scalar_types += types
+            .iter()
+            .filter(|kind| matches!(**kind, "null" | "boolean" | "integer" | "number" | "string"))
+            .count();
+        inventory.nullable_nodes += usize::from(types.contains(&"null"));
+        if types.contains(&"integer") {
+            inventory.integer_lower_bounds += usize::from(
+                object.contains_key("minimum") || object.contains_key("exclusiveMinimum"),
+            );
+            inventory.integer_upper_bounds += usize::from(
+                object.contains_key("maximum") || object.contains_key("exclusiveMaximum"),
+            );
+        }
+        inventory.string_length_bounds +=
+            usize::from(object.contains_key("minLength") || object.contains_key("maxLength"));
+        inventory.string_patterns += usize::from(object.contains_key("pattern"));
+        inventory.array_size_bounds +=
+            usize::from(object.contains_key("minItems") || object.contains_key("maxItems"));
+        inventory.unique_arrays +=
+            usize::from(object.get("uniqueItems") == Some(&Value::Bool(true)));
+        inventory.object_size_bounds += usize::from(
+            object.contains_key("minProperties") || object.contains_key("maxProperties"),
+        );
+        inventory.property_name_constraints += usize::from(object.contains_key("propertyNames"));
+        inventory.enums += usize::from(object.contains_key("enum"));
+        inventory.consts += usize::from(object.contains_key("const"));
+        inventory.defaults += usize::from(object.contains_key("default"));
+        inventory.deprecations += usize::from(object.contains_key("deprecated"));
+        if is_object_schema(node) {
+            inventory.objects += 1;
+            match object.get("additionalProperties") {
+                Some(Value::Bool(false)) => inventory.closed_objects += 1,
+                Some(Value::Object(_)) => inventory.typed_maps += 1,
+                None | Some(Value::Bool(true)) => inventory.open_maps += 1,
+                other => panic!("unsupported additionalProperties shape: {other:?}"),
+            }
+        }
+    });
+    inventory
+}
+
 #[test]
-fn closed_object_policy_has_only_named_map_exceptions() {
+fn exact_published_structural_contract_inventory_is_release_gated() {
+    let coverage = coverage();
+    let actual = coverage
+        .schemas
+        .iter()
+        .map(|entry| {
+            (
+                entry.kind.as_str(),
+                published_structural_inventory(&compile_schema(&entry.file).0),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    assert_eq!(
+        actual,
+        [
+            (
+                "project",
+                PublishedStructuralInventory {
+                    nodes: 252,
+                    local_refs: 123,
+                    union_nodes: 9,
+                    union_branches: 19,
+                    conditionals: 0,
+                    objects: 51,
+                    closed_objects: 36,
+                    typed_maps: 15,
+                    open_maps: 0,
+                    arrays: 11,
+                    scalar_types: 30,
+                    nullable_nodes: 0,
+                    integer_lower_bounds: 9,
+                    integer_upper_bounds: 9,
+                    string_length_bounds: 10,
+                    string_patterns: 12,
+                    array_size_bounds: 9,
+                    unique_arrays: 8,
+                    object_size_bounds: 17,
+                    property_name_constraints: 14,
+                    enums: 12,
+                    consts: 8,
+                    defaults: 0,
+                    deprecations: 0,
+                },
+            ),
+            (
+                "environment",
+                PublishedStructuralInventory {
+                    nodes: 215,
+                    local_refs: 82,
+                    union_nodes: 6,
+                    union_branches: 16,
+                    conditionals: 7,
+                    objects: 39,
+                    closed_objects: 35,
+                    typed_maps: 4,
+                    open_maps: 0,
+                    arrays: 4,
+                    scalar_types: 40,
+                    nullable_nodes: 0,
+                    integer_lower_bounds: 16,
+                    integer_upper_bounds: 16,
+                    string_length_bounds: 15,
+                    string_patterns: 13,
+                    array_size_bounds: 4,
+                    unique_arrays: 4,
+                    object_size_bounds: 5,
+                    property_name_constraints: 4,
+                    enums: 2,
+                    consts: 6,
+                    defaults: 2,
+                    deprecations: 0,
+                },
+            ),
+            (
+                "integration",
+                PublishedStructuralInventory {
+                    nodes: 159,
+                    local_refs: 35,
+                    union_nodes: 8,
+                    union_branches: 19,
+                    conditionals: 0,
+                    objects: 33,
+                    closed_objects: 27,
+                    typed_maps: 6,
+                    open_maps: 0,
+                    arrays: 9,
+                    scalar_types: 46,
+                    nullable_nodes: 0,
+                    integer_lower_bounds: 14,
+                    integer_upper_bounds: 14,
+                    string_length_bounds: 14,
+                    string_patterns: 18,
+                    array_size_bounds: 9,
+                    unique_arrays: 8,
+                    object_size_bounds: 8,
+                    property_name_constraints: 3,
+                    enums: 10,
+                    consts: 14,
+                    defaults: 0,
+                    deprecations: 0,
+                },
+            ),
+            (
+                "fixture",
+                PublishedStructuralInventory {
+                    nodes: 45,
+                    local_refs: 6,
+                    union_nodes: 3,
+                    union_branches: 6,
+                    conditionals: 0,
+                    objects: 15,
+                    closed_objects: 7,
+                    typed_maps: 5,
+                    open_maps: 3,
+                    arrays: 2,
+                    scalar_types: 21,
+                    nullable_nodes: 3,
+                    integer_lower_bounds: 1,
+                    integer_upper_bounds: 1,
+                    string_length_bounds: 6,
+                    string_patterns: 6,
+                    array_size_bounds: 2,
+                    unique_arrays: 0,
+                    object_size_bounds: 8,
+                    property_name_constraints: 3,
+                    enums: 2,
+                    consts: 1,
+                    defaults: 0,
+                    deprecations: 0,
+                },
+            ),
+            (
+                "entity",
+                PublishedStructuralInventory {
+                    nodes: 40,
+                    local_refs: 7,
+                    union_nodes: 3,
+                    union_branches: 6,
+                    conditionals: 0,
+                    objects: 5,
+                    closed_objects: 4,
+                    typed_maps: 1,
+                    open_maps: 0,
+                    arrays: 3,
+                    scalar_types: 13,
+                    nullable_nodes: 0,
+                    integer_lower_bounds: 8,
+                    integer_upper_bounds: 8,
+                    string_length_bounds: 1,
+                    string_patterns: 4,
+                    array_size_bounds: 3,
+                    unique_arrays: 3,
+                    object_size_bounds: 1,
+                    property_name_constraints: 1,
+                    enums: 2,
+                    consts: 6,
+                    defaults: 0,
+                    deprecations: 0,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+        "every finite schema node, local reference, union/conditional, object/map shape, scalar/null type, numeric/string/array/object constraint, enum/const, default, and deprecation is release-gated"
+    );
+}
+
+fn normalized_rust_source(source: &str) -> String {
+    source.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn validate_production_ingress_inventory(
+    project_source: &str,
+    output_source: &str,
+    diagnostics_source: &str,
+    schema_authority_source: &str,
+) -> Result<(), String> {
+    let project = normalized_rust_source(project_source);
+    let output = normalized_rust_source(output_source);
+    let diagnostics = normalized_rust_source(diagnostics_source);
+    let schema_authority = normalized_rust_source(schema_authority_source);
+    let routes = [
+        (
+            "loader/project",
+            &project,
+            "let project: RegistryProject = parse_yaml(&project_bytes, PROJECT_FILE)",
+        ),
+        (
+            "loader/entity",
+            &project,
+            "let document: EntityDefinition = parse_yaml(&bytes, relative)",
+        ),
+        (
+            "loader/integration",
+            &project,
+            "let authored: AuthoredIntegrationDocument = parse_yaml(&bytes, &reference.file.display().to_string())",
+        ),
+        (
+            "loader/environment",
+            &project,
+            "let document: EnvironmentDocument = parse_yaml(&bytes, &relative.display().to_string())",
+        ),
+        (
+            "loader/fixture",
+            &output,
+            "let authored: AuthoredFixtureDocument = parse_yaml(&bytes, relative)",
+        ),
+        (
+            "diagnostics/project",
+            &diagnostics,
+            "diagnostic_parse_yaml(&project_bytes, PROJECT_FILE, \"project\", PROJECT_SCHEMA_HINT)",
+        ),
+        (
+            "diagnostics/entity",
+            &diagnostics,
+            "diagnostic_parse_yaml(&bytes, &file, \"entity\", ENTITY_SCHEMA_HINT)",
+        ),
+        (
+            "diagnostics/integration",
+            &diagnostics,
+            "diagnostic_parse_yaml(&bytes, &file, \"integration\", INTEGRATION_SCHEMA_HINT)",
+        ),
+        (
+            "diagnostics/environment",
+            &diagnostics,
+            "diagnostic_parse_yaml(&bytes, &file, \"environment\", ENVIRONMENT_SCHEMA_HINT)",
+        ),
+        (
+            "diagnostics/fixture",
+            &diagnostics,
+            "diagnostic_parse_yaml(&bytes, &file, \"fixture\", FIXTURE_SCHEMA_HINT)",
+        ),
+    ];
+    for (route, source, needle) in routes {
+        let count = source.matches(needle).count();
+        if count != 1 {
+            return Err(format!(
+                "{route} must occur exactly once in the production ingress inventory; found {count}"
+            ));
+        }
+    }
+
+    let project_production = project_source
+        .split("#[cfg(test)]")
+        .next()
+        .expect("project source has a production prefix");
+    if project_production.matches("parse_yaml(").count() != 4 {
+        return Err("project loader must retain exactly four direct authored routes".to_string());
+    }
+    if output_source.matches("parse_yaml(").count() != 1
+        || output_source.matches("fn parse_yaml<").count() != 1
+    {
+        return Err(
+            "output module must retain exactly one fixture route and one central parse helper"
+                .to_string(),
+        );
+    }
+    let diagnostic_production = diagnostics_source
+        .split("#[cfg(test)]")
+        .next()
+        .expect("diagnostics source has a production prefix");
+    if diagnostic_production
+        .matches("diagnostic_parse_yaml(")
+        .count()
+        != 5
+        || diagnostic_production
+            .matches("fn diagnostic_parse_yaml<")
+            .count()
+            != 1
+    {
+        return Err(
+            "diagnostics must retain five authored routes and one central diagnostic helper"
+                .to_string(),
+        );
+    }
+    for (rust_type, kind) in [
+        ("RegistryProject", "Project"),
+        ("EnvironmentDocument", "Environment"),
+        ("AuthoredIntegrationDocument", "Integration"),
+        ("AuthoredFixtureDocument", "Fixture"),
+        ("EntityDefinition", "Entity"),
+    ] {
+        let mapping = format!(
+            "impl CurrentAuthoringDocument for {rust_type} {{ const KIND: ProjectSchemaKind = ProjectSchemaKind::{kind}; }}"
+        );
+        if schema_authority.matches(&mapping).count() != 1 {
+            return Err(format!(
+                "typed schema-authority mapping must occur exactly once: {mapping}"
+            ));
+        }
+    }
+    if output
+        .matches("parse_current_authoring_document(bytes)")
+        .count()
+        != 1
+        || diagnostics
+            .matches("parse_current_authoring_document(bytes)")
+            .count()
+            != 1
+    {
+        return Err(
+            "both loader and diagnostic ingress helpers must route through canonical schema authority"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn every_production_current_format_ingress_routes_through_schema_authority() {
+    let project = include_str!("../src/project_authoring/project.rs");
+    let output = include_str!("../src/project_authoring/output.rs");
+    let diagnostics = include_str!("../src/project_authoring/diagnostics.rs");
+    let schema_authority = include_str!("../src/project_authoring/schema_authority.rs");
+    validate_production_ingress_inventory(project, output, diagnostics, schema_authority)
+        .expect("the production ingress inventory is exact");
+
+    let missing_route = project.replacen("AuthoredIntegrationDocument", "EntityDefinition", 1);
+    assert!(
+        validate_production_ingress_inventory(
+            &missing_route,
+            output,
+            diagnostics,
+            schema_authority
+        )
+        .expect_err("route-kind drift must fail closed")
+        .contains("loader/integration"),
+        "the route inventory has a planted negative control"
+    );
+}
+
+#[test]
+fn published_schema_vocabulary_and_open_object_exceptions_are_explicit() {
     let coverage = coverage();
     let schema_files = coverage
         .schemas
@@ -745,30 +1160,44 @@ fn closed_object_policy_has_only_named_map_exceptions() {
         "every object schema must be closed or have one exact named map/extension exception"
     );
 
-    let mut covered_keywords = BTreeMap::new();
-    for rule in &coverage.rule_coverage {
-        assert!(
-            KNOWN_EVIDENCE.contains(&rule.evidence.as_str()),
-            "unknown rule evidence: {}",
-            rule.evidence
-        );
-        assert!(!rule.keywords.is_empty(), "rule evidence cannot be empty");
-        for keyword in &rule.keywords {
-            assert!(
-                covered_keywords
-                    .insert(keyword.as_str(), rule.evidence.as_str())
-                    .is_none(),
-                "schema rule keyword is covered twice: {keyword}"
-            );
-        }
-    }
     assert_eq!(
         encountered_keywords,
-        covered_keywords
-            .keys()
-            .map(|keyword| (*keyword).to_string())
-            .collect(),
-        "adding or removing a published schema rule requires named parity evidence"
+        [
+            "$defs",
+            "$ref",
+            "additionalProperties",
+            "allOf",
+            "anyOf",
+            "const",
+            "else",
+            "enum",
+            "exclusiveMinimum",
+            "format",
+            "if",
+            "items",
+            "maxItems",
+            "maxLength",
+            "maxProperties",
+            "maximum",
+            "minItems",
+            "minLength",
+            "minProperties",
+            "minimum",
+            "not",
+            "oneOf",
+            "pattern",
+            "prefixItems",
+            "properties",
+            "propertyNames",
+            "required",
+            "then",
+            "type",
+            "uniqueItems",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
+        "published schema vocabulary changed; update the inventory and add exact evidence where a rule is exercised"
     );
 }
 
@@ -866,11 +1295,24 @@ fn representative_mutations_fail_schema_and_runtime() {
         .collect::<BTreeMap<_, _>>();
     let mut ids = BTreeSet::new();
     let mut dimensions = BTreeMap::<&str, BTreeSet<&str>>::new();
+    let mut observed_keyword_evidence = BTreeMap::new();
 
     for case in &coverage.parity_cases {
         assert!(
             ids.insert(case.id.as_str()),
             "duplicate case id: {}",
+            case.id
+        );
+        assert!(
+            !case.expected_failing_keywords.is_empty(),
+            "{} must name at least one observed failing schema keyword",
+            case.id
+        );
+        assert!(
+            case.expected_failing_keywords
+                .windows(2)
+                .all(|keywords| keywords[0] < keywords[1]),
+            "{} failing schema keywords must be unique and sorted",
             case.id
         );
         let schema = schemas
@@ -892,12 +1334,21 @@ fn representative_mutations_fail_schema_and_runtime() {
             case.id
         );
         mutate(&mut document, &case.mutation);
-        assert!(
-            !schema.is_valid(&document),
-            "{} mutation must fail the published {} schema",
-            case.id,
-            case.schema
-        );
+        let observed_failing_keywords = schema
+            .validate(&document)
+            .expect_err("maintained mutation must fail its published schema")
+            .map(|error| {
+                error
+                    .schema_path
+                    .to_string()
+                    .rsplit('/')
+                    .next()
+                    .filter(|keyword| !keyword.is_empty())
+                    .unwrap_or("<root>")
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
+        observed_keyword_evidence.insert(case.id.as_str(), observed_failing_keywords);
         std::fs::write(
             &document_path,
             serde_norway::to_string(&document).expect("mutated document serializes as YAML"),
@@ -972,5 +1423,19 @@ fn representative_mutations_fail_schema_and_runtime() {
         .into_iter()
         .collect(),
         "new parity dimensions require an explicit gate assertion"
+    );
+    assert_eq!(
+        observed_keyword_evidence,
+        coverage
+            .parity_cases
+            .iter()
+            .map(|case| {
+                (
+                    case.id.as_str(),
+                    case.expected_failing_keywords.iter().cloned().collect(),
+                )
+            })
+            .collect(),
+        "each maintained mutation must name the exact schema keywords observed to fail"
     );
 }

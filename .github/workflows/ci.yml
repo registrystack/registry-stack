@@ -935,6 +935,10 @@ jobs:
         working-directory: docs/site
         run: npm ci
 
+      - name: Fetch pinned OpenAPI inputs
+        working-directory: docs/site
+        run: node scripts/fetch-openapi.mjs
+
       - name: Test docs scripts
         working-directory: docs/site
         run: npm test

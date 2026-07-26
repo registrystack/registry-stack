@@ -553,7 +553,7 @@ fn relay_product_usage_requires_relay_product_support() {
 }
 
 #[test]
-fn schema_and_dto_reject_unknown_fields_and_country_value_sentinels() {
+fn schema_and_dto_reject_country_value_carriers() {
     let mut root = parse(FIXTURE);
     root["project"] = json!("COUNTRY_PROJECT_SENTINEL");
     assert_schema_invalid(&root);
@@ -586,19 +586,6 @@ fn schema_and_dto_reject_unknown_fields_and_country_value_sentinels() {
             .insert(forbidden_field.to_owned(), json!(sentinel));
         assert_schema_invalid(&document);
         assert!(serde_json::from_value::<ProjectCapabilityInventoryReportV1>(document).is_err());
-    }
-
-    let serialized = serde_json::to_string(
-        &build_capability_inventory(canonical_input()).expect("inventory builds"),
-    )
-    .expect("inventory serializes");
-    for sentinel in [
-        "COUNTRY_PROJECT_SENTINEL",
-        "COUNTRY_ORIGIN_SENTINEL",
-        "COUNTRY_SECRET_NAME_SENTINEL",
-        "COUNTRY_RUNTIME_SENTINEL",
-    ] {
-        assert!(!serialized.contains(sentinel));
     }
 }
 

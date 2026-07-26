@@ -9,7 +9,7 @@
   "required": ["name", "classification", "input", "interactions", "expect"],
   "properties": {
     "name": {"x-registry-field": "public_property", "type": "string", "minLength": 1, "maxLength": 256, "description": "Human-readable scenario name shown in test output.", "examples": ["existing household matches"] },
-    "classification": {"x-registry-field": "public_property", "const": "synthetic", "default": "synthetic", "description": "Declares that fixture data is synthetic and safe for offline testing." },
+    "classification": {"x-registry-field": "public_property", "const": "synthetic", "description": "Declares that fixture data is synthetic and safe for offline testing." },
     "input": {
       "x-registry-field": "redacted_fixture_property",
       "description": "Typed consultation inputs supplied to the adapter under test.",

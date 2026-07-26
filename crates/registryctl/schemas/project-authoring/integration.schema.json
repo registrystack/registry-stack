@@ -8,9 +8,9 @@
   "additionalProperties": false,
   "required": ["version", "id", "revision", "input", "capability", "outputs"],
   "properties": {
-    "version": {"x-registry-field": "public_property", "const": 1, "default": 1, "description": "Integration authoring format version." },
+    "version": {"x-registry-field": "public_property", "const": 1, "description": "Integration authoring format version." },
     "id": {"x-registry-field": "property", "$ref": "#/$defs/stableId", "description": "Stable project-local identifier for the integration." },
-    "revision": {"x-registry-field": "property", "type": "integer", "minimum": 1, "description": "Monotonically increasing revision of this integration contract.", "examples": [1] },
+    "revision": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4294967295, "description": "Monotonically increasing revision of this integration contract.", "examples": [1] },
     "source": {"x-registry-field": "property", "$ref": "#/$defs/source", "description": "Optional source product metadata and transport policy; capabilities remain product-neutral." },
     "input": {
       "x-registry-field": "property",
@@ -110,7 +110,7 @@
     "byteSize": {
       "description": "Positive byte count expressed as an integer or a KiB/MiB quantity.",
       "oneOf": [
-        {"x-registry-field": "branch", "type": "integer", "minimum": 1 },
+        {"x-registry-field": "branch", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
         {"x-registry-field": "branch", "type": "string", "pattern": "^[1-9][0-9]*(?:KiB|MiB)$" }
       ]
     },
@@ -143,8 +143,8 @@
         "maxLength": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 16384 },
         "minLength": {"x-registry-field": "property", "type": "integer", "minimum": 0, "maximum": 16384 },
         "pattern": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 16384 },
-        "minimum": {"x-registry-field": "property", "type": "integer" },
-        "maximum": {"x-registry-field": "property", "type": "integer" },
+        "minimum": {"x-registry-field": "property", "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
+        "maximum": {"x-registry-field": "property", "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
         "canonicalization": {"x-registry-field": "property", "enum": ["identity", "ascii_lowercase"] }
       }
     },
@@ -458,8 +458,8 @@
         "type": {"x-registry-field": "property", "$ref": "#/$defs/scalarType" },
         "format": {"x-registry-field": "property", "const": "date" },
         "maxLength": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 16384 },
-        "minimum": {"x-registry-field": "property", "type": "integer" },
-        "maximum": {"x-registry-field": "property", "type": "integer" },
+        "minimum": {"x-registry-field": "property", "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
+        "maximum": {"x-registry-field": "property", "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
         "x-registry-source": {
           "x-registry-field": "property",
           "type": "string",

@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added strict, value-free project authoring reports and commands for field
+  explanation, offline preflight, capability inventory, semantic comparison,
+  signed-baseline promotion analysis, same-v1 migration, fixture coverage, and
+  generated artifact provenance. `registryctl compare` supports exact embedded
+  starter, local project, and same-project environment baselines without
+  reading runtime state or treating local files as signed approval.
+- Added generated seven-domain configuration and ownership reference data plus
+  separate authoring, fixture, and operator diagnostic catalogs. Release gates
+  fail when schemas, runtime semantics, editor metadata, examples, generated
+  references, or stable diagnostics drift.
+- Added platform-generated fixture boundary cases and per-integration coverage
+  classifications. Offline coverage remains explicitly distinct from live
+  source compatibility or country acceptance.
+
 ### Changed
 
 - Attribute-release project authoring now emits the stable Relay profile

@@ -8,10 +8,14 @@
     "schema_id",
     "format_version",
     "status",
+    "reference_baseline",
     "source_contract",
     "coverage",
-    "prose_required_count",
-    "prose_covered_count",
+    "reviewed_intent_assignment_required_count",
+    "reviewed_intent_assignment_covered_count",
+    "distinct_reviewed_intent_count",
+    "distinct_reviewed_intents_reused_count",
+    "reviewed_intent_assignments_using_reused_intent_count",
     "missing_intent"
   ],
   "properties": {
@@ -27,17 +31,32 @@
         "incomplete"
       ]
     },
+    "reference_baseline": {
+      "$ref": "#/$defs/referenceBaseline"
+    },
     "source_contract": {
       "$ref": "#/$defs/sourceContract"
     },
     "coverage": {
       "$ref": "#/$defs/coverage"
     },
-    "prose_required_count": {
+    "reviewed_intent_assignment_required_count": {
       "type": "integer",
       "minimum": 0
     },
-    "prose_covered_count": {
+    "reviewed_intent_assignment_covered_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "distinct_reviewed_intent_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "distinct_reviewed_intents_reused_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "reviewed_intent_assignments_using_reused_intent_count": {
       "type": "integer",
       "minimum": 0
     },
@@ -69,6 +88,35 @@
         "array_item",
         "branch"
       ]
+    },
+    "referenceBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generator_lifecycle",
+        "published_release",
+        "field_history_status",
+        "history_verification_method",
+        "compared_releases"
+      ],
+      "properties": {
+        "generator_lifecycle": {
+          "const": "unreleased"
+        },
+        "published_release": {
+          "type": "null"
+        },
+        "field_history_status": {
+          "const": "not_verified"
+        },
+        "history_verification_method": {
+          "type": "null"
+        },
+        "compared_releases": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
     },
     "sourceContract": {
       "type": "object",

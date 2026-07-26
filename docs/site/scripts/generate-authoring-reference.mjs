@@ -87,6 +87,22 @@ function assertSourceContract(source, label) {
   }
 }
 
+function assertReferenceBaseline(baseline, label) {
+  if (
+    !baseline ||
+    baseline.generator_lifecycle !== 'unreleased' ||
+    baseline.published_release !== null ||
+    baseline.field_history_status !== 'not_verified' ||
+    baseline.history_verification_method !== null ||
+    !Array.isArray(baseline.compared_releases) ||
+    baseline.compared_releases.length !== 0
+  ) {
+    throw new Error(
+      `${label} must identify an unreleased generator with field history not verified`,
+    );
+  }
+}
+
 function assertCoverageShape(coverage, label) {
   if (!coverage || typeof coverage !== 'object') {
     throw new Error(`${label}.coverage must be an object`);
@@ -148,14 +164,36 @@ export function validateAuthoringReferenceCoverage(coverage) {
     throw new Error(`configuration-reference coverage is incomplete (${missing} missing intents)`);
   }
   assertCoverageShape(coverage.coverage, 'coverage report');
+  assertReferenceBaseline(coverage.reference_baseline, 'coverage report reference baseline');
   assertSourceContract(coverage.source_contract, 'coverage report source contract');
+  for (const field of [
+    'reviewed_intent_assignment_required_count',
+    'reviewed_intent_assignment_covered_count',
+    'distinct_reviewed_intent_count',
+    'distinct_reviewed_intents_reused_count',
+    'reviewed_intent_assignments_using_reused_intent_count',
+  ]) {
+    assertInteger(coverage[field], `coverage report.${field}`);
+  }
   if (
-    coverage.prose_required_count !== coverage.coverage.path_count ||
-    coverage.prose_covered_count !== coverage.coverage.path_count ||
+    coverage.reviewed_intent_assignment_required_count !== coverage.coverage.path_count ||
+    coverage.reviewed_intent_assignment_covered_count !== coverage.coverage.path_count ||
+    coverage.distinct_reviewed_intent_count >
+      coverage.reviewed_intent_assignment_covered_count ||
+    coverage.distinct_reviewed_intents_reused_count >
+      coverage.distinct_reviewed_intent_count ||
+    coverage.reviewed_intent_assignments_using_reused_intent_count >
+      coverage.reviewed_intent_assignment_covered_count ||
+    (coverage.distinct_reviewed_intents_reused_count === 0) !==
+      (coverage.reviewed_intent_assignments_using_reused_intent_count === 0) ||
+    coverage.reviewed_intent_assignments_using_reused_intent_count <
+      coverage.distinct_reviewed_intents_reused_count * 2 ||
     !Array.isArray(coverage.missing_intent) ||
     coverage.missing_intent.length !== 0
   ) {
-    throw new Error('configuration-reference coverage is not exhaustively complete');
+    throw new Error(
+      'configuration-reference reviewed-intent assignment coverage is not exhaustively consistent',
+    );
   }
 }
 
@@ -165,7 +203,11 @@ export function validateAuthoringReference(reference, coverage) {
     throw new Error('configuration reference uses an unsupported contract');
   }
   assertCoverageShape(reference.coverage, 'configuration reference');
+  assertReferenceBaseline(reference.reference_baseline, 'configuration reference baseline');
   assertSourceContract(reference.source_contract, 'configuration reference source contract');
+  if (JSON.stringify(reference.reference_baseline) !== JSON.stringify(coverage.reference_baseline)) {
+    throw new Error('configuration reference and coverage report baselines differ');
+  }
   if (JSON.stringify(reference.source_contract) !== JSON.stringify(coverage.source_contract)) {
     throw new Error('configuration reference and coverage report provenance differ');
   }
@@ -179,6 +221,7 @@ export function validateAuthoringReference(reference, coverage) {
     throw new Error('configuration reference must contain one entry per covered path');
   }
   const identities = new Set();
+  const intentCounts = new Map();
   for (const [index, field] of reference.fields.entries()) {
     const identity = fieldIdentity(field);
     const runtimeField = runtimeSchemas.has(field?.address?.schema);
@@ -202,6 +245,18 @@ export function validateAuthoringReference(reference, coverage) {
     ) {
       throw new Error(`configuration reference field ${identity} lacks reviewed, safe intent`);
     }
+    intentCounts.set(field.purpose, (intentCounts.get(field.purpose) ?? 0) + 1);
+    if (
+      field.history_status !== 'not_verified' ||
+      field.introduced_in !== null ||
+      !Array.isArray(field.version_history) ||
+      field.version_history.length !== 0 ||
+      Object.hasOwn(field.default ?? {}, 'source_version')
+    ) {
+      throw new Error(
+        `configuration reference field ${identity} fabricates unverified release history`,
+      );
+    }
     if (
       runtimeField !==
       (typeof field.intent_profile === 'string' && field.intent_profile.trim().length > 0)
@@ -215,6 +270,17 @@ export function validateAuthoringReference(reference, coverage) {
         `configuration reference field ${identity} exposes a runtime default value`,
       );
     }
+  }
+  const reusedIntentCounts = [...intentCounts.values()].filter((count) => count > 1);
+  if (
+    coverage.distinct_reviewed_intent_count !== intentCounts.size ||
+    coverage.distinct_reviewed_intents_reused_count !== reusedIntentCounts.length ||
+    coverage.reviewed_intent_assignments_using_reused_intent_count !==
+      reusedIntentCounts.reduce((total, count) => total + count, 0)
+  ) {
+    throw new Error(
+      'configuration reference reviewed-intent reuse differs from the coverage report',
+    );
   }
 }
 

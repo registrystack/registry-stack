@@ -710,6 +710,14 @@ pub struct FixtureCoverageTarget {
     pub requirements: Vec<FixtureRequirementCoverage>,
 }
 
+impl FixtureCoverageTarget {
+    /// Recomputes the closed requirement matrix from this target's evidence.
+    /// The reason is used only when no semantic comparison is attached.
+    pub fn refresh_requirements(&mut self, comparison_reason: FixtureCoverageNotEvaluatedReason) {
+        self.requirements = derive_fixture_coverage_requirements(self, comparison_reason);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FixtureCoverageTargetSetState {
@@ -1016,10 +1024,7 @@ fn build_target_comparison(
 }
 
 fn replace_comparison_requirements(target: &mut FixtureCoverageTarget) -> Result<(), &'static str> {
-    target.requirements = derive_fixture_coverage_requirements(
-        target,
-        FixtureCoverageNotEvaluatedReason::TargetComparisonAbsent,
-    );
+    target.refresh_requirements(FixtureCoverageNotEvaluatedReason::TargetComparisonAbsent);
     Ok(())
 }
 
@@ -1161,9 +1166,12 @@ fn validate_target(target: &FixtureCoverageTarget) -> Result<(), &'static str> {
         );
     }
 
-    let comparison_reason = comparison_absence_reason(&target.requirements, target.comparison.is_some())?;
+    let comparison_reason =
+        comparison_absence_reason(&target.requirements, target.comparison.is_some())?;
     if target.requirements != derive_fixture_coverage_requirements(target, comparison_reason) {
-        return Err("fixture coverage requirement states or evidence are not derived from target evidence");
+        return Err(
+            "fixture coverage requirement states or evidence are not derived from target evidence",
+        );
     }
     for requirement in &target.requirements {
         if !requirement
@@ -1564,7 +1572,10 @@ fn derive_fixture_coverage_requirement(
             } else if target.identity.capability == FixtureCapability::Snapshot {
                 no_remote_not_applicable(target, requirement)
             } else if target.identity.capability == FixtureCapability::DeclarativeHttp
-                && target.contract.source_operation_count.is_some_and(|count| count <= 1)
+                && target
+                    .contract
+                    .source_operation_count
+                    .is_some_and(|count| count <= 1)
             {
                 not_applicable(
                     requirement,
@@ -1638,9 +1649,11 @@ fn derive_fixture_coverage_requirement(
                 FixtureCoverageNotApplicableReason::NoContinuationProtocolDeclared,
                 vec![target.compiled_contract.clone()],
             ),
-            FixtureCapability::Script => {
-                missing(requirement, FixtureCoverageGapReason::RequiredEvidenceMissing, Vec::new())
-            }
+            FixtureCapability::Script => missing(
+                requirement,
+                FixtureCoverageGapReason::RequiredEvidenceMissing,
+                Vec::new(),
+            ),
         },
         Requirement::StatusMappings => {
             if target.declared.status_mappings.is_empty() {
@@ -1650,8 +1663,7 @@ fn derive_fixture_coverage_requirement(
                     vec![target.compiled_contract.clone()],
                 )
             } else {
-                let evidence =
-                    authored(|fixture| !fixture.exercised_status_mappings.is_empty());
+                let evidence = authored(|fixture| !fixture.exercised_status_mappings.is_empty());
                 if target.exercised.status_mappings == target.declared.status_mappings
                     && !evidence.is_empty()
                 {
@@ -1780,12 +1792,7 @@ fn derive_fixture_coverage_requirement(
             if target.identity.capability == FixtureCapability::Snapshot {
                 no_remote_not_applicable(target, requirement)
             } else {
-                generated_requirement(
-                    target,
-                    requirement,
-                    GeneratorRecipeId::Timeout,
-                    fixture_gap,
-                )
+                generated_requirement(target, requirement, GeneratorRecipeId::Timeout, fixture_gap)
             }
         }
         Requirement::NumericDeadlineEnforcement => {
@@ -1922,12 +1929,11 @@ fn comparison_requirement(
         .into_iter()
         .find(|kind| kind.requirement() == requirement)
         .expect("comparison requirements have a change kind");
-    let Some(impact) = target.comparison.as_ref().and_then(|comparison| {
-        comparison
-            .impacts
-            .iter()
-            .find(|impact| impact.kind == kind)
-    }) else {
+    let Some(impact) = target
+        .comparison
+        .as_ref()
+        .and_then(|comparison| comparison.impacts.iter().find(|impact| impact.kind == kind))
+    else {
         return FixtureRequirementCoverage::NotEvaluated {
             requirement,
             reason: comparison_reason,

@@ -44,6 +44,9 @@ pub struct ProjectEnvironmentSemanticComparisonOptions {
 pub struct ProjectStarterSemanticComparisonOptions {
     pub project_directory: PathBuf,
     pub environment: String,
+    /// An explicitly selected embedded starter kind. `None` uses, and still
+    /// verifies, the starter id recorded by the authored project.
+    pub starter: Option<ProjectStarter>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -430,8 +433,15 @@ pub fn compare_registry_project_to_embedded_starter_semantically(
         .starter
         .as_ref()
         .ok_or_else(|| anyhow!("project starter provenance cannot be proved by this binary"))?;
-    let selected = project_starter_by_id(&recorded.id)
-        .ok_or_else(|| anyhow!("project starter provenance cannot be proved by this binary"))?;
+    let selected = if let Some(selected) = options.starter {
+        if recorded.id != selected.id() {
+            bail!("selected embedded starter does not match project starter provenance");
+        }
+        selected
+    } else {
+        project_starter_by_id(&recorded.id)
+            .ok_or_else(|| anyhow!("project starter provenance cannot be proved by this binary"))?
+    };
     let embedded = selected
         .embedded()
         .map_err(|_| anyhow!("project starter provenance cannot be proved by this binary"))?;
@@ -1652,6 +1662,7 @@ mod tests {
             &ProjectStarterSemanticComparisonOptions {
                 project_directory: baseline,
                 environment: "local".to_owned(),
+                starter: None,
             },
         )
         .expect("exact embedded starter compares");
@@ -1707,6 +1718,7 @@ mod tests {
         let options = ProjectStarterSemanticComparisonOptions {
             project_directory: project.clone(),
             environment: "local".to_owned(),
+            starter: None,
         };
         rewrite_yaml(&project.join(PROJECT_FILE), |document| {
             document["services"]["person-verification"]["purpose"] =

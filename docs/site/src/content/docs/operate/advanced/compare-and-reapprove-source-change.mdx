@@ -96,17 +96,21 @@ change requires reviewed orchestration.
 Run the complete offline gates:
 
 ```sh
-registryctl test --project-dir <project>
+PROJECT_DIR=registry-project
+ENVIRONMENT=staging
+RELAY_BASELINE=operator-inputs/reviewed-relay-bundle
+RELAY_TRUST_ANCHOR=operator-inputs/relay-trust-anchor.json
+registryctl test --project-dir "$PROJECT_DIR"
 registryctl check \
-  --project-dir <project> \
-  --environment <environment> \
-  --against <relay-baseline-bundle> \
-  --anchor <relay-trust-anchor> \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
+  --against "$RELAY_BASELINE" \
+  --anchor "$RELAY_TRUST_ANCHOR" \
   --explain \
   --format json
 registryctl preflight \
-  --project-dir <project> \
-  --environment <environment> \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
   --format json
 ```
 

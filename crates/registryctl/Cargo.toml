@@ -24,6 +24,7 @@ getrandom = "0.4"
 hex.workspace = true
 include_dir = "0.7"
 ipnet.workspace = true
+jsonschema.workspace = true
 rcgen.workspace = true
 registry-config-report = { workspace = true }
 registry-language-server.workspace = true
@@ -48,4 +49,4 @@ url = "2"
 zeroize.workspace = true
 
 [dev-dependencies]
-jsonschema = { workspace = true }
+schemars.workspace = true

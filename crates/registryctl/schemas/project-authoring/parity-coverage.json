@@ -290,47 +290,6 @@
       }
     ]
   },
-  "rule_coverage": [
-    {
-      "keywords": ["$defs", "$ref"],
-      "evidence": "schemas_compile_and_all_catalog_documents_pass_schema_and_runtime"
-    },
-    {
-      "keywords": ["properties", "items", "prefixItems", "propertyNames"],
-      "evidence": "schemas_compile_and_all_catalog_documents_pass_schema_and_runtime"
-    },
-    {
-      "keywords": ["additionalProperties"],
-      "evidence": "closed_object_policy_has_only_named_map_exceptions"
-    },
-    {
-      "keywords": ["required", "minProperties"],
-      "evidence": "representative_mutations_fail_schema_and_runtime"
-    },
-    {
-      "keywords": ["type"],
-      "evidence": "representative_mutations_fail_schema_and_runtime"
-    },
-    {
-      "keywords": [
-        "format",
-        "maxItems",
-        "maxLength",
-        "maxProperties",
-        "maximum",
-        "minItems",
-        "minLength",
-        "minimum",
-        "pattern",
-        "uniqueItems"
-      ],
-      "evidence": "representative_mutations_fail_schema_and_runtime"
-    },
-    {
-      "keywords": ["allOf", "anyOf", "const", "else", "enum", "if", "not", "oneOf", "then"],
-      "evidence": "representative_mutations_fail_schema_and_runtime"
-    }
-  ],
   "open_object_exceptions": [
     {
       "schema": "entity",
@@ -484,18 +443,6 @@
     },
     {
       "schema": "project",
-      "pointer": "/$defs/recordsApi/properties/standards/properties/ogc_features/oneOf/1",
-      "kind": "extension_map",
-      "rationale": "The OGC Features profile carries standard-owned configuration validated by the production compiler."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/recordsApi/properties/standards/properties/sp_dci/oneOf/1",
-      "kind": "extension_map",
-      "rationale": "The SP DCI profile carries standard-owned configuration validated by the production compiler."
-    },
-    {
-      "schema": "project",
       "pointer": "/$defs/recordAttributeReleaseProfiles",
       "kind": "typed_map",
       "rationale": "Attribute release profile identifiers are authored and every value uses a closed profile declaration."
@@ -508,21 +455,15 @@
     },
     {
       "schema": "project",
+      "pointer": "/$defs/recordFieldMap",
+      "kind": "typed_map",
+      "rationale": "Record field aliases are authored and every value uses a bounded closed field declaration."
+    },
+    {
+      "schema": "project",
       "pointer": "/$defs/recordAggregate/properties/allowed_filters",
       "kind": "typed_map",
       "rationale": "Aggregate filter field names map to bounded filter operator lists."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/recordAggregate/properties/access",
-      "kind": "extension_map",
-      "rationale": "Aggregate access policy is interpreted and bounded by the production records compiler."
-    },
-    {
-      "schema": "project",
-      "pointer": "/$defs/recordAggregate/properties/spatial",
-      "kind": "extension_map",
-      "rationale": "Aggregate spatial policy is interpreted and bounded by the production records compiler."
     },
     {
       "schema": "project",
@@ -559,6 +500,7 @@
     {
       "id": "project-unknown-field",
       "dimension": "unknown_field",
+      "expected_failing_keywords": ["additionalProperties"],
       "schema": "project",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "registry-stack.yaml",
@@ -571,6 +513,7 @@
     {
       "id": "environment-unknown-field",
       "dimension": "unknown_field",
+      "expected_failing_keywords": ["additionalProperties"],
       "schema": "environment",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "environments/local.yaml",
@@ -583,6 +526,7 @@
     {
       "id": "integration-unknown-field",
       "dimension": "unknown_field",
+      "expected_failing_keywords": ["additionalProperties"],
       "schema": "integration",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "integrations/eligibility/integration.yaml",
@@ -595,6 +539,7 @@
     {
       "id": "fixture-unknown-field",
       "dimension": "unknown_field",
+      "expected_failing_keywords": ["additionalProperties"],
       "schema": "fixture",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "integrations/eligibility/fixtures/source-approved.yaml",
@@ -607,6 +552,7 @@
     {
       "id": "entity-unknown-field",
       "dimension": "unknown_field",
+      "expected_failing_keywords": ["additionalProperties"],
       "schema": "entity",
       "source": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
       "document": "entities/population.yaml",
@@ -619,6 +565,7 @@
     {
       "id": "project-missing-required",
       "dimension": "missing_required",
+      "expected_failing_keywords": ["required"],
       "schema": "project",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "registry-stack.yaml",
@@ -630,6 +577,7 @@
     {
       "id": "environment-missing-required",
       "dimension": "missing_required",
+      "expected_failing_keywords": ["not", "required"],
       "schema": "environment",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "environments/local.yaml",
@@ -641,6 +589,7 @@
     {
       "id": "integration-missing-required",
       "dimension": "missing_required",
+      "expected_failing_keywords": ["required"],
       "schema": "integration",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "integrations/eligibility/integration.yaml",
@@ -652,6 +601,7 @@
     {
       "id": "fixture-missing-required",
       "dimension": "missing_required",
+      "expected_failing_keywords": ["required"],
       "schema": "fixture",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "integrations/eligibility/fixtures/source-approved.yaml",
@@ -663,6 +613,7 @@
     {
       "id": "entity-missing-required",
       "dimension": "missing_required",
+      "expected_failing_keywords": ["required"],
       "schema": "entity",
       "source": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
       "document": "entities/population.yaml",
@@ -674,6 +625,7 @@
     {
       "id": "project-wrong-type",
       "dimension": "type",
+      "expected_failing_keywords": ["const"],
       "schema": "project",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "registry-stack.yaml",
@@ -686,6 +638,7 @@
     {
       "id": "environment-wrong-type",
       "dimension": "type",
+      "expected_failing_keywords": ["const"],
       "schema": "environment",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "environments/local.yaml",
@@ -698,6 +651,7 @@
     {
       "id": "integration-wrong-type",
       "dimension": "type",
+      "expected_failing_keywords": ["type"],
       "schema": "integration",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "integrations/eligibility/integration.yaml",
@@ -710,6 +664,7 @@
     {
       "id": "fixture-wrong-type",
       "dimension": "type",
+      "expected_failing_keywords": ["type"],
       "schema": "fixture",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "integrations/eligibility/fixtures/source-approved.yaml",
@@ -722,6 +677,7 @@
     {
       "id": "entity-wrong-type",
       "dimension": "type",
+      "expected_failing_keywords": ["type"],
       "schema": "entity",
       "source": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
       "document": "entities/population.yaml",
@@ -734,6 +690,7 @@
     {
       "id": "project-id-over-boundary",
       "dimension": "boundary",
+      "expected_failing_keywords": ["pattern"],
       "schema": "project",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "registry-stack.yaml",
@@ -746,6 +703,7 @@
     {
       "id": "environment-empty-caller-scopes",
       "dimension": "boundary",
+      "expected_failing_keywords": ["minItems"],
       "schema": "environment",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "environments/local.yaml",
@@ -758,6 +716,7 @@
     {
       "id": "integration-zero-max-length",
       "dimension": "boundary",
+      "expected_failing_keywords": ["minimum"],
       "schema": "integration",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "integrations/eligibility/integration.yaml",
@@ -770,6 +729,7 @@
     {
       "id": "fixture-status-below-http-range",
       "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
       "schema": "fixture",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "integrations/eligibility/fixtures/source-approved.yaml",
@@ -782,6 +742,7 @@
     {
       "id": "entity-zero-max-records",
       "dimension": "boundary",
+      "expected_failing_keywords": ["minimum"],
       "schema": "entity",
       "source": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
       "document": "entities/population.yaml",
@@ -794,6 +755,7 @@
     {
       "id": "project-incoherent-service-union",
       "dimension": "conditional",
+      "expected_failing_keywords": ["oneOf"],
       "schema": "project",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "registry-stack.yaml",
@@ -806,6 +768,7 @@
     {
       "id": "environment-incoherent-deployment",
       "dimension": "conditional",
+      "expected_failing_keywords": ["not", "required"],
       "schema": "environment",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "environments/local.yaml",
@@ -817,6 +780,7 @@
     {
       "id": "integration-incoherent-capability-union",
       "dimension": "conditional",
+      "expected_failing_keywords": ["oneOf"],
       "schema": "integration",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "integrations/eligibility/integration.yaml",
@@ -831,6 +795,7 @@
     {
       "id": "fixture-incoherent-response-union",
       "dimension": "conditional",
+      "expected_failing_keywords": ["oneOf"],
       "schema": "fixture",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "integrations/eligibility/fixtures/source-approved.yaml",
@@ -843,6 +808,7 @@
     {
       "id": "fixture-ambiguous-body-file-reference",
       "dimension": "conditional",
+      "expected_failing_keywords": ["oneOf"],
       "schema": "fixture",
       "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
       "document": "integrations/eligibility/fixtures/source-approved.yaml",

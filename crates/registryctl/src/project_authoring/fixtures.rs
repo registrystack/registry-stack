@@ -926,9 +926,8 @@ fn generate_fixture_coverage_report_with_comparison(
             capability: fixture_coverage_capability(&integration.document.capability),
         };
         let contract = fixture_coverage_target_contract(integration)?;
-        let compiled_contract =
-            target_compiled_contract_evidence(&identity, &contract, &declared)
-                .map_err(|error| anyhow!(error))?;
+        let compiled_contract = target_compiled_contract_evidence(&identity, &contract, &declared)
+            .map_err(|error| anyhow!(error))?;
         let mut target = FixtureCoverageTarget {
             identity,
             contract,
@@ -959,9 +958,12 @@ fn generate_fixture_coverage_report_with_comparison(
         targets,
     )
     .map_err(|error| anyhow!(error))?;
-    comparison_input.map_or(Ok(report), |input| {
-        report.with_comparison(input).map_err(|error| anyhow!(error))
-    })
+    match comparison_input {
+        Some(input) => report
+            .with_comparison(input)
+            .map_err(|error| anyhow!(error)),
+        None => Ok(report),
+    }
 }
 
 fn build_platform_call_budget_case(
@@ -1020,6 +1022,34 @@ fn fixture_coverage_capability(capability: &CapabilityDeclaration) -> FixtureCap
         CapabilityDeclaration::Script { .. } => FixtureCapability::Script,
         CapabilityDeclaration::Snapshot { .. } => FixtureCapability::Snapshot,
     }
+}
+
+fn fixture_coverage_target_contract(
+    integration: &LoadedIntegration,
+) -> Result<FixtureCoverageTargetContract> {
+    let source_operation_count = match &integration.document.capability {
+        CapabilityDeclaration::Http { http } => Some(
+            u32::try_from(http.operations.len())
+                .map_err(|_| anyhow!("compiled HTTP operation count exceeds report range"))?,
+        ),
+        CapabilityDeclaration::Script { .. } | CapabilityDeclaration::Snapshot { .. } => None,
+    };
+    let mut reviewed_not_applicable = Vec::new();
+    if integration.document.not_applicable.ambiguity.is_some() {
+        reviewed_not_applicable.push(FixtureCoverageReviewedNotApplicable::SemanticAmbiguity);
+    }
+    if integration
+        .document
+        .not_applicable
+        .subject_mismatch
+        .is_some()
+    {
+        reviewed_not_applicable.push(FixtureCoverageReviewedNotApplicable::SubjectMismatch);
+    }
+    Ok(FixtureCoverageTargetContract {
+        source_operation_count,
+        reviewed_not_applicable,
+    })
 }
 
 fn distinguishable_request_pair(
@@ -1337,28 +1367,52 @@ fn fixture_exercised_status_mappings(
                 .iter()
                 .copied()
                 .filter(|status| {
-                    integration.fixtures.iter().any(|(_, fixture)| {
-                        let passed = inventory.iter().any(|record| {
-                            record.fixture_id == fixture.name
-                                && record.pass_state == FixturePassState::Passed
-                        });
-                        let outcome_matches = matches!(
-                            (mapping.outcome, fixture.expect.outcome.as_deref()),
-                            (FixtureStatusOutcome::NoMatch, Some("no_match"))
-                                | (FixtureStatusOutcome::Ambiguous, Some("ambiguous"))
-                        );
-                        passed
-                            && outcome_matches
-                            && fixture.interactions.iter().any(|interaction| {
-                                matches!(
-                                    interaction.respond,
-                                    FixtureSourceResponse::Http { status: actual, .. }
-                                        if actual == *status
-                                )
+                    inventory.iter().any(|fixture| {
+                        fixture.pass_state == FixturePassState::Passed
+                            && fixture.exercised_status_mappings.iter().any(|exercised| {
+                                exercised.outcome == mapping.outcome
+                                    && exercised.statuses.binary_search(status).is_ok()
                             })
                     })
                 })
                 .collect::<Vec<_>>();
+            (!statuses.is_empty()).then_some(FixtureStatusMapping {
+                outcome: mapping.outcome,
+                statuses,
+            })
+        })
+        .collect()
+}
+
+fn fixture_exercised_status_mappings_for_fixture(
+    integration: &IntegrationDocument,
+    fixture: &FixtureDocument,
+) -> Vec<FixtureStatusMapping> {
+    fixture_status_mappings(integration)
+        .into_iter()
+        .filter_map(|mapping| {
+            let outcome_matches = matches!(
+                (mapping.outcome, fixture.expect.outcome.as_deref()),
+                (FixtureStatusOutcome::NoMatch, Some("no_match"))
+                    | (FixtureStatusOutcome::Ambiguous, Some("ambiguous"))
+            );
+            let statuses = if outcome_matches {
+                mapping
+                    .statuses
+                    .into_iter()
+                    .filter(|status| {
+                        fixture.interactions.iter().any(|interaction| {
+                            matches!(
+                                interaction.respond,
+                                FixtureSourceResponse::Http { status: actual, .. }
+                                    if actual == *status
+                            )
+                        })
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             (!statuses.is_empty()).then_some(FixtureStatusMapping {
                 outcome: mapping.outcome,
                 statuses,
@@ -1424,681 +1478,6 @@ fn fixture_has_semantic_null(fixture: &FixtureDocument) -> bool {
         .any(Value::is_null)
 }
 
-fn build_target_fixture_comparison(
-    comparison_input: Option<&FixtureCoverageComparisonInput>,
-    integration_alias: &str,
-    inventory: &[AuthoredSemanticFixtureCoverage],
-) -> Result<Option<FixtureCoverageSemanticComparison>> {
-    let Some(input) = comparison_input else {
-        return Ok(None);
-    };
-    let Some(target_input) = input
-        .targets
-        .iter()
-        .find(|target| target.integration == integration_alias)
-    else {
-        return Ok(None);
-    };
-    let changes = [
-        (
-            FixtureCoverageChangeKind::ChangedInput,
-            target_input.changed_input_ids.clone(),
-        ),
-        (
-            FixtureCoverageChangeKind::ChangedOutput,
-            target_input.changed_output_ids.clone(),
-        ),
-        (
-            FixtureCoverageChangeKind::ChangedClaim,
-            target_input.changed_claim_ids.clone(),
-        ),
-        (
-            FixtureCoverageChangeKind::ChangedSourceContract,
-            if target_input.source_contract_changed {
-                vec!["source_contract".to_owned()]
-            } else {
-                Vec::new()
-            },
-        ),
-    ];
-    let mut impacts = Vec::with_capacity(changes.len());
-    for (kind, changed_member_ids) in changes {
-        let affected_fixture_ids = inventory
-            .iter()
-            .filter(|fixture| match kind {
-                FixtureCoverageChangeKind::ChangedInput => {
-                    slices_intersect(&fixture.input_ids, &changed_member_ids)
-                }
-                FixtureCoverageChangeKind::ChangedOutput => {
-                    slices_intersect(&fixture.output_ids, &changed_member_ids)
-                }
-                FixtureCoverageChangeKind::ChangedClaim => {
-                    slices_intersect(&fixture.claim_ids, &changed_member_ids)
-                }
-                FixtureCoverageChangeKind::ChangedSourceContract => !changed_member_ids.is_empty(),
-            })
-            .map(|fixture| fixture.fixture_id.clone())
-            .collect::<Vec<_>>();
-        let digest = fixture_coverage_digest(&(
-            &input.baseline_digest,
-            &input.candidate_digest,
-            kind,
-            &changed_member_ids,
-            &affected_fixture_ids,
-        ))
-        .map_err(|error| anyhow!(error))?;
-        impacts.push(FixtureCoverageChangeImpact {
-            kind,
-            changed_member_ids,
-            affected_fixture_ids,
-            evidence: fixture_coverage_evidence(
-                FixtureCoverageEvidenceKind::SemanticComparison,
-                format!(
-                    "target/{integration_alias}/semantic-comparison/{}/v1",
-                    change_suffix(kind)
-                ),
-                digest,
-            )
-            .map_err(|error| anyhow!(error))?,
-        });
-    }
-    Ok(Some(FixtureCoverageSemanticComparison {
-        baseline_digest: input.baseline_digest.clone(),
-        candidate_digest: input.candidate_digest.clone(),
-        impacts,
-    }))
-}
-
-fn slices_intersect(left: &[String], right: &[String]) -> bool {
-    left.iter().any(|value| right.binary_search(value).is_ok())
-}
-
-fn fixture_target_requirements(
-    integration: &LoadedIntegration,
-    target: &FixtureCoverageTarget,
-    semantic_null_fixture_ids: &BTreeSet<String>,
-    comparison_reason: FixtureCoverageNotEvaluatedReason,
-) -> Vec<FixtureRequirementCoverage> {
-    use RequiredFixtureCoverageRequirement as Requirement;
-
-    let no_fixtures = target.fixture_inventory.is_empty();
-    let authored = |predicate: fn(&AuthoredSemanticFixtureCoverage) -> bool| {
-        target
-            .fixture_inventory
-            .iter()
-            .filter(|fixture| fixture.pass_state == FixturePassState::Passed && predicate(fixture))
-            .map(|fixture| fixture.evidence.clone())
-            .collect::<Vec<_>>()
-    };
-    let fixture_gap = if no_fixtures {
-        FixtureCoverageGapReason::TargetHasNoFixtures
-    } else {
-        FixtureCoverageGapReason::RequiredEvidenceMissing
-    };
-    let match_evidence = authored(|fixture| {
-        fixture.expectation
-            == FixtureSemanticExpectation::Outcome {
-                outcome: FixtureSemanticOutcome::Match,
-            }
-    });
-    let no_match_evidence = authored(|fixture| {
-        fixture.expectation
-            == FixtureSemanticExpectation::Outcome {
-                outcome: FixtureSemanticOutcome::NoMatch,
-            }
-    });
-    let ambiguity_evidence = authored(|fixture| {
-        fixture.expectation
-            == FixtureSemanticExpectation::Outcome {
-                outcome: FixtureSemanticOutcome::Ambiguous,
-            }
-    });
-    let subject_mismatch_evidence = authored(|fixture| {
-        fixture.expectation
-            == FixtureSemanticExpectation::SafeErrorCode {
-                code: FixtureSafeCode::FailureSubjectMismatch,
-            }
-    });
-    let authorization_evidence = authored(|fixture| {
-        fixture.expectation
-            == FixtureSemanticExpectation::SafeErrorCode {
-                code: FixtureSafeCode::AuthorizationDenied,
-            }
-    });
-    let source_failure_evidence = authored(|fixture| {
-        matches!(
-            fixture.expectation,
-            FixtureSemanticExpectation::SafeErrorCode { code } if code.is_source_failure()
-        )
-    });
-    let null_evidence = target
-        .fixture_inventory
-        .iter()
-        .filter(|fixture| {
-            fixture.pass_state == FixturePassState::Passed
-                && semantic_null_fixture_ids.contains(&fixture.fixture_id)
-        })
-        .map(|fixture| fixture.evidence.clone())
-        .collect::<Vec<_>>();
-    let all_passed_evidence = authored(|_| true);
-    let output_evidence = target
-        .fixture_inventory
-        .iter()
-        .filter(|fixture| {
-            fixture.pass_state == FixturePassState::Passed && !fixture.output_ids.is_empty()
-        })
-        .map(|fixture| fixture.evidence.clone())
-        .collect::<Vec<_>>();
-    let claim_evidence = target
-        .fixture_inventory
-        .iter()
-        .filter(|fixture| {
-            fixture.pass_state == FixturePassState::Passed && !fixture.claim_ids.is_empty()
-        })
-        .map(|fixture| fixture.evidence.clone())
-        .collect::<Vec<_>>();
-    let status_evidence = target
-        .fixture_inventory
-        .iter()
-        .filter(|fixture| {
-            fixture.pass_state == FixturePassState::Passed
-                && integration.fixtures.iter().any(|(_, authored_fixture)| {
-                    authored_fixture.name == fixture.fixture_id
-                        && authored_fixture.interactions.iter().any(|interaction| {
-                            matches!(
-                                interaction.respond,
-                                FixtureSourceResponse::Http { status, .. }
-                                    if target.declared.status_mappings.iter().any(|mapping| {
-                                        mapping.statuses.contains(&status)
-                                    })
-                            )
-                        })
-                })
-        })
-        .map(|fixture| fixture.evidence.clone())
-        .collect::<Vec<_>>();
-    let (request_complete, request_evidence) =
-        generated_recipe_complete(&target.generated_cases, GeneratorRecipeId::RequestAuthority);
-    let (order_complete, order_evidence) =
-        generated_recipe_complete(&target.generated_cases, GeneratorRecipeId::RequestOrder);
-    let (protocol_complete, protocol_evidence) = generated_recipe_complete(
-        &target.generated_cases,
-        GeneratorRecipeId::ProtocolVerification,
-    );
-    let (authorization_before_complete, authorization_before_evidence) = generated_recipe_complete(
-        &target.generated_cases,
-        GeneratorRecipeId::AuthorizationBeforeSource,
-    );
-    let (malformed_complete, malformed_evidence) =
-        generated_recipe_complete(&target.generated_cases, GeneratorRecipeId::MalformedDecode);
-    let (response_bytes_complete, response_bytes_evidence) =
-        generated_recipe_complete(&target.generated_cases, GeneratorRecipeId::ByteCeiling);
-    let (timeout_complete, timeout_evidence) =
-        generated_recipe_complete(&target.generated_cases, GeneratorRecipeId::Timeout);
-    let (minimization_complete, minimization_evidence) = generated_recipe_complete(
-        &target.generated_cases,
-        GeneratorRecipeId::OutputMinimization,
-    );
-    let platform_evidence = target
-        .platform_cases
-        .iter()
-        .filter(|case| case.pass_state == FixturePassState::Passed)
-        .map(|case| case.evidence.clone())
-        .collect::<Vec<_>>();
-
-    let mut requirements = Vec::with_capacity(RequiredFixtureCoverageRequirement::ALL.len());
-    requirements.push(covered_or_missing(
-        Requirement::SemanticMatch,
-        match_evidence,
-        fixture_gap,
-    ));
-    requirements.push(covered_or_missing(
-        Requirement::SemanticNoMatch,
-        no_match_evidence,
-        fixture_gap,
-    ));
-    requirements.push(if !ambiguity_evidence.is_empty() {
-        covered(Requirement::SemanticAmbiguity, ambiguity_evidence)
-    } else if integration.document.not_applicable.ambiguity.is_some() {
-        not_applicable(
-            Requirement::SemanticAmbiguity,
-            FixtureCoverageNotApplicableReason::ReviewedAmbiguityNotApplicable,
-            vec![target.compiled_contract.clone()],
-        )
-    } else {
-        missing(Requirement::SemanticAmbiguity, fixture_gap, Vec::new())
-    });
-    requirements.push(if !subject_mismatch_evidence.is_empty() {
-        covered(Requirement::SubjectMismatch, subject_mismatch_evidence)
-    } else if integration
-        .document
-        .not_applicable
-        .subject_mismatch
-        .is_some()
-    {
-        not_applicable(
-            Requirement::SubjectMismatch,
-            FixtureCoverageNotApplicableReason::ReviewedSubjectMismatchNotApplicable,
-            vec![target.compiled_contract.clone()],
-        )
-    } else {
-        missing(Requirement::SubjectMismatch, fixture_gap, Vec::new())
-    });
-    requirements.push(covered_or_missing(
-        Requirement::SemanticNull,
-        null_evidence,
-        fixture_gap,
-    ));
-    requirements.push(if target.declared.claim_ids.is_empty() {
-        not_applicable(
-            Requirement::AuthorizationDenial,
-            FixtureCoverageNotApplicableReason::NoProductClaimsDeclared,
-            vec![target.compiled_contract.clone()],
-        )
-    } else {
-        covered_or_missing(
-            Requirement::AuthorizationDenial,
-            authorization_evidence,
-            fixture_gap,
-        )
-    });
-    requirements.push(
-        if target.identity.capability == FixtureCapability::Snapshot {
-            not_applicable(
-                Requirement::SourceFailure,
-                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
-                vec![target.compiled_contract.clone()],
-            )
-        } else {
-            covered_or_missing(
-                Requirement::SourceFailure,
-                source_failure_evidence,
-                fixture_gap,
-            )
-        },
-    );
-    requirements.push(
-        if target.identity.capability == FixtureCapability::Snapshot {
-            not_applicable(
-                Requirement::RequestRendering,
-                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
-                vec![target.compiled_contract.clone()],
-            )
-        } else {
-            covered_if_complete(
-                Requirement::RequestRendering,
-                request_evidence,
-                request_complete,
-                fixture_gap,
-            )
-        },
-    );
-    requirements.push(
-        if !target.fixture_inventory.is_empty()
-            && all_passed_evidence.len() == target.fixture_inventory.len()
-        {
-            covered(Requirement::ExpectedSourceInteractions, all_passed_evidence)
-        } else {
-            missing(
-                Requirement::ExpectedSourceInteractions,
-                fixture_gap,
-                all_passed_evidence,
-            )
-        },
-    );
-    requirements.push(if order_complete {
-        covered(Requirement::SourceInteractionOrder, order_evidence)
-    } else if target.identity.capability == FixtureCapability::Snapshot {
-        not_applicable(
-            Requirement::SourceInteractionOrder,
-            FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
-            vec![target.compiled_contract.clone()],
-        )
-    } else if matches!(
-        &integration.document.capability,
-        CapabilityDeclaration::Http { http } if http.operations.len() <= 1
-    ) {
-        not_applicable(
-            Requirement::SourceInteractionOrder,
-            FixtureCoverageNotApplicableReason::SingleCompiledSourceOperation,
-            vec![target.compiled_contract.clone()],
-        )
-    } else {
-        missing(
-            Requirement::SourceInteractionOrder,
-            fixture_gap,
-            order_evidence,
-        )
-    });
-    requirements.push(
-        if !target.declared.output_ids.is_empty()
-            && target.exercised.output_ids == target.declared.output_ids
-            && !output_evidence.is_empty()
-        {
-            covered(Requirement::OutputFields, output_evidence)
-        } else {
-            missing(Requirement::OutputFields, fixture_gap, output_evidence)
-        },
-    );
-    requirements.push(if target.declared.claim_ids.is_empty() {
-        not_applicable(
-            Requirement::Claims,
-            FixtureCoverageNotApplicableReason::NoProductClaimsDeclared,
-            vec![target.compiled_contract.clone()],
-        )
-    } else if target.exercised.claim_ids == target.declared.claim_ids && !claim_evidence.is_empty()
-    {
-        covered(Requirement::Claims, claim_evidence)
-    } else {
-        missing(Requirement::Claims, fixture_gap, claim_evidence)
-    });
-    requirements.push(if target.declared.claim_ids.is_empty() {
-        not_applicable(
-            Requirement::DeclaredDisclosureModes,
-            FixtureCoverageNotApplicableReason::NoProductClaimsDeclared,
-            vec![target.compiled_contract.clone()],
-        )
-    } else {
-        covered(
-            Requirement::DeclaredDisclosureModes,
-            vec![target.compiled_contract.clone()],
-        )
-    });
-    requirements.push(if target.declared.claim_ids.is_empty() {
-        not_applicable(
-            Requirement::ExercisedDisclosureModes,
-            FixtureCoverageNotApplicableReason::NoProductClaimsDeclared,
-            vec![target.compiled_contract.clone()],
-        )
-    } else {
-        missing(
-            Requirement::ExercisedDisclosureModes,
-            FixtureCoverageGapReason::RuntimeDimensionNotObserved,
-            Vec::new(),
-        )
-    });
-    requirements.push(if target.identity.capability != FixtureCapability::Script {
-        not_applicable(
-            Requirement::ScriptBranches,
-            FixtureCoverageNotApplicableReason::NoScriptCapability,
-            vec![target.compiled_contract.clone()],
-        )
-    } else {
-        missing(
-            Requirement::ScriptBranches,
-            FixtureCoverageGapReason::ScriptBranchContractNotDeclared,
-            Vec::new(),
-        )
-    });
-    requirements.push(
-        if target.identity.capability == FixtureCapability::Snapshot {
-            not_applicable(
-                Requirement::PaginationAndContinuation,
-                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
-                vec![target.compiled_contract.clone()],
-            )
-        } else if target.identity.capability == FixtureCapability::DeclarativeHttp {
-            not_applicable(
-                Requirement::PaginationAndContinuation,
-                FixtureCoverageNotApplicableReason::NoContinuationProtocolDeclared,
-                vec![target.compiled_contract.clone()],
-            )
-        } else {
-            missing(
-                Requirement::PaginationAndContinuation,
-                FixtureCoverageGapReason::RequiredEvidenceMissing,
-                Vec::new(),
-            )
-        },
-    );
-    requirements.push(if target.declared.status_mappings.is_empty() {
-        not_applicable(
-            Requirement::StatusMappings,
-            FixtureCoverageNotApplicableReason::NoStatusMappingsDeclared,
-            vec![target.compiled_contract.clone()],
-        )
-    } else if target.exercised.status_mappings == target.declared.status_mappings
-        && !status_evidence.is_empty()
-    {
-        covered(Requirement::StatusMappings, status_evidence)
-    } else {
-        missing(Requirement::StatusMappings, fixture_gap, status_evidence)
-    });
-    requirements.push(if target.declared.protocol_helpers.is_empty() {
-        not_applicable(
-            Requirement::ProtocolHelpers,
-            FixtureCoverageNotApplicableReason::NoProtocolHelpersDeclared,
-            vec![target.compiled_contract.clone()],
-        )
-    } else {
-        covered_if_complete(
-            Requirement::ProtocolHelpers,
-            protocol_evidence.clone(),
-            protocol_complete
-                && target.exercised.protocol_helpers == target.declared.protocol_helpers,
-            fixture_gap,
-        )
-    });
-    requirements.push(
-        if !target.declared.protocol_helpers.iter().any(|helper| {
-            matches!(
-                helper,
-                FixtureProtocolHelper::SignedDci | FixtureProtocolHelper::Verification
-            )
-        }) {
-            not_applicable(
-                Requirement::ProtocolVerification,
-                FixtureCoverageNotApplicableReason::NoVerificationProtocolDeclared,
-                vec![target.compiled_contract.clone()],
-            )
-        } else {
-            covered_if_complete(
-                Requirement::ProtocolVerification,
-                protocol_evidence.clone(),
-                protocol_complete,
-                fixture_gap,
-            )
-        },
-    );
-    requirements.push(if target.declared.claim_ids.is_empty() {
-        not_applicable(
-            Requirement::AuthorizationBeforeSource,
-            FixtureCoverageNotApplicableReason::NoProductClaimsDeclared,
-            vec![target.compiled_contract.clone()],
-        )
-    } else {
-        covered_if_complete(
-            Requirement::AuthorizationBeforeSource,
-            authorization_before_evidence,
-            authorization_before_complete,
-            fixture_gap,
-        )
-    });
-    requirements.push(
-        if target.identity.capability == FixtureCapability::Snapshot {
-            not_applicable(
-                Requirement::MalformedDecoding,
-                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
-                vec![target.compiled_contract.clone()],
-            )
-        } else {
-            covered_if_complete(
-                Requirement::MalformedDecoding,
-                malformed_evidence,
-                malformed_complete,
-                fixture_gap,
-            )
-        },
-    );
-    requirements.push(covered(
-        Requirement::StructuralLimits,
-        vec![target.compiled_contract.clone()],
-    ));
-    requirements.push(
-        if target.identity.capability == FixtureCapability::Snapshot {
-            not_applicable(
-                Requirement::RequestBytes,
-                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
-                vec![target.compiled_contract.clone()],
-            )
-        } else {
-            missing(
-                Requirement::RequestBytes,
-                FixtureCoverageGapReason::NumericBoundaryNotExercised,
-                vec![target.compiled_contract.clone()],
-            )
-        },
-    );
-    requirements.push(
-        if target.identity.capability == FixtureCapability::Snapshot {
-            not_applicable(
-                Requirement::ResponseBytes,
-                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
-                vec![target.compiled_contract.clone()],
-            )
-        } else {
-            covered_if_complete(
-                Requirement::ResponseBytes,
-                response_bytes_evidence,
-                response_bytes_complete,
-                fixture_gap,
-            )
-        },
-    );
-    requirements.push(missing(
-        Requirement::AggregateSourceBytes,
-        FixtureCoverageGapReason::NumericBoundaryNotExercised,
-        vec![target.compiled_contract.clone()],
-    ));
-    requirements.push(missing(
-        Requirement::OutputBytes,
-        FixtureCoverageGapReason::NumericBoundaryNotExercised,
-        vec![target.compiled_contract.clone()],
-    ));
-    requirements.push(if target.identity.capability == FixtureCapability::Script {
-        covered_or_missing(
-            Requirement::CallLimits,
-            platform_evidence,
-            FixtureCoverageGapReason::RequiredEvidenceMissing,
-        )
-    } else {
-        not_applicable(
-            Requirement::CallLimits,
-            FixtureCoverageNotApplicableReason::NoDynamicSourceCallsCapability,
-            vec![target.compiled_contract.clone()],
-        )
-    });
-    requirements.push(
-        if target.identity.capability == FixtureCapability::Snapshot {
-            not_applicable(
-                Requirement::TimeoutClassification,
-                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
-                vec![target.compiled_contract.clone()],
-            )
-        } else {
-            covered_if_complete(
-                Requirement::TimeoutClassification,
-                timeout_evidence.clone(),
-                timeout_complete,
-                fixture_gap,
-            )
-        },
-    );
-    requirements.push(
-        if target.identity.capability == FixtureCapability::Snapshot {
-            not_applicable(
-                Requirement::NumericDeadlineEnforcement,
-                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
-                vec![target.compiled_contract.clone()],
-            )
-        } else {
-            let mut evidence = vec![target.compiled_contract.clone()];
-            evidence.extend(timeout_evidence);
-            missing(
-                Requirement::NumericDeadlineEnforcement,
-                FixtureCoverageGapReason::NumericBoundaryNotExercised,
-                evidence,
-            )
-        },
-    );
-    requirements.push(
-        if target.identity.capability == FixtureCapability::Snapshot {
-            not_applicable(
-                Requirement::OutputMinimization,
-                FixtureCoverageNotApplicableReason::NoRemoteSourceCapability,
-                vec![target.compiled_contract.clone()],
-            )
-        } else if target.generated_cases.iter().any(|case| {
-            case.recipe.id == GeneratorRecipeId::OutputMinimization
-                && matches!(
-                    case.applicability,
-                    GeneratedRecipeApplicability::NotApplicable {
-                        reason: GeneratedNotApplicableReason::ProtocolMatcherOwnsResponseMutation,
-                        ..
-                    }
-                )
-        }) && protocol_complete
-        {
-            not_applicable(
-                Requirement::OutputMinimization,
-                FixtureCoverageNotApplicableReason::ProtocolMatcherOwnsOutputValidation,
-                protocol_evidence,
-            )
-        } else {
-            covered_if_complete(
-                Requirement::OutputMinimization,
-                minimization_evidence,
-                minimization_complete,
-                fixture_gap,
-            )
-        },
-    );
-    for change_kind in FixtureCoverageChangeKind::ALL {
-        requirements.push(
-            match target.comparison.as_ref().and_then(|comparison| {
-                comparison
-                    .impacts
-                    .iter()
-                    .find(|impact| impact.kind == change_kind)
-            }) {
-                Some(impact) => {
-                    let all_affected_passed =
-                        impact.affected_fixture_ids.iter().all(|fixture_id| {
-                            target.fixture_inventory.iter().any(|fixture| {
-                                fixture.fixture_id == *fixture_id
-                                    && fixture.pass_state == FixturePassState::Passed
-                            })
-                        });
-                    if impact.changed_member_ids.is_empty()
-                        || (!impact.affected_fixture_ids.is_empty() && all_affected_passed)
-                    {
-                        covered(change_kind.requirement(), vec![impact.evidence.clone()])
-                    } else {
-                        missing(
-                            change_kind.requirement(),
-                            FixtureCoverageGapReason::RequiredEvidenceMissing,
-                            vec![impact.evidence.clone()],
-                        )
-                    }
-                }
-                None => FixtureRequirementCoverage::NotEvaluated {
-                    requirement: change_kind.requirement(),
-                    reason: comparison_reason,
-                    evidence: Vec::new(),
-                },
-            },
-        );
-    }
-    debug_assert_eq!(
-        requirements
-            .iter()
-            .map(FixtureRequirementCoverage::requirement)
-            .collect::<Vec<_>>(),
-        RequiredFixtureCoverageRequirement::ALL
-    );
-    requirements
-}
-
 fn generated_recipe_complete(
     generated: &[GeneratedFixtureCoverage],
     recipe_id: GeneratorRecipeId,
@@ -2130,71 +1509,6 @@ fn generated_recipe_complete(
         !applicable.is_empty() && evidence.len() == applicable.len(),
         evidence,
     )
-}
-
-fn covered_or_missing(
-    requirement: RequiredFixtureCoverageRequirement,
-    evidence: Vec<FixtureCoverageEvidence>,
-    gap: FixtureCoverageGapReason,
-) -> FixtureRequirementCoverage {
-    if evidence.is_empty() {
-        missing(requirement, gap, evidence)
-    } else {
-        covered(requirement, evidence)
-    }
-}
-
-fn covered_if_complete(
-    requirement: RequiredFixtureCoverageRequirement,
-    evidence: Vec<FixtureCoverageEvidence>,
-    complete: bool,
-    gap: FixtureCoverageGapReason,
-) -> FixtureRequirementCoverage {
-    if complete && !evidence.is_empty() {
-        covered(requirement, evidence)
-    } else {
-        missing(requirement, gap, evidence)
-    }
-}
-
-fn covered(
-    requirement: RequiredFixtureCoverageRequirement,
-    mut evidence: Vec<FixtureCoverageEvidence>,
-) -> FixtureRequirementCoverage {
-    evidence.sort();
-    evidence.dedup();
-    FixtureRequirementCoverage::Covered {
-        requirement,
-        evidence,
-    }
-}
-
-fn missing(
-    requirement: RequiredFixtureCoverageRequirement,
-    reason: FixtureCoverageGapReason,
-    mut evidence: Vec<FixtureCoverageEvidence>,
-) -> FixtureRequirementCoverage {
-    evidence.sort();
-    evidence.dedup();
-    FixtureRequirementCoverage::Missing {
-        requirement,
-        reason,
-        evidence,
-    }
-}
-
-fn not_applicable(
-    requirement: RequiredFixtureCoverageRequirement,
-    reason: FixtureCoverageNotApplicableReason,
-    mut evidence: Vec<FixtureCoverageEvidence>,
-) -> FixtureRequirementCoverage {
-    evidence.sort();
-    evidence.dedup();
-    FixtureRequirementCoverage::NotApplicable {
-        requirement,
-        reason,
-        evidence,
-    }
 }
 
 fn invalid_fixture_input_field<'a>(

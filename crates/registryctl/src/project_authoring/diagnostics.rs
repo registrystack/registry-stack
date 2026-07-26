@@ -1695,38 +1695,55 @@ fn diagnostic_join_relative(
     Ok(joined)
 }
 
-fn diagnostic_parse_yaml<T: for<'de> Deserialize<'de>>(
+fn diagnostic_parse_yaml<T: CurrentAuthoringDocument>(
     bytes: &[u8],
     file: &str,
     kind: &'static str,
     schema_hint: &'static str,
 ) -> DiagnosticResult<T> {
-    serde_norway::from_slice(bytes).map_err(|error| {
-        let message = error.to_string();
-        let reserved_fixture_body =
-            kind == "fixture" && message.contains(FIXTURE_BODY_FILE_REFERENCE_REMEDIATION);
-        let unknown_field = message.contains("unknown field");
-        let location = error.location();
+    parse_current_authoring_document(bytes).map_err(|error| {
+        if error.is_unsafe_authored_path() {
+            return Box::new(path_unsafe(file, None));
+        }
+        let reserved_fixture_body = error.is_reserved_fixture_body();
+        let unknown_field = error.keyword() == Some("additionalProperties");
+        let syntax = error.is_syntax();
+        let schema_code = match T::KIND {
+            ProjectSchemaKind::Project => "registryctl.authoring.project.invalid",
+            ProjectSchemaKind::Environment => {
+                "registryctl.authoring.environment.invalid"
+            }
+            ProjectSchemaKind::Integration => {
+                "registryctl.authoring.integration.invalid"
+            }
+            ProjectSchemaKind::Fixture => "registryctl.authoring.fixture.invalid",
+            ProjectSchemaKind::Entity => "registryctl.authoring.entity.invalid",
+        };
+        let (line, column) = error.location();
         Box::new(make_diagnostic(
             if reserved_fixture_body {
                 "registryctl.authoring.fixture.reserved_body_field"
             } else if unknown_field {
                 "registryctl.authoring.yaml.unknown_field"
-            } else {
+            } else if syntax {
                 "registryctl.authoring.yaml.invalid_syntax"
+            } else {
+                schema_code
             },
             file,
             reserved_fixture_body.then_some("interactions.body"),
-            location.as_ref().map(serde_norway::Location::line),
-            location.as_ref().map(serde_norway::Location::column),
+            line,
+            column,
             Some(schema_hint),
             None,
             if reserved_fixture_body {
                 "A fixture body object uses the reserved top-level `file` field without matching the closed file-reference shape."
             } else if unknown_field {
                 "The YAML document contains an unknown field."
+            } else if syntax {
+                "The YAML document has invalid syntax."
             } else {
-                "The YAML document has invalid syntax or shape."
+                "The YAML document does not satisfy its canonical authoring schema."
             },
             if reserved_fixture_body {
                 FIXTURE_BODY_FILE_REFERENCE_REMEDIATION
@@ -2088,7 +2105,7 @@ mod diagnostic_catalog_tests {
     }
 
     #[test]
-    fn typed_address_is_rfc6901_and_never_carries_received_values() {
+    fn typed_address_is_rfc6901() {
         let diagnostic = make_diagnostic(
             "registryctl.authoring.yaml.unknown_field",
             "integrations/example/fixture.yaml",
@@ -2106,9 +2123,54 @@ mod diagnostic_catalog_tests {
         );
         assert_eq!(diagnostic.addresses[0].pointer, "/interactions/body");
         assert_eq!(diagnostic.addresses.len(), 2);
-        let serialized = serde_json::to_string(&diagnostic).expect("diagnostic serializes");
-        assert!(!serialized.contains("secret-sentinel"));
-        assert!(!serialized.contains("personal-sentinel"));
+    }
+
+    #[test]
+    fn parser_diagnostic_never_carries_planted_invalid_scalars() {
+        for (input, sentinel) in [
+            (
+                br#"
+version: secret-sentinel
+registry:
+  id: synthetic-registry
+services: {}
+"#
+                .as_slice(),
+                "secret-sentinel",
+            ),
+            (
+                br#"
+version: 1
+registry: personal-sentinel
+services: {}
+"#
+                .as_slice(),
+                "personal-sentinel",
+            ),
+        ] {
+            let raw_error = serde_norway::from_slice::<RegistryProject>(input)
+                .expect_err("control parser rejects planted invalid scalar");
+            assert!(
+                raw_error.to_string().contains(sentinel),
+                "negative control must place {sentinel:?} on a parser error path that could leak it"
+            );
+            let diagnostic = diagnostic_parse_yaml::<RegistryProject>(
+                input,
+                PROJECT_FILE,
+                "project",
+                PROJECT_SCHEMA_HINT,
+            )
+            .expect_err("planted invalid scalar is rejected");
+            assert_eq!(
+                diagnostic.code,
+                "registryctl.authoring.yaml.invalid_syntax"
+            );
+            let serialized = serde_json::to_string(&diagnostic).expect("diagnostic serializes");
+            assert!(
+                !serialized.contains(sentinel),
+                "parser diagnostic leaked planted scalar {sentinel:?}"
+            );
+        }
     }
 
     #[test]

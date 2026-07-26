@@ -48,7 +48,7 @@ fn published_diagnostic_references_are_closed_complete_and_unreleased() {
 
     assert_eq!(authoring.entries.len(), 17);
     assert_eq!(fixture.entries.len(), 16);
-    assert_eq!(operator.entries.len(), 46);
+    assert_eq!(operator.entries.len(), 53);
     assert!(
         operator.omissions.is_empty(),
         "all operator catalogs now expose complete product-owned metadata"
@@ -68,7 +68,7 @@ fn published_diagnostic_references_are_closed_complete_and_unreleased() {
             ("notary_activation", 11),
             ("operator_preflight", 11),
             ("relay_activation", 9),
-            ("relay_process_startup", 11),
+            ("relay_process_startup", 18),
         ])
     );
 
@@ -271,6 +271,34 @@ fn strict_json_schemas_accept_only_the_generated_shapes() {
             .insert("unexpected".to_string(), Value::Bool(true));
         assert!(!validator.is_valid(&unknown));
     }
+}
+
+#[test]
+fn operator_schema_accepts_exact_catalog_and_rejects_open_values() {
+    let schema: Value = serde_json::from_str(OPERATOR_SCHEMA).unwrap();
+    let validator = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .unwrap();
+    let canonical = serde_json::to_value(operator_error_reference()).unwrap();
+    assert_eq!(canonical["entries"].as_array().unwrap().len(), 53);
+    assert!(validator.is_valid(&canonical));
+
+    let mut open_code = canonical.clone();
+    open_code["entries"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["family"] == "relay_process_startup")
+        .unwrap()["code"] = Value::String("relay.startup.unregistered_open_value".to_string());
+    assert!(!validator.is_valid(&open_code));
+
+    let mut open_field = canonical;
+    open_field["entries"][0]
+        .as_object_mut()
+        .unwrap()
+        .insert("runtime_value".to_string(), Value::Bool(true));
+    assert!(!validator.is_valid(&open_field));
 }
 
 fn entry_for<'a>(

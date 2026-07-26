@@ -304,9 +304,38 @@ impl From<SchemaKind> for ConfigurationSchemaKind {
 pub struct ConfigurationReferenceV1 {
     pub schema_id: &'static str,
     pub format_version: &'static str,
+    pub reference_baseline: ReferenceBaseline,
     pub source_contract: ReferenceSourceContract,
     pub coverage: ReferenceCoverageSummary,
     pub fields: Vec<ConfigurationFieldReference>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReferenceBaseline {
+    pub generator_lifecycle: GeneratorLifecycle,
+    pub published_release: Option<String>,
+    pub field_history_status: FieldHistoryStatus,
+    pub history_verification_method: Option<HistoryVerificationMethod>,
+    pub compared_releases: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GeneratorLifecycle {
+    Unreleased,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldHistoryStatus {
+    NotVerified,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryVerificationMethod {
+    ReleaseSchemaDiff,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -358,7 +387,8 @@ pub struct ConfigurationFieldReference {
     pub stability: Stability,
     pub validation_stages: Vec<ValidationStage>,
     pub diagnostic: String,
-    pub introduced_in: String,
+    pub history_status: FieldHistoryStatus,
+    pub introduced_in: Option<String>,
     pub version_history: Vec<VersionHistoryEntry>,
     pub example: ExampleDocumentation,
     pub migration: Migration,
@@ -480,10 +510,14 @@ pub struct ConfigurationReferenceCoverageV1 {
     pub schema_id: &'static str,
     pub format_version: &'static str,
     pub status: CoverageStatus,
+    pub reference_baseline: ReferenceBaseline,
     pub source_contract: ReferenceSourceContract,
     pub coverage: ReferenceCoverageSummary,
-    pub prose_required_count: usize,
-    pub prose_covered_count: usize,
+    pub reviewed_intent_assignment_required_count: usize,
+    pub reviewed_intent_assignment_covered_count: usize,
+    pub distinct_reviewed_intent_count: usize,
+    pub distinct_reviewed_intents_reused_count: usize,
+    pub reviewed_intent_assignments_using_reused_intent_count: usize,
     pub missing_intent: Vec<DocumentationFieldAddress>,
 }
 
@@ -523,6 +557,7 @@ struct PreparedDocumentation<'a> {
     overrides: BTreeMap<FieldPath, &'a FieldIntentOverride>,
     structural_reviews: BTreeSet<(FieldPath, FieldPathKind)>,
     purpose_sources: BTreeMap<HumanIntentSource, usize>,
+    purpose_counts: BTreeMap<String, usize>,
     missing: Vec<DocumentationFieldAddress>,
 }
 
@@ -559,7 +594,7 @@ pub fn configuration_reference_coverage(
     let prepared = prepare(catalog, schemas, intent)?;
     let source_contract = source_contract(schemas);
     let coverage = coverage_summary(&prepared);
-    let prose_required_count = prepared
+    let reviewed_intent_assignment_required_count = prepared
         .index
         .by_path()
         .values()
@@ -570,7 +605,9 @@ pub fn configuration_reference_coverage(
                 .contains(&knowledge.path_kind)
         })
         .count();
-    let prose_covered_count = prose_required_count - prepared.missing.len();
+    let reviewed_intent_assignment_covered_count =
+        reviewed_intent_assignment_required_count - prepared.missing.len();
+    let intent_counts = reviewed_intent_counts(&prepared.purpose_counts);
     Ok(ConfigurationReferenceCoverageV1 {
         schema_id: CONFIGURATION_REFERENCE_COVERAGE_SCHEMA_ID,
         format_version: CONFIGURATION_REFERENCE_FORMAT_VERSION,
@@ -579,10 +616,15 @@ pub fn configuration_reference_coverage(
         } else {
             CoverageStatus::Incomplete
         },
+        reference_baseline: reference_baseline(),
         source_contract,
         coverage,
-        prose_required_count,
-        prose_covered_count,
+        reviewed_intent_assignment_required_count,
+        reviewed_intent_assignment_covered_count,
+        distinct_reviewed_intent_count: intent_counts.distinct,
+        distinct_reviewed_intents_reused_count: intent_counts.distinct_reused,
+        reviewed_intent_assignments_using_reused_intent_count: intent_counts
+            .assignments_using_reused,
         missing_intent: prepared.missing,
     })
 }
@@ -670,11 +712,7 @@ pub fn generate_configuration_reference(
                 ),
                 null_behavior: null_behavior(contract_node, knowledge.path_kind),
                 empty_behavior: empty_behavior(contract_node, knowledge.path_kind),
-                default: default_documentation(
-                    contract_node,
-                    knowledge.path_kind,
-                    &knowledge.introduced_in,
-                ),
+                default: default_documentation(contract_node, knowledge.path_kind),
                 environment_behavior,
                 sensitivity: knowledge.sensitivity,
                 state: domain.state,
@@ -683,11 +721,9 @@ pub fn generate_configuration_reference(
                 stability: knowledge.stability,
                 validation_stages: domain.validation_stages.clone(),
                 diagnostic,
-                introduced_in: knowledge.introduced_in.clone(),
-                version_history: vec![VersionHistoryEntry {
-                    version: knowledge.introduced_in.clone(),
-                    change: VersionChange::Introduced,
-                }],
+                history_status: FieldHistoryStatus::NotVerified,
+                introduced_in: None,
+                version_history: Vec::new(),
                 example: ExampleDocumentation {
                     guidance: example_guidance,
                     schema_examples_available: contract_node
@@ -714,6 +750,7 @@ pub fn generate_configuration_reference(
     Ok(ConfigurationReferenceV1 {
         schema_id: CONFIGURATION_REFERENCE_SCHEMA_ID,
         format_version: CONFIGURATION_REFERENCE_FORMAT_VERSION,
+        reference_baseline: reference_baseline(),
         source_contract: source_contract(schemas),
         coverage: coverage_summary(&prepared),
         fields,
@@ -1409,7 +1446,7 @@ fn runtime_configuration_fields(
                         // Runtime schema defaults may contain deployment-local names or paths.
                         // The reviewed reference reports behavior without copying the value.
                         schema_value: None,
-                        source_version: Some(profile.introduced_in.clone()),
+                        source_version: None,
                         reviewed_behavior: Some(
                             "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
                                 .to_owned(),
@@ -1440,7 +1477,7 @@ fn runtime_configuration_fields(
                     DefaultDocumentation {
                         behavior: DefaultBehavior::ReviewedRuntimeDefault,
                         schema_value: None,
-                        source_version: Some(profile.introduced_in.clone()),
+                        source_version: None,
                         reviewed_behavior: Some(
                             override_intent
                                 .and_then(|entry| entry.runtime_default_note.as_ref())
@@ -1521,11 +1558,9 @@ fn runtime_configuration_fields(
                 stability: profile.stability,
                 validation_stages: profile.validation_stages.clone(),
                 diagnostic: profile.diagnostic.clone(),
-                introduced_in: profile.introduced_in.clone(),
-                version_history: vec![VersionHistoryEntry {
-                    version: profile.introduced_in.clone(),
-                    change: VersionChange::Introduced,
-                }],
+                history_status: FieldHistoryStatus::NotVerified,
+                introduced_in: None,
+                version_history: Vec::new(),
                 example: ExampleDocumentation {
                     guidance: profile.example_guidance.clone(),
                     schema_examples_available: !runtime_schema_values(
@@ -1763,7 +1798,12 @@ pub fn embedded_configuration_reference_coverage(
             "combined reference does not preserve the complete authored coverage audit",
         ));
     }
-    let prose_required_count = coverage.path_count;
+    let reviewed_intent_assignment_required_count = coverage.path_count;
+    let purpose_counts = fields.iter().fold(BTreeMap::new(), |mut counts, field| {
+        *counts.entry(field.purpose.clone()).or_default() += 1;
+        counts
+    });
+    let intent_counts = reviewed_intent_counts(&purpose_counts);
     Ok(ConfigurationReferenceCoverageV1 {
         schema_id: CONFIGURATION_REFERENCE_COVERAGE_SCHEMA_ID,
         format_version: CONFIGURATION_REFERENCE_FORMAT_VERSION,
@@ -1772,10 +1812,15 @@ pub fn embedded_configuration_reference_coverage(
         } else {
             CoverageStatus::Incomplete
         },
+        reference_baseline: reference_baseline(),
         source_contract: combined_source_contract(),
         coverage,
-        prose_required_count,
-        prose_covered_count: fields.len(),
+        reviewed_intent_assignment_required_count,
+        reviewed_intent_assignment_covered_count: fields.len(),
+        distinct_reviewed_intent_count: intent_counts.distinct,
+        distinct_reviewed_intents_reused_count: intent_counts.distinct_reused,
+        reviewed_intent_assignments_using_reused_intent_count: intent_counts
+            .assignments_using_reused,
         missing_intent: missing,
     })
 }
@@ -1792,6 +1837,7 @@ pub fn embedded_configuration_reference() -> Result<ConfigurationReferenceV1, Do
     Ok(ConfigurationReferenceV1 {
         schema_id: CONFIGURATION_REFERENCE_SCHEMA_ID,
         format_version: CONFIGURATION_REFERENCE_FORMAT_VERSION,
+        reference_baseline: reference_baseline(),
         source_contract: combined_source_contract(),
         coverage: combined_coverage_summary(&fields, &[]),
         fields,
@@ -2047,6 +2093,7 @@ fn prepare<'a>(
     let structural_reviews = unique_structural_reviews(intent, &index)?;
     let mut missing = Vec::new();
     let mut purpose_sources = BTreeMap::new();
+    let mut purpose_counts = BTreeMap::new();
     for (path, knowledge) in index.by_path() {
         if !intent
             .policy
@@ -2076,8 +2123,9 @@ fn prepare<'a>(
             path,
             &structural_reviews,
         ) {
-            Ok((_, source)) => {
+            Ok((purpose, source)) => {
                 *purpose_sources.entry(source).or_default() += 1;
+                *purpose_counts.entry(purpose).or_default() += 1;
             }
             Err(_) => missing.push(field_address(path, knowledge.path_kind)),
         }
@@ -2091,6 +2139,7 @@ fn prepare<'a>(
         overrides,
         structural_reviews,
         purpose_sources,
+        purpose_counts,
         missing,
     })
 }
@@ -2387,6 +2436,31 @@ fn reviewed_purpose(
     Err(documentation_error("field has no reviewed human intent"))
 }
 
+fn reference_baseline() -> ReferenceBaseline {
+    ReferenceBaseline {
+        generator_lifecycle: GeneratorLifecycle::Unreleased,
+        published_release: None,
+        field_history_status: FieldHistoryStatus::NotVerified,
+        history_verification_method: None,
+        compared_releases: Vec::new(),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReviewedIntentCounts {
+    distinct: usize,
+    distinct_reused: usize,
+    assignments_using_reused: usize,
+}
+
+fn reviewed_intent_counts(purpose_counts: &BTreeMap<String, usize>) -> ReviewedIntentCounts {
+    ReviewedIntentCounts {
+        distinct: purpose_counts.len(),
+        distinct_reused: purpose_counts.values().filter(|count| **count > 1).count(),
+        assignments_using_reused: purpose_counts.values().filter(|count| **count > 1).sum(),
+    }
+}
+
 fn source_contract(schemas: &[DocumentationSchema<'_>]) -> ReferenceSourceContract {
     ReferenceSourceContract {
         schemas: schemas
@@ -2558,11 +2632,7 @@ fn collect_numeric_keyword(node: &Value, keyword: &str) -> Vec<i64> {
     values
 }
 
-fn default_documentation(
-    node: &Value,
-    kind: FieldPathKind,
-    source_version: &str,
-) -> DefaultDocumentation {
+fn default_documentation(node: &Value, kind: FieldPathKind) -> DefaultDocumentation {
     if matches!(kind, FieldPathKind::Root | FieldPathKind::Branch) {
         return DefaultDocumentation {
             behavior: DefaultBehavior::NotApplicable,
@@ -2575,7 +2645,7 @@ fn default_documentation(
         DefaultDocumentation {
             behavior: DefaultBehavior::SchemaDefault,
             schema_value: Some(value.clone()),
-            source_version: Some(source_version.to_owned()),
+            source_version: None,
             reviewed_behavior: None,
         }
     } else {
@@ -2645,7 +2715,7 @@ mod tests {
             .expect("embedded reference coverage is readable");
         assert!(!coverage.source_contract.reads_country_workspaces);
         assert!(!coverage.source_contract.reads_runtime_configuration);
-        assert_eq!(coverage.coverage.path_count, 564);
+        assert_eq!(coverage.coverage.path_count, 623);
     }
 
     #[test]

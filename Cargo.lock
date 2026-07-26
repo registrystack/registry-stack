@@ -5749,6 +5749,7 @@ dependencies = [
  "registry-platform-ops",
  "registry-relay",
  "rustix",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "serde_norway",

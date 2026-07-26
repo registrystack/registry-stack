@@ -419,6 +419,113 @@ fn generated_explanation(
     })
 }
 
+/// Select directly authored, non-secret scalars for an explicit trusted-local
+/// terminal review.
+///
+/// The classifier-safe explanation remains the authority for each field's
+/// source and sensitivity. This function only joins approved addresses back to
+/// digest-checked authored documents. It intentionally excludes fixtures,
+/// defaults, derived values, and every secret-bearing classification.
+fn trusted_local_authored_values(
+    loaded: &LoadedRegistryProject,
+    explanation: &ProjectExplanationReportV1,
+) -> Result<Vec<ProjectTrustedLocalAuthoredValue>> {
+    let project_document = authored_explanation_document(loaded, &loaded.root.join(PROJECT_FILE))?;
+    let mut integration_documents = BTreeMap::new();
+    for (integration_id, reference) in &loaded.project.integrations {
+        let path = resolve_authored_path(&loaded.root, &reference.file)?;
+        integration_documents.insert(
+            integration_id.as_str(),
+            authored_explanation_document(loaded, &path)?,
+        );
+    }
+    let mut entity_documents = BTreeMap::new();
+    for (entity_id, reference) in &loaded.project.entities {
+        let path = resolve_authored_path(&loaded.root, &reference.file)?;
+        entity_documents.insert(
+            entity_id.as_str(),
+            authored_explanation_document(loaded, &path)?,
+        );
+    }
+    let environment_document = if let Some(environment_name) = loaded.environment_name.as_deref() {
+        let path = resolve_authored_path(
+            &loaded.root,
+            &PathBuf::from("environments").join(format!("{environment_name}.yaml")),
+        )?;
+        Some((
+            environment_name,
+            authored_explanation_document(loaded, &path)?,
+        ))
+    } else {
+        None
+    };
+
+    let mut values = Vec::new();
+    for field in &explanation.fields {
+        if !matches!(
+            field.source.kind,
+            FieldSourceKind::Authored | FieldSourceKind::EnvironmentBound
+        ) || field.source.address.as_ref() != Some(&field.address)
+            || !matches!(
+                field.state.presence,
+                FieldPresence::Authored | FieldPresence::EnvironmentBound
+            )
+            || !matches!(
+                field.knowledge.sensitivity,
+                FieldSensitivity::Public
+                    | FieldSensitivity::Internal
+                    | FieldSensitivity::Structural
+                    | FieldSensitivity::Sensitive
+            )
+        {
+            continue;
+        }
+        if trusted_local_value_path_is_prohibited(&field.address) {
+            continue;
+        }
+        let (document, path) = match &field.address {
+            ProjectFieldAddress::Project { path } => (&project_document, path),
+            ProjectFieldAddress::Integration { integration, path } => {
+                let Some(document) = integration_documents.get(integration.as_str()) else {
+                    continue;
+                };
+                (document, path)
+            }
+            ProjectFieldAddress::Entity { entity, path } => {
+                let Some(document) = entity_documents.get(entity.as_str()) else {
+                    continue;
+                };
+                (document, path)
+            }
+            ProjectFieldAddress::Environment { environment, path } => {
+                let Some((loaded_environment, document)) = environment_document.as_ref() else {
+                    continue;
+                };
+                if environment != loaded_environment {
+                    continue;
+                }
+                (document, path)
+            }
+            // Fixture documents may contain planted private inputs or source
+            // responses. The trusted-local switch never weakens that boundary.
+            ProjectFieldAddress::Fixture { .. } => continue,
+        };
+        let Some(value) = document.pointer(path.as_str()) else {
+            continue;
+        };
+        if !matches!(value, Value::Bool(_) | Value::Number(_) | Value::String(_)) {
+            continue;
+        }
+        values.push(ProjectTrustedLocalAuthoredValue {
+            address: field.address.clone(),
+            source: field.source.kind,
+            sensitivity: field.knowledge.sensitivity,
+            value: value.clone(),
+        });
+    }
+    Ok(values)
+}
+
 #[cfg(test)]
 pub(crate) fn generated_explanation_for_test(
     root: &Path,
@@ -1564,6 +1671,70 @@ mod explanation_tests {
     }
 
     #[test]
+    fn trusted_local_terminal_rendering_fails_closed_for_prohibited_internal_states() {
+        const SENTINEL: &str = "TRUSTED_LOCAL_PROHIBITED_SENTINEL";
+        let address = ProjectFieldAddress::Project {
+            path: JsonPointer::new("/registry/id".to_owned()).expect("pointer is valid"),
+        };
+        let derived = ProjectTrustedLocalAuthoredValue {
+            address: address.clone(),
+            source: FieldSourceKind::Derived,
+            sensitivity: FieldSensitivity::Internal,
+            value: json!(SENTINEL),
+        };
+        let secret = ProjectTrustedLocalAuthoredValue {
+            address: address.clone(),
+            source: FieldSourceKind::Authored,
+            sensitivity: FieldSensitivity::SecretReference,
+            value: json!(SENTINEL),
+        };
+        let fixture = ProjectTrustedLocalAuthoredValue {
+            address: ProjectFieldAddress::Fixture {
+                integration: "person-record".to_owned(),
+                fixture: "private".to_owned(),
+                path: JsonPointer::new("/input/person_id".to_owned()).expect("pointer is valid"),
+            },
+            source: FieldSourceKind::Authored,
+            sensitivity: FieldSensitivity::Internal,
+            value: json!(SENTINEL),
+        };
+        let parser = ProjectTrustedLocalAuthoredValue {
+            address: ProjectFieldAddress::Project {
+                path: JsonPointer::new("/services/example/claims/example/cel".to_owned())
+                    .expect("pointer is valid"),
+            },
+            source: FieldSourceKind::Authored,
+            sensitivity: FieldSensitivity::Internal,
+            value: json!(SENTINEL),
+        };
+
+        for (field, expected) in [
+            (
+                derived,
+                "only authored values can enter trusted-local authored output",
+            ),
+            (
+                secret,
+                "secret or fixture data cannot enter trusted-local authored output",
+            ),
+            (
+                fixture,
+                "fixture data cannot enter trusted-local authored output",
+            ),
+            (
+                parser,
+                "secret locator or parser input cannot enter trusted-local authored output",
+            ),
+        ] {
+            let error = field
+                .terminal_line()
+                .expect_err("prohibited internal state fails closed");
+            assert_eq!(error.to_string(), expected);
+            assert!(!error.to_string().contains(SENTINEL));
+        }
+    }
+
+    #[test]
     fn bounded_http_explanation_reports_effective_defaults_and_knowledge() {
         let loaded = bounded_http_project();
         let report =
@@ -1876,10 +2047,52 @@ expect:
                 }
             )
         }));
+
+        let trusted = trusted_local_authored_values(&loaded, &report)
+            .expect("trusted-local authored values are selected");
+        assert!(trusted.iter().all(|field| {
+            matches!(
+                field.source,
+                FieldSourceKind::Authored | FieldSourceKind::EnvironmentBound
+            ) && matches!(
+                field.sensitivity,
+                FieldSensitivity::Public
+                    | FieldSensitivity::Internal
+                    | FieldSensitivity::Structural
+                    | FieldSensitivity::Sensitive
+            ) && !matches!(field.address, ProjectFieldAddress::Fixture { .. })
+        }));
+        let trusted_values = trusted
+            .iter()
+            .map(|field| serde_json::to_string(&field.value).expect("scalar serializes"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for visible in ["ORIGIN_SENTINEL", "ISSUER_SENTINEL"] {
+            assert!(
+                trusted_values.contains(visible),
+                "trusted-local review should expose authored non-secret metadata {visible}"
+            );
+        }
+        for hidden in [
+            "SECRET_REFERENCE_SENTINEL",
+            "SIGNING_SECRET_SENTINEL",
+            "CALLER_SECRET_SENTINEL",
+            "FIXTURE_INPUT_SENTINEL",
+            "FIXTURE_BODY_SENTINEL",
+            "/ABSOLUTE/RUNTIME/FILE/PATH_SENTINEL",
+            "REQUEST_PAYLOAD_SENTINEL",
+            "SOURCE_VALUE_SENTINEL",
+            "CEL_SENTINEL",
+        ] {
+            assert!(
+                !trusted_values.contains(hidden),
+                "trusted-local review leaked prohibited value {hidden}"
+            );
+        }
     }
 
     #[test]
-    fn records_standard_objects_are_opaque_when_the_schema_publishes_no_fields() {
+    fn records_standard_objects_use_typed_leaf_knowledge_without_leaking_values() {
         let schemas = explanation_schema_set().expect("published explanation schemas load");
         let mut builder = ExplanationBuilder::new(&schemas);
         let project = json!({
@@ -1930,24 +2143,29 @@ expect:
             )
             .expect("records standards explanation generates");
         let fields = builder.finish();
-        let ogc = fields
-            .iter()
-            .find(|field| {
-                matches!(
-                    &field.address,
-                    ProjectFieldAddress::Project { path }
-                        if path.as_str()
-                            == "/services/people-records/api/standards/ogc_features"
-                )
-            })
-            .expect("opaque OGC standards field is represented");
-        assert!(matches!(
-            ogc.reported_value,
-            ClassifierSafeReportedValue::Redacted {
-                classification: FieldSensitivity::Internal,
-                reason: RedactionReason::Policy,
-            }
-        ));
+        for path in [
+            "/services/people-records/api/standards/ogc_features/collection_id",
+            "/services/people-records/api/standards/ogc_features/geometry/crs",
+            "/services/people-records/api/standards/sp_dci/registry",
+        ] {
+            let field = fields
+                .iter()
+                .find(|field| {
+                    matches!(
+                        &field.address,
+                        ProjectFieldAddress::Project { path: field_path }
+                            if field_path.as_str() == path
+                    )
+                })
+                .unwrap_or_else(|| panic!("typed standards field {path} is represented"));
+            assert!(matches!(
+                field.reported_value,
+                ClassifierSafeReportedValue::Redacted {
+                    classification: FieldSensitivity::Internal,
+                    reason: RedactionReason::Policy,
+                }
+            ));
+        }
         let serialized = serde_json::to_string(&fields).expect("standards fields serialize");
         for sentinel in [
             "COLLECTION_ID_SENTINEL",
@@ -1956,7 +2174,7 @@ expect:
         ] {
             assert!(
                 !serialized.contains(sentinel),
-                "opaque standards leaked {sentinel}"
+                "typed standards explanation leaked {sentinel}"
             );
         }
     }

@@ -114,10 +114,12 @@ Record that residual risk in the operator-security review.
 Run the offline fixtures and semantic check:
 
 ```sh
-registryctl test --project-dir <project>
+PROJECT_DIR=registry-project
+ENVIRONMENT=local
+registryctl test --project-dir "$PROJECT_DIR"
 registryctl check \
-  --project-dir <project> \
-  --environment <environment> \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
   --explain
 ```
 

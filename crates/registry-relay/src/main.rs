@@ -394,10 +394,21 @@ async fn run_server(
     let runtime = handle.load_full();
     let app = build_relay_app_from_runtime(Arc::clone(&handle))?;
 
-    let listener = TcpListener::bind(runtime.bind)
-        .await
-        .map_err(|_| ProcessStartupFailure::new(ProcessStartupCode::LISTENER_UNAVAILABLE))?;
+    let listener = TcpListener::bind(runtime.bind).await.map_err(|error| {
+        ProcessStartupFailure::new(ProcessStartupCode::from_data_listener_bind(error.kind()))
+    })?;
 
+    let admin_listener = match runtime.admin_bind {
+        Some(addr) => Some(TcpListener::bind(addr).await.map_err(|error| {
+            ProcessStartupFailure::new(ProcessStartupCode::from_admin_listener_bind(error.kind()))
+        })?),
+        None => None,
+    };
+
+    // Do not render either configured binding before both requested listeners
+    // have opened successfully. A bind failure crosses the value-free process
+    // diagnostic boundary and must not inherit the other listener's address
+    // from a preceding informational event.
     info!(
         bind = %runtime.bind,
         admin_bind = ?runtime.admin_bind,
@@ -407,14 +418,6 @@ async fn run_server(
         consultation_enabled = runtime.consultation.is_some(),
         "registry-relay listening"
     );
-
-    let admin_listener =
-        match runtime.admin_bind {
-            Some(addr) => Some(TcpListener::bind(addr).await.map_err(|_| {
-                ProcessStartupFailure::new(ProcessStartupCode::LISTENER_UNAVAILABLE)
-            })?),
-            None => None,
-        };
 
     let serve_limits = ServeLimits::from_config(&runtime.config.server);
     let admin_app = if admin_listener.is_some() {
@@ -3248,7 +3251,7 @@ config_trust:
         assert!(
             error
                 .to_string()
-                .contains("relay.startup.listener_unavailable"),
+                .contains("relay.startup.data_listener_address_in_use"),
             "unexpected error: {error}"
         );
         let key = AntiRollbackKey {

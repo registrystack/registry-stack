@@ -197,14 +197,16 @@ mapping.
 Run the fixtures, semantic check, and build:
 
 ```sh
-registryctl test --project-dir <project>
+PROJECT_DIR=snapshot-project
+ENVIRONMENT=local
+registryctl test --project-dir "$PROJECT_DIR"
 registryctl check \
-  --project-dir <project> \
-  --environment <environment> \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
   --explain
 registryctl build \
-  --project-dir <project> \
-  --environment <environment>
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT"
 ```
 
 The human-readable test report starts with `PASS`, the check report marks the project `valid`, and

@@ -105,7 +105,7 @@ export default defineConfig({
   // to their new homes so old links and search results keep resolving.
   redirects: {
     '/start/': internalRedirect('/'),
-    '/start/see-it-live/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
+    '/start/see-it-live/': internalRedirect('/journeys/spreadsheet-protected-api/'),
     '/explanation/trust-posture-and-security-guarantees/': internalRedirect('/security/'),
     '/reference/security-self-assessment/': internalRedirect('/security/self-assessment/'),
     '/reference/openssf-evidence/': internalRedirect('/security/openssf-evidence/'),

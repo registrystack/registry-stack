@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
+import { promisify } from 'node:util';
 
 import {
   diagnosticCatalogs,
@@ -10,10 +12,11 @@ import {
 
 const siteRoot = resolve(import.meta.dirname, '..');
 const repoRoot = resolve(siteRoot, '../..');
+const execFileAsync = promisify(execFile);
 const expectedCounts = {
   authoring: 17,
   fixture: 16,
-  operator: 46,
+  operator: 53,
 };
 
 async function artifactBytes(catalog) {
@@ -23,6 +26,32 @@ async function artifactBytes(catalog) {
     readFile(resolve(siteRoot, contract.public), 'utf8'),
     readFile(resolve(repoRoot, contract.fixture), 'utf8'),
   ]);
+}
+
+async function executableBytes(catalog) {
+  const { stdout } = await execFileAsync(
+    'cargo',
+    [
+      'run',
+      '--locked',
+      '--quiet',
+      '-p',
+      'registryctl',
+      '--',
+      'project',
+      'diagnostics',
+      '--catalog',
+      catalog,
+      '--format',
+      'json',
+    ],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  );
+  return stdout;
 }
 
 test('committed diagnostic artifacts are strict and byte-identical at every publication point', async () => {
@@ -43,6 +72,35 @@ test('committed diagnostic artifacts are strict and byte-identical at every publ
     if (catalog === 'operator') {
       assert.deepEqual(reference.omissions, []);
     }
+  }
+});
+
+test('committed diagnostic artifacts are byte-exact to the registryctl executable', async () => {
+  for (const catalog of Object.keys(diagnosticCatalogs)) {
+    const first = await executableBytes(catalog);
+    const second = await executableBytes(catalog);
+    assert.equal(
+      second,
+      first,
+      `${catalog} registryctl diagnostic output is not byte deterministic`,
+    );
+    const [internal, publicArtifact, registryctlFixture] = await artifactBytes(catalog);
+    assert.equal(internal, first, `${catalog} internal reference drifted from registryctl`);
+    assert.equal(publicArtifact, first, `${catalog} public reference drifted from registryctl`);
+    assert.equal(
+      registryctlFixture,
+      first,
+      `${catalog} registryctl fixture drifted from its executable`,
+    );
+
+    const reference = JSON.parse(first);
+    validateDiagnosticReference(catalog, reference);
+    assert.ok(
+      reference.entries.every(
+        (entry) => entry.lifecycle === 'unreleased' && entry.introduced_in === null,
+      ),
+      `${catalog} executable must not attribute unreleased codes to an older release`,
+    );
   }
 });
 

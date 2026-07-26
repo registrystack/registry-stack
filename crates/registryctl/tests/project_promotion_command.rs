@@ -206,6 +206,8 @@ fn copy_tree(source: &Path, destination: &Path) {
 
 #[test]
 fn promotion_requires_a_verified_reviewed_baseline_without_exposing_project_values() {
+    const SECRET_REFERENCE_SENTINEL: &str = "COUNTRY_SECRET_SENTINEL";
+
     let temporary = tempfile::tempdir().expect("temporary directory creates");
     let project = temporary.path().join("country-promotion-project");
     init_registry_project(&ProjectInitOptions {
@@ -213,6 +215,12 @@ fn promotion_requires_a_verified_reviewed_baseline_without_exposing_project_valu
         directory: project.clone(),
     })
     .expect("starter initializes");
+    let environment_path = project.join("environments/local.yaml");
+    let environment = std::fs::read_to_string(&environment_path).expect("environment reads");
+    assert!(environment.contains("FICTIONAL_REGISTRY_TOKEN"));
+    let environment = environment.replace("FICTIONAL_REGISTRY_TOKEN", SECRET_REFERENCE_SENTINEL);
+    assert!(environment.contains(SECRET_REFERENCE_SENTINEL));
+    write(&environment_path, &environment);
 
     let report = promote_registry_project(&ProjectPromotionOptions {
         project_directory: project,
@@ -237,7 +245,7 @@ fn promotion_requires_a_verified_reviewed_baseline_without_exposing_project_valu
     let serialized = serde_json::to_string(&report).expect("promotion report serializes");
     for sentinel in [
         "country-promotion-project",
-        "COUNTRY_SECRET_SENTINEL",
+        SECRET_REFERENCE_SENTINEL,
         temporary.path().to_str().expect("temporary path is UTF-8"),
     ] {
         assert!(

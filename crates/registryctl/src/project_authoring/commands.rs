@@ -619,7 +619,7 @@ fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureR
         .ok_or_else(|| anyhow!("live request file is absent from the process environment"))?;
     let request_bytes = read_bounded_external_request(&request_path)?;
     let request = parse_json_strict(&request_bytes).context("live request is not strict JSON")?;
-    let validated_request = validate_live_request(loaded, &request)?;
+    let prepared_request = prepare_governed_live_request(loaded, &request)?;
     validate_live_relay_readiness(&origin)?;
     let expected_path = std::env::var_os("REGISTRY_STACK_LIVE_EXPECTED_FILE")
         .map(PathBuf::from)
@@ -635,7 +635,7 @@ fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureR
     let evaluation_request = governed_live_evaluation_request(&endpoint, &api_key);
     let request_started_at = OffsetDateTime::now_utc();
     let response = evaluation_request
-        .send_bytes(&request_bytes)
+        .send_bytes(&prepared_request.body)
         .map_err(|_| anyhow!("governed Notary evaluation failed"))?;
     let mut response_bytes = Vec::new();
     response
@@ -651,7 +651,7 @@ fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureR
         .context("governed Notary response was not strict JSON")?;
     let returned_claims = validate_live_response(
         &response,
-        &validated_request,
+        &prepared_request.validated,
         &expected,
         GovernedLiveValidationWindow {
             request_started_at,
@@ -1193,26 +1193,91 @@ struct ValidatedLiveRequest {
     notary_service_id: String,
 }
 
+struct PreparedGovernedLiveRequest {
+    validated: ValidatedLiveRequest,
+    body: Vec<u8>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GovernedLiveRequest {
+    target: GovernedLiveTarget,
+    #[serde(
+        default,
+        skip_serializing_if = "registry_notary_core::RequestVariables::is_empty"
+    )]
+    variables: registry_notary_core::RequestVariables,
+    claims: Vec<registry_notary_core::ClaimRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    disclosure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+    purpose: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GovernedLiveTarget {
+    #[serde(rename = "type")]
+    entity_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    identifiers: Vec<GovernedLiveIdentifier>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    attributes: BTreeMap<String, Value>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GovernedLiveIdentifier {
+    scheme: String,
+    value: String,
+}
+
+#[derive(Clone, Copy)]
+struct GovernedLiveInputContract<'a> {
+    name: &'a str,
+    declaration: &'a InputDeclaration,
+}
+
+fn prepare_governed_live_request(
+    loaded: &LoadedRegistryProject,
+    request: &Value,
+) -> Result<PreparedGovernedLiveRequest> {
+    let (validated, outbound) = validate_live_request_boundary(loaded, request)?;
+    let body = serde_json::to_vec(&outbound)
+        .context("failed to construct the validated governed Notary request")?;
+    Ok(PreparedGovernedLiveRequest { validated, body })
+}
+
+#[cfg(test)]
 fn validate_live_request(
     loaded: &LoadedRegistryProject,
     request: &Value,
 ) -> Result<ValidatedLiveRequest> {
-    let object = request
-        .as_object()
-        .ok_or_else(|| anyhow!("live request must be a JSON object"))?;
+    validate_live_request_boundary(loaded, request).map(|(validated, _)| validated)
+}
+
+fn validate_live_request_boundary(
+    loaded: &LoadedRegistryProject,
+    request: &Value,
+) -> Result<(ValidatedLiveRequest, GovernedLiveRequest)> {
+    if !request.is_object() {
+        bail!("live request must be a JSON object");
+    }
     if contains_sensitive_request_key(request) {
         bail!("live request contains a forbidden credential-like field");
     }
+    let outbound: GovernedLiveRequest = serde_json::from_value(request.clone())
+        .map_err(|_| anyhow!("live request does not match the closed governed schema"))?;
     let notary_service_id = loaded
         .environment
         .as_ref()
         .and_then(|environment| environment.deployment.notary.as_ref())
         .map(|notary| notary.service.clone())
         .ok_or_else(|| anyhow!("live request environment does not declare a Notary service"))?;
-    let purpose = object
-        .get("purpose")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("live request must declare one project purpose"))?;
+    let purpose = outbound.purpose.as_str();
     let services = loaded
         .project
         .services
@@ -1222,10 +1287,7 @@ fn validate_live_request(
     if services.is_empty() {
         bail!("live request purpose is not declared by this project");
     }
-    let claims = object
-        .get("claims")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("live request must contain a claims array"))?;
+    let claims = &outbound.claims;
     if claims.is_empty() || claims.len() > MAX_CLAIMS {
         bail!("live request claim count is outside the project bound");
     }
@@ -1233,24 +1295,17 @@ fn validate_live_request(
     let mut claim_versions = BTreeMap::new();
     let mut selected_claims = Vec::with_capacity(claims.len());
     for claim in claims {
-        let (id, requested_version) = match claim {
-            Value::String(id) => (id.as_str(), None),
-            Value::Object(object) => (
-                object
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow!("live request claim reference is invalid"))?,
-                object.get("version"),
-            ),
-            _ => bail!("live request claim reference is invalid"),
-        };
+        let id = claim.id.as_str();
         let service = services
             .iter()
+            .copied()
             .find(|service| service.claims.contains_key(id))
             .ok_or_else(|| anyhow!("live request contains an unknown project claim"))?;
         let authored_version = service.version.to_string();
-        if requested_version
-            .is_some_and(|version| version.as_str() != Some(authored_version.as_str()))
+        if claim
+            .version
+            .as_deref()
+            .is_some_and(|version| version != authored_version)
         {
             bail!("live request claim version does not match the authored project");
         }
@@ -1261,33 +1316,192 @@ fn validate_live_request(
             bail!("live request contains an unknown or duplicate project claim");
         }
         ids.push(id.to_string());
-        selected_claims.push(
-            service
-                .claims
-                .get(id)
-                .expect("selected project claim remains present"),
-        );
+        let selected_claim = service
+            .claims
+            .get(id)
+            .ok_or_else(|| anyhow!("selected project claim is absent after claim resolution"))?;
+        selected_claims.push((service, selected_claim));
     }
-    let disclosure = match object.get("disclosure") {
-        Some(Value::String(disclosure)) => disclosure.as_str(),
-        Some(_) => bail!("live request disclosure profile is invalid"),
-        None => expanded_disclosure(&selected_claims[0].disclosure).0,
-    };
+    let first_claim = selected_claims
+        .first()
+        .map(|(_, claim)| *claim)
+        .ok_or_else(|| anyhow!("live request must select at least one project claim"))?;
+    let disclosure = outbound
+        .disclosure
+        .as_deref()
+        .unwrap_or_else(|| expanded_disclosure(&first_claim.disclosure).0);
     if registry_notary_core::DisclosureProfile::parse(disclosure).is_none() {
         bail!("live request disclosure profile is invalid");
     }
-    if selected_claims.iter().any(|claim| {
+    if selected_claims.iter().any(|(_, claim)| {
         !expanded_disclosure(&claim.disclosure)
             .1
             .contains(&disclosure)
     }) {
         bail!("live request disclosure is not allowed for every selected project claim");
     }
-    Ok(ValidatedLiveRequest {
-        claims: ids,
-        claim_versions,
-        notary_service_id,
-    })
+    if outbound
+        .format
+        .as_deref()
+        .is_some_and(|format| format != registry_notary_core::FORMAT_CLAIM_RESULT_JSON)
+    {
+        bail!("live request format must be the governed claim-result media type");
+    }
+    for (name, _) in outbound.variables.iter() {
+        if !selected_claims
+            .iter()
+            .any(|(service, _)| service.variables.contains_key(name))
+        {
+            bail!("live request variable is not declared by a selected project service");
+        }
+    }
+    validate_governed_live_target(
+        loaded,
+        &selected_claims,
+        &outbound.target,
+        &outbound.variables,
+    )?;
+    Ok((
+        ValidatedLiveRequest {
+            claims: ids,
+            claim_versions,
+            notary_service_id,
+        },
+        outbound,
+    ))
+}
+
+fn validate_governed_live_target(
+    loaded: &LoadedRegistryProject,
+    selected_claims: &[(&ServiceDeclaration, &ClaimDeclaration)],
+    target: &GovernedLiveTarget,
+    variables: &registry_notary_core::RequestVariables,
+) -> Result<()> {
+    if !target
+        .entity_type
+        .eq_ignore_ascii_case(AUTHORED_CLAIM_SUBJECT_TYPE)
+    {
+        bail!("live request target type does not match the authored project");
+    }
+
+    let mut id_contracts = Vec::new();
+    let mut identifier_contracts = BTreeMap::<String, Vec<GovernedLiveInputContract<'_>>>::new();
+    let mut attribute_contracts = BTreeMap::<String, Vec<GovernedLiveInputContract<'_>>>::new();
+    let mut variable_contracts = BTreeMap::<String, Vec<GovernedLiveInputContract<'_>>>::new();
+    for (service, claim) in selected_claims {
+        if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
+            bail!("governed live requests require registry-backed project claims");
+        }
+        let consultation_name = claim_consultation_name(service, claim)?;
+        let consultation = service
+            .consultations
+            .get(consultation_name)
+            .ok_or_else(|| anyhow!("selected project claim has no authored live consultation"))?;
+        let integration = loaded
+            .integrations
+            .get(&consultation.integration)
+            .ok_or_else(|| anyhow!("selected live consultation has no authored integration"))?;
+        for (name, mapping) in &consultation.input {
+            let declaration = integration.document.input.get(name).ok_or_else(|| {
+                anyhow!("selected live consultation input has no authored contract")
+            })?;
+            let contract = GovernedLiveInputContract { name, declaration };
+            if mapping == "request.target.id" {
+                id_contracts.push(contract);
+            } else if let Some(scheme) = mapping.strip_prefix("request.target.identifiers.") {
+                identifier_contracts
+                    .entry(scheme.to_string())
+                    .or_default()
+                    .push(contract);
+            } else if let Some(name) = mapping.strip_prefix("request.target.attributes.") {
+                attribute_contracts
+                    .entry(name.to_string())
+                    .or_default()
+                    .push(contract);
+            } else if let Some(name) = mapping.strip_prefix("request.variables.") {
+                variable_contracts
+                    .entry(name.to_string())
+                    .or_default()
+                    .push(contract);
+            } else {
+                bail!("authored consultation uses an unsupported governed live input");
+            }
+        }
+    }
+
+    if id_contracts.is_empty() != target.id.is_none() {
+        bail!("live request target fields do not exactly match the selected authored inputs");
+    }
+    let mut identifiers = BTreeMap::new();
+    for identifier in &target.identifiers {
+        if identifiers
+            .insert(identifier.scheme.as_str(), identifier.value.as_str())
+            .is_some()
+        {
+            bail!("live request target contains a duplicate identifier scheme");
+        }
+    }
+    if identifiers.keys().copied().collect::<BTreeSet<_>>()
+        != identifier_contracts
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+        || target
+            .attributes
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+            != attribute_contracts
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>()
+    {
+        bail!("live request target fields do not exactly match the selected authored inputs");
+    }
+
+    if let Some(id) = &target.id {
+        validate_governed_live_input("target.id", &id_contracts, &Value::String(id.clone()))?;
+    }
+    for (scheme, contracts) in &identifier_contracts {
+        let value = identifiers.get(scheme.as_str()).ok_or_else(|| {
+            anyhow!("live request target identifier is absent after exact-shape validation")
+        })?;
+        validate_governed_live_input(
+            &format!("target.identifiers.{scheme}"),
+            contracts,
+            &Value::String((*value).to_string()),
+        )?;
+    }
+    for (name, contracts) in &attribute_contracts {
+        let value = target.attributes.get(name).ok_or_else(|| {
+            anyhow!("live request target attribute is absent after exact-shape validation")
+        })?;
+        validate_governed_live_input(&format!("target.attributes.{name}"), contracts, value)?;
+    }
+    for (name, contracts) in &variable_contracts {
+        let value = variables.get(name).ok_or_else(|| {
+            anyhow!("live request omits a variable required by the selected authored inputs")
+        })?;
+        validate_governed_live_input(
+            &format!("variables.{name}"),
+            contracts,
+            &Value::String(value.to_string()),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_governed_live_input(
+    path: &str,
+    contracts: &[GovernedLiveInputContract<'_>],
+    value: &Value,
+) -> Result<()> {
+    for contract in contracts {
+        validate_fixture_input_value(contract.name, contract.declaration, value).map_err(|_| {
+            anyhow!("live request {path} violates its selected authored type or bounds")
+        })?;
+    }
+    Ok(())
 }
 
 fn contains_sensitive_request_key(value: &Value) -> bool {
@@ -1303,15 +1517,223 @@ fn contains_sensitive_request_key(value: &Value) -> bool {
     }
 }
 
+#[cfg(test)]
+mod governed_live_request_boundary_tests {
+    use super::*;
+
+    fn loaded_project(name: &str) -> LoadedRegistryProject {
+        load_registry_project(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project-authoring")
+                .join(name),
+            Some("local"),
+        )
+        .unwrap_or_else(|error| panic!("{name} project loads: {error:#}"))
+    }
+
+    fn openspp_request() -> Value {
+        json!({
+            "target": {
+                "type": "Person",
+                "identifiers": [{
+                    "scheme": "openspp_individual_id",
+                    "value": "IND-AB12CD34",
+                }],
+            },
+            "claims": ["social-registry-record-exists"],
+            "disclosure": "predicate",
+            "format": registry_notary_core::FORMAT_CLAIM_RESULT_JSON,
+            "purpose": "social-programme-verification",
+        })
+    }
+
+    fn assert_rejected_before_outbound_body(
+        loaded: &LoadedRegistryProject,
+        request: &Value,
+        expected_error: &str,
+    ) -> String {
+        let error = prepare_governed_live_request(loaded, request)
+            .err()
+            .expect("invalid input must not produce an outbound request body");
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains(expected_error),
+            "unexpected error: {rendered}"
+        );
+        rendered
+    }
+
+    #[test]
+    fn governed_live_request_rejects_unknown_top_level_before_outbound_body() {
+        let loaded = loaded_project("openspp-exact");
+        let mut request = openspp_request();
+        request["raw_record"] = json!({ "national_id": "NID-raw-top-level" });
+
+        let error =
+            assert_rejected_before_outbound_body(&loaded, &request, "closed governed schema");
+        for private_fragment in ["raw_record", "national_id", "NID-raw-top-level"] {
+            assert!(
+                !error.contains(private_fragment),
+                "closed-schema errors must redact unknown names and values"
+            );
+        }
+    }
+
+    #[test]
+    fn governed_live_request_rejects_unknown_nested_field_before_outbound_body() {
+        let loaded = loaded_project("openspp-exact");
+        let mut request = openspp_request();
+        request["target"]["raw_record"] = json!({ "record": "unreviewed" });
+
+        let error =
+            assert_rejected_before_outbound_body(&loaded, &request, "closed governed schema");
+        for private_fragment in ["raw_record", "record", "unreviewed"] {
+            assert!(
+                !error.contains(private_fragment),
+                "closed-schema errors must redact unknown names and values"
+            );
+        }
+    }
+
+    #[test]
+    fn governed_live_request_rejects_unmapped_pii_shaped_field_before_outbound_body() {
+        let loaded = loaded_project("openspp-exact");
+        let mut request = openspp_request();
+        request["target"]["attributes"]["national_id"] = json!("NID-private-value");
+
+        let error = assert_rejected_before_outbound_body(
+            &loaded,
+            &request,
+            "do not exactly match the selected authored inputs",
+        );
+        for private_fragment in ["national_id", "NID-private-value"] {
+            assert!(
+                !error.contains(private_fragment),
+                "live validation errors must redact unknown names and values"
+            );
+        }
+    }
+
+    #[test]
+    fn governed_live_request_validates_identifier_and_attribute_bounds() {
+        let openspp = loaded_project("openspp-exact");
+        let mut oversized_identifier = openspp_request();
+        oversized_identifier["target"]["identifiers"][0]["value"] = json!("X".repeat(257));
+        assert_rejected_before_outbound_body(
+            &openspp,
+            &oversized_identifier,
+            "violates its selected authored type or bounds",
+        );
+
+        let dhis2 = loaded_project("dhis2-script");
+        let invalid_attribute = json!({
+            "target": {
+                "type": "person",
+                "identifiers": [{
+                    "scheme": "dhis2_tracked_entity",
+                    "value": "A1234567890",
+                }],
+                "attributes": { "include_inactive": "false" },
+            },
+            "variables": { "as_of_date": "2026-01-01" },
+            "claims": ["child-age-band"],
+            "disclosure": "value",
+            "purpose": "programme-enrollment-verification",
+        });
+        assert_rejected_before_outbound_body(
+            &dhis2,
+            &invalid_attribute,
+            "violates its selected authored type or bounds",
+        );
+    }
+
+    #[test]
+    fn governed_live_request_reconstructs_declared_typed_target_and_variables() {
+        let loaded = loaded_project("dhis2-script");
+        let request = json!({
+            "target": {
+                "type": "Person",
+                "identifiers": [{
+                    "scheme": "dhis2_tracked_entity",
+                    "value": "A1234567890",
+                }],
+                "attributes": { "include_inactive": false },
+            },
+            "variables": { "as_of_date": "2026-01-01" },
+            "claims": ["child-age-band"],
+            "disclosure": "value",
+            "format": registry_notary_core::FORMAT_CLAIM_RESULT_JSON,
+            "purpose": "programme-enrollment-verification",
+        });
+
+        let prepared = prepare_governed_live_request(&loaded, &request)
+            .expect("declared typed live request prepares");
+        let outbound =
+            parse_json_strict(&prepared.body).expect("prepared outbound body is strict JSON");
+        assert_eq!(
+            outbound.pointer("/target/identifiers/0/value"),
+            Some(&json!("A1234567890"))
+        );
+        assert_eq!(
+            outbound.pointer("/target/attributes/include_inactive"),
+            Some(&json!(false))
+        );
+        assert_eq!(
+            outbound.pointer("/variables/as_of_date"),
+            Some(&json!("2026-01-01"))
+        );
+        assert!(outbound.get("raw_record").is_none());
+    }
+
+    #[test]
+    fn governed_live_request_rejects_undeclared_variables_and_formats() {
+        let loaded = loaded_project("openspp-exact");
+        let mut variable = openspp_request();
+        variable["variables"] = json!({ "as_of_date": "2026-01-01" });
+        assert_rejected_before_outbound_body(
+            &loaded,
+            &variable,
+            "variable is not declared by a selected project service",
+        );
+
+        let mut format = openspp_request();
+        format["format"] = json!("application/json");
+        assert_rejected_before_outbound_body(&loaded, &format, "governed claim-result media type");
+    }
+}
+
 pub fn check_registry_project(options: &ProjectCheckOptions) -> Result<ProjectCommandReport> {
     let execution_context = ProjectExecutionContext::for_current_executable()?;
     check_registry_project_with_context(options, &execution_context)
+}
+
+/// Run the same offline check while also selecting directly authored,
+/// non-secret scalars for explicit trusted-local human review.
+///
+/// The additional values are not part of the portable command report and this
+/// function must only back the human-only `--show-authored-values` CLI path.
+pub fn check_registry_project_with_trusted_local_authored_values(
+    options: &ProjectCheckOptions,
+) -> Result<ProjectTrustedLocalCheck> {
+    if !options.explain {
+        bail!("trusted-local authored values require an explanation");
+    }
+    let execution_context = ProjectExecutionContext::for_current_executable()?;
+    check_registry_project_internal(options, &execution_context, true)
 }
 
 pub fn check_registry_project_with_context(
     options: &ProjectCheckOptions,
     execution_context: &ProjectExecutionContext,
 ) -> Result<ProjectCommandReport> {
+    check_registry_project_internal(options, execution_context, false).map(|result| result.report)
+}
+
+fn check_registry_project_internal(
+    options: &ProjectCheckOptions,
+    execution_context: &ProjectExecutionContext,
+    include_trusted_local_authored_values: bool,
+) -> Result<ProjectTrustedLocalCheck> {
     validate_baseline_pair(options.against.as_deref(), options.anchor.as_deref())?;
     let diagnostics = collect_project_authoring_diagnostics(
         &options.project_directory,
@@ -1358,7 +1780,12 @@ pub fn check_registry_project_with_context(
         &generated_observations,
         call_budget_actual,
     )?;
-    Ok(ProjectCommandReport {
+    let authored_values = if include_trusted_local_authored_values {
+        trusted_local_authored_values(&loaded, &compiled.explanation)?
+    } else {
+        Vec::new()
+    };
+    let report = ProjectCommandReport {
         schema_version: PROJECT_COMMAND_REPORT_SCHEMA_VERSION,
         status: "valid",
         project: loaded.project.registry.id.clone(),
@@ -1375,6 +1802,10 @@ pub fn check_registry_project_with_context(
         artifact_manifest: None,
         fixture_coverage: Some(fixture_coverage),
         explanation: options.explain.then_some(compiled.explanation),
+    };
+    Ok(ProjectTrustedLocalCheck {
+        report,
+        authored_values,
     })
 }
 
@@ -1953,7 +2384,7 @@ mod promotion_adapter_tests {
         // intentional review pins. Adding or changing a published path without
         // updating its closed mapping and reviewed revision fails this test and
         // `project_promotion_projection`.
-        assert_eq!(index.by_path().len(), 564);
+        assert_eq!(index.by_path().len(), 623);
         let mapped = index
             .by_path()
             .keys()

@@ -189,10 +189,12 @@
         "fixture_id",
         "fixture_digest",
         "expectation",
+        "semantic_null",
         "interaction_count",
         "input_ids",
         "output_ids",
         "claim_ids",
+        "exercised_status_mappings",
         "classification",
         "pass_state"
       ],
@@ -209,6 +211,9 @@
         "expectation": {
           "$ref": "#/$defs/semantic_expectation"
         },
+        "semantic_null": {
+          "type": "boolean"
+        },
         "interaction_count": {
           "type": "integer",
           "minimum": 1,
@@ -222,6 +227,14 @@
         },
         "claim_ids": {
           "$ref": "#/$defs/identifier_list"
+        },
+        "exercised_status_mappings": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/status_mapping"
+          }
         },
         "classification": {
           "const": "synthetic"
@@ -849,6 +862,7 @@
       "additionalProperties": false,
       "required": [
         "identity",
+        "contract",
         "fixture_set_state",
         "compiled_contract",
         "fixture_inventory",
@@ -877,6 +891,39 @@
                 "script",
                 "snapshot"
               ]
+            }
+          }
+        },
+        "contract": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source_operation_count",
+            "reviewed_not_applicable"
+          ],
+          "properties": {
+            "source_operation_count": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 16
+                }
+              ]
+            },
+            "reviewed_not_applicable": {
+              "type": "array",
+              "maxItems": 2,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "semantic_ambiguity",
+                  "subject_mismatch"
+                ]
+              }
             }
           }
         },

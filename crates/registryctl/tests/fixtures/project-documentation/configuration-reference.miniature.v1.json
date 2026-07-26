@@ -65,7 +65,8 @@
         "field_reference"
       ],
       "human_owner": "registry_maintainers",
-      "introduced_in": "0.13.0",
+      "history_status": "not_verified",
+      "introduced_in": null,
       "migration": "rebuild_project",
       "migration_note": "Revalidate the miniature document after changing this test-only authored contract.",
       "null_behavior": "not_applicable",
@@ -93,12 +94,7 @@
         "json_schema",
         "rust_deserialization"
       ],
-      "version_history": [
-        {
-          "change": "introduced",
-          "version": "0.13.0"
-        }
-      ]
+      "version_history": []
     },
     {
       "address": {
@@ -126,8 +122,7 @@
       ],
       "default": {
         "behavior": "schema_default",
-        "schema_value": "safe",
-        "source_version": "0.13.0"
+        "schema_value": "safe"
       },
       "diagnostic": "registryctl.authoring.project.invalid",
       "empty_behavior": "allowed",
@@ -148,7 +143,8 @@
         "field_reference"
       ],
       "human_owner": "registry_maintainers",
-      "introduced_in": "0.13.0",
+      "history_status": "not_verified",
+      "introduced_in": null,
       "migration": "rebuild_project",
       "migration_note": "Revalidate the miniature document after changing this test-only authored contract.",
       "null_behavior": "rejected",
@@ -176,12 +172,7 @@
         "json_schema",
         "rust_deserialization"
       ],
-      "version_history": [
-        {
-          "change": "introduced",
-          "version": "0.13.0"
-        }
-      ]
+      "version_history": []
     },
     {
       "address": {
@@ -226,7 +217,8 @@
         "field_reference"
       ],
       "human_owner": "registry_maintainers",
-      "introduced_in": "0.13.0",
+      "history_status": "not_verified",
+      "introduced_in": null,
       "migration": "rebuild_project",
       "migration_note": "Revalidate the miniature document after changing this test-only authored contract.",
       "null_behavior": "rejected",
@@ -254,15 +246,17 @@
         "json_schema",
         "rust_deserialization"
       ],
-      "version_history": [
-        {
-          "change": "introduced",
-          "version": "0.13.0"
-        }
-      ]
+      "version_history": []
     }
   ],
   "format_version": "1.0",
+  "reference_baseline": {
+    "generator_lifecycle": "unreleased",
+    "published_release": null,
+    "field_history_status": "not_verified",
+    "history_verification_method": null,
+    "compared_releases": []
+  },
   "schema_id": "https://id.registrystack.org/schemas/registryctl/project-documentation/registry.project.configuration_reference.v1.schema.json",
   "source_contract": {
     "field_knowledge": "schemas/project-authoring/parity-coverage.json#field_knowledge",

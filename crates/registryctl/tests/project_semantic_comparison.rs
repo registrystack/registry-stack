@@ -165,6 +165,7 @@ fn embedded_starter_comparison_distinguishes_unchanged_adapted_and_stale() {
     let options = ProjectStarterSemanticComparisonOptions {
         project_directory: project.clone(),
         environment: "local".to_owned(),
+        starter: None,
     };
     let unchanged = compare_registry_project_to_embedded_starter_semantically(&options)
         .expect("unchanged starter compares");
@@ -221,6 +222,7 @@ fn every_public_starter_compares_equivalent_to_its_exact_embedded_release() {
             &ProjectStarterSemanticComparisonOptions {
                 project_directory: project,
                 environment: "local".to_owned(),
+                starter: Some(starter),
             },
         )
         .unwrap_or_else(|error| panic!("{starter:?} starter compares: {error:#}"));
@@ -237,6 +239,26 @@ fn every_public_starter_compares_equivalent_to_its_exact_embedded_release() {
         assert!(report.changes.is_empty(), "{starter:?}");
         assert!(report.required_actions.is_empty(), "{starter:?}");
     }
+}
+
+#[test]
+fn explicit_starter_kind_must_match_recorded_project_provenance() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("project");
+    init_http_project(&project);
+
+    let error = compare_registry_project_to_embedded_starter_semantically(
+        &ProjectStarterSemanticComparisonOptions {
+            project_directory: project,
+            environment: "local".to_owned(),
+            starter: Some(ProjectStarter::Snapshot),
+        },
+    )
+    .expect_err("a mismatched explicit starter kind fails closed");
+    assert_eq!(
+        error.to_string(),
+        "selected embedded starter does not match project starter provenance"
+    );
 }
 
 #[test]
@@ -272,6 +294,52 @@ fn compare_cli_emits_value_free_human_and_strict_json_reports() {
     );
     let serialized = String::from_utf8(json_output.stdout).expect("JSON output is UTF-8");
     assert!(!serialized.contains(project_argument));
+
+    let explicit_output = Command::new(env!("CARGO_BIN_EXE_registryctl"))
+        .args([
+            "compare",
+            "--project-dir",
+            project_argument,
+            "--environment",
+            "local",
+            "--from-starter",
+            "http",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("registryctl explicit starter comparison runs");
+    assert!(
+        explicit_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explicit_output.stderr)
+    );
+    let explicit_report: registryctl::ProjectSemanticComparisonReportV1 =
+        serde_json::from_slice(&explicit_output.stdout)
+            .expect("explicit starter JSON report is strict and typed");
+    assert_eq!(
+        explicit_report.equivalence,
+        SemanticComparisonEquivalence::Equivalent
+    );
+
+    let mismatch = Command::new(env!("CARGO_BIN_EXE_registryctl"))
+        .args([
+            "compare",
+            "--project-dir",
+            project_argument,
+            "--environment",
+            "local",
+            "--from-starter",
+            "snapshot",
+        ])
+        .output()
+        .expect("registryctl mismatched starter comparison runs");
+    assert!(!mismatch.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&mismatch.stderr).trim(),
+        "Error: selected embedded starter does not match project starter provenance"
+    );
+    assert!(!String::from_utf8_lossy(&mismatch.stderr).contains(project_argument));
 
     let human_output = Command::new(env!("CARGO_BIN_EXE_registryctl"))
         .args([

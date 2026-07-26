@@ -79,7 +79,7 @@ fn load_config_document(path: &Path, options: LoadOptions) -> Result<LoadedConfi
     let expanded = match expand_config_env_vars(&raw) {
         Ok(expanded) => expanded,
         Err(_) => {
-            emit_process_startup_failure(ProcessStartupCode::CONFIG_DOCUMENT_INVALID);
+            emit_process_startup_failure(ProcessStartupCode::CONFIG_ENVIRONMENT_BINDING_REJECTED);
             return Err(Error::from(ConfigError::ParseError));
         }
     };
@@ -92,7 +92,7 @@ fn load_config_document(path: &Path, options: LoadOptions) -> Result<LoadedConfi
         }
     };
     if reject_deprecated_config_fields(&config_value, &deprecated_config_fields()).is_err() {
-        emit_process_startup_failure(ProcessStartupCode::CONFIG_DOCUMENT_INVALID);
+        emit_process_startup_failure(ProcessStartupCode::CONFIG_DEPRECATED_FIELD_REJECTED);
         return Err(Error::from(ConfigError::ParseError));
     }
     let config: Config = match serde_saphyr::from_str(&expanded) {

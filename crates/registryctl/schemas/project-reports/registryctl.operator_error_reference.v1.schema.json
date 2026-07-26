@@ -11,8 +11,8 @@
     },
     "entries": {
       "type": "array",
-      "minItems": 46,
-      "maxItems": 46,
+      "minItems": 53,
+      "maxItems": 53,
       "uniqueItems": true,
       "items": {
         "allOf": [
@@ -254,16 +254,23 @@
             },
             "code": {
               "enum": [
+                "relay.startup.admin_listener_address_in_use",
+                "relay.startup.admin_listener_permission_denied",
+                "relay.startup.admin_listener_unavailable",
                 "relay.startup.bundle_binding_rejected",
                 "relay.startup.bundle_rollback_rejected",
                 "relay.startup.bundle_signature_rejected",
                 "relay.startup.bundle_validation_rejected",
+                "relay.startup.config_deprecated_field_rejected",
                 "relay.startup.config_document_invalid",
+                "relay.startup.config_environment_binding_rejected",
                 "relay.startup.config_source_unavailable",
                 "relay.startup.config_validation_rejected",
                 "relay.startup.consultation_artifacts_rejected",
+                "relay.startup.data_listener_address_in_use",
+                "relay.startup.data_listener_permission_denied",
+                "relay.startup.data_listener_unavailable",
                 "relay.startup.doctor_failed",
-                "relay.startup.listener_unavailable",
                 "relay.startup.runtime_initialization_failed"
               ]
             },

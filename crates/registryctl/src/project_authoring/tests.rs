@@ -1641,6 +1641,13 @@ outputs:
         let request = validate_live_request(
             &loaded,
             &json!({
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{
+                        "scheme": "openspp_individual_id",
+                        "value": "IND-AB12CD34",
+                    }],
+                },
                 "purpose": "social-programme-verification",
                 "claims": ["social-registry-record-exists"],
                 "disclosure": "predicate",
@@ -1704,6 +1711,13 @@ outputs:
         let request = validate_live_request(
             &loaded,
             &json!({
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{
+                        "scheme": "openspp_individual_id",
+                        "value": "IND-AB12CD34",
+                    }],
+                },
                 "purpose": "social-programme-verification",
                 "claims": ["social-registry-record-exists"],
                 "disclosure": "predicate",
@@ -2199,6 +2213,13 @@ outputs:
             ("redacted", vec!["household-reference"]),
         ] {
             let request = json!({
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{
+                        "scheme": "openspp_individual_id",
+                        "value": "IND-AB12CD34",
+                    }],
+                },
                 "purpose": "social-programme-verification",
                 "claims": claims,
                 "disclosure": disclosure,
@@ -2212,6 +2233,13 @@ outputs:
         }
 
         let mixed = json!({
+            "target": {
+                "type": "Person",
+                "identifiers": [{
+                    "scheme": "openspp_individual_id",
+                    "value": "IND-AB12CD34",
+                }],
+            },
             "purpose": "social-programme-verification",
             "claims": [
                 "social-registry-record-exists",
@@ -2233,6 +2261,13 @@ outputs:
             .expect("OpenSPP golden project loads");
         let request = |version| {
             json!({
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{
+                        "scheme": "openspp_individual_id",
+                        "value": "IND-AB12CD34",
+                    }],
+                },
                 "purpose": "social-programme-verification",
                 "claims": [{
                     "id": "social-registry-record-exists",
@@ -2311,6 +2346,13 @@ outputs:
         let request = validate_live_request(
             &loaded,
             &json!({
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{
+                        "scheme": "household_reference",
+                        "value": "HH-AB12CD34",
+                    }],
+                },
                 "purpose": "household-support-screening",
                 "claims": ["household-category", "source-household-approval-decision"],
                 "disclosure": "redacted",

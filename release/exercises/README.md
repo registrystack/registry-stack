@@ -74,17 +74,19 @@ that trust boundary explicit.
 Validate an honest in-progress or failed record structurally with:
 
 ```sh
+LIFECYCLE_RECORD=release/exercises/product-input-lifecycle/candidate-record.json
 python3 release/scripts/validate-product-input-lifecycle.py \
   --candidate-asset-root "${CANDIDATE_ASSET_ROOT}" \
-  release/exercises/product-input-lifecycle/<candidate-record.json>
+  "$LIFECYCLE_RECORD"
 ```
 
 Require all checks and reviews to pass with:
 
 ```sh
+LIFECYCLE_RECORD=release/exercises/product-input-lifecycle/candidate-record.json
 python3 release/scripts/validate-product-input-lifecycle.py --require-pass \
   --candidate-asset-root "${CANDIDATE_ASSET_ROOT}" \
-  release/exercises/product-input-lifecycle/<candidate-record.json>
+  "$LIFECYCLE_RECORD"
 ```
 
 Discovery accepts the template only as non-evidence. Any discovered real
@@ -173,15 +175,17 @@ release are frozen and independently verified:
 10. Validate the record structure, then require every promotion check to pass:
 
    ```sh
+   UPGRADE_RECORD=release/exercises/candidate-upgrade-record.json
+   CANDIDATE_ASSET_ROOT=operator-evidence/candidate-release-assets
    python3 release/scripts/prepare-upgrade-exercise-assets.py \
      --discover release/exercises \
-     --asset-root /private/path/candidate-release-assets
+     --asset-root "$CANDIDATE_ASSET_ROOT"
    python3 release/scripts/validate-upgrade-exercise.py \
-     --candidate-asset-root /private/path/candidate-release-assets \
-     release/exercises/<candidate-upgrade-record.json>
+     --candidate-asset-root "$CANDIDATE_ASSET_ROOT" \
+     "$UPGRADE_RECORD"
    python3 release/scripts/validate-upgrade-exercise.py --require-pass \
-     --candidate-asset-root /private/path/candidate-release-assets \
-     release/exercises/<candidate-upgrade-record.json>
+     --candidate-asset-root "$CANDIDATE_ASSET_ROOT" \
+     "$UPGRADE_RECORD"
    ```
 
 The validator authenticates release coordinates and enforces equality among

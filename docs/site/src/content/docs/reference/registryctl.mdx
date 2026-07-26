@@ -16,7 +16,10 @@ import ProjectWorkspaceJourneys from '../../../components/ProjectWorkspaceJourne
 
 `registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
 
-This page lists commands in the current `registryctl` source.
+This page lists commands in Main source (unreleased), the next release candidate.
+The last released `registryctl` is `v0.13.0`.
+That artifact does not contain `preflight`, `capabilities`, `compare`, `promote`, `migrate`,
+`authoring reference`, or `project diagnostics`; use a current source build for those commands.
 Run `registryctl <command> --help` for the built-in usage text.
 Most human-facing commands also perform a once-per-day update check; see
 [Update check](#update-check).
@@ -46,6 +49,7 @@ complete workflow and generated trust boundary.
 | `test --environment <name> --live` | After offline fixtures pass, send one governed evaluation through a deployed Notary. The environment must be explicitly non-production. |
 | `check --project-dir <dir> --environment <name>` | Validate fixtures and the generated configuration for the project's Relay-only, Notary-only, or combined topology without writing build output. |
 | `check --explain` | Include the redacted acquisition, authorization, output, claim, and disclosure plan. |
+| `check --explain --show-authored-values` | Show directly authored non-secret scalar metadata for explicit trusted-local human review. Human output only; never a report, evidence, or export mode. |
 | `check --format json` | Emit the machine-readable success report or typed invalid-project diagnostics instead of the default human-readable report. |
 | `check --against <bundle> --anchor <anchor>` | Verify a signed product baseline and compare against its signed human review plus internal approval state. Both flags are required together. |
 | `preflight --project-dir <dir> --environment <name>` | Verify required secret-reference availability, runtime-file posture, environment binding, product compatibility, and non-widening offline. It performs no DNS, HTTP, token, or source contact. |
@@ -125,6 +129,16 @@ or country governance acceptance.
 `check --explain` reports the current redacted acquisition, authorization,
 output, claim, and disclosure plan. It does not compare the project with its
 starter.
+For an explicit trusted-local terminal review, add `--show-authored-values`.
+This human-only view can show directly authored or environment-bound scalar metadata classified
+as public, internal, structural, or sensitive. It prints each source and sensitivity so a reviewer
+can inspect their local project without weakening the portable report boundary. Treat the output
+as project-sensitive and do not copy it into logs, tickets, or shared artifacts. It is not a
+report, evidence, or export mode.
+Secret values, secret references and runtime secret-file locators, fixture data, raw parser text,
+defaulted values, and derived values remain hidden.
+The flag requires `--explain`; combining it with `--format json` is rejected. Default human output,
+JSON output, generated artifacts, and comparison and promotion reports remain redacted.
 Without `--against`, `check` and `build` label the baseline
 `initial_without_baseline`.
 Their `semantic_changes` entries identify changed `claim`, `integration`, `service_policy`,
@@ -221,7 +235,7 @@ OpenSPP release.
 earlier `registryctl`, create or verify the same files with:
 
 ```sh
-registryctl authoring editor --project-dir <project>
+registryctl authoring editor --project-dir registry-project
 ```
 
 The command copies the five JSON Schema Draft 2020-12 documents embedded in the running
@@ -479,6 +493,7 @@ Related environment variables are listed in the [environment variable reference]
 
 ## Source
 
-The released command tree comes from the registryctl source at `v0.13.0`.
-For its canonical definitions, read the
-[registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.13.0/crates/registryctl/src/main.rs).
+The command tables on this page come from Main source (unreleased).
+They describe the next release candidate, not the `v0.13.0` artifact.
+For the last released command tree, read the
+[registryctl `v0.13.0` command tree](https://github.com/registrystack/registry-stack/blob/v0.13.0/crates/registryctl/src/main.rs).

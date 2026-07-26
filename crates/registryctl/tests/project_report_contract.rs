@@ -50,6 +50,8 @@ const PROJECT_ARTIFACT_MANIFEST_FIXTURE: &str =
     include_str!("fixtures/project-reports/registry.project.artifact_manifest.v1.json");
 const PROJECT_FIXTURE_COVERAGE_FIXTURE: &str =
     include_str!("fixtures/project-reports/registry.project.fixture_coverage.v1.json");
+const PROJECT_FIXTURE_COVERAGE_NO_TARGET_FIXTURE: &str =
+    include_str!("fixtures/project-reports/registry.project.fixture_coverage.no-target.v1.json");
 const PROJECT_SEMANTIC_COMPARISON_FIXTURE: &str =
     include_str!("fixtures/project-reports/registry.project.semantic_comparison.v1.json");
 
@@ -147,6 +149,10 @@ fn draft_2020_12_schemas_validate_all_canonical_fixtures() {
             PROJECT_FIXTURE_COVERAGE_FIXTURE,
         ),
         (
+            PROJECT_FIXTURE_COVERAGE_SCHEMA,
+            PROJECT_FIXTURE_COVERAGE_NO_TARGET_FIXTURE,
+        ),
+        (
             PROJECT_SEMANTIC_COMPARISON_SCHEMA,
             PROJECT_SEMANTIC_COMPARISON_FIXTURE,
         ),
@@ -162,6 +168,9 @@ fn strict_dtos_roundtrip_canonical_fixtures_without_loss() {
     assert_exact_roundtrip::<ProjectSemanticImpactReportV1>(PROJECT_SEMANTIC_IMPACT_FIXTURE);
     assert_exact_roundtrip::<ProjectArtifactManifestV1>(PROJECT_ARTIFACT_MANIFEST_FIXTURE);
     assert_exact_roundtrip::<ProjectFixtureCoverageReportV1>(PROJECT_FIXTURE_COVERAGE_FIXTURE);
+    assert_exact_roundtrip::<ProjectFixtureCoverageReportV1>(
+        PROJECT_FIXTURE_COVERAGE_NO_TARGET_FIXTURE,
+    );
     assert_exact_roundtrip::<ProjectSemanticComparisonReportV1>(
         PROJECT_SEMANTIC_COMPARISON_FIXTURE,
     );

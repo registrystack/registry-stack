@@ -19,8 +19,7 @@ pub(crate) async fn run_server(
 ) -> Result<(), Box<dyn std::error::Error>> {
     init_tracing().map_err(value_free_configuration_failure)?;
 
-    let loaded = load_server_config(config_path, initialize_state)
-        .map_err(value_free_configuration_failure)?;
+    let loaded = load_server_config(config_path, initialize_state)?;
     let mut config = loaded.config;
     apply_bind_override(&mut config, bind_override);
     let bind = config.server.bind;

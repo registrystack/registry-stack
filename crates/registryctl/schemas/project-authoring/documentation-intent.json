@@ -66,9 +66,16 @@
     { "schema": "project", "pointer": "/$defs/recordAttributeReleaseProfile/properties/claims/additionalProperties/oneOf/1", "path_kind": "branch" },
     { "schema": "project", "pointer": "/$defs/filterOperators/items", "path_kind": "array_item" },
     { "schema": "project", "pointer": "/$defs/fieldList/items", "path_kind": "array_item" },
+    { "schema": "project", "pointer": "/$defs/recordAggregate/properties/dimensions/items", "path_kind": "array_item" },
+    { "schema": "project", "pointer": "/$defs/recordAggregate/properties/indicators/items", "path_kind": "array_item" },
     { "schema": "project", "pointer": "/$defs/recordAggregate/properties/allowed_filters/additionalProperties", "path_kind": "map_value" },
+    { "schema": "project", "pointer": "/$defs/recordAggregate/properties/measures/items", "path_kind": "array_item" },
     { "schema": "project", "pointer": "/$defs/recordAggregate/anyOf/0", "path_kind": "branch" },
     { "schema": "project", "pointer": "/$defs/recordAggregate/anyOf/1", "path_kind": "branch" },
+    { "schema": "project", "pointer": "/$defs/recordSpatialGeometry/oneOf/0", "path_kind": "branch" },
+    { "schema": "project", "pointer": "/$defs/recordSpatialGeometry/oneOf/1", "path_kind": "branch" },
+    { "schema": "project", "pointer": "/$defs/recordFieldMap/propertyNames", "path_kind": "map_key" },
+    { "schema": "project", "pointer": "/$defs/recordFieldMap/additionalProperties", "path_kind": "map_value" },
     { "schema": "project", "pointer": "/$defs/disclosure/oneOf/0", "path_kind": "branch" },
     { "schema": "project", "pointer": "/$defs/disclosure/oneOf/1", "path_kind": "branch" },
     { "schema": "project", "pointer": "/$defs/disclosure/oneOf/1/properties/allowed/items", "path_kind": "array_item" },
@@ -632,6 +639,91 @@
       "schema": "project",
       "pointer": "/$defs/recordAggregate/properties/disclosure_control/properties/suppression",
       "purpose": "Selects whether undersized aggregate groups are omitted, masked, or represented as null."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordAggregateAccess/properties/aggregate_only_execution",
+      "purpose": "Restricts this definition to aggregate execution so it cannot be used as a record-level result path."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordAggregateIndicator/properties/function",
+      "purpose": "Selects the aggregation function used to compute this named indicator."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordAggregateIndicator/properties/decimals",
+      "purpose": "Sets the non-negative decimal precision published for this aggregate indicator."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordAggregateIndicator/properties/unit_mult",
+      "purpose": "Declares the base-ten unit multiplier published with this aggregate indicator."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordAggregateMeasure/properties/function",
+      "purpose": "Selects the aggregation function applied to the optional source column for this measure."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordAggregateSpatial/properties/mode",
+      "purpose": "Selects the supported administrative-area aggregation mode for this spatial definition."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordAggregateSpatial/properties/bbox_fields",
+      "purpose": "Maps the geometry entity fields that provide the minimum and maximum coordinates of its bounding box."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordAggregateSpatial/properties/max_geometry_vertices",
+      "purpose": "Caps the number of vertices accepted when materializing one administrative-area geometry."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordSpatial/properties/geometry",
+      "purpose": "Defines whether feature geometry comes from point-coordinate fields or one encoded geometry field."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordSpatial/properties/bbox_fields",
+      "purpose": "Maps optional entity fields containing precomputed minimum and maximum bounding-box coordinates."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordSpatial/properties/max_bbox_degrees",
+      "purpose": "Caps the geographic span accepted for one bounding-box query."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordSpatial/properties/max_geometry_vertices",
+      "purpose": "Caps the number of vertices accepted when returning one feature geometry."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordSpatialGeometry/oneOf/0/properties/kind",
+      "purpose": "Selects geometry assembled from separate longitude and latitude entity fields."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordSpatialGeometry/oneOf/1/properties/kind",
+      "purpose": "Selects the GeoJSON, WKT, or WKB encoding used by the configured geometry field."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordSpdci/properties/identifiers",
+      "purpose": "Maps SP-DCI identifier names to the entity fields used to identify a record."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordSpdci/properties/expression_fields",
+      "purpose": "Maps SP-DCI expression input names to the entity fields available during expression evaluation."
+    },
+    {
+      "schema": "project",
+      "pointer": "/$defs/recordSpdci/properties/response_fields",
+      "purpose": "Maps SP-DCI response names to the entity fields returned for an authorized record."
     },
     {
       "schema": "project",

@@ -77,7 +77,7 @@ pub(crate) fn load_server_config(
     initialize_state: bool,
 ) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
     let raw = fs::read_to_string(config_path).map_err(|_| {
-        log_safe_startup_rejection(
+        log_safe_configuration_rejection(
             NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
             "rejected_validation",
             None,
@@ -85,7 +85,7 @@ pub(crate) fn load_server_config(
         configuration_failure()
     })?;
     let bootstrap = parse_config_document(&raw).map_err(|_| {
-        log_safe_startup_rejection(
+        log_safe_configuration_rejection(
             NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
             "rejected_validation",
             None,
@@ -94,7 +94,7 @@ pub(crate) fn load_server_config(
     })?;
     let Some(config_trust) = bootstrap.config.config_trust.as_ref() else {
         validate_config_document(&bootstrap).map_err(|_| {
-            log_safe_startup_rejection(
+            log_safe_configuration_rejection(
                 NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
                 "rejected_validation",
                 None,
@@ -119,8 +119,8 @@ pub(crate) fn load_server_config(
                 )? {
                     return Ok(loaded);
                 }
-                log_bundle_verification_error(&error);
-                return Err(configuration_failure());
+                let code = log_bundle_verification_error(&error);
+                return Err(bundle_verification_failure(code));
             }
         };
     match load_verified_bundle_server_config(config_trust, initialize_state, verified) {
@@ -155,16 +155,28 @@ pub(crate) fn load_verified_bundle_server_config(
     })
     .map_err(map_config_boot_error)?;
     let config_text = std::str::from_utf8(&verified.config_bytes).map_err(|_| {
-        log_safe_startup_rejection("config.bundle_rejected", "rejected_validation", None);
-        configuration_failure()
+        log_safe_bundle_rejection(
+            "config.bundle_rejected",
+            BundleVerificationCode::REJECTED_VALIDATION,
+            None,
+        );
+        bundle_verification_failure(BundleVerificationCode::REJECTED_VALIDATION)
     })?;
     let parsed = parse_config_document(config_text).map_err(|_| {
-        log_safe_startup_rejection("config.bundle_rejected", "rejected_validation", None);
-        configuration_failure()
+        log_safe_bundle_rejection(
+            "config.bundle_rejected",
+            BundleVerificationCode::REJECTED_VALIDATION,
+            None,
+        );
+        bundle_verification_failure(BundleVerificationCode::REJECTED_VALIDATION)
     })?;
     validate_signed_bundle_config_document(&parsed).map_err(|_| {
-        log_safe_startup_rejection("config.bundle_rejected", "rejected_validation", None);
-        configuration_failure()
+        log_safe_bundle_rejection(
+            "config.bundle_rejected",
+            BundleVerificationCode::REJECTED_VALIDATION,
+            None,
+        );
+        bundle_verification_failure(BundleVerificationCode::REJECTED_VALIDATION)
     })?;
     let provenance = ConfigProvenance {
         source: ConfigSource::SignedBundleFile,
@@ -226,16 +238,28 @@ pub(crate) fn load_unsigned_pin_server_config(
     selection: UnsignedConfigSelection,
 ) -> Result<LoadedServerConfig, Box<dyn std::error::Error>> {
     let config_text = std::str::from_utf8(&selection.config_bytes).map_err(|_| {
-        log_safe_startup_rejection("config.bundle_rejected", "rejected_validation", None);
-        configuration_failure()
+        log_safe_bundle_rejection(
+            "config.bundle_rejected",
+            BundleVerificationCode::REJECTED_VALIDATION,
+            None,
+        );
+        bundle_verification_failure(BundleVerificationCode::REJECTED_VALIDATION)
     })?;
     let parsed = parse_config_document(config_text).map_err(|_| {
-        log_safe_startup_rejection("config.bundle_rejected", "rejected_validation", None);
-        configuration_failure()
+        log_safe_bundle_rejection(
+            "config.bundle_rejected",
+            BundleVerificationCode::REJECTED_VALIDATION,
+            None,
+        );
+        bundle_verification_failure(BundleVerificationCode::REJECTED_VALIDATION)
     })?;
     validate_config_document(&parsed).map_err(|_| {
-        log_safe_startup_rejection("config.bundle_rejected", "rejected_validation", None);
-        configuration_failure()
+        log_safe_bundle_rejection(
+            "config.bundle_rejected",
+            BundleVerificationCode::REJECTED_VALIDATION,
+            None,
+        );
+        bundle_verification_failure(BundleVerificationCode::REJECTED_VALIDATION)
     })?;
     let override_pin = Some(selection.pin.clone());
     Ok(LoadedServerConfig {
@@ -276,22 +300,19 @@ pub(crate) fn load_unsigned_pin_server_config(
     })
 }
 
-pub(crate) fn log_bundle_verification_error(error: &ConfigBundleError) {
-    let result = bundle_verify_rejection_result(error);
-    log_safe_startup_rejection("config.bundle_rejected", result, None);
+pub(crate) fn log_bundle_verification_error(error: &ConfigBundleError) -> BundleVerificationCode {
+    let code = bundle_verify_rejection_code(error);
+    log_safe_bundle_rejection("config.bundle_rejected", code, None);
+    code
 }
 
 pub(crate) fn map_config_boot_error(error: ConfigBootError) -> Box<dyn std::error::Error> {
+    let code = error.bundle_rejection_code();
     if let Some(reason) = error.break_glass_invalid_reason() {
-        log_safe_startup_rejection(
-            "config.break_glass_invalid",
-            "rejected_rollback",
-            Some(reason),
-        );
+        log_safe_bundle_rejection("config.break_glass_invalid", code, Some(reason));
     }
-    let result = error.bundle_rejection_result();
-    log_safe_startup_rejection("config.bundle_rejected", result, None);
-    configuration_failure()
+    log_safe_bundle_rejection("config.bundle_rejected", code, None);
+    bundle_verification_failure(code)
 }
 
 fn configuration_failure() -> Box<dyn std::error::Error> {
@@ -300,19 +321,80 @@ fn configuration_failure() -> Box<dyn std::error::Error> {
     ))
 }
 
-fn log_safe_startup_rejection(
+fn bundle_verification_failure(code: BundleVerificationCode) -> Box<dyn std::error::Error> {
+    Box::new(BundleVerificationFailure::from(code))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SafeStartupRejection {
+    classification_code: &'static str,
+    result: &'static str,
+    reason: &'static str,
+    activation_code: &'static str,
+    safe_meaning: &'static str,
+    safe_remediation: &'static str,
+}
+
+fn safe_configuration_rejection(
+    classification_code: &'static str,
+    result: &'static str,
+    reason: Option<&'static str>,
+) -> SafeStartupRejection {
+    let definition = NotaryActivationCode::CONFIGURATION_INVALID.definition();
+    SafeStartupRejection {
+        classification_code,
+        result,
+        reason: reason.unwrap_or("none"),
+        activation_code: definition.code.as_str(),
+        safe_meaning: definition.meaning,
+        safe_remediation: definition.remediation,
+    }
+}
+
+fn safe_bundle_rejection(
+    classification_code: &'static str,
+    code: BundleVerificationCode,
+    reason: Option<&'static str>,
+) -> SafeStartupRejection {
+    let definition = code.definition();
+    SafeStartupRejection {
+        classification_code,
+        result: code.as_str(),
+        reason: reason.unwrap_or("none"),
+        activation_code: NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
+        safe_meaning: definition.safe_meaning,
+        safe_remediation: definition.safe_remediation,
+    }
+}
+
+fn log_safe_configuration_rejection(
     classification_code: &'static str,
     result: &'static str,
     reason: Option<&'static str>,
 ) {
-    let definition = NotaryActivationCode::CONFIGURATION_INVALID.definition();
-    tracing::error!(
-        code = classification_code,
+    log_safe_startup_rejection(safe_configuration_rejection(
+        classification_code,
         result,
-        reason = reason.unwrap_or("none"),
-        activation_code = definition.code.as_str(),
-        safe_meaning = definition.meaning,
-        safe_remediation = definition.remediation,
+        reason,
+    ));
+}
+
+fn log_safe_bundle_rejection(
+    classification_code: &'static str,
+    code: BundleVerificationCode,
+    reason: Option<&'static str>,
+) {
+    log_safe_startup_rejection(safe_bundle_rejection(classification_code, code, reason));
+}
+
+fn log_safe_startup_rejection(rejection: SafeStartupRejection) {
+    tracing::error!(
+        code = rejection.classification_code,
+        result = rejection.result,
+        reason = rejection.reason,
+        activation_code = rejection.activation_code,
+        safe_meaning = rejection.safe_meaning,
+        safe_remediation = rejection.safe_remediation,
         "registry notary startup configuration rejected"
     );
 }

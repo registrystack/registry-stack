@@ -155,10 +155,12 @@ checks.
 ## Verify the journey
 
 ```sh
-registryctl test --project-dir <project>
+PROJECT_DIR=fhir-project
+ENVIRONMENT=local
+registryctl test --project-dir "$PROJECT_DIR"
 registryctl check \
-  --project-dir <project> \
-  --environment <environment> \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
   --explain
 ```
 

@@ -19,7 +19,7 @@ use registry_relay::source_plan::{
     },
     EvidenceClass, PinnedEvidenceArtifact, PinnedSourcePlanArtifact, SourcePlanArtifactBundle,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -87,6 +87,7 @@ mod semantic_comparison;
 pub use semantic_comparison::*;
 include!("project_authoring/model.rs");
 include!("project_authoring/editor.rs");
+include!("project_authoring/schema_authority.rs");
 include!("project_authoring/authoring_contract.rs");
 include!("project_authoring/diagnostics.rs");
 include!("project_authoring/commands.rs");

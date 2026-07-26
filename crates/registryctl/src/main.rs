@@ -15,7 +15,7 @@ use registryctl::{
     ProjectPromotionOptions, ProjectPromotionReportV1, ProjectSchemaKind,
     ProjectSemanticComparisonOptions, ProjectSemanticComparisonReportV1, ProjectStarter,
     ProjectStarterSemanticComparisonOptions, ProjectTestOptions, ProjectTestSelection,
-    PromotionDisposition, RedactionReason, Sample,
+    ProjectTrustedLocalAuthoredValue, PromotionDisposition, RedactionReason, Sample,
 };
 
 fn main() -> Result<()> {
@@ -138,19 +138,29 @@ fn main() -> Result<()> {
             project_dir,
             environment,
             explain,
+            show_authored_values,
             format,
             against,
             anchor,
         } => {
-            let report = registryctl::check_registry_project(&ProjectCheckOptions {
+            if show_authored_values && format != OutputFormat::Human {
+                anyhow::bail!("--show-authored-values requires --format human");
+            }
+            let options = ProjectCheckOptions {
                 project_directory: project_dir,
                 environment,
                 explain: explain || format == OutputFormat::Human,
                 against,
                 anchor,
-            });
-            let report = match report {
-                Ok(report) => report,
+            };
+            let checked = if show_authored_values {
+                registryctl::check_registry_project_with_trusted_local_authored_values(&options)
+                    .map(|trusted| (trusted.report, Some(trusted.authored_values)))
+            } else {
+                registryctl::check_registry_project(&options).map(|report| (report, None))
+            };
+            let (report, authored_values) = match checked {
+                Ok(checked) => checked,
                 Err(error) => {
                     if let Some(report) =
                         error.downcast_ref::<registryctl::ProjectAuthoringDiagnostics>()
@@ -168,9 +178,10 @@ fn main() -> Result<()> {
                 }
             };
             match format {
-                OutputFormat::Human => {
-                    println!("{}", render_check_report(&report, explain)?)
-                }
+                OutputFormat::Human => println!(
+                    "{}",
+                    render_check_report(&report, explain, authored_values.as_deref())?
+                ),
                 OutputFormat::Json => print_json(&report)?,
             }
         }
@@ -279,11 +290,12 @@ fn main() -> Result<()> {
             from_starter,
             format,
         } => {
-            let report = if from_starter {
+            let report = if let Some(starter) = from_starter {
                 registryctl::compare_registry_project_to_embedded_starter_semantically(
                     &ProjectStarterSemanticComparisonOptions {
                         project_directory: project_dir,
                         environment,
+                        starter,
                     },
                 )?
             } else if let Some(baseline_environment) = from_environment {
@@ -1373,7 +1385,11 @@ fn rendered_claim_class(
     }
 }
 
-fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<String> {
+fn render_check_report(
+    report: &ProjectCommandReport,
+    expanded: bool,
+    trusted_local_values: Option<&[ProjectTrustedLocalAuthoredValue]>,
+) -> Result<String> {
     use std::fmt::Write as _;
 
     let explanation = report
@@ -1782,6 +1798,23 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
             writeln!(output, "Redactions: {}", redactions.join(", "))?;
         }
     }
+    if let Some(values) = trusted_local_values {
+        writeln!(
+            output,
+            "WARNING: trusted-local authored values follow. This output includes project-sensitive metadata and must not be shared."
+        )?;
+        writeln!(
+            output,
+            "Secret values, secret references and runtime secret-file locators, fixture data, raw parser text, defaulted values, and derived values remain hidden."
+        )?;
+        writeln!(output, "Trusted-local authored values:")?;
+        if values.is_empty() {
+            writeln!(output, "  none")?;
+        }
+        for field in values {
+            writeln!(output, "  {}", field.terminal_line()?)?;
+        }
+    }
     writeln!(
         output,
         "Rhai xw.v1 reference: registryctl authoring xw --format reference"
@@ -1938,6 +1971,13 @@ enum Commands {
         /// Print the complete redacted acquisition and disclosure plan.
         #[arg(long)]
         explain: bool,
+        /// Show directly authored non-secret values for trusted-local terminal review.
+        ///
+        /// This may expose project-sensitive metadata. Secret references,
+        /// secret values and runtime secret-file locators, fixture data, raw
+        /// parser text, defaulted values, and derived values remain hidden.
+        #[arg(long, requires = "explain")]
+        show_authored_values: bool,
         /// Human-readable review report, or deliberate machine-readable JSON.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
@@ -2000,13 +2040,17 @@ enum Commands {
             conflicts_with = "from_starter"
         )]
         from_environment: Option<String>,
-        /// Compare against the exact starter embedded in this registryctl release.
+        /// Compare against the recorded, exact starter embedded in this registryctl release.
+        ///
+        /// Optionally name a starter kind to assert that it matches the
+        /// project's recorded provenance.
         #[arg(
             long,
+            num_args = 0..=1,
             required_unless_present = "from_environment",
             conflicts_with_all = ["from_project_dir", "from_environment"]
         )]
-        from_starter: bool,
+        from_starter: Option<Option<ProjectStarter>>,
         /// Human-readable value-free review plan, or strict machine-readable JSON.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
@@ -2328,6 +2372,7 @@ mod tests {
                 project_dir,
                 environment,
                 explain: true,
+                show_authored_values: false,
                 format: OutputFormat::Human,
                 against: Some(against),
                 anchor: Some(anchor),
@@ -2353,9 +2398,36 @@ mod tests {
             Commands::Check {
                 format: OutputFormat::Json,
                 explain: false,
+                show_authored_values: false,
                 ..
             }
         ));
+        let trusted_local = Cli::try_parse_from([
+            "registryctl",
+            "check",
+            "--environment",
+            "staging",
+            "--explain",
+            "--show-authored-values",
+        ])
+        .expect("trusted-local explanation parses");
+        assert!(matches!(
+            trusted_local.command,
+            Commands::Check {
+                explain: true,
+                show_authored_values: true,
+                format: OutputFormat::Human,
+                ..
+            }
+        ));
+        assert!(Cli::try_parse_from([
+            "registryctl",
+            "check",
+            "--environment",
+            "staging",
+            "--show-authored-values",
+        ])
+        .is_err());
 
         let preflight = Cli::try_parse_from([
             "registryctl",
@@ -2664,7 +2736,8 @@ mod tests {
             anchor: None,
         })
         .expect("Relay-only project checks");
-        let relay_rendered = render_check_report(&relay_report, false).expect("report renders");
+        let relay_rendered =
+            render_check_report(&relay_report, false, None).expect("report renders");
         assert!(relay_rendered.contains("topology: Relay-only"));
         assert!(relay_rendered.contains(
             "Relay authority: 0 source integrations, 1 records API service, 1 materialized entity definition"
@@ -2678,7 +2751,8 @@ mod tests {
             anchor: None,
         })
         .expect("Notary-only evaluation project checks");
-        let notary_rendered = render_check_report(&notary_report, true).expect("report renders");
+        let notary_rendered =
+            render_check_report(&notary_report, true, None).expect("report renders");
         assert!(notary_rendered.contains("topology: Notary-only"));
         assert!(notary_rendered.contains(
             "Notary authority: 1 source-free evaluation service, 0 compiler-pinned Relay-backed services"
@@ -3398,6 +3472,7 @@ mod semantic_comparison_cli_tests {
     use clap::Parser as _;
 
     use super::{Cli, Commands, OutputFormat};
+    use registryctl::ProjectStarter;
 
     #[test]
     fn compare_cli_requires_exactly_one_local_or_embedded_baseline() {
@@ -3418,12 +3493,39 @@ mod semantic_comparison_cli_tests {
             Commands::Compare {
                 project_dir,
                 environment,
-                from_starter: true,
+                from_starter: Some(None),
                 from_project_dir: None,
                 from_environment: None,
                 format: OutputFormat::Json,
             } if project_dir == std::path::Path::new("candidate") && environment == "local"
         ));
+
+        for (value, expected) in [
+            ("http", ProjectStarter::Http),
+            ("dhis2-tracker", ProjectStarter::Dhis2Tracker),
+            ("opencrvs-dci", ProjectStarter::OpencrvsDci),
+            ("fhir-r4", ProjectStarter::FhirR4),
+            ("snapshot", ProjectStarter::Snapshot),
+        ] {
+            let selected = Cli::try_parse_from([
+                "registryctl",
+                "compare",
+                "--environment",
+                "local",
+                "--from-starter",
+                value,
+            ])
+            .unwrap_or_else(|error| panic!("{value} starter selection parses: {error}"));
+            assert!(matches!(
+                selected.command,
+                Commands::Compare {
+                    from_starter: Some(Some(actual)),
+                    from_project_dir: None,
+                    from_environment: None,
+                    ..
+                } if actual == expected
+            ));
+        }
 
         let same_project = Cli::try_parse_from([
             "registryctl",
@@ -3441,7 +3543,7 @@ mod semantic_comparison_cli_tests {
             Commands::Compare {
                 from_project_dir: None,
                 from_environment: Some(environment),
-                from_starter: false,
+                from_starter: None,
                 ..
             } if environment == "local"
         ));
@@ -3464,7 +3566,7 @@ mod semantic_comparison_cli_tests {
             Commands::Compare {
                 from_project_dir: Some(project),
                 from_environment: Some(environment),
-                from_starter: false,
+                from_starter: None,
                 ..
             } if project == std::path::Path::new("reviewed") && environment == "production"
         ));
@@ -3489,6 +3591,15 @@ mod semantic_comparison_cli_tests {
             "--from-starter",
             "--from-environment",
             "reviewed",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "registryctl",
+            "compare",
+            "--environment",
+            "local",
+            "--from-starter",
+            "unknown",
         ])
         .is_err());
     }

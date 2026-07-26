@@ -312,7 +312,7 @@ fn human_intent_sidecar_and_documentation_contracts_are_strict_schemas() {
     let intent_schema = compile_schema(&intent_schema_document);
     let intent = read_json(schema_root.join("project-authoring/documentation-intent.json"));
     assert_valid(&intent_schema, &intent, "documentation intent sidecar");
-    assert_eq!(intent["structural_reviews"].as_array().unwrap().len(), 171);
+    assert_eq!(intent["structural_reviews"].as_array().unwrap().len(), 178);
 
     for file in [
         "registry.project.configuration_reference.v1.schema.json",
@@ -437,11 +437,11 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
         CONFIGURATION_REFERENCE_COVERAGE_SCHEMA_ID
     );
     assert_eq!(coverage.coverage.schema_count, 7);
-    assert_eq!(coverage.coverage.path_count, 1677);
+    assert_eq!(coverage.coverage.path_count, 1736);
     assert_eq!(
         coverage.coverage.by_schema,
         [
-            (ConfigurationSchemaKind::Project, 160),
+            (ConfigurationSchemaKind::Project, 219),
             (ConfigurationSchemaKind::Environment, 191),
             (ConfigurationSchemaKind::Integration, 138),
             (ConfigurationSchemaKind::Fixture, 40),
@@ -456,22 +456,41 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
         coverage.coverage.by_path_kind,
         [
             (FieldPathKind::Root, 7),
-            (FieldPathKind::Property, 1_339),
-            (FieldPathKind::MapKey, 23),
-            (FieldPathKind::MapValue, 44),
-            (FieldPathKind::ArrayItem, 172),
-            (FieldPathKind::Branch, 92),
+            (FieldPathKind::Property, 1_391),
+            (FieldPathKind::MapKey, 24),
+            (FieldPathKind::MapValue, 45),
+            (FieldPathKind::ArrayItem, 175),
+            (FieldPathKind::Branch, 94),
         ]
         .into_iter()
         .collect(),
-        "the exact reviewed structural taxonomy remains 23 map keys, 44 map values, 172 array items, and 92 branches"
+        "the exact reviewed structural taxonomy remains 24 map keys, 45 map values, 175 array items, and 94 branches"
     );
-    assert_eq!(coverage.prose_required_count, 1677);
+    assert_eq!(coverage.reviewed_intent_assignment_required_count, 1736);
     assert_eq!(
-        coverage.prose_covered_count + coverage.missing_intent.len(),
-        coverage.prose_required_count
+        coverage.reviewed_intent_assignment_covered_count + coverage.missing_intent.len(),
+        coverage.reviewed_intent_assignment_required_count
     );
-    assert_eq!(coverage.prose_covered_count, 1677);
+    assert_eq!(coverage.reviewed_intent_assignment_covered_count, 1736);
+    assert!(
+        coverage.distinct_reviewed_intent_count < coverage.reviewed_intent_assignment_covered_count,
+        "assignment coverage must not imply one unique explanation per path"
+    );
+    assert!(
+        coverage.distinct_reviewed_intents_reused_count > 0
+            && coverage.reviewed_intent_assignments_using_reused_intent_count
+                > coverage.distinct_reviewed_intents_reused_count,
+        "the coverage report must expose reuse separately from assignment completeness"
+    );
+    assert_eq!(
+        (
+            coverage.distinct_reviewed_intent_count,
+            coverage.distinct_reviewed_intents_reused_count,
+            coverage.reviewed_intent_assignments_using_reused_intent_count,
+        ),
+        (566, 83, 1_253),
+        "the exact intent-text reuse baseline must change intentionally with reviewed documentation"
+    );
     assert_eq!(
         coverage.coverage.by_intent_profile.values().sum::<usize>(),
         1113,
@@ -514,7 +533,54 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
     let reference = documentation::embedded_configuration_reference()
         .expect("complete reviewed prose permits canonical reference generation");
     assert_eq!(reference.coverage, coverage.coverage);
-    assert_eq!(reference.fields.len(), coverage.prose_required_count);
+    assert_eq!(
+        reference.fields.len(),
+        coverage.reviewed_intent_assignment_required_count
+    );
+    assert_eq!(
+        reference.reference_baseline, coverage.reference_baseline,
+        "reference and coverage must publish the same unreleased baseline provenance"
+    );
+    assert_eq!(
+        reference.reference_baseline.generator_lifecycle,
+        documentation::GeneratorLifecycle::Unreleased
+    );
+    assert_eq!(
+        reference.reference_baseline.field_history_status,
+        documentation::FieldHistoryStatus::NotVerified
+    );
+    assert_eq!(reference.reference_baseline.published_release, None);
+    assert_eq!(
+        reference.reference_baseline.history_verification_method,
+        None
+    );
+    assert!(reference.reference_baseline.compared_releases.is_empty());
+    assert!(reference.fields.iter().all(|field| {
+        field.history_status == documentation::FieldHistoryStatus::NotVerified
+            && field.introduced_in.is_none()
+            && field.version_history.is_empty()
+            && field.default.source_version.is_none()
+    }));
+    let intent_counts =
+        reference
+            .fields
+            .iter()
+            .fold(BTreeMap::<&str, usize>::new(), |mut counts, field| {
+                *counts.entry(field.purpose.as_str()).or_default() += 1;
+                counts
+            });
+    assert_eq!(coverage.distinct_reviewed_intent_count, intent_counts.len());
+    assert_eq!(
+        coverage.distinct_reviewed_intents_reused_count,
+        intent_counts.values().filter(|count| **count > 1).count()
+    );
+    assert_eq!(
+        coverage.reviewed_intent_assignments_using_reused_intent_count,
+        intent_counts
+            .values()
+            .filter(|count| **count > 1)
+            .sum::<usize>()
+    );
     for removed in [
         "/$defs/recordAttributeReleaseProfile/properties/subject/properties/input",
         "/$defs/recordAttributeReleaseProfile/properties/response",
@@ -596,7 +662,7 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
             .fields
             .iter()
             .all(|field| !field.example.contains_country_values),
-        "all 1,677 documentation entries remain value-free"
+        "all configuration documentation entries remain value-free"
     );
     assert!(
         reference.fields.iter().all(|field| {
@@ -619,6 +685,12 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
         &reference_schema,
         &reference_value,
         "embedded configuration reference",
+    );
+    let mut fabricated_history = reference_value.clone();
+    fabricated_history["fields"][0]["introduced_in"] = json!("0.13.0");
+    assert!(
+        reference_schema.validate(&fabricated_history).is_err(),
+        "not-verified history cannot carry a fabricated introduced version"
     );
     let mut missing_runtime_key_path = reference_value;
     let runtime_field = missing_runtime_key_path["fields"]
@@ -656,8 +728,8 @@ fn coverage_gate_reports_drift_instead_of_deriving_prose_from_a_field_name() {
 
     let coverage = configuration_reference_coverage(&catalog, &schema, &intent)
         .expect("coverage report remains available when prose is missing");
-    assert_eq!(coverage.prose_required_count, 3);
-    assert_eq!(coverage.prose_covered_count, 2);
+    assert_eq!(coverage.reviewed_intent_assignment_required_count, 3);
+    assert_eq!(coverage.reviewed_intent_assignment_covered_count, 2);
     assert_eq!(coverage.missing_intent.len(), 1);
     assert_eq!(coverage.missing_intent[0].pointer, "/properties/mode");
     assert!(generate_configuration_reference(&catalog, &schema, &intent)
@@ -681,8 +753,8 @@ fn structural_taxonomy_requires_exact_path_reviews_and_rejects_invalid_reviews()
 
     let coverage = configuration_reference_coverage(&catalog, &schema, &intent)
         .expect("unreviewed structural paths produce an incomplete coverage report");
-    assert_eq!(coverage.prose_required_count, 10);
-    assert_eq!(coverage.prose_covered_count, 6);
+    assert_eq!(coverage.reviewed_intent_assignment_required_count, 10);
+    assert_eq!(coverage.reviewed_intent_assignment_covered_count, 6);
     assert_eq!(
         coverage
             .missing_intent

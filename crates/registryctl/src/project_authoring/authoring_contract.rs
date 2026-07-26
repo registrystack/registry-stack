@@ -3,6 +3,7 @@
 /// The pre-1.0 project authoring contract. Runtime artifacts may still lower
 /// this concise model into product-owned structures, but authored files never
 /// expose those structures.
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredIntegrationDocument {
@@ -20,6 +21,7 @@ struct AuthoredIntegrationDocument {
     not_applicable: AuthoredNotApplicableDeclaration,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredNotApplicableDeclaration {
@@ -29,6 +31,7 @@ struct AuthoredNotApplicableDeclaration {
     subject_mismatch: Option<AuthoredNotApplicableReason>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredNotApplicableReason {
@@ -36,6 +39,7 @@ struct AuthoredNotApplicableReason {
     request_fixture: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSourceDeclaration {
@@ -56,6 +60,7 @@ struct AuthoredSourceDeclaration {
     protocol: Option<AuthoredProtocolDeclaration>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSourceVersions {
@@ -65,6 +70,7 @@ struct AuthoredSourceVersions {
     unverified: Vec<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredProtocolDeclaration {
@@ -72,6 +78,7 @@ struct AuthoredProtocolDeclaration {
     signed_dci: Option<AuthoredSignedDciDeclaration>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSignedDciDeclaration {
@@ -86,6 +93,7 @@ struct AuthoredSignedDciDeclaration {
     selectors: BTreeMap<String, AuthoredDciSelectorBinding>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredDciSelectorBinding {
@@ -93,6 +101,7 @@ struct AuthoredDciSelectorBinding {
     response_pointer: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSourceAllowRule {
@@ -102,12 +111,14 @@ struct AuthoredSourceAllowRule {
     semantics: Option<AuthoredRequestSemantics>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredRequestSemantics {
     ReadOnly,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSourceResponse {
@@ -117,6 +128,7 @@ struct AuthoredSourceResponse {
     max_bytes: Option<AuthoredByteSize>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredResponseFormat {
@@ -128,6 +140,7 @@ fn default_authored_response_format() -> AuthoredResponseFormat {
     AuthoredResponseFormat::Json
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredInputDeclaration {
@@ -154,6 +167,7 @@ struct AuthoredInputDeclaration {
     canonicalization: Option<Canonicalization>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredInputRole {
@@ -161,6 +175,7 @@ enum AuthoredInputRole {
     Parameter,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 enum AuthoredSchemaType {
@@ -168,6 +183,7 @@ enum AuthoredSchemaType {
     Union(Vec<AuthoredScalarType>),
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredScalarType {
@@ -177,12 +193,14 @@ enum AuthoredScalarType {
     Null,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredStringFormat {
     Date,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum AuthoredCapabilityDeclaration {
@@ -194,24 +212,28 @@ enum AuthoredCapabilityDeclaration {
 // Each untagged union arm needs its own closed object. Putting
 // `deny_unknown_fields` only on the enum still lets serde select the first arm
 // when an author supplies keys from multiple capability variants.
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredHttpCapability {
     http: AuthoredHttpDeclaration,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredScriptCapability {
     script: AuthoredScriptDeclaration,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSnapshotCapability {
     snapshot: AuthoredSnapshotDeclaration,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredHttpDeclaration {
@@ -220,6 +242,7 @@ struct AuthoredHttpDeclaration {
     response: AuthoredHttpResponse,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredHttpRequest {
@@ -235,6 +258,7 @@ struct AuthoredHttpRequest {
     body: Option<Value>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredHttpResponse {
@@ -246,6 +270,7 @@ struct AuthoredHttpResponse {
     shape: Option<AuthoredHttpShape>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum AuthoredHttpShape {
@@ -256,12 +281,14 @@ enum AuthoredHttpShape {
     },
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredSingletonShape {
     Singleton,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredScriptDeclaration {
@@ -270,6 +297,7 @@ struct AuthoredScriptDeclaration {
     modules: Vec<PathBuf>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSnapshotDeclaration {
@@ -278,12 +306,14 @@ struct AuthoredSnapshotDeclaration {
     freshness: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredInputReference {
     input: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum AuthoredOutputsDeclaration {
@@ -291,6 +321,7 @@ enum AuthoredOutputsDeclaration {
     EntityFields(Vec<String>),
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredOutputDeclaration {
@@ -308,6 +339,7 @@ struct AuthoredOutputDeclaration {
     source: Option<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredLimitsDeclaration {
@@ -321,6 +353,7 @@ struct AuthoredLimitsDeclaration {
     deadline: Option<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 enum AuthoredByteSize {
@@ -354,6 +387,7 @@ impl AuthoredByteSize {
     }
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredFixtureDocument {
@@ -367,12 +401,14 @@ struct AuthoredFixtureDocument {
     expect: FixtureExpectation,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredFixtureClassification {
     Synthetic,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredFixtureInteraction {
@@ -380,6 +416,7 @@ struct AuthoredFixtureInteraction {
     respond: AuthoredFixtureResponse,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredFixtureRequest {
@@ -393,6 +430,7 @@ struct AuthoredFixtureRequest {
     body: Option<AuthoredFixtureBody>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum AuthoredFixtureResponse {
@@ -431,6 +469,7 @@ impl<'de> Deserialize<'de> for AuthoredFixtureResponse {
 // Response modes are exclusive in the published oneOf schema. Closed wrapper
 // objects keep the production decoder from silently choosing the HTTP arm for
 // a response that also declares `timeout`.
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredFixtureHttpResponse {
@@ -441,6 +480,7 @@ struct AuthoredFixtureHttpResponse {
     body: Option<AuthoredFixtureBody>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredFixtureTimeoutResponse {
@@ -456,6 +496,32 @@ enum AuthoredFixtureBody {
     Inline(Value),
 }
 
+#[cfg(test)]
+impl schemars::JsonSchema for AuthoredFixtureBody {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "AuthoredFixtureBody".into()
+    }
+
+    fn json_schema(
+        generator: &mut schemars::SchemaGenerator,
+    ) -> schemars::Schema {
+        let file_reference =
+            generator.subschema_for::<AuthoredFixtureBodyFile>();
+        schemars::json_schema!({
+            "oneOf": [
+                file_reference,
+                {
+                    "not": {
+                        "type": "object",
+                        "required": ["file"]
+                    }
+                }
+            ]
+        })
+    }
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredFixtureBodyFile {

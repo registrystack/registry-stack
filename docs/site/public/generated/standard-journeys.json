@@ -148,34 +148,34 @@
         "code": "relay.startup.config_document_invalid",
         "family": "relay_process_startup",
         "product": "registry_relay",
-        "meaning": "The Relay configuration document could not be parsed.",
-        "remediation": "Check the configuration encoding, syntax, fields, and environment expressions.",
+        "meaning": "A Relay configuration or metadata document does not match its required syntax or typed schema.",
+        "remediation": "Compare the authored input with the current Relay schema, run authored-project validation when generated, correct the document, regenerate generated Relay input, then retry.",
         "docs_anchor": "/reference/diagnostics/operator/#registry_relay--config-document-invalid",
         "lifecycle": "unreleased",
         "introduced_in": null,
-        "evidence_limitation": "The category does not disclose parser excerpts, environment names, local paths, or supplied values."
+        "evidence_limitation": "The category does not disclose parser excerpts, field paths, local paths, or supplied values. It does not claim field-level diagnostics were emitted."
       },
       {
         "code": "relay.startup.config_validation_rejected",
         "family": "relay_process_startup",
         "product": "registry_relay",
         "meaning": "The parsed Relay configuration failed product validation.",
-        "remediation": "Correct the configuration and its governed runtime bindings, then retry.",
+        "remediation": "Run the authored-project validator, correct its field-addressed issues and governed bindings, regenerate the Relay input, then retry.",
         "docs_anchor": "/reference/diagnostics/operator/#registry_relay--config-validation-rejected",
         "lifecycle": "unreleased",
         "introduced_in": null,
         "evidence_limitation": "The category does not disclose configured identifiers, URLs, environment names, hashes, or source values."
       },
       {
-        "code": "relay.startup.listener_unavailable",
+        "code": "relay.startup.data_listener_unavailable",
         "family": "relay_process_startup",
         "product": "registry_relay",
-        "meaning": "A configured Relay listener could not be opened.",
-        "remediation": "Check listener availability and process permissions, then retry.",
-        "docs_anchor": "/reference/diagnostics/operator/#registry_relay--listener-unavailable",
+        "meaning": "Relay could not open the configured data-plane listener.",
+        "remediation": "Check interface availability, address-family support, and deployment networking for server.bind in its owning input; regenerate generated Relay input, then retry.",
+        "docs_anchor": "/reference/diagnostics/operator/#registry_relay--data-listener-unavailable",
         "lifecycle": "unreleased",
         "introduced_in": null,
-        "evidence_limitation": "The category does not disclose addresses, ports, or operating-system errors."
+        "evidence_limitation": "The fallback category names server.bind but does not disclose its address, port, or operating-system error."
       },
       {
         "code": "relay.startup.doctor_failed",
@@ -432,22 +432,22 @@
     },
     "troubleshooting": [
       {
-        "code": "relay.startup.listener_unavailable",
+        "code": "relay.startup.data_listener_unavailable",
         "family": "relay_process_startup",
         "product": "registry_relay",
-        "meaning": "A configured Relay listener could not be opened.",
-        "remediation": "Check listener availability and process permissions, then retry.",
-        "docs_anchor": "/reference/diagnostics/operator/#registry_relay--listener-unavailable",
+        "meaning": "Relay could not open the configured data-plane listener.",
+        "remediation": "Check interface availability, address-family support, and deployment networking for server.bind in its owning input; regenerate generated Relay input, then retry.",
+        "docs_anchor": "/reference/diagnostics/operator/#registry_relay--data-listener-unavailable",
         "lifecycle": "unreleased",
         "introduced_in": null,
-        "evidence_limitation": "The category does not disclose addresses, ports, or operating-system errors."
+        "evidence_limitation": "The fallback category names server.bind but does not disclose its address, port, or operating-system error."
       },
       {
         "code": "relay.startup.config_validation_rejected",
         "family": "relay_process_startup",
         "product": "registry_relay",
         "meaning": "The parsed Relay configuration failed product validation.",
-        "remediation": "Correct the configuration and its governed runtime bindings, then retry.",
+        "remediation": "Run the authored-project validator, correct its field-addressed issues and governed bindings, regenerate the Relay input, then retry.",
         "docs_anchor": "/reference/diagnostics/operator/#registry_relay--config-validation-rejected",
         "lifecycle": "unreleased",
         "introduced_in": null,

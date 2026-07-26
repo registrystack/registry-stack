@@ -30,6 +30,8 @@ type ReferenceField = (typeof reference.fields)[number] & {
     schema_value?: unknown;
     reviewed_behavior?: string;
   };
+  history_status: string;
+  introduced_in: string | null;
   intent_profile?: string;
   local_reference?: {
     pointer: string;
@@ -40,15 +42,36 @@ const fields = reference.fields as ReferenceField[];
 if (
   coverage.status !== 'complete' ||
   coverage.missing_intent.length !== 0 ||
-  coverage.prose_covered_count !== coverage.prose_required_count
+  coverage.reviewed_intent_assignment_covered_count !==
+    coverage.reviewed_intent_assignment_required_count
 ) {
   throw new Error('generated authoring reference has incomplete reviewed-intent coverage');
+}
+if (
+  reference.reference_baseline.generator_lifecycle !== 'unreleased' ||
+  reference.reference_baseline.published_release !== null ||
+  reference.reference_baseline.field_history_status !== 'not_verified' ||
+  reference.reference_baseline.history_verification_method !== null ||
+  reference.reference_baseline.compared_releases.length !== 0
+) {
+  throw new Error('generated authoring reference has unsupported release-history provenance');
 }
 if (
   reference.coverage.path_count !== coverage.coverage.path_count ||
   fields.length !== coverage.coverage.path_count
 ) {
   throw new Error('generated authoring reference and coverage report have drifted');
+}
+if (
+  fields.some(
+    (field) =>
+      field.history_status !== 'not_verified' ||
+      field.introduced_in !== null ||
+      field.version_history.length !== 0 ||
+      Object.hasOwn(field.default, 'source_version'),
+  )
+) {
+  throw new Error('generated authoring reference contains unverified release-history values');
 }
 
 const fieldsBySchema = Object.fromEntries(
@@ -100,8 +123,22 @@ const base = import.meta.env.BASE_URL === '/' ? '' : import.meta.env.BASE_URL.re
       <dd>{coverage.coverage.path_count}</dd>
     </div>
     <div>
-      <dt>Reviewed intent</dt>
-      <dd>{coverage.prose_covered_count} of {coverage.prose_required_count}</dd>
+      <dt>Reviewed intent assignments</dt>
+      <dd>
+        {coverage.reviewed_intent_assignment_covered_count} of{' '}
+        {coverage.reviewed_intent_assignment_required_count}
+      </dd>
+    </div>
+    <div>
+      <dt>Distinct reviewed intents</dt>
+      <dd>{coverage.distinct_reviewed_intent_count}</dd>
+    </div>
+    <div>
+      <dt>Reused reviewed intents</dt>
+      <dd>
+        {coverage.distinct_reviewed_intents_reused_count} texts across{' '}
+        {coverage.reviewed_intent_assignments_using_reused_intent_count} assignments
+      </dd>
     </div>
     <div>
       <dt>Country workspace reads</dt>
@@ -114,6 +151,11 @@ const base = import.meta.env.BASE_URL === '/' ? '' : import.meta.env.BASE_URL.re
   Project, environment, integration, fixture, and entity sections describe human-authored country
   files. Relay and Notary sections describe generated product runtime contracts. The reviewed intent
   sidecars are documentation knowledge only and are not runtime configuration.
+</p>
+<p>
+  Assignment coverage means that every documented path resolves to reviewed intent. It does not mean
+  that every path has unique prose. Reviewed profiles and structural taxonomy intentionally reuse
+  intent text across paths with the same operational meaning.
 </p>
 
 {
@@ -217,8 +259,8 @@ const base = import.meta.env.BASE_URL === '/' ? '' : import.meta.env.BASE_URL.re
                 <dd>{words(field.stability)}</dd>
               </div>
               <div>
-                <dt>Introduced</dt>
-                <dd><code>{field.introduced_in}</code></dd>
+                <dt>Release history</dt>
+                <dd>Not verified</dd>
               </div>
               <div>
                 <dt>Migration</dt>

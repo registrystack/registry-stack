@@ -325,14 +325,19 @@ def classify(
             "crates/registry-relay/src/process_startup.rs",
             "crates/registry-relay/src/server.rs",
             "crates/registryctl/src/main.rs",
+            "crates/registryctl/src/project_authoring/capability_inventory.rs",
             "crates/registryctl/src/project_authoring/diagnostic_reference.rs",
             "crates/registryctl/src/project_authoring/diagnostics.rs",
-            "crates/registryctl/src/project_authoring/fixture_diagnostics.rs",
-            "crates/registryctl/src/project_authoring/preflight.rs",
             "crates/registryctl/src/project_authoring/documentation.rs",
+            "crates/registryctl/src/project_authoring/fixture_diagnostics.rs",
+            "crates/registryctl/src/project_authoring/fixture_coverage.rs",
             "crates/registryctl/src/project_authoring/knowledge.rs",
+            "crates/registryctl/src/project_authoring/migration.rs",
             "crates/registryctl/src/project_authoring/output.rs",
+            "crates/registryctl/src/project_authoring/preflight.rs",
+            "crates/registryctl/src/project_authoring/promotion.rs",
             "crates/registryctl/src/project_authoring/report_contract.rs",
+            "crates/registryctl/src/project_authoring/semantic_comparison.rs",
             "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
             "schemas/registry-notary.config.schema.json",
             "schemas/registry-relay.config.schema.json",
@@ -389,6 +394,9 @@ def classify(
     tutorial_source_under_test = any(
         matches(
             path,
+            "crates/registry-notary/src/*",
+            "crates/registry-notary-core/src/*",
+            "crates/registry-notary-server/src/*",
             "crates/registryctl/src/templates/*",
         )
         or path
