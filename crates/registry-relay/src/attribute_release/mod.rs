@@ -4,9 +4,9 @@
 //! Registry Relay evaluates two kinds of operator-authored CEL expressions for
 //! identity attribute release:
 //!
-//! * **release predicates** (e.g. `deceased == false`) that gate whether a
+//! * **release predicates** (e.g. `source.deceased == false`) that gate whether a
 //!   subject's claims may be released at all, and
-//! * **computed claim scalars** (e.g. `given_name + ' ' + surname`) that derive
+//! * **computed claim scalars** (e.g. `source.given_name + ' ' + source.surname`) that derive
 //!   a single claim value from a subject's source fields.
 //!
 //! Rather than introduce a second expression language, this module reuses the
@@ -64,7 +64,8 @@ pub use disabled::{
 mod enabled {
     use super::AttributeReleaseError;
 
-    use std::collections::HashMap;
+    use cel::common::ast::{EntryExpr, Expr, IdedExpr};
+    use std::collections::{BTreeSet, HashMap};
     use std::sync::{Arc, RwLock};
 
     use serde_json::{json, Value};
@@ -241,8 +242,101 @@ mod enabled {
     /// expression that does not compile is rejected before the runtime serves
     /// any request.
     pub fn validate_release_expression(cel: &str) -> Result<(), AttributeReleaseError> {
+        validate_expression_authority(cel)?;
         let runtime = MappingRuntime::new(RuntimeOptions::default());
         compile(&runtime, cel).map(|_| ())
+    }
+
+    /// Restrict release expressions to the projected `source` object. The
+    /// Crosswalk runtime also offers a `context` object, but Relay does not
+    /// define an attribute-release authority contract for it. Rejecting any
+    /// other member root at config load prevents raw Relay configuration from
+    /// acquiring capabilities that Registryctl-authored profiles do not have.
+    fn validate_expression_authority(cel: &str) -> Result<(), AttributeReleaseError> {
+        let roots = cel_member_roots(cel)
+            .map_err(|()| AttributeReleaseError::Compile("kind=authority".to_string()))?;
+        if roots != BTreeSet::from(["source".to_string()]) {
+            return Err(AttributeReleaseError::Compile("kind=authority".to_string()));
+        }
+        Ok(())
+    }
+
+    /// Collect global CEL roots from the parsed expression while excluding
+    /// comprehension variables introduced by CEL collection macros.
+    /// This mirrors Registryctl's authoring validator so direct Relay config and
+    /// generated config enforce the same source-only authority boundary.
+    fn cel_member_roots(expression: &str) -> Result<BTreeSet<String>, ()> {
+        let program = cel::Program::compile(expression).map_err(|_| ())?;
+        let mut roots = BTreeSet::new();
+        collect_cel_roots(program.expression(), &BTreeSet::new(), &mut roots);
+        Ok(roots)
+    }
+
+    fn collect_cel_roots(
+        expression: &IdedExpr,
+        locals: &BTreeSet<String>,
+        roots: &mut BTreeSet<String>,
+    ) {
+        match &expression.expr {
+            Expr::Unspecified | Expr::Literal(_) => {}
+            Expr::Ident(name) => {
+                if !name.starts_with('@') && !locals.contains(name) {
+                    roots.insert(name.clone());
+                }
+            }
+            Expr::Select(select) => collect_cel_roots(&select.operand, locals, roots),
+            Expr::Call(call) => {
+                if let Some(target) = &call.target {
+                    collect_cel_roots(target, locals, roots);
+                }
+                for argument in &call.args {
+                    collect_cel_roots(argument, locals, roots);
+                }
+            }
+            Expr::List(list) => {
+                for element in &list.elements {
+                    collect_cel_roots(element, locals, roots);
+                }
+            }
+            Expr::Map(map) => {
+                for entry in &map.entries {
+                    collect_cel_entry_roots(&entry.expr, locals, roots);
+                }
+            }
+            Expr::Struct(value) => {
+                for entry in &value.entries {
+                    collect_cel_entry_roots(&entry.expr, locals, roots);
+                }
+            }
+            Expr::Comprehension(comprehension) => {
+                collect_cel_roots(&comprehension.iter_range, locals, roots);
+                collect_cel_roots(&comprehension.accu_init, locals, roots);
+
+                let mut scoped_locals = locals.clone();
+                scoped_locals.insert(comprehension.iter_var.clone());
+                if let Some(iter_var) = &comprehension.iter_var2 {
+                    scoped_locals.insert(iter_var.clone());
+                }
+                scoped_locals.insert(comprehension.accu_var.clone());
+                collect_cel_roots(&comprehension.loop_cond, &scoped_locals, roots);
+                collect_cel_roots(&comprehension.loop_step, &scoped_locals, roots);
+                collect_cel_roots(&comprehension.result, &scoped_locals, roots);
+            }
+        }
+    }
+
+    fn collect_cel_entry_roots(
+        entry: &EntryExpr,
+        locals: &BTreeSet<String>,
+        roots: &mut BTreeSet<String>,
+    ) {
+        match entry {
+            EntryExpr::StructField(field) => collect_cel_roots(&field.value, locals, roots),
+            EntryExpr::MapEntry(entry) => {
+                collect_cel_roots(&entry.key, locals, roots);
+                collect_cel_roots(&entry.value, locals, roots);
+            }
+        }
     }
 
     /// Evaluate a release **predicate** over a subject record. Fails closed:
@@ -440,6 +534,79 @@ mod enabled {
             assert!(matches!(err, AttributeReleaseError::Compile(_)));
             // PII-free: the rendered message carries no expression text.
             assert!(!err.to_string().contains("given_name"));
+        }
+
+        #[test]
+        fn expression_authority_rejects_context_members() {
+            let err = validate_release_expression("context.subject == source.subject")
+                .expect_err("context authority must be rejected");
+            assert!(matches!(err, AttributeReleaseError::Compile(_)));
+            assert!(!err.to_string().contains("subject"));
+
+            let err = validate_release_expression("source.subject == context [\"subject\"]")
+                .expect_err("bracketed context authority must be rejected");
+            assert!(matches!(err, AttributeReleaseError::Compile(_)));
+        }
+
+        #[test]
+        fn expression_authority_ignores_member_decoys_in_strings() {
+            validate_release_expression(
+                "source.given_name == 'context.secret' || source.given_name == \"request.value\"",
+            )
+            .expect("quoted member-like text is not authority");
+        }
+
+        #[test]
+        fn expression_authority_ignores_member_decoys_and_quotes_in_comments() {
+            validate_release_expression(
+                r#"source.active // context.secret ' "unterminated
+"#,
+            )
+            .expect("line-comment contents are not authority or string syntax");
+
+            let err =
+                validate_release_expression("source.active // request.value\n || context.secret")
+                    .expect_err("authority on the next line must still be rejected");
+            assert!(matches!(err, AttributeReleaseError::Compile(_)));
+        }
+
+        #[test]
+        fn expression_authority_accepts_nested_and_method_member_chains() {
+            for expression in [
+                "source.person.name == 'Ada'",
+                "source.name.startsWith('A')",
+                "source['person'].name == 'Ada'",
+                "source . context == 'profile-field'",
+            ] {
+                validate_release_expression(expression).unwrap_or_else(|_| {
+                    panic!("source-only expression must compile: {expression}")
+                });
+            }
+        }
+
+        #[test]
+        fn expression_authority_scopes_cel_macro_locals() {
+            let expression = "source.items.exists(item, item.active)";
+            assert_eq!(
+                cel_member_roots(expression).expect("CEL roots parse"),
+                BTreeSet::from(["source".to_string()])
+            );
+            validate_release_expression(expression).expect("macro local derives from source");
+
+            assert_eq!(
+                cel_member_roots(
+                    "source.items.exists(item, item.active) && item.secret == 'outside'"
+                )
+                .expect("CEL roots parse"),
+                BTreeSet::from(["item".to_string(), "source".to_string()])
+            );
+        }
+
+        #[test]
+        fn expression_authority_rejects_unterminated_strings() {
+            let err = validate_release_expression("source.given_name == 'unterminated")
+                .expect_err("unterminated string must be rejected");
+            assert!(matches!(err, AttributeReleaseError::Compile(_)));
         }
 
         #[test]

@@ -2,7 +2,7 @@
 #![cfg(not(feature = "attribute-release"))]
 
 //! Guardrail for binaries built without the CEL-backed attribute-release adapter
-//! (`cargo build`, the 1.0 default feature shape). The
+//! (`cargo build --no-default-features`, the deliberately minimal shape). The
 //! `attribute_release_profiles` field is parsed in every build, but profiles are
 //! rejected unless the `attribute-release` feature is explicitly enabled so the
 //! default binary cannot accept config for routes it does not mount.
@@ -108,9 +108,8 @@ datasets:
             title: Civil identity bundle
             description: Minimised identity claims.
             purpose: identity
-            release_scope: civil_registry:release
+            release_scope: civil_registry:identity_release
             subject:
-              input: subject_token
               source_field: national_id
               id_type: NATIONAL_ID
             claims:

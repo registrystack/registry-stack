@@ -23,6 +23,13 @@ IMAGE_REF = "example.invalid/registry-relay@sha256:" + "a" * 64
 SOURCE = "https://github.com/registrystack/registry-stack"
 REVISION = "b" * 40
 VERSION = "v0.12.0"
+RELAY_FEATURE_LABEL = "org.registrystack.registry-relay.features"
+RELAY_FEATURES = (
+    Path(__file__).resolve().parents[2]
+    / "crates"
+    / "registry-relay"
+    / "canonical-release-features.txt"
+).read_text(encoding="utf-8").strip()
 BUILDKIT_IMAGE = (
     "moby/buildkit:v0.31.2@sha256:"
     "2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
@@ -317,6 +324,57 @@ class ReleaseImageOciLabelsTest(unittest.TestCase):
         self.assertIn("org.opencontainers.image.revision", stderr)
         self.assertIn("expected exactly", stderr)
 
+    def test_additional_expected_label_is_verified(self) -> None:
+        labels = {
+            "org.opencontainers.image.source": SOURCE,
+            "org.opencontainers.image.revision": REVISION,
+            "org.opencontainers.image.version": VERSION,
+            RELAY_FEATURE_LABEL: RELAY_FEATURES,
+        }
+
+        result, _, stderr, _ = self.run_with_inspect(
+            stdout=config_json(labels),
+            extra_args=[
+                "--expected-label",
+                f"{RELAY_FEATURE_LABEL}={RELAY_FEATURES}",
+            ],
+        )
+
+        self.assertEqual(0, result, stderr)
+
+    def test_missing_additional_expected_label_is_rejected(self) -> None:
+        labels = {
+            "org.opencontainers.image.source": SOURCE,
+            "org.opencontainers.image.revision": REVISION,
+            "org.opencontainers.image.version": VERSION,
+        }
+
+        result, _, stderr, _ = self.run_with_inspect(
+            stdout=config_json(labels),
+            extra_args=[
+                "--expected-label",
+                f"{RELAY_FEATURE_LABEL}={RELAY_FEATURES}",
+            ],
+        )
+
+        self.assertEqual(1, result)
+        self.assertIn(RELAY_FEATURE_LABEL, stderr)
+
+    def test_malformed_additional_expected_label_is_rejected(self) -> None:
+        result, _, stderr, _ = self.run_with_inspect(
+            stdout=config_json(
+                {
+                    "org.opencontainers.image.source": SOURCE,
+                    "org.opencontainers.image.revision": REVISION,
+                    "org.opencontainers.image.version": VERSION,
+                }
+            ),
+            extra_args=["--expected-label", "missing-separator"],
+        )
+
+        self.assertEqual(1, result)
+        self.assertIn("KEY=VALUE", stderr)
+
     def test_format_template_override_is_passed_to_docker(self) -> None:
         result, _, stderr, run = self.run_with_inspect(
             returncode=1,
@@ -401,6 +459,10 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertNotIn("--provenance=false", result.stdout)
+        self.assertIn(
+            f"<{RELAY_FEATURE_LABEL}={RELAY_FEATURES}>",
+            result.stdout,
+        )
 
     def test_retained_oci_layout_disables_timestamped_provenance(self) -> None:
         result = self.run_wrapper(
@@ -598,6 +660,21 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                     Path(layout.removeprefix("oci-layout://")).name
                     for layout in inspected_layouts
                 },
+            )
+            relay_checks = [
+                call
+                for call in python_calls
+                if call
+                and call[0].endswith("check-release-image-oci-labels.py")
+                and len(call) > 1
+                and "correct-registry-relay-first" in call[1]
+                and "--format-template" not in call
+            ]
+            self.assertEqual(1, len(relay_checks))
+            self.assertIn("--expected-label", relay_checks[0])
+            self.assertIn(
+                f"{RELAY_FEATURE_LABEL}={RELAY_FEATURES}",
+                relay_checks[0],
             )
             comparisons = [
                 call

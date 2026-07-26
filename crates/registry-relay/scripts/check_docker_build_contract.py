@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -71,24 +72,99 @@ def forbid_documented_unpinned_build_context(path: Path) -> list[str]:
     ]
 
 
+def check_feature_profile_script(path: Path) -> list[str]:
+    failures: list[str] = []
+    cases = [
+        ("", True),
+        ("attribute-release,crosswalk-runtime", True),
+        ("crosswalk-runtime,standards-cel-mapping", True),
+        ("ogcapi-edr", True),
+        ("attribute-release", True),
+        ("standards-cel-mapping", True),
+        ("attribute-release,crosswalk-runtime,attribute-release", False),
+        ("crosswalk-runtime,attribute-release", False),
+        ("attribute-release crosswalk-runtime", False),
+    ]
+    for profile, expected_success in cases:
+        result = subprocess.run(
+            ["sh", str(path), profile],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        succeeded = result.returncode == 0
+        if succeeded != expected_success:
+            expected = "accept" if expected_success else "reject"
+            failures.append(
+                f"{path.relative_to(ROOT)}: expected to {expected} feature profile "
+                f"{profile!r}: {result.stderr.strip()}"
+            )
+    return failures
+
+
+def check_feature_profile(path: Path, profile: str) -> list[str]:
+    result = subprocess.run(
+        ["sh", str(path), profile],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return []
+    return [
+        f"{path.relative_to(ROOT)}: canonical release feature profile "
+        f"{profile!r} is invalid: {result.stderr.strip()}"
+    ]
+
+
 def main() -> int:
     dockerfile = ROOT / "Dockerfile"
     build_script = ROOT / "scripts" / "build-image.sh"
+    feature_profile_script = ROOT / "scripts" / "validate-feature-profile.sh"
+    canonical_feature_profile = (
+        ROOT / "canonical-release-features.txt"
+    ).read_text(encoding="utf-8").strip()
     docs = [ROOT / "README.md", ROOT / "docs" / "ops.md"]
 
     failures: list[str] = []
+    failures.extend(check_feature_profile_script(feature_profile_script))
+    failures.extend(
+        check_feature_profile(feature_profile_script, canonical_feature_profile)
+    )
     failures.extend(
         require(
             dockerfile,
-            'ARG REGISTRY_RELAY_FEATURES=""',
-            "empty-by-default feature build arg",
+            f'ARG REGISTRY_RELAY_FEATURES="{canonical_feature_profile}"',
+            "canonical feature build arg",
         )
     )
     failures.extend(
         require(
             dockerfile,
-            'cargo build --release --locked --features "$REGISTRY_RELAY_FEATURES"',
+            'REGISTRY_RELAY_FEATURES="$REGISTRY_RELAY_FEATURES" \\\n'
+            '            cargo build --release --locked --no-default-features --features "$REGISTRY_RELAY_FEATURES"',
             "feature-enabled cargo build path",
+        )
+    )
+    failures.extend(
+        require(
+            dockerfile,
+            "COPY scripts/validate-feature-profile.sh ./scripts/validate-feature-profile.sh",
+            "feature profile validator copy",
+        )
+    )
+    failures.extend(
+        require(
+            dockerfile,
+            "COPY build.rs build_support.rs ./",
+            "Cargo-derived compiled feature inventory",
+        )
+    )
+    failures.extend(
+        require(
+            dockerfile,
+            'sh scripts/validate-feature-profile.sh "$REGISTRY_RELAY_FEATURES"',
+            "feature profile syntax validation",
         )
     )
     failures.extend(
@@ -101,8 +177,15 @@ def main() -> int:
     failures.extend(
         require(
             dockerfile,
-            "cargo build --release --locked",
-            "default cargo build path",
+            'REGISTRY_RELAY_FEATURES="" cargo build --release --locked --no-default-features',
+            "explicit minimal cargo build path",
+        )
+    )
+    failures.extend(
+        require(
+            dockerfile,
+            'LABEL org.registrystack.registry-relay.features="${REGISTRY_RELAY_FEATURES}"',
+            "compiled feature metadata label",
         )
     )
     failures.extend(

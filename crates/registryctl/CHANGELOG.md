@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Attribute-release project authoring now emits the stable Relay profile
+  contract with required purpose, exact subject type, and exact-one lookup
+  semantics. It rejects non-portable profile version path segments and Relay
+  cross-field prerequisites before product activation.
+
+### Removed
+
+- Removed the unused attribute-release subject input and response cache-age
+  fields from project authoring. Generated profiles remain non-storable and do
+  not opt into source metadata disclosure.
+
 ## [0.13.0] - 2026-07-25
 
 ### Changed

@@ -8,6 +8,7 @@ import argparse
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -48,6 +49,7 @@ SECRET_COPY_RE = re.compile(
 )
 CONST_STR_RE = re.compile(r'const\s+([A-Z][A-Z0-9_]*)\s*:\s*&str\s*=\s*"([^"]+)"\s*;')
 OPENAPI_HTTP_METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}
+RELEASE_FEATURE_RE = re.compile(r"^[a-z0-9-]+$")
 
 # Keep this empty unless a static OpenAPI operation is intentionally broader
 # than the security exposure manifest. Each entry must explain why the drift is
@@ -82,6 +84,61 @@ def load_json(path: Path) -> object:
         fail(f"missing required file: {path.relative_to(ROOT)}")
     except json.JSONDecodeError as exc:
         fail(f"{path.relative_to(ROOT)} is not valid JSON: {exc}")
+
+
+def load_release_features() -> set[str]:
+    cargo_path = ROOT / "Cargo.toml"
+    profile_path = ROOT / "canonical-release-features.txt"
+    try:
+        document = tomllib.loads(cargo_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        fail("missing required file: Cargo.toml")
+    except tomllib.TOMLDecodeError as exc:
+        fail(f"Cargo.toml is not valid TOML: {exc}")
+
+    features = document.get("features")
+    if not isinstance(features, dict):
+        fail("Cargo.toml must contain a [features] table")
+
+    try:
+        profile = profile_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        fail("missing required file: canonical-release-features.txt")
+    release_features = profile.split(",") if profile else []
+    if (
+        not release_features
+        or any(not RELEASE_FEATURE_RE.fullmatch(feature) for feature in release_features)
+        or len(set(release_features)) != len(release_features)
+        or release_features != sorted(release_features)
+    ):
+        fail(
+            "canonical-release-features.txt must contain unique, sorted, "
+            "comma-separated Cargo feature names"
+        )
+
+    enabled = set(release_features)
+    unknown = sorted(enabled - features.keys())
+    if unknown:
+        fail(
+            "canonical-release-features.txt names unknown Cargo features: "
+            f"{unknown}"
+        )
+    missing_dependencies: set[str] = set()
+    for feature in enabled:
+        members = features[feature]
+        if not isinstance(members, list) or not all(
+            isinstance(member, str) for member in members
+        ):
+            fail(f"Cargo.toml feature {feature} must name a feature list")
+        missing_dependencies.update(
+            member for member in members if member in features and member not in enabled
+        )
+    if missing_dependencies:
+        fail(
+            "canonical-release-features.txt must explicitly include transitive "
+            f"product features: {sorted(missing_dependencies)}"
+        )
+    return enabled
 
 
 def fail(message: str) -> None:
@@ -126,6 +183,7 @@ def validate_manifest() -> None:
     manifest = load_json(SECURITY_DIR / "exposure-manifest.json")
     inventory = load_json(SECURITY_DIR / "route-inventory.json")
     allowlist = load_allowlist(SECURITY_DIR / "auth-none-allowlist.yml")
+    release_features = load_release_features()
 
     if not isinstance(manifest, dict) or manifest.get("service") != "registry-relay":
         fail("exposure-manifest.json must describe service registry-relay")
@@ -150,7 +208,7 @@ def validate_manifest() -> None:
         check_value(entry, "stability", STABILITY)
         check_value(entry, "data_classification", DATA)
         check_value(entry, "source", SOURCES)
-        validate_stability(entry)
+        validate_stability(entry, release_features)
         if entry["method"] not in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}:
             fail(f"{entry['path']} has invalid method {entry['method']}")
         if not isinstance(entry["scopes"], list):
@@ -199,11 +257,20 @@ def validate_manifest() -> None:
     validate_route_sources(inventory)
 
 
-def validate_stability(entry: dict) -> None:
-    if entry["feature"] is not None and entry["stability"] != "experimental":
+def validate_stability(
+    entry: dict, release_features: set[str] | None = None
+) -> None:
+    release_features = release_features or set()
+    feature = entry["feature"]
+    if (
+        feature is not None
+        and feature not in release_features
+        and entry["stability"] != "experimental"
+    ):
         fail(
-            f"{entry['path']} is feature-gated but has stability "
-            f"{entry['stability']}; the 1.0 optional surfaces are experimental"
+            f"{entry['path']} is gated by optional feature {feature} but has "
+            f"stability {entry['stability']}; the 1.0 optional surfaces are "
+            "experimental"
         )
     if key(entry) in CORE_STABLE_ROUTE_KEYS and entry["stability"] != "stable":
         fail(
@@ -413,6 +480,7 @@ def check_openapi_strategy() -> None:
 def check_openapi_manifest_coverage(path: Path) -> None:
     manifest = load_json(SECURITY_DIR / "exposure-manifest.json")
     document = load_json(path)
+    release_features = load_release_features()
     if not isinstance(manifest, dict) or not isinstance(document, dict):
         fail("OpenAPI coverage inputs must be JSON objects")
     endpoints = manifest.get("endpoints")
@@ -432,14 +500,16 @@ def check_openapi_manifest_coverage(path: Path) -> None:
             fail("endpoint entries must be objects")
         op_key = (openapi_path_shape(str(entry.get("path"))), str(entry.get("method")))
         manifest_ops.setdefault(op_key, []).append(entry)
-        if entry.get("openapi") is True and is_default_openapi_entry(entry):
+        if entry.get("openapi") is True and is_release_openapi_entry(
+            entry, release_features
+        ):
             manifest_openapi_ops.add(op_key)
 
     missing = sorted(
         (entry["method"], entry["path"])
         for entry in endpoints
         if entry.get("openapi")
-        and is_default_openapi_entry(entry)
+        and is_release_openapi_entry(entry, release_features)
         and (openapi_path_shape(entry["path"]), entry["method"]) not in openapi_op_keys
     )
     if missing:
@@ -478,8 +548,11 @@ def check_openapi_manifest_coverage(path: Path) -> None:
         )
 
 
-def is_default_openapi_entry(entry: dict) -> bool:
-    return entry.get("feature") is None
+def is_release_openapi_entry(
+    entry: dict, release_features: set[str] | None = None
+) -> bool:
+    feature = entry.get("feature")
+    return feature is None or feature in (release_features or set())
 
 
 def openapi_path_shape(path: str) -> str:

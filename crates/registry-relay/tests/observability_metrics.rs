@@ -359,6 +359,24 @@ async fn metrics_requires_metrics_scope_on_admin_listener() {
 }
 
 #[tokio::test]
+async fn capabilities_report_the_compiled_cargo_feature_set() {
+    let fixture = build_fixture();
+
+    let response = fixture
+        .admin
+        .get("/admin/v1/capabilities")
+        .add_header("x-api-key", OPS_TOKEN)
+        .await;
+
+    response.assert_status(StatusCode::OK);
+    let body: serde_json::Value = response.json();
+    assert_eq!(
+        body["cargo_features"],
+        serde_json::json!(registry_relay::compiled_cargo_features())
+    );
+}
+
+#[tokio::test]
 async fn denied_admin_and_metrics_requests_do_not_leak_privileged_surfaces() {
     let fixture = build_fixture();
 

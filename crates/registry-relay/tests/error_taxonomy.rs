@@ -123,6 +123,8 @@ fn all_variants() -> Vec<Error> {
         // query.*
         Error::Query(QueryError::CursorInvalid),
         // release.*
+        Error::Release(ReleaseError::InvalidRequest),
+        Error::Release(ReleaseError::UnsupportedMediaType),
         Error::Release(ReleaseError::ProfileNotFound),
         Error::Release(ReleaseError::SubjectInvalid),
         Error::Release(ReleaseError::SubjectNotFound),
@@ -288,6 +290,11 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
         ("spatial.crs_unsupported", StatusCode::BAD_REQUEST),
         ("query.cursor_invalid", StatusCode::BAD_REQUEST),
         // release.*
+        ("release.invalid_request", StatusCode::BAD_REQUEST),
+        (
+            "release.unsupported_media_type",
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
         ("release.profile_not_found", StatusCode::NOT_FOUND),
         ("release.subject_invalid", StatusCode::BAD_REQUEST),
         // SubjectNotFound, SubjectAmbiguous, SubjectReleaseDenied, ClaimUnavailable
@@ -545,6 +552,14 @@ async fn error_into_response_attaches_error_code_extension() {
         ("internal.timeout", Error::Internal(InternalError::Timeout)),
         // release.*: non-collapsed variants carry their own public code.
         (
+            "release.invalid_request",
+            Error::Release(ReleaseError::InvalidRequest),
+        ),
+        (
+            "release.unsupported_media_type",
+            Error::Release(ReleaseError::UnsupportedMediaType),
+        ),
+        (
             "release.profile_not_found",
             Error::Release(ReleaseError::ProfileNotFound),
         ),
@@ -666,6 +681,8 @@ fn audit_code_differs_from_public_code_for_collapsed_variants() {
 
     // Non-collapsed variants: audit_code() == code().
     let non_collapsed = [
+        ReleaseError::InvalidRequest,
+        ReleaseError::UnsupportedMediaType,
         ReleaseError::ProfileNotFound,
         ReleaseError::SubjectInvalid,
         ReleaseError::SourceUnavailable,

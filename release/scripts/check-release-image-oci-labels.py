@@ -169,6 +169,7 @@ def require_oci_labels(
     image_ref: str,
     config: dict[str, Any],
     expected: dict[str, str],
+    expected_labels: dict[str, str],
 ) -> None:
     if "Labels" not in config:
         raise CheckError(
@@ -197,6 +198,33 @@ def require_oci_labels(
                 f"{actual!r}; expected exactly {wanted!r}"
             )
 
+    for label, wanted in expected_labels.items():
+        if label not in labels:
+            raise CheckError(
+                f"image config Labels for {image_ref!r} is missing required "
+                f"label {label!r}"
+            )
+        actual = labels[label]
+        if actual != wanted:
+            raise CheckError(
+                f"image label {label!r} for {image_ref!r} has value "
+                f"{actual!r}; expected exactly {wanted!r}"
+            )
+
+
+def parse_expected_labels(values: Sequence[str]) -> dict[str, str]:
+    expected: dict[str, str] = {}
+    for value in values:
+        label, separator, wanted = value.partition("=")
+        if not separator or not label:
+            raise CheckError(
+                f"expected label must have the form KEY=VALUE, got {value!r}"
+            )
+        if label in expected:
+            raise CheckError(f"expected label {label!r} was provided more than once")
+        expected[label] = wanted
+    return expected
+
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -206,6 +234,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source", required=True, help="Expected OCI source label")
     parser.add_argument("--revision", required=True, help="Expected OCI revision label")
     parser.add_argument("--version", required=True, help="Expected OCI version label")
+    parser.add_argument(
+        "--expected-label",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Additional image label and exact value to verify; repeatable",
+    )
     parser.add_argument(
         "--format-template",
         default=DEFAULT_FORMAT_TEMPLATE,
@@ -218,6 +253,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         config = inspect_image_config(args.image_ref, args.format_template)
+        expected_labels = parse_expected_labels(args.expected_label)
         require_oci_labels(
             args.image_ref,
             config,
@@ -226,6 +262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "revision": args.revision,
                 "version": args.version,
             },
+            expected_labels,
         )
     except CheckError as error:
         print(f"error: {error}", file=sys.stderr)

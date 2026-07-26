@@ -1448,6 +1448,18 @@ fn validate_record_attribute_release_profiles(
     entity: &EntityDefinition,
     fields: &BTreeSet<&str>,
 ) -> Result<()> {
+    if !api.attribute_release_profiles.is_empty()
+        && !api.required_principal_filters.is_empty()
+    {
+        bail!(
+            "attribute release profiles cannot use required principal filters because the caller-supplied subject cannot satisfy a principal-bound filter"
+        );
+    }
+    if !api.attribute_release_profiles.is_empty() && api.pagination.max_limit < 2 {
+        bail!(
+            "attribute release profiles require records pagination max_limit of at least 2 to detect ambiguous subjects"
+        );
+    }
     let projected = api
         .projection
         .iter()
@@ -1459,14 +1471,18 @@ fn validate_record_attribute_release_profiles(
                 "attribute release profile id must match [a-z][a-z0-9_-]{{0,95}}"
             );
         }
-        validate_token(&profile.version, "attribute release profile version", 64)?;
+        validate_release_version(&profile.version, "attribute release profile version")?;
         if let Some(title) = &profile.title {
             validate_authored_text(title, "attribute release profile title")?;
         }
         if let Some(description) = &profile.description {
             validate_authored_text(description, "attribute release profile description")?;
         }
-        validate_token(&profile.purpose, "attribute release profile purpose", 256)?;
+        validate_header_token(
+            &profile.purpose,
+            "attribute release profile purpose",
+            256,
+        )?;
         if !api.purposes.contains(&profile.purpose) {
             bail!("attribute release profile purpose must be a records API permitted purpose");
         }
@@ -1487,8 +1503,6 @@ fn validate_record_attribute_release_profiles(
         ) {
             bail!("{collision}");
         }
-        validate_input_name(&profile.subject.input)
-            .context("attribute release subject input is invalid")?;
         validate_token(
             &profile.subject.id_type,
             "attribute release subject id_type",
@@ -1532,13 +1546,6 @@ fn validate_record_attribute_release_profiles(
         }
         if !has_required_claim {
             bail!("attribute release profiles require at least one required claim");
-        }
-        if profile
-            .response
-            .max_age_seconds
-            .is_some_and(|seconds| !(1..=3600).contains(&seconds))
-        {
-            bail!("attribute release response max_age_seconds must be between 1 and 3600");
         }
     }
     Ok(())

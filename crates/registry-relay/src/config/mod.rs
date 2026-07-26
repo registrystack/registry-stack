@@ -54,6 +54,7 @@ pub use loader::{
 };
 
 pub(crate) const MAX_AUDIT_PSEUDONYM_MATERIALS: usize = 32;
+pub(crate) const MAX_ATTRIBUTE_RELEASE_CLAIMS: usize = 32;
 pub(crate) const MAX_CONSULTATION_SOURCE_CREDENTIALS: usize = 128;
 
 /// Root configuration document. Parsed from YAML at startup.
@@ -1624,10 +1625,9 @@ pub struct EntityConfig {
 /// A governed identity attribute-release profile. A profile is a
 /// projection-limited, exactly-one-subject lookup that maps a configured set of
 /// source fields (or CEL-computed expressions) into a minimised
-/// OIDC/UserInfo-style claim bundle. It is *optionally* purpose-bound: a profile
-/// that declares a `purpose` requires a matching `data-purpose` at resolve time;
-/// one that omits it does not. Identified globally by the `(id, version)` pair;
-/// both are required path segments at resolve time.
+/// OIDC/UserInfo-style claim bundle. Every profile is purpose-bound and requires
+/// a matching `data-purpose` at resolve time. Identified globally by the
+/// `(id, version)` pair; both are required path segments at resolve time.
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AttributeReleaseProfile {
@@ -1640,17 +1640,15 @@ pub struct AttributeReleaseProfile {
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
-    /// Data-purpose this profile is bound to. Required (and must be a member
-    /// of the entity's `governed_policy.permitted_purposes`) when the backing
-    /// entity declares any permitted purposes.
-    #[serde(default)]
-    pub purpose: Option<String>,
-    /// Dataset-bound scope a caller must hold to invoke this release. Must
-    /// differ from the entity's `read_scope`.
+    /// Data-purpose this profile is bound to. When the backing entity declares
+    /// `governed_policy.permitted_purposes`, this must be a member.
+    pub purpose: String,
+    /// Dataset-bound scope a caller must hold to invoke this release. The
+    /// stable profile is exactly `<dataset_id>:identity_release`.
     pub release_scope: String,
     /// How the subject is identified and looked up.
     pub subject: ReleaseSubjectConfig,
-    /// Optional CEL release-condition gate evaluated before projection.
+    /// Optional CEL release-condition gate evaluated over the redacted row.
     #[serde(default)]
     pub release_conditions: Option<ReleaseConditionsConfig>,
     /// Claims released on success. Non-empty; at least one `required`.
@@ -1664,39 +1662,18 @@ pub struct AttributeReleaseProfile {
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseSubjectConfig {
-    /// Request input that carries the subject identifier.
-    pub input: String,
     /// Source field used to match the subject. Must be an exposed entity field.
     pub source_field: String,
-    /// Optional accepted identifier type label.
-    #[serde(default)]
-    pub id_type: Option<String>,
-    /// Expected subject cardinality. Defaults to exactly one.
-    #[serde(default = "default_subject_cardinality")]
-    pub cardinality: SubjectCardinality,
+    /// Accepted identifier type label.
+    pub id_type: String,
 }
 
-/// Expected number of subjects a release lookup may match.
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SubjectCardinality {
-    One,
-    Many,
-}
-
-fn default_subject_cardinality() -> SubjectCardinality {
-    SubjectCardinality::One
-}
-
-/// CEL release-condition gate. When present, the predicate must hold before
-/// any claim is projected; failure fails closed (subject denied).
+/// CEL release-condition gate. When present, the predicate must hold over the
+/// governed-redacted row before any claim is projected; failure fails closed.
 #[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseConditionsConfig {
     pub expression: ReleaseExpressionConfig,
-    /// Optional internal audit code for a release-condition denial.
-    #[serde(default)]
-    pub denied_code: Option<String>,
 }
 
 /// A single CEL expression evaluated over the subject's source projection.
@@ -1732,13 +1709,6 @@ pub struct ReleaseClaimConfig {
     /// Optional locale hint.
     #[serde(default)]
     pub locale: Option<String>,
-    /// Whether the claim may be shared downstream. Defaults to true.
-    #[serde(default = "default_claim_shareable")]
-    pub shareable: bool,
-}
-
-fn default_claim_shareable() -> bool {
-    true
 }
 
 /// Closed privacy-sensitivity classification for a released claim. This is a
@@ -1760,9 +1730,6 @@ pub struct ReleaseResponseConfig {
     /// Whether to include profile-sourced metadata in the response body.
     #[serde(default)]
     pub include_source_metadata: bool,
-    /// Optional cache lifetime hint for the released bundle, in seconds.
-    #[serde(default)]
-    pub max_age_seconds: Option<u64>,
 }
 
 pub const CRS84: &str = "http://www.opengis.net/def/crs/OGC/1.3/CRS84";
@@ -2384,20 +2351,9 @@ state_plane:
     }
 
     #[test]
-    fn default_subject_cardinality_is_one() {
-        assert_eq!(default_subject_cardinality(), SubjectCardinality::One);
-    }
-
-    #[test]
-    fn default_claim_shareable_is_true() {
-        assert!(default_claim_shareable());
-    }
-
-    #[test]
     fn release_response_config_default_is_minimal() {
         let response = ReleaseResponseConfig::default();
         assert!(!response.include_source_metadata);
-        assert_eq!(response.max_age_seconds, None);
     }
 
     #[test]

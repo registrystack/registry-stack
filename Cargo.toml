@@ -88,6 +88,7 @@ axum-test = { version = "20" }
 base64 = { version = "0.22" }
 bytes = { version = "1" }
 calamine = { version = "0.36" }
+cel = { version = "0.13" }
 chrono = { version = "0.4" }
 clap = { version = "4", features = ["derive", "env"] }
 crc32fast = { version = "1.4" }

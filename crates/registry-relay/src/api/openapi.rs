@@ -16,7 +16,9 @@ use crate::api::governed::{
 };
 use crate::audit::ErrorCodeExt;
 use crate::auth::Principal;
-use crate::config::{AuthMode, Config, DatasetConfig, EntityConfig, FilterOp};
+use crate::config::{
+    AuthMode, Config, DatasetConfig, EntityConfig, FilterOp, MAX_ATTRIBUTE_RELEASE_CLAIMS,
+};
 use crate::entity::EntityRegistry;
 use crate::error::{AuthError, Error};
 // Reads the local `CatalogDocument`, not `registry-manifest-core`'s
@@ -1797,7 +1799,7 @@ fn tag_definitions(catalog: &CatalogDocument, config: &Config) -> Value {
         tags.push(json!({
             "name": TAG_ATTRIBUTE_RELEASE,
             "description": "Projection-limited, exactly-one-subject identity attribute \
-                            release; a profile is purpose-bound when it declares a purpose. \
+                            release; every profile is purpose-bound. \
                             Returns only the approved claim bundle for a named release \
                             profile; never a raw registry row.",
         }));
@@ -4151,23 +4153,33 @@ fn insert_attribute_release_paths(paths: &mut Map<String, Value>) {
                         }
                     },
                     "400": problem_response(
-                        "Invalid request: malformed body, unknown id_type, empty claims list, \
-                         or unsupported media type."
+                        "Invalid request: missing Data-Purpose header, malformed or \
+                         schema-invalid body, unknown id_type, or invalid claims list."
                     ),
                     "401": problem_response("Missing or invalid bearer credential."),
                     "403": problem_response(
-                        "Subject denied: not found, ambiguous, release condition not met, \
-                         or required claim unavailable. The response does not distinguish \
-                         these cases."
+                        "Purpose denied, or subject denied because it was not found, was \
+                         ambiguous, failed the release condition, or lacked a required claim. \
+                         The response does not distinguish subject-denial cases."
                     ),
                     "404": problem_response(
-                        "Profile not found. Does not confirm whether the profile ever existed."
+                        "Profile not found or not visible to the authenticated principal. \
+                         Does not confirm whether the profile ever existed."
+                    ),
+                    "415": problem_response(
+                        "Unsupported media type: request body must be application/json."
                     ),
                     "503": problem_response("Source unavailable."),
                     "default": problem_response("Problem Details error response."),
                 }
             }
         }),
+    );
+    add_header_parameter(
+        paths,
+        "/v1/attribute-releases/{profile_id}/versions/{version}/resolve",
+        "post",
+        attribute_release_purpose_header_parameter(),
     );
     add_value_bound_trust_header_parameters(
         paths,
@@ -5145,6 +5157,25 @@ fn purpose_header_parameter_with_required(required: bool) -> Value {
     })
 }
 
+fn attribute_release_purpose_header_parameter() -> Value {
+    json!({
+        "name": "Data-Purpose",
+        "in": "header",
+        "required": true,
+        "description": "Purpose of use. The value must exactly match the selected \
+                        attribute-release profile's purpose and is checked before any source \
+                        read. A missing value returns `400 auth.purpose_required`; a mismatched \
+                        value returns `403 auth.purpose_denied`. Header names are \
+                        case-insensitive (`Data-Purpose` and `data-purpose` are equivalent).",
+        "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+        },
+        "example": "identity_verification",
+    })
+}
+
 fn value_bound_trust_header_parameter(name: &str, scope_field: &str) -> Value {
     json!({
         "name": name,
@@ -5237,31 +5268,29 @@ fn attribute_release_profile_schema() -> Value {
         "description": "A governed identity attribute-release profile. Identifies the release \
                         scope, accepted subject id types, and the claim names that will be \
                         returned on a successful resolve.",
-        "required": ["profile_id", "version", "release_scope", "claim_names", "required_claims",
-                     "accepted_subject_id_types", "response_media_type"],
+        "required": ["id", "version", "purpose", "release_scope", "claim_names",
+                     "required_claims", "accepted_subject_id_types", "response_media_type"],
         "properties": {
-            "profile_id": {
+            "id": {
                 "type": "string",
-                "description": "Profile identifier, lower-snake. Globally unique with `version`."
+                "description": "Profile identifier, lower-snake or lower-kebab. Globally unique \
+                                with `version`."
             },
             "version": {
                 "type": "string",
-                "description": "Profile version. Globally unique with `profile_id`."
+                "description": "Profile version. Globally unique with `id`."
             },
             "title": {
-                "type": "string",
-                "description": "Human-readable profile title.",
-                "nullable": true
+                "type": ["string", "null"],
+                "description": "Human-readable profile title."
             },
             "description": {
-                "type": "string",
-                "description": "Human-readable profile description.",
-                "nullable": true
+                "type": ["string", "null"],
+                "description": "Human-readable profile description."
             },
             "purpose": {
                 "type": "string",
-                "description": "Data-purpose IRI this profile is bound to.",
-                "nullable": true
+                "description": "Data-purpose token or IRI this profile is bound to."
             },
             "accepted_subject_id_types": {
                 "type": "array",
@@ -5310,19 +5339,25 @@ fn attribute_release_resolve_request_schema() -> Value {
                         "description": "Subject identifier type (e.g. `national_id`, `passport`)."
                     },
                     "value": {
-                        "type": "string",
-                        "description": "Subject identifier value. Never logged or echoed in responses."
+                        "type": ["string", "number", "boolean"],
+                        "description": "Non-blank scalar subject identifier value. String, number, \
+                                        and boolean values are matched without coercion. Never \
+                                        logged or echoed in responses."
                     }
                 },
                 "additionalProperties": false
             },
             "claims": {
-                "type": "array",
+                "type": ["array", "null"],
                 "description": "Optional subset of claim names to return. Absent means the \
                                 profile default set; an empty array is rejected (400); \
-                                any unknown claim name is denied.",
+                                duplicate or over-bound arrays are rejected (400); any \
+                                explicit subset must include every required claim; any unknown \
+                                claim name is denied.",
                 "items": { "type": "string" },
-                "nullable": true
+                "minItems": 1,
+                "maxItems": MAX_ATTRIBUTE_RELEASE_CLAIMS,
+                "uniqueItems": true
             }
         },
         "additionalProperties": false,
@@ -5346,11 +5381,6 @@ fn attribute_release_resolve_response_schema() -> Value {
             "profile_version": {
                 "type": "string",
                 "description": "Version of the release profile used to resolve this response."
-            },
-            "purpose": {
-                "type": "string",
-                "description": "Data-purpose IRI bound to this release profile.",
-                "nullable": true
             },
             "claims": {
                 "type": "object",
@@ -5382,8 +5412,8 @@ fn attribute_release_resolve_response_schema() -> Value {
                     },
                     "cardinality": {
                         "type": "string",
-                        "description": "Subject cardinality expectation from the profile.",
-                        "enum": ["one", "many"]
+                        "description": "Stable attribute release always requires exactly one subject.",
+                        "enum": ["one"]
                     },
                     "checked_at": {
                         "type": "string",
@@ -5409,7 +5439,7 @@ mod tests {
     #[cfg(feature = "attribute-release")]
     use crate::config::{
         AttributeReleaseProfile, ClaimSensitivity, ReleaseClaimConfig, ReleaseResponseConfig,
-        ReleaseSubjectConfig, SubjectCardinality,
+        ReleaseSubjectConfig,
     };
     use crate::metadata::catalog::{CatalogLinks, DatasetLinks, EntityLinks};
 
@@ -5463,13 +5493,11 @@ mod tests {
                 description: Some(
                     "Minimal identity claims for an authenticator plugin.".to_string(),
                 ),
-                purpose: None,
+                purpose: "identity_verification".to_string(),
                 release_scope: "social_registry:identity_release".to_string(),
                 subject: ReleaseSubjectConfig {
-                    input: "individual_id".to_string(),
                     source_field: "id".to_string(),
-                    id_type: Some("national_id".to_string()),
-                    cardinality: SubjectCardinality::One,
+                    id_type: "national_id".to_string(),
                 },
                 release_conditions: None,
                 claims: vec![ReleaseClaimConfig {
@@ -5480,11 +5508,9 @@ mod tests {
                     sensitivity: Some(ClaimSensitivity::DirectIdentifier),
                     format: None,
                     locale: None,
-                    shareable: false,
                 }],
                 response: ReleaseResponseConfig {
                     include_source_metadata: false,
-                    max_age_seconds: Some(300),
                 },
             });
     }
@@ -6422,6 +6448,23 @@ mod tests {
             resolve_op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
             "#/components/schemas/AttributeReleaseResolveResponse"
         );
+        let purpose = resolve_op["parameters"]
+            .as_array()
+            .expect("resolve parameters")
+            .iter()
+            .find(|parameter| parameter["name"] == "Data-Purpose")
+            .expect("resolve must declare Data-Purpose");
+        assert_eq!(purpose["in"], "header");
+        assert_eq!(purpose["required"], true);
+        assert_eq!(purpose["schema"]["minLength"], 1);
+        assert_eq!(purpose["schema"]["maxLength"], 256);
+        assert!(
+            purpose["description"]
+                .as_str()
+                .expect("purpose description")
+                .contains("exactly match"),
+            "purpose parameter must document profile binding"
+        );
         assert_value_bound_trust_headers(resolve_op);
         // Standard denial responses must be present
         assert!(
@@ -6435,6 +6478,10 @@ mod tests {
         assert!(
             resolve_op["responses"]["404"].is_object(),
             "404 must be present"
+        );
+        assert!(
+            resolve_op["responses"]["415"].is_object(),
+            "415 must be present"
         );
         assert!(
             resolve_op["responses"]["503"].is_object(),
@@ -6461,12 +6508,26 @@ mod tests {
             schemas.contains_key("AttributeReleaseResolveResponse"),
             "AttributeReleaseResolveResponse schema must be present"
         );
+        assert_eq!(
+            schemas["AttributeReleaseResolveRequest"]["properties"]["subject"]["properties"]
+                ["value"]["type"],
+            json!(["string", "number", "boolean"]),
+            "subject value must document every runtime-supported scalar type"
+        );
+        let claims_schema = &schemas["AttributeReleaseResolveRequest"]["properties"]["claims"];
+        assert_eq!(claims_schema["minItems"], 1);
+        assert_eq!(
+            claims_schema["maxItems"],
+            json!(MAX_ATTRIBUTE_RELEASE_CLAIMS)
+        );
+        assert_eq!(claims_schema["uniqueItems"], true);
 
         // Required fields on AttributeReleaseProfile schema
         let profile_required = &schemas["AttributeReleaseProfile"]["required"];
         for field in [
-            "profile_id",
+            "id",
             "version",
+            "purpose",
             "release_scope",
             "claim_names",
             "required_claims",

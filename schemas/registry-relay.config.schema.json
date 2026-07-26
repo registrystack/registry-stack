@@ -409,7 +409,7 @@
     },
     "AttributeReleaseProfile": {
       "additionalProperties": false,
-      "description": "A governed identity attribute-release profile. A profile is a\nprojection-limited, exactly-one-subject lookup that maps a configured set of\nsource fields (or CEL-computed expressions) into a minimised\nOIDC/UserInfo-style claim bundle. It is *optionally* purpose-bound: a profile\nthat declares a `purpose` requires a matching `data-purpose` at resolve time;\none that omits it does not. Identified globally by the `(id, version)` pair;\nboth are required path segments at resolve time.",
+      "description": "A governed identity attribute-release profile. A profile is a\nprojection-limited, exactly-one-subject lookup that maps a configured set of\nsource fields (or CEL-computed expressions) into a minimised\nOIDC/UserInfo-style claim bundle. Every profile is purpose-bound and requires\na matching `data-purpose` at resolve time. Identified globally by the\n`(id, version)` pair; both are required path segments at resolve time.",
       "properties": {
         "claims": {
           "description": "Claims released on success. Non-empty; at least one `required`.",
@@ -430,12 +430,8 @@
           "type": "string"
         },
         "purpose": {
-          "default": null,
-          "description": "Data-purpose this profile is bound to. Required (and must be a member\nof the entity's `governed_policy.permitted_purposes`) when the backing\nentity declares any permitted purposes.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "Data-purpose this profile is bound to. When the backing entity declares\n`governed_policy.permitted_purposes`, this must be a member.",
+          "type": "string"
         },
         "release_conditions": {
           "anyOf": [
@@ -446,10 +442,10 @@
               "type": "null"
             }
           ],
-          "description": "Optional CEL release-condition gate evaluated before projection."
+          "description": "Optional CEL release-condition gate evaluated over the redacted row."
         },
         "release_scope": {
-          "description": "Dataset-bound scope a caller must hold to invoke this release. Must\ndiffer from the entity's `read_scope`.",
+          "description": "Dataset-bound scope a caller must hold to invoke this release. The\nstable profile is exactly `<dataset_id>:identity_release`.",
           "type": "string"
         },
         "response": {
@@ -475,6 +471,7 @@
       "required": [
         "id",
         "version",
+        "purpose",
         "release_scope",
         "subject",
         "claims"
@@ -2485,11 +2482,6 @@
           ],
           "description": "Optional privacy sensitivity label."
         },
-        "shareable": {
-          "default": true,
-          "description": "Whether the claim may be shared downstream. Defaults to true.",
-          "type": "boolean"
-        },
         "source_field": {
           "default": null,
           "description": "Source field projected into the claim. XOR with `expression`.",
@@ -2506,16 +2498,8 @@
     },
     "ReleaseConditionsConfig": {
       "additionalProperties": false,
-      "description": "CEL release-condition gate. When present, the predicate must hold before\nany claim is projected; failure fails closed (subject denied).",
+      "description": "CEL release-condition gate. When present, the predicate must hold over the\ngoverned-redacted row before any claim is projected; failure fails closed.",
       "properties": {
-        "denied_code": {
-          "default": null,
-          "description": "Optional internal audit code for a release-condition denial.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "expression": {
           "$ref": "#/$defs/ReleaseExpressionConfig"
         }
@@ -2546,17 +2530,6 @@
           "default": false,
           "description": "Whether to include profile-sourced metadata in the response body.",
           "type": "boolean"
-        },
-        "max_age_seconds": {
-          "default": null,
-          "description": "Optional cache lifetime hint for the released bundle, in seconds.",
-          "format": "uint64",
-          "maximum": 18446744073709551615,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
         }
       },
       "type": "object"
@@ -2565,20 +2538,8 @@
       "additionalProperties": false,
       "description": "Subject-identification controls for an attribute-release profile.",
       "properties": {
-        "cardinality": {
-          "$ref": "#/$defs/SubjectCardinality",
-          "description": "Expected subject cardinality. Defaults to exactly one."
-        },
         "id_type": {
-          "default": null,
-          "description": "Optional accepted identifier type label.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "input": {
-          "description": "Request input that carries the subject identifier.",
+          "description": "Accepted identifier type label.",
           "type": "string"
         },
         "source_field": {
@@ -2587,8 +2548,8 @@
         }
       },
       "required": [
-        "input",
-        "source_field"
+        "source_field",
+        "id_type"
       ],
       "type": "object"
     },
@@ -3275,14 +3236,6 @@
         }
       },
       "type": "object"
-    },
-    "SubjectCardinality": {
-      "description": "Expected number of subjects a release lookup may match.",
-      "enum": [
-        "one",
-        "many"
-      ],
-      "type": "string"
     },
     "Suppression": {
       "description": "Disclosure suppression strategy.",

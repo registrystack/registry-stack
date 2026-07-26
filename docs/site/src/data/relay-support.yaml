@@ -267,16 +267,29 @@
 - id: attribute-release
   name: Attribute release
   category: adapter
-  stability_tier: experimental
-  support_owner: none
-  feature_frozen: true
-  canonical_release: false
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
   cargo_features: [attribute-release]
-  openapi_policy: excluded
-  decision_date: "2026-07-19"
-  decision_reference: https://github.com/registrystack/registry-stack/issues/305
+  openapi_policy: included
+  decision_date: "2026-07-25"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/487
   evidence: crates/registry-relay/tests/attribute_release_api.rs
-  notes: Source and all-feature tests remain, but the adapter is outside the 1.0 compatibility promise.
+  notes: Governed, purpose-bound, exactly-one-subject release is part of the canonical 1.0 contract.
+- id: crosswalk-runtime
+  name: Crosswalk runtime
+  category: runtime
+  stability_tier: stable
+  support_owner: registry-relay
+  feature_frozen: false
+  canonical_release: true
+  cargo_features: [crosswalk-runtime]
+  openapi_policy: not_applicable
+  decision_date: "2026-07-25"
+  decision_reference: https://github.com/registrystack/registry-stack/issues/487
+  evidence: crates/registry-relay/src/attribute_release/mod.rs
+  notes: The canonical runtime dependency supports bounded attribute-release CEL evaluation.
 - id: parquet-source-input
   name: Parquet source input
   category: source_decoder

@@ -8,6 +8,7 @@ use std::io::{Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
+use cel::common::ast::{EntryExpr, Expr, IdedExpr};
 use clap::ValueEnum;
 use registry_notary_core::{config::StatePostgresqlConfig, StandaloneRegistryNotaryConfig};
 use registry_platform_crypto::{canonicalize_json, parse_json_strict};

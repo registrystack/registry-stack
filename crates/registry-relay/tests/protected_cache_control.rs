@@ -159,9 +159,9 @@ datasets:
             version: v1
             title: Individual identity bundle
             description: Minimal bundle for cache-control coverage.
+            purpose: identity
             release_scope: social_registry:identity_release
             subject:
-              input: subject_token
               source_field: id
               id_type: INDIVIDUAL_ID
             release_conditions:
@@ -364,6 +364,7 @@ async fn attribute_release_family_carries_single_cache_control_header() {
     let resp = server
         .post("/v1/attribute-releases/individual_identity/versions/v1/resolve")
         .add_header("Authorization", format!("Bearer {API_KEY}"))
+        .add_header("data-purpose", "identity")
         .json(&json!({ "subject": { "id_type": "INDIVIDUAL_ID", "value": "ind-1" } }))
         .await;
     resp.assert_status_ok();

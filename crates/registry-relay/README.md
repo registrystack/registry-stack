@@ -23,15 +23,16 @@ Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Regis
 
 ## 1.0 Support Roster
 
-The canonical 1.0 release has no optional Relay Cargo features enabled. Stable
-support covers OpenAPI 3.x and RFC 9457 errors; RFC 9727 and portable DCAT,
-DCAT-AP, BRegDCAT-AP, JSON-LD, SHACL, JSON Schema, ODRL, and link-free OGC
-Records metadata; CSV and XLSX source input; and JSON aggregate output.
+The canonical 1.0 release enables the `attribute-release` and
+`crosswalk-runtime` Relay Cargo features. Stable support covers governed
+attribute release; OpenAPI 3.x and RFC 9457 errors; RFC 9727 and portable
+DCAT, DCAT-AP, BRegDCAT-AP, JSON-LD, SHACL, JSON Schema, ODRL, and link-free
+OGC Records metadata; CSV and XLSX source input; and JSON aggregate output.
 
 CSV, XLSX, and Parquet are source decoders. Aggregate output supports JSON,
 CSV, and SDMX-JSON. The live OGC API Records adapter, OGC API Features, OGC API
 EDR, SP DCI routes, standards-CEL mapping, CSV and SDMX-JSON aggregate output,
-attribute release, and Parquet source input are experimental and feature-frozen.
+and Parquet source input are experimental and feature-frozen.
 Experimental surfaces are outside the 1.0 compatibility promise. Feature-gated
 source and all-feature tests remain available. Non-feature-gated experimental
 formats remain shipped but unstable to avoid breaking existing configurations.
@@ -105,7 +106,20 @@ registry-stack root.
 scripts/build-image.sh registry-relay:local
 ```
 
-The production image is distroless, non-root, and built with no optional Cargo features; standards-enabled images opt in through `REGISTRY_RELAY_FEATURES`. Build steps, sibling-checkout requirements, and promotion gates are in [docs/ops.md](docs/ops.md#build-and-release); image publication, tagging, and signing policy are in [docs/security-assurance.md](docs/security-assurance.md). Release images publish to `ghcr.io/registrystack/registry-relay` from stable `vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags; consume release tags or digests, not `latest`, for rollback guarantees. `Dockerfile.demo` is demo-only and is not release evidence.
+The production image is distroless, non-root, and built with the feature set in
+[`canonical-release-features.txt`](canonical-release-features.txt), currently
+`attribute-release,crosswalk-runtime`. A custom
+`REGISTRY_RELAY_FEATURES` value replaces that exact set. Custom profiles must
+list product features in alphabetical order and include Cargo's complete
+transitive feature closure. Incomplete, unordered, or duplicate profiles fail
+the image build before an inaccurate feature label can be published. Build steps, sibling-checkout
+requirements, and promotion gates are in
+[docs/ops.md](docs/ops.md#build-and-release); image publication, tagging, and
+signing policy are in [docs/security-assurance.md](docs/security-assurance.md).
+Release images publish to `ghcr.io/registrystack/registry-relay` from stable
+`vX.Y.Z` tags and `registry-stack-technical-preview-<date-or-version>` tags;
+consume release tags or digests, not `latest`, for rollback guarantees.
+`Dockerfile.demo` is demo-only and is not release evidence.
 
 ## Operating With Registry Notary
 

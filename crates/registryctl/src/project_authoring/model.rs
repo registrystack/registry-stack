@@ -403,9 +403,8 @@ struct RecordsApiDeclaration {
 
 /// A project-authored, entity-bound identity release. The project compiler
 /// deliberately exposes only the minimizing subset used by Registry Relay:
-/// exact-one subject resolution, purpose binding, typed claim selection, and
-/// a bounded private cache lifetime. Source metadata disclosure is not an
-/// authoring option and is always disabled in the generated Relay config.
+/// exact-one subject resolution, purpose binding, and typed claim selection.
+/// Source metadata disclosure and response caching are not authoring options.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordAttributeReleaseProfile {
@@ -419,14 +418,11 @@ struct RecordAttributeReleaseProfile {
     subject: RecordAttributeReleaseSubject,
     release_conditions: RecordAttributeReleaseConditions,
     claims: BTreeMap<String, RecordAttributeReleaseClaim>,
-    #[serde(default)]
-    response: RecordAttributeReleaseResponse,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordAttributeReleaseSubject {
-    input: String,
     source_field: String,
     id_type: String,
 }
@@ -461,13 +457,6 @@ enum RecordAttributeReleaseSensitivity {
     Personal,
     Public,
     Pseudonymous,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct RecordAttributeReleaseResponse {
-    #[serde(default)]
-    max_age_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that the release Relay binary keeps optional API surfaces disabled."""
+"""Verify the exact canonical Relay release feature profile."""
 
 from __future__ import annotations
 
@@ -8,10 +8,13 @@ import sys
 from pathlib import Path
 
 
-DISABLED_FEATURE_MARKERS: dict[str, bytes] = {
+ENABLED_FEATURE_MARKERS: dict[str, bytes] = {
     "attribute-release": (
-        b"attribute_release_profiles require the attribute-release feature"
+        b"/v1/attribute-releases/{profile_id}/versions/{version}/resolve"
     ),
+}
+
+DISABLED_FEATURE_MARKERS: dict[str, bytes] = {
     "ogcapi-features": (
         b"entity declares OGC API Features spatial config but binary was built "
         b"without the ogcapi-features feature"
@@ -19,6 +22,12 @@ DISABLED_FEATURE_MARKERS: dict[str, bytes] = {
     "spdci-api-standards": (
         b"standards.spdci is configured but binary was built without the "
         b"spdci-api-standards feature"
+    ),
+}
+
+FORBIDDEN_FEATURE_MARKERS: dict[str, bytes] = {
+    "attribute-release": (
+        b"attribute_release_profiles require the attribute-release feature"
     ),
 }
 
@@ -35,15 +44,37 @@ def check_binary(path: Path) -> None:
     if not payload.startswith(b"\x7fELF"):
         raise FeatureCheckError(f"release Relay binary is not an ELF executable: {path}")
 
-    missing = [
+    missing_enabled = [
+        feature
+        for feature, marker in ENABLED_FEATURE_MARKERS.items()
+        if marker not in payload
+    ]
+    if missing_enabled:
+        raise FeatureCheckError(
+            "release Relay binary does not prove these canonical features are "
+            f"enabled: {', '.join(missing_enabled)}"
+        )
+
+    missing_disabled = [
         feature
         for feature, marker in DISABLED_FEATURE_MARKERS.items()
         if marker not in payload
     ]
-    if missing:
+    if missing_disabled:
         raise FeatureCheckError(
             "release Relay binary does not prove these optional features are "
-            f"disabled: {', '.join(missing)}"
+            f"disabled: {', '.join(missing_disabled)}"
+        )
+
+    forbidden = [
+        feature
+        for feature, marker in FORBIDDEN_FEATURE_MARKERS.items()
+        if marker in payload
+    ]
+    if forbidden:
+        raise FeatureCheckError(
+            "release Relay binary contains feature-disabled markers for canonical "
+            f"features: {', '.join(forbidden)}"
         )
 
 
@@ -60,8 +91,9 @@ def main(argv: list[str] | None = None) -> int:
     except FeatureCheckError as error:
         print(f"release Relay feature check failed: {error}", file=sys.stderr)
         return 1
-    features = ", ".join(DISABLED_FEATURE_MARKERS)
-    print(f"verified disabled release Relay features: {features}")
+    enabled = ", ".join(ENABLED_FEATURE_MARKERS)
+    disabled = ", ".join(DISABLED_FEATURE_MARKERS)
+    print(f"verified canonical release Relay features: enabled={enabled}; disabled={disabled}")
     return 0
 
 

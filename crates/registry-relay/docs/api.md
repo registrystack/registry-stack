@@ -16,7 +16,7 @@ The public URL space is structured as follows:
 
 - `/v1/datasets/{dataset_id}/entities/{entity}/...` and related aggregate, measure, and dimension routes are the entity-oriented data-plane surface.
 - `/v1/consultations/{profile_id}` and its `/execute` subresource expose one active, purpose-aware consultation contract to the configured authorized workload. Callers pin the exact `contract_hash`; route versions are not part of the contract.
-- `/v1/attribute-releases` and `/v1/attribute-releases/{profile_id}/versions/{version}/resolve` (feature: `attribute-release`, off by default for 1.0) resolve governed identity attribute-release profiles to minimized claim bundles.
+- `/v1/attribute-releases` and `/v1/attribute-releases/{profile_id}/versions/{version}/resolve` (default feature: `attribute-release`) resolve governed identity attribute-release profiles to minimized claim bundles.
 - `/metadata/*` is the standards-facing metadata surface: catalog, DCAT, SHACL, policies, evidence offerings, and dataset/entity descriptors.
 - `/.well-known/api-catalog` is the public well-known discovery entry point.
 - `/ogc/v1/*` (feature: `ogcapi-features`) exposes spatial entities as OGC API Features collections.
@@ -423,8 +423,8 @@ Aggregate JSON results use `observations` for rows and `structure` for dimension
 `registry-relay` can resolve a governed identity attribute-release profile: an
 exactly-one-subject lookup that maps configured source fields (or CEL
 expressions) into a minimized, OIDC/UserInfo-style claim bundle for a named
-profile. This beta surface is compiled only when Relay is built with the
-off-by-default `attribute-release` feature.
+profile. This stable surface is part of the default and canonical release
+builds through the `attribute-release` feature.
 
 ```text
 GET  /v1/attribute-releases
@@ -439,16 +439,16 @@ profile's `release_scope`. The response never includes source internals
 
 `POST /v1/attribute-releases/{profile_id}/versions/{version}/resolve` resolves
 one subject against the named `(profile_id, version)` pair, which is globally
-unique and has no "latest" alias. Each profile declares its own
+unique and has no "latest" alias. Profile versions use the portable path
+segment grammar `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Each profile declares its own
 `release_scope`, a dataset-bound scope that must differ from the entity's
-`read_scope`; the scope suffix convention for this capability is
+`read_scope`; the required scope for this capability is
 `<dataset_id>:identity_release`, one of the scope levels an API key can be
 granted alongside `metadata`, `aggregate`, `rows`, `verify`, and
-`evidence_verification`. A profile may also declare a `purpose`: when it does,
-the request's `Data-Purpose` header must equal it, or the gateway returns
+`evidence_verification`. Every profile declares a `purpose`. The request's
+`Data-Purpose` header must equal it, or the gateway returns
 `400 auth.purpose_required` (header absent) or `403 auth.purpose_denied`
-(header present but mismatched), before any source read. A profile that omits
-`purpose` carries no such gate.
+(header present but mismatched), before any source read.
 
 Request body:
 
@@ -459,12 +459,20 @@ Request body:
 }
 ```
 
-`claims` is optional: absent resolves the profile's full default claim set; an
-explicit empty list is rejected with `400 filter.invalid_value`; a name
-outside the profile's configured claims is denied. `subject.value` accepts
+`claims` is optional: absent resolves the profile's full default claim set. An
+explicit list must contain between 1 and 32 unique claim names; an invalid
+list returns `400 filter.invalid_value`. Every claim listed by discovery as
+required must be present in an explicit list. A name outside the profile's
+configured claims is denied. `subject.value` accepts
 only a non-blank scalar (string, number, or boolean); `subject.id_type` must
-match the profile's configured type when one is set. Either failure returns
+match the profile's configured type. Either failure returns
 `400 release.subject_invalid`.
+
+The body must use `Content-Type: application/json`. A missing or unsupported
+media type returns `415 release.unsupported_media_type`; malformed JSON or a
+body outside the closed request schema returns `400 release.invalid_request`.
+Both use Relay Problem Details and carry the same non-storable response headers
+as every other resolve outcome.
 
 Successful response (`200`):
 
@@ -491,15 +499,14 @@ denied":
 
 | Condition | Code | Status |
 | --- | --- | --- |
-| Unknown `(profile_id, version)` | `release.profile_not_found` | 404 |
+| Unknown `(profile_id, version)`, or a known profile outside the caller's scope | `release.profile_not_found` | 404 |
 | Invalid subject id_type or value | `release.subject_invalid` | 400 |
 | No matching row, more than one matching row, a false release-condition predicate, a required claim unavailable, or a requested claim name outside the profile's configured set | `release.subject_denied` | 403 |
 | Backing source unavailable | `release.source_unavailable` | 503 |
 
-A successful release is cacheable only when the profile sets
-`response.max_age_seconds`, which yields `private, max-age=N`; the default is
-`private, no-store`. Every response carries `Vary: Authorization`. Denials are
-always `private, no-store`, regardless of the profile's caching setting.
+Every response is `private, no-store` and carries `Vary: Authorization`.
+Registry Relay does not make a `POST` release response reusable through an
+incomplete cache-control-only contract.
 
 ## Problem details
 

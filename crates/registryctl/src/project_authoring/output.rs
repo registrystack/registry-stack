@@ -1318,6 +1318,28 @@ fn validate_token(value: &str, field: &str, max_bytes: usize) -> Result<()> {
     Ok(())
 }
 
+fn validate_header_token(value: &str, field: &str, max_bytes: usize) -> Result<()> {
+    validate_token(value, field, max_bytes)?;
+    if !value.is_ascii() {
+        bail!("{field} must use visible ASCII");
+    }
+    Ok(())
+}
+
+fn validate_release_version(value: &str, field: &str) -> Result<()> {
+    let mut bytes = value.bytes();
+    if value.is_empty()
+        || value.len() > 64
+        || !matches!(bytes.next(), Some(b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'))
+        || !bytes.all(
+            |byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'),
+        )
+    {
+        bail!("{field} must match [A-Za-z0-9][A-Za-z0-9._-]{{0,63}}");
+    }
+    Ok(())
+}
+
 fn validate_scopes(scopes: &[String]) -> Result<()> {
     if scopes.is_empty() || scopes.len() > 16 {
         bail!("caller scopes must contain between one and 16 entries");

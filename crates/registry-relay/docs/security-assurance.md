@@ -116,7 +116,7 @@ to the exact candidate digest; the source checks do not substitute for them.
 Relay has two OpenAPI shapes:
 
 - `openapi/registry-relay.openapi.json` is the curated release artifact for the
-  default feature build.
+  exact feature profile in `canonical-release-features.txt`.
 - Runtime OpenAPI is config-expanded, scope-filtered, and may inline parameters.
 
 Because generated-vs-curated comparison creates false positives, the Relay
@@ -126,10 +126,10 @@ existing Rust tests. A future normalizer may replace this with
 generated-vs-normalized comparison once both shapes can be canonicalized without
 losing security scheme or route semantics.
 
-Default-feature manifest entries marked `openapi: true` are compared against the
-curated OpenAPI artifact with path-parameter normalization. Feature-gated
+Canonical-release manifest entries marked `openapi: true` are compared against
+the curated OpenAPI artifact with path-parameter normalization. Feature-gated
 manifest entries remain in the exposure inventory, but they are not required in
-the default artifact unless the default feature set enables them.
+the release artifact unless `canonical-release-features.txt` enables them.
 
 ## Image release evidence
 
@@ -176,9 +176,12 @@ rules when installed.
 
 Endpoint exposure is checked in three directions: route inventory to
 manifest, manifest to route inventory, and Rust Axum route declarations to
-route inventory. Protected public routes with non-optional features are also
-covered by `tests/security_assurance_surface.rs`, which builds the production
-public app and verifies the manifest routes are actually mounted behind auth.
+route inventory. A feature-gated route may be stable only when its Cargo
+feature is in `canonical-release-features.txt`; optional feature gates remain
+experimental. Protected public routes without a feature gate or behind a
+canonical release feature are also covered by
+`tests/security_assurance_surface.rs`, which builds the production public app
+and verifies the manifest routes are actually mounted behind auth.
 
 Hadolint ignores `DL3022` because the Dockerfile intentionally copies from
 named external build contexts. It also ignores `DL3008` for the apt package

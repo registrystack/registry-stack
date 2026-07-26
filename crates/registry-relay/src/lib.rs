@@ -48,3 +48,14 @@ pub mod spdci;
 )]
 mod state_plane;
 pub mod table_provider;
+
+include!(concat!(env!("OUT_DIR"), "/compiled_cargo_features.rs"));
+
+/// Exact Cargo feature set compiled into this Relay binary. The inventory is
+/// generated from Cargo's active feature environment, so operators can compare
+/// the protected admin capabilities endpoint with release image metadata
+/// without maintaining a second feature list in Rust.
+#[must_use]
+pub fn compiled_cargo_features() -> &'static [&'static str] {
+    COMPILED_CARGO_FEATURES
+}

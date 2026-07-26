@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+- BREAKING: Attribute release is stable and enabled in the default and
+  canonical release builds. Profiles now require a purpose, the exact
+  `<dataset_id>:identity_release` scope, and a subject `id_type`. Strict
+  configuration parsing rejects the unused subject input and cardinality,
+  claim shareability, denial-code, and response cache-age fields. Release
+  predicates and computed claims evaluate only the redacted source row, every
+  response is `private, no-store`, and unauthorized profile lookups are
+  indistinguishable from unknown profiles.
+
+  Migrate each pre-release profile by removing the retired hints and making
+  the enforced bindings explicit:
+
+  ```yaml
+  # Before
+  release_scope: civil_registry:release
+  subject:
+    input: subject_id
+    source_field: national_id
+    cardinality: one
+  release_conditions:
+    expression: { cel: "source.active" }
+    denied_code: inactive
+  claims:
+    - name: given_name
+      source_field: given_name
+      required: true
+      shareable: true
+  response:
+    max_age_seconds: 300
+
+  # After
+  purpose: identity_verification
+  release_scope: civil_registry:identity_release
+  subject:
+    source_field: national_id
+    id_type: NATIONAL_ID
+  release_conditions:
+    expression: { cel: "source.active" }
+  claims:
+    - name: given_name
+      source_field: given_name
+      required: true
+  response:
+    include_source_metadata: false
+  ```
+
 ## 0.13.0
 
 - BREAKING: Relay consultation results remove the inert

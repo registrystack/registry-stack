@@ -13,12 +13,15 @@ workspace = true
 [package.metadata.cargo-machete]
 ignored = ["humantime-serde"]
 
+[build-dependencies]
+toml = { version = "1.1" }
+
 [features]
-# The 1.0 default build keeps the beta attribute-release surface out of the
-# shipped API. Opt in with `--features attribute-release` to compile the
-# CEL-backed adapter, routes, config surface, and observability buckets.
-default = []
-attribute-release = ["crosswalk-runtime"]
+# The 1.0 default build includes the stable attribute-release surface. Release
+# recipes still select the exact canonical features explicitly so changing this
+# developer default cannot silently expand a published binary.
+default = ["attribute-release"]
+attribute-release = ["crosswalk-runtime", "dep:cel"]
 crosswalk-runtime = ["dep:crosswalk-core"]
 standards-cel-mapping = ["crosswalk-runtime"]
 spdci-api-standards = ["dep:jsonschema"]
@@ -66,6 +69,7 @@ native-tls = { version = "0.2" }
 # relying on a re-export path.
 futures = { version = "0.3" }
 bytes = { version = "1" }
+cel = { workspace = true, optional = true }
 # Atomic state swap for IngestPlan readiness (single-writer, many-reader).
 arc-swap = { version = "1" }
 # Implements DataFusion's async TableProvider delegation for atomic swaps.
@@ -79,8 +83,8 @@ serde_json = { version = "1" }
 schemars.workspace = true
 rhai.workspace = true
 crosswalk-functions = { workspace = true, features = ["date", "redaction"] }
-# Optional Crosswalk CEL mapping support. Disabled by default so the core VC
-# path does not pull in the mapping dependency graph.
+# Crosswalk CEL support for canonical attribute release and optional mapping
+# adapters.
 crosswalk-core = { workspace = true, optional = true }
 jsonschema = { version = "0.18", optional = true }
 # Pure Rust YAML parser used instead of the previous unmaintained YAML stack.

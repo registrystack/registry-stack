@@ -475,6 +475,13 @@ pub enum QueryError {
 /// record; they are **never** surfaced in HTTP responses.
 #[derive(Debug, Clone, Error)]
 pub enum ReleaseError {
+    /// The resolve request body is malformed or does not match the closed
+    /// request schema.
+    #[error("release request invalid")]
+    InvalidRequest,
+    /// The resolve request did not use the required JSON media type.
+    #[error("release media type unsupported")]
+    UnsupportedMediaType,
     /// The requested release profile id/version is not registered.
     /// Renders as generic 404 — does **not** confirm profile enumeration.
     #[error("release profile not found")]
@@ -1571,6 +1578,8 @@ impl SpatialError {
 impl ReleaseError {
     fn code(&self) -> &'static str {
         match self {
+            ReleaseError::InvalidRequest => "release.invalid_request",
+            ReleaseError::UnsupportedMediaType => "release.unsupported_media_type",
             ReleaseError::ProfileNotFound => "release.profile_not_found",
             ReleaseError::SubjectInvalid => "release.subject_invalid",
             ReleaseError::SubjectNotFound
@@ -1583,6 +1592,8 @@ impl ReleaseError {
 
     fn http_status(&self) -> StatusCode {
         match self {
+            ReleaseError::InvalidRequest => StatusCode::BAD_REQUEST,
+            ReleaseError::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ReleaseError::ProfileNotFound => StatusCode::NOT_FOUND,
             ReleaseError::SubjectInvalid => StatusCode::BAD_REQUEST,
             ReleaseError::SubjectNotFound
@@ -1595,6 +1606,8 @@ impl ReleaseError {
 
     fn title(&self) -> &'static str {
         match self {
+            ReleaseError::InvalidRequest => "Invalid release request",
+            ReleaseError::UnsupportedMediaType => "Unsupported media type",
             ReleaseError::ProfileNotFound => "Not found",
             ReleaseError::SubjectInvalid => "Subject invalid",
             ReleaseError::SubjectNotFound
@@ -1607,6 +1620,12 @@ impl ReleaseError {
 
     fn detail(&self) -> &'static str {
         match self {
+            ReleaseError::InvalidRequest => {
+                "request body must match the attribute-release resolve schema"
+            }
+            ReleaseError::UnsupportedMediaType => {
+                "request body must use the application/json media type"
+            }
             ReleaseError::ProfileNotFound => "the requested resource was not found",
             ReleaseError::SubjectInvalid => {
                 "subject identifier type or value is not valid for this request"
@@ -1631,6 +1650,8 @@ impl ReleaseError {
     /// **Never** include this value in HTTP responses.
     pub fn audit_code(&self) -> &'static str {
         match self {
+            ReleaseError::InvalidRequest => "release.invalid_request",
+            ReleaseError::UnsupportedMediaType => "release.unsupported_media_type",
             ReleaseError::ProfileNotFound => "release.profile_not_found",
             ReleaseError::SubjectInvalid => "release.subject_invalid",
             ReleaseError::SubjectNotFound => "release.subject_not_found",

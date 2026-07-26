@@ -14,6 +14,10 @@ revision_label="0123456789abcdef0123456789abcdef01234567"
 wrong_revision_label="89abcdef0123456789abcdef0123456789abcdef"
 version_label="v0.0.0-oci-label-smoke"
 source_date_epoch=0
+relay_release_features="$(<"${repo_root}/crates/registry-relay/canonical-release-features.txt")"
+sh "${repo_root}/crates/registry-relay/scripts/validate-feature-profile.sh" \
+  "${relay_release_features}"
+relay_features_label="org.registrystack.registry-relay.features=${relay_release_features}"
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/registry-stack-oci-labels.XXXXXX")"
 smoke_builder="registry-stack-release-smoke-$$-${RANDOM}"
@@ -102,10 +106,15 @@ for image in "${images[@]}"; do
     "${context_dir}/dist/image-bin/registry-notary-cel-worker" \
     "${context_dir}/LICENSE"
   build_layout "${image}" "${first_layout}" "${revision_label}" "${version_label}"
+  expected_label_args=()
+  if [[ "${image}" == "registry-relay" ]]; then
+    expected_label_args+=(--expected-label "${relay_features_label}")
+  fi
   python3 "${checker}" "oci-layout://${first_layout}" \
     --source "${source_label}" \
     --revision "${revision_label}" \
-    --version "${version_label}"
+    --version "${version_label}" \
+    "${expected_label_args[@]}"
 
   # Source mtimes and uncached RUN timestamps must not affect release-owned
   # layers. The exporter also normalizes inherited layers to the fixed epoch.
@@ -128,6 +137,7 @@ expect_failure "lower-case image config template" \
     --source "${source_label}" \
     --revision "${revision_label}" \
     --version "${version_label}" \
+    --expected-label "${relay_features_label}" \
     --format-template '{{json .Image.config}}'
 
 build_negative_layout "${relay_dockerfile}" "${missing_version_layout}" "${revision_label}"
@@ -135,7 +145,8 @@ expect_failure "image missing the version label" \
   python3 "${checker}" "oci-layout://${missing_version_layout}" \
     --source "${source_label}" \
     --revision "${revision_label}" \
-    --version "${version_label}"
+    --version "${version_label}" \
+    --expected-label "${relay_features_label}"
 
 build_negative_layout "${relay_dockerfile}" "${wrong_revision_layout}" \
   "${wrong_revision_label}" "${version_label}"
@@ -143,7 +154,8 @@ expect_failure "image with the wrong revision label" \
   python3 "${checker}" "oci-layout://${wrong_revision_layout}" \
     --source "${source_label}" \
     --revision "${revision_label}" \
-    --version "${version_label}"
+    --version "${version_label}" \
+    --expected-label "${relay_features_label}"
 python3 "${layout_comparator}" "${correct_layout}" "${wrong_revision_layout}" \
   --rootfs-only
 

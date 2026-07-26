@@ -329,23 +329,18 @@ datasets[].entities[].attribute_release_profiles[].claims[].locale
 datasets[].entities[].attribute_release_profiles[].claims[].name
 datasets[].entities[].attribute_release_profiles[].claims[].required
 datasets[].entities[].attribute_release_profiles[].claims[].sensitivity
-datasets[].entities[].attribute_release_profiles[].claims[].shareable
 datasets[].entities[].attribute_release_profiles[].claims[].source_field
 datasets[].entities[].attribute_release_profiles[].description
 datasets[].entities[].attribute_release_profiles[].id
 datasets[].entities[].attribute_release_profiles[].purpose
 datasets[].entities[].attribute_release_profiles[].release_conditions
-datasets[].entities[].attribute_release_profiles[].release_conditions.denied_code
 datasets[].entities[].attribute_release_profiles[].release_conditions.expression
 datasets[].entities[].attribute_release_profiles[].release_conditions.expression.cel
 datasets[].entities[].attribute_release_profiles[].release_scope
 datasets[].entities[].attribute_release_profiles[].response
 datasets[].entities[].attribute_release_profiles[].response.include_source_metadata
-datasets[].entities[].attribute_release_profiles[].response.max_age_seconds
 datasets[].entities[].attribute_release_profiles[].subject
-datasets[].entities[].attribute_release_profiles[].subject.cardinality
 datasets[].entities[].attribute_release_profiles[].subject.id_type
-datasets[].entities[].attribute_release_profiles[].subject.input
 datasets[].entities[].attribute_release_profiles[].subject.source_field
 datasets[].entities[].attribute_release_profiles[].title
 datasets[].entities[].attribute_release_profiles[].version
@@ -1230,8 +1225,8 @@ audit:
 
 Registry Relay uses this secret to pseudonymize sensitive audit handles. Values for
 configured sensitive fields, record primary keys, table identifiers, and
-attribute-release subject identifiers, when the off-by-default feature is
-enabled, are written as stable audit hashes instead of raw strings. This gives
+attribute-release subject identifiers are written as stable audit hashes
+instead of raw strings. This gives
 an auditor a way to see that the same subject or source was accessed more than
 once without storing the underlying person identifier, address, date of birth,
 or table id in the audit sink.

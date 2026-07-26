@@ -114,6 +114,7 @@ async fn capabilities(runtime: RuntimeSnapshot, _ops: OpsReadPrincipal) -> Respo
         "schema": "registry.admin.capabilities.v1",
         "product": "registry-relay",
         "admin_api_version": "v1",
+        "cargo_features": crate::compiled_cargo_features(),
         "supported_posture_tiers": ["default", "restricted"],
         "config": {
             "verify": {
