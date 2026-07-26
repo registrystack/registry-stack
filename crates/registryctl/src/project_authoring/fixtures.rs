@@ -369,7 +369,7 @@ fn execute_all_fixtures_with_coverage_observations(
                         .collect(),
                     outcome: None,
                     expected_error: None,
-                    source_access: Some(false),
+                    source_access: Some(actual_relay_consultations.unwrap_or_default() > 0),
                     passed: pass_state == FixturePassState::Passed,
                     failure: (pass_state != FixturePassState::Passed).then(|| {
                         format!(

@@ -118,6 +118,11 @@ fn governed_request_binding_remains_country_configurable_when_both_sides_change(
         .expect("independent request witness is reported");
     assert!(witness.passed);
     assert_eq!(witness.calls, ["notary-relay-consultation"]);
+    assert_eq!(
+        witness.source_access,
+        Some(true),
+        "an entered Relay consultation must not be reported as zero source access"
+    );
     assert_eq!(witness.claims, ["household-record-exists"]);
 }
 
