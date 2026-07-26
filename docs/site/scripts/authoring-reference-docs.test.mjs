@@ -26,12 +26,12 @@ test('committed internal and public reference artifacts are exact and complete',
   validateAuthoringReference(reference, coverage);
   assert.deepEqual(publicReference, reference);
   assert.deepEqual(publicCoverage, coverage);
-  assert.equal(reference.fields.length, 1762);
-  assert.equal(coverage.reviewed_intent_assignment_required_count, 1762);
-  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1762);
+  assert.equal(reference.fields.length, 1763);
+  assert.equal(coverage.reviewed_intent_assignment_required_count, 1763);
+  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1763);
   assert.equal(coverage.distinct_reviewed_intent_count, 590);
   assert.equal(coverage.distinct_reviewed_intents_reused_count, 82);
-  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1254);
+  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1255);
   assert.deepEqual(reference.reference_baseline, {
     generator_lifecycle: 'unreleased',
     published_release: null,
@@ -56,11 +56,11 @@ test('committed internal and public reference artifacts are exact and complete',
     fixture: 62,
     entity: 35,
     relay: 584,
-    notary: 529,
+    notary: 530,
   });
   assert.deepEqual(reference.coverage.by_path_kind, {
     root: 7,
-    property: 1406,
+    property: 1407,
     map_key: 25,
     map_value: 47,
     array_item: 177,
@@ -71,13 +71,13 @@ test('committed internal and public reference artifacts are exact and complete',
       (total, count) => total + count,
       0,
     ),
-    1113,
+    1114,
   );
   assert.equal(reference.fields.filter((field) => field.empty_behavior === 'allowed').length, 523);
   assert.equal(reference.fields.filter((field) => field.empty_behavior === 'rejected').length, 303);
   assert.equal(
     reference.fields.filter((field) => field.empty_behavior === 'not_applicable').length,
-    936,
+    937,
   );
 });
 

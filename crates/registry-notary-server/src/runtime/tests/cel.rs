@@ -280,6 +280,58 @@ fn claim_value_type_validation_matches_declared_json_shape() {
     ));
 }
 
+#[test]
+fn claim_value_max_bytes_enforces_utf8_bytes_and_preserves_null_and_absence() {
+    let config = |max_bytes, nullable| registry_notary_core::ClaimValueConfig {
+        value_type: "string".to_string(),
+        nullable,
+        max_bytes,
+        unit: None,
+    };
+
+    assert!(validate_claim_value_config(&json!("ABCD"), &config(Some(4), false)).is_ok());
+    assert!(matches!(
+        validate_claim_value_config(&json!("ABCDE"), &config(Some(4), false)),
+        Err(EvidenceError::RuleEvaluationFailed)
+    ));
+    assert!(
+        validate_claim_value_config(&json!("éé"), &config(Some(4), false)).is_ok(),
+        "two two-byte UTF-8 scalars exactly meet a four-byte bound"
+    );
+    assert!(matches!(
+        validate_claim_value_config(&json!("éé"), &config(Some(3), false)),
+        Err(EvidenceError::RuleEvaluationFailed)
+    ));
+
+    let unbounded = "s".repeat(
+        usize::try_from(registry_notary_core::MAX_CLAIM_VALUE_STRING_BYTES_V1)
+            .expect("claim byte ceiling fits usize")
+            + 1,
+    );
+    assert!(validate_claim_value_config(&json!(unbounded), &config(None, false)).is_ok());
+    assert!(validate_claim_value_config(&Value::Null, &config(Some(1), true)).is_ok());
+    assert!(matches!(
+        validate_claim_value_config(&Value::Null, &config(Some(1), false)),
+        Err(EvidenceError::RuleEvaluationFailed)
+    ));
+}
+
+#[test]
+fn claim_value_max_bytes_failure_classification_does_not_retain_the_value() {
+    let sensitive = "DO-NOT-EXPOSE";
+    let config = registry_notary_core::ClaimValueConfig {
+        value_type: "string".to_string(),
+        nullable: false,
+        max_bytes: Some(1),
+        unit: None,
+    };
+    let error = validate_claim_value_config(&json!(sensitive), &config)
+        .expect_err("over-bound value must fail");
+
+    assert!(matches!(error, EvidenceError::RuleEvaluationFailed));
+    assert!(!format!("{error:?}").contains(sensitive));
+}
+
 #[cfg(feature = "registry-notary-cel")]
 #[test]
 fn cel_binding_limits_reject_deep_json_without_recursive_walk() {

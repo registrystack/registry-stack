@@ -295,6 +295,7 @@ evidence.claims[].semantics.vocabulary
 evidence.claims[].subject_type
 evidence.claims[].title
 evidence.claims[].value
+evidence.claims[].value.max_bytes
 evidence.claims[].value.nullable
 evidence.claims[].value.type
 evidence.claims[].value.unit
@@ -659,6 +660,15 @@ consultation outcome, outputs, and bounded request variables. Direct output
 claims become null on `no_match` in the evaluation view and are not issuable
 as null credential claims. Ambiguity or failure evaluates no claims from that
 consultation.
+
+`value.max_bytes` is an optional UTF-8 byte ceiling for a string claim result.
+When present, it must be between 1 and 65536 and `value.type` must be `string`.
+Notary accepts a result exactly at the bound, rejects an over-bound result as a
+value-free rule-evaluation failure, and preserves null for nullable claims.
+Omitting the field preserves the absence of a per-claim ceiling in older direct
+Notary configurations; the global CEL and response safety limits still apply.
+Registry Stack project authoring requires and emits the field for source-free
+string claims.
 
 Disclosure remains a Notary decision. Credential profiles own ordered claim
 membership, issuance format, holder binding, validity, and allowed disclosure.

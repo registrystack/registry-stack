@@ -24,6 +24,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Source-free string claim compilation now preserves the authored
+  `value.max_bytes` contract in generated Notary configuration instead of
+  silently discarding it.
 - Semantic comparison now preserves exact JSON-integer ordering when
   classifying policy bounds, while retaining floating-point comparison for
   non-integer numbers.

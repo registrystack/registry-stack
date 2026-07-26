@@ -89,7 +89,7 @@ fn generated_notary_config(
             // response format.
             let formats = vec!["application/vnd.registry-notary.claim-result+json".to_string()];
             let (default_disclosure, allowed_disclosures) = expanded_disclosure(&claim.disclosure);
-            let (evidence_mode, value_type, nullable, rule) =
+            let (evidence_mode, value_type, nullable, value_max_bytes, rule) =
                 match inferred_claim_evidence(service, claim)? {
                     ClaimEvidence::RegistryBacked => {
                         let consultation_name = claim_consultation_name(service, claim)?;
@@ -146,6 +146,7 @@ fn generated_notary_config(
                             json!({ "type": "registry_backed", "consultations": consultations }),
                             value_type,
                             nullable,
+                            None,
                             rule,
                         )
                     }
@@ -161,17 +162,22 @@ fn generated_notary_config(
                             json!({ "type": "self_attested" }),
                             claim_value_type(value)?.to_string(),
                             value.nullable,
+                            value.max_bytes,
                             json!({ "type": "cel", "expression": expression, "bindings": {} }),
                         )
                     }
                 };
+            let mut claim_value = json!({ "type": value_type, "nullable": nullable });
+            if let Some(max_bytes) = value_max_bytes {
+                claim_value["max_bytes"] = json!(max_bytes);
+            }
             claims.push(json!({
                 "id": claim_id,
                 "title": claim_id.replace('-', " "),
                 "version": service.version.to_string(),
                 "subject_type": AUTHORED_CLAIM_SUBJECT_TYPE,
                 "evidence_mode": evidence_mode,
-                "value": { "type": value_type, "nullable": nullable },
+                "value": claim_value,
                 "purpose": service.purpose,
                 "required_scopes": service.access.scopes,
                 "rule": rule,

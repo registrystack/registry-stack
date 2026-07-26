@@ -352,6 +352,56 @@ fn strict_nested_objects_and_tagged_variants_match_runtime_deserialization() {
 }
 
 #[test]
+fn claim_value_max_bytes_schema_matches_runtime_bounds_and_compatibility() {
+    let schema = document();
+    let max_bytes_schema = schema
+        .pointer("/$defs/ClaimValueConfig/properties/max_bytes")
+        .expect("claim value max_bytes schema exists");
+    assert_eq!(max_bytes_schema["minimum"], json!(1));
+    assert_eq!(max_bytes_schema["maximum"], json!(65_536));
+
+    let mut absent = example_config();
+    absent["evidence"]["claims"][0]["value"]
+        .as_object_mut()
+        .expect("claim value is an object")
+        .remove("max_bytes");
+    assert_valid(&schema, &absent, "claim value without max_bytes");
+    assert_runtime_deserializes(&absent, "claim value without max_bytes");
+
+    for max_bytes in [1_u32, 65_536] {
+        let mut bounded = example_config();
+        bounded["evidence"]["claims"][0]["value"]["max_bytes"] = json!(max_bytes);
+        assert_valid(
+            &schema,
+            &bounded,
+            &format!("claim value max_bytes {max_bytes}"),
+        );
+        assert_runtime_deserializes(&bounded, &format!("claim value max_bytes {max_bytes}"));
+    }
+
+    for max_bytes in [0_u32, 65_537] {
+        let mut invalid = example_config();
+        invalid["evidence"]["claims"][0]["value"]["max_bytes"] = json!(max_bytes);
+        assert_invalid(
+            &schema,
+            &invalid,
+            &format!("claim value max_bytes {max_bytes}"),
+        );
+        assert_runtime_load_rejects(&invalid, &format!("claim value max_bytes {max_bytes}"));
+    }
+
+    let mut non_string = example_config();
+    non_string["evidence"]["claims"][0]["value"]["type"] = json!("boolean");
+    non_string["evidence"]["claims"][0]["value"]["max_bytes"] = json!(16);
+    assert_valid(
+        &schema,
+        &non_string,
+        "structural non-string max_bytes left to semantic validation",
+    );
+    assert_runtime_load_rejects(&non_string, "non-string claim value max_bytes");
+}
+
+#[test]
 fn deployment_waiver_schema_rejects_retired_and_noncanonical_metadata() {
     let schema = document();
     let mut config = example_config();
@@ -766,7 +816,7 @@ fn product_owned_documentation_intent_has_exact_runtime_key_inventory() {
     let assignments = intent["assignments"]
         .as_array()
         .expect("Notary intent assignments are an array");
-    assert_eq!(assignments.len(), 529);
+    assert_eq!(assignments.len(), 530);
     let assigned_paths = assignments
         .iter()
         .map(|assignment| {

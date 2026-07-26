@@ -39,7 +39,7 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1762,
+    "path_count": 1763,
     "reference_count": 482,
     "by_schema": {
       "project": 219,
@@ -48,11 +48,11 @@
       "fixture": 62,
       "entity": 35,
       "relay": 584,
-      "notary": 529
+      "notary": 530
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1406,
+      "property": 1407,
       "map_key": 25,
       "map_value": 47,
       "array_item": 177,
@@ -60,7 +60,7 @@
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1140,
+      "internal": 1141,
       "sensitive": 396,
       "secret_reference": 41,
       "redacted_fixture": 50,
@@ -70,7 +70,7 @@
       "schema_description": 503,
       "reviewed_override": 243,
       "structural_taxonomy": 125,
-      "reviewed_profile": 891
+      "reviewed_profile": 892
     },
     "by_intent_profile": {
       "notary_audit_internal": 4,
@@ -91,7 +91,7 @@
       "notary_evidence_claims_evidence_mode_consultations_outputs_open_map": 1,
       "notary_evidence_claims_rule_bindings_claims_open_map": 1,
       "notary_evidence_credential_profiles_open_map": 1,
-      "notary_evidence_internal": 91,
+      "notary_evidence_internal": 92,
       "notary_evidence_secret_reference": 5,
       "notary_evidence_sensitive": 40,
       "notary_evidence_signing_keys_open_map": 1,
@@ -148,10 +148,10 @@
       "relay_vocabularies_open_map": 1
     }
   },
-  "reviewed_intent_assignment_required_count": 1762,
-  "reviewed_intent_assignment_covered_count": 1762,
+  "reviewed_intent_assignment_required_count": 1763,
+  "reviewed_intent_assignment_covered_count": 1763,
   "distinct_reviewed_intent_count": 590,
   "distinct_reviewed_intents_reused_count": 82,
-  "reviewed_intent_assignments_using_reused_intent_count": 1254,
+  "reviewed_intent_assignments_using_reused_intent_count": 1255,
   "missing_intent": []
 }

@@ -6832,6 +6832,78 @@ fn source_free_evaluation_without_credential_profiles_omits_issuance_and_signing
 }
 
 #[test]
+fn source_free_string_claim_bound_is_preserved_in_generated_notary_config() {
+    use registry_notary_core::StandaloneRegistryNotaryConfig;
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = create_source_free_evaluation_project(temporary.path());
+    let project_path = project.join("registry-stack.yaml");
+    let mut authored = read_yaml(&project_path);
+    let claim = &mut authored["services"]["applicant-evaluation"]["claims"]["application-complete"];
+    claim["cel"] = serde_norway::Value::String(r#""Ficción""#.to_string());
+    claim["value"] = serde_norway::from_str("type: string\nmax_bytes: 37\n")
+        .expect("bounded string value contract");
+    write_yaml(&project_path, &authored);
+
+    let options = ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    };
+    let first = build_registry_project(&options).expect("bounded source-free project builds");
+    let output = resolve_build_output(&project, first.output.expect("build output"));
+    let notary_path = output.join("private/notary/config/notary.yaml");
+    let first_bytes = std::fs::read(&notary_path).expect("generated Notary config reads");
+    let generated: StandaloneRegistryNotaryConfig = serde_norway::from_slice(&first_bytes)
+        .expect("generated Notary config parses through its production model");
+    generated
+        .validate()
+        .expect("generated bounded source-free config validates");
+    let claim = generated
+        .evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == "application-complete")
+        .expect("generated source-free string claim");
+    assert_eq!(claim.value.value_type, "string");
+    assert_eq!(claim.value.max_bytes, Some(37));
+
+    build_registry_project(&options).expect("bounded source-free project rebuilds");
+    assert_eq!(
+        first_bytes,
+        std::fs::read(&notary_path).expect("regenerated Notary config reads"),
+        "the generated bound is byte-exact across rebuilds"
+    );
+}
+
+#[test]
+fn source_free_string_claim_rejects_out_of_range_bounds() {
+    for max_bytes in [0_u32, 65_537] {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = create_source_free_evaluation_project(temporary.path());
+        let project_path = project.join("registry-stack.yaml");
+        let mut authored = read_yaml(&project_path);
+        let claim =
+            &mut authored["services"]["applicant-evaluation"]["claims"]["application-complete"];
+        claim["cel"] = serde_norway::Value::String(r#""bounded""#.to_string());
+        claim["value"] = serde_norway::from_str(&format!("type: string\nmax_bytes: {max_bytes}\n"))
+            .expect("string value contract");
+        write_yaml(&project_path, &authored);
+
+        let error = check_registry_project(&ProjectCheckOptions {
+            project_directory: project,
+            environment: "local".to_string(),
+            explain: false,
+            against: None,
+            anchor: None,
+        })
+        .expect_err("out-of-range string claim max_bytes must fail project validation");
+        assert_authoring_diagnostic(&error, "registryctl.authoring.project.invalid");
+    }
+}
+
+#[test]
 fn records_standards_share_the_validated_materialization() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("snapshot-with-records", temporary.path());

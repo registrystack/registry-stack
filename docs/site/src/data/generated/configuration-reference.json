@@ -38,7 +38,7 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1762,
+    "path_count": 1763,
     "reference_count": 482,
     "by_schema": {
       "project": 219,
@@ -47,11 +47,11 @@
       "fixture": 62,
       "entity": 35,
       "relay": 584,
-      "notary": 529
+      "notary": 530
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1406,
+      "property": 1407,
       "map_key": 25,
       "map_value": 47,
       "array_item": 177,
@@ -59,7 +59,7 @@
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1140,
+      "internal": 1141,
       "sensitive": 396,
       "secret_reference": 41,
       "redacted_fixture": 50,
@@ -69,7 +69,7 @@
       "schema_description": 503,
       "reviewed_override": 243,
       "structural_taxonomy": 125,
-      "reviewed_profile": 891
+      "reviewed_profile": 892
     },
     "by_intent_profile": {
       "notary_audit_internal": 4,
@@ -90,7 +90,7 @@
       "notary_evidence_claims_evidence_mode_consultations_outputs_open_map": 1,
       "notary_evidence_claims_rule_bindings_claims_open_map": 1,
       "notary_evidence_credential_profiles_open_map": 1,
-      "notary_evidence_internal": 91,
+      "notary_evidence_internal": 92,
       "notary_evidence_secret_reference": 5,
       "notary_evidence_sensitive": 40,
       "notary_evidence_signing_keys_open_map": 1,
@@ -112319,6 +112319,98 @@
           "keyword": "type",
           "value": [
             "string",
+            "null"
+          ]
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "notary",
+        "pointer": "/$defs/ClaimValueConfig/properties/max_bytes",
+        "key_path": "evidence.claims[].value.max_bytes",
+        "path_kind": "property"
+      },
+      "purpose": "Controls evidence claims, Relay consultations, disclosure, signing keys, variables, and credential profiles.",
+      "purpose_source": "reviewed_profile",
+      "intent_profile": "notary_evidence_internal",
+      "semantic_owner": "notary_runtime",
+      "human_owner": "notary_maintainers",
+      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "integer",
+          "null"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "conditional",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "reviewed_runtime_default",
+        "reviewed_behavior": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a per-claim string byte ceiling."
+      },
+      "environment_behavior": "bound_by_environment",
+      "sensitivity": "internal",
+      "state": "runtime",
+      "products": [
+        "notary",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
+      "consumers": [
+        "registry_notary",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "notary",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "format",
+          "value": "uint32"
+        },
+        {
+          "keyword": "maximum",
+          "value": 65536
+        },
+        {
+          "keyword": "minimum",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": [
+            "integer",
             "null"
           ]
         }

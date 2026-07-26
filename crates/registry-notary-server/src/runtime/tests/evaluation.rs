@@ -3004,6 +3004,63 @@ async fn evaluate_refuses_consultation_matched_result_with_wrong_value_type() {
     assert!(matches!(err, EvidenceError::RuleEvaluationFailed));
 }
 
+#[cfg(feature = "registry-notary-cel")]
+#[tokio::test]
+async fn source_free_string_evaluation_enforces_max_bytes_after_cel() {
+    let string_claim = |id: &str, expression: &str, max_bytes: u32, nullable: bool| {
+        let mut claim = test_claim(id, Vec::new(), false);
+        claim.value.value_type = "string".to_string();
+        claim.value.nullable = nullable;
+        claim.value.max_bytes = Some(max_bytes);
+        claim.rule = RuleConfig::Cel {
+            expression: expression.to_string(),
+            bindings: CelBindingsConfig::default(),
+        };
+        claim
+    };
+
+    let exact = string_claim("exact", r#""éé""#, 4, false);
+    let exact_results = RegistryNotaryRuntime::new()
+        .evaluate(
+            test_evidence(vec![exact]),
+            &EvidenceStore::default(),
+            &machine_principal(),
+            test_request("exact"),
+            None,
+        )
+        .await
+        .expect("a four-byte UTF-8 result exactly meets the bound");
+    assert_eq!(exact_results[0].value, Some(json!("éé")));
+
+    let nullable = string_claim("nullable", "null", 1, true);
+    let null_results = RegistryNotaryRuntime::new()
+        .evaluate(
+            test_evidence(vec![nullable]),
+            &EvidenceStore::default(),
+            &machine_principal(),
+            test_request("nullable"),
+            None,
+        )
+        .await
+        .expect("a nullable string claim preserves null independently of its byte bound");
+    assert_eq!(null_results[0].value, Some(Value::Null));
+
+    let sensitive = "DO-NOT-EXPOSE";
+    let over_bound = string_claim("over-bound", &format!(r#""{sensitive}""#), 4, false);
+    let error = RegistryNotaryRuntime::new()
+        .evaluate(
+            test_evidence(vec![over_bound]),
+            &EvidenceStore::default(),
+            &machine_principal(),
+            test_request("over-bound"),
+            None,
+        )
+        .await
+        .expect_err("an over-bound evaluated claim value must fail");
+    assert!(matches!(error, EvidenceError::RuleEvaluationFailed));
+    assert!(!format!("{error:?}").contains(sensitive));
+}
+
 #[tokio::test]
 async fn evaluate_target_ref_serializes_as_opaque_handle() {
     let mut evidence_config =

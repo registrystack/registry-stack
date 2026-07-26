@@ -4152,6 +4152,16 @@
     },
     {
       "schema": "notary",
+      "pointer": "/$defs/ClaimValueConfig/properties/max_bytes",
+      "key_path": "evidence.claims[].value.max_bytes",
+      "path_kind": "property",
+      "profile": "notary_evidence_internal",
+      "purpose_source": "profile",
+      "default_source": "reviewed_runtime_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
       "pointer": "/$defs/ClaimValueConfig/properties/nullable",
       "key_path": "evidence.claims[].value.nullable",
       "path_kind": "property",
@@ -7413,6 +7423,13 @@
       "key_path": "evidence.claims[].semantics.vocabulary",
       "path_kind": "property",
       "runtime_default_note": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a configuration value."
+    },
+    {
+      "schema": "notary",
+      "pointer": "/$defs/ClaimValueConfig/properties/max_bytes",
+      "key_path": "evidence.claims[].value.max_bytes",
+      "path_kind": "property",
+      "runtime_default_note": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a per-claim string byte ceiling."
     },
     {
       "schema": "notary",

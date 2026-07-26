@@ -224,6 +224,7 @@ impl StandaloneRegistryNotaryConfig {
                 });
             }
             validate_claim_semantics(claim)?;
+            validate_claim_value_config(claim)?;
             validate_claim_evidence_mode(claim, self.evidence.relay.is_some())?;
             // REQ-DM-CLAIM-008: reject a disclosure default outside the
             // allowed set at load; this is the most consequential of the

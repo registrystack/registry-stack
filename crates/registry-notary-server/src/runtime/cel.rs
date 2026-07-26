@@ -143,7 +143,15 @@ pub(super) fn validate_claim_value_config(
             .then_some(())
             .ok_or(EvidenceError::RuleEvaluationFailed);
     }
-    validate_claim_value_type(value, &config.value_type)
+    validate_claim_value_type(value, &config.value_type)?;
+    if config.max_bytes.is_some_and(|max_bytes| {
+        value
+            .as_str()
+            .is_none_or(|string| string.len() > max_bytes as usize)
+    }) {
+        return Err(EvidenceError::RuleEvaluationFailed);
+    }
+    Ok(())
 }
 
 #[cfg(feature = "registry-notary-cel")]

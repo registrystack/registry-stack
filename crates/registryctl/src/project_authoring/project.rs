@@ -1816,8 +1816,18 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                 }
             }
             if let Some(value) = &claim.value {
-                if value.value_type == OutputType::String && value.max_bytes.is_none() {
-                    bail!("string claim value contracts require max_bytes");
+                if value.value_type == OutputType::String {
+                    let Some(max_bytes) = value.max_bytes else {
+                        bail!("string claim value contracts require max_bytes");
+                    };
+                    if !(1..=registry_notary_core::MAX_CLAIM_VALUE_STRING_BYTES_V1)
+                        .contains(&max_bytes)
+                    {
+                        bail!(
+                            "string claim value max_bytes must be between 1 and {}",
+                            registry_notary_core::MAX_CLAIM_VALUE_STRING_BYTES_V1
+                        );
+                    }
                 }
                 if value.value_type != OutputType::String && value.max_bytes.is_some() {
                     bail!("only string claim value contracts may declare max_bytes");
