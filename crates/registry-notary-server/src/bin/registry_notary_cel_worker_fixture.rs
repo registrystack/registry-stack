@@ -35,6 +35,7 @@ fn main() {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
+    let mut startup_probe_count = 0_u64;
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -60,17 +61,13 @@ fn main() {
 
         match request.expression.as_str() {
             "true" => {
-                if let Some(delay_ms) =
-                    env::var("REGISTRY_NOTARY_CEL_WORKER_FIXTURE_PROBE_DELAY_MS")
-                        .ok()
-                        .and_then(|value| value.parse::<u64>().ok())
-                {
-                    thread::sleep(Duration::from_millis(delay_ms));
-                }
+                startup_probe_count = startup_probe_count.saturating_add(1);
+                let probe_value = startup_mode.as_deref() != Some("reject_repeated_probe")
+                    || startup_probe_count == 1;
                 write_response(
                     &mut stdout,
                     request.policy_hash.as_deref(),
-                    Some(Value::Bool(true)),
+                    Some(Value::Bool(probe_value)),
                     None,
                 );
                 if startup_mode.as_deref() == Some("reply_then_exit") {

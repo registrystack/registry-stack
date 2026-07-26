@@ -96,6 +96,52 @@ async fn worker_config_rejects_forbidden_explicit_envs() {
     assert!(matches!(error, WorkerError::InvalidConfig { .. }));
 }
 
+#[test]
+fn startup_probe_timeout_validation_has_an_exact_liveness_boundary() {
+    let mut config = pool_config(1);
+    let required = Duration::from_millis(25) + Duration::from_nanos(1);
+
+    assert_eq!(config.required_startup_timeout(), required);
+    config.startup_timeout = required - Duration::from_nanos(1);
+    let error = config
+        .validate()
+        .expect_err("the liveness window alone leaves no time for spawn and probe");
+    assert!(matches!(
+        error,
+        WorkerError::InvalidConfig {
+            reason: "startup_timeout must exceed the post-probe liveness window when startup_probe is configured"
+        }
+    ));
+
+    config.startup_timeout = required;
+    config
+        .validate()
+        .expect("one nanosecond beyond the liveness window is structurally valid");
+}
+
+#[test]
+fn no_probe_timeout_validation_preserves_the_nonzero_boundary() {
+    let mut config = pool_config(1);
+    config.startup_probe = None;
+
+    assert_eq!(config.required_startup_timeout(), Duration::from_nanos(1));
+    config.startup_timeout = Duration::ZERO;
+    let error = config
+        .validate()
+        .expect_err("a zero startup timeout remains invalid without a probe");
+    assert!(matches!(
+        error,
+        WorkerError::InvalidConfig {
+            reason: "startup_timeout must be greater than zero"
+        }
+    ));
+
+    config.startup_timeout = Duration::from_nanos(1);
+    config
+        .validate()
+        .expect("the smallest nonzero no-probe timeout remains valid");
+}
+
 #[tokio::test]
 async fn startup_probe_requires_the_exact_response_before_admission() {
     let _guard = worker_pool_test_lock().await;

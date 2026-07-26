@@ -269,18 +269,17 @@ async fn cel_worker_activation_rejects_a_worker_that_replies_then_exits() {
 
 #[tokio::test]
 #[cfg(feature = "cel-worker-fixture")]
-async fn cel_worker_activation_does_not_repeat_a_near_deadline_protocol_probe() {
+async fn cel_worker_activation_probes_each_process_once() {
     let _guard = CEL_WORKER_TEST_LOCK.lock().await;
     let mut config = fixture_config();
-    config.startup_timeout = Duration::from_secs(2);
     config.command_envs.push((
-        OsString::from("REGISTRY_NOTARY_CEL_WORKER_FIXTURE_PROBE_DELAY_MS"),
-        OsString::from("1100"),
+        OsString::from("REGISTRY_NOTARY_CEL_WORKER_FIXTURE_STARTUP_MODE"),
+        OsString::from("reject_repeated_probe"),
     ));
 
     let worker = CelWorker::new(config)
         .await
-        .expect("one slow protocol probe completes within the startup deadline");
+        .expect("one protocol probe per process completes activation");
 
     assert!(worker.is_activated());
     assert!(worker.check_ready().await);

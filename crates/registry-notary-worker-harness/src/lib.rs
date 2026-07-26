@@ -27,6 +27,7 @@ use tracing::error;
 // immediately after flushing it. Observe one short, value-free liveness window
 // without sending a second protocol request.
 const POST_PROBE_LIVENESS_WINDOW: Duration = Duration::from_millis(25);
+const MINIMUM_NONZERO_TIMEOUT: Duration = Duration::from_nanos(1);
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct WorkerCommand {
@@ -85,6 +86,8 @@ pub struct WorkerPoolConfig {
     pub forbidden_env_names: BTreeSet<OsString>,
     pub max_workers: usize,
     pub startup_probe: Option<WorkerStartupProbe>,
+    /// Pool-wide spawn-and-probe deadline. When a startup probe is configured,
+    /// this must exceed the fixed post-probe liveness window.
     pub startup_timeout: Duration,
     pub request_timeout: Duration,
     pub max_request_bytes: usize,
@@ -97,16 +100,32 @@ pub struct WorkerPoolConfig {
 }
 
 impl WorkerPoolConfig {
+    /// Return the smallest structurally valid pool-wide startup deadline.
+    ///
+    /// The worker still has to spawn and answer its protocol probe inside the
+    /// time left before the post-probe liveness window.
+    #[must_use]
+    pub const fn required_startup_timeout(&self) -> Duration {
+        if self.startup_probe.is_some() {
+            POST_PROBE_LIVENESS_WINDOW.saturating_add(MINIMUM_NONZERO_TIMEOUT)
+        } else {
+            MINIMUM_NONZERO_TIMEOUT
+        }
+    }
+
     pub fn validate(&self) -> Result<(), WorkerError> {
         if self.max_workers == 0 {
             return Err(WorkerError::InvalidConfig {
                 reason: "max_workers must be greater than zero",
             });
         }
-        if self.startup_timeout.is_zero() {
-            return Err(WorkerError::InvalidConfig {
-                reason: "startup_timeout must be greater than zero",
-            });
+        if self.startup_timeout < self.required_startup_timeout() {
+            let reason = if self.startup_probe.is_some() {
+                "startup_timeout must exceed the post-probe liveness window when startup_probe is configured"
+            } else {
+                "startup_timeout must be greater than zero"
+            };
+            return Err(WorkerError::InvalidConfig { reason });
         }
         if self.request_timeout.is_zero() {
             return Err(WorkerError::InvalidConfig {
