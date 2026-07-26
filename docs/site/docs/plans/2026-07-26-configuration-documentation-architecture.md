@@ -41,19 +41,25 @@ Five findings recur, and they are the load-bearing ones.
    SpiceDB teaches six lines with two relations and two permissions. Terraform teaches a provider and
    two resources with no variables, no outputs, and no backend. None of them opens with a complete
    object.
-2. **The projects that survive contact with real users publish the schema as the authority and generate
-   the reference from it.** Kong points readers at `/schemas` rather than copying defaults into prose.
-   Terraform generates provider documentation with `tfplugindocs`. Airbyte names one
-   `declarative_component_schema.yaml` as the validator. Where the reference is hand-maintained beside a
-   real schema, it drifts, and Terraform's own variable pages prove it.
+2. **Naming one schema as the authority is common; generating the reference from it is not.** Three of
+   the six name a single authority: Kong points readers at the live `/schemas` endpoint rather than
+   copying defaults into prose, Airbyte names `declarative_component_schema.yaml` as the validator, and
+   the collector generates per-component READMEs from each `metadata.yaml`. Only Terraform generates
+   published reference documentation from schema, with `tfplugindocs`. The other two leave a
+   hand-authored companion beside the real schema: Airbyte's reference page says so itself, and Kong's
+   prose delegates rather than renders. That gap is where drift lives, and Terraform's own concept and
+   block-reference variable pages prove it happens even to the project that generates most.
 3. **The best validation documentation states what each tier cannot catch.** Kong distinguishes offline
    `deck file validate` from `deck gateway validate` against a live Admin API. Terraform says
    `terraform validate` "does not validate remote services". That sentence saves more support time than
    any feature description.
 4. **Redaction is not containment, and the mature projects have learned it in public.** Terraform moved
    from `sensitive` to ephemeral and write-only values because sensitive values still landed in state
-   and plan files. Kong moved secrets out of entities into vault references. Airbyte keeps credentials
-   out of the connector entirely.
+   and plan files. Kong moved secrets out of entities into vault references. Airbyte keeps credential
+   values out of the authored connector manifest, which is a narrower claim than containment: end users
+   fill those fields in `spec.connectionSpecification`, the values reach the running connector as
+   `config`, and `airbyte_secret` obfuscates them in the UI and API rather than keeping them out of
+   execution.
 5. **Terminology collisions are the most expensive documentation debt in the set.** Kong's "service"
    carries four meanings and its "control plane" two. Terraform's "workspace" carries two and needed a
    permanent explanatory paragraph. SpiceDB's own FAQ concedes it uses `relation`, `permission`, and
@@ -1004,7 +1010,11 @@ Three mechanisms, and Terraform is the only project in this review that has all 
   "distinctly different from workspaces in HCP Terraform, which each have their own Terraform
   configuration and function as separate working directories"
   ([cli/workspaces](https://developer.hashicorp.com/terraform/cli/workspaces)). There is no admonition
-  marking the collision, the glossary defines only the CLI sense, and `TF_WORKSPACE` binds the other.
+  marking the collision, and the glossary defines only the CLI sense. `TF_WORKSPACE` binds that same CLI
+  sense, standing in for `terraform workspace select`
+  ([cli/config/environment-variables](https://developer.hashicorp.com/terraform/cli/config/environment-variables)),
+  which sharpens the collision rather than resolving it: one sense gets an environment binding and a
+  glossary entry, the other gets neither.
 - **Root against child module is defined in a tutorial.** "When you run Terraform commands directly
   from such a directory, it is considered the **root module**"
   ([tutorials/modules/module](https://developer.hashicorp.com/terraform/tutorials/modules/module)),
@@ -1051,11 +1061,18 @@ ambiguous.
 
 ### Three practices Registry Stack should adopt
 
-1. **Publish a versioned projection of every generated artifact and write down the increment rule.**
-   Registry Stack already versions its CLI reports (`registryctl.init.v1`, `registryctl.smoke.v1`, and
-   the rest). Extend that to the `build` output envelope, so a tool reading
-   `.registry-stack/build/<env>/reviewable/review.json` can tell which contract it is reading, and
-   document the increment rule for that envelope.
+1. **Write down the increment rule for the versioned artifacts that already exist.**
+   Registry Stack already does the identification half, in both the CLI reports
+   (`registryctl.init.v1`, `registryctl.smoke.v1`, and the rest) and the build output:
+   `compile_project_for_environment` writes `"schema": REVIEW_SCHEMA` into
+   `reviewable/review.json`, `REVIEW_SCHEMA` is `registry.project.review.v1`
+   (`crates/registryctl/src/project_authoring.rs:44`), and signed-baseline validation rejects any other
+   value (`project_authoring/output.rs:502`). A consumer can already tell which contract it is reading.
+
+   What is missing is the published increment policy: what a minor bump to
+   `registry.project.review.v1` may change, what forces a major bump, and how a baseline signed under
+   one version is treated by a `registryctl` that emits another. Document that policy for the envelopes
+   that exist rather than adding a second version marker.
 
    Adopt the versioning idea and not Terraform's forward-compatibility rule. Terraform tells consumers
    to "Ignore any object properties with unrecognized names", which is right for a plan projection and
@@ -1334,16 +1351,23 @@ into the site, from two sources that can disagree.
    their committed JSON Schema from the typed config graph and fail CI on drift. The step to take is
    rendering the published reference pages from those same schemas, gated beside the existing OpenAPI
    drift check, so the strength does not decay into prose.
-2. **Publish per-field stability and per-product availability inside the reference itself.** The
-   collector's `Stability` and `Distributions` columns tell a reader about this field, for this signal,
-   in this build. Pre-1.0 with two products, Registry Stack should carry `stability` and the owning
-   product per configuration block in the schema and render it as a column, which also gives the
-   version-skew story one home.
-3. **Ship `validate` and a redacted effective-configuration dump as ordinary commands.** Registry
-   Stack's compile step makes the gap between authored and effective configuration wider than the
-   collector's, so a redacted dump matters more, not less. Redaction should be the default and
-   unredacted an explicit act, with tests asserting the redaction, which the repository's own rules
-   already classify as security-sensitive.
+2. **Publish stability and availability inside the reference itself.** The collector's `Stability` and
+   `Distributions` columns answer a question at component and signal granularity: is this component,
+   for this telemetry signal, in this build. That is the precedent, and it is not per field. Carrying
+   the same idea down to a configuration block or field would be a Registry Stack extension, not a
+   borrowed practice. It is worth making anyway, because pre-1.0 with two products the reader's real
+   question is whether a given block is stable and which product honors it, so `stability` and the
+   owning product belong in the schema and render as columns. That also gives the version-skew story one
+   home.
+3. **Keep the redacted effective-configuration dump unflagged, and make it discoverable.** The
+   collector got this design right and then hid it behind `--feature-gates=otelcol.printInitialConfig`
+   and a CAUTION admonition. Registry Stack already ships the mechanism unflagged: both products have
+   `doctor` validation and an `explain-config` command that emits redacted resolved configuration
+   (`crates/registry-relay/src/main.rs:103`, `crates/registry-notary/src/main.rs:302`), and the upgrade
+   guide already points operators at them. So the gap is not the command, it is site-level
+   discoverability and reference coverage: `explain-config` deserves a place in the validate-before-you-
+   deploy path and a row in the CLI reference, because the compile step makes the distance between
+   authored and effective configuration wider here than in the collector.
 
 ### Two practices Registry Stack should avoid
 
@@ -1398,8 +1422,8 @@ when the capability requires one:
 | `adapter.rhai` plus reviewed local modules | `xw.v1` function surface | Integration reviewer, only when `capability.script` |
 
 **Plane 2, generated product input.** `registryctl build --environment <name>` writes
-`.registry-stack/build/<env>/` with a `reviewable/` half (`integration-packs/`,
-`consultation-contracts/`, `review.json`) and a `private/` half (`relay/config/relay.yaml`,
+`.registry-stack/build/<env>/` with a `reviewable/` half (`entities/<id>.json` for each declared
+entity, `integration-packs/`, `consultation-contracts/`, and `review.json`) and a `private/` half (`relay/config/relay.yaml`,
 `notary/config/notary.yaml`, each with `approval/review.json`). These validate against
 `schemas/registry-relay.config.schema.json` and `schemas/registry-notary.config.schema.json`, which
 the products' `config-schema-check` commands reproduce from their typed config graphs.
@@ -1546,12 +1570,25 @@ being written, not a scaffold of empty sections to create first.
   fact, the reuse test, and the narrow exception where a claim attests a decision an authoritative
   source already made. Names the boundary against CEL: a rule "may derive a precise evidence predicate
   from typed outputs, but it is not a general-purpose eligibility engine."
-- **Bind an environment.** Secret references by name only, `${VAR}`, `${VAR:-fallback}`, and
-  `${VAR:?message}` expansion before YAML parsing, and the rule that diagnostics never print values.
-- **Validate before you deploy.** The single page that walks `test` to `check --explain` to `build`
-  to `bundle sign` and `bundle verify` with `anchor`, plus `check --against` and `--anchor` for a
-  signed baseline and the five review classes (`claim`, `integration`, `service_policy`,
-  `operator_security`, `disclosure`).
+- **Bind an environment.** Secret references by name only, caller fingerprints, Relay trust, and the
+  rule that diagnostics never print authored values. This page must not teach `${VAR}` syntax:
+  `registryctl` parses `environments/<name>.yaml` directly and never calls `expand_config_env_vars`, so
+  a placeholder written into an authored environment file either fails authored validation or becomes a
+  literal secret-reference name. Expansion belongs to the runtime configuration reference, where the
+  product loaders resolve `${VAR}`, `${VAR:-fallback}`, and `${VAR:?message}` at config-load time. The
+  authoring page should state that boundary explicitly and link across.
+- **Validate before you deploy.** The single page that walks `test` to `check --explain` to `build` to
+  `bundle sign` to `bundle verify --bundle-dir <dir> --anchor-path <file>`, then `check --against` and
+  `build --against` with `--anchor` for a signed baseline. Note that the flags differ by command:
+  `verify` takes `--anchor-path`, `check` and `build` take `--anchor`, and `anchor` is a separate
+  top-level namespace.
+
+  The page covers six semantic-change dimensions, not five. The authored five are `claim`,
+  `integration`, `service_policy`, `operator_security`, and `disclosure`. A sixth, `compiler`
+  (`project_authoring/output.rs:911`), is appended when the signed baseline was produced by a different
+  `registryctl` version, independently of any authored change. An operator upgrading the CLI will see a
+  reported change with no authored cause, so the page must say what `compiler` means and what reviewing
+  it requires.
 - **Authored configuration reference** and **Runtime configuration reference.** Generated, never
   hand-written, each field carrying type, default, required, and the owning plane.
 - **Authoring diagnostics.** Generated from `diagnostics.rs`: code, cause, remediation. Today one
@@ -1587,7 +1624,15 @@ Three additions this proposal depends on:
    `just config-schema-check` in `crates/registry-relay/justfile` and `products/notary/justfile`
    already reproduce those two files from each product's typed config graph and fail CI on drift, so
    the docs step consumes an artifact that is already gated rather than adding a second source of
-   truth. Reference drift then fails `npm run check` the same way OpenAPI drift already fails CI.
+   truth.
+
+   The gate needs one more piece than the phrase "fails `npm run check`" implies. `npm run check` begins
+   with `npm run generate`, the existing generators overwrite `src/data/generated/` in place, and the
+   Docs CI job runs `npm ci`, `npm test`, and `npm run check` with no worktree-cleanliness step. A new
+   generator that also overwrites would let CI pass over stale committed output. So the step must either
+   compare generated bytes against the committed files and fail on difference, the way
+   `just config-schema-check` does with `cmp` and `diff`, or CI must assert a clean worktree after
+   `generate`. Without one of those, reference drift is regenerated rather than reported.
 2. **Generate the diagnostics index** from the same source the CLI uses, so a new code cannot ship
    undocumented.
 3. **Assert the ownership matrix.** One data file mapping every top-level authored field to its
@@ -1631,7 +1676,7 @@ it through a failed command.
 | Fixtures as a first-class documented artifact | SpiceDB's one assertion format for playground and CLI | Registry Stack's fixtures already run through the real decoder and evaluator, so the gap is documentation, not mechanism |
 | Validate page that states each tier's limits | Terraform's "does not validate remote services"; Kong's two-tier decK validate | Extended to Registry Stack's four tiers, offline fixtures, generated-config check, live non-production evaluation, and signed-baseline comparison |
 | Secret-reference resolution timing | Tyk's per-location KV resolution table | Registry Stack has one resolution point, before YAML parsing, which is simpler and should be said once, plainly |
-| `format_version` on generated build output | Terraform's JSON-format compatibility contract | Applied to the compiled Relay and Notary configuration, alongside the existing versioned CLI reports |
+| Published increment policy for versioned artifacts | Terraform's JSON-format compatibility contract | Only the versioning half is borrowed. The identification half already exists (`registry.project.review.v1`, the `registryctl.*.v1` reports), and Terraform's forward-compatibility rule is explicitly rejected for runtime config, which keeps `deny_unknown_fields` |
 | Precedence rules for anything layered | Airbyte's "Child parameters supersede parent ones"; Terraform's ordered variable precedence list, and its two conflicting statements of it | Stated in exactly one place per rule |
 | Authoring diagnostics index | Kong's missing troubleshooting hub, as a negative example | Generated from the same source the CLI uses |
 | Advanced operations behind a stated prerequisite rung | Terraform's gated features woven into a general path, as a negative example | Every advanced page names the rung it assumes |
