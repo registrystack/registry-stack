@@ -739,6 +739,42 @@
       }
     },
     {
+      "id": "integration-input-below-json-safe-minimum",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["minimum"],
+      "schema": "integration",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
+      "document": "integrations/eligibility/integration.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/input/household_reference",
+        "value": {
+          "role": "selector",
+          "type": "integer",
+          "minimum": -9007199254740992,
+          "maximum": 1
+        }
+      }
+    },
+    {
+      "id": "integration-input-above-json-safe-maximum",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["maximum"],
+      "schema": "integration",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
+      "document": "integrations/eligibility/integration.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/input/household_reference",
+        "value": {
+          "role": "selector",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740992
+        }
+      }
+    },
+    {
       "id": "fixture-status-below-http-range",
       "dimension": "boundary",
       "expected_failing_keywords": ["oneOf"],
@@ -775,6 +811,40 @@
         "operation": "set",
         "pointer": "/materialization/max_records",
         "value": 100000001
+      }
+    },
+    {
+      "id": "entity-field-below-json-safe-minimum",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["minimum"],
+      "schema": "entity",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
+      "document": "entities/population.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/schema/properties/alive",
+        "value": {
+          "type": "integer",
+          "minimum": -9007199254740992,
+          "maximum": 1
+        }
+      }
+    },
+    {
+      "id": "entity-field-above-json-safe-maximum",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["maximum"],
+      "schema": "entity",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
+      "document": "entities/population.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/schema/properties/alive",
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740992
+        }
       }
     },
     {

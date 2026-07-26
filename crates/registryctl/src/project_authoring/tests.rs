@@ -154,6 +154,56 @@ outputs:
     }
 
     #[test]
+    fn integer_entity_fields_enforce_json_safe_bounds() {
+        let safe: EntityFieldSchema = serde_norway::from_str(
+            r#"type: integer
+minimum: -9007199254740991
+maximum: 9007199254740991
+"#,
+        )
+        .expect("JSON-safe entity field parses");
+        let (output_type, nullable, max_bytes) =
+            entity_output_contract("sequence", &safe).expect("JSON-safe entity field lowers");
+        assert_eq!(output_type, OutputType::Integer);
+        assert!(!nullable);
+        assert_eq!(max_bytes, None);
+
+        for (name, source) in [
+            (
+                "below",
+                "type: integer\nminimum: -9007199254740992\nmaximum: 1\n",
+            ),
+            (
+                "above",
+                "type: integer\nminimum: 0\nmaximum: 9007199254740992\n",
+            ),
+        ] {
+            let field: EntityFieldSchema =
+                serde_norway::from_str(source).expect("adjacent unsafe entity field parses");
+            assert!(
+                entity_output_contract(name, &field)
+                    .expect_err("adjacent unsafe entity field rejects")
+                    .to_string()
+                    .contains("incompatible constraints"),
+                "{name} must fail at the runtime authority"
+            );
+        }
+    }
+
+    #[test]
+    fn integer_integration_outputs_preserve_full_i64_bounds() {
+        let output: AuthoredOutputDeclaration = serde_norway::from_str(
+            r#"type: integer
+minimum: -9223372036854775808
+maximum: 9223372036854775807
+"#,
+        )
+        .expect("full i64 output contract parses");
+        validate_authored_output("sequence", &output)
+            .expect("integration output bounds intentionally retain full i64");
+    }
+
+    #[test]
     fn corrected_authoring_rejects_the_superseded_operation_graph() {
         serde_norway::from_str::<AuthoredIntegrationDocument>(
             r#"
@@ -302,14 +352,33 @@ outputs:
             .to_string()
             .contains("selector inputs cannot be nullable"));
 
-        let unsafe_integer = base.replace(
+        let safe_integer = base.replace(
+            "type: string, maxLength: 64",
+            "type: integer, minimum: -9007199254740991, maximum: 9007199254740991",
+        );
+        let authored: AuthoredIntegrationDocument =
+            serde_norway::from_str(&safe_integer).expect("JSON-safe integer parses");
+        lower_authored_integration(&authored).expect("JSON-safe integer lowers");
+
+        let unsafe_lower_integer = base.replace(
             "type: string, maxLength: 64",
             "type: integer, minimum: -9007199254740992, maximum: 1",
         );
         let authored: AuthoredIntegrationDocument =
-            serde_norway::from_str(&unsafe_integer).expect("unsafe integer parses");
+            serde_norway::from_str(&unsafe_lower_integer).expect("unsafe lower integer parses");
         assert!(lower_authored_integration(&authored)
-            .expect_err("unsafe integer rejects")
+            .expect_err("unsafe lower integer rejects")
+            .to_string()
+            .contains("Integer schema has incompatible constraints"));
+
+        let unsafe_upper_integer = base.replace(
+            "type: string, maxLength: 64",
+            "type: integer, minimum: 0, maximum: 9007199254740992",
+        );
+        let authored: AuthoredIntegrationDocument =
+            serde_norway::from_str(&unsafe_upper_integer).expect("unsafe upper integer parses");
+        assert!(lower_authored_integration(&authored)
+            .expect_err("unsafe upper integer rejects")
             .to_string()
             .contains("Integer schema has incompatible constraints"));
 

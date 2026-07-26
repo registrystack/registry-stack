@@ -44320,11 +44320,11 @@
       "constraints": [
         {
           "keyword": "maximum",
-          "value": 9223372036854775807
+          "value": 9007199254740991
         },
         {
           "keyword": "minimum",
-          "value": -9223372036854775808
+          "value": -9007199254740991
         },
         {
           "keyword": "type",
@@ -44514,11 +44514,11 @@
       "constraints": [
         {
           "keyword": "maximum",
-          "value": 9223372036854775807
+          "value": 9007199254740991
         },
         {
           "keyword": "minimum",
-          "value": -9223372036854775808
+          "value": -9007199254740991
         },
         {
           "keyword": "type",
@@ -57450,11 +57450,11 @@
       "constraints": [
         {
           "keyword": "maximum",
-          "value": 9223372036854775807
+          "value": 9007199254740991
         },
         {
           "keyword": "minimum",
-          "value": -9223372036854775808
+          "value": -9007199254740991
         },
         {
           "keyword": "type",
@@ -57628,11 +57628,11 @@
       "constraints": [
         {
           "keyword": "maximum",
-          "value": 9223372036854775807
+          "value": 9007199254740991
         },
         {
           "keyword": "minimum",
-          "value": -9223372036854775808
+          "value": -9007199254740991
         },
         {
           "keyword": "type",

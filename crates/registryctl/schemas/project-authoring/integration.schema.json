@@ -143,8 +143,8 @@
         "maxLength": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 16384 },
         "minLength": {"x-registry-field": "property", "type": "integer", "minimum": 0, "maximum": 16384 },
         "pattern": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 16384 },
-        "minimum": {"x-registry-field": "property", "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
-        "maximum": {"x-registry-field": "property", "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
+        "minimum": {"x-registry-field": "property", "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "maximum": {"x-registry-field": "property", "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
         "canonicalization": {"x-registry-field": "property", "enum": ["identity", "ascii_lowercase"] }
       }
     },
