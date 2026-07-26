@@ -1,0 +1,305 @@
+name: Nightly Rust coverage
+
+on:
+  schedule:
+    - cron: "17 19 * * *"
+  workflow_dispatch:
+  # Temporary branch trigger used to verify this new workflow before merge.
+  push:
+    branches:
+      - agent/nightly-rust-coverage
+
+concurrency:
+  group: nightly-rust-coverage
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_LLVM_COV_VERSION: "0.8.7"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  plan:
+    name: Plan Rust coverage shards
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Build coverage matrix from the CI shard inventory
+        id: matrix
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          sys.path.insert(0, ".github/scripts")
+          from ci_changes import SHARDS, Workspace
+
+          metadata = json.loads(
+              subprocess.run(
+                  ("cargo", "metadata", "--locked", "--format-version", "1"),
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              ).stdout
+          )
+          Workspace(metadata)
+
+          flags = {
+              "platform": "platform",
+              "manifest": "manifest-unit",
+              "notary": "notary-unit",
+              "relay": "relay-unit",
+              "developer-tools": "developer-tools",
+              "registryctl": "registryctl-unit",
+          }
+          matrix = [
+              {
+                  "name": name,
+                  "packages": " ".join(packages),
+                  "all_features": str(name in {"platform", "relay"}).lower(),
+                  "features": "",
+                  "flag": flags[name],
+              }
+              for name, packages in SHARDS.items()
+          ]
+          matrix.append(
+              {
+                  "name": "notary-cel",
+                  "packages": "registry-notary registry-notary-server",
+                  "all_features": "false",
+                  "features": (
+                      "registry-notary/registry-notary-cel,"
+                      "registry-notary-server/cel-worker-fixture"
+                  ),
+                  "flag": "notary-cel",
+              }
+          )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"matrix={json.dumps({'include': matrix})}\n")
+          PY
+
+  rust:
+    name: Rust coverage (${{ matrix.name }})
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      CARGO_TARGET_DIR: target/nightly-rust-coverage
+      COVERAGE_ALL_FEATURES: ${{ matrix.all_features }}
+      COVERAGE_FEATURES: ${{ matrix.features }}
+      COVERAGE_PACKAGES: ${{ matrix.packages }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: false
+
+      - name: Install pinned coverage tool
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
+
+      - name: Run shard with coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          read -r -a packages <<< "${COVERAGE_PACKAGES}"
+          package_args=()
+          for package in "${packages[@]}"; do
+            package_args+=(-p "${package}")
+          done
+
+          feature_args=()
+          if [[ "${COVERAGE_ALL_FEATURES}" == "true" ]]; then
+            feature_args+=(--all-features)
+          elif [[ -n "${COVERAGE_FEATURES}" ]]; then
+            feature_args+=(--features "${COVERAGE_FEATURES//[[:space:]]/}")
+          fi
+
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --locked \
+            "${package_args[@]}" \
+            "${feature_args[@]}" \
+            --no-report
+
+      - name: Export shard coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          read -r -a packages <<< "${COVERAGE_PACKAGES}"
+          package_args=()
+          for package in "${packages[@]}"; do
+            package_args+=(-p "${package}")
+          done
+
+          coverage_dir="${CARGO_TARGET_DIR}/coverage"
+          mkdir -p "${coverage_dir}"
+          cargo llvm-cov report --locked "${package_args[@]}"
+          cargo llvm-cov report --locked \
+            "${package_args[@]}" \
+            --lcov \
+            --output-path "${coverage_dir}/${{ matrix.name }}.lcov"
+
+      - name: Upload shard coverage artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nightly-rust-${{ matrix.name }}-coverage
+          path: target/nightly-rust-coverage/coverage/${{ matrix.name }}.lcov
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload shard coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          disable_search: true
+          fail_ci_if_error: true
+          files: target/nightly-rust-coverage/coverage/${{ matrix.name }}.lcov
+          flags: ${{ matrix.flag }}
+          name: nightly-${{ matrix.name }}
+          plugins: noop
+          use_oidc: true
+          version: v11.3.1
+
+      - name: Report disk usage
+        if: always()
+        run: |
+          df -h /
+          du -sh "${CARGO_TARGET_DIR}" 2>/dev/null || true
+
+  relay-postgres:
+    name: Relay PostgreSQL coverage (${{ matrix.postgresql }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        postgresql:
+          - "16"
+          - "17"
+          - "18"
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgresql }}-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username postgres --dbname postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CARGO_TARGET_DIR: target/nightly-relay-postgres-coverage
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: false
+
+      - name: Install pinned coverage tool
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
+
+      - name: Run Relay PostgreSQL conformance with coverage
+        env:
+          REGISTRY_RELAY_STATE_PLANE_POSTGRES_TEST_URL: postgres://postgres@localhost:5432/postgres?sslmode=disable
+        run: >-
+          cargo llvm-cov --locked
+          -p registry-relay
+          --lib
+          --no-report
+          state_plane::postgres_tests::postgres_state_plane_enforces_role_catalog_and_chain_contract
+          --
+          --ignored
+          --exact
+
+      - name: Export Relay PostgreSQL coverage
+        run: |
+          set -euo pipefail
+          coverage_dir="${CARGO_TARGET_DIR}/coverage"
+          mkdir -p "${coverage_dir}"
+          cargo llvm-cov report --locked -p registry-relay
+          cargo llvm-cov report --locked \
+            -p registry-relay \
+            --lcov \
+            --output-path "${coverage_dir}/relay-postgresql-${{ matrix.postgresql }}.lcov"
+
+      - name: Upload Relay PostgreSQL coverage artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nightly-relay-postgresql-${{ matrix.postgresql }}-coverage
+          path: target/nightly-relay-postgres-coverage/coverage/relay-postgresql-${{ matrix.postgresql }}.lcov
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Relay PostgreSQL coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          disable_search: true
+          fail_ci_if_error: true
+          files: target/nightly-relay-postgres-coverage/coverage/relay-postgresql-${{ matrix.postgresql }}.lcov
+          flags: relay-postgres
+          name: nightly-relay-postgresql-${{ matrix.postgresql }}
+          plugins: noop
+          use_oidc: true
+          version: v11.3.1
+
+      - name: Report disk usage
+        if: always()
+        run: |
+          df -h /
+          du -sh "${CARGO_TARGET_DIR}" 2>/dev/null || true
+
+  notary-postgres:
+    name: Notary PostgreSQL coverage
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/notary-postgres-conformance.yml

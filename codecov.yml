@@ -34,6 +34,29 @@ flags:
       - "crates/registry-notary/"
       - "crates/registry-notary-server/"
     carryforward: true
+  manifest-unit:
+    paths:
+      - "crates/registry-manifest-*/**"
+  notary-unit:
+    paths:
+      - "crates/registry-notary*/**"
+      - "products/notary/xtask/**"
+  notary-cel:
+    paths:
+      - "crates/registry-notary*/**"
+  relay-unit:
+    paths:
+      - "crates/registry-relay/**"
+  relay-postgres:
+    paths:
+      - "crates/registry-relay/**"
+  developer-tools:
+    paths:
+      - "crates/registry-config-report/**"
+      - "crates/registry-language-server/**"
+  registryctl-unit:
+    paths:
+      - "crates/registryctl/**"
 
 comment:
   layout: "reach, diff, flags, files"

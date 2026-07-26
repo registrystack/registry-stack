@@ -1,6 +1,7 @@
 name: Notary PostgreSQL conformance
 
 on:
+  workflow_call:
   pull_request:
     branches:
       - main
@@ -119,7 +120,10 @@ jobs:
 
   state-plane-coverage:
     name: Notary state plane (PostgreSQL ${{ matrix.postgresql }})
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_call'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
