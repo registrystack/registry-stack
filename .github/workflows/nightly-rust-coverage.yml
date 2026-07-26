@@ -251,7 +251,7 @@ jobs:
         env:
           REGISTRY_RELAY_STATE_PLANE_POSTGRES_TEST_URL: postgres://postgres@localhost:5432/postgres?sslmode=disable
         run: >-
-          cargo llvm-cov --locked
+          cargo llvm-cov test --locked
           -p registry-relay
           --lib
           --no-report
