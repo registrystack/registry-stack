@@ -28,6 +28,29 @@ function fixture(t, archivedHref) {
   write(root, 'src/data/contracts.yaml', '[]\n');
   write(
     root,
+    'src/data/docsets.yaml',
+    `current: latest
+docsets:
+  - id: latest
+    label: Latest
+    path: /
+    status: current
+    source: main
+    published_at: 2026-07-26
+    description: Current docs.
+    products: {}
+  - id: v1
+    label: Version 1
+    path: /v/v1/
+    status: archived
+    source: v1
+    published_at: 2026-07-25
+    description: Archived docs.
+    products: {}
+`,
+  );
+  write(
+    root,
     'src/data/standards.yaml',
     `- id: test
   official_url: /not-evidence/
@@ -55,12 +78,20 @@ test('keeps rejecting unrelated links that escape an archive', (t) => {
   assert.match(result.stderr, /links outside its archive/);
 });
 
-test('current scope defers immutable archive targets to the archive gate', (t) => {
+test('current scope accepts a declared archive without requiring its target tree', (t) => {
   const root = fixture(t, '/explanation/current/');
-  write(root, 'dist/index.html', '<html><a href="/v/missing/">Release</a></html>');
+  write(root, 'dist/index.html', '<html><a href="/v/v1/missing/">Release</a></html>');
   const current = run(root, ['--scope', 'current']);
   const all = run(root);
   assert.equal(current.status, 0, current.stderr);
   assert.equal(all.status, 1);
   assert.match(all.stderr, /links to missing/);
+});
+
+test('current scope rejects links to undeclared archives', (t) => {
+  const root = fixture(t, '/explanation/current/');
+  write(root, 'dist/index.html', '<html><a href="/v/missing/">Release</a></html>');
+  const current = run(root, ['--scope', 'current']);
+  assert.equal(current.status, 1);
+  assert.match(current.stderr, /links to unknown archive/);
 });

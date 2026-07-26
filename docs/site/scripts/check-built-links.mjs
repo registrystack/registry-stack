@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, join, normalize, relative } from 'node:path';
 
 import { extractEvidenceUrlsFromYaml } from './check-evidence-links.mjs';
+import { loadDocsets } from './docsets.mjs';
 
 const distDir = 'dist';
 const attrPattern = /\s(?:href|src)=["']([^"']+)["']/g;
@@ -103,6 +104,13 @@ const idsByFile = new Map();
 const evidencePaths = await currentEvidencePaths();
 const scope = scopeFromArgs(process.argv.slice(2));
 const archivedRootPattern = /^\/v\/[^/]+\//;
+const archivedRoots = scope === 'current'
+  ? new Set(
+    (await loadDocsets()).docsets
+      .filter((docset) => docset.status === 'archived')
+      .map((docset) => docset.path),
+  )
+  : new Set();
 
 const files = (await htmlFiles(distDir)).filter(
   (file) => scope === 'all' || archiveRoot(file) === null,
@@ -134,7 +142,14 @@ for (const file of files) {
 
     const url = resolveInternal(raw, file);
     if (!url) continue;
-    if (scope === 'current' && archivedRootPattern.test(splitUrl(url)[0])) continue;
+    const archivedRoot = splitUrl(url)[0].match(archivedRootPattern)?.[0];
+    if (scope === 'current' && archivedRoot) {
+      checked += 1;
+      if (!archivedRoots.has(archivedRoot)) {
+        errors.push(`${relative('.', file)} links to unknown archive ${raw}`);
+      }
+      continue;
+    }
 
     checked += 1;
     const [path, fragment] = splitUrl(url);
