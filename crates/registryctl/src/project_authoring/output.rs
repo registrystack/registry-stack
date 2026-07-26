@@ -1976,39 +1976,6 @@ fn validate_absolute_runtime_path(path: &Path, field: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_duration_ms(value: &str) -> Result<u32> {
-    parse_duration_ms_with_max(value, 20_000, "deadline")
-}
-
-fn parse_materialization_refresh_ms(value: &str) -> Result<u32> {
-    parse_duration_ms_with_max(
-        value,
-        30 * 24 * 60 * 60 * 1_000,
-        "entity materialization refresh",
-    )
-}
-
-fn parse_duration_ms_with_max(value: &str, maximum: u32, label: &str) -> Result<u32> {
-    let milliseconds = if let Some(milliseconds) = value.strip_suffix("ms") {
-        Some(milliseconds.parse::<u32>()?)
-    } else if let Some(seconds) = value.strip_suffix('s') {
-        seconds.parse::<u32>()?.checked_mul(1_000)
-    } else if let Some(minutes) = value.strip_suffix('m') {
-        minutes.parse::<u32>()?.checked_mul(60_000)
-    } else if let Some(hours) = value.strip_suffix('h') {
-        hours.parse::<u32>()?.checked_mul(60 * 60 * 1_000)
-    } else if let Some(days) = value.strip_suffix('d') {
-        days.parse::<u32>()?.checked_mul(24 * 60 * 60 * 1_000)
-    } else {
-        None
-    }
-    .ok_or_else(|| anyhow!("{label} must be a bounded positive duration"))?;
-    if milliseconds == 0 || milliseconds > maximum {
-        bail!("{label} is outside its reviewed bound");
-    }
-    Ok(milliseconds)
-}
-
 fn validate_full_date(value: &str) -> Result<()> {
     if value.len() != 10
         || value.as_bytes()[4] != b'-'

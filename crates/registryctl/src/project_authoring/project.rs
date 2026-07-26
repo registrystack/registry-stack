@@ -327,11 +327,7 @@ fn lower_project_integration(
     if exact.values().collect::<BTreeSet<_>>() != authored.input.keys().collect::<BTreeSet<_>>() {
         bail!("snapshot exact must bind every integration input exactly once");
     }
-    parse_duration_ms_with_max(
-        &snapshot.freshness,
-        31 * 24 * 60 * 60 * 1_000,
-        "snapshot freshness",
-    )?;
+    parse_snapshot_freshness_ms(&snapshot.freshness)?;
     let input = authored
         .input
         .iter()
@@ -2613,7 +2609,7 @@ fn validate_fixture_inputs(
                     }
                 }
                 FixtureSourceResponse::Timeout { timeout } => {
-                    if parse_duration_ms(timeout)? == 0 {
+                    if parse_fixture_timeout_ms(timeout)? == 0 {
                         bail!("fixture timeout must be positive");
                     }
                 }
@@ -2901,7 +2897,7 @@ fn validate_integration(alias: &str, integration: &IntegrationDocument) -> Resul
     {
         bail!("integration bounds are inconsistent with its compiled source plan");
     }
-    parse_duration_ms(&integration.bounds.deadline)?;
+    parse_integration_deadline_ms(&integration.bounds.deadline)?;
     let ordered = ordered_operations(operations)?;
     let mut prior = BTreeSet::new();
     for (operation_id, operation) in ordered {
@@ -3422,7 +3418,7 @@ fn validate_credential_interface(integration: &IntegrationDocument) -> Result<()
             if interface
                 .refresh_skew
                 .as_deref()
-                .map(parse_duration_ms)
+                .map(parse_oauth_refresh_skew_ms)
                 .transpose()?
                 .is_some_and(|skew| skew == 0 || skew >= 3_600_000)
             {
@@ -3472,7 +3468,7 @@ fn validate_source_binding(
     if source
         .timeout
         .as_deref()
-        .map(parse_duration_ms)
+        .map(parse_environment_source_timeout_ms)
         .transpose()?
         .is_some_and(|value| value == 0 || value > 60_000)
     {

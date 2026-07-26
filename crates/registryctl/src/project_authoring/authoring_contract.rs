@@ -799,7 +799,7 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
             bail!("authored limits exceed the v1 hard ceilings");
         }
         if let Some(deadline) = &limits.deadline {
-            let milliseconds = parse_duration_ms(deadline)?;
+            let milliseconds = parse_integration_deadline_ms(deadline)?;
             if milliseconds == 0 || milliseconds > 60_000 {
                 bail!("limits.deadline must be between 1ms and 60s");
             }
@@ -952,7 +952,7 @@ fn validate_authored_credential_interface(interface: &CredentialInterface) -> Re
             if interface
                 .refresh_skew
                 .as_deref()
-                .map(parse_duration_ms)
+                .map(parse_oauth_refresh_skew_ms)
                 .transpose()?
                 .is_some_and(|skew| skew == 0 || skew >= 3_600_000)
             {

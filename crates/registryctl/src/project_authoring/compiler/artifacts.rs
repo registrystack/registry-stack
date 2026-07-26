@@ -694,7 +694,7 @@ fn generated_script_pack_semantics(
         })
     });
     let operation_timeout_ms =
-        parse_duration_ms(&integration.document.bounds.deadline)?.min(10_000);
+        parse_integration_deadline_ms(&integration.document.bounds.deadline)?.min(10_000);
     let verification_operations = script.signed_dci.as_ref().map_or_else(Vec::new, |_| {
         vec![json!({
             "id": "jwks",
@@ -761,7 +761,7 @@ fn generated_script_pack_semantics(
         "max_credential_exchanges": usize::from(credential_operation.is_some()),
         "max_data_destinations": 1,
         "max_source_bytes": integration.document.bounds.source_bytes,
-        "timeout_ms": parse_duration_ms(&integration.document.bounds.deadline)?,
+        "timeout_ms": parse_integration_deadline_ms(&integration.document.bounds.deadline)?,
         "max_in_flight": integration.document.bounds.concurrency,
         "quota_per_minute": 60,
         "quota_burst": integration.document.bounds.concurrency.min(60),
@@ -987,7 +987,7 @@ fn generated_http_pack_semantics(
         "max_credential_exchanges": credential_exchanges,
         "max_data_destinations": 1,
         "max_source_bytes": integration.document.bounds.source_bytes,
-        "timeout_ms": parse_duration_ms(&integration.document.bounds.deadline)?,
+        "timeout_ms": parse_integration_deadline_ms(&integration.document.bounds.deadline)?,
         "max_in_flight": integration.document.bounds.concurrency,
         "quota_per_minute": 60,
         "quota_burst": integration.document.bounds.concurrency.min(60),
@@ -1103,11 +1103,7 @@ fn generated_snapshot_pack_semantics(
         CardinalityMode::Singleton => 1,
         CardinalityMode::ProbeTwo => 2,
     };
-    let freshness = u64::from(parse_duration_ms_with_max(
-        &snapshot.freshness,
-        31 * 24 * 60 * 60 * 1_000,
-        "snapshot freshness",
-    )?);
+    let freshness = u64::from(parse_snapshot_freshness_ms(&snapshot.freshness)?);
     let acquisition = json!({
         "class": "materialized_snapshot",
         "fields": fields,
@@ -1146,7 +1142,7 @@ fn generated_snapshot_pack_semantics(
         "max_credential_exchanges": 0,
         "max_data_destinations": 0,
         "max_source_bytes": integration.document.bounds.source_bytes,
-        "timeout_ms": parse_duration_ms(&integration.document.bounds.deadline)?,
+        "timeout_ms": parse_integration_deadline_ms(&integration.document.bounds.deadline)?,
         "max_in_flight": integration.document.bounds.concurrency,
         "quota_per_minute": 60,
         "quota_burst": integration.document.bounds.concurrency.min(60),
@@ -1588,7 +1584,7 @@ fn generated_http_operation(
         "request_signer": request_signer,
         "step_limits": {
             "max_request_bytes": integration.bounds.request_bytes,
-            "timeout_ms": parse_duration_ms(&integration.bounds.deadline)?.min(10_000),
+            "timeout_ms": parse_integration_deadline_ms(&integration.bounds.deadline)?.min(10_000),
             "max_in_flight": 1,
         },
         "auth": relay_source_auth(credential_interface(integration)),
@@ -1998,7 +1994,7 @@ fn generated_credential_operation(
     let expiry_safety_skew_ms = interface
         .refresh_skew
         .as_deref()
-        .map(parse_duration_ms)
+        .map(parse_oauth_refresh_skew_ms)
         .transpose()?
         .unwrap_or(30_000);
     Ok(Some(json!({
@@ -2012,7 +2008,7 @@ fn generated_credential_operation(
             "max_client_secret_bytes": 512,
             "max_body_bytes": integration.bounds.request_bytes.min(8192),
             "max_request_bytes": integration.bounds.request_bytes,
-            "timeout_ms": parse_duration_ms(&integration.bounds.deadline)?.min(10_000),
+            "timeout_ms": parse_integration_deadline_ms(&integration.bounds.deadline)?.min(10_000),
             "audience": interface.audience,
             "scopes": scopes,
         },
@@ -2054,7 +2050,7 @@ fn generated_verification_operations(
                 "path": operation.request.path,
                 "step_limits": {
                     "max_request_bytes": integration.bounds.request_bytes,
-                    "timeout_ms": parse_duration_ms(&integration.bounds.deadline)?.min(10_000),
+                    "timeout_ms": parse_integration_deadline_ms(&integration.bounds.deadline)?.min(10_000),
                     "max_in_flight": 1,
                 },
                 "max_response_bytes": operation.response.max_bytes,
@@ -2468,10 +2464,14 @@ fn private_binding_document(
             "max_source_bytes": integration.document.bounds.source_bytes,
             "timeout_ms": binding
                 .and_then(|binding| binding.source.timeout.as_deref())
-                .map(parse_duration_ms)
+                .map(parse_environment_source_timeout_ms)
                 .transpose()?
-                .unwrap_or(parse_duration_ms(&integration.document.bounds.deadline)?)
-                .min(parse_duration_ms(&integration.document.bounds.deadline)?),
+                .unwrap_or(parse_integration_deadline_ms(
+                    &integration.document.bounds.deadline,
+                )?)
+                .min(parse_integration_deadline_ms(
+                    &integration.document.bounds.deadline,
+                )?),
             "max_in_flight": binding
                 .and_then(|binding| binding.source.concurrency)
                 .unwrap_or(integration.document.bounds.concurrency)

@@ -2403,7 +2403,7 @@ fn offline_fixture_interactions(
                         .map_err(|_| "source.response_malformed".to_string())?,
                 },
                 FixtureSourceResponse::Timeout { timeout } => {
-                    parse_duration_ms(timeout)
+                    parse_fixture_timeout_ms(timeout)
                         .map_err(|_| "source.deadline_exceeded".to_string())?;
                     OfflineSourceResponse::Timeout
                 }
