@@ -33,6 +33,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Entity integer fields and integration integer inputs now expose the same
   inclusive JSON-safe bounds in authoring schemas, editor setup, and generated
   configuration reference that Registryctl already enforces at runtime.
+- Entity `materialization.max_bytes` integer values now expose the same 1 GiB
+  ceiling in the authoring schema, editor setup, and generated configuration
+  reference that Registryctl already enforces at runtime. The field description
+  states the same ceiling for human-readable KiB/MiB values, which remain
+  semantically validated.
 - **BREAKING:** Before the Registry Stack 1.0 compatibility promise takes
   effect, `registry.project.fixture_coverage.v1` now distinguishes
   mapping-derived fixtures from independently executed, per-consultation

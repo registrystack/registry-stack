@@ -58951,7 +58951,7 @@
         "pointer": "/properties/materialization/properties/max_bytes",
         "path_kind": "property"
       },
-      "purpose": "Maximum encoded size of one generation, as bytes or a KiB/MiB quantity.",
+      "purpose": "Maximum encoded size of one generation, up to 1 GiB, as bytes or a KiB/MiB quantity.",
       "purpose_source": "schema_description",
       "semantic_owner": "entity_contract",
       "human_owner": "data_model_maintainers",
@@ -59100,7 +59100,7 @@
       "constraints": [
         {
           "keyword": "maximum",
-          "value": 18446744073709551615
+          "value": 1073741824
         },
         {
           "keyword": "minimum",

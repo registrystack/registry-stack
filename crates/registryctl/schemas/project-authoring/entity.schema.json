@@ -23,10 +23,10 @@
         "max_records": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 100000000, "description": "Maximum number of records allowed in one generation.", "examples": [10000] },
         "max_bytes": {
           "x-registry-field": "property",
-          "description": "Maximum encoded size of one generation, as bytes or a KiB/MiB quantity.",
+          "description": "Maximum encoded size of one generation, up to 1 GiB, as bytes or a KiB/MiB quantity.",
           "examples": ["16MiB"],
           "oneOf": [
-            {"x-registry-field": "branch", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 },
+            {"x-registry-field": "branch", "type": "integer", "minimum": 1, "maximum": 1073741824 },
             {"x-registry-field": "branch", "type": "string", "pattern": "^[1-9][0-9]*(?:KiB|MiB)$" }
           ]
         },

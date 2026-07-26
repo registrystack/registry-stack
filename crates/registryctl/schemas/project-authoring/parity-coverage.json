@@ -814,6 +814,19 @@
       }
     },
     {
+      "id": "entity-over-ceiling-integer-max-bytes",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
+      "schema": "entity",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
+      "document": "entities/population.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/materialization/max_bytes",
+        "value": 1073741825
+      }
+    },
+    {
       "id": "entity-field-below-json-safe-minimum",
       "dimension": "boundary",
       "expected_failing_keywords": ["minimum"],

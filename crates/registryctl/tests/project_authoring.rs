@@ -5951,6 +5951,44 @@ fn relay_only_and_notary_only_projects_emit_only_selected_products() {
 }
 
 #[test]
+fn materialization_size_boundary_accepts_integer_ceiling_and_rejects_human_above() {
+    let at_boundary = tempfile::tempdir().expect("boundary temporary directory");
+    let boundary_project = copy_project("snapshot-exact", at_boundary.path());
+    let boundary_entity_path = boundary_project.join("entities/people.yaml");
+    let mut boundary_entity = read_yaml(&boundary_entity_path);
+    boundary_entity["materialization"]["max_bytes"] =
+        serde_norway::Value::Number(1_073_741_824_u64.into());
+    write_yaml(&boundary_entity_path, &boundary_entity);
+    build_registry_project(&ProjectBuildOptions {
+        project_directory: boundary_project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("integer materialization size at 1 GiB builds");
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("snapshot-exact", temporary.path());
+    let entity_path = project.join("entities/people.yaml");
+    let mut entity = read_yaml(&entity_path);
+    entity["materialization"]["max_bytes"] = serde_norway::Value::String("1025MiB".to_string());
+    write_yaml(&entity_path, &entity);
+
+    let error = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect_err("human-readable materialization size above 1 GiB rejects");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("entity materialization exceeds the v1 bounds"),
+        "unexpected error: {rendered}"
+    );
+}
+
+#[test]
 fn materialization_only_project_emits_private_relay_table_without_public_records() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("relay-only-materialization", temporary.path());
