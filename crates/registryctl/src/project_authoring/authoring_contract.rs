@@ -361,32 +361,6 @@ enum AuthoredByteSize {
     Human(String),
 }
 
-impl AuthoredByteSize {
-    fn bytes(&self, field: &str) -> Result<u64> {
-        match self {
-            Self::Bytes(bytes) => Ok(*bytes),
-            Self::Human(value) => {
-                let (digits, multiplier) = if let Some(digits) = value.strip_suffix("KiB") {
-                    (digits, 1024_u64)
-                } else if let Some(digits) = value.strip_suffix("MiB") {
-                    (digits, 1024_u64 * 1024)
-                } else {
-                    bail!("{field} must be bytes or a positive KiB/MiB value");
-                };
-                let amount = digits
-                    .parse::<u64>()
-                    .with_context(|| format!("{field} has an invalid byte quantity"))?;
-                if amount == 0 {
-                    bail!("{field} must be positive");
-                }
-                amount
-                    .checked_mul(multiplier)
-                    .ok_or_else(|| anyhow!("{field} exceeds the platform integer range"))
-            }
-        }
-    }
-}
-
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -548,10 +522,9 @@ impl<'de> Deserialize<'de> for AuthoredFixtureBody {
     }
 }
 
-const DEFAULT_SOURCE_RESPONSE_BYTES: u64 = 512 * 1024;
-const MAX_DECLARATIVE_HTTP_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
-const DEFAULT_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
-const DEFAULT_REQUEST_BYTES: u64 = 64 * 1024;
+const DEFAULT_SOURCE_RESPONSE_BYTES: u64 = DEFAULT_INTEGRATION_RESPONSE_BYTES;
+const DEFAULT_SOURCE_BYTES: u64 = DEFAULT_INTEGRATION_SOURCE_BYTES;
+const DEFAULT_REQUEST_BYTES: u64 = DEFAULT_INTEGRATION_REQUEST_BYTES;
 const DEFAULT_SCRIPT_CALLS: u8 = 5;
 const DEFAULT_DEADLINE: &str = "15s";
 
@@ -604,14 +577,14 @@ fn lower_authored_integration(
         calls_authored: limits.is_some_and(|limits| limits.calls.is_some()),
         source_bytes: limits
             .and_then(|limits| limits.source_bytes.as_ref())
-            .map(|size| size.bytes("limits.source_bytes"))
+            .map(parse_integration_source_bytes)
             .transpose()?
             .unwrap_or(DEFAULT_SOURCE_BYTES),
         source_bytes_authored: limits.is_some_and(|limits| limits.source_bytes.is_some()),
         request_bytes: u32::try_from(
             limits
                 .and_then(|limits| limits.request_bytes.as_ref())
-                .map(|size| size.bytes("limits.request_bytes"))
+                .map(parse_integration_request_bytes)
                 .transpose()?
                 .unwrap_or(DEFAULT_REQUEST_BYTES),
         )
@@ -782,21 +755,17 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
         }
     }
     if let Some(limits) = &authored.limits {
-        if limits.calls.is_some_and(|calls| !(1..=16).contains(&calls))
-            || limits
-                .request_bytes
-                .as_ref()
-                .map(|bytes| bytes.bytes("limits.request_bytes"))
-                .transpose()?
-                .is_some_and(|bytes| bytes == 0 || bytes > 1024 * 1024)
-            || limits
-                .source_bytes
-                .as_ref()
-                .map(|bytes| bytes.bytes("limits.source_bytes"))
-                .transpose()?
-                .is_some_and(|bytes| bytes == 0 || bytes > 16 * 1024 * 1024)
+        if limits
+            .calls
+            .is_some_and(|calls| !(1..=16).contains(&calls))
         {
             bail!("authored limits exceed the v1 hard ceilings");
+        }
+        if let Some(request_bytes) = &limits.request_bytes {
+            parse_integration_request_bytes(request_bytes)?;
+        }
+        if let Some(source_bytes) = &limits.source_bytes {
+            parse_integration_source_bytes(source_bytes)?;
         }
         if let Some(deadline) = &limits.deadline {
             parse_integration_deadline_ms(deadline)?;
@@ -838,15 +807,12 @@ fn validate_authored_source(source: &AuthoredSourceDeclaration) -> Result<()> {
     {
         bail!("source.versions must classify at least one product version label");
     }
-    if source
+    if let Some(max_bytes) = source
         .response
         .as_ref()
         .and_then(|response| response.max_bytes.as_ref())
-        .map(|size| size.bytes("source.response.max_bytes"))
-        .transpose()?
-        .is_some_and(|bytes| bytes == 0 || bytes > 8 * 1024 * 1024)
     {
-        bail!("source.response.max_bytes exceeds the 8MiB v1 hard ceiling");
+        parse_integration_response_bytes(max_bytes)?;
     }
     if source.request_headers.len() > 32 || source.response_headers.len() > 32 {
         bail!("source request and response header allow-lists contain at most 32 names");
@@ -1312,12 +1278,9 @@ fn lower_http_capability(
         .response
         .as_ref()
         .and_then(|response| response.max_bytes.as_ref())
-        .map(|size| size.bytes("source.response.max_bytes"))
+        .map(parse_integration_response_bytes)
         .transpose()?
         .unwrap_or(DEFAULT_SOURCE_RESPONSE_BYTES);
-    if response_bytes > MAX_DECLARATIVE_HTTP_RESPONSE_BYTES {
-        bail!("http source.response.max_bytes exceeds the 8MiB platform ceiling");
-    }
     let operation = OperationDeclaration {
         depends_on: credential
             .as_ref()
@@ -1441,7 +1404,7 @@ fn lower_script_capability(
     let max_bytes = u32::try_from(
         response
             .and_then(|response| response.max_bytes.as_ref())
-            .map(|size| size.bytes("source.response.max_bytes"))
+            .map(parse_integration_response_bytes)
             .transpose()?
             .unwrap_or(DEFAULT_SOURCE_RESPONSE_BYTES),
     )

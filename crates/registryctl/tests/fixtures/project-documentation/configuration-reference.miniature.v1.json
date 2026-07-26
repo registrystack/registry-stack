@@ -125,7 +125,7 @@
         "schema_value": "safe"
       },
       "diagnostic": "registryctl.authoring.project.invalid",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "environment_behavior": "environment_independent",
       "example": {
         "contains_country_values": false,
@@ -199,7 +199,7 @@
         "behavior": "no_schema_default"
       },
       "diagnostic": "registryctl.authoring.project.invalid",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "environment_behavior": "environment_independent",
       "example": {
         "contains_country_values": false,

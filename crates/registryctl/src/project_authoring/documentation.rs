@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::knowledge::{
     index_published_field_knowledge, reachable_published_field_paths, Availability, Consumer,
@@ -711,7 +711,11 @@ pub fn generate_configuration_reference(
                     knowledge.path_kind,
                 ),
                 null_behavior: null_behavior(contract_node, knowledge.path_kind),
-                empty_behavior: empty_behavior(contract_node, knowledge.path_kind),
+                empty_behavior: empty_behavior(
+                    schema.published.document,
+                    contract_node,
+                    knowledge.path_kind,
+                )?,
                 default: default_documentation(contract_node, knowledge.path_kind),
                 environment_behavior,
                 sensitivity: knowledge.sensitivity,
@@ -1734,17 +1738,39 @@ fn runtime_empty_behavior(
     if kind == FieldPathKind::Root || !schema_types.iter().any(|kind| kind == "string") {
         return Ok(EmptyBehavior::NotApplicable);
     }
-    let minimums = runtime_schema_values(document, nodes, "minLength")?
-        .into_iter()
-        .filter_map(|value| value.as_u64())
-        .collect::<Vec<_>>();
-    Ok(if minimums.is_empty() {
+    let acceptance = nodes
+        .iter()
+        .map(|node| schema_accepts_empty_string(document, node))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(if acceptance.iter().all(|accepted| *accepted) {
         EmptyBehavior::Allowed
-    } else if minimums.iter().all(|minimum| *minimum >= 1) {
+    } else if acceptance.iter().all(|accepted| !accepted) {
         EmptyBehavior::Rejected
     } else {
         EmptyBehavior::Conditional
     })
+}
+
+fn schema_accepts_empty_string(document: &Value, node: &Value) -> Result<bool, DocumentationError> {
+    let mut wrapper = Map::new();
+    if let Some(dialect) = document.get("$schema") {
+        wrapper.insert("$schema".to_owned(), dialect.clone());
+    }
+    for definitions in ["$defs", "definitions"] {
+        if let Some(value) = document.get(definitions) {
+            wrapper.insert(definitions.to_owned(), value.clone());
+        }
+    }
+    wrapper.insert("allOf".to_owned(), Value::Array(vec![node.clone()]));
+    let wrapper = Value::Object(wrapper);
+    let validator = jsonschema::JSONSchema::options()
+        .compile(&wrapper)
+        .map_err(|error| {
+            documentation_error(format!(
+                "configuration empty-string schema evaluation failed: {error}"
+            ))
+        })?;
+    Ok(validator.is_valid(&Value::String(String::new())))
 }
 
 fn runtime_schema_constraints(
@@ -2597,39 +2623,24 @@ fn null_behavior(node: &Value, kind: FieldPathKind) -> NullBehavior {
     }
 }
 
-fn empty_behavior(node: &Value, kind: FieldPathKind) -> EmptyBehavior {
+fn empty_behavior(
+    document: &Value,
+    node: &Value,
+    kind: FieldPathKind,
+) -> Result<EmptyBehavior, DocumentationError> {
     if matches!(kind, FieldPathKind::Root | FieldPathKind::Branch) {
-        return EmptyBehavior::NotApplicable;
+        return Ok(EmptyBehavior::NotApplicable);
     }
     let mut types = BTreeSet::new();
     collect_schema_types(node, &mut types);
     if !types.contains("string") {
-        return EmptyBehavior::NotApplicable;
+        return Ok(EmptyBehavior::NotApplicable);
     }
-    let minimums = collect_numeric_keyword(node, "minLength");
-    if minimums.is_empty() {
+    Ok(if schema_accepts_empty_string(document, node)? {
         EmptyBehavior::Allowed
-    } else if minimums.iter().all(|minimum| *minimum >= 1) {
-        EmptyBehavior::Rejected
     } else {
-        EmptyBehavior::Conditional
-    }
-}
-
-fn collect_numeric_keyword(node: &Value, keyword: &str) -> Vec<i64> {
-    let mut values = node
-        .get(keyword)
-        .and_then(Value::as_i64)
-        .into_iter()
-        .collect::<Vec<_>>();
-    for composer in ["allOf", "anyOf", "oneOf"] {
-        if let Some(branches) = node.get(composer).and_then(Value::as_array) {
-            for branch in branches {
-                values.extend(collect_numeric_keyword(branch, keyword));
-            }
-        }
-    }
-    values
+        EmptyBehavior::Rejected
+    })
 }
 
 fn default_documentation(node: &Value, kind: FieldPathKind) -> DefaultDocumentation {
@@ -2710,12 +2721,132 @@ mod tests {
     use super::*;
 
     #[test]
+    fn empty_string_behavior_evaluates_supported_json_schema_semantics() {
+        let cases = [
+            (
+                "pattern rejection",
+                serde_json::json!({"type": "string", "pattern": "^value$"}),
+                EmptyBehavior::Rejected,
+            ),
+            (
+                "enum rejection",
+                serde_json::json!({"type": "string", "enum": ["value"]}),
+                EmptyBehavior::Rejected,
+            ),
+            (
+                "const rejection",
+                serde_json::json!({"type": "string", "const": "value"}),
+                EmptyBehavior::Rejected,
+            ),
+            (
+                "allOf rejection",
+                serde_json::json!({
+                    "type": "string",
+                    "allOf": [{"maxLength": 8}, {"minLength": 1}]
+                }),
+                EmptyBehavior::Rejected,
+            ),
+            (
+                "anyOf acceptance",
+                serde_json::json!({
+                    "type": "string",
+                    "anyOf": [{"const": ""}, {"minLength": 1}]
+                }),
+                EmptyBehavior::Allowed,
+            ),
+            (
+                "anyOf rejection",
+                serde_json::json!({
+                    "type": "string",
+                    "anyOf": [{"const": "value"}, {"minLength": 1}]
+                }),
+                EmptyBehavior::Rejected,
+            ),
+            (
+                "oneOf acceptance",
+                serde_json::json!({
+                    "type": "string",
+                    "oneOf": [{"const": ""}, {"minLength": 1}]
+                }),
+                EmptyBehavior::Allowed,
+            ),
+            (
+                "oneOf multiple-match rejection",
+                serde_json::json!({
+                    "type": "string",
+                    "oneOf": [{"maxLength": 8}, {"const": ""}]
+                }),
+                EmptyBehavior::Rejected,
+            ),
+            (
+                "not rejection",
+                serde_json::json!({"type": "string", "not": {"const": ""}}),
+                EmptyBehavior::Rejected,
+            ),
+            (
+                "not acceptance",
+                serde_json::json!({"type": "string", "not": {"const": "value"}}),
+                EmptyBehavior::Allowed,
+            ),
+        ];
+
+        for (label, node, expected) in cases {
+            let document = serde_json::json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema"
+            });
+            assert_eq!(
+                empty_behavior(&document, &node, FieldPathKind::Property)
+                    .unwrap_or_else(|error| panic!("{label} evaluates: {error}")),
+                expected,
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_empty_string_behavior_is_conditional_only_across_real_alternatives() {
+        let document = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "nonEmpty": {"type": "string", "minLength": 1}
+            }
+        });
+        let string_types = vec!["string".to_owned()];
+        assert_eq!(
+            runtime_empty_behavior(
+                &document,
+                FieldPathKind::Property,
+                &[
+                    serde_json::json!({"$ref": "#/$defs/nonEmpty"}),
+                    serde_json::json!({"type": "string", "maxLength": 8}),
+                ],
+                &string_types,
+            )
+            .expect("mixed runtime alternatives evaluate"),
+            EmptyBehavior::Conditional
+        );
+        assert_eq!(
+            runtime_empty_behavior(
+                &document,
+                FieldPathKind::Property,
+                &[
+                    serde_json::json!({"$ref": "#/$defs/nonEmpty"}),
+                    serde_json::json!({"type": "string", "pattern": "^value$"}),
+                ],
+                &string_types,
+            )
+            .expect("uniform runtime rejection evaluates"),
+            EmptyBehavior::Rejected
+        );
+    }
+
+    #[test]
     fn embedded_entry_points_have_no_workspace_or_runtime_input() {
         let coverage = with_embedded_inputs(configuration_reference_coverage)
             .expect("embedded reference coverage is readable");
         assert!(!coverage.source_contract.reads_country_workspaces);
         assert!(!coverage.source_contract.reads_runtime_configuration);
-        assert_eq!(coverage.coverage.path_count, 645);
+        assert_eq!(coverage.coverage.path_count, 649);
     }
 
     #[test]

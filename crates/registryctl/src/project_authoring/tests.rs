@@ -382,6 +382,11 @@ outputs:
             .to_string()
             .contains("Integer schema has incompatible constraints"));
 
+        let boundary_selector = base.replace("maxLength: 64", "maxLength: 1024");
+        let authored: AuthoredIntegrationDocument =
+            serde_norway::from_str(&boundary_selector).expect("boundary selector parses");
+        lower_authored_integration(&authored).expect("4096-byte selector lowers");
+
         let oversized_selector = base.replace("maxLength: 64", "maxLength: 1025");
         let authored: AuthoredIntegrationDocument =
             serde_norway::from_str(&oversized_selector).expect("oversized selector parses");

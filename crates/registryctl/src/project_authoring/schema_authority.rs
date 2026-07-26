@@ -1977,6 +1977,9 @@ mod schema_authority_tests {
         assert_eq!(
             defaults,
             [
+                "/$defs/integrationRequestByteSize",
+                "/$defs/integrationResponseByteSize",
+                "/$defs/integrationSourceByteSize",
                 "/$defs/oid4vci/properties/tx_code/properties/required",
                 "/properties/issuance/properties/algorithm",
             ]
@@ -1985,6 +1988,40 @@ mod schema_authority_tests {
             deprecated.is_empty(),
             "deprecated authoring fields require an explicit reviewed inventory and policy"
         );
+
+        let integration_schema: Value =
+            serde_json::from_str(ProjectSchemaKind::Integration.document())
+                .expect("integration schema parses");
+        for (pointer, parser, expected_bytes) in [
+            (
+                "/$defs/integrationResponseByteSize/default",
+                parse_integration_response_bytes as fn(&AuthoredByteSize) -> Result<u64>,
+                DEFAULT_INTEGRATION_RESPONSE_BYTES,
+            ),
+            (
+                "/$defs/integrationRequestByteSize/default",
+                parse_integration_request_bytes,
+                DEFAULT_INTEGRATION_REQUEST_BYTES,
+            ),
+            (
+                "/$defs/integrationSourceByteSize/default",
+                parse_integration_source_bytes,
+                DEFAULT_INTEGRATION_SOURCE_BYTES,
+            ),
+        ] {
+            let authored: AuthoredByteSize = serde_json::from_value(
+                integration_schema
+                    .pointer(pointer)
+                    .unwrap_or_else(|| panic!("integration schema contains {pointer}"))
+                    .clone(),
+            )
+            .unwrap_or_else(|error| panic!("{pointer} default parses: {error}"));
+            assert_eq!(
+                parser(&authored).unwrap_or_else(|error| panic!("{pointer} default validates: {error}")),
+                expected_bytes,
+                "{pointer} matches the runtime default"
+            );
+        }
 
         let issuance_omitted: IssuanceBinding = serde_json::from_value(json!({
             "issuer": "https://issuer.invalid",

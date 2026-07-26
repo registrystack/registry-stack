@@ -4860,8 +4860,11 @@ fn integration_input_bounds_match_the_production_compiler_limit() {
     })
     .expect_err("selector above the aggregate byte ceiling must be rejected before source access");
     let error = format!("{error:#}");
-    assert!(error.contains("input.household_reference"), "{error}");
-    assert!(error.contains("exceeds 4096 bytes"), "{error}");
+    assert!(
+        error.contains("authored document failed canonical schema validation"),
+        "{error}"
+    );
+    assert!(error.contains("keyword=maximum"), "{error}");
 }
 
 #[test]
@@ -5418,7 +5421,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "44b7218cd4d0b4739e74b756dfbaa26cdfb837ef14985ec9b1248823f99ded9b",
+        "986e116f1ff5f83b5c6aaa6119819dd65e5193f04ffbc83aae283f5373b044ef",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }
@@ -6024,7 +6027,8 @@ fn materialization_size_boundary_accepts_integer_ceiling_and_rejects_human_above
     .expect_err("human-readable materialization size above 1 GiB rejects");
     let rendered = format!("{error:#}");
     assert!(
-        rendered.contains("entity materialization exceeds the v1 bounds"),
+        rendered.contains("authored document failed canonical schema validation")
+            && rendered.contains("keyword=oneOf"),
         "unexpected error: {rendered}"
     );
 }

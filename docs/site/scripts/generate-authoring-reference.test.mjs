@@ -122,6 +122,18 @@ test('accepts one complete, value-safe field reference per covered configuration
   assert.doesNotThrow(() => validateAuthoringReference(data.reference, data.coverage));
 });
 
+test('rejects an allowed empty behavior contradicted by schema constraints', () => {
+  const data = fixtureData();
+  data.reference.fields[0].empty_behavior = 'allowed';
+  data.reference.fields[0].constraints = [
+    { keyword: 'pattern', value: '^[a-z]+$' },
+  ];
+  assert.throws(
+    () => validateAuthoringReference(data.reference, data.coverage),
+    /reports an allowed empty string rejected by pattern/,
+  );
+});
+
 test('publishes identical internal and raw public artifacts only after validation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'registry-doc-reference-'));
   try {

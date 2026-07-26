@@ -258,6 +258,24 @@ export function validateAuthoringReference(reference, coverage) {
         `configuration reference field ${identity} must have an exact product-owned runtime intent profile`,
       );
     }
+    if (field.empty_behavior === 'allowed') {
+      for (const constraint of field.constraints ?? []) {
+        const falselyAllowsEmpty =
+          (constraint.keyword === 'minLength' && constraint.value > 0) ||
+          (constraint.keyword === 'pattern' &&
+            typeof constraint.value === 'string' &&
+            !new RegExp(constraint.value).test('')) ||
+          (constraint.keyword === 'enum' &&
+            Array.isArray(constraint.value) &&
+            !constraint.value.includes('')) ||
+          (constraint.keyword === 'const' && constraint.value !== '');
+        if (falselyAllowsEmpty) {
+          throw new Error(
+            `configuration reference field ${identity} reports an allowed empty string rejected by ${constraint.keyword}`,
+          );
+        }
+      }
+    }
     if (runtimeField && Object.hasOwn(field.default ?? {}, 'schema_value')) {
       throw new Error(
         `configuration reference field ${identity} exposes a runtime default value`,

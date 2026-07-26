@@ -372,10 +372,9 @@ fn lower_project_integration(
                 freshness: snapshot.freshness.clone(),
                 materialization: SnapshotFootprint {
                     max_source_records: entity.materialization.max_records,
-                    max_source_bytes: entity
-                        .materialization
-                        .max_bytes
-                        .bytes("entity.materialization.max_bytes")?,
+                    max_source_bytes: parse_entity_generation_bytes(
+                        &entity.materialization.max_bytes,
+                    )?,
                 },
             },
         },
@@ -902,7 +901,7 @@ fn semantic_digests(
 // A schema or knowledge change must therefore be reviewed for promotion
 // semantics before a new projection can be emitted.
 const PROMOTION_FIELD_KNOWLEDGE_REVISION: &str =
-    "sha256:043707b6702aad55ba7a0697be3d551cd445e16f768b6f632da479a02c5d537c";
+    "sha256:0a095899dc4354edeaf517adacbbeec1aae74eceb80690f654a650ed58361e21";
 
 fn project_promotion_projection(
     loaded: &LoadedRegistryProject,
@@ -1905,13 +1904,10 @@ fn validate_entity_definition(entity: &EntityDefinition) -> Result<()> {
             bail!("entity primary_key must be non-nullable");
         }
     }
+    parse_entity_generation_bytes(&entity.materialization.max_bytes)
+        .context("entity materialization exceeds the v1 bounds")?;
     if entity.materialization.max_records == 0
         || entity.materialization.max_records > 100_000_000
-        || entity
-            .materialization
-            .max_bytes
-            .bytes("entity.materialization.max_bytes")?
-            > 1024 * 1024 * 1024
         || !(1..=16).contains(&entity.materialization.retain_generations)
     {
         bail!("entity materialization exceeds the v1 bounds");

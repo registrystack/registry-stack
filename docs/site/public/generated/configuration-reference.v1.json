@@ -38,12 +38,12 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1758,
+    "path_count": 1762,
     "reference_count": 482,
     "by_schema": {
       "project": 219,
       "environment": 191,
-      "integration": 138,
+      "integration": 142,
       "fixture": 62,
       "entity": 35,
       "relay": 584,
@@ -55,7 +55,7 @@
       "map_key": 25,
       "map_value": 47,
       "array_item": 177,
-      "branch": 96
+      "branch": 100
     },
     "by_sensitivity": {
       "public": 16,
@@ -63,12 +63,12 @@
       "sensitive": 396,
       "secret_reference": 41,
       "redacted_fixture": 50,
-      "structural": 115
+      "structural": 119
     },
     "by_intent_source": {
       "schema_description": 503,
       "reviewed_override": 243,
-      "structural_taxonomy": 121,
+      "structural_taxonomy": 125,
       "reviewed_profile": 891
     },
     "by_intent_profile": {
@@ -921,7 +921,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -1021,7 +1021,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -1117,7 +1117,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -1212,7 +1212,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -2594,7 +2594,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -3156,7 +3156,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -3448,7 +3448,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -3539,7 +3539,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -4114,7 +4114,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -6180,7 +6180,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -6765,7 +6765,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -6860,7 +6860,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -7054,7 +7054,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -7539,7 +7539,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -7926,7 +7926,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -8119,7 +8119,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -8314,7 +8314,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -8409,7 +8409,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -8504,7 +8504,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -8599,7 +8599,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -8694,7 +8694,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -9695,7 +9695,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -9789,7 +9789,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -10566,7 +10566,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -10960,7 +10960,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -11052,7 +11052,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -11148,7 +11148,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -11344,7 +11344,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -11439,7 +11439,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -12002,7 +12002,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -12097,7 +12097,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -12192,7 +12192,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -12287,7 +12287,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -12665,7 +12665,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -12760,7 +12760,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -13053,7 +13053,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -13529,7 +13529,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -14011,7 +14011,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -14392,7 +14392,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -14867,7 +14867,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -15445,7 +15445,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -15628,7 +15628,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -15723,7 +15723,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -17525,7 +17525,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -18384,7 +18384,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -18559,7 +18559,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -19455,7 +19455,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -19838,7 +19838,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -20026,7 +20026,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -20296,7 +20296,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -20485,7 +20485,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -20577,7 +20577,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -22910,7 +22910,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -23202,7 +23202,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -23299,7 +23299,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -24673,7 +24673,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -25800,7 +25800,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -25896,7 +25896,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -28459,7 +28459,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -28555,7 +28555,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -29139,7 +29139,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -29232,7 +29232,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -30010,7 +30010,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -30394,7 +30394,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -33180,7 +33180,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -33281,7 +33281,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -33382,7 +33382,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -33483,7 +33483,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -33584,7 +33584,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -33685,7 +33685,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -33786,7 +33786,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -33967,7 +33967,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -34068,7 +34068,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -34169,7 +34169,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -35003,7 +35003,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -35848,7 +35848,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -36135,7 +36135,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -39152,198 +39152,6 @@
     {
       "address": {
         "schema": "integration",
-        "pointer": "/$defs/byteSize/oneOf/0",
-        "path_kind": "branch"
-      },
-      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
-      "purpose_source": "structural_taxonomy",
-      "semantic_owner": "integration_contract",
-      "human_owner": "integration_maintainers",
-      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
-      "field_type": {
-        "schema_types": [
-          "integer"
-        ],
-        "composed": false
-      },
-      "requiredness": "conditional",
-      "null_behavior": "not_applicable",
-      "empty_behavior": "not_applicable",
-      "default": {
-        "behavior": "not_applicable"
-      },
-      "environment_behavior": "narrows_reviewed_authority",
-      "sensitivity": "structural",
-      "state": "authored",
-      "products": [
-        "registryctl",
-        "relay",
-        "notary",
-        "editor",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "cross_file_semantic",
-        "fixture_execution",
-        "product_build"
-      ],
-      "diagnostic": "registryctl.authoring.integration.invalid",
-      "history_status": "not_verified",
-      "introduced_in": null,
-      "version_history": [],
-      "example": {
-        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
-        "schema_examples_available": false,
-        "contains_country_values": false
-      },
-      "migration": "rebuild_project",
-      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
-      "consumers": [
-        "registryctl_authoring",
-        "registry_relay",
-        "registry_notary",
-        "editor_tooling",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "editor_schemas",
-        "project_build",
-        "relay_config",
-        "notary_config",
-        "fixture_report",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "security",
-        "privacy",
-        "relay",
-        "notary",
-        "compatibility",
-        "documentation",
-        "testing"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values",
-        "branch_has_no_authored_value"
-      ],
-      "constraints": [
-        {
-          "keyword": "maximum",
-          "value": 18446744073709551615
-        },
-        {
-          "keyword": "minimum",
-          "value": 1
-        },
-        {
-          "keyword": "type",
-          "value": "integer"
-        }
-      ]
-    },
-    {
-      "address": {
-        "schema": "integration",
-        "pointer": "/$defs/byteSize/oneOf/1",
-        "path_kind": "branch"
-      },
-      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
-      "purpose_source": "structural_taxonomy",
-      "semantic_owner": "integration_contract",
-      "human_owner": "integration_maintainers",
-      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
-      "field_type": {
-        "schema_types": [
-          "string"
-        ],
-        "composed": false
-      },
-      "requiredness": "conditional",
-      "null_behavior": "not_applicable",
-      "empty_behavior": "not_applicable",
-      "default": {
-        "behavior": "not_applicable"
-      },
-      "environment_behavior": "narrows_reviewed_authority",
-      "sensitivity": "structural",
-      "state": "authored",
-      "products": [
-        "registryctl",
-        "relay",
-        "notary",
-        "editor",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "cross_file_semantic",
-        "fixture_execution",
-        "product_build"
-      ],
-      "diagnostic": "registryctl.authoring.integration.invalid",
-      "history_status": "not_verified",
-      "introduced_in": null,
-      "version_history": [],
-      "example": {
-        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
-        "schema_examples_available": false,
-        "contains_country_values": false
-      },
-      "migration": "rebuild_project",
-      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
-      "consumers": [
-        "registryctl_authoring",
-        "registry_relay",
-        "registry_notary",
-        "editor_tooling",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "editor_schemas",
-        "project_build",
-        "relay_config",
-        "notary_config",
-        "fixture_report",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "security",
-        "privacy",
-        "relay",
-        "notary",
-        "compatibility",
-        "documentation",
-        "testing"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values",
-        "branch_has_no_authored_value"
-      ],
-      "constraints": [
-        {
-          "keyword": "pattern",
-          "value": "^[1-9][0-9]*(?:KiB|MiB)$"
-        },
-        {
-          "keyword": "type",
-          "value": "string"
-        }
-      ]
-    },
-    {
-      "address": {
-        "schema": "integration",
         "pointer": "/$defs/capability/oneOf/0",
         "path_kind": "branch"
       },
@@ -40443,7 +40251,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -40738,7 +40546,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -41213,7 +41021,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -41588,7 +41396,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -41964,7 +41772,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -43887,7 +43695,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -44144,7 +43952,7 @@
         "pointer": "/$defs/input/properties/maxLength",
         "path_kind": "property"
       },
-      "purpose": "Caps the character length accepted for a string-valued integration input.",
+      "purpose": "Caps a string-valued integration input at 1,024 Unicode scalar values, deriving its conservative 4,096-byte UTF-8 ceiling.",
       "purpose_source": "reviewed_override",
       "semantic_owner": "integration_contract",
       "human_owner": "integration_maintainers",
@@ -44223,7 +44031,7 @@
       "constraints": [
         {
           "keyword": "maximum",
-          "value": 16384
+          "value": 1024
         },
         {
           "keyword": "minimum",
@@ -45019,7 +44827,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -45096,6 +44904,582 @@
         "schema": "integration",
         "pointer": "/$defs/inputName"
       }
+    },
+    {
+      "address": {
+        "schema": "integration",
+        "pointer": "/$defs/integrationRequestByteSize/oneOf/0",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [
+          "integer"
+        ],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "maximum",
+          "value": 1048576
+        },
+        {
+          "keyword": "minimum",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": "integer"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
+        "pointer": "/$defs/integrationRequestByteSize/oneOf/1",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "pattern",
+          "value": "^(?:(?:[1-9][0-9]{0,2}|10[0-1][0-9]|102[0-4])KiB|1MiB)$"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
+        "pointer": "/$defs/integrationResponseByteSize/oneOf/0",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [
+          "integer"
+        ],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "maximum",
+          "value": 8388608
+        },
+        {
+          "keyword": "minimum",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": "integer"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
+        "pointer": "/$defs/integrationResponseByteSize/oneOf/1",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "pattern",
+          "value": "^(?:(?:[1-9][0-9]{0,2}|[1-7][0-9]{3}|80[0-9]{2}|81[0-8][0-9]|819[0-2])KiB|[1-8]MiB)$"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
+        "pointer": "/$defs/integrationSourceByteSize/oneOf/0",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [
+          "integer"
+        ],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "maximum",
+          "value": 16777216
+        },
+        {
+          "keyword": "minimum",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": "integer"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "integration",
+        "pointer": "/$defs/integrationSourceByteSize/oneOf/1",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "integration_contract",
+      "human_owner": "integration_maintainers",
+      "scope": "A reviewed source contract, bounded adaptation capability, typed inputs and outputs, and offline verification requirements.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "fixture_execution",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.integration.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use a bounded synthetic source contract and fixture-safe values that demonstrate behavior without revealing a country endpoint or record.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Update affected fixtures and rebuild the project; re-review authority whenever source access, credentials, or bounds change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "pattern",
+          "value": "^(?:(?:[1-9][0-9]{0,3}|1[0-5][0-9]{3}|16[0-2][0-9]{2}|163[0-7][0-9]|1638[0-4])KiB|(?:[1-9]|1[0-6])MiB)$"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
     },
     {
       "address": {
@@ -45213,7 +45597,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -45293,7 +45677,7 @@
         "pointer": "/$defs/limits/properties/request_bytes",
         "path_kind": "property"
       },
-      "purpose": "Positive byte count expressed as an integer or a KiB/MiB quantity.",
+      "purpose": "Maximum aggregate author-controlled request bytes for one execution, defaulting to 64 KiB and capped at 1 MiB. Use a positive byte integer or canonical KiB/MiB value.",
       "purpose_source": "schema_description",
       "semantic_owner": "integration_contract",
       "human_owner": "integration_maintainers",
@@ -45303,14 +45687,15 @@
           "integer",
           "string"
         ],
-        "local_reference": "#/$defs/byteSize",
+        "local_reference": "#/$defs/integrationRequestByteSize",
         "composed": false
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
-        "behavior": "no_schema_default"
+        "behavior": "schema_default",
+        "schema_value": "64KiB"
       },
       "environment_behavior": "narrows_reviewed_authority",
       "sensitivity": "internal",
@@ -45374,7 +45759,7 @@
       "constraints": [],
       "local_reference": {
         "schema": "integration",
-        "pointer": "/$defs/byteSize"
+        "pointer": "/$defs/integrationRequestByteSize"
       }
     },
     {
@@ -45383,7 +45768,7 @@
         "pointer": "/$defs/limits/properties/source_bytes",
         "path_kind": "property"
       },
-      "purpose": "Positive byte count expressed as an integer or a KiB/MiB quantity.",
+      "purpose": "Maximum aggregate source-response bytes for one execution, defaulting to 2 MiB and capped at 16 MiB. Use a positive byte integer or canonical KiB/MiB value.",
       "purpose_source": "schema_description",
       "semantic_owner": "integration_contract",
       "human_owner": "integration_maintainers",
@@ -45393,14 +45778,15 @@
           "integer",
           "string"
         ],
-        "local_reference": "#/$defs/byteSize",
+        "local_reference": "#/$defs/integrationSourceByteSize",
         "composed": false
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
-        "behavior": "no_schema_default"
+        "behavior": "schema_default",
+        "schema_value": "2MiB"
       },
       "environment_behavior": "narrows_reviewed_authority",
       "sensitivity": "internal",
@@ -45464,7 +45850,7 @@
       "constraints": [],
       "local_reference": {
         "schema": "integration",
-        "pointer": "/$defs/byteSize"
+        "pointer": "/$defs/integrationSourceByteSize"
       }
     },
     {
@@ -45786,7 +46172,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -46350,7 +46736,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -46633,7 +47019,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -46726,7 +47112,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -47489,7 +47875,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -47583,7 +47969,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -48732,7 +49118,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -48992,7 +49378,7 @@
         "pointer": "/$defs/source/properties/response/properties/max_bytes",
         "path_kind": "property"
       },
-      "purpose": "Positive byte count expressed as an integer or a KiB/MiB quantity.",
+      "purpose": "Maximum bytes accepted from one source response, defaulting to 512 KiB and capped at 8 MiB. Use a positive byte integer or canonical KiB/MiB value.",
       "purpose_source": "schema_description",
       "semantic_owner": "integration_contract",
       "human_owner": "integration_maintainers",
@@ -49002,14 +49388,15 @@
           "integer",
           "string"
         ],
-        "local_reference": "#/$defs/byteSize",
+        "local_reference": "#/$defs/integrationResponseByteSize",
         "composed": false
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
-        "behavior": "no_schema_default"
+        "behavior": "schema_default",
+        "schema_value": "512KiB"
       },
       "environment_behavior": "narrows_reviewed_authority",
       "sensitivity": "internal",
@@ -49073,7 +49460,7 @@
       "constraints": [],
       "local_reference": {
         "schema": "integration",
-        "pointer": "/$defs/byteSize"
+        "pointer": "/$defs/integrationResponseByteSize"
       }
     },
     {
@@ -49192,7 +49579,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -50126,7 +50513,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -50423,7 +50810,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -51456,7 +51843,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -55880,7 +56267,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -58090,7 +58477,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -58273,7 +58660,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -58785,7 +59172,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -58965,7 +59352,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -59190,7 +59577,7 @@
       "constraints": [
         {
           "keyword": "pattern",
-          "value": "^[1-9][0-9]*(?:KiB|MiB)$"
+          "value": "^(?:(?:[1-9][0-9]{0,5}|10[0-3][0-9]{4}|104[0-7][0-9]{3}|1048[0-4][0-9]{2}|10485[0-6][0-9]|104857[0-6])KiB|(?:[1-9][0-9]{0,2}|10[0-1][0-9]|102[0-4])MiB)$"
         },
         {
           "keyword": "type",
@@ -59306,7 +59693,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -59638,7 +60025,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -63377,7 +63764,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -63461,7 +63848,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -63545,7 +63932,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -68930,7 +69317,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -69023,7 +69410,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -69116,7 +69503,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -70610,7 +70997,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -70703,7 +71090,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -70796,7 +71183,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -72784,7 +73171,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -72863,7 +73250,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -72942,7 +73329,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -73772,7 +74159,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "not_applicable"
       },
@@ -73862,7 +74249,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "not_applicable"
       },
@@ -73952,7 +74339,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "not_applicable"
       },
@@ -74042,7 +74429,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "not_applicable"
       },
@@ -74132,7 +74519,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "not_applicable"
       },
@@ -75428,7 +75815,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -75750,7 +76137,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization supplies the reviewed product-owned scalar default; its value is omitted from this value-free reference."
@@ -75834,7 +76221,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "conditional",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -75995,7 +76382,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -76170,7 +76557,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -76341,7 +76728,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -76426,7 +76813,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -76756,7 +77143,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -78934,7 +79321,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -79445,7 +79832,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -79610,7 +79997,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -79894,7 +80281,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -79980,7 +80367,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -80066,7 +80453,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -80155,7 +80542,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -80241,7 +80628,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -80327,7 +80714,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -80413,7 +80800,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -80499,7 +80886,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -80753,7 +81140,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -81011,7 +81398,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -81093,7 +81480,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -81175,7 +81562,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -81491,7 +81878,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -81570,7 +81957,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -81649,7 +82036,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -81807,7 +82194,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -82207,7 +82594,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -82292,7 +82679,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -82730,7 +83117,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -83605,7 +83992,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -83926,7 +84313,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -84096,7 +84483,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "conditional",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -84424,7 +84811,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -84519,7 +84906,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "conditional",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a configuration value."
@@ -84778,7 +85165,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "conditional",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -86987,7 +87374,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization supplies the reviewed product-owned scalar default; its value is omitted from this value-free reference."
@@ -87076,7 +87463,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization supplies the reviewed product-owned scalar default; its value is omitted from this value-free reference."
@@ -87165,7 +87552,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization supplies the reviewed product-owned scalar default; its value is omitted from this value-free reference."
@@ -89819,7 +90206,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -90691,7 +91078,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -92069,7 +92456,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -94458,7 +94845,7 @@
       },
       "requiredness": "not_applicable",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "not_applicable"
       },
@@ -95171,7 +95558,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -95343,7 +95730,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -96201,7 +96588,7 @@
       },
       "requiredness": "conditional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -96290,7 +96677,7 @@
       },
       "requiredness": "conditional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -96378,7 +96765,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -96461,7 +96848,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -96942,7 +97329,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "conditional",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a configuration value."
@@ -97877,7 +98264,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization supplies the reviewed product-owned scalar default; its value is omitted from this value-free reference."
@@ -97964,7 +98351,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization supplies the reviewed product-owned scalar default; its value is omitted from this value-free reference."
@@ -98051,7 +98438,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization supplies the reviewed product-owned scalar default; its value is omitted from this value-free reference."
@@ -98138,7 +98525,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization supplies the reviewed product-owned scalar default; its value is omitted from this value-free reference."
@@ -99128,7 +99515,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -99212,7 +99599,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "conditional",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a configuration value."
@@ -100301,7 +100688,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "conditional",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -100391,7 +100778,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -100632,7 +101019,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -100969,7 +101356,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -101057,7 +101444,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -101468,7 +101855,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -101633,7 +102020,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -101722,7 +102109,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -101888,7 +102275,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -103338,7 +103725,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -103648,7 +104035,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -104188,7 +104575,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -113075,7 +113462,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -113160,7 +113547,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -114365,7 +114752,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "conditional",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a configuration value."
@@ -116734,7 +117121,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "conditional",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a configuration value."
@@ -116826,7 +117213,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "conditional",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a configuration value."
@@ -137097,7 +137484,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "reviewed_runtime_default",
         "reviewed_behavior": "When omitted, Rust deserialization supplies the reviewed product-owned scalar default; its value is omitted from this value-free reference."
@@ -140403,7 +140790,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -140804,7 +141191,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -141039,7 +141426,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -141440,7 +141827,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -142228,7 +142615,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -142492,7 +142879,7 @@
       },
       "requiredness": "required",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "no_schema_default"
       },
@@ -145132,7 +145519,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -147581,7 +147968,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -147751,7 +148138,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -147841,7 +148228,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."
@@ -148010,7 +148397,7 @@
       },
       "requiredness": "optional",
       "null_behavior": "rejected",
-      "empty_behavior": "allowed",
+      "empty_behavior": "rejected",
       "default": {
         "behavior": "schema_default",
         "reviewed_behavior": "The product-owned JSON Schema publishes the default; its value is intentionally omitted from this value-free reference."

@@ -656,7 +656,7 @@ fn entity_materialization_resource_id(
         },
         "acquisition_policy": {
             "max_records": entity.materialization.max_records,
-            "max_bytes": entity.materialization.max_bytes.bytes("entity.materialization.max_bytes")?,
+            "max_bytes": parse_entity_generation_bytes(&entity.materialization.max_bytes)?,
             "refresh_ms": refresh_ms,
             "retain_generations": entity.materialization.retain_generations,
         },

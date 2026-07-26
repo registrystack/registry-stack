@@ -158,8 +158,12 @@
     { "schema": "integration", "pointer": "/properties/outputs/oneOf/0/additionalProperties", "path_kind": "map_value" },
     { "schema": "integration", "pointer": "/properties/outputs/oneOf/1", "path_kind": "branch" },
     { "schema": "integration", "pointer": "/properties/outputs/oneOf/1/items", "path_kind": "array_item" },
-    { "schema": "integration", "pointer": "/$defs/byteSize/oneOf/0", "path_kind": "branch" },
-    { "schema": "integration", "pointer": "/$defs/byteSize/oneOf/1", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/integrationResponseByteSize/oneOf/0", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/integrationResponseByteSize/oneOf/1", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/integrationRequestByteSize/oneOf/0", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/integrationRequestByteSize/oneOf/1", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/integrationSourceByteSize/oneOf/0", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/integrationSourceByteSize/oneOf/1", "path_kind": "branch" },
     { "schema": "integration", "pointer": "/$defs/scalarType/oneOf/0", "path_kind": "branch" },
     { "schema": "integration", "pointer": "/$defs/scalarType/oneOf/1", "path_kind": "branch" },
     { "schema": "integration", "pointer": "/$defs/scalarType/oneOf/1/prefixItems/0", "path_kind": "array_item" },
@@ -1085,7 +1089,7 @@
     {
       "schema": "integration",
       "pointer": "/$defs/input/properties/maxLength",
-      "purpose": "Caps the character length accepted for a string-valued integration input."
+      "purpose": "Caps a string-valued integration input at 1,024 Unicode scalar values, deriving its conservative 4,096-byte UTF-8 ceiling."
     },
     {
       "schema": "integration",

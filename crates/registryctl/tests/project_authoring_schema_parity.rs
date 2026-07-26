@@ -249,7 +249,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         [
             (SchemaKind::Project, 219),
             (SchemaKind::Environment, 191),
-            (SchemaKind::Integration, 138),
+            (SchemaKind::Integration, 142),
             (SchemaKind::Fixture, 62),
             (SchemaKind::Entity, 35),
         ]
@@ -265,7 +265,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
             (FieldPathKind::MapKey, 25),
             (FieldPathKind::MapValue, 32),
             (FieldPathKind::ArrayItem, 32),
-            (FieldPathKind::Branch, 96),
+            (FieldPathKind::Branch, 100),
         ]
         .into_iter()
         .collect(),
@@ -279,7 +279,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
             (Sensitivity::Sensitive, 64),
             (Sensitivity::SecretReference, 14),
             (Sensitivity::RedactedFixture, 50),
-            (Sensitivity::Structural, 101),
+            (Sensitivity::Structural, 105),
         ]
         .into_iter()
         .collect(),
@@ -287,7 +287,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     );
     assert_eq!(
         index.by_path().len(),
-        645,
+        649,
         "the field-knowledge gate covers every published schema path"
     );
     assert_eq!(
@@ -817,29 +817,29 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
             (
                 "integration",
                 PublishedStructuralInventory {
-                    nodes: 159,
+                    nodes: 165,
                     local_refs: 35,
-                    union_nodes: 8,
-                    union_branches: 19,
+                    union_nodes: 10,
+                    union_branches: 23,
                     conditionals: 0,
                     objects: 33,
                     closed_objects: 27,
                     typed_maps: 6,
                     open_maps: 0,
                     arrays: 9,
-                    scalar_types: 46,
+                    scalar_types: 50,
                     nullable_nodes: 0,
-                    integer_lower_bounds: 14,
-                    integer_upper_bounds: 14,
+                    integer_lower_bounds: 16,
+                    integer_upper_bounds: 16,
                     string_length_bounds: 14,
-                    string_patterns: 18,
+                    string_patterns: 20,
                     array_size_bounds: 9,
                     unique_arrays: 8,
                     object_size_bounds: 8,
                     property_name_constraints: 3,
                     enums: 10,
                     consts: 14,
-                    defaults: 0,
+                    defaults: 3,
                     deprecations: 0,
                 },
             ),

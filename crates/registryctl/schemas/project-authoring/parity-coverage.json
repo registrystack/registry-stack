@@ -739,6 +739,97 @@
       }
     },
     {
+      "id": "integration-input-over-character-ceiling",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["maximum"],
+      "schema": "integration",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
+      "document": "integrations/eligibility/integration.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/input/household_reference/maxLength",
+        "value": 1025
+      }
+    },
+    {
+      "id": "integration-response-over-integer-byte-ceiling",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
+      "schema": "integration",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
+      "document": "integrations/birth-record/integration.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/source/response/max_bytes",
+        "value": 8388609
+      }
+    },
+    {
+      "id": "integration-response-over-human-byte-ceiling",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
+      "schema": "integration",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
+      "document": "integrations/birth-record/integration.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/source/response/max_bytes",
+        "value": "9MiB"
+      }
+    },
+    {
+      "id": "integration-request-over-integer-byte-ceiling",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
+      "schema": "integration",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
+      "document": "integrations/birth-record/integration.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/limits/request_bytes",
+        "value": 1048577
+      }
+    },
+    {
+      "id": "integration-request-over-human-byte-ceiling",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
+      "schema": "integration",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
+      "document": "integrations/birth-record/integration.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/limits/request_bytes",
+        "value": "1025KiB"
+      }
+    },
+    {
+      "id": "integration-source-over-integer-byte-ceiling",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
+      "schema": "integration",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
+      "document": "integrations/birth-record/integration.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/limits/source_bytes",
+        "value": 16777217
+      }
+    },
+    {
+      "id": "integration-source-over-human-byte-ceiling",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
+      "schema": "integration",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
+      "document": "integrations/birth-record/integration.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/limits/source_bytes",
+        "value": "17MiB"
+      }
+    },
+    {
       "id": "integration-oauth-refresh-skew-at-minimum-token-lifetime",
       "dimension": "boundary",
       "expected_failing_keywords": ["oneOf"],
@@ -878,6 +969,19 @@
         "operation": "set",
         "pointer": "/materialization/max_bytes",
         "value": 1073741825
+      }
+    },
+    {
+      "id": "entity-over-ceiling-human-max-bytes",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
+      "schema": "entity",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
+      "document": "entities/population.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/materialization/max_bytes",
+        "value": "1025MiB"
       }
     },
     {

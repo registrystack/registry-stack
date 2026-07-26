@@ -33,11 +33,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Entity integer fields and integration integer inputs now expose the same
   inclusive JSON-safe bounds in authoring schemas, editor setup, and generated
   configuration reference that Registryctl already enforces at runtime.
-- Entity `materialization.max_bytes` integer values now expose the same 1 GiB
-  ceiling in the authoring schema, editor setup, and generated configuration
-  reference that Registryctl already enforces at runtime. The field description
-  states the same ceiling for human-readable KiB/MiB values, which remain
-  semantically validated.
+- Generated configuration references now evaluate empty strings against the
+  complete published schema constraint instead of inferring behavior only from
+  `minLength`. Pattern, enum, const, and composed constraints now report
+  rejected or conditional empty behavior accurately.
+- **BREAKING:** Before the Registry Stack 1.0 compatibility promise takes
+  effect, integration response, request, and aggregate source byte fields now
+  publish distinct schema bounds and defaults. Their integer and canonical
+  KiB/MiB forms expose the existing runtime ceilings of 8 MiB, 1 MiB, and
+  16 MiB, respectively. Entity generation KiB/MiB values now expose the
+  existing 1 GiB runtime ceiling as well. Schema-only consumers may newly
+  reject out-of-bound human-readable values that Registryctl runtime already
+  rejected.
+- **BREAKING:** Before the Registry Stack 1.0 compatibility promise takes
+  effect, integration input `maxLength` now publishes the existing
+  1,024-character schema ceiling and its derived 4,096-byte UTF-8 ceiling.
+  Schema-only consumers may newly reject values from 1,025 through 16,384,
+  which Registryctl runtime already rejected.
 - OAuth `refresh_skew` now accepts the documented safe interval through
   59,999ms, including an explicit `30s` value that matches the generated
   default, while the schema, generated configuration reference, and runtime

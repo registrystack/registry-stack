@@ -26,12 +26,12 @@ test('committed internal and public reference artifacts are exact and complete',
   validateAuthoringReference(reference, coverage);
   assert.deepEqual(publicReference, reference);
   assert.deepEqual(publicCoverage, coverage);
-  assert.equal(reference.fields.length, 1758);
-  assert.equal(coverage.reviewed_intent_assignment_required_count, 1758);
-  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1758);
-  assert.equal(coverage.distinct_reviewed_intent_count, 588);
-  assert.equal(coverage.distinct_reviewed_intents_reused_count, 83);
-  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1253);
+  assert.equal(reference.fields.length, 1762);
+  assert.equal(coverage.reviewed_intent_assignment_required_count, 1762);
+  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1762);
+  assert.equal(coverage.distinct_reviewed_intent_count, 590);
+  assert.equal(coverage.distinct_reviewed_intents_reused_count, 82);
+  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1254);
   assert.deepEqual(reference.reference_baseline, {
     generator_lifecycle: 'unreleased',
     published_release: null,
@@ -52,7 +52,7 @@ test('committed internal and public reference artifacts are exact and complete',
   assert.deepEqual(reference.coverage.by_schema, {
     project: 219,
     environment: 191,
-    integration: 138,
+    integration: 142,
     fixture: 62,
     entity: 35,
     relay: 584,
@@ -64,7 +64,7 @@ test('committed internal and public reference artifacts are exact and complete',
     map_key: 25,
     map_value: 47,
     array_item: 177,
-    branch: 96,
+    branch: 100,
   });
   assert.equal(
     Object.values(reference.coverage.by_intent_profile).reduce(
@@ -73,6 +73,67 @@ test('committed internal and public reference artifacts are exact and complete',
     ),
     1113,
   );
+  assert.equal(reference.fields.filter((field) => field.empty_behavior === 'allowed').length, 523);
+  assert.equal(reference.fields.filter((field) => field.empty_behavior === 'rejected').length, 303);
+  assert.equal(
+    reference.fields.filter((field) => field.empty_behavior === 'not_applicable').length,
+    936,
+  );
+});
+
+test('generated reference publishes field-specific byte defaults and ceilings', async () => {
+  const reference = await readJson('src/data/generated/configuration-reference.json');
+  const field = (pointer) =>
+    reference.fields.find(
+      (candidate) =>
+        candidate.address.schema === 'integration' && candidate.address.pointer === pointer,
+    );
+  const constraint = (pointer, keyword) =>
+    field(pointer).constraints.find((candidate) => candidate.keyword === keyword)?.value;
+
+  assert.equal(
+    field('/$defs/source/properties/response/properties/max_bytes').default.schema_value,
+    '512KiB',
+  );
+  assert.equal(
+    field('/$defs/limits/properties/request_bytes').default.schema_value,
+    '64KiB',
+  );
+  assert.equal(
+    field('/$defs/limits/properties/source_bytes').default.schema_value,
+    '2MiB',
+  );
+  assert.equal(constraint('/$defs/integrationResponseByteSize/oneOf/0', 'maximum'), 8388608);
+  assert.equal(constraint('/$defs/integrationRequestByteSize/oneOf/0', 'maximum'), 1048576);
+  assert.equal(constraint('/$defs/integrationSourceByteSize/oneOf/0', 'maximum'), 16777216);
+  assert.equal(
+    constraint('/$defs/input/properties/maxLength', 'maximum'),
+    1024,
+  );
+});
+
+test('Script tutorial deadline matches the generated authoring authority', async () => {
+  const [reference, tutorial] = await Promise.all([
+    readJson('src/data/generated/configuration-reference.json'),
+    readFile(
+      resolve(siteRoot, 'src/content/docs/tutorials/configure-project-script-adapter.mdx'),
+      'utf8',
+    ),
+  ]);
+  const deadline = reference.fields.find(
+    (field) =>
+      field.address.schema === 'integration' &&
+      field.address.pointer === '/$defs/limits/properties/deadline',
+  );
+  assert.ok(deadline, 'generated reference contains the integration deadline');
+  const pattern = deadline.constraints.find((constraint) => constraint.keyword === 'pattern')?.value;
+  assert.equal(typeof pattern, 'string');
+  const authority = new RegExp(pattern);
+  assert.equal(authority.test('20s'), true);
+  assert.equal(authority.test('21s'), false);
+  assert.equal(authority.test('60s'), false);
+  assert.match(tutorial, /hard\s+ceilings[^.]*20 seconds\./s);
+  assert.doesNotMatch(tutorial, /hard\s+ceilings[^.]*60 seconds\./s);
 });
 
 test('published reference page identifies generated sources and the no-country-value boundary', async () => {
@@ -157,5 +218,6 @@ test('committed reference and coverage are byte-exact to the CLI', async () => {
   assert.equal(publicReference, referenceStdout);
   assert.equal(committedCoverage, coverageStdout);
   assert.equal(publicCoverage, coverageStdout);
-  assert.match(committedReference, /"value": 18446744073709551615/);
+  assert.match(committedReference, /"schema_value": "512KiB"/);
+  assert.match(committedReference, /"value": 16777216/);
 });

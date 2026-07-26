@@ -27,7 +27,7 @@
           "examples": ["16MiB"],
           "oneOf": [
             {"x-registry-field": "branch", "type": "integer", "minimum": 1, "maximum": 1073741824 },
-            {"x-registry-field": "branch", "type": "string", "pattern": "^[1-9][0-9]*(?:KiB|MiB)$" }
+            {"x-registry-field": "branch", "type": "string", "pattern": "^(?:(?:[1-9][0-9]{0,5}|10[0-3][0-9]{4}|104[0-7][0-9]{3}|1048[0-4][0-9]{2}|10485[0-6][0-9]|104857[0-6])KiB|(?:[1-9][0-9]{0,2}|10[0-1][0-9]|102[0-4])MiB)$" }
           ]
         },
         "refresh": {
