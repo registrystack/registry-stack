@@ -26,7 +26,6 @@ coverage:
 flags:
   platform:
     paths:
-      - "crates/registry-config-report/"
       - "crates/registry-platform-*/**"
     carryforward: true
   notary-postgres:
