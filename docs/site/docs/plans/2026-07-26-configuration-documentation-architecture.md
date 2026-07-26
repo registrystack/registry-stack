@@ -1412,6 +1412,11 @@ of them are source shapes, so this proposal reads all five on the source-shape a
 | `script` | A source recipe needing more than one bounded call | `capability.script`, `adapter.rhai`, `xw.v1`; tutorial `tutorials/configure-project-script-adapter`, plus the `fhir-r4`, `dhis2-tracker`, and `opencrvs-dci` starters |
 | `snapshot` | An immutable local snapshot | `init --from snapshot`, `capability.snapshot`; tutorial `tutorials/configure-project-snapshot-materialization` |
 
+The spreadsheet row sits in a different authoring workflow from the other four, which B.1 sets out: it
+produces a directly edited `relay/config.yaml` rather than the five authored project surfaces. The
+chooser page has to say which workflow a row puts the reader in, because the file they edit and the
+reference page they need both change with it.
+
 A second reading of "OpenAPI" is the generated `openapi.json` contract a configured Relay or Notary
 serves to consumers. That is a publishing concern, not an authoring journey, so this proposal keeps
 it under generated artifacts (B.6). If the second reading was intended, only the OpenAPI row of B.3
