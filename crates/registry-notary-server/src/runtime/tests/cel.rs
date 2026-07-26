@@ -214,6 +214,80 @@ fn registry_cel_startup_is_limited_to_one_output_root_and_declared_variables() {
 
 #[cfg(feature = "registry-notary-cel")]
 #[test]
+fn source_free_cel_startup_accepts_a_bounded_string_dependency_below_nine_bytes() {
+    let mut dependency = test_claim("dependency", Vec::new(), false);
+    dependency.value.value_type = "string".to_string();
+    dependency.value.max_bytes = Some(1);
+    let mut selected = test_claim("selected", vec!["dependency"], false);
+    selected.value.value_type = "string".to_string();
+    selected.value.max_bytes = Some(1);
+    selected.rule = RuleConfig::Cel {
+        expression: "claims.prior.value".to_string(),
+        bindings: CelBindingsConfig {
+            claims: BTreeMap::from([(
+                "prior".to_string(),
+                registry_notary_core::ClaimBindingConfig {
+                    claim: "dependency".to_string(),
+                    binding_type: None,
+                },
+            )]),
+            vars: BTreeMap::new(),
+        },
+    };
+    let evidence = EvidenceConfig {
+        enabled: true,
+        service_id: "runtime.test".to_string(),
+        claims: vec![dependency, selected.clone()],
+        ..EvidenceConfig::default()
+    };
+
+    validate_cel_claims_for_startup(&evidence, &RegistryNotaryCelConfig::default())
+        .expect("a type-correct one-byte dependency preview satisfies the claim bound");
+    assert!(matches!(
+        validate_claim_value_config(&json!("xx"), &selected.value),
+        Err(EvidenceError::RuleEvaluationFailed)
+    ));
+}
+
+#[cfg(feature = "registry-notary-cel")]
+#[test]
+fn registry_cel_startup_accepts_a_bounded_string_output_below_nine_bytes() {
+    let mut claim = registry_claim(
+        "short-code",
+        RuleConfig::Cel {
+            expression: "enrollment.registration_status".to_string(),
+            bindings: CelBindingsConfig::default(),
+        },
+        "string",
+    );
+    claim.value.max_bytes = Some(1);
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+        panic!("registry-backed claim")
+    };
+    consultations
+        .get_mut("enrollment")
+        .expect("consultation exists")
+        .outputs
+        .insert(
+            "registration_status".to_string(),
+            registry_notary_core::RelayOutputContract::String {
+                nullable: false,
+                max_bytes: 1,
+            },
+        );
+    let evidence = EvidenceConfig {
+        enabled: true,
+        service_id: "runtime.test".to_string(),
+        claims: vec![claim],
+        ..EvidenceConfig::default()
+    };
+
+    validate_cel_claims_for_startup(&evidence, &RegistryNotaryCelConfig::default())
+        .expect("a type-correct one-byte Relay preview satisfies the claim bound");
+}
+
+#[cfg(feature = "registry-notary-cel")]
+#[test]
 fn cel_startup_validation_rejects_unknown_roots_and_regex_usage() {
     assert!(validate_cel_expression_roots(
         "source.farmer.total_farmed_area < 4 && claims.prior.satisfied"

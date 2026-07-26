@@ -233,13 +233,12 @@ pub(super) fn cel_preflight_root_bindings(
 
     let mut claims = Map::new();
     for (alias, binding) in &bindings.claims {
-        let value_type = evidence
+        let value = evidence
             .claims
             .iter()
             .find(|candidate| candidate.id == binding.claim)
-            .map(|candidate| candidate.value.value_type.as_str())
-            .unwrap_or("boolean");
-        let value = cel_dummy_value_for_type(value_type);
+            .map(|candidate| cel_dummy_value_for_config(&candidate.value))
+            .unwrap_or(Value::Bool(true));
         claims.insert(
             alias.clone(),
             json!({
@@ -279,24 +278,37 @@ fn registry_output_dummy_value(output: &registry_notary_core::RelayOutputContrac
     match output {
         registry_notary_core::RelayOutputContract::Boolean { .. } => Value::Bool(true),
         registry_notary_core::RelayOutputContract::Integer { minimum, .. } => json!(minimum),
-        registry_notary_core::RelayOutputContract::String { .. } => json!("preflight"),
+        registry_notary_core::RelayOutputContract::String { max_bytes, .. } => {
+            bounded_string_preview(Some(*max_bytes))
+        }
         registry_notary_core::RelayOutputContract::Date { .. } => json!("2000-01-01"),
     }
 }
 
 #[cfg(feature = "registry-notary-cel")]
-pub(super) fn cel_dummy_value_for_type(value_type: &str) -> Value {
-    match value_type {
+fn cel_dummy_value_for_config(config: &registry_notary_core::ClaimValueConfig) -> Value {
+    match config.value_type.as_str() {
         "boolean" | "bool" => Value::Bool(true),
         "number" | "float" | "double" => json!(1.0),
         "integer" | "int" => json!(1),
         "date" => json!("2000-01-01"),
-        "datetime" | "date-time" => json!("2000-01-01T00:00:00Z"),
+        "datetime" | "date-time" | "string" | "uri" | "" | "unknown" => {
+            bounded_string_preview(config.max_bytes)
+        }
         "array" | "list" => json!([]),
         "object" => json!({}),
         "null" => Value::Null,
-        _ => json!("preflight"),
+        _ => bounded_string_preview(config.max_bytes),
     }
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn bounded_string_preview(max_bytes: Option<u32>) -> Value {
+    Value::String(if max_bytes == Some(0) {
+        String::new()
+    } else {
+        "x".to_string()
+    })
 }
 
 #[cfg(feature = "registry-notary-cel")]

@@ -56,7 +56,7 @@ by rate limits and disclosure controls.
 ## CEL worker lifecycle
 
 Registry Notary starts a CEL worker pool only when at least one configured
-claim uses CEL. Before listener binding, every initial worker must answer a
+claim uses CEL. Before listener binding, every initial worker must answer one
 fixed, value-free CEL protocol probe and remain live through activation. One
 10-second wall-clock deadline covers the complete concurrent spawn-and-probe
 batch; it is not a separate allowance for each worker. The bound is

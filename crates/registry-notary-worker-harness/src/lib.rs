@@ -23,6 +23,11 @@ use tokio::{
 };
 use tracing::error;
 
+// A protocol reply alone does not prove usable capacity when the process exits
+// immediately after flushing it. Observe one short, value-free liveness window
+// without sending a second protocol request.
+const POST_PROBE_LIVENESS_WINDOW: Duration = Duration::from_millis(25);
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct WorkerCommand {
     pub program: PathBuf,
@@ -631,42 +636,6 @@ impl WorkerPool {
         }
         snapshot.warming_workers == 0 && current_workers == snapshot.max_workers
     }
-
-    pub async fn prove_ready(&self) -> bool {
-        if self.inner.config.startup_probe.is_none() {
-            return self.check_ready().await;
-        }
-        if self.inner.circuit_retry_after().await.is_some()
-            || self.inner.in_flight.load(Ordering::Relaxed) > 0
-            || self.inner.warming_workers.load(Ordering::Relaxed) > 0
-        {
-            return false;
-        }
-
-        let workers = {
-            let mut idle = self.inner.idle.lock().await;
-            if idle.len() != self.inner.config.max_workers {
-                return false;
-            }
-            self.inner
-                .warming_workers
-                .store(idle.len(), Ordering::Release);
-            idle.drain(..).collect::<Vec<_>>()
-        };
-        let startup_deadline =
-            time::Instant::from_std(self.inner.started_at + self.inner.config.startup_timeout);
-        let batch =
-            WorkerPoolInner::probe_worker_batch(Arc::clone(&self.inner), workers, startup_deadline)
-                .await;
-        let ready_workers = batch.ready.len();
-        self.inner.idle.lock().await.extend(batch.ready);
-        self.inner.warming_workers.store(0, Ordering::Release);
-        let ready = batch.first_error.is_none() && ready_workers == self.inner.config.max_workers;
-        if !ready {
-            self.inner.schedule_replenish();
-        }
-        ready
-    }
 }
 
 impl WorkerPoolInner {
@@ -698,7 +667,7 @@ impl WorkerPoolInner {
                 stderr,
             });
         }
-        tokio::task::yield_now().await;
+        time::sleep(POST_PROBE_LIVENESS_WINDOW).await;
         match worker.child.try_wait() {
             Ok(None) => Ok(worker),
             Ok(Some(status)) => {
@@ -728,29 +697,6 @@ impl WorkerPoolInner {
             let inner = Arc::clone(&inner);
             workers.spawn(async move {
                 match time::timeout_at(deadline, inner.spawn_worker()).await {
-                    Ok(Err(WorkerError::Timeout { .. })) | Err(_) => {
-                        Err(WorkerError::StartupTimeout {
-                            timeout: startup_timeout,
-                        })
-                    }
-                    Ok(result) => result,
-                }
-            });
-        }
-        collect_worker_batch(workers).await
-    }
-
-    async fn probe_worker_batch(
-        inner: Arc<Self>,
-        workers_to_probe: Vec<Worker>,
-        deadline: time::Instant,
-    ) -> WorkerBatch {
-        let startup_timeout = inner.config.startup_timeout;
-        let mut workers = JoinSet::new();
-        for worker in workers_to_probe {
-            let inner = Arc::clone(&inner);
-            workers.spawn(async move {
-                match time::timeout_at(deadline, inner.probe_worker(worker)).await {
                     Ok(Err(WorkerError::Timeout { .. })) | Err(_) => {
                         Err(WorkerError::StartupTimeout {
                             timeout: startup_timeout,

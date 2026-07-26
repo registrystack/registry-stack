@@ -149,11 +149,7 @@ impl CelWorker {
             Ok(pool) => {
                 let snapshot = pool.snapshot().await;
                 self.record_snapshot(&snapshot);
-                let ready = if self.activated.load(Ordering::Acquire) {
-                    pool.check_ready().await
-                } else {
-                    pool.prove_ready().await
-                };
+                let ready = pool.check_ready().await;
                 self.activated.store(ready, Ordering::Release);
                 if ready {
                     self.record_startup(true);

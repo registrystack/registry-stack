@@ -60,6 +60,13 @@ fn main() {
 
         match request.expression.as_str() {
             "true" => {
+                if let Some(delay_ms) =
+                    env::var("REGISTRY_NOTARY_CEL_WORKER_FIXTURE_PROBE_DELAY_MS")
+                        .ok()
+                        .and_then(|value| value.parse::<u64>().ok())
+                {
+                    thread::sleep(Duration::from_millis(delay_ms));
+                }
                 write_response(
                     &mut stdout,
                     request.policy_hash.as_deref(),

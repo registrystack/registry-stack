@@ -137,6 +137,29 @@ async fn startup_probe_rejects_a_worker_that_exits_before_the_protocol_response(
 }
 
 #[tokio::test]
+async fn startup_probe_rejects_a_worker_that_replies_then_exits() {
+    let _guard = worker_pool_test_lock().await;
+    let state_dir = unique_state_path();
+    fs::create_dir(&state_dir).expect("create fixture start-ordinal directory");
+    let mut config = pool_config(1);
+    config.command = fixture_command()
+        .env(
+            OsString::from("WORKER_HARNESS_START_ORDINAL_DIR"),
+            state_dir.as_os_str().to_os_string(),
+        )
+        .env("WORKER_HARNESS_EXIT_START_ORDINALS_THROUGH", "1")
+        .env("WORKER_HARNESS_EXIT_AFTER_STARTUP_MS", "0");
+
+    let error = match WorkerPool::new(config).await {
+        Ok(_) => panic!("a startup reply without live capacity must not be admitted"),
+        Err(error) => error,
+    };
+
+    assert!(matches!(error, WorkerError::WorkerExited { .. }));
+    fs::remove_dir_all(&state_dir).expect("remove fixture start-ordinal directory");
+}
+
+#[tokio::test]
 async fn startup_probe_failure_does_not_disclose_captured_stderr() {
     let _guard = worker_pool_test_lock().await;
     let secret = "STARTUP_PROBE_SECRET";
