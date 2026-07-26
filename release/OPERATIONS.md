@@ -16,11 +16,17 @@ The selector requires extended proof when any of these conditions applies:
 
 - Release workflow, build recipe, packaging, signing, provenance, scan policy,
   builder, BuildKit, runtime base, lockfile, or other trust-anchor code changed
-- Candidate comparison disagrees, or its evidence is incomplete
+- Candidate evidence available to the selector is incomplete or records
+  disagreement
 - The release is a stable, audit, or `1.0` or later milestone
 - The previous promoted receipt or tag is missing, conflicting, unreachable, or
   not an ancestor of the candidate source
 - The operator requests `extended`
+
+An actual disagreement between the two builds in the current candidate fails
+the candidate. Extended proof is additional evidence, not a bypass for
+non-identical candidate bytes or image config and layers. A promotable receipt
+is emitted only after the current comparison passes.
 
 The selector writes `registry-stack.release-proof-selection.v1` JSON into the
 candidate evidence.
