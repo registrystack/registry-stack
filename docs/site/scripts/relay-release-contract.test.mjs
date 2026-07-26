@@ -131,6 +131,14 @@ test('canonical Relay release, local image, and OpenAPI use the same feature set
     new Set(['attribute-release', 'crosswalk-runtime']),
     'the approved 1.0 Relay feature list must be exact',
   );
+  const canonicalProfile = (
+    await readRepo('crates/registry-relay/canonical-release-features.txt')
+  ).trim();
+  assert.deepEqual(
+    new Set(canonicalProfile.split(',')),
+    canonicalFeatures,
+    'the canonical release profile must match the approved 1.0 roster',
+  );
 
   const cargoToml = await readRepo('crates/registry-relay/Cargo.toml');
   const cargoFeatureSection = cargoToml.match(/\[features\]\n([\s\S]*?)\n\[/)?.[1];
@@ -155,9 +163,10 @@ test('canonical Relay release, local image, and OpenAPI use the same feature set
   );
 
   const dockerfile = await readRepo('crates/registry-relay/Dockerfile');
-  assert.match(
-    dockerfile,
-    /^ARG REGISTRY_RELAY_FEATURES="attribute-release,crosswalk-runtime"$/m,
+  const dockerProfile = dockerfile.match(/^ARG REGISTRY_RELAY_FEATURES="([^"]+)"$/m)?.[1];
+  assert.equal(
+    dockerProfile,
+    canonicalProfile,
     'the local production image must default to the canonical feature set',
   );
 
@@ -166,19 +175,29 @@ test('canonical Relay release, local image, and OpenAPI use the same feature set
   const releaseRecipe = isAbsolute(releaseRecipePath)
     ? await readFile(releaseRecipePath, 'utf8')
     : await readRepo(releaseRecipePath);
-  const relayBuild = releaseRecipe.match(
-    /-p registry-relay \\\n\s+--no-default-features \\\n\s+--features ([^\s'"]+)/,
+  assert.match(
+    releaseRecipe,
+    /relay_feature_profile=.*crates\/registry-relay\/canonical-release-features\.txt/,
+    'the release recipe must read the canonical Relay feature profile',
   );
-  assert.ok(relayBuild, 'the release recipe must select an exact Relay feature set');
-  const workflowRelayFeatures = new Set(
-    relayBuild[1]
-      .split(',')
-      .map((feature) => feature.replace(/^registry-relay\//, '')),
+  assert.match(
+    releaseRecipe,
+    /-p registry-relay \\\n\s+--no-default-features \\\n\s+--features "\$\{RELEASE_RELAY_FEATURES\}"/,
+    'the release recipe must select the canonical Relay feature profile exactly',
   );
-  assert.deepEqual(
-    workflowRelayFeatures,
-    canonicalFeatures,
-    'the release workflow Relay features must match the canonical 1.0 roster',
+
+  const openapiContract = await readRepo(
+    'crates/registry-relay/scripts/check-openapi-contract.sh',
+  );
+  assert.match(
+    openapiContract,
+    /RELEASE_FEATURES=.*canonical-release-features\.txt/,
+    'the OpenAPI contract must read the canonical Relay feature profile',
+  );
+  assert.match(
+    openapiContract,
+    /--no-default-features --features "\$RELEASE_FEATURES"/,
+    'the OpenAPI contract must select the canonical Relay feature profile exactly',
   );
 
   const openapi = JSON.parse(
