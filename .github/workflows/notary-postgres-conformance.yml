@@ -58,6 +58,9 @@ jobs:
     name: Notary state plane (PostgreSQL ${{ matrix.postgresql }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -137,6 +140,17 @@ jobs:
           name: notary-postgresql-${{ matrix.postgresql }}-coverage
           path: target/notary-postgres-conformance/coverage/
           if-no-files-found: error
+
+      - name: Upload Notary PostgreSQL coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          disable_search: true
+          fail_ci_if_error: false
+          files: target/notary-postgres-conformance/coverage/notary-postgresql-${{ matrix.postgresql }}.lcov
+          flags: notary-postgres
+          name: notary-postgresql-${{ matrix.postgresql }}
+          use_oidc: true
+          version: v11.3.1
 
       - name: Report PostgreSQL Docker diagnostics
         if: failure()

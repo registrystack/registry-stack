@@ -1,0 +1,42 @@
+coverage:
+  status:
+    default_rules:
+      flag_coverage_not_uploaded_behavior: exclude
+    project:
+      default: off
+      platform:
+        flags:
+          - platform
+        informational: true
+      notary-postgres:
+        flags:
+          - notary-postgres
+        informational: true
+    patch:
+      default: off
+      platform:
+        flags:
+          - platform
+        informational: true
+      notary-postgres:
+        flags:
+          - notary-postgres
+        informational: true
+
+flags:
+  platform:
+    paths:
+      - "crates/registry-config-report/"
+      - "crates/registry-platform-*/**"
+    carryforward: true
+  notary-postgres:
+    paths:
+      - "crates/registry-notary/"
+      - "crates/registry-notary-server/"
+    carryforward: true
+
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default
+  require_changes: true
+  show_carryforward_flags: true
