@@ -3,14 +3,18 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
+  fstatSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { constants as fsConstants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, test } from 'node:test';
@@ -100,13 +104,21 @@ function directoryDigest(root) {
     )) {
       const relative = join(relativeDirectory, entry.name);
       const path = join(directory, entry.name);
-      const metadata = statSync(path);
-      digest.update(`${entry.isDirectory() ? 'directory' : 'file'} ${relative} ${metadata.mode & 0o777}\n`);
       if (entry.isDirectory()) {
+        const metadata = statSync(path);
+        digest.update(`directory ${relative} ${metadata.mode & 0o777}\n`);
         visit(path, relative);
       } else {
         assert.equal(entry.isFile(), true, `unexpected project entry type: ${relative}`);
-        digest.update(readFileSync(path));
+        const descriptor = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+        try {
+          const metadata = fstatSync(descriptor);
+          assert.equal(metadata.isFile(), true, `unexpected project entry type: ${relative}`);
+          digest.update(`file ${relative} ${metadata.mode & 0o777}\n`);
+          digest.update(readFileSync(descriptor));
+        } finally {
+          closeSync(descriptor);
+        }
       }
     }
   }

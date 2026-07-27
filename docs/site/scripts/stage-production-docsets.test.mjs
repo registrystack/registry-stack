@@ -154,7 +154,7 @@ test('builds an allowlisted released-only production tree without changing previ
   ]) {
     const redirect = await readFile(resolve(fixture.productionRoot, path), 'utf8');
     assert.match(redirect, /registry-docset-redirect/);
-    assert.match(redirect, /https:\/\/docs\.registrystack\.org\/v\/1\.0\.0\//);
+    assert.equal(redirect.includes('https://docs.registrystack.org/v/1.0.0/'), true);
     assert.doesNotMatch(redirect, /Released (?:index|guide)/);
   }
   assert.match(
@@ -170,7 +170,7 @@ test('builds an allowlisted released-only production tree without changing previ
   const llms = await readFile(resolve(fixture.productionRoot, 'llms.txt'), 'utf8');
   assert.equal(robots, 'User-agent: *\nAllow: /v/1.0.0/\n');
   assert.match(llms, /Selected released docset: v1\.0\.0/);
-  assert.match(llms, /https:\/\/docs\.registrystack\.org\/v\/1\.0\.0\//);
+  assert.equal(llms.includes('https://docs.registrystack.org/v/1.0.0/'), true);
   assert.doesNotMatch(`${robots}\n${llms}`, /preview|v0\.14\.0/i);
 
   const files = await filesBelow(fixture.productionRoot);
