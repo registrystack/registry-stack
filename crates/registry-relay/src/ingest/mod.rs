@@ -127,6 +127,20 @@ pub async fn validate_xlsx_source_bytes(
     resource: &ResourceConfig,
     workbook_bytes: &[u8],
 ) -> Result<(), IngestError> {
+    validate_xlsx_source_bytes_with_limits(config, resource, workbook_bytes, None).await
+}
+
+/// Decode and completely validate exact XLSX source bytes against both Relay's
+/// server ceilings and an authored materialization footprint.
+///
+/// The optional footprint is `(max_source_records, max_source_bytes)`. It is
+/// checked while the source is decoded, before any cache or table publication.
+pub async fn validate_xlsx_source_bytes_with_limits(
+    config: &Config,
+    resource: &ResourceConfig,
+    workbook_bytes: &[u8],
+    footprint_limits: Option<(u64, u64)>,
+) -> Result<(), IngestError> {
     if !matches!(resource.source, SourceConfig::File { .. }) {
         return Err(IngestError::SourceUnreadable);
     }
@@ -141,6 +155,9 @@ pub async fn validate_xlsx_source_bytes(
         u64::try_from(workbook_bytes.len()).map_err(|_| IngestError::SourceUnreadable)?;
     if byte_count > xlsx_source_byte_limit(config) {
         return Err(IngestError::SourceUnreadable);
+    }
+    if footprint_limits.is_some_and(|(_, max_source_bytes)| byte_count > max_source_bytes) {
+        return Err(IngestError::MaterializationFailed);
     }
 
     let declared = Arc::new(DeclaredSchema::from(&resource.schema));
@@ -159,9 +176,19 @@ pub async fn validate_xlsx_source_bytes(
         .map_err(ingest_error_from_connector)?;
     let observed_schema = snapshot.observed_schema;
     let mut batches = Vec::new();
+    let mut source_row_count = 0_u64;
     let mut batch_stream = snapshot.batches;
     while let Some(batch) = batch_stream.next().await {
-        batches.push(batch.map_err(ingest_error_from_connector)?);
+        let batch = batch.map_err(ingest_error_from_connector)?;
+        source_row_count = source_row_count
+            .checked_add(batch.num_rows() as u64)
+            .ok_or(IngestError::MaterializationFailed)?;
+        if footprint_limits
+            .is_some_and(|(max_source_records, _)| source_row_count > max_source_records)
+        {
+            return Err(IngestError::MaterializationFailed);
+        }
+        batches.push(batch);
     }
     let dataset_id: DatasetId =
         serde_json::from_str("\"project_workbook\"").expect("static dataset id is valid");

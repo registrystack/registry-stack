@@ -12,6 +12,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const siteRoot = resolve(here, '..');
 const configSource = readFileSync(resolve(siteRoot, 'astro.config.mjs'), 'utf8');
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
+const registryBannerSource = readFileSync(
+  resolve(siteRoot, 'src/components/RegistryBanner.astro'),
+  'utf8',
+);
 const firstApiSource = readFileSync(
   resolve(siteRoot, 'src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx'),
   'utf8',
@@ -164,6 +168,11 @@ test('does not expose source-assurance material as an adopter journey', () => {
   assert.doesNotMatch(sidebarSource, /label: 'Journeys'|label: 'Source assurance'/);
   assert.doesNotMatch(sidebarSource, /slug: 'journeys/);
   assert.match(configSource, /'\/journeys\/': internalRedirect\('\/'\)/);
+});
+
+test('archived pages send readers directly to the current preview docset', () => {
+  assert.match(registryBannerSource, /<a href="\/preview\/">Latest<\/a>/);
+  assert.doesNotMatch(registryBannerSource, /<a href="\/">Latest<\/a>/);
 });
 
 test('keeps detailed product navigation under collapsed Reference', () => {
