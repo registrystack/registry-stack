@@ -1,0 +1,436 @@
+---
+title: Use your own spreadsheet
+description: Adapt the canonical spreadsheet project to one reviewed non-personal workbook, validate the complete sheet, review generated Relay input, and run the protected API.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+  - registry-relay
+last_reviewed: "2026-07-27"
+doc_type: tutorial
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Use this tutorial after
+[Run a protected registry API locally](../publish-spreadsheet-secured-registry-api/).
+You will create a separate canonical project, replace its synthetic workbook
+with one reviewed non-personal workbook, describe the strict sheet shape,
+review callers and disclosure, validate the whole sheet, inspect the generated
+Relay input, and run the same denied and allowed checks.
+
+<QuickstartMeta
+  outcome="A canonical Registry Stack project over one reviewed workbook, with explicit ownership, strict full-sheet validation, deny-by-default fields, deterministic generated Relay input, and a loopback-only local runtime."
+  time="About 45 minutes for a four-column worksheet"
+  level="Country implementer"
+  prerequisites={['Linux amd64', 'registryctl 0.14.0 and its matching image lock', 'Docker Engine with Compose v2', 'A one-sheet public or synthetic non-personal XLSX workbook', 'A text editor'] }
+/>
+
+Do not use a live country source, personal data, production credentials, or a
+workbook whose disclosure decisions have not been reviewed.
+
+Registryctl does not infer a project from an arbitrary workbook. It does not
+decide that a detected field is safe, choose a primary key, or rewrite your
+workbook. You adapt a small explicit starter so each source, caller, purpose,
+filter, and projection decision remains reviewable.
+
+## Prepare a bounded workbook
+
+For this path, prepare one `.xlsx` file with:
+
+- one selected worksheet;
+- one header row;
+- one stable, non-empty, unique primary-key column;
+- a fixed set of named columns;
+- one consistent declared type per column; and
+- no formulas anywhere in the selected sheet.
+
+Remove unrelated worksheets and columns from a non-personal working
+derivative before you begin. Keep the original source outside the project.
+Registry Stack does not evaluate formulas, resolve external workbook links, or
+infer cross-sheet references. A formula in the selected sheet is rejected.
+
+The complete parser and activation limits are in the
+[XLSX readiness contract](../../products/registry-relay/xlsx-readiness-contract/).
+
+## Create a separate project
+
+Initialize the canonical starter:
+
+```sh
+registryctl init --from spreadsheet --project-dir country-registry
+cd country-registry
+```
+
+Copy your reviewed derivative under `data/`. This example uses a file already
+available at `/path/to/reviewed-projects.xlsx`:
+
+```sh
+cp /path/to/reviewed-projects.xlsx data/country-projects.xlsx
+```
+
+The copy under `data/` is the project-owned source. The local runtime mounts it
+read-only. Registryctl never writes workbook cells.
+
+## Identify ownership before editing
+
+Keep these boundaries:
+
+| Surface | Owner | Authority |
+| --- | --- | --- |
+| `data/country-projects.xlsx` | Source or operator owner | Workbook bytes and release into this reviewed project |
+| `entities/projects.yaml` | Project reviewer | Stable key, strict columns, types, nullability, and size bounds |
+| `registry-stack.yaml` | Project reviewer | Purpose, sensitivity, scopes, filters, and external projection |
+| `environments/local.yaml` | Environment owner | Workbook path, runtime mount, sheet, column mapping, source generation, and local callers |
+| `.registry-stack/build/local/` | Registryctl | Deterministic unsigned product input and artifact manifest |
+| `.registry-stack/runtime/local/` | Registryctl | Private local credentials and closed Compose runtime |
+
+Only the first four surfaces are authored. Never fix a project by editing
+`.registry-stack/build/` or `.registry-stack/runtime/`.
+
+## Describe the strict sheet shape
+
+Open `entities/projects.yaml`. Replace the starter fields with the smallest
+strict schema for your selected worksheet. This four-column example uses
+`project_id` as the stable key:
+
+```yaml
+version: 1
+id: projects
+revision: 1
+primary_key: project_id
+schema:
+  type: object
+  additionalProperties: false
+  required: [project_id, district_code, sector, status]
+  properties:
+    project_id: { type: string, minLength: 1, maxLength: 64 }
+    district_code: { type: string, minLength: 1, maxLength: 32 }
+    sector: { type: string, minLength: 1, maxLength: 64 }
+    status: { type: string, minLength: 1, maxLength: 32 }
+materialization:
+  max_records: 10000
+  max_bytes: 16MiB
+  refresh: manual
+  retain_generations: 2
+```
+
+Use the exact header names and types in your derivative. Add a field to
+`required` only when every materialized row must contain it. Keep
+`additionalProperties: false`; an unexpected source column should require a
+review, not become silently available.
+
+The primary key is an identity and update contract. Do not substitute a row
+number, a mutable display label, or a combination that is only probably
+unique.
+
+## Bind the workbook and local callers
+
+Open `environments/local.yaml`. Bind the project copy, selected worksheet,
+column mapping, and a new source generation:
+
+```yaml
+version: 1
+entities:
+  projects:
+    provider:
+      type: xlsx
+      project_file: data/country-projects.xlsx
+      path: /var/lib/registry/country-projects.xlsx
+      sheet: Projects
+      header_row: 1
+    columns:
+      project_id: project_id
+      district_code: district_code
+      sector: sector
+      status: status
+    source_revision: reviewed-country-projects-v1
+    generation: "1"
+relay:
+  origin: https://records-relay.internal.invalid
+  issuer: https://workload-issuer.internal.invalid
+  jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
+  audience: registry-relay
+  allowed_clients: [public-works-casework]
+  local_api_keys:
+    match_principal: PROJECT-001
+    no_match_principal: registryctl-local-no-match
+    scopes: [projects:metadata, projects:rows]
+deployment:
+  profile: local
+  relay: { service: records-relay }
+```
+
+Set `match_principal` to one synthetic or public non-personal primary-key value
+that exists in the reviewed workbook. This is a local smoke identity, not a
+production caller model. `no_match_principal` must remain distinct and absent
+from the workbook so the maintained empty-result check stays meaningful.
+
+`local_api_keys` is accepted only for the local deployment profile.
+Registryctl generates its raw keys privately and emits only fingerprint
+environment references to Relay. Non-local environments remove this local
+binding and use the reviewed OIDC issuer, audience, key-set URL, and allowed
+clients instead.
+
+`project_file` must be a contained, non-symlinked project-relative path.
+`path` is the read-only absolute path inside the Relay container. The compiler
+emits `path`, but does not emit `project_file`.
+
+## Review purpose, callers, and disclosure
+
+Open `registry-stack.yaml`. Keep the service small and align its scopes and
+fields with the environment:
+
+```yaml
+services:
+  projects-records:
+    kind: records_api
+    entity: projects
+    title: Reviewed public works projects
+    description: Protected operational view of reviewed project records.
+    owner: Public Works Delivery Unit
+    sensitivity: confidential
+    access_rights: restricted
+    update_frequency: as_needed
+    api:
+      scopes:
+        metadata: projects:metadata
+        rows: projects:rows
+        aggregate: projects:aggregate
+        evidence_verification: projects:evidence_verification
+      purposes: [public-works-case-management]
+      projection: [project_id, district_code, sector, status]
+      pagination: { default_limit: 50, max_limit: 100 }
+      filters: { project_id: [eq] }
+      required_principal_filters: [project_id]
+      standards: { ogc_features: false, sp_dci: false }
+```
+
+Review each decision:
+
+- `sensitivity` and `access_rights` classify the service.
+- `purposes` names the accepted request purpose.
+- each scope grants one bounded class of operation;
+- `projection` is the complete externally readable field set;
+- `filters` names allowed query operations; and
+- `required_principal_filters` prevents one local principal from reading a
+  different primary key.
+
+All XLSX fields compile as sensitive, including fields in the projection.
+Projection is an explicit release decision, not a statement that the source
+field is harmless. A workbook column not declared in the entity fails strict
+validation. A declared field not listed in `projection` is not returned by the
+records API.
+
+## Validate before starting
+
+Run the project stages in order. Each stage answers a different question.
+
+### Run the fixture gate
+
+```sh
+registryctl test --project-dir .
+```
+
+The command reports:
+
+```text
+PASS: 0/0 fixtures passed
+```
+
+This gate validates the project's maintained synthetic fixtures. The
+records-only spreadsheet starter has no source-integration fixtures, so this
+expected result does not validate workbook rows.
+
+### Check runtime prerequisites
+
+```sh
+registryctl preflight --project-dir . --environment local
+```
+
+The report begins:
+
+```text
+Registry Stack project "fictional-public-works-registry" is locally ready for environment "local".
+```
+
+This gate checks the local runtime prerequisites declared by the selected
+environment. At this stage, Registryctl opens the selected workbook and parses
+every selected data row with the production XLSX reader and validation rules
+that Relay uses when it starts. It does not run fixtures or write
+`.registry-stack/build/` or `.registry-stack/runtime/`.
+
+### Validate the authored configuration
+
+```sh
+registryctl check --project-dir . --environment local --explain
+```
+
+The report begins:
+
+```text
+Registry Stack project: fictional-public-works-registry (valid)
+Fixtures: 0/0 passed (offline synthetic)
+```
+
+This gate validates the authored project, entity, and environment
+relationships and the generated Relay configuration. It parses every selected
+workbook row again with Relay's production XLSX reader and validation rules.
+`--explain` shows how the authored fields become that configuration without
+printing workbook values or raw local keys.
+
+### Compare the disclosure intent
+
+```sh
+registryctl compare --project-dir . --environment local --from-starter spreadsheet
+```
+
+The report starts with:
+
+```text
+semantic comparison: different; assurance: embedded_exact_release; changes: <count>; review plan: generated_pending_review
+```
+
+This gate compares the workbook binding, schema, caller, filter, and
+disclosure intent with the starter. Review each listed change before building.
+The comparison does not approve the change or observe runtime behavior.
+
+### Build reviewable product input
+
+```sh
+registryctl build --project-dir . --environment local
+```
+
+The report begins:
+
+```text
+Built Registry Stack project "fictional-public-works-registry".
+  Output: .registry-stack/build/local
+  Fixtures: 0/0 passed
+```
+
+This gate parses and validates every selected workbook row again before it
+generates the reviewable Relay input and artifact manifest under
+`.registry-stack/build/local/`. It uses Relay's production XLSX reader and
+validation rules. The manifest records the exact workbook bytes with the other
+authored inputs. Build does not approve, sign, or activate the generated
+product input.
+
+In this tutorial order, workbook rows are first parsed during `preflight`, then
+parsed again during `check` and `build`. The earlier `test` gate validates only
+synthetic fixtures. When you later run `registryctl start`, Relay parses the
+workbook again during its initial load and does not report ready unless that
+load succeeds.
+
+The validation rejects:
+
+- a missing file or sheet;
+- a missing or unexpected strict column;
+- a null in a required field;
+- a value that does not match its declared type;
+- a formula anywhere in the selected sheet;
+- a missing or duplicate primary key, including a duplicate after row 1,000;
+- a path outside the project or a workbook symlink; and
+- a project, environment, or generated product input that fails its product
+  contract.
+
+Diagnostics name the safe file, field, row class, and error category needed to
+correct the authored input. They do not include cell values.
+
+Exact primary-key lookup makes a multiple-row result inapplicable to this
+journey. A duplicate key is treated as an invalid ambiguous source and blocks
+activation instead of returning an arbitrary row.
+
+## Review generated product input
+
+Review the generated inventory and Relay input:
+
+```sh
+sed -n '1,240p' .registry-stack/build/local/artifact-manifest.json
+sed -n '1,260p' .registry-stack/build/local/private/relay/config/relay.yaml
+```
+
+Confirm that:
+
+- the artifact manifest binds every authored input and generated artifact by
+  digest;
+- the Relay provider contains only the container path, selected sheet, strict
+  mappings, and source generation;
+- every XLSX field is marked sensitive;
+- only the reviewed projection is exposed;
+- authentication uses fingerprint environment references, never raw keys; and
+- the output is unsigned and has not been approved for deployment.
+
+Do not edit either file. Change the authored project and rerun the checks and
+build instead.
+
+## Run the same protected result
+
+Prepare the closed Docker runtime and start it:
+
+```sh
+registryctl doctor --profile local
+registryctl start
+registryctl smoke
+```
+
+The maintained checks cover public readiness, anonymous denial, invalid-key
+denial, one principal-bound match, and one safe no-match. Registryctl uses the
+same compiled Relay input reviewed above. It mounts both the compiled config
+and workbook read-only and publishes only `127.0.0.1:4242`.
+
+You can repeat the manual denied and allowed requests from
+[the first API tutorial](../publish-spreadsheet-secured-registry-api/#make-one-denied-request).
+Do not retain workbook rows, raw keys, or private paths as acceptance evidence.
+
+Stop when finished:
+
+```sh
+registryctl stop
+```
+
+## Recover from source failures
+
+| Failure | Safe result | Recovery |
+| --- | --- | --- |
+| Wrong or missing worksheet | Preflight, check, and build fail before a listener starts. | Correct `sheet` to the reviewed worksheet name. |
+| Missing stable key | Validation reports the key field and row class without its value. | Supply a non-empty stable key or exclude the invalid row from the reviewed derivative. |
+| Duplicate key | Validation rejects the source as ambiguous, even when the duplicate occurs after row 1,000. | Correct the source owner's identity conflict; never choose one duplicate arbitrarily. |
+| Missing or unexpected column | Strict validation fails. | Align the entity and mapping only after reviewing the source change. |
+| Incompatible type or null | Full-sheet validation fails. | Correct the derivative or change the reviewed schema deliberately. |
+| Formula or external reference | The selected sheet is rejected. | Replace the formula with a reviewed static value in the derivative. Registry Stack does not evaluate workbook logic. |
+| Workbook path traversal or symlink | Preflight rejects the path before reading it. | Copy the approved derivative under `data/` and use a contained regular file. |
+| Unreviewed field added to `projection` | The semantic comparison shows a disclosure change. | Remove it or obtain the required data and policy review before proceeding. |
+| Generated file changed | Runtime integrity validation fails. | Discard the generated closure, correct authored input, and rebuild. |
+| Docker unavailable | Doctor fails with Docker Compose v2 remediation. | Start the supported Docker provider. Do not substitute an untested engine name. |
+
+## Hand off to an operator
+
+The local project proves authored intent, full-sheet parsing, product
+validation, and a protected synthetic or public non-personal result. It is not
+a production deployment.
+
+The next operator-owned transition must provide:
+
+- a reviewed non-local environment;
+- a source ownership and update process;
+- production OIDC callers and secret management;
+- TLS, private networking, monitoring, audit retention, and recovery;
+- independent data, policy, security, and operational approvals; and
+- the repository's signed Config Bundle activation process when the target
+  environment requires it.
+
+The country implementer does not sign, promote, activate, migrate, or roll
+back production configuration as part of this tutorial.
+
+Review the generated-source and disclosure evidence in
+[Spreadsheet protected API assurance](../../journeys/spreadsheet-protected-api/)
+before handing the project to an operator.
+
+If the documented path does not fit the reviewed workbook, open a
+[public Registry Stack issue](https://github.com/registrystack/registry-stack/issues/new/choose)
+with the Registryctl version, safe field names, command, and stable diagnostic
+code. Do not attach the workbook, cell values, credentials, private endpoints,
+or country identifiers.

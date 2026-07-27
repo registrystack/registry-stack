@@ -3,9 +3,22 @@ set -euo pipefail
 
 repo="registrystack/registry-stack"
 default_version="v0.13.0"
+script_name="${BASH_SOURCE[0]##*/}"
+filename_version=""
+if [[ "$script_name" =~ ^registryctl-(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-install\.sh$ ]]; then
+	default_version="${BASH_REMATCH[1]}"
+	filename_version="$default_version"
+fi
 version="${REGISTRYCTL_VERSION:-$default_version}"
+if [ -n "$filename_version" ] &&
+	[ -n "${REGISTRYCTL_VERSION:-}" ] &&
+	[ "$REGISTRYCTL_VERSION" != "$filename_version" ]; then
+	echo "Refusing a release override that does not match the versioned installer asset." >&2
+	exit 1
+fi
 install_dir="${REGISTRYCTL_INSTALL_DIR:-$HOME/.local/bin}"
-verify_url="https://github.com/${repo}/blob/main/release/VERIFY.md"
+asset_dir="${REGISTRYCTL_ASSET_DIR:-}"
+verify_url="https://github.com/${repo}/blob/${version}/release/VERIFY.md"
 
 usage() {
 	cat <<EOF
@@ -19,8 +32,14 @@ unsigned. Follow the canonical release verification guide:
   $verify_url
 
 Environment:
-  REGISTRYCTL_VERSION      Pinned release tag to install. Defaults to v0.13.0.
+  REGISTRYCTL_VERSION      Pinned release tag for the historical unversioned
+                           installer. A versioned installer asset requires the
+                           matching filename release. Defaults to ${default_version}.
   REGISTRYCTL_INSTALL_DIR  Install directory. Defaults to ~/.local/bin.
+  REGISTRYCTL_ASSET_DIR    Read already-downloaded release assets from this
+                           directory instead of downloading them. Verify the
+                           installer, registryctl, image lock, and checksums
+                           before using this higher-assurance installation mode.
 EOF
 }
 
@@ -51,37 +70,34 @@ if ((version_major > 0 || version_minor >= 9)); then
 	requires_image_lock=1
 fi
 
-need curl
 need uname
+if [ -z "$asset_dir" ]; then
+	need curl
+fi
 
 os="$(uname -s)"
 arch="$(uname -m)"
 
-case "$os" in
-Linux) os_label="linux" ;;
-Darwin) os_label="macos" ;;
+case "$os/$arch" in
+Linux/x86_64 | Linux/amd64)
+	os_label="linux"
+	arch_label="amd64"
+	;;
+Linux/arm64 | Linux/aarch64)
+	os_label="linux"
+	arch_label="arm64"
+	;;
+Darwin/arm64 | Darwin/aarch64)
+	os_label="macos"
+	arch_label="arm64"
+	;;
 *)
-	echo "Unsupported OS: $os" >&2
+	printf 'No prebuilt registryctl asset is published for %s/%s.\n' "$os" "$arch" >&2
+	printf 'Supported platforms: Linux amd64, Linux arm64, and macOS arm64.\n' >&2
+	printf 'Check the published assets at https://github.com/%s/releases/tag/%s\n' "$repo" "$version" >&2
 	exit 1
 	;;
 esac
-
-case "$arch" in
-x86_64 | amd64) arch_label="amd64" ;;
-arm64 | aarch64) arch_label="arm64" ;;
-*)
-	echo "Unsupported architecture: $arch" >&2
-	exit 1
-	;;
-esac
-
-source_hint() {
-	echo "Install registryctl from source instead:" >&2
-	echo "  cargo install --git https://github.com/${repo} --tag ${version} registryctl --locked" >&2
-	if ((requires_image_lock)); then
-		echo "Project generation also requires the checksum-verified ${version} image lock beside the installed binary." >&2
-	fi
-}
 
 asset="registryctl-${version}-${os_label}-${arch_label}"
 lock_asset="registryctl-${version}-image-lock.json"
@@ -98,14 +114,25 @@ trap 'exit 143' TERM
 download() {
 	local src="$1"
 	local dest="$2"
-	curl -fsSL "$src" -o "$dest" 2>/dev/null
+	if [ -n "$asset_dir" ]; then
+		local name="${src##*/}"
+		if [ ! -f "$asset_dir/$name" ]; then
+			return 1
+		fi
+		cp "$asset_dir/$name" "$dest"
+	else
+		curl -fsSL "$src" -o "$dest" 2>/dev/null
+	fi
 }
 
-echo "Downloading registryctl ${version} for ${os_label}/${arch_label}..."
+if [ -n "$asset_dir" ]; then
+	printf 'Installing verified local registryctl %s assets for %s/%s...\n' "$version" "$os_label" "$arch_label"
+else
+	printf 'Downloading registryctl %s for %s/%s...\n' "$version" "$os_label" "$arch_label"
+fi
 if ! download "$base_url/$asset" "$tmpdir/$asset"; then
-	printf 'No registryctl %s binary published for %s/%s (HTTP 404 or download error).\n' "$version" "$os_label" "$arch_label" >&2
+	printf 'Could not read the published registryctl %s binary for %s/%s.\n' "$version" "$os_label" "$arch_label" >&2
 	printf 'Check the published assets at https://github.com/%s/releases/tag/%s\n' "$repo" "$version" >&2
-	source_hint
 	exit 1
 fi
 
@@ -166,7 +193,9 @@ fi
 cat <<EOF
 Authenticity check not performed by this installer.
 Evidence availability varies by release, and v0.8.0 is unsigned.
-Follow the canonical release verification guide to check available evidence:
+For a higher-assurance installation, follow the tag-frozen release verification
+guide to authenticate the installer, registryctl, and image lock first, then
+rerun this installer with REGISTRYCTL_ASSET_DIR set to that verified directory:
   $verify_url
 
 EOF
@@ -235,9 +264,9 @@ fi
 cat <<EOF
 
 Try it:
-  registryctl init relay my-first-api --sample benefits
+  registryctl init --from spreadsheet --project-dir my-first-api
   cd my-first-api
-  registryctl start
+  registryctl doctor --profile local
 
 EOF
 

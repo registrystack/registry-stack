@@ -475,6 +475,7 @@ pub fn compare_registry_project_to_embedded_starter_semantically(
 fn project_starter_by_id(id: &str) -> Option<ProjectStarter> {
     [
         ProjectStarter::Http,
+        ProjectStarter::Spreadsheet,
         ProjectStarter::Dhis2Tracker,
         ProjectStarter::OpencrvsDci,
         ProjectStarter::FhirR4,

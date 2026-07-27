@@ -19,6 +19,7 @@ use preflight::{
     MAX_PREFLIGHT_CHECKS, MAX_PREFLIGHT_DIAGNOSTICS,
 };
 use serde_json::{json, Value};
+use sha2::{Digest as _, Sha256};
 
 const SCHEMA: &str =
     include_str!("../schemas/project-reports/registryctl.project_preflight.v1.schema.json");
@@ -700,25 +701,35 @@ fn command_adapter_checks_csv_xlsx_and_parquet_entity_provider_paths() {
                 .as_path(),
             &project,
         );
-        let provider_path = directory.path().join(format!("people.{extension}"));
+        let provider_path = if provider_type == "xlsx" {
+            project.join("data/people.xlsx")
+        } else {
+            directory.path().join(format!("people.{extension}"))
+        };
+        if let Some(parent) = provider_path.parent() {
+            fs::create_dir_all(parent).expect("provider parent creates");
+        }
         let provider = match provider_type {
             "csv" => format!(
                 "{{ type: csv, path: {}, header_row: 1 }}",
                 provider_path.display()
             ),
-            "xlsx" => format!(
-                "{{ type: xlsx, path: {}, sheet: People, header_row: 1 }}",
-                provider_path.display()
-            ),
+            "xlsx" => "{ type: xlsx, project_file: data/people.xlsx, path: /var/lib/registry/people.xlsx, sheet: data, header_row: 1, data_range: 'A1:B6' }".to_string(),
             "parquet" => format!("{{ type: parquet, path: {} }}", provider_path.display()),
             _ => unreachable!("provider table is closed"),
         };
         let environment_file = project.join("environments/local.yaml");
         let original = fs::read_to_string(&environment_file).expect("environment reads");
-        let authored = original.replace(
+        let mut authored = original.replace(
             "    provider: { type: csv, path: /var/lib/registry/people.csv, header_row: 1 }",
             &format!("    provider: {provider}"),
         );
+        if provider_type == "xlsx" {
+            authored = authored.replace(
+                "    columns: { person_id: subject_key, status: status_code }",
+                "    columns: { person_id: id, status: name }",
+            );
+        }
         assert_ne!(authored, original, "provider fixture replacement applies");
         fs::write(&environment_file, authored).expect("environment writes");
 
@@ -726,35 +737,55 @@ fn command_adapter_checks_csv_xlsx_and_parquet_entity_provider_paths() {
             project_directory: project,
             environment: "local".to_string(),
         };
-        let missing =
-            registryctl::preflight_registry_project(&options).expect("missing preflight reports");
-        assert_eq!(missing.status, registryctl::PreflightStatus::NotReady);
-        assert_eq!(missing.runtime_files.len(), 1);
-        assert_eq!(missing.runtime_files[0].kind, kind);
-        assert_eq!(
-            missing.runtime_files[0].generation,
-            registryctl::PreflightGenerationState::Declared
-        );
-        assert_eq!(
-            missing.runtime_files[0].state,
-            registryctl::PreflightCheckState::Missing
-        );
-        assert_eq!(missing.runtime_files[0].addresses.len(), 1);
-        assert_eq!(
-            missing.runtime_files[0].addresses[0].file.as_str(),
-            "environments/local.yaml"
-        );
-        assert_eq!(
-            missing.runtime_files[0].addresses[0].pointer.as_str(),
-            "/entities/people/provider/path"
-        );
-        assert!(missing.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == registryctl::PreflightDiagnosticCode::RuntimeFileMissing
-                && diagnostic.addresses == missing.runtime_files[0].addresses
-        }));
-        assert_schema_valid(&serde_json::to_value(&missing).expect("missing report serializes"));
+        if provider_type == "xlsx" {
+            let error = registryctl::preflight_registry_project(&options)
+                .expect_err("missing project workbook fails before preflight reporting");
+            assert_eq!(
+                format!("{error:#}"),
+                "workbook source input is missing or unreadable"
+            );
+        } else {
+            let missing = registryctl::preflight_registry_project(&options)
+                .expect("missing preflight reports");
+            assert_eq!(missing.status, registryctl::PreflightStatus::NotReady);
+            assert_eq!(missing.runtime_files.len(), 1);
+            assert_eq!(missing.runtime_files[0].kind, kind);
+            assert_eq!(
+                missing.runtime_files[0].generation,
+                registryctl::PreflightGenerationState::Declared
+            );
+            assert_eq!(
+                missing.runtime_files[0].state,
+                registryctl::PreflightCheckState::Missing
+            );
+            assert_eq!(missing.runtime_files[0].addresses.len(), 1);
+            assert_eq!(
+                missing.runtime_files[0].addresses[0].file.as_str(),
+                "environments/local.yaml"
+            );
+            assert_eq!(
+                missing.runtime_files[0].addresses[0].pointer.as_str(),
+                "/entities/people/provider/path"
+            );
+            assert!(missing.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == registryctl::PreflightDiagnosticCode::RuntimeFileMissing
+                    && diagnostic.addresses == missing.runtime_files[0].addresses
+            }));
+            assert_schema_valid(
+                &serde_json::to_value(&missing).expect("missing report serializes"),
+            );
+        }
 
-        fs::write(&provider_path, b"bounded entity data").expect("provider file writes");
+        if provider_type == "xlsx" {
+            fs::copy(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../registry-relay/tests/fixtures_xlsx/simple.xlsx"),
+                &provider_path,
+            )
+            .expect("valid provider workbook copies");
+        } else {
+            fs::write(&provider_path, b"bounded entity data").expect("provider file writes");
+        }
         fs::set_permissions(&provider_path, fs::Permissions::from_mode(0o600))
             .expect("provider mode sets");
         let available =
@@ -817,6 +848,98 @@ fn preflight_reads_only_declared_runtime_files_and_has_no_fixture_or_build_side_
     assert_eq!(
         report.execution.build_output,
         PreflightWriteState::NotWritten
+    );
+}
+
+#[test]
+fn project_workbook_is_validated_without_preflight_writes_and_digest_bound_on_build() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let project = directory.path().join("spreadsheet-project");
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/project-starters/spreadsheet"),
+        &project,
+    );
+    let workbook_relative = "data/public_works_projects.xlsx";
+    let workbook = project.join(workbook_relative);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&workbook, fs::Permissions::from_mode(0o600))
+            .expect("workbook mode sets");
+    }
+    let workbook_bytes = fs::read(&workbook).expect("workbook reads");
+    let before = directory_snapshot(&project);
+
+    let preflight =
+        registryctl::preflight_registry_project(&registryctl::ProjectPreflightOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+        })
+        .expect("valid workbook passes preflight");
+    assert_eq!(preflight.status, registryctl::PreflightStatus::Ready);
+    assert_eq!(
+        directory_snapshot(&project),
+        before,
+        "preflight workbook validation must be read-only"
+    );
+
+    registryctl::build_registry_project(&registryctl::ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("valid workbook builds");
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(project.join(".registry-stack/build/local/artifact-manifest.json"))
+            .expect("artifact manifest reads"),
+    )
+    .expect("artifact manifest parses");
+    let workbook_input = manifest["inputs"]
+        .as_array()
+        .expect("manifest inputs")
+        .iter()
+        .find(|input| input["path"] == workbook_relative)
+        .expect("workbook provenance input");
+    assert_eq!(
+        workbook_input["digest"],
+        format!("sha256:{}", hex::encode(Sha256::digest(&workbook_bytes)))
+    );
+}
+
+#[test]
+fn corrupt_project_workbook_fails_preflight_and_build_without_output() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let project = directory.path().join("spreadsheet-project");
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/project-starters/spreadsheet"),
+        &project,
+    );
+    fs::write(
+        project.join("data/public_works_projects.xlsx"),
+        b"not an xlsx workbook",
+    )
+    .expect("corrupt workbook writes");
+    let before = directory_snapshot(&project);
+
+    registryctl::preflight_registry_project(&registryctl::ProjectPreflightOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+    })
+    .expect_err("corrupt workbook must fail preflight");
+    assert_eq!(directory_snapshot(&project), before);
+
+    registryctl::build_registry_project(&registryctl::ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect_err("corrupt workbook must fail build");
+    assert_eq!(
+        directory_snapshot(&project),
+        before,
+        "failed build must not publish runtime output"
     );
 }
 

@@ -2,22 +2,29 @@
 
 `registryctl` is the local adopter CLI for Registry Stack.
 
+The complete local beginner runtime is supported on Linux x86_64. Linux arm64
+and macOS arm64 release assets support CLI authoring, validation, and build
+tasks, but the current image lock does not advertise those hosts for the
+complete runtime. Intel macOS and Windows are unsupported.
+
 Install a pinned release without cloning this repo:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.13.0/crates/registryctl/install.sh | bash
+tag=v0.14.0
+curl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/registryctl-${tag}-install.sh"
+bash "./registryctl-${tag}-install.sh"
 ```
 
-The quick installer verifies downloaded release assets against `SHA256SUMS`
-only. It installs the binary for releases before `v0.9.0`; beginning with
-`v0.9.0`, it installs the binary and matching image lock beside each other. It
-does not verify cosign signatures or SLSA provenance; use
-[`release/VERIFY.md`](../../release/VERIFY.md) for release authenticity checks.
+Executing this quick installer trusts GitHub and TLS. The installer then
+verifies the downloaded binary and image lock against the release's
+`SHA256SUMS`. It does not authenticate the installer, checksums, signatures,
+or provenance. Use [`release/VERIFY.md`](../../release/VERIFY.md) to verify
+release authenticity before installation.
 
 Then create and start your first secured spreadsheet API:
 
 ```sh
-registryctl init relay my-first-api --sample benefits
+registryctl init --from spreadsheet --project-dir my-first-api
 cd my-first-api
 registryctl doctor --profile local
 registryctl start
@@ -33,31 +40,24 @@ entry points. Automation must use the versioned JSON report rather than
 hard-code the local tutorial's generated directory layout, which remains an
 implementation detail.
 
-Run `registryctl doctor` before starting a generated stack or after editing config. It calls the
-product-owned validators and redacts local secret values. Add `--format json` when another program
-needs the versioned diagnostic report.
+`registryctl doctor` calls the product-owned Relay validator through the
+digest-pinned Docker Compose v2 service, so no host Relay binary is required.
+It validates the authored project, complete workbook, generated product input,
+closed runtime, and required provider while redacting local secret values. Add
+`--format json` when another program needs the versioned diagnostic report.
 
 For the full walkthroughs, use the Registry Docs tutorials:
 
-- [Publish a spreadsheet as a secured registry API](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/)
-- [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
+- [Run a protected registry API locally](https://docs.registrystack.org/v/0.14.0/tutorials/publish-spreadsheet-secured-registry-api/)
+- [Use your own spreadsheet](https://docs.registrystack.org/v/0.14.0/tutorials/use-your-spreadsheet/)
+- [Evaluate your first registry-backed claim](https://docs.registrystack.org/v/0.14.0/tutorials/verify-claim-registry-api/)
 
 ## Registry Stack project authoring
 
-The project-authoring workflow in this section documents the current
-unreleased source revision. The `v0.13.0` installer shown earlier does not
-contain the complete workflow. Build `registryctl` from the same reviewed
-Registry Stack source revision as these instructions until a later release
-publishes this surface.
-The public
-[current-source test procedure](https://docs.registrystack.org/start/test-current-source-revision/)
-pins one commit, builds its CLI, runs the matching local product gate, and records the boundary
-between source-test and release evidence.
-
 Start from a built-in Registry Stack project starter, run its closed offline
 fixtures, inspect the redacted generated plan, and build deterministic Relay
-and Notary inputs. Available starters are `http`, `dhis2-tracker`,
-`opencrvs-dci`, `fhir-r4`, and `snapshot`:
+and Notary inputs. Available starters are `spreadsheet`, `http`,
+`dhis2-tracker`, `opencrvs-dci`, `fhir-r4`, and `snapshot`:
 
 ```sh
 registryctl init --from http --project-dir registry-project
@@ -115,22 +115,27 @@ workers need a platform-specific process limit. The Notary default remains
 128 MiB. The maximum 1 GiB value supports emulated local runtimes and is a
 per-worker data/address-space ceiling, not reserved memory.
 
-The installer defaults to `v0.13.0`. To install a different pinned release, set
-`REGISTRYCTL_VERSION`:
+Download the versioned installer from the same pinned release whose assets it
+will install:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/vX.Y.Z/crates/registryctl/install.sh | REGISTRYCTL_VERSION=vX.Y.Z bash
+tag=vX.Y.Z
+curl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/registryctl-${tag}-install.sh"
+bash "./registryctl-${tag}-install.sh"
 ```
 
-Fetch the installer from the same pinned tag selected by
-`REGISTRYCTL_VERSION`. An older installer does not know the asset contract of a
-newer release.
+The versioned filename selects the same release by default. An explicit
+`REGISTRYCTL_VERSION` must match that release unless a release operator is
+performing a separately verified compatibility check.
 
-Prebuilt binaries are published for the `v0.13.0` stack release on Linux x86_64,
-Linux arm64, and macOS arm64. On other platforms, install from source with
-`cargo install --git https://github.com/registrystack/registry-stack --tag v0.13.0 registryctl --locked`.
-Intel macOS has no prebuilt binary for `v0.13.0`, so the installer stops after
-printing that Cargo command. It does not run the source build automatically.
+Prebuilt Registryctl binaries are published for the `v0.14.0` stack release on
+Linux x86_64, Linux arm64, and macOS arm64. The complete local beginner
+runtime is supported and release-gated on Linux x86_64 only because the
+release image lock currently binds Linux amd64 images. The Linux arm64 and
+macOS arm64 binaries support CLI authoring, validation, and build tasks, but
+are not advertised for the complete local runtime. Intel macOS and Windows
+have no prebuilt `v0.14.0` binary. Use Linux x86_64 for the beginner runtime
+instead of building the tool from source.
 
 ## Release image lock (`v0.9.0` and later)
 
@@ -184,11 +189,13 @@ shared crates have fresh release tags.
 ## End-to-end smoke
 
 The generated project uses the digest-pinned Registry Relay image recorded in
-the matching registryctl release image lock, not a floating image tag. The
-source tutorial gate builds registryctl and the product images from the same
-checkout, places a strict test lock beside the binary, rebinds the generated
-project to those local images, and executes both reader tutorials. With Docker
-and the docs dependencies available, run:
+the matching Registryctl release image lock, not a floating image tag. The
+source tutorial gate builds Registryctl from the checkout, places a strict
+generation-only test lock beside it, and verifies the canonical spreadsheet
+initializer, fixtures, preflight, explanation, and deterministic product
+build. The release-candidate workflow separately executes the exact sealed
+installer and runtime journey without rewriting image references. With the
+docs dependencies available, run:
 
 ```sh
 cd docs/site

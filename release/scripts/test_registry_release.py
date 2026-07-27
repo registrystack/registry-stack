@@ -17,6 +17,34 @@ ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "release/scripts/registry-release"
 IMAGE_DIGEST = "sha256:" + "a" * 64
 IMAGE_DIGEST_REF = f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}"
+NATIVE_CLI_AUTHORING_COMMANDS = (
+    '"${registryctl}" init --from spreadsheet --project-dir "${project_dir}"',
+    '"${registryctl}" test --project-dir "${project_dir}"',
+    '"${registryctl}" preflight --project-dir "${project_dir}" --environment local',
+    '"${registryctl}" check --project-dir "${project_dir}" '
+    "--environment local --explain",
+    '"${registryctl}" build --project-dir "${project_dir}" --environment local',
+)
+NATIVE_CLI_PROVENANCE_CONTROLS = (
+    'candidate_expected_sha256="$(expected_sha256_for "${asset}")"',
+    'candidate_actual_sha256="$(sha256_file "${candidate_binary}")"',
+    '"${candidate_actual_sha256}" != "${candidate_expected_sha256}"',
+    'installer_expected_sha256="$(expected_sha256_for "${installer_asset}")"',
+    'installer_actual_sha256="$(sha256_file "${installer}")"',
+    '"${installer_actual_sha256}" != "${installer_expected_sha256}"',
+    'run_sanitized_command install bash "${installer}"',
+    'installed_sha256="$(sha256_file "${registryctl}")"',
+    '"${installed_sha256}" != "${candidate_expected_sha256}"',
+    'cmp -s "${candidate_binary}" "${registryctl}"',
+)
+
+
+def native_cli_authoring_command_positions(script: str) -> list[int]:
+    return [script.index(command) for command in NATIVE_CLI_AUTHORING_COMMANDS]
+
+
+def native_cli_provenance_control_positions(script: str) -> list[int]:
+    return [script.index(control) for control in NATIVE_CLI_PROVENANCE_CONTROLS]
 
 
 def load_debian13_image_check():
@@ -158,38 +186,18 @@ class RegistryReleaseTest(unittest.TestCase):
                 any("not pinned by immutable digest" in failure for failure in failures)
             )
 
-    def test_debian13_contract_rejects_other_tutorial_builders(self) -> None:
+    def test_source_tutorial_does_not_claim_a_container_builder(self) -> None:
         module = load_debian13_image_check()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for relative in module.MAINTAINED_TEXT_PATHS:
-                destination = root / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(
-                    (ROOT / relative).read_text(encoding="utf-8"),
-                    encoding="utf-8",
-                )
+        tutorial = (
+            ROOT / "docs/site/scripts/check-registryctl-tutorials.sh"
+        ).read_text(encoding="utf-8")
 
-            tutorial = root / "docs/site/scripts/check-registryctl-tutorials.sh"
-            text = tutorial.read_text(encoding="utf-8")
-            tutorial.write_text(
-                text.replace(module.RUST_BUILDER, "rust:1.95-debian-12", 1),
-                encoding="utf-8",
-            )
-
-            failures = module.check_repository(root)
-            self.assertTrue(
-                any(
-                    "retired Debian image generation marker" in failure
-                    for failure in failures
-                )
-            )
-            self.assertTrue(
-                any(
-                    "pinned Debian 13 tutorial builder" in failure
-                    for failure in failures
-                )
-            )
+        self.assertNotIn("BUILDER_IMAGE=", tutorial)
+        self.assertNotIn(module.RUST_BUILDER, tutorial)
+        self.assertIn(
+            "exact runtime sequence is release-gated from the sealed candidate payload",
+            tutorial,
+        )
 
     def test_contributing_documents_major_functionality_test_policy(self) -> None:
         text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
@@ -205,14 +213,12 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("exactly the same bit-for-bit result", text)
         self.assertIn(".github/workflows/release.yml", text)
 
-    def test_registryctl_alternate_installer_uses_the_target_release_tag(self) -> None:
+    def test_registryctl_installer_uses_the_versioned_release_asset(self) -> None:
         text = (ROOT / "crates/registryctl/README.md").read_text(encoding="utf-8")
 
-        self.assertIn(
-            "refs/tags/vX.Y.Z/crates/registryctl/install.sh | "
-            "REGISTRYCTL_VERSION=vX.Y.Z bash",
-            text,
-        )
+        self.assertIn("registryctl-${tag}-install.sh", text)
+        self.assertIn('bash "./registryctl-${tag}-install.sh"', text)
+        self.assertNotIn("raw.githubusercontent.com", text)
 
     def test_release_image_packaging_uses_release_dockerfiles(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
@@ -684,6 +690,157 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertIn(asset, workflow)
             self.assertIn(f"registry-stack-candidate-{asset}", workflow)
 
+    def test_candidate_native_platforms_execute_installed_cli_authoring_sequence(
+        self,
+    ) -> None:
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/release-candidate.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        job = workflow["jobs"]["verify-cli-platforms"]
+        platforms = {
+            entry["asset"]: entry["runner"]
+            for entry in job["strategy"]["matrix"]["include"]
+        }
+        self.assertEqual(
+            {
+                "macos-arm64": "macos-14",
+                "linux-arm64": "ubuntu-24.04-arm",
+            },
+            platforms,
+        )
+        self.assertEqual(
+            {"validate", "verify-candidate"},
+            set(job["needs"]),
+        )
+        self.assertEqual("read", job["permissions"]["actions"])
+        self.assertEqual("read", job["permissions"]["contents"])
+        self.assertNotIn("id-token", job["permissions"])
+
+        job_scripts = [
+            step.get("run", "")
+            for step in job["steps"]
+            if isinstance(step, dict)
+        ]
+        script = next(
+            script
+            for script in job_scripts
+            if "REGISTRYCTL_ASSET_DIR=\"${asset_dir}\"" in script
+        )
+        uses = [
+            step.get("uses", "")
+            for step in job["steps"]
+            if isinstance(step, dict)
+        ]
+        self.assertTrue(
+            any(use.startswith("actions/download-artifact@") for use in uses)
+        )
+        self.assertFalse(
+            any(use.startswith("actions/checkout@") for use in uses)
+        )
+        self.assertIn(
+            'REGISTRYCTL_ASSET_DIR="${asset_dir}"',
+            script,
+        )
+        self.assertIn(
+            'REGISTRYCTL_INSTALL_DIR="${GITHUB_WORKSPACE}/install"',
+            script,
+        )
+        self.assertIn(
+            'registryctl="${GITHUB_WORKSPACE}/install/registryctl"',
+            script,
+        )
+        self.assertIn(
+            'asset="registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"',
+            script,
+        )
+        self.assertIn('candidate_binary="${asset_dir}/${asset}"', script)
+        self.assertIn(
+            'installer_asset="registryctl-${{ needs.validate.outputs.tag }}-install.sh"',
+            script,
+        )
+        self.assertIn('installer="${asset_dir}/${installer_asset}"', script)
+        self.assertIn('"${asset_dir}/SHA256SUMS"', script)
+        self.assertIn("Sealed candidate checksum mismatch", script)
+        self.assertIn("command -v shasum", script)
+        self.assertIn("command -v sha256sum", script)
+        provenance_positions = native_cli_provenance_control_positions(script)
+        self.assertEqual(sorted(provenance_positions), provenance_positions)
+        self.assertLess(
+            script.index('installer_actual_sha256="$(sha256_file "${installer}")"'),
+            script.index('run_sanitized_command install bash "${installer}"'),
+        )
+        self.assertLess(
+            script.index('installed_sha256="$(sha256_file "${registryctl}")"'),
+            script.index('actual="$("${registryctl}" --version)"'),
+        )
+        self.assertIn(
+            "Installed Registryctl bytes do not match the sealed candidate",
+            script,
+        )
+        self.assertIn("command -v registryctl", script)
+        self.assertIn("command -v registry-relay", script)
+        self.assertIn("command -v registry-notary", script)
+        self.assertIn("lsof -nP -iTCP:4242 -sTCP:LISTEN", script)
+        positions = native_cli_authoring_command_positions(script)
+        self.assertEqual(sorted(positions), positions)
+        self.assertIn('authoring_root="$(mktemp -d ', script)
+        self.assertIn(
+            'project_dir="${authoring_root}/spreadsheet-project"',
+            script,
+        )
+        self.assertIn('rm -rf "${authoring_root}"', script)
+        self.assertIn("trap cleanup EXIT", script)
+        self.assertIn("run_sanitized_command", script)
+        self.assertIn('"status=passed" > "platform-cli-report/${report}.log"', script)
+        self.assertIn('rm -f "${raw_log}"', script)
+        self.assertNotIn('"${registryctl}" start', script)
+        self.assertNotIn("docker", script.lower())
+        self.assertNotIn("gh ", script)
+        self.assertNotIn("curl ", script)
+        self.assertNotIn("wget ", script)
+
+        self.assertIn("verify-cli-platforms", workflow["jobs"]["attest-candidate"]["needs"])
+        self.assertIn(
+            "verify-cli-platforms", workflow["jobs"]["candidate-telemetry"]["needs"]
+        )
+
+    def test_candidate_native_platform_verifier_rejects_version_only_control(
+        self,
+    ) -> None:
+        version_only_verifier = (
+            'registryctl="${GITHUB_WORKSPACE}/install/registryctl"\n'
+            'actual="$("${registryctl}" --version)"\n'
+        )
+        self.assertIn("--version", version_only_verifier)
+        with self.assertRaises(ValueError):
+            native_cli_authoring_command_positions(version_only_verifier)
+        with self.assertRaises(ValueError):
+            native_cli_provenance_control_positions(version_only_verifier)
+
+    def test_candidate_native_platform_verifier_requires_verified_installer_and_output(
+        self,
+    ) -> None:
+        complete = "\n".join(NATIVE_CLI_PROVENANCE_CONTROLS)
+        self.assertEqual(
+            sorted(native_cli_provenance_control_positions(complete)),
+            native_cli_provenance_control_positions(complete),
+        )
+
+        for omitted in (
+            'installer_expected_sha256="$(expected_sha256_for "${installer_asset}")"',
+            'installer_actual_sha256="$(sha256_file "${installer}")"',
+            '"${installer_actual_sha256}" != "${installer_expected_sha256}"',
+            'installed_sha256="$(sha256_file "${registryctl}")"',
+            '"${installed_sha256}" != "${candidate_expected_sha256}"',
+            'cmp -s "${candidate_binary}" "${registryctl}"',
+        ):
+            with self.subTest(omitted=omitted):
+                incomplete = complete.replace(omitted, "", 1)
+                with self.assertRaises(ValueError):
+                    native_cli_provenance_control_positions(incomplete)
+
     def test_release_workflow_does_not_execute_downloaded_binaries_when_publishing(
         self,
     ) -> None:
@@ -814,6 +971,7 @@ class RegistryReleaseTest(unittest.TestCase):
         )
         self.assertIn("does not match immutable lock", publish_script)
         self.assertIn("--require-registry-docs-archive", publish_script)
+        self.assertIn("--require-registryctl-installer", publish_script)
 
     def test_candidate_receipt_checks_its_in_progress_run_identity(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
@@ -890,6 +1048,7 @@ class RegistryReleaseTest(unittest.TestCase):
         candidate = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
+        candidate_workflow = yaml.safe_load(candidate)
         backfill = (ROOT / ".github/workflows/release-capsule-backfill.yml").read_text(
             encoding="utf-8"
         )
@@ -912,8 +1071,44 @@ class RegistryReleaseTest(unittest.TestCase):
             candidate.index("Upload exact platform artifact"),
         )
         self.assertIn("--require-registryctl-image-lock", workflow)
+        self.assertIn("--require-registryctl-installer", workflow)
         self.assertIn(
             "registryctl-${{ needs.verify.outputs.tag }}-image-lock.json", workflow
+        )
+        self.assertIn(
+            'installer="registryctl-${{ needs.validate.outputs.tag }}-install.sh"',
+            candidate,
+        )
+        self.assertIn(
+            'cp crates/registryctl/install.sh "dist/candidate/dist/bin/${installer}"',
+            candidate,
+        )
+        self.assertIn(
+            '.artifacts["registryctl-installer"] == $version',
+            candidate,
+        )
+        self.assertIn("Run exact first-country release-form journey before sealing", candidate)
+        self.assertIn("first-country-release-form.py run", candidate)
+        self.assertIn("first-country-release-form.py verify", candidate)
+        self.assertIn("first-country-release-form.py verify", workflow)
+        self.assertIn("verify-cli-platforms:", candidate)
+        self.assertIn("runner: macos-14", candidate)
+        self.assertIn("runner: ubuntu-24.04-arm", candidate)
+        self.assertIn(
+            "verify-cli-platforms",
+            candidate_workflow["jobs"]["attest-candidate"]["needs"],
+        )
+        self.assertLess(
+            candidate.index("render-registryctl-image-lock"),
+            candidate.index("Run exact first-country release-form journey before sealing"),
+        )
+        self.assertLess(
+            candidate.index("Run exact first-country release-form journey before sealing"),
+            candidate.index("Upload exact candidate payload"),
+        )
+        self.assertLess(
+            workflow.index("first-country-release-form.py verify"),
+            workflow.index("Build fail-closed prewrite promotion state"),
         )
         self.assertLess(
             workflow.index("Stage exact candidate release files"),
@@ -1164,6 +1359,17 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("artifact inventory for version 0.10.0 or later", rejected.stderr)
         self.assertIn("missing registry-notary-cel-worker", rejected.stderr)
         self.assertIn("unexpected registry-lab", rejected.stderr)
+
+    def test_validate_accepts_declared_registryctl_installer_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = write_manifest(
+                Path(tmp),
+                version="0.14.0",
+                include_registryctl_installer=True,
+            )
+            result = run_tool("validate", str(manifest))
+
+        self.assertEqual(0, result.returncode, result.stderr)
 
     def test_render_registryctl_image_lock_from_exact_release_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1603,6 +1809,102 @@ class RegistryReleaseTest(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("requires exactly one registry docs archive", result.stderr)
+
+    def test_render_capsule_classifies_declared_registryctl_installer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_ref = init_release_repo(root)
+            manifest = write_manifest(
+                root,
+                source_ref=source_ref,
+                include_registryctl_installer=True,
+            )
+            binary_dir = write_binary_fixture(root)
+            installer = binary_dir / "registryctl-v0.8.0-install.sh"
+            installer.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            checksums = "".join(
+                subprocess.check_output(
+                    ["sha256sum", path.name],
+                    cwd=binary_dir,
+                    text=True,
+                )
+                for path in sorted(binary_dir.iterdir())
+                if path.is_file() and path.name != "SHA256SUMS"
+            )
+            (binary_dir / "SHA256SUMS").write_text(checksums, encoding="utf-8")
+            binary_sbom_dir = write_binary_sbom_fixture(root, binary_dir)
+            output_json = root / "capsule.json"
+
+            result = render_capsule(
+                manifest,
+                binary_dir,
+                write_image_fixture(root),
+                output_json,
+                root / "capsule.md",
+                root,
+                binary_sbom_dir=binary_sbom_dir,
+                require_registryctl_installer=True,
+            )
+            evidence = json.loads(output_json.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        installers = [
+            item
+            for item in evidence["release_files"]
+            if item["kind"] == "registryctl-installer"
+        ]
+        self.assertEqual(1, len(installers))
+        self.assertEqual("registryctl-v0.8.0-install.sh", installers[0]["name"])
+        self.assertNotIn(
+            installers[0]["name"],
+            {item["name"] for item in evidence["binaries"]},
+        )
+
+    def test_render_capsule_requires_installer_declaration_and_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            undeclared_root = root / "undeclared"
+            undeclared_root.mkdir()
+            source_ref = init_release_repo(undeclared_root)
+            undeclared = write_manifest(undeclared_root, source_ref=source_ref)
+            missing_declaration = render_capsule(
+                undeclared,
+                write_binary_fixture(undeclared_root),
+                write_image_fixture(undeclared_root),
+                undeclared_root / "capsule.json",
+                undeclared_root / "capsule.md",
+                undeclared_root,
+                require_registryctl_installer=True,
+            )
+
+            declared_root = root / "declared"
+            declared_root.mkdir()
+            source_ref = init_release_repo(declared_root)
+            declared = write_manifest(
+                declared_root,
+                source_ref=source_ref,
+                include_registryctl_installer=True,
+            )
+            missing_file = render_capsule(
+                declared,
+                write_binary_fixture(declared_root),
+                write_image_fixture(declared_root),
+                declared_root / "capsule.json",
+                declared_root / "capsule.md",
+                declared_root,
+                require_registryctl_installer=True,
+            )
+
+        self.assertNotEqual(0, missing_declaration.returncode)
+        self.assertIn(
+            "requires manifest artifact registryctl-installer",
+            missing_declaration.stderr,
+        )
+        self.assertNotEqual(0, missing_file.returncode)
+        self.assertIn(
+            "requires exactly one registryctl installer",
+            missing_file.stderr,
+        )
 
     def test_render_capsule_includes_cross_platform_binaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2274,6 +2576,7 @@ def write_manifest(
     status: str = "release-candidate",
     version: str = "0.8.0",
     include_registryctl_image_lock: bool | None = None,
+    include_registryctl_installer: bool = False,
 ) -> Path:
     if source_tag is None:
         source_tag = f"v{version}"
@@ -2300,6 +2603,8 @@ def write_manifest(
         artifacts["registryctl-image-lock"] = version
     else:
         artifacts.pop("registryctl-image-lock", None)
+    if include_registryctl_installer:
+        artifacts["registryctl-installer"] = version
     manifest = {
         "stack": {
             "release": "beta-6",
@@ -2584,6 +2889,7 @@ def render_capsule(
     binary_sbom_dir: Path | None = None,
     require_registryctl_image_lock: bool = False,
     require_registry_docs_archive: bool = False,
+    require_registryctl_installer: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     if binary_sbom_dir is None:
         binary_sbom_dir = write_binary_sbom_fixture(repo, binary_dir)
@@ -2617,6 +2923,8 @@ def render_capsule(
         args.append("--require-registryctl-image-lock")
     if require_registry_docs_archive:
         args.append("--require-registry-docs-archive")
+    if require_registryctl_installer:
+        args.append("--require-registryctl-installer")
     return run_tool(*args)
 
 

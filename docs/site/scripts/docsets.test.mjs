@@ -10,12 +10,14 @@ import {
 function validDocsets() {
   return {
     current: 'latest',
+    released: 'beta-2026-06-12',
     docsets: [
       {
         id: 'latest',
         label: 'Latest',
         path: '/',
         status: 'current',
+        availability: 'unreleased',
         source: 'main',
         published_at: '2026-06-13',
         description: 'Current docs.',
@@ -31,6 +33,7 @@ function validDocsets() {
         label: 'Beta 2026-06-12',
         path: '/v/beta-2026-06-12/',
         status: 'archived',
+        availability: 'released',
         source: 'registry-stack-beta-2026-06-12',
         published_at: '2026-06-12',
         description: 'Frozen beta docs.',
@@ -80,6 +83,16 @@ test('validateDocsets rejects non-SHA product refs', () => {
   const manifest = validDocsets();
   manifest.docsets[0].products['registry-relay'].ref = 'main';
   assert.throws(() => validateDocsets(manifest), /must be a full 40-character SHA/);
+});
+
+test('validateDocsets rejects candidate and current docsets as released selectors', () => {
+  const candidate = validDocsets();
+  candidate.docsets[1].availability = 'candidate';
+  assert.throws(() => validateDocsets(candidate), /archived released docset/);
+
+  const current = validDocsets();
+  current.released = current.current;
+  assert.throws(() => validateDocsets(current), /selectors must be different/);
 });
 
 test('applyDocsetRefs fails when an active repo is missing from a docset', () => {

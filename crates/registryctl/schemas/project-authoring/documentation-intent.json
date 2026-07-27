@@ -104,6 +104,7 @@
     { "schema": "environment", "pointer": "/properties/callers/additionalProperties", "path_kind": "map_value" },
     { "schema": "environment", "pointer": "/properties/callers/additionalProperties/properties/scopes/items", "path_kind": "array_item" },
     { "schema": "environment", "pointer": "/properties/relay/properties/allowed_clients/items", "path_kind": "array_item" },
+    { "schema": "environment", "pointer": "/properties/relay/properties/local_api_keys/properties/scopes/items", "path_kind": "array_item" },
     { "schema": "environment", "pointer": "/properties/deployment/anyOf/0", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/properties/deployment/anyOf/1", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/allOf/0", "path_kind": "branch" },
@@ -130,6 +131,7 @@
     { "schema": "environment", "pointer": "/allOf/6", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/allOf/6/if", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/allOf/6/else", "path_kind": "branch" },
+    { "schema": "environment", "pointer": "/allOf/6/else/properties/relay/not", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/internalOrigin/anyOf/0", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/internalOrigin/anyOf/1", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/relayOrigin/anyOf/0", "path_kind": "branch" },
@@ -375,6 +377,26 @@
       "schema": "environment",
       "pointer": "/properties/relay/properties/allowed_clients",
       "purpose": "Narrows Relay authentication to the operator-reviewed client identifiers listed for this environment."
+    },
+    {
+      "schema": "environment",
+      "pointer": "/properties/relay/properties/local_api_keys",
+      "purpose": "Declares synthetic API-key principals only for the local profile; Registryctl generates raw keys privately and emits only their fingerprints to Relay."
+    },
+    {
+      "schema": "environment",
+      "pointer": "/properties/relay/properties/local_api_keys/properties/match_principal",
+      "purpose": "Binds the synthetic local caller whose reviewed identifier matches one starter row; this identifier is not a raw key or a source value."
+    },
+    {
+      "schema": "environment",
+      "pointer": "/properties/relay/properties/local_api_keys/properties/no_match_principal",
+      "purpose": "Binds the synthetic local caller whose reviewed identifier intentionally matches no starter row so an empty result is maintained."
+    },
+    {
+      "schema": "environment",
+      "pointer": "/properties/relay/properties/local_api_keys/properties/scopes",
+      "purpose": "Limits both generated local API-key callers to the explicitly reviewed service scopes needed by the maintained checks."
     },
     {
       "schema": "environment",
@@ -890,6 +912,11 @@
       "schema": "environment",
       "pointer": "/$defs/endpoint/properties/generation",
       "purpose": "Records the operator-controlled private-endpoint generation used for explicit binding rotation."
+    },
+    {
+      "schema": "environment",
+      "pointer": "/$defs/provider/oneOf/1/properties/project_file",
+      "purpose": "Binds a contained project-relative workbook for offline preflight and read-only runtime mounting without emitting the authoring path into Relay configuration."
     },
     {
       "schema": "environment",

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+const LOCAL_RELAY_MATCH_KEY_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH";
+const LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_HASH";
 fn generated_relay_config(
     loaded: &LoadedRegistryProject,
     environment_name: &str,
@@ -52,14 +54,14 @@ fn generated_relay_config(
             .entry(artifact.sha256.clone())
             .or_insert_with(|| {
                 json!({
-                "class": match artifact.class {
-                    EvidenceClass::Conformance => "conformance",
-                    EvidenceClass::NegativeSecurity => "negative_security",
-                    EvidenceClass::Minimization => "minimization",
-                },
-                "path": artifact.path,
-                "sha256": artifact.sha256,
-            })
+                    "class": match artifact.class {
+                        EvidenceClass::Conformance => "conformance",
+                        EvidenceClass::NegativeSecurity => "negative_security",
+                        EvidenceClass::Minimization => "minimization",
+                    },
+                    "path": artifact.path,
+                    "sha256": artifact.sha256,
+                })
             });
     }
     let evidence = evidence_by_hash.into_values().collect::<Vec<_>>();
@@ -91,7 +93,9 @@ fn generated_relay_config(
                 continue;
             }
             let entry = match interface.credential_type {
-                CredentialType::None => bail!("none credential must not have an environment binding"),
+                CredentialType::None => {
+                    bail!("none credential must not have an environment binding")
+                }
                 CredentialType::Basic => json!({
                     "type": "basic",
                     "ref": reference,
@@ -139,6 +143,58 @@ fn generated_relay_config(
     let relay_origin = normalize_url_scheme(&relay.origin)?;
     let relay_issuer = normalize_url_scheme(&relay.issuer)?;
     let relay_jwks_url = normalize_url_scheme(&relay.jwks_url)?;
+    let auth = if let Some(local) = &relay.local_api_keys {
+        if !matches!(environment.deployment.profile, DeploymentProfile::Local) {
+            bail!("Relay local_api_keys are supported only by the local deployment profile");
+        }
+        validate_token(
+            &local.match_principal,
+            "Relay local API-key match principal",
+            256,
+        )?;
+        validate_token(
+            &local.no_match_principal,
+            "Relay local API-key no-match principal",
+            256,
+        )?;
+        if local.match_principal == local.no_match_principal {
+            bail!("Relay local API-key principals must be distinct");
+        }
+        validate_scopes(&local.scopes)?;
+        json!({
+            "mode": "api_key",
+            "api_keys": [
+                {
+                    "id": local.match_principal,
+                    "fingerprint": {
+                        "provider": "env",
+                        "name": LOCAL_RELAY_MATCH_KEY_HASH_ENV,
+                    },
+                    "scopes": local.scopes,
+                },
+                {
+                    "id": local.no_match_principal,
+                    "fingerprint": {
+                        "provider": "env",
+                        "name": LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV,
+                    },
+                    "scopes": local.scopes,
+                },
+            ],
+        })
+    } else {
+        json!({
+            "mode": "oidc",
+            "oidc": {
+                "issuer": relay_issuer,
+                "audiences": [relay.audience.as_str()],
+                "jwks_url": relay_jwks_url,
+                "allow_dev_insecure_fetch_urls": url_uses_http(&relay.issuer)
+                    || url_uses_http(&relay.jwks_url),
+                "allowed_clients": allowed_clients,
+            },
+        })
+    };
     let mut config = json!({
         "instance": {
             "id": relay_service.service,
@@ -150,17 +206,7 @@ fn generated_relay_config(
             "base_url": relay_origin,
             "publisher": loaded.project.registry.id,
         },
-        "auth": {
-            "mode": "oidc",
-            "oidc": {
-                "issuer": relay_issuer,
-                "audiences": [relay.audience.as_str()],
-                "jwks_url": relay_jwks_url,
-                "allow_dev_insecure_fetch_urls": url_uses_http(&relay.issuer)
-                    || url_uses_http(&relay.jwks_url),
-                "allowed_clients": allowed_clients,
-            },
-        },
+        "auth": auth,
         "audit": {
             "sink": "stdout",
             "hash_secret_env": "REGISTRY_RELAY_AUDIT_HASH_SECRET",
@@ -243,10 +289,7 @@ fn source_credential_reference(
     bail!("environment credential has no integration owner")
 }
 
-fn canonical_rhai_script_path(
-    loaded: &LoadedRegistryProject,
-    alias: &str,
-) -> Result<PathBuf> {
+fn canonical_rhai_script_path(loaded: &LoadedRegistryProject, alias: &str) -> Result<PathBuf> {
     let target = compiled_rhai_source(
         loaded
             .integrations
@@ -295,6 +338,7 @@ fn generated_records_datasets(
                     }},
                 }),
                 RecordProvider::Xlsx {
+                    project_file: _,
                     path,
                     sheet,
                     header_row,
@@ -333,7 +377,7 @@ fn generated_records_datasets(
                         "name": binding.columns[logical],
                         "type": record_field.field_type,
                         "nullable": record_field.nullable,
-                        "sensitive": false,
+                        "sensitive": matches!(&binding.provider, RecordProvider::Xlsx { .. }),
                     }))
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -348,7 +392,7 @@ fn generated_records_datasets(
                     json!({
                         "name": logical,
                         "from": binding.columns[logical],
-                        "sensitive": false,
+                        "sensitive": matches!(&binding.provider, RecordProvider::Xlsx { .. }),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -660,7 +704,7 @@ fn entity_materialization_resource_id(
             "refresh_ms": refresh_ms,
             "retain_generations": entity.materialization.retain_generations,
         },
-        "provider": binding.provider,
+        "provider": entity_runtime_provider(&binding.provider),
         "columns": binding.columns,
         "source_revision": binding.source_revision,
         "generation": binding.generation,
@@ -723,6 +767,7 @@ fn entity_provider_review(provider: &RecordProvider) -> Value {
             "quote": quote,
         }),
         RecordProvider::Xlsx {
+            project_file: _,
             path,
             sheet,
             header_row,
@@ -741,6 +786,50 @@ fn entity_provider_review(provider: &RecordProvider) -> Value {
         RecordProvider::Postgres { schema, table, .. } => json!({
             "type": "postgres",
             "connection": "configured_secret",
+            "schema": schema,
+            "table": table,
+        }),
+    }
+}
+
+fn entity_runtime_provider(provider: &RecordProvider) -> Value {
+    match provider {
+        RecordProvider::Csv {
+            path,
+            header_row,
+            delimiter,
+            quote,
+        } => json!({
+            "type": "csv",
+            "path": path,
+            "header_row": header_row,
+            "delimiter": delimiter,
+            "quote": quote,
+        }),
+        RecordProvider::Xlsx {
+            project_file: _,
+            path,
+            sheet,
+            header_row,
+            data_range,
+        } => json!({
+            "type": "xlsx",
+            "path": path,
+            "sheet": sheet,
+            "header_row": header_row,
+            "data_range": data_range,
+        }),
+        RecordProvider::Parquet { path } => json!({
+            "type": "parquet",
+            "path": path,
+        }),
+        RecordProvider::Postgres {
+            connection,
+            schema,
+            table,
+        } => json!({
+            "type": "postgres",
+            "connection": connection,
             "schema": schema,
             "table": table,
         }),

@@ -44,7 +44,6 @@ MAINTAINED_TEXT_PATHS = DOCKERFILES + (
     Path("crates/registry-relay/docs/security-assurance.md"),
     Path("crates/registry-relay/scripts/check_docker_build_contract.py"),
     Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
-    Path("docs/site/scripts/check-registryctl-tutorials.sh"),
     Path("products/notary/docs/security-assurance.md"),
 )
 
@@ -273,15 +272,6 @@ def check_repository(root: Path = ROOT) -> list[str]:
         RUST_BUILDER,
         Path("crates/registry-relay/scripts/run-live-consultation-journey.sh"),
         "pinned Debian 13 live-journey builder",
-        failures,
-    )
-
-    tutorial = texts[Path("docs/site/scripts/check-registryctl-tutorials.sh")]
-    require(
-        tutorial,
-        f'BUILDER_IMAGE="{RUST_BUILDER}"',
-        Path("docs/site/scripts/check-registryctl-tutorials.sh"),
-        "pinned Debian 13 tutorial builder",
         failures,
     )
 

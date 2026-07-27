@@ -107,7 +107,7 @@ impl ProjectionPlan {
 /// Validate `observed` against `declared` and produce a
 /// [`ProjectionPlan`] that turns one into the other.
 ///
-/// `sample_rows` enables the sample-mode checks (null-in-non-nullable,
+/// `materialized_rows` enables complete-source checks (null-in-non-nullable,
 /// primary-key uniqueness, RFC 3339 parseability for string-encoded
 /// date/timestamp columns). When `None`, those checks are skipped
 /// (cheap mode; used to validate the schema shape before
@@ -126,7 +126,7 @@ pub fn validate(
     declared: &DeclaredSchema,
     observed: &Schema,
     primary_key: Option<&str>,
-    sample_rows: Option<&RecordBatch>,
+    materialized_rows: Option<&RecordBatch>,
 ) -> Result<ProjectionPlan, IngestError> {
     let declared_names: Vec<&str> = declared.fields.iter().map(|f| f.name.as_str()).collect();
     let observed_names: Vec<&str> = observed
@@ -224,10 +224,10 @@ pub fn validate(
         let target = declared_type_to_arrow(dfield.ty);
         match type_compatibility(dfield.ty, obs_field.data_type()) {
             TypeCheck::Ok => {}
-            TypeCheck::NeedsSampleParse => {
-                // RFC 3339 / ISO-8601 parse: cheap-mode skips, sample-mode
+            TypeCheck::NeedsMaterializedParse => {
+                // RFC 3339 / ISO-8601 parse: cheap-mode skips, materialized-mode
                 // parses each non-null row.
-                if let Some(batch) = sample_rows {
+                if let Some(batch) = materialized_rows {
                     let col = batch.column(obs_idx);
                     if let Err(diff) =
                         parse_string_like_array(col.as_ref(), dfield.ty, &dfield.name)
@@ -270,8 +270,8 @@ pub fn validate(
         output_fields.push(Field::new(&dfield.name, target, dfield.nullable));
     }
 
-    // ── Rule: declared non-null columns have no null rows in sample ──
-    if let Some(batch) = sample_rows {
+    // ── Rule: declared non-null columns have no null materialized rows ──
+    if let Some(batch) = materialized_rows {
         if batch.num_rows() == 0 {
             warn!(
                 event = "ingest.zero_rows",
@@ -299,9 +299,9 @@ pub fn validate(
         }
     }
 
-    // ── Rule: primary key uniqueness in sample ──────────────────────
+    // ── Rule: primary key uniqueness across all materialized rows ───
     if let Some(pk) = primary_key {
-        if let Some(batch) = sample_rows {
+        if let Some(batch) = materialized_rows {
             let obs_idx = observed
                 .fields()
                 .iter()
@@ -371,7 +371,7 @@ fn parse_string_like_array(
     }
 
     Err(format!(
-        "type_mismatch: {col_name} (declared {declared:?}, expected Utf8 or LargeUtf8 for sample parse)"
+        "type_mismatch: {col_name} (declared {declared:?}, expected Utf8 or LargeUtf8 for materialized parse)"
     ))
 }
 
@@ -411,10 +411,10 @@ fn parse_all_string_values<'a>(
 enum TypeCheck {
     /// Castable / equal.
     Ok,
-    /// Acceptable only if the sample-mode parse succeeds. Today this is
+    /// Acceptable only if the materialized-source parse succeeds. Today this is
     /// declared `Date` vs observed `Utf8` and declared `Timestamp` vs
     /// observed `Utf8`.
-    NeedsSampleParse,
+    NeedsMaterializedParse,
     /// Hard fail.
     Fail,
 }
@@ -450,22 +450,23 @@ fn type_compatibility(declared: FieldType, observed: &DataType) -> TypeCheck {
         ) => TypeCheck::Ok,
         (F::Boolean, DataType::Boolean) => TypeCheck::Ok,
         (F::Date, DataType::Date32) | (F::Date, DataType::Date64) => TypeCheck::Ok,
-        (F::Date, DataType::Utf8) | (F::Date, DataType::LargeUtf8) => TypeCheck::NeedsSampleParse,
+        (F::Date, DataType::Utf8) | (F::Date, DataType::LargeUtf8) => {
+            TypeCheck::NeedsMaterializedParse
+        }
         (F::Timestamp, DataType::Timestamp(_, _)) => TypeCheck::Ok,
         (F::Timestamp, DataType::Utf8) | (F::Timestamp, DataType::LargeUtf8) => {
-            TypeCheck::NeedsSampleParse
+            TypeCheck::NeedsMaterializedParse
         }
         _ => TypeCheck::Fail,
     }
 }
 
-/// Check primary-key uniqueness in a sample batch. The column may be of
-/// any Arrow type; we hash row strings (debug repr) for V1 sample
-/// volumes. This is sample-mode only, not production-scale.
+/// Check primary-key uniqueness across the complete materialized source.
+/// The column may be any supported Arrow scalar type.
 fn primary_key_unique(batch: &RecordBatch, col_idx: usize) -> bool {
     use std::collections::HashSet;
     let col = batch.column(col_idx);
-    // Format each value cheaply; we only run this on sample batches.
+    // Keep one deterministic scalar representation per observed key.
     let mut seen: HashSet<String> = HashSet::with_capacity(batch.num_rows());
     for row in 0..batch.num_rows() {
         if col.is_null(row) {
@@ -484,8 +485,7 @@ fn primary_key_unique(batch: &RecordBatch, col_idx: usize) -> bool {
     true
 }
 
-/// Cheap string repr of a single cell. Used for primary-key uniqueness
-/// in sample mode; not a general-purpose serialiser.
+/// Deterministic string representation used only for primary-key uniqueness.
 fn format_array_value(arr: &dyn Array, row: usize) -> String {
     use datafusion::arrow::array::{
         BooleanArray, Date32Array, Float64Array, Int32Array, Int64Array, StringArray,

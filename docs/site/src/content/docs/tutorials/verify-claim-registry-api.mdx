@@ -1,13 +1,13 @@
 ---
-title: Evaluate a registry-backed claim locally
-description: Add Registry Notary to the protected spreadsheet project, evaluate a bounded active-registration existence claim, and revise its governed meaning.
-status: draft
+title: Evaluate your first registry-backed claim
+description: Initialize the canonical snapshot starter, run its synthetic match and no-match fixtures, inspect the bounded claim meaning, and build validated Relay and Notary inputs.
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-26"
+last_reviewed: "2026-07-27"
 doc_type: tutorial
 locale: en
 standards_referenced: []
@@ -15,430 +15,342 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-The canonical first-country path is the generated
-[registry-backed Notary journey](/journeys/registry-backed-notary-claim/). It keeps the
-configuration, fixture, evidence, and product-input gates synchronized with current source. Use
-this longer Main-source walkthrough when you need the live local runtime details below.
-
-This tutorial continues from the `my-first-api` project created in
-[Run a protected registry API locally](../publish-spreadsheet-secured-registry-api/).
-Imagine that a benefits intake service has collected an applicant's name and date of birth. It
-needs to know whether one active matching registration exists in a selected registry source, but
-the service must not receive the registry row or a national identifier. You will add Registry
-Notary, evaluate active, pending, and no-match cases, then broaden and rename the predicate to
-include pending registrations.
-
-Later tutorials will show how to start from your own registry and author a custom integration.
-Here, reusing the first tutorial's small workbook keeps the focus on making and changing a Notary
-claim.
+Use Registry Notary when a caller needs a bounded claim result instead of a
+registry row. This tutorial evaluates one synthetic claim entirely offline,
+proves its match and no-match meanings, and builds the validated Relay and
+Notary inputs that an operator would review next.
 
 <QuickstartMeta
-  outcome="A live bounded-existence claim, matched without a national identifier, with a governed rule and claim-name change exercised end to end."
-  time="About 10 minutes after completing the first tutorial"
-  level="Local single-node"
-  prerequisites={['The my-first-api project from the first tutorial', 'A Registry Stack Main checkout pinned to one exact commit, with registryctl, Relay and Notary images, and the image lock built from that commit', 'A Docker Compose provider', 'curl']}
+  outcome="A canonical project whose synthetic fixtures prove a bounded population-record-exists claim and whose unsigned Relay and Notary inputs pass product validation."
+  time="About 10 minutes"
+  level="Local offline authoring"
+  prerequisites={['registryctl 0.14.0 and its matching image lock', 'A shell and a text editor'] }
 />
 
-This tutorial uses synthetic data and local demo credentials. Do not use the generated keys or
-database settings in production.
+This task does not contact a registry, start a service, issue a credential, or
+prove wallet interoperability. Its fixtures are synthetic and have no network,
+credential, or filesystem authority.
 
-:::caution[Unreleased Main-source tutorial]
-This page documents behavior added after Registry Stack `v0.13.0`.
-The `v0.13.0` CLI and release assets are incompatible with these instructions because they
-generate the older claim identifier.
+## Create the canonical claim project
 
-Use a Registry Stack Main checkout pinned to one exact Git commit that contains this page. Build
-`registryctl`, the Relay and Notary images, and the source-under-test image lock from that same
-checkout. Record the revision with `git rev-parse HEAD`, and require the lock's
-`manifest_source_ref` and `tag_target` to equal that full commit. `registryctl --version` reports a
-package version; it does not establish source revision or artifact identity. Do not combine
-artifacts from different commits.
-The [current-source test procedure](../../start/test-current-source-revision/) provides the exact
-pin, build, field-verification, and all-in-one local runtime commands.
-
-This is an evaluation-only local tutorial. It does not issue a credential or
-prove wallet, credential-presentation, or OID4VCI interoperability.
-:::
-
-## Add Notary to the project
-
-From the `my-first-api` directory left by the first tutorial, add the local Notary journey:
+Initialize the exact snapshot starter:
 
 ```sh
-registryctl add notary
+registryctl init --from snapshot --project-dir my-first-claim
+cd my-first-claim
 ```
 
-The command reports the authored claim file, local Notary URL, and next command:
+Registryctl copies one canonical `registry-stack.yaml` project, its
+`person-snapshot` integration, two synthetic fixtures, a logical entity, and a
+local environment. You edit authored project files, never generated Relay or
+Notary YAML.
+
+## Evaluate the matching fixture
+
+Run the matching fixture with its safe trace:
+
+```sh
+registryctl test \
+  --project-dir . \
+  --integration person-snapshot \
+  --fixture snapshot-match \
+  --trace
+```
+
+The report begins with a pass for `person-snapshot.snapshot-match`. Its bounded
+result is:
 
 ```text
-Added Registry Notary to "my-first-api".
-  Claim: notary/project/registry-stack.yaml
-  Notary API after start: http://127.0.0.1:4255
-
-Next:
-  registryctl start
+outcome: match
+claims:
+  population-record-exists: true
+  population-registration-status: active
+  residency-confirmed: true
 ```
 
-Add `--format json` when another program needs the versioned add-on report.
+The trace shows the typed selector name, the fixed snapshot operation,
+minimized output names, claim identifiers, outcome class, and derived negative
+cases. It does not grant the fixture access to a real source or retain a
+subject record.
 
-The add-on creates an editable Registry Stack project under `notary/project/`. It also adds a
-private consultation Relay that reads the same workbook. Relay still owns registry access. Notary
-receives only the minimized consultation result needed to evaluate the claim.
+`population-record-exists: true` means this exact project fixture produced one
+validated match for the selected snapshot key. It does not prove that the
+record exists in every registry, that the caller is the person, or that the
+person is eligible for a service.
 
-This template change applies only to newly generated add-ons. `registryctl add notary` does not
-rewrite an existing Notary project. Projects generated with the older
-`person-registration-accepted` identifier keep that identifier. Before renaming an existing claim,
-review its CEL expression and downstream use. If the expression is the active-registration
-predicate shown in this tutorial, rename the claim to `active-registration-exists`, then update
-caller claim lists and the match, pending, and no-match fixture keys together. Do not mechanically
-rename a claim that represents a broader policy or legal decision.
+## Evaluate the no-match fixture
 
-## Inspect the claim
-
-Read the evidence service before starting it:
+Run the maintained no-match case:
 
 ```sh
-sed -n '7,28p' notary/project/registry-stack.yaml
+registryctl test \
+  --project-dir . \
+  --integration person-snapshot \
+  --fixture snapshot-no-match \
+  --trace
 ```
 
-The important part is deliberately small:
+The result is:
+
+```text
+outcome: no_match
+claims:
+  population-record-exists: false
+  population-registration-status: null
+  residency-confirmed: null
+```
+
+`false` means this bounded source observation produced no match. It does not
+prove global nonexistence, identity fraud, ineligibility, or any legal
+negative. Value claims remain `null` because no source row was selected.
+
+The exact snapshot selector is the entity primary key. A duplicate key is
+rejected when the snapshot is materialized, so an ambiguous multiple-row result
+is not applicable to this one-key journey.
+
+## Inspect the governed claim
+
+Read the small authored service and integration:
+
+```sh
+sed -n '1,180p' registry-stack.yaml
+sed -n '1,180p' integrations/person-snapshot/integration.yaml
+```
+
+The important service boundary is:
 
 ```yaml
-  registration-verification:
+services:
+  benefits-eligibility:
     kind: evidence
     version: 1
-    purpose: https://example.local/purpose/tutorial
+    purpose: benefits-eligibility
     legal_basis: public-service-delivery
     consent: not_required
-    access: { scopes: ["benefits_casework:evidence"] }
+    access: { scopes: ["evidence:population:read"] }
     consultations:
-      enrollment:
-        integration: person-demographics
+      person:
+        integration: person-snapshot
         input:
-          given_name: request.target.attributes.given_name
-          family_name: request.target.attributes.family_name
-          date_of_birth: request.target.attributes.date_of_birth
+          person_id: request.target.identifiers.population_person_id
     claims:
-      active-registration-exists:
-        cel: enrollment.matched && enrollment.registration_status == "active"
+      population-record-exists:
+        cel: person.matched
+        disclosure: predicate
+      population-registration-status:
+        output: person.registration_status
+        disclosure: value
+      residency-confirmed:
+        output: person.residency_confirmed
         disclosure: predicate
 ```
 
-The caller supplies a name and date of birth already obtained through its intake process. Registry
-Relay owns the bounded lookup: it uses all three values for an exact match and returns only
-`matched` and `registration_status` to Registry Notary. Registry Notary owns the claim: Registry
-Notary evaluates the CEL expression and discloses the predicate result. The claim identifier and
-boolean are not Relay outputs.
+The caller supplies the typed identifier. Relay owns the exact source lookup
+and returns only the reviewed `registration_status` and
+`residency_confirmed` outputs to the generated consultation boundary. Notary
+owns claim evaluation and disclosure. A claim identifier and boolean are not
+raw registry fields.
 
-The selector fields cannot also be projected as outputs, and the public result does not repeat the
-name, date of birth, or status. `true` means this bounded consultation found exactly one matching
-record with status `active` in the selected registry source. `false` means the consultation did not
-find an active matching record. `false` does not prove global nonexistence, identity fraud,
-ineligibility, or any legal negative.
+The project separately binds purpose, legal basis, caller scope, consultation
+input, claim expression, value source, and disclosure mode. None is inferred
+from the fixture response.
 
-The result is not proof that the caller is the matched person. Authentication, identity assurance,
-and authority to act for the person remain separate controls.
+## Run the complete fixture set
 
-Names and dates of birth can collide or be recorded differently. Requiring exactly one match
-rejects ambiguity, but a production service still needs a jurisdiction-appropriate identity
-assurance and matching design.
-
-## Start Relay and Notary
-
-Start the combined local project:
+Run every synthetic fixture:
 
 ```sh
-registryctl start
+registryctl test --project-dir .
 ```
 
-After the containers become ready, the command prints both APIs:
+The command reports:
 
 ```text
-Relay API:  http://127.0.0.1:4242
-API docs:   http://127.0.0.1:4242/docs
-Notary API: http://127.0.0.1:4255
-Notary docs: http://127.0.0.1:4255/docs
+PASS: 5/5 fixtures passed
 ```
 
-## Load the evaluator key
+This gate validates the project's maintained authorization,
+malformed-source, subject-binding, status, match, and no-match fixtures.
+It does not contact a registry or check local runtime files and secrets.
 
-Load the generated local credentials into your current shell:
+## Inspect runtime prerequisites
+
+Ask Registryctl which local runtime prerequisites are available:
 
 ```sh
-set -a
-. ./secrets/local.env
-set +a
-test -n "$TUTORIAL_EVALUATOR_RAW"
+registryctl preflight --project-dir . --environment local
 ```
 
-The raw key stays in the ignored `secrets/local.env` file. Do not paste it into the request body or
-commit it.
+A fresh snapshot starter reports:
 
-## Evaluate an active registration
+```text
+Registry Stack project "fictional-population-registry" is not locally ready for environment "local".
+```
 
-Evaluate an active registration from the workbook:
+The command exits nonzero because the offline starter does not include an
+operator's signing key, caller key fingerprints, materialized source file, or
+Relay token file. This expected result inventories runtime prerequisites. It
+does not run fixtures, contact a source, or block the remaining offline
+authoring steps.
+
+## Validate the authored claim configuration
+
+Validate the project and inspect its value-free effective plan:
 
 ```sh
-curl -sS -X POST \
-  -H "x-api-key: $TUTORIAL_EVALUATOR_RAW" \
-  -H "Data-Purpose: https://example.local/purpose/tutorial" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/vnd.registry-notary.claim-result+json" \
-  --data '{
-    "target": {
-      "type": "person",
-      "attributes": {
-        "given_name": "Jo",
-        "family_name": "Elm",
-        "date_of_birth": "2019-02-03"
-      }
-    },
-    "claims": ["active-registration-exists"],
-    "disclosure": "predicate",
-    "format": "application/vnd.registry-notary.claim-result+json",
-    "purpose": "https://example.local/purpose/tutorial"
-  }' \
-  http://127.0.0.1:4255/v1/evaluations
+registryctl check --project-dir . --environment local --explain
 ```
 
-The response also includes dynamic evaluation, target-reference, timestamp, and provenance fields.
-The stable fields to look for are:
+The report begins:
 
-```json
-{
-  "results": [
-    {
-      "claim_id": "active-registration-exists",
-      "value": true,
-      "satisfied": true,
-      "disclosure": "predicate",
-      "format": "application/vnd.registry-notary.claim-result+json"
-    }
-  ]
-}
+```text
+Registry Stack project: fictional-population-registry (valid)
+Fixtures: 5/5 passed (offline synthetic)
 ```
 
-`true` means this selected registry source returned one exact matching record with status `active`
-for the bounded consultation. The response does not contain `Jo`, `Elm`, `2019-02-03`, or the
-source value `active`.
+This gate validates the authored project, integration, entity, fixture, and
+environment relationships. It also compiles and validates the proposed Relay
+and Notary configuration without writing build output or resolving runtime
+secrets.
 
-## Evaluate a pending registration
+## Compare the disclosure intent
 
-Save a request for a person whose registry record is pending. You will repeat it after changing the
-policy:
+Compare the current authored state with the snapshot starter:
 
 ```sh
-cat > notary/pending-registration-request.json <<'JSON'
-{
-  "target": {
-    "type": "person",
-    "attributes": {
-      "given_name": "Nia",
-      "family_name": "Stone",
-      "date_of_birth": "1998-03-05"
-    }
-  },
-  "claims": ["active-registration-exists"],
-  "disclosure": "predicate",
-  "format": "application/vnd.registry-notary.claim-result+json",
-  "purpose": "https://example.local/purpose/tutorial"
-}
-JSON
-
-curl -sS -X POST \
-  -H "x-api-key: $TUTORIAL_EVALUATOR_RAW" \
-  -H "Data-Purpose: https://example.local/purpose/tutorial" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/vnd.registry-notary.claim-result+json" \
-  --data @notary/pending-registration-request.json \
-  http://127.0.0.1:4255/v1/evaluations
+registryctl compare --project-dir . --environment local --from-starter snapshot
 ```
 
-The person matches exactly, but the record does not have status `active`:
+Before you change the claim, the result is:
 
-```json
-{
-  "results": [
-    {
-      "claim_id": "active-registration-exists",
-      "value": false,
-      "satisfied": false,
-      "disclosure": "predicate"
-    }
-  ]
-}
+```text
+semantic comparison: equivalent; assurance: embedded_exact_release; changes: 0; review plan: generated_no_changes
 ```
 
-`false` means this bounded consultation did not find an active matching record in the selected
-registry source. In this example Relay found one matching record, but the active-status condition
-was false. The public response does not reveal the source status. The result does not establish
-ineligibility or another legal negative.
+This gate compares claim, scope, purpose, and disclosure intent. It does not
+approve a change or observe runtime behavior.
 
-## Try a non-matching date of birth
+## Build reviewable product inputs
 
-Change only the request date for this call:
+Generate the unsigned Relay and Notary inputs:
 
 ```sh
-curl -sS -X POST \
-  -H "x-api-key: $TUTORIAL_EVALUATOR_RAW" \
-  -H "Data-Purpose: https://example.local/purpose/tutorial" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/vnd.registry-notary.claim-result+json" \
-  --data '{
-    "target": {
-      "type": "person",
-      "attributes": {
-        "given_name": "Jo",
-        "family_name": "Elm",
-        "date_of_birth": "2019-02-04"
-      }
-    },
-    "claims": ["active-registration-exists"],
-    "disclosure": "predicate",
-    "format": "application/vnd.registry-notary.claim-result+json",
-    "purpose": "https://example.local/purpose/tutorial"
-  }' \
-  http://127.0.0.1:4255/v1/evaluations
+registryctl build --project-dir . --environment local
 ```
 
-The bounded lookup finds no exact record, so the existence predicate is false:
+The report begins:
 
-```json
-{
-  "results": [
-    {
-      "claim_id": "active-registration-exists",
-      "value": false,
-      "satisfied": false,
-      "disclosure": "predicate"
-    }
-  ]
-}
+```text
+Built Registry Stack project "fictional-population-registry".
+  Output: .registry-stack/build/local
+  Fixtures: 5/5 passed
 ```
 
-The same bounded meaning applies: `false` means no active matching record was found by this
-consultation in the selected registry source. The result does not prove global nonexistence,
-identity fraud, ineligibility, or a legal negative. No-match is a Relay consultation outcome that
-Notary uses to evaluate the claim, not a source error or a global fact. Ambiguous matches are
-different: the private Relay rejects them rather than choosing a row, and the ambiguous fixture
-expects no claim result.
+This gate reruns the fixtures and product validation, then generates separate
+reviewable Relay and Notary inputs plus an artifact manifest. It does not
+resolve runtime secrets, contact a source, sign the inputs, or activate either
+product.
 
-## Edit the claim rule
+## Review generated product inputs
 
-Open `notary/project/registry-stack.yaml` in your editor. Find this claim:
+Review the inventory and generated paths:
+
+```sh
+sed -n '1,260p' .registry-stack/build/local/artifact-manifest.json
+```
+
+The manifest binds authored inputs and generated outputs by digest. Generated
+product files are review output, not a second authoring surface. Do not edit
+them.
+
+This local build is unsigned. It does not activate Notary, contact a source,
+or grant production approval. An operator must supply reviewed environment
+bindings, secrets, network controls, signing, activation, audit, and recovery
+before a deployed claim can be trusted.
+
+## Change one disclosure boundary
+
+To stop releasing the registration status as a value, change this authored
+claim in `registry-stack.yaml`:
 
 ```yaml
-      active-registration-exists:
-        cel: enrollment.matched && enrollment.registration_status == "active"
-        disclosure: predicate
+population-registration-status:
+  output: person.registration_status
+  disclosure: value
 ```
 
-Including pending registrations changes the meaning, not only the implementation. Rename the claim
-while changing the expression:
+to:
 
 ```yaml
-      active-or-pending-registration-exists:
-        cel: enrollment.matched && (enrollment.registration_status == "active" || enrollment.registration_status == "pending")
-        disclosure: predicate
+population-registration-status:
+  output: person.registration_status
+  disclosure: redacted
 ```
 
-Update the fixture keys to the new claim identifier. Keep the match fixture `true`, change the
-pending fixture from `false` to `true`, and keep the no-match fixture `false`:
+The matching fixture still expects the old visible value, so the next test
+fails. Update only its reviewed claim expectation in
+`integrations/person-snapshot/fixtures/match.yaml`:
 
 ```yaml
-# fixtures/match.yaml
-  claims: { active-or-pending-registration-exists: true }
-# fixtures/pending.yaml
-  claims: { active-or-pending-registration-exists: true }
-# fixtures/no-match.yaml
-  claims: { active-or-pending-registration-exists: false }
+population-registration-status: redacted
 ```
 
-The ambiguous fixture keeps `claims: {}` because Relay refuses an ambiguous consultation instead of
-producing a false claim. Update the saved request in
-`notary/pending-registration-request.json` to ask for
-`active-or-pending-registration-exists`.
-
-Restart after the authored claim, all fixture keys, and the saved request agree:
+Rerun the fixture gate:
 
 ```sh
-registryctl restart
+registryctl test --project-dir .
 ```
 
-`registryctl restart` validates and rebuilds the generated Relay and Notary inputs from the
-authored files before starting the services. The fixtures are executable examples of the claim, so
-restart refuses to deploy when an expected result no longer agrees with the edited rule. Edit the
-authored files under `notary/project/`, not generated files under `.registry-stack/build/`.
+The command reports `PASS: 5/5 fixtures passed`. The updated fixture now proves
+the reviewed redacted result.
 
-## Evaluate the edited rule
-
-Repeat the saved request:
+Validate the changed authored configuration:
 
 ```sh
-curl -sS -X POST \
-  -H "x-api-key: $TUTORIAL_EVALUATOR_RAW" \
-  -H "Data-Purpose: https://example.local/purpose/tutorial" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/vnd.registry-notary.claim-result+json" \
-  --data @notary/pending-registration-request.json \
-  http://127.0.0.1:4255/v1/evaluations
+registryctl check --project-dir . --environment local --explain
 ```
 
-The same pending source record now satisfies the renamed bounded-existence predicate:
+The report still begins with
+`Registry Stack project: fictional-population-registry (valid)`. The
+explanation shows the changed disclosure in the compiled configuration.
 
-```json
-{
-  "results": [
-    {
-      "claim_id": "active-or-pending-registration-exists",
-      "value": true,
-      "satisfied": true,
-      "disclosure": "predicate"
-    }
-  ]
-}
-```
-
-You changed the claim name and semantics in the authored project, rebuilt the governed contract,
-and observed the new result through the live API. You did not edit the workbook or expose its row.
-
-## Stop the stack
-
-When you are done:
+Compare the change with the starter:
 
 ```sh
-registryctl stop
+registryctl compare --project-dir . --environment local --from-starter snapshot
 ```
 
-This keeps the workbook, authored Notary project, and local request file. To return to the original
-claim later, restore the `active-registration-exists` identifier and equality expression, restore
-all three fixture keys, change the pending expectation back to `false`, and restore the saved
-request before starting the project.
+The report now starts with `semantic comparison: different` and lists a
+disclosure change.
 
-## What you built
+Generate the changed product inputs:
 
-You extended the first tutorial's protected registry with a live Notary evaluation path. An
-authorized caller supplied name and date of birth instead of a national identifier. Relay required
-one exact record and released only registration status to Notary. Notary returned one predicate,
-with no source fields in the public result. You saw the active-registration existence predicate
-return `false` for both a matched pending record and a no-match consultation, without treating
-either result as a global or legal negative. You then broadened and renamed the predicate and
-watched the same pending request produce a different governed answer.
+```sh
+registryctl build --project-dir . --environment local
+```
+
+The report begins with
+`Built Registry Stack project "fictional-population-registry".` The build
+reruns validation and writes new generated product inputs and an artifact
+manifest. This is an authored policy change with an explicit test, not a
+generated-file edit.
 
 ## Next
 
-- [Author an HTTP Registry Stack project](../author-registry-project/) to start adapting a custom
-  registry while retaining synthetic success, no-match, and ambiguity evidence.
-- [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/)
-  for the generated runtime contract and deployment gates.
+- [Use your own spreadsheet](../use-your-spreadsheet/): adapt a reviewed
+  non-personal workbook to the canonical records project and run it locally.
+- [Registry-backed Notary claim assurance](../../journeys/registry-backed-notary-claim/):
+  inspect generated source-activation evidence and exact current test coverage.
+- [Configure a snapshot materialization](../configure-project-snapshot-materialization/):
+  review the complete operator and source-ownership boundary for immutable
+  snapshot inputs.
 
 ## Troubleshooting
 
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
-| `registryctl add notary` is unknown or generates `person-registration-accepted` | The CLI or templates do not come from the exact unreleased Main revision documented by this page. Registry Stack v0.13.0 is incompatible with these instructions. | Build `registryctl`, Relay and Notary images, and the image lock from one exact Main commit containing this page. Verify the lock's full source refs rather than relying on `registryctl --version`. |
-| `registryctl add notary` says the project already has a Notary add-on | The command has already completed for this project. | Continue with `registryctl start`; do not run the add command twice. |
-| Notary returns `401` | The evaluator key was not loaded or is from another generated project. | Source `secrets/local.env` again in the current shell. |
-| Notary returns `403` | The key lacks the evidence scope or the purpose does not match the authored service. | Use `TUTORIAL_EVALUATOR_RAW` and the tutorial purpose shown above. |
-| `registryctl restart` reports a claim mismatch | The edited claim identifier or rule no longer agrees with a fixture expectation. | Update the claim keys in the match, pending, and no-match fixtures, preserve the empty ambiguous expectation, then restart again. |
-| The edited rule does not take effect | A generated file was edited, or the running services were not rebuilt. | Edit the authored claim, fixture keys, and saved request under `notary/`, then run `registryctl restart`. |
+| A fixture fails after a claim edit | The maintained expected claim result still represents the old policy. | Review the intended meaning, update the authored fixture expectation, and rerun the full project. Do not make the expectation pass mechanically. |
+| `preflight` reports a missing binding | The local environment does not provide one required entity, integration, service, caller, or secret reference. | Correct the human-owned environment file using the stable diagnostic. |
+| `check` reports a claim or consultation error | The claim references an unavailable output, purpose, input, integration, or service boundary. | Correct the authored project. Do not bypass the product validator. |
+| A generated artifact fails integrity validation | Generated output was changed after compilation. | Discard the generated closure and rebuild from reviewed authored files. |
+| The documented recovery does not solve the problem | The offline starter does not cover every claim design. | Open a [public Registry Stack issue](https://github.com/registrystack/registry-stack/issues/new/choose) with the command, stable code, Registryctl version, and safe field names. Do not include identifiers, fixture observations, credentials, or private endpoints. |

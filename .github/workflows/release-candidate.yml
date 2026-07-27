@@ -921,6 +921,34 @@ jobs:
           cp -R inputs/build-a/dist/bin dist/candidate/dist/bin
           cp inputs/macos-arm64/dist/bin/* dist/candidate/dist/bin/
           cp inputs/linux-arm64/dist/bin/* dist/candidate/dist/bin/
+          for name in registry-notary registry-relay; do
+            staging="$(cat "dist/candidate/dist/images/${name}.digest")"
+            digest="${staging##*@}"
+            printf '%s\n' "${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}" \
+              > "${RUNNER_TEMP}/${name}.release.digest"
+          done
+          release/scripts/registry-release render-registryctl-image-lock \
+            "${{ needs.validate.outputs.manifest }}" \
+            --relay-digest "${RUNNER_TEMP}/registry-relay.release.digest" \
+            --notary-digest "${RUNNER_TEMP}/registry-notary.release.digest" \
+            --tag-target "${{ needs.validate.outputs.source_sha }}" \
+            --output \
+              "dist/candidate/dist/bin/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json"
+          jq -e --arg version "${{ needs.validate.outputs.version }}" \
+            '.artifacts["registryctl-installer"] == $version' \
+            "${{ needs.validate.outputs.manifest }}" >/dev/null
+          installer="registryctl-${{ needs.validate.outputs.tag }}-install.sh"
+          cp crates/registryctl/install.sh "dist/candidate/dist/bin/${installer}"
+          chmod 0755 "dist/candidate/dist/bin/${installer}"
+          sums="${RUNNER_TEMP}/candidate-bin-SHA256SUMS"
+          (
+            cd dist/candidate/dist/bin
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+              | sort -z \
+              | xargs -0 sha256sum \
+              | sed 's#  \./#  #'
+          ) > "${sums}"
+          mv "${sums}" dist/candidate/dist/bin/SHA256SUMS
           rm -rf dist/candidate/dist/rootfs
           mkdir -p dist/candidate/dist/image-binary-sbom
           while IFS= read -r -d '' binary; do
@@ -932,6 +960,22 @@ jobs:
               "${sbom}" --file-name "${asset}" \
               --sha256 "$(sha256sum "${binary}" | awk '{print $1}')"
           done < <(find inputs/build-a/dist/image-bin -maxdepth 1 -type f -print0 | sort -z)
+
+      - name: Run exact first-country release-form journey before sealing
+        shell: bash
+        run: |
+          set -euo pipefail
+          relay_staging="$(cat dist/candidate/dist/images/registry-relay.digest)"
+          python3 release/scripts/first-country-release-form.py run \
+            --asset-dir dist/candidate/dist/bin \
+            --tag "${{ needs.validate.outputs.tag }}" \
+            --relay-image-override "${relay_staging}" \
+            --evidence-dir dist/candidate/evidence/first-country-release-form
+          python3 release/scripts/first-country-release-form.py verify \
+            --asset-dir dist/candidate/dist/bin \
+            --tag "${{ needs.validate.outputs.tag }}" \
+            --report \
+              dist/candidate/evidence/first-country-release-form/first-country-release-form.json
 
       - name: Stop verification peak-storage sampler
         if: ${{ always() }}
@@ -1272,11 +1316,152 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  verify-cli-platforms:
+    name: Verify candidate CLI install on ${{ matrix.asset }}
+    needs:
+      - validate
+      - verify-candidate
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            asset: macos-arm64
+          - runner: ubuntu-24.04-arm
+            asset: linux-arm64
+    steps:
+      - name: Download exact candidate payload
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: registry-stack-release-candidate-payload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate
+
+      - name: Install exact candidate CLI and verify authoring path
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p platform-cli-report install
+          run_sanitized_command() {
+            local report="$1"
+            shift
+            local raw_log="${RUNNER_TEMP}/${report}.raw"
+            if "$@" > "${raw_log}" 2>&1; then
+              printf '%s\n' "status=passed" > "platform-cli-report/${report}.log"
+            else
+              status=$?
+              printf '%s\n' "status=failed" > "platform-cli-report/${report}.log"
+              rm -f "${raw_log}"
+              return "${status}"
+            fi
+            rm -f "${raw_log}"
+          }
+          if command -v registryctl >/dev/null 2>&1 ||
+             command -v registry-relay >/dev/null 2>&1 ||
+             command -v registry-notary >/dev/null 2>&1; then
+            echo "Ambient Registry CLI or product binary found on platform runner" >&2
+            exit 1
+          fi
+          if lsof -nP -iTCP:4242 -sTCP:LISTEN >/dev/null 2>&1; then
+            echo "Ambient Registry service is listening on the local Relay port" >&2
+            exit 1
+          fi
+          asset_dir="${GITHUB_WORKSPACE}/candidate/dist/bin"
+          asset="registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+          candidate_binary="${asset_dir}/${asset}"
+          installer_asset="registryctl-${{ needs.validate.outputs.tag }}-install.sh"
+          installer="${asset_dir}/${installer_asset}"
+          sha256_file() {
+            if command -v shasum >/dev/null 2>&1; then
+              shasum -a 256 "$1" | awk '{print $1}'
+            elif command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$1" | awk '{print $1}'
+            else
+              echo "Neither shasum nor sha256sum is available" >&2
+              return 1
+            fi
+          }
+          expected_sha256_for() {
+            local expected
+            expected="$(awk -v asset="$1" '$2 == asset {print $1}' "${asset_dir}/SHA256SUMS")"
+            if [[ ! "${expected}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Sealed candidate checksum is missing for $1" >&2
+              return 1
+            fi
+            printf '%s\n' "${expected}"
+          }
+          candidate_expected_sha256="$(expected_sha256_for "${asset}")"
+          candidate_actual_sha256="$(sha256_file "${candidate_binary}")"
+          if [[ "${candidate_actual_sha256}" != "${candidate_expected_sha256}" ]]; then
+            echo "Sealed candidate checksum mismatch for ${asset}" >&2
+            exit 1
+          fi
+          installer_expected_sha256="$(expected_sha256_for "${installer_asset}")"
+          installer_actual_sha256="$(sha256_file "${installer}")"
+          if [[ "${installer_actual_sha256}" != "${installer_expected_sha256}" ]]; then
+            echo "Sealed candidate checksum mismatch for ${installer_asset}" >&2
+            exit 1
+          fi
+          REGISTRYCTL_ASSET_DIR="${asset_dir}" \
+          REGISTRYCTL_INSTALL_DIR="${GITHUB_WORKSPACE}/install" \
+          REGISTRYCTL_VERSION="${{ needs.validate.outputs.tag }}" \
+            run_sanitized_command install bash "${installer}"
+          registryctl="${GITHUB_WORKSPACE}/install/registryctl"
+          installed_sha256="$(sha256_file "${registryctl}")"
+          if [[ "${installed_sha256}" != "${candidate_expected_sha256}" ]] ||
+             ! cmp -s "${candidate_binary}" "${registryctl}"; then
+            echo "Installed Registryctl bytes do not match the sealed candidate" >&2
+            exit 1
+          fi
+          actual="$("${registryctl}" --version)"
+          expected="registryctl ${{ needs.validate.outputs.version }}"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "Installed Registryctl version is not exact" >&2
+            exit 1
+          fi
+          authoring_root="$(mktemp -d "${RUNNER_TEMP}/registryctl-platform-authoring.XXXXXX")"
+          cleanup() {
+            rm -rf "${authoring_root}"
+          }
+          trap cleanup EXIT
+          export REGISTRYCTL_NO_UPDATE_CHECK=1
+          project_dir="${authoring_root}/spreadsheet-project"
+          run_sanitized_command init \
+            "${registryctl}" init --from spreadsheet --project-dir "${project_dir}"
+          run_sanitized_command test \
+            "${registryctl}" test --project-dir "${project_dir}"
+          run_sanitized_command preflight \
+            "${registryctl}" preflight --project-dir "${project_dir}" --environment local
+          run_sanitized_command check \
+            "${registryctl}" check --project-dir "${project_dir}" --environment local --explain
+          run_sanitized_command build \
+            "${registryctl}" build --project-dir "${project_dir}" --environment local
+          printf '%s\n' \
+            "platform=${{ matrix.asset }}" \
+            "asset=registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}" \
+            "version=${actual}" \
+            "runtime_support=cli-authoring-only" \
+            > platform-cli-report/result.txt
+          cp "${asset_dir}/SHA256SUMS" platform-cli-report/SHA256SUMS
+
+      - name: Upload sanitized platform CLI report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-stack-candidate-cli-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: platform-cli-report
+          if-no-files-found: error
+          retention-days: 7
+
   attest-candidate:
     name: Reverify and attest prior-sealed candidate bytes
     needs:
       - validate
       - verify-candidate
+      - verify-cli-platforms
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -1335,6 +1520,7 @@ jobs:
       - build-b
       - other-platforms
       - verify-candidate
+      - verify-cli-platforms
       - attest-candidate
     if: ${{ always() }}
     runs-on: ubuntu-24.04

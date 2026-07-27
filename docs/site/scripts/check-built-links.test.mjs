@@ -30,11 +30,13 @@ function fixture(t, archivedHref) {
     root,
     'src/data/docsets.yaml',
     `current: latest
+released: v1
 docsets:
   - id: latest
     label: Latest
     path: /
     status: current
+    availability: unreleased
     source: main
     published_at: 2026-07-26
     description: Current docs.
@@ -43,6 +45,7 @@ docsets:
     label: Version 1
     path: /v/v1/
     status: archived
+    availability: released
     source: v1
     published_at: 2026-07-25
     description: Archived docs.

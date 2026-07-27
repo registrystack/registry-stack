@@ -1,0 +1,35 @@
+version: 1
+starter:
+  id: spreadsheet
+  release: 0.13.0
+  content_digest: sha256:67f94eaa7c657df498db5e5bfe9adaa022f6f2ecad2b3883a5174e9c1b2dd531
+
+registry:
+  id: fictional-public-works-registry
+
+entities:
+  projects:
+    file: entities/projects.yaml
+
+services:
+  projects-records:
+    kind: records_api
+    entity: projects
+    title: Fictional public works projects
+    description: Protected operational view of synthetic public works projects.
+    owner: Public Works Delivery Unit
+    sensitivity: confidential
+    access_rights: restricted
+    update_frequency: as_needed
+    api:
+      scopes:
+        metadata: projects:metadata
+        rows: projects:rows
+        aggregate: projects:aggregate
+        evidence_verification: projects:evidence_verification
+      purposes: [public-works-case-management]
+      projection: [project_id, district_code, sector, status]
+      pagination: { default_limit: 50, max_limit: 100 }
+      filters: { project_id: [eq] }
+      required_principal_filters: [project_id]
+      standards: { ogc_features: false, sp_dci: false }

@@ -389,6 +389,17 @@ jobs:
             staging="${REGISTRY}/${IMAGE_NAMESPACE}/${name}-candidate@${digest}"
             test "$(crane digest "${staging}")" = "${digest}"
           done
+          payload_name="$(jq -er '
+            [.artifacts[].name |
+             select(startswith("registry-stack-release-candidate-payload-"))] |
+            if length == 1 then .[0] else error("expected one payload") end
+          ' "${receipt}")"
+          payload="promotion/artifacts/${payload_name}"
+          python3 release/scripts/first-country-release-form.py verify \
+            --asset-dir "${payload}/dist/bin" \
+            --tag "${{ needs.verify.outputs.tag }}" \
+            --report \
+              "${payload}/evidence/first-country-release-form/first-country-release-form.json"
           echo "proof_level=$(jq -er '.release.proof_level' "${receipt}")" \
             >> "${GITHUB_OUTPUT}"
 
@@ -879,7 +890,8 @@ jobs:
             --repo . \
             --default-branch origin/main \
             --require-registryctl-image-lock \
-            --require-registry-docs-archive
+            --require-registry-docs-archive \
+            --require-registryctl-installer
 
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.1

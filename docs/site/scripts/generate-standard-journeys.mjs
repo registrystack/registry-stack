@@ -74,8 +74,8 @@ const fixtureFormats = new Set(["generated_sample", "source_reference", "yaml"])
 const commandRecipeKinds = new Set([
   "instance_openapi",
   "matrix",
-  "notary_claim",
   "product_input_lifecycle",
+  "snapshot_first_claim",
   "spreadsheet_runtime",
 ]);
 const evidenceDimensions = ["extraction", "execution", "runtime"];
@@ -112,6 +112,9 @@ const credentialReferenceKeys = new Set([
   "token",
 ]);
 const publicConfigurationSources = new Set([
+  "crates/registryctl/assets/project-starters/spreadsheet/entities/projects.yaml",
+  "crates/registryctl/assets/project-starters/spreadsheet/environments/local.yaml",
+  "crates/registryctl/assets/project-starters/spreadsheet/registry-stack.yaml",
   "crates/registryctl/assets/project-starters/bounded-http/environments/local.yaml",
   "crates/registryctl/assets/project-starters/bounded-http/integrations/person-record/integration.yaml",
   "crates/registryctl/assets/project-starters/bounded-http/registry-stack.yaml",
@@ -131,11 +134,19 @@ const publicConfigurationSources = new Set([
 const requiredConfigurationSources = new Map([
   [
     "spreadsheet-protected-api",
-    ["crates/registryctl/src/templates/relay_config.yaml.tmpl"],
+    [
+      "crates/registryctl/assets/project-starters/spreadsheet/registry-stack.yaml",
+      "crates/registryctl/assets/project-starters/spreadsheet/environments/local.yaml",
+      "crates/registryctl/assets/project-starters/spreadsheet/entities/projects.yaml",
+    ],
   ],
   [
     "instance-openapi",
-    ["crates/registryctl/src/templates/relay_config.yaml.tmpl"],
+    [
+      "crates/registryctl/assets/project-starters/spreadsheet/registry-stack.yaml",
+      "crates/registryctl/assets/project-starters/spreadsheet/environments/local.yaml",
+      "crates/registryctl/assets/project-starters/spreadsheet/entities/projects.yaml",
+    ],
   ],
   [
     "bounded-http",
@@ -166,9 +177,10 @@ const requiredConfigurationSources = new Map([
   [
     "registry-backed-notary-claim",
     [
-      "crates/registryctl/src/templates/notary_addon/registry-stack.yaml",
-      "crates/registryctl/src/templates/notary_addon/environments/local.yaml",
-      "crates/registryctl/src/templates/notary_addon/integrations/person-demographics/integration.yaml",
+      "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/registry-stack.yaml",
+      "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/environments/local.yaml",
+      "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/entities/people.yaml",
+      "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/integrations/person-snapshot/integration.yaml",
     ],
   ],
   [
@@ -817,8 +829,8 @@ function buildSteps(journey, matrixById) {
     return [
       commandStep(
         "spreadsheet-init",
-        "Create the disposable spreadsheet scaffold",
-        "registryctl init relay my-first-api --sample benefits",
+        "Create the canonical spreadsheet project",
+        "registryctl init --from spreadsheet --project-dir my-first-api",
       ),
       {
         id: "spreadsheet-doctor",
@@ -850,14 +862,14 @@ function buildSteps(journey, matrixById) {
       commandStep(
         "openapi-init",
         "Create the disposable local instance",
-        "registryctl init relay openapi-inspection --sample benefits",
+        "registryctl init --from spreadsheet --project-dir openapi-inspection",
       ),
       longRunningStep(
         "openapi-start",
         "Start the disposable local instance",
         "registryctl start",
         "openapi-inspection",
-        "The generated local sample explicitly opts out of OpenAPI authentication. Product defaults remain authentication-gated.",
+        "The generated local project uses its reviewed authentication configuration. Product defaults remain authentication-gated.",
       ),
       {
         id: "openapi-capture",
@@ -865,9 +877,9 @@ function buildSteps(journey, matrixById) {
         label: "Capture the disposable instance contract",
         method: "GET",
         url: "http://127.0.0.1:4242/openapi.json",
-        authentication: "none_disposable_local_opt_out",
+        authentication: "configured_local_authentication",
         output_path: "openapi-inspection/output/instance.openapi.json",
-        note: "Use an HTTP client that preserves the response bytes. This interface is public only because the generated disposable local configuration sets server.openapi_requires_auth to false.",
+        note: "Use an HTTP client that preserves the response bytes and authenticates according to the reviewed local configuration.",
       },
       {
         id: "openapi-consumer-review",
@@ -883,40 +895,42 @@ function buildSteps(journey, matrixById) {
       },
     ];
   }
-  if (recipe.kind === "notary_claim") {
+  if (recipe.kind === "snapshot_first_claim") {
     return [
       commandStep(
-        "notary-init",
-        "Create the disposable Relay scaffold",
-        "registryctl init relay my-first-api --sample benefits",
+        "snapshot-first-claim-init",
+        "Create the embedded snapshot project",
+        "registryctl init --from snapshot --project-dir snapshot-project",
       ),
       commandStep(
-        "notary-add",
-        "Add the maintained Notary project",
-        "registryctl add notary",
-        "my-first-api",
+        "snapshot-first-claim-match",
+        "Run the focused matching claim fixture offline",
+        "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-match --trace",
       ),
       commandStep(
-        "notary-test",
-        "Execute every Notary project fixture offline",
-        "registryctl test --project-dir my-first-api/notary/project",
+        "snapshot-first-claim-no-match",
+        "Run the focused no-match claim fixture offline",
+        "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-no-match --trace",
       ),
       commandStep(
-        "notary-check",
-        "Check and explain the combined project",
-        "registryctl check --project-dir my-first-api/notary/project --environment local --explain",
+        "snapshot-first-claim-preflight",
+        "Validate the embedded snapshot project inputs",
+        "registryctl preflight --project-dir snapshot-project --environment local",
       ),
       commandStep(
-        "notary-build",
-        "Build separate unsigned product inputs",
-        "registryctl build --project-dir my-first-api/notary/project --environment local",
+        "snapshot-first-claim-check",
+        "Check and explain the embedded snapshot project",
+        "registryctl check --project-dir snapshot-project --environment local --explain",
       ),
-      longRunningStep(
-        "notary-start",
-        "Start the combined disposable runtime",
-        "registryctl start",
-        "my-first-api",
-        "This runtime step is exercised by the source tutorial gate and remains separate from the required clean-temp sequence.",
+      commandStep(
+        "snapshot-first-claim-compare",
+        "Compare authored semantics with the embedded starter",
+        "registryctl compare --project-dir snapshot-project --environment local --from-starter",
+      ),
+      commandStep(
+        "snapshot-first-claim-build",
+        "Build unsigned product inputs",
+        "registryctl build --project-dir snapshot-project --environment local",
       ),
     ];
   }
@@ -1061,8 +1075,8 @@ function validateStep(step, path) {
     ]);
     invariant(step.method === "GET", `${path}.method must be GET`);
     invariant(
-      step.authentication === "none_disposable_local_opt_out",
-      `${path}.authentication must identify the disposable local public opt-out`,
+      step.authentication === "configured_local_authentication",
+      `${path}.authentication must identify the reviewed local authentication boundary`,
     );
     string(step.url, `${path}.url`);
     safeRelativePath(step.output_path, `${path}.output_path`);

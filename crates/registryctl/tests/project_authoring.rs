@@ -2272,6 +2272,7 @@ fn production_cel_worker_evaluates_project_date_policy() {
 fn all_advertised_starters_initialize_and_test_without_source_access() {
     for starter in [
         ProjectStarter::Http,
+        ProjectStarter::Spreadsheet,
         ProjectStarter::Dhis2Tracker,
         ProjectStarter::OpencrvsDci,
         ProjectStarter::FhirR4,
@@ -2317,6 +2318,354 @@ fn all_advertised_starters_initialize_and_test_without_source_access() {
         .expect("initialized starter passes offline tests");
         assert_eq!(tested.status, "passed");
     }
+}
+
+#[test]
+fn spreadsheet_starter_builds_sensitive_projected_fields_without_emitting_project_file() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("spreadsheet-project");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Spreadsheet,
+        directory: project.clone(),
+    })
+    .expect("spreadsheet starter initializes");
+
+    let check = check_registry_project(&ProjectCheckOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect("spreadsheet starter check executes");
+    assert_eq!(check.status, "valid");
+    let preflight = preflight_registry_project(&ProjectPreflightOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+    })
+    .expect("spreadsheet starter preflight executes");
+    assert_eq!(preflight.status, registryctl::PreflightStatus::Ready);
+    let repeated_preflight = preflight_registry_project(&ProjectPreflightOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+    })
+    .expect("spreadsheet starter preflight repeats");
+    assert_eq!(
+        serde_json::to_value(&preflight).expect("preflight serializes"),
+        serde_json::to_value(&repeated_preflight).expect("repeated preflight serializes")
+    );
+    let comparison = compare_registry_projects_semantically(&ProjectSemanticComparisonOptions {
+        current_project_directory: project.clone(),
+        current_environment: "local".to_string(),
+        baseline_project_directory: project.clone(),
+        baseline_environment: "local".to_string(),
+    })
+    .expect("spreadsheet project compares to itself");
+    assert_eq!(
+        comparison.equivalence,
+        SemanticComparisonEquivalence::Equivalent
+    );
+    assert!(comparison.changes.is_empty());
+
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("spreadsheet starter builds");
+    let output = resolve_build_output(&project, build.output.expect("build output"));
+    let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
+    assert_eq!(relay["auth"]["mode"], "api_key");
+    let api_keys = relay["auth"]["api_keys"]
+        .as_sequence()
+        .expect("local Relay API keys compile");
+    assert_eq!(api_keys.len(), 2);
+    for (principal, fingerprint_env) in [
+        ("pw_001", "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH"),
+        (
+            "registryctl_local_no_match",
+            "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_HASH",
+        ),
+    ] {
+        let key = api_keys
+            .iter()
+            .find(|key| key["id"] == principal)
+            .expect("synthetic principal compiles");
+        assert_eq!(key["fingerprint"]["provider"], "env");
+        assert_eq!(key["fingerprint"]["name"], fingerprint_env);
+        assert_eq!(
+            key["scopes"],
+            serde_norway::from_str::<serde_norway::Value>("[projects:metadata, projects:rows]")
+                .expect("expected scopes parse")
+        );
+    }
+    let relay_text = std::fs::read_to_string(output.join("private/relay/config/relay.yaml"))
+        .expect("Relay config reads");
+    assert!(!relay_text.contains("_RAW"));
+    assert!(!relay_text.contains("pw_001="));
+    let table = &relay["datasets"][0]["tables"][0];
+    assert_eq!(
+        table["source"]["path"],
+        "/var/lib/registry/public_works_projects.xlsx"
+    );
+    assert!(table["source"].get("project_file").is_none());
+    assert!(table["schema"]["fields"]
+        .as_sequence()
+        .is_some_and(|fields| fields
+            .iter()
+            .all(|field| field["sensitive"].as_bool() == Some(true))));
+    assert!(relay["datasets"][0]["entities"][0]["fields"]
+        .as_sequence()
+        .is_some_and(|fields| fields
+            .iter()
+            .all(|field| field["sensitive"].as_bool() == Some(true))));
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(output.join("artifact-manifest.json"))
+            .expect("spreadsheet artifact manifest reads"),
+    )
+    .expect("spreadsheet artifact manifest parses");
+    let workbook_inputs = manifest["inputs"]
+        .as_array()
+        .expect("spreadsheet manifest inputs")
+        .iter()
+        .filter(|input| input["classification"] == "operator_owned_source_data")
+        .collect::<Vec<_>>();
+    assert_eq!(workbook_inputs.len(), 1);
+    assert_eq!(
+        workbook_inputs[0]["path"],
+        "data/public_works_projects.xlsx"
+    );
+    assert_eq!(
+        workbook_inputs[0]["digest"],
+        test_sha256_uri(
+            &std::fs::read(project.join("data/public_works_projects.xlsx"))
+                .expect("spreadsheet source reads")
+        )
+    );
+    assert!(manifest["inputs"]
+        .as_array()
+        .expect("spreadsheet manifest inputs")
+        .iter()
+        .filter(|input| input["path"] != "data/public_works_projects.xlsx")
+        .all(|input| input["classification"] == "authored_project_input"));
+    assert!(manifest["artifacts"]
+        .as_array()
+        .expect("spreadsheet generated artifacts")
+        .iter()
+        .all(|artifact| artifact["path"] != "data/public_works_projects.xlsx"));
+    let first_relay_bytes = std::fs::read(output.join("private/relay/config/relay.yaml"))
+        .expect("first Relay output reads");
+    let repeated_build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("spreadsheet starter build repeats");
+    let repeated_output = resolve_build_output(
+        &project,
+        repeated_build.output.expect("repeated build output"),
+    );
+    assert_eq!(
+        first_relay_bytes,
+        std::fs::read(repeated_output.join("private/relay/config/relay.yaml"))
+            .expect("repeated Relay output reads")
+    );
+}
+
+#[test]
+fn spreadsheet_commands_reject_invalid_complete_workbooks_without_writing_or_replacing_output() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("spreadsheet-project");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Spreadsheet,
+        directory: project.clone(),
+    })
+    .expect("spreadsheet starter initializes");
+    let build_options = ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    };
+    let build = build_registry_project(&build_options).expect("valid workbook builds");
+    let output = resolve_build_output(&project, build.output.expect("build output"));
+    let valid_output = directory_closure(&output);
+    let workbook = project.join("data/public_works_projects.xlsx");
+    let relay_fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../registry-relay/tests");
+
+    for (fixture, expected_code) in [
+        (
+            "fixtures_xlsx/formula_outside_projection.xlsx",
+            "ingest.source_unreadable",
+        ),
+        (
+            "fixtures_xlsx/duplicate_primary_key_after_1000.xlsx",
+            "ingest.schema_mismatch",
+        ),
+    ] {
+        std::fs::copy(relay_fixtures.join(fixture), &workbook)
+            .expect("invalid workbook fixture copies");
+        let before_commands = directory_closure(&project);
+        let check = check_registry_project(&ProjectCheckOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+            explain: false,
+            against: None,
+            anchor: None,
+        })
+        .expect_err("invalid workbook must fail check");
+        assert_eq!(
+            format!("{check:#}"),
+            format!("workbook validation failed ({expected_code})")
+        );
+        assert_eq!(before_commands, directory_closure(&project));
+
+        let preflight = preflight_registry_project(&ProjectPreflightOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+        })
+        .expect_err("invalid workbook must fail preflight");
+        assert_eq!(
+            format!("{preflight:#}"),
+            format!("workbook validation failed ({expected_code})")
+        );
+        assert_eq!(before_commands, directory_closure(&project));
+
+        let build = build_registry_project(&build_options)
+            .expect_err("invalid workbook must fail before build publication");
+        assert_eq!(
+            format!("{build:#}"),
+            format!("workbook validation failed ({expected_code})")
+        );
+        assert_eq!(valid_output, directory_closure(&output));
+    }
+
+    std::fs::write(&workbook, b"not an XLSX workbook").expect("corrupt workbook writes");
+    for error in [
+        check_registry_project(&ProjectCheckOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+            explain: false,
+            against: None,
+            anchor: None,
+        })
+        .expect_err("corrupt workbook must fail check"),
+        preflight_registry_project(&ProjectPreflightOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+        })
+        .expect_err("corrupt workbook must fail preflight"),
+        build_registry_project(&build_options).expect_err("corrupt workbook must fail build"),
+    ] {
+        assert_eq!(
+            format!("{error:#}"),
+            "workbook validation failed (ingest.source_unreadable)"
+        );
+    }
+    assert_eq!(valid_output, directory_closure(&output));
+
+    std::fs::remove_file(&workbook).expect("workbook removes");
+    for error in [
+        check_registry_project(&ProjectCheckOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+            explain: false,
+            against: None,
+            anchor: None,
+        })
+        .expect_err("missing workbook must fail check"),
+        preflight_registry_project(&ProjectPreflightOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+        })
+        .expect_err("missing workbook must fail preflight"),
+        build_registry_project(&build_options).expect_err("missing workbook must fail build"),
+    ] {
+        assert_eq!(
+            format!("{error:#}"),
+            "workbook source input is missing or unreadable"
+        );
+    }
+    assert_eq!(valid_output, directory_closure(&output));
+}
+
+#[test]
+fn spreadsheet_local_api_keys_are_rejected_outside_the_local_profile() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("spreadsheet-project");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Spreadsheet,
+        directory: project.clone(),
+    })
+    .expect("spreadsheet starter initializes");
+    let environment_path = project.join("environments/local.yaml");
+    let environment = std::fs::read_to_string(&environment_path)
+        .expect("environment reads")
+        .replace("profile: local", "profile: hosted_lab");
+    std::fs::write(&environment_path, environment).expect("environment writes");
+
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("local API keys must not validate outside the local profile");
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
+}
+
+#[cfg(unix)]
+#[test]
+fn spreadsheet_project_file_rejects_traversal_and_symlink_components() {
+    use std::os::unix::fs::symlink;
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let traversal = temporary.path().join("traversal");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Spreadsheet,
+        directory: traversal.clone(),
+    })
+    .expect("spreadsheet starter initializes");
+    let environment_path = traversal.join("environments/local.yaml");
+    let authored = std::fs::read_to_string(&environment_path)
+        .expect("spreadsheet environment reads")
+        .replace(
+            "project_file: data/public_works_projects.xlsx",
+            "project_file: ../outside.xlsx",
+        );
+    std::fs::write(&environment_path, authored).expect("traversal environment writes");
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: traversal,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("project_file traversal must fail closed");
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
+
+    let symlinked = temporary.path().join("symlinked");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Spreadsheet,
+        directory: symlinked.clone(),
+    })
+    .expect("spreadsheet starter initializes");
+    let external = temporary.path().join("external-data");
+    std::fs::create_dir(&external).expect("external directory creates");
+    std::fs::remove_dir_all(symlinked.join("data")).expect("starter data removes");
+    symlink(&external, symlinked.join("data")).expect("data symlink creates");
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: symlinked,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("project_file symlink component must fail closed");
+    assert_authoring_diagnostic(&error, "registryctl.authoring.project.invalid");
 }
 
 #[test]
@@ -5421,7 +5770,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "986e116f1ff5f83b5c6aaa6119819dd65e5193f04ffbc83aae283f5373b044ef",
+        "1322a99c8aa31ba8031fc7d66e10c987d2b5b6e6fa216ee61fb9537b7d40de76",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }
@@ -5496,6 +5845,7 @@ fn build_artifact_manifest_is_complete_relative_private_and_deterministic() {
                 &std::fs::read(project.join(relative)).expect("authored manifest input reads")
             )
         );
+        assert_eq!(input["classification"], "authored_project_input");
     }
 
     let artifacts = manifest["artifacts"]

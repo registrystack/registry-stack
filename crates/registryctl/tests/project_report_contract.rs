@@ -327,6 +327,22 @@ fn artifact_manifest_rejects_root_and_deeply_nested_unknown_fields() {
 }
 
 #[test]
+fn artifact_manifest_rejects_unknown_or_missing_input_classification() {
+    let mut unknown = parse(PROJECT_ARTIFACT_MANIFEST_FIXTURE);
+    unknown["inputs"][0]["classification"] = json!("source");
+    assert_typed_invalid::<ProjectArtifactManifestV1>(unknown.clone());
+    assert_invalid(PROJECT_ARTIFACT_MANIFEST_SCHEMA, &unknown);
+
+    let mut missing = parse(PROJECT_ARTIFACT_MANIFEST_FIXTURE);
+    missing["inputs"][0]
+        .as_object_mut()
+        .expect("input object")
+        .remove("classification");
+    assert_typed_invalid::<ProjectArtifactManifestV1>(missing.clone());
+    assert_invalid(PROJECT_ARTIFACT_MANIFEST_SCHEMA, &missing);
+}
+
+#[test]
 fn semantic_precision_requires_a_field_address_only_for_field_precision() {
     let mut missing_field = parse(PROJECT_SEMANTIC_IMPACT_FIXTURE);
     missing_field["changes"][0]["precision"] = json!("field");

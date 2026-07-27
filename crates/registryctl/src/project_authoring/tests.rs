@@ -8,7 +8,14 @@ mod tests {
     fn embedded_starter_provenance_matches_authored_content() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let starters = [
-            ("http", manifest_dir.join("assets/project-starters/bounded-http")),
+            (
+                "http",
+                manifest_dir.join("assets/project-starters/bounded-http"),
+            ),
+            (
+                "spreadsheet",
+                manifest_dir.join("assets/project-starters/spreadsheet"),
+            ),
             (
                 "dhis2-tracker",
                 manifest_dir.join("tests/fixtures/project-authoring/dhis2-tracker"),
@@ -19,9 +26,7 @@ mod tests {
             ),
             (
                 "fhir-r4",
-                manifest_dir.join(
-                    "tests/fixtures/project-authoring/fhir-r4-coverage-active",
-                ),
+                manifest_dir.join("tests/fixtures/project-authoring/fhir-r4-coverage-active"),
             ),
             (
                 "snapshot",
@@ -445,7 +450,8 @@ outputs:
             .contains("between one and eight selectors"));
 
         let authored: AuthoredIntegrationDocument =
-            serde_norway::from_str(&authored_with_inputs(8, 9)).expect("seventeen-input map parses");
+            serde_norway::from_str(&authored_with_inputs(8, 9))
+                .expect("seventeen-input map parses");
         assert!(lower_authored_integration(&authored)
             .expect_err("seventeen inputs reject")
             .to_string()
@@ -489,11 +495,7 @@ outputs:
             .as_array()
             .expect("release claims are a closed list")
             .iter()
-            .map(|claim| {
-                claim["name"]
-                    .as_str()
-                    .expect("claim name is a string")
-            })
+            .map(|claim| claim["name"].as_str().expect("claim name is a string"))
             .collect::<BTreeSet<_>>();
         assert_eq!(
             claims,
@@ -529,8 +531,7 @@ outputs:
         )
         .expect("changed semantic digests compile");
         assert_ne!(
-            loaded.semantic_digests.service_policy,
-            changed_digests.service_policy,
+            loaded.semantic_digests.service_policy, changed_digests.service_policy,
             "release claim policy changes must alter the signed semantic digest"
         );
         let changed_compiled =
@@ -544,11 +545,9 @@ outputs:
 
     #[test]
     fn attribute_release_purpose_must_be_header_safe_during_authoring() {
-        let mut loaded = load_registry_project(
-            &project_golden("nia-attribute-release"),
-            Some("local"),
-        )
-        .expect("NIA release project loads");
+        let mut loaded =
+            load_registry_project(&project_golden("nia-attribute-release"), Some("local"))
+                .expect("NIA release project loads");
         let api = loaded
             .project
             .services
@@ -562,12 +561,9 @@ outputs:
             .expect("release profile exists")
             .purpose = purpose;
 
-        let error = validate_project_entity_links(
-            &loaded.project,
-            &loaded.integrations,
-            &loaded.entities,
-        )
-        .expect_err("header-bound release purpose must use visible ASCII");
+        let error =
+            validate_project_entity_links(&loaded.project, &loaded.integrations, &loaded.entities)
+                .expect_err("header-bound release purpose must use visible ASCII");
         assert!(
             error.to_string().contains("purpose must use visible ASCII"),
             "unexpected diagnostic: {error:#}"
@@ -576,11 +572,9 @@ outputs:
 
     #[test]
     fn attribute_release_version_must_be_a_portable_path_segment() {
-        let mut loaded = load_registry_project(
-            &project_golden("nia-attribute-release"),
-            Some("local"),
-        )
-        .expect("NIA release project loads");
+        let mut loaded =
+            load_registry_project(&project_golden("nia-attribute-release"), Some("local"))
+                .expect("NIA release project loads");
         loaded
             .project
             .services
@@ -593,12 +587,9 @@ outputs:
             .expect("release profile exists")
             .version = "v1/preview".to_string();
 
-        let error = validate_project_entity_links(
-            &loaded.project,
-            &loaded.integrations,
-            &loaded.entities,
-        )
-        .expect_err("path-reserved profile version must fail during authoring");
+        let error =
+            validate_project_entity_links(&loaded.project, &loaded.integrations, &loaded.entities)
+                .expect_err("path-reserved profile version must fail during authoring");
         assert!(
             error
                 .to_string()
@@ -610,11 +601,9 @@ outputs:
     #[test]
     fn attribute_release_prerequisites_fail_during_authoring() {
         for case in ["required principal filters", "pagination max_limit"] {
-            let mut loaded = load_registry_project(
-                &project_golden("nia-attribute-release"),
-                Some("local"),
-            )
-            .expect("NIA release project loads");
+            let mut loaded =
+                load_registry_project(&project_golden("nia-attribute-release"), Some("local"))
+                    .expect("NIA release project loads");
             let api = loaded
                 .project
                 .services
@@ -670,8 +659,14 @@ outputs:
                 .expect("generated Relay config exists"),
         )
         .expect("generated Relay config parses");
-        assert_eq!(relay["datasets"][0]["tables"][0]["refresh"]["mode"], "interval");
-        assert_eq!(relay["datasets"][0]["tables"][0]["refresh"]["interval"], "1m");
+        assert_eq!(
+            relay["datasets"][0]["tables"][0]["refresh"]["mode"],
+            "interval"
+        );
+        assert_eq!(
+            relay["datasets"][0]["tables"][0]["refresh"]["interval"],
+            "1m"
+        );
 
         loaded
             .entities
@@ -689,11 +684,9 @@ outputs:
 
     #[test]
     fn attribute_release_claims_cannot_read_unprojected_entity_fields() {
-        let mut loaded = load_registry_project(
-            &project_golden("nia-attribute-release"),
-            Some("local"),
-        )
-        .expect("NIA release project loads");
+        let mut loaded =
+            load_registry_project(&project_golden("nia-attribute-release"), Some("local"))
+                .expect("NIA release project loads");
         loaded
             .project
             .services
@@ -702,12 +695,9 @@ outputs:
             .expect("records API exists")
             .projection
             .retain(|field| field != "birth_date");
-        let error = validate_project_entity_links(
-            &loaded.project,
-            &loaded.integrations,
-            &loaded.entities,
-        )
-        .expect_err("unprojected release input must fail closed");
+        let error =
+            validate_project_entity_links(&loaded.project, &loaded.integrations, &loaded.entities)
+                .expect_err("unprojected release input must fail closed");
         assert!(error
             .to_string()
             .contains("claim source_field must be an explicitly projected entity field"));
@@ -733,11 +723,9 @@ outputs:
                 ),
             ),
         ] {
-            let mut loaded = load_registry_project(
-                &project_golden("nia-attribute-release"),
-                Some("local"),
-            )
-            .expect("NIA release project loads");
+            let mut loaded =
+                load_registry_project(&project_golden("nia-attribute-release"), Some("local"))
+                    .expect("NIA release project loads");
             let api = loaded
                 .project
                 .services
@@ -763,8 +751,7 @@ outputs:
             .expect_err("colliding effective records scopes must fail closed");
             let diagnostic = error.to_string();
             assert!(
-                diagnostic.contains(expected_fields.0)
-                    && diagnostic.contains(expected_fields.1),
+                diagnostic.contains(expected_fields.0) && diagnostic.contains(expected_fields.1),
                 "unexpected {name} diagnostic: {diagnostic}"
             );
         }
@@ -773,11 +760,9 @@ outputs:
     #[test]
     fn attribute_release_scope_must_differ_from_every_effective_records_scope() {
         for record_scope_field in ["metadata", "rows", "aggregate", "evidence_verification"] {
-            let mut loaded = load_registry_project(
-                &project_golden("nia-attribute-release"),
-                Some("local"),
-            )
-            .expect("NIA release project loads");
+            let mut loaded =
+                load_registry_project(&project_golden("nia-attribute-release"), Some("local"))
+                    .expect("NIA release project loads");
             let api = loaded
                 .project
                 .services
@@ -789,9 +774,7 @@ outputs:
                 "metadata" => api.scopes.metadata = release_scope,
                 "rows" => api.scopes.rows = release_scope,
                 "aggregate" => api.scopes.aggregate = Some(release_scope),
-                "evidence_verification" => {
-                    api.scopes.evidence_verification = Some(release_scope)
-                }
+                "evidence_verification" => api.scopes.evidence_verification = Some(release_scope),
                 _ => unreachable!("unknown records scope field"),
             }
 
@@ -839,6 +822,121 @@ outputs:
                 "unexpected {field} diagnostic: {diagnostic}"
             );
         }
+    }
+
+    #[test]
+    fn generated_local_api_key_validation_preserves_refs_and_rejects_malformed_or_duplicate_keys() {
+        let project =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/project-starters/spreadsheet");
+        let loaded =
+            load_registry_project(&project, Some("local")).expect("spreadsheet starter loads");
+        let compiled = compile_project(&loaded, None).expect("spreadsheet starter compiles");
+        let relay = compiled
+            .relay_private
+            .get(Path::new("config/relay.yaml"))
+            .expect("Relay config exists");
+        let original: Value = serde_norway::from_slice(relay).expect("Relay config parses");
+
+        validate_generated_relay(relay, &compiled.relay_private)
+            .expect("temporary validation credentials satisfy production loading");
+        let after: Value = serde_norway::from_slice(relay).expect("Relay config still parses");
+        assert_eq!(after, original, "validation must not mutate emitted config");
+        assert_eq!(
+            after["auth"]["api_keys"][0]["fingerprint"],
+            json!({
+                "provider": "env",
+                "name": "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH",
+            })
+        );
+        assert_eq!(
+            after["auth"]["api_keys"][1]["fingerprint"],
+            json!({
+                "provider": "env",
+                "name": "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_HASH",
+            })
+        );
+
+        let mut malformed = original.clone();
+        malformed["auth"]["api_keys"][0]["fingerprint"]["name"] = Value::String(String::new());
+        let mut duplicate = original.clone();
+        let first_fingerprint = duplicate["auth"]["api_keys"][0]["fingerprint"].clone();
+        duplicate["auth"]["api_keys"][1]["fingerprint"] = first_fingerprint;
+        for (label, invalid) in [("malformed", malformed), ("duplicate", duplicate)] {
+            let bytes = serde_norway::to_string(&invalid).expect("invalid config serializes");
+            let error = validate_generated_relay(bytes.as_bytes(), &compiled.relay_private)
+                .expect_err("invalid API-key config must fail production validation");
+            let diagnostic = format!("{error:#}");
+            assert!(
+                diagnostic.contains("failed production loading"),
+                "unexpected {label} diagnostic: {diagnostic}"
+            );
+            assert!(
+                !diagnostic.contains("REGISTRYCTL_LOCAL_RELAY")
+                    && !diagnostic.contains("registryctl-project-validation"),
+                "{label} diagnostic disclosed validation material: {diagnostic}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_local_api_key_validation_material_is_private_distinct_and_disposable() {
+        let validation_root =
+            GeneratedValidationDirectory::create().expect("validation root creates");
+        let root_path = validation_root.path.clone();
+        let mut config = json!({
+            "auth": {
+                "api_keys": [
+                    {
+                        "fingerprint": {
+                            "provider": "env",
+                            "name": "FIRST_FINGERPRINT",
+                        },
+                    },
+                    {
+                        "fingerprint": {
+                            "provider": "env",
+                            "name": "SECOND_FINGERPRINT",
+                        },
+                    },
+                ],
+            },
+        });
+        materialize_generated_relay_validation_fingerprints(&mut config, &root_path)
+            .expect("validation fingerprints materialize");
+        let first = PathBuf::from(
+            config["auth"]["api_keys"][0]["fingerprint"]["path"]
+                .as_str()
+                .expect("first validation path"),
+        );
+        let second = PathBuf::from(
+            config["auth"]["api_keys"][1]["fingerprint"]["path"]
+                .as_str()
+                .expect("second validation path"),
+        );
+        assert_ne!(first, second);
+        assert_ne!(
+            fs::read_to_string(&first).expect("first fingerprint reads"),
+            fs::read_to_string(&second).expect("second fingerprint reads")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                fs::metadata(&root_path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            for path in [&first, &second] {
+                assert_eq!(
+                    fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+        }
+        drop(validation_root);
+        assert!(
+            !root_path.exists(),
+            "temporary validation material must be removed"
+        );
     }
 
     fn governed_live_claim_result(
@@ -1172,10 +1270,7 @@ outputs:
                 json!("eval-other"),
             ),
             ("/provenance/generated_by/claim_id", json!("other-claim")),
-            (
-                "/provenance/generated_by/claim_version",
-                json!("0.9.0"),
-            ),
+            ("/provenance/generated_by/claim_version", json!("0.9.0")),
         ] {
             let mut invalid = response.clone();
             set_governed_live_result_pointer(&mut invalid, pointer, value);
@@ -1230,13 +1325,8 @@ outputs:
             let mut boundary = response.clone();
             set_governed_live_result_pointer(&mut boundary, "/issued_at", json!(issued_at));
             assert_eq!(
-                super::validate_live_response(
-                    &boundary,
-                    &request,
-                    &expected,
-                    validation_window,
-                )
-                .expect("inclusive remote clock-skew boundary passes"),
+                super::validate_live_response(&boundary, &request, &expected, validation_window,)
+                    .expect("inclusive remote clock-skew boundary passes"),
                 request.claims
             );
         }
@@ -1256,27 +1346,14 @@ outputs:
         for (issued_at, expires_at) in [
             ("2026-07-22T23:59:29Z", None),
             ("2026-07-23T00:00:41Z", None),
-            (
-                "2026-07-23T00:00:00Z",
-                Some("2026-07-23T00:00:10Z"),
-            ),
-            (
-                "2026-07-23T00:00:40Z",
-                Some("2026-07-23T00:00:20Z"),
-            ),
-            (
-                "2026-07-23T00:00:20Z",
-                Some("2026-07-23T00:00:20Z"),
-            ),
+            ("2026-07-23T00:00:00Z", Some("2026-07-23T00:00:10Z")),
+            ("2026-07-23T00:00:40Z", Some("2026-07-23T00:00:20Z")),
+            ("2026-07-23T00:00:20Z", Some("2026-07-23T00:00:20Z")),
         ] {
             let mut invalid = response.clone();
             set_governed_live_result_pointer(&mut invalid, "/issued_at", json!(issued_at));
             if let Some(expires_at) = expires_at {
-                set_governed_live_result_pointer(
-                    &mut invalid,
-                    "/expires_at",
-                    json!(expires_at),
-                );
+                set_governed_live_result_pointer(&mut invalid, "/expires_at", json!(expires_at));
             }
             let error =
                 super::validate_live_response(&invalid, &request, &expected, validation_window)
@@ -1309,9 +1386,7 @@ outputs:
             )],
         });
         assert!(
-            response
-                .pointer("/results/0/redacted_fields")
-                .is_none(),
+            response.pointer("/results/0/redacted_fields").is_none(),
             "empty redaction metadata is omitted"
         );
         set_governed_live_result_pointer(
@@ -1473,12 +1548,10 @@ outputs:
                     "value",
                 )],
             });
-            assert!(
-                validate_live_response(&response, &request, &expected)
-                    .expect_err("producer-inconsistent copied value fixture must fail closed")
-                    .to_string()
-                    .contains("value evidence semantics")
-            );
+            assert!(validate_live_response(&response, &request, &expected)
+                .expect_err("producer-inconsistent copied value fixture must fail closed")
+                .to_string()
+                .contains("value evidence semantics"));
         }
     }
 
@@ -1526,17 +1599,10 @@ outputs:
             (json!(["IND-AB12CD34"]), "IND-AB12CD34"),
             (json!(["profile.ssn"]), "profile.ssn"),
             (json!(["profile/ssn"]), "profile/ssn"),
-            (
-                json!(["private_field", "private_field"]),
-                "private_field",
-            ),
+            (json!(["private_field", "private_field"]), "private_field"),
         ] {
             let mut invalid = response.clone();
-            set_governed_live_result_pointer(
-                &mut invalid,
-                "/redacted_fields",
-                invalid_markers,
-            );
+            set_governed_live_result_pointer(&mut invalid, "/redacted_fields", invalid_markers);
             let error = validate_live_response(&invalid, &request, &expected)
                 .expect_err("invalid runtime field-redaction marker must fail closed")
                 .to_string();
@@ -1566,16 +1632,14 @@ outputs:
             "/redacted_fields",
             json!(["private_field"]),
         );
-        assert!(
-            validate_live_response(
-                &predicate_response,
-                &predicate_request,
-                &predicate_expected,
-            )
-            .expect_err("predicate over redacted fields must fail closed")
-            .to_string()
-            .contains("predicate over redacted fields")
-        );
+        assert!(validate_live_response(
+            &predicate_response,
+            &predicate_request,
+            &predicate_expected,
+        )
+        .expect_err("predicate over redacted fields must fail closed")
+        .to_string()
+        .contains("predicate over redacted fields"));
     }
 
     #[test]
@@ -1613,12 +1677,10 @@ outputs:
             let mut mismatched = response.clone();
             set_governed_live_result_pointer(&mut mismatched, "/value", json!(value));
             set_governed_live_result_pointer(&mut mismatched, "/satisfied", json!(satisfied));
-            assert!(
-                validate_live_response(&mismatched, &request, &expected)
-                    .expect_err("mismatched predicate booleans must fail closed")
-                    .to_string()
-                    .contains("predicate evidence semantics")
-            );
+            assert!(validate_live_response(&mismatched, &request, &expected)
+                .expect_err("mismatched predicate booleans must fail closed")
+                .to_string()
+                .contains("predicate evidence semantics"));
         }
     }
 
@@ -1698,14 +1760,11 @@ outputs:
 
         let mut mixed = response;
         mixed["results"][1]["evaluation_id"] = json!("eval-live-2");
-        mixed["results"][1]["provenance"]["generated_by"]["evaluation_id"] =
-            json!("eval-live-2");
-        assert!(
-            validate_live_response(&mixed, &request, &expected)
-                .expect_err("mixed evaluation ids must fail closed")
-                .to_string()
-                .contains("different evaluations")
-        );
+        mixed["results"][1]["provenance"]["generated_by"]["evaluation_id"] = json!("eval-live-2");
+        assert!(validate_live_response(&mixed, &request, &expected)
+            .expect_err("mixed evaluation ids must fail closed")
+            .to_string()
+            .contains("different evaluations"));
     }
 
     #[test]
@@ -1757,18 +1816,16 @@ outputs:
 
         let mut wrong_version = response;
         wrong_version["results"][0]["claim_version"] = json!("2.0.0");
-        wrong_version["results"][0]["provenance"]["generated_by"]["claim_version"] =
-            json!("2.0.0");
-        assert!(
-            validate_live_response(&wrong_version, &request, &expected)
-                .expect_err("result from a different claim version must fail closed")
-                .to_string()
-                .contains("does not match the authored project")
-        );
+        wrong_version["results"][0]["provenance"]["generated_by"]["claim_version"] = json!("2.0.0");
+        assert!(validate_live_response(&wrong_version, &request, &expected)
+            .expect_err("result from a different claim version must fail closed")
+            .to_string()
+            .contains("does not match the authored project"));
 
         let mut wrong_subject_type = wrong_version;
         wrong_subject_type["results"][0]["claim_version"] = json!("1");
-        wrong_subject_type["results"][0]["provenance"]["generated_by"]["claim_version"] = json!("1");
+        wrong_subject_type["results"][0]["provenance"]["generated_by"]["claim_version"] =
+            json!("1");
         wrong_subject_type["results"][0]["subject_type"] = json!("organisation");
         assert!(
             validate_live_response(&wrong_subject_type, &request, &expected)
@@ -1826,8 +1883,7 @@ outputs:
             request.claims
         );
 
-        response["results"][0]["provenance"]["generated_by"]["service_id"] =
-            json!("stale-notary");
+        response["results"][0]["provenance"]["generated_by"]["service_id"] = json!("stale-notary");
         let error = validate_live_response(&response, &request, &expected)
             .expect_err("wrong Notary service must fail closed")
             .to_string();
@@ -1917,9 +1973,7 @@ outputs:
         for field in ["policy_id", "policy_version", "policy_hash"] {
             assert!(
                 response
-                    .pointer(&format!(
-                        "/results/0/provenance/generated_by/{field}"
-                    ))
+                    .pointer(&format!("/results/0/provenance/generated_by/{field}"))
                     .is_none(),
                 "machine-client runtime fixture unexpectedly carries {field}"
             );
@@ -1971,12 +2025,10 @@ outputs:
         );
 
         set_governed_live_result_pointer(&mut response, "/format", json!("application/json"));
-        assert!(
-            validate_live_response(&response, &request, &expected)
-                .expect_err("wrong result format must fail closed")
-                .to_string()
-                .contains("invalid claim-result format")
-        );
+        assert!(validate_live_response(&response, &request, &expected)
+            .expect_err("wrong result format must fail closed")
+            .to_string()
+            .contains("invalid claim-result format"));
     }
 
     #[test]
@@ -1999,12 +2051,10 @@ outputs:
             )],
         });
 
-        assert!(
-            validate_live_response(&response, &request, &expected)
-                .expect_err("partial expected disclosure must fail closed")
-                .to_string()
-                .contains("must contain value, satisfied, disclosure")
-        );
+        assert!(validate_live_response(&response, &request, &expected)
+            .expect_err("partial expected disclosure must fail closed")
+            .to_string()
+            .contains("must contain value, satisfied, disclosure"));
     }
 
     #[test]
@@ -2029,12 +2079,10 @@ outputs:
         });
         response["results"][0]["raw_value"] = json!("unexpected source value");
 
-        assert!(
-            validate_live_response(&response, &request, &expected)
-                .expect_err("unknown result fields must fail closed")
-                .to_string()
-                .contains("closed public claim-result schema")
-        );
+        assert!(validate_live_response(&response, &request, &expected)
+            .expect_err("unknown result fields must fail closed")
+            .to_string()
+            .contains("closed public claim-result schema"));
     }
 
     #[test]
@@ -2105,12 +2153,10 @@ outputs:
         response["results"][0]["provenance"]["derived_from"] =
             json!([{ "raw_source_row": "private" }]);
 
-        assert!(
-            validate_live_response(&response, &request, &expected)
-                .expect_err("non-empty derived_from must fail closed")
-                .to_string()
-                .contains("derived_from must remain empty")
-        );
+        assert!(validate_live_response(&response, &request, &expected)
+            .expect_err("non-empty derived_from must fail closed")
+            .to_string()
+            .contains("derived_from must remain empty"));
     }
 
     #[test]
@@ -2226,10 +2272,8 @@ outputs:
             BTreeSet::from(["person".to_string()])
         );
         assert_eq!(
-            cel_member_roots(
-                "person.items.exists(item, item.active) && item.secret == 'outside'"
-            )
-            .expect("out-of-scope CEL roots parse"),
+            cel_member_roots("person.items.exists(item, item.active) && item.secret == 'outside'")
+                .expect("out-of-scope CEL roots parse"),
             BTreeSet::from(["item".to_string(), "person".to_string()])
         );
         assert!(cel_member_roots("person.exists && 'unterminated").is_err());
@@ -2321,12 +2365,10 @@ outputs:
                 "household-reference",
             ],
         });
-        assert!(
-            validate_live_request(&loaded, &mixed)
-                .expect_err("mixed defaults must fail before source access")
-                .to_string()
-                .contains("not allowed for every selected project claim")
-        );
+        assert!(validate_live_request(&loaded, &mixed)
+            .expect_err("mixed defaults must fail before source access")
+            .to_string()
+            .contains("not allowed for every selected project claim"));
     }
 
     #[test]
@@ -2355,17 +2397,12 @@ outputs:
             validate_live_request(&loaded, &request("1")).expect("authored version passes");
         assert_eq!(
             validated.claim_versions,
-            BTreeMap::from([(
-                "social-registry-record-exists".to_string(),
-                "1".to_string(),
-            )])
+            BTreeMap::from([("social-registry-record-exists".to_string(), "1".to_string(),)])
         );
-        assert!(
-            validate_live_request(&loaded, &request("2"))
-                .expect_err("non-authored request version must fail closed")
-                .to_string()
-                .contains("does not match the authored project")
-        );
+        assert!(validate_live_request(&loaded, &request("2"))
+            .expect_err("non-authored request version must fail closed")
+            .to_string()
+            .contains("does not match the authored project"));
     }
 
     #[test]
@@ -2747,10 +2784,7 @@ outputs:
         oauth.request.codec.as_deref(),
         Some("oauth2_client_credentials_form_v1")
     );
-    assert_eq!(
-        operations["request"].depends_on,
-        vec!["oauth".to_string()]
-    );
+    assert_eq!(operations["request"].depends_on, vec!["oauth".to_string()]);
 }
 
 #[test]
@@ -2777,8 +2811,22 @@ source:
 "#,
     )
     .expect("simple source binding parses");
-    assert_eq!(source.source.oauth.as_ref().map(|endpoint| endpoint.generation), Some(3));
-    assert_eq!(source.source.jwks.as_ref().map(|endpoint| endpoint.generation), Some(4));
+    assert_eq!(
+        source
+            .source
+            .oauth
+            .as_ref()
+            .map(|endpoint| endpoint.generation),
+        Some(3)
+    );
+    assert_eq!(
+        source
+            .source
+            .jwks
+            .as_ref()
+            .map(|endpoint| endpoint.generation),
+        Some(4)
+    );
 
     for legacy in [
         "data_destination: { origin: https://registry.invalid }",

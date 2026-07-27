@@ -12,6 +12,22 @@ const here = dirname(fileURLToPath(import.meta.url));
 const siteRoot = resolve(here, '..');
 const configSource = readFileSync(resolve(siteRoot, 'astro.config.mjs'), 'utf8');
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
+const firstApiSource = readFileSync(
+  resolve(siteRoot, 'src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx'),
+  'utf8',
+);
+const firstClaimSource = readFileSync(
+  resolve(siteRoot, 'src/content/docs/tutorials/verify-claim-registry-api.mdx'),
+  'utf8',
+);
+const spreadsheetAssuranceSource = readFileSync(
+  resolve(siteRoot, 'src/content/docs/journeys/spreadsheet-protected-api.mdx'),
+  'utf8',
+);
+const claimAssuranceSource = readFileSync(
+  resolve(siteRoot, 'src/content/docs/journeys/registry-backed-notary-claim.mdx'),
+  'utf8',
+);
 const sidebarSource = configSource.match(/sidebar: \[([\s\S]*?)\n      \],\n    \}\),/)?.[1];
 
 assert.ok(sidebarSource, 'could not isolate the Starlight sidebar configuration');
@@ -34,6 +50,46 @@ function hasDocForSlug(slug) {
     resolve(siteRoot, 'src/content/docs', `${slug}.mdx`),
     resolve(siteRoot, 'src/content/docs', slug, 'index.mdx'),
   ].some((path) => existsSync(path) && !/^draft: true$/m.test(readFileSync(path, 'utf8')));
+}
+
+function assertReleasedTaskRoute(source) {
+  assert.doesNotMatch(source, /\]\([^)]*start\/test-current-source-revision/);
+}
+
+function assertReleaseFormClaimTutorial(source) {
+  assert.match(source, /population-record-exists/);
+  assert.match(source, /registryctl init --from snapshot --project-dir my-first-claim/);
+  assert.doesNotMatch(
+    source,
+    /person-registration-accepted|active-registration-exists|active-or-pending-registration-exists/,
+  );
+  assert.doesNotMatch(source, /Unreleased Main-source tutorial|current-source test procedure/);
+}
+
+function assertReleaseFormFirstApiSequence(source) {
+  const headings = [
+    '## Install Registryctl',
+    '## Create the canonical project',
+    '## Run the required preflight',
+    '## Start the API',
+    '## Run the maintained checks',
+    '## Make one denied request',
+    '## Make one allowed request',
+    '## Inspect the human-owned boundary',
+    '## Stop and clean up',
+  ];
+  let position = -1;
+  for (const heading of headings) {
+    const next = source.indexOf(heading);
+    assert.ok(next > position, `missing or misplaced required first-API step: ${heading}`);
+    position = next;
+  }
+  assert.doesNotMatch(
+    source,
+    /Main source|test-current-source-revision|cargo install|git clone|Podman|OrbStack|Colima/,
+  );
+  assert.match(source, /Linux amd64/);
+  assert.match(source, /Docker Engine with Compose v2/);
 }
 
 test('uses the Phase 2 top-level task flow in its published order', () => {
@@ -66,13 +122,27 @@ test('publishes one stable overview route for every task-flow section', () => {
   }
 });
 
-test('keeps the bounded current-source procedure discoverable from Start', () => {
+test('puts released first-result tasks directly in Start', () => {
   const start = topLevelSection(sidebarSource, 'Start');
   assert.ok(start, 'could not isolate Start');
   assert.match(
     start,
-    /label: 'Test one current source revision', slug: 'start\/test-current-source-revision'/,
+    /label: 'Your first registry API', slug: 'tutorials\/publish-spreadsheet-secured-registry-api'/,
   );
+  assert.match(
+    start,
+    /label: 'Your first claim check', slug: 'tutorials\/verify-claim-registry-api'/,
+  );
+  assert.doesNotMatch(start, /start\/test-current-source-revision/);
+});
+
+test('keeps generated Main-source journeys on the assurance rail', () => {
+  const journeys = topLevelSection(sidebarSource, 'Journeys');
+  assert.ok(journeys, 'could not isolate Journeys');
+  assert.match(journeys, /Spreadsheet protected API assurance \(Main source\)/);
+  assert.match(journeys, /Registry-backed Notary claim assurance \(Main source\)/);
+  assert.doesNotMatch(journeys, /label: 'Your first registry API'/);
+  assert.doesNotMatch(journeys, /label: 'Your first claim check'/);
 });
 
 test('keeps the Relay and Notary generated product navigation under Configure', () => {
@@ -102,11 +172,11 @@ test('every hand-authored sidebar slug resolves to a published documentation pag
   assert.deepEqual(missing, []);
 });
 
-test('legacy entry points redirect to current task-flow pages', () => {
+test('legacy entry points redirect to released task pages', () => {
   assert.match(configSource, /'\/start\/': internalRedirect\('\/'\)/);
   assert.match(
     configSource,
-    /'\/start\/see-it-live\/': internalRedirect\('\/journeys\/spreadsheet-protected-api\/'\)/,
+    /'\/start\/see-it-live\/': internalRedirect\('\/tutorials\/publish-spreadsheet-secured-registry-api\/'\)/,
   );
   assert.match(
     configSource,
@@ -118,22 +188,38 @@ test('legacy entry points redirect to current task-flow pages', () => {
   );
 });
 
-test('homepage uses generated journey summaries while Verify leads to the complete runtime tutorial', () => {
-  const spreadsheetIndex = homepageSource.indexOf('](journeys/spreadsheet-protected-api/)');
-  const openapiIndex = homepageSource.indexOf('](journeys/instance-openapi/)');
-  const notaryIndex = homepageSource.indexOf('](journeys/registry-backed-notary-claim/)');
-  assert.ok(spreadsheetIndex >= 0);
-  assert.ok(openapiIndex > spreadsheetIndex);
-  assert.ok(notaryIndex > openapiIndex);
-  assert.doesNotMatch(homepageSource, /\]\(tutorials\/verify-claim-registry-api\/\)/);
-  assert.doesNotMatch(
-    sidebarSource,
-    /label: 'Evaluate a registry-backed claim', slug: 'journeys\/registry-backed-notary-claim'/,
-  );
-  assert.match(
-    sidebarSource,
-    /label: 'Evaluate a registry-backed claim', slug: 'tutorials\/verify-claim-registry-api'/,
-  );
+test('homepage and first-result tasks stay on the release-form beginner rail', () => {
+  assert.match(homepageSource, /\]\(tutorials\/publish-spreadsheet-secured-registry-api\/\)/);
+  assert.match(homepageSource, /\]\(tutorials\/verify-claim-registry-api\/\)/);
+  assert.doesNotMatch(homepageSource, /\]\(journeys\//);
+  assertReleasedTaskRoute(firstApiSource);
+  assertReleasedTaskRoute(firstClaimSource);
+  assertReleaseFormFirstApiSequence(firstApiSource);
+  assertReleaseFormClaimTutorial(firstClaimSource);
   assert.ok(hasDocForSlug('tutorials/publish-spreadsheet-secured-registry-api'));
   assert.ok(hasDocForSlug('tutorials/verify-claim-registry-api'));
+});
+
+test('tasks and Main-source assurance pages link to each other by reader purpose', () => {
+  assert.match(firstApiSource, /\]\(\.\.\/\.\.\/journeys\/spreadsheet-protected-api\/\)/);
+  assert.match(firstClaimSource, /\]\(\.\.\/\.\.\/journeys\/registry-backed-notary-claim\/\)/);
+  assert.match(spreadsheetAssuranceSource, /^doc_type: reference$/m);
+  assert.match(claimAssuranceSource, /^doc_type: reference$/m);
+  assert.match(spreadsheetAssuranceSource, /\]\(\.\.\/\.\.\/tutorials\/publish-spreadsheet-secured-registry-api\/\)/);
+  assert.match(claimAssuranceSource, /\]\(\.\.\/\.\.\/tutorials\/verify-claim-registry-api\/\)/);
+});
+
+test('beginner-rail control rejects a planted Main-source route', () => {
+  assert.throws(
+    () => assertReleasedTaskRoute('[source test](../../start/test-current-source-revision/)'),
+    /test-current-source-revision/,
+  );
+  assert.throws(
+    () => assertReleaseFormClaimTutorial('active-registration-exists'),
+    /population-record-exists/,
+  );
+  assert.throws(
+    () => assertReleaseFormFirstApiSequence('## Install Registryctl\n## Start the API'),
+    /Create the canonical project/,
+  );
 });

@@ -1,8 +1,8 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { loadDocsets } from './docsets.mjs';
 
-const distDir = 'dist';
+const distDir = resolve(process.env.DOCS_DIST_DIR || 'dist');
 
 function scopeFromArgs(args) {
   if (args.length === 0) return 'all';
@@ -39,13 +39,18 @@ function archiveRootForFile(file, archivedDocsets) {
 
 const manifest = await loadDocsets();
 const archivedDocsets = manifest.docsets.filter((docset) => docset.status === 'archived');
+const releasedDocset = manifest.docsets.find((docset) => docset.id === manifest.released);
 const scope = scopeFromArgs(process.argv.slice(2));
 const errors = [];
-let latestChecked = 0;
+let currentChecked = 0;
 let archivedChecked = 0;
+let redirectsChecked = 0;
+const previewDir = join(distDir, 'preview');
+const productionLayout = await exists(join(previewDir, 'index.html'));
+const currentOutput = productionLayout ? previewDir : distDir;
 
-if (!await exists(join(distDir, 'sitemap-index.xml'))) {
-  errors.push('Latest sitemap is missing: dist/sitemap-index.xml');
+if (!await exists(join(currentOutput, 'sitemap-index.xml'))) {
+  errors.push(`Main sitemap is missing: ${join(currentOutput, 'sitemap-index.xml')}`);
 }
 
 if (scope === 'all') {
@@ -65,11 +70,29 @@ if (scope === 'all') {
 for (const file of await htmlFiles(distDir)) {
   const html = await readFile(file, 'utf8');
   const isArchived = Boolean(archiveRootForFile(file, archivedDocsets));
-  if (scope === 'current' && isArchived) continue;
+  const isProductionRedirect =
+    /<meta\s+name=["']registry-docset-redirect["']\s+content=["'][^"']+["']\s*\/?>/.test(html);
+  if (scope === 'current' && (isArchived || isProductionRedirect)) continue;
   const hasNoindex = /<meta\s+name=["']robots["']\s+content=["']noindex,follow["']\s*\/?>/.test(html);
   const hasSitemapLink = /<link\b(?=[^>]*\brel=["']sitemap["'])[^>]*>/i.test(html);
 
-  if (isArchived) {
+  if (isProductionRedirect) {
+    redirectsChecked += 1;
+    if (!hasNoindex) {
+      errors.push(`${relative('.', file)} is a root redirect but missing robots noindex,follow`);
+    }
+    if (hasSitemapLink) {
+      errors.push(`${relative('.', file)} is a root redirect but links a sitemap`);
+    }
+    const canonical = html.match(
+      /<link\b(?=[^>]*\brel=["']canonical["'])(?=[^>]*\bhref=["']([^"']+)["'])[^>]*>/i,
+    )?.[1];
+    if (!canonical?.startsWith(`https://docs.registrystack.org${releasedDocset.path}`)) {
+      errors.push(
+        `${relative('.', file)} must canonically redirect into released docset ${manifest.released}`,
+      );
+    }
+  } else if (isArchived) {
     archivedChecked += 1;
     if (!hasNoindex) {
       errors.push(`${relative('.', file)} is archived but missing robots noindex,follow`);
@@ -78,9 +101,9 @@ for (const file of await htmlFiles(distDir)) {
       errors.push(`${relative('.', file)} is archived but links a sitemap`);
     }
   } else {
-    latestChecked += 1;
+    currentChecked += 1;
     if (hasNoindex) {
-      errors.push(`${relative('.', file)} is latest but has robots noindex,follow`);
+      errors.push(`${relative('.', file)} is Main but has robots noindex,follow`);
     }
   }
 }
@@ -88,10 +111,15 @@ for (const file of await htmlFiles(distDir)) {
 if (scope === 'all' && archivedDocsets.length > 0 && archivedChecked === 0) {
   errors.push('No archived HTML files were checked.');
 }
+if (scope === 'all' && productionLayout && redirectsChecked === 0) {
+  errors.push('No released-root redirect HTML files were checked.');
+}
 
 if (errors.length) {
   console.error(errors.join('\n'));
   process.exit(1);
 }
 
-console.log(`SEO check passed: ${latestChecked} latest HTML files and ${archivedChecked} archived HTML files checked.`);
+console.log(
+  `SEO check passed: ${currentChecked} Main HTML files, ${archivedChecked} archived HTML files, and ${redirectsChecked} released-root redirects checked.`,
+);

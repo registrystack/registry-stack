@@ -10,15 +10,23 @@
   "inputs": [
     {
       "path": "registry-stack.yaml",
-      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "classification": "authored_project_input"
     },
     {
       "path": "environments/local.yaml",
-      "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "classification": "authored_project_input"
     },
     {
       "path": "integrations/person-record/integration.yaml",
-      "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "classification": "authored_project_input"
+    },
+    {
+      "path": "data/source.xlsx",
+      "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "classification": "operator_owned_source_data"
     }
   ],
   "artifacts": [

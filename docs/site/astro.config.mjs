@@ -58,7 +58,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const internalRedirect = (path) => basePath ? `${basePath}${path}` : path;
   /** @param {string} path */
   const currentDocsetRedirect = (path) =>
-    isArchivedBuild ? `https://docs.registrystack.org${path}` : internalRedirect(path);
+    isArchivedBuild ? `https://docs.registrystack.org/preview${path}` : internalRedirect(path);
 
   return {
     base,
@@ -105,7 +105,7 @@ export default defineConfig({
   // to their new homes so old links and search results keep resolving.
   redirects: {
     '/start/': internalRedirect('/'),
-    '/start/see-it-live/': internalRedirect('/journeys/spreadsheet-protected-api/'),
+    '/start/see-it-live/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
     '/explanation/trust-posture-and-security-guarantees/': internalRedirect('/security/'),
     '/reference/security-self-assessment/': internalRedirect('/security/self-assessment/'),
     '/reference/openssf-evidence/': internalRedirect('/security/openssf-evidence/'),
@@ -263,8 +263,10 @@ export default defineConfig({
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
+            { label: 'Your first registry API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
+            { label: 'Use your spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
+            { label: 'Your first claim check', slug: 'tutorials/verify-claim-registry-api' },
             { label: 'When to use', slug: 'start/when-to-use' },
-            { label: 'Test one current source revision', slug: 'start/test-current-source-revision' },
             { label: 'Architecture', slug: 'explanation/architecture' },
             { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
           ],
@@ -273,13 +275,13 @@ export default defineConfig({
           label: 'Journeys',
           items: [
             { label: 'Overview', slug: 'journeys' },
-            { label: 'Spreadsheet protected API', slug: 'journeys/spreadsheet-protected-api' },
-            { label: 'Instance OpenAPI', slug: 'journeys/instance-openapi' },
-            { label: 'Bounded HTTP', slug: 'journeys/bounded-http' },
-            { label: 'Bounded multi-call script', slug: 'journeys/bounded-multi-call-script' },
-            { label: 'Exact snapshot', slug: 'journeys/exact-snapshot' },
-            { label: 'Registry-backed Notary claim', slug: 'journeys/registry-backed-notary-claim' },
-            { label: 'Product-input lifecycle', slug: 'journeys/product-input-lifecycle' },
+            { label: 'Spreadsheet protected API assurance (Main source)', slug: 'journeys/spreadsheet-protected-api' },
+            { label: 'Instance OpenAPI assurance (Main source)', slug: 'journeys/instance-openapi' },
+            { label: 'Bounded HTTP assurance (Main source)', slug: 'journeys/bounded-http' },
+            { label: 'Bounded multi-call script assurance (Main source)', slug: 'journeys/bounded-multi-call-script' },
+            { label: 'Exact snapshot assurance (Main source)', slug: 'journeys/exact-snapshot' },
+            { label: 'Registry-backed Notary claim assurance (Main source)', slug: 'journeys/registry-backed-notary-claim' },
+            { label: 'Product-input lifecycle assurance (Main source)', slug: 'journeys/product-input-lifecycle' },
           ],
         },
         {

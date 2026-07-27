@@ -38,11 +38,11 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1763,
-    "reference_count": 482,
+    "path_count": 1770,
+    "reference_count": 485,
     "by_schema": {
       "project": 219,
-      "environment": 191,
+      "environment": 198,
       "integration": 142,
       "fixture": 62,
       "entity": 35,
@@ -51,24 +51,24 @@
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1407,
+      "property": 1412,
       "map_key": 25,
       "map_value": 47,
-      "array_item": 177,
-      "branch": 100
+      "array_item": 178,
+      "branch": 101
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1141,
-      "sensitive": 396,
+      "internal": 1144,
+      "sensitive": 399,
       "secret_reference": 41,
       "redacted_fixture": 50,
-      "structural": 119
+      "structural": 120
     },
     "by_intent_source": {
       "schema_description": 503,
-      "reviewed_override": 243,
-      "structural_taxonomy": 125,
+      "reviewed_override": 248,
+      "structural_taxonomy": 127,
       "reviewed_profile": 892
     },
     "by_intent_profile": {
@@ -27473,6 +27473,7 @@
           "keyword": "required",
           "value": [
             "type",
+            "project_file",
             "path",
             "sheet"
           ]
@@ -27776,6 +27777,111 @@
       "local_reference": {
         "schema": "environment",
         "pointer": "/$defs/absolutePath"
+      }
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/$defs/provider/oneOf/1/properties/project_file",
+        "path_kind": "property"
+      },
+      "purpose": "Binds a contained project-relative workbook for offline preflight and read-only runtime mounting without emitting the authoring path into Relay configuration.",
+      "purpose_source": "reviewed_override",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "local_reference": "#/$defs/relativePath",
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "sensitive",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "sensitive_operational_metadata"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxLength",
+          "value": 4096
+        },
+        {
+          "keyword": "minLength",
+          "value": 1
+        },
+        {
+          "keyword": "pattern",
+          "value": "^(?!/)(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ],
+      "local_reference": {
+        "schema": "environment",
+        "pointer": "/$defs/relativePath"
       }
     },
     {
@@ -33950,6 +34056,94 @@
     {
       "address": {
         "schema": "environment",
+        "pointer": "/allOf/6/else/properties/relay/not",
+        "path_kind": "branch"
+      },
+      "purpose": "Documents a validation alternative or condition and is not authored as a standalone configuration field.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "conditional",
+      "null_behavior": "not_applicable",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "not_applicable"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "structural",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "branch_has_no_authored_value"
+      ],
+      "constraints": [
+        {
+          "keyword": "required",
+          "value": [
+            "local_api_keys"
+          ]
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "environment",
         "pointer": "/allOf/6/else/properties/relay/properties/issuer",
         "path_kind": "property"
       },
@@ -38307,6 +38501,506 @@
         "schema": "environment",
         "pointer": "/$defs/relayResource"
       }
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/properties/relay/properties/local_api_keys",
+        "path_kind": "property"
+      },
+      "purpose": "Declares synthetic API-key principals only for the local profile; Registryctl generates raw keys privately and emits only their fingerprints to Relay.",
+      "purpose_source": "reviewed_override",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "object"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "required",
+          "value": [
+            "match_principal",
+            "no_match_principal",
+            "scopes"
+          ]
+        },
+        {
+          "keyword": "type",
+          "value": "object"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/properties/relay/properties/local_api_keys/properties/match_principal",
+        "path_kind": "property"
+      },
+      "purpose": "Binds the synthetic local caller whose reviewed identifier matches one starter row; this identifier is not a raw key or a source value.",
+      "purpose_source": "reviewed_override",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "local_reference": "#/$defs/token256",
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "sensitive",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "sensitive_operational_metadata"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxLength",
+          "value": 256
+        },
+        {
+          "keyword": "minLength",
+          "value": 1
+        },
+        {
+          "keyword": "pattern",
+          "value": "^[!-~]+$"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ],
+      "local_reference": {
+        "schema": "environment",
+        "pointer": "/$defs/token256"
+      }
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/properties/relay/properties/local_api_keys/properties/no_match_principal",
+        "path_kind": "property"
+      },
+      "purpose": "Binds the synthetic local caller whose reviewed identifier intentionally matches no starter row so an empty result is maintained.",
+      "purpose_source": "reviewed_override",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "local_reference": "#/$defs/token256",
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "sensitive",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "sensitive_operational_metadata"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxLength",
+          "value": 256
+        },
+        {
+          "keyword": "minLength",
+          "value": 1
+        },
+        {
+          "keyword": "pattern",
+          "value": "^[!-~]+$"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ],
+      "local_reference": {
+        "schema": "environment",
+        "pointer": "/$defs/token256"
+      }
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/properties/relay/properties/local_api_keys/properties/scopes",
+        "path_kind": "property"
+      },
+      "purpose": "Limits both generated local API-key callers to the explicitly reviewed service scopes needed by the maintained checks.",
+      "purpose_source": "reviewed_override",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "array"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxItems",
+          "value": 16
+        },
+        {
+          "keyword": "minItems",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": "array"
+        },
+        {
+          "keyword": "uniqueItems",
+          "value": true
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/properties/relay/properties/local_api_keys/properties/scopes/items",
+        "path_kind": "array_item"
+      },
+      "purpose": "Defines the contract shared by each ordered item in the enclosing authored list.",
+      "purpose_source": "structural_taxonomy",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "not_applicable",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxLength",
+          "value": 128
+        },
+        {
+          "keyword": "minLength",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ]
     },
     {
       "address": {

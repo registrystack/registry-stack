@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Validate every materialized XLSX row before activation, including rows after
+  the first 1,000. Formula cells, duplicate primary keys, missing or unexpected
+  strict columns, nulls, and incompatible types fail with bounded value-free
+  diagnostics. Spreadsheet-backed fields remain sensitive unless a reviewed
+  API projection explicitly releases them.
 - BREAKING: Promote governed attribute release to the stable default and
   canonical release feature set. Require purpose, exact release-scope, and
   subject-type bindings; remove inert pre-1.0 configuration fields; evaluate

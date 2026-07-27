@@ -173,8 +173,9 @@ removed alias is a usage failure and returns status `2`.
 
 The following surfaces remain outside the 1.0 compatibility promise:
 
-- The generated layout of the local `init relay` Compose tutorial, including `registryctl.yaml`,
-  `compose.yaml`, and its data, state, secret, and product subdirectories.
+- The generated layout below `.registry-stack/runtime/` for a canonical local
+  project, including Compose, state, credential, and product-input
+  subdirectories.
 - Directory names and intermediate files below a build root returned by
   `registryctl.project_command.v1`.
 - Editor staging, backup, and transaction artifacts that are not returned by a versioned report.

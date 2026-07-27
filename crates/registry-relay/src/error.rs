@@ -1051,7 +1051,10 @@ impl SchemaError {
 }
 
 impl IngestError {
-    fn code(&self) -> &'static str {
+    /// Stable value-free category code for readiness and offline validation
+    /// diagnostics.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
         match self {
             IngestError::SourceNotFound => "ingest.source_not_found",
             IngestError::SourceUnreadable => "ingest.source_unreadable",

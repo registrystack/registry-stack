@@ -521,6 +521,7 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
             jwks_url: "https://workload.fixture.invalid/.well-known/jwks.json".to_string(),
             audience: "registry-relay".to_string(),
             allowed_clients: vec!["registry-project-fixture-client".to_string()],
+            local_api_keys: None,
         }),
         notary_relay: requires_notary_relay.then(|| NotaryRelayBinding {
             base_url: "https://relay.fixture.invalid".to_string(),
@@ -1745,6 +1746,7 @@ fn check_registry_project_internal(
     )?;
     let compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
     validate_generated_product_configs(&compiled)?;
+    validate_project_workbook_inputs(&loaded, &compiled)?;
     let (fixtures, generated_observations, request_observations, call_budget_actual) =
         execute_all_fixtures_with_coverage_observations(
             &loaded,
@@ -1791,10 +1793,11 @@ fn check_registry_project_internal(
     })
 }
 
-/// Verify the selected environment's locally available secret and file posture.
+/// Verify the selected environment's locally available secret and file posture,
+/// including production-equivalent validation of project-authored workbooks.
 ///
 /// This command is intentionally offline. It performs no fixture execution,
-/// build publication, network access, or source contact.
+/// build publication, network access, or runtime source contact.
 pub fn preflight_registry_project(
     options: &ProjectPreflightOptions,
 ) -> Result<ProjectPreflightReportV1> {
@@ -1811,6 +1814,7 @@ pub fn preflight_registry_project(
     )?;
     let compiled = compile_project(&loaded, None)?;
     validate_generated_product_configs(&compiled)?;
+    validate_project_workbook_inputs(&loaded, &compiled)?;
     let environment = loaded
         .environment
         .as_ref()
@@ -2391,7 +2395,7 @@ mod promotion_adapter_tests {
         // intentional review pins. Adding or changing a published path without
         // updating its closed mapping and reviewed revision fails this test and
         // `project_promotion_projection`.
-        assert_eq!(index.by_path().len(), 649);
+        assert_eq!(index.by_path().len(), 656);
         let mapped = index
             .by_path()
             .keys()
@@ -2867,11 +2871,11 @@ fn offline_preflight_input(
                 path,
                 PreflightRuntimeFileKind::EntityCsv,
             )?,
-            RecordProvider::Xlsx { path, .. } => add_preflight_runtime_file(
+            RecordProvider::Xlsx { project_file, .. } => add_preflight_runtime_file(
                 &mut input,
                 &environment_file,
-                &format!("{entity_prefix}/path"),
-                path,
+                &format!("{entity_prefix}/project_file"),
+                &loaded.root.join(project_file),
                 PreflightRuntimeFileKind::EntityXlsx,
             )?,
             RecordProvider::Parquet { path } => add_preflight_runtime_file(
@@ -3048,7 +3052,7 @@ pub fn build_registry_project_with_context(
     options: &ProjectBuildOptions,
     execution_context: &ProjectExecutionContext,
 ) -> Result<ProjectCommandReport> {
-    build_registry_project_inner(options, None, false, None, execution_context)
+    build_registry_project_inner(options, None, execution_context)
 }
 
 pub fn build_registry_project_with_baselines_and_context(
@@ -3056,72 +3060,12 @@ pub fn build_registry_project_with_baselines_and_context(
     baselines: &ProjectBuildBaselineSetOptions,
     execution_context: &ProjectExecutionContext,
 ) -> Result<ProjectCommandReport> {
-    build_registry_project_inner(options, Some(baselines), false, None, execution_context)
-}
-
-/// Build the closed local tutorial runtime in one atomic publication.
-///
-/// These overrides are fixed in reviewed `registryctl` code, are not authored
-/// extension input, and are revalidated with the production product models
-/// before publication. Applying them before `write_compiled_project` prevents
-/// containers from observing the compiler's PostgreSQL defaults between the
-/// generated build and the tutorial's in-memory runtime configuration.
-pub(crate) fn build_registry_project_for_local_tutorial(
-    options: &ProjectBuildOptions,
-    runtime_identity: Option<crate::RuntimeIdentity>,
-) -> Result<ProjectCommandReport> {
-    let execution_context = ProjectExecutionContext::for_current_executable()?;
-    build_registry_project_inner(options, None, true, runtime_identity, &execution_context)
-}
-
-/// Compile, statically validate, and publish the local tutorial project without
-/// executing its authored fixtures.
-///
-/// This reduced-scope seam exists only for unit tests whose process is not a
-/// `registryctl` worker executable. It is not a complete project build and must
-/// not be used by production commands or end-to-end conformance tests.
-#[cfg(test)]
-pub(crate) fn build_registry_project_static_validation_only_for_unit_test(
-    options: &ProjectBuildOptions,
-    runtime_identity: Option<crate::RuntimeIdentity>,
-) -> Result<()> {
-    let baseline_paths = ApprovedBaselineSetPaths::build(options, None);
-    validate_approved_baseline_set_paths(baseline_paths)?;
-    let loaded = load_registry_project(
-        &options.project_directory,
-        Some(options.environment.as_str()),
-    )?;
-    preflight_project_rhai_scripts(&loaded)?;
-    let baselines = load_verified_approved_baseline_set(
-        baseline_paths,
-        &loaded,
-        BaselineSetCompleteness::CompleteTopologyWhenPresent,
-    )
-    .map_err(|_| anyhow!("could not establish verified build baselines"))?;
-    let mut compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
-    apply_local_tutorial_runtime_overrides(&mut compiled)?;
-    validate_generated_product_configs(&compiled)?;
-    let output = loaded
-        .root
-        .join(BUILD_ROOT)
-        .join(options.environment.as_str());
-    write_compiled_project(
-        &loaded.root,
-        &output,
-        &compiled,
-        runtime_identity,
-        &loaded.project.registry.id,
-        &options.environment,
-        &loaded.artifact_inputs,
-    )?;
-    Ok(())
+    build_registry_project_inner(options, Some(baselines), execution_context)
 }
 
 fn build_registry_project_inner(
     options: &ProjectBuildOptions,
     baseline_options: Option<&ProjectBuildBaselineSetOptions>,
-    local_tutorial_runtime: bool,
-    runtime_identity: Option<crate::RuntimeIdentity>,
     execution_context: &ProjectExecutionContext,
 ) -> Result<ProjectCommandReport> {
     let baseline_paths = ApprovedBaselineSetPaths::build(options, baseline_options);
@@ -3137,11 +3081,9 @@ fn build_registry_project_inner(
         BaselineSetCompleteness::CompleteTopologyWhenPresent,
     )
     .map_err(|_| anyhow!("could not establish verified build baselines"))?;
-    let mut compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
-    if local_tutorial_runtime {
-        apply_local_tutorial_runtime_overrides(&mut compiled)?;
-    }
+    let compiled = compile_project(&loaded, (!baselines.is_empty()).then_some(&baselines))?;
     validate_generated_product_configs(&compiled)?;
+    let artifact_inputs = validate_project_workbook_inputs(&loaded, &compiled)?;
     let (fixtures, generated_observations, request_observations, call_budget_actual) =
         execute_all_fixtures_with_coverage_observations(
             &loaded,
@@ -3167,10 +3109,10 @@ fn build_registry_project_inner(
         &loaded.root,
         &output,
         &compiled,
-        runtime_identity,
+        None,
         &loaded.project.registry.id,
         &options.environment,
-        &loaded.artifact_inputs,
+        &artifact_inputs,
     )?;
     let reported_output = ProjectRelativePath::new(format!("{BUILD_ROOT}/{}", options.environment))
         .map_err(|error| anyhow!("invalid project-relative build output path: {error}"))?;
@@ -3192,42 +3134,6 @@ fn build_registry_project_inner(
         fixture_coverage: Some(fixture_coverage),
         explanation: None,
     })
-}
-
-fn apply_local_tutorial_runtime_overrides(compiled: &mut CompiledProject) -> Result<()> {
-    let notary = compiled
-        .notary_private
-        .get_mut(Path::new("config/notary.yaml"))
-        .ok_or_else(|| anyhow!("generated local Notary config is absent"))?;
-    let mut notary_config: serde_norway::Value =
-        serde_norway::from_slice(notary).context("generated local Notary config did not parse")?;
-    notary_config["server"]["bind"] = serde_norway::Value::String("0.0.0.0:8081".to_string());
-    notary_config["state"] = serde_norway::from_str("storage: in_memory\n")?;
-    notary_config["evidence"]["signing_keys"] = serde_norway::from_str(&format!(
-        "relay-workload:\n  provider: local_jwk_env\n  private_jwk_env: {}\n  alg: EdDSA\n  kid: {}\n  status: active\n",
-        super::NOTARY_RELAY_WORKLOAD_JWK_ENV,
-        super::NOTARY_RELAY_WORKLOAD_KID,
-    ))?;
-    *notary = serde_norway::to_string(&notary_config)
-        .context("failed to render local Notary config")?
-        .into_bytes()
-        .into_boxed_slice();
-
-    let relay = compiled
-        .relay_private
-        .get_mut(Path::new("config/relay.yaml"))
-        .ok_or_else(|| anyhow!("generated local consultation Relay config is absent"))?;
-    let mut relay_config: serde_norway::Value = serde_norway::from_slice(relay)
-        .context("generated local consultation Relay config did not parse")?;
-    relay_config["server"]["bind"] = serde_norway::Value::String("0.0.0.0:8082".to_string());
-    relay_config["auth"]["oidc"]["allow_dev_insecure_fetch_urls"] = serde_norway::Value::Bool(true);
-    relay_config["consultation"]["state_plane"]["root_certificate_path"] =
-        serde_norway::Value::String("/run/registry-tls/state-plane-ca.pem".to_string());
-    *relay = serde_norway::to_string(&relay_config)
-        .context("failed to render local consultation Relay config")?
-        .into_bytes()
-        .into_boxed_slice();
-    Ok(())
 }
 
 fn require_passing_fixtures(fixtures: &[FixtureReport]) -> Result<()> {

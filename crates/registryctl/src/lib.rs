@@ -11,8 +11,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
 use clap::ValueEnum;
-use ed25519_dalek::SigningKey as Ed25519SigningKey;
-use rcgen::{generate_simple_self_signed, CertifiedKey};
 use registry_config_report::{
     ConfigDiagnostic, ConfigDiagnosticReport, ConfigSourceKind, ConfigSourceRef,
     DiagnosticSeverity, DiagnosticSummary, RegistryctlProductReport, RegistryctlProjectRef,
@@ -58,8 +56,9 @@ pub use project_authoring::{
     redacted_project_check_failure_diagnostics, render_project_authoring_diagnostics,
     setup_registry_project_editor, test_registry_project, test_registry_project_selected,
     test_registry_project_selected_with_context, test_registry_project_with_context,
-    AuthoredSemanticFixtureCoverage, AuthoringContract, AuthoringVersionSet, CapabilityDisposition,
-    CapabilityId, CapabilityInventoryEvidenceGrade, CapabilityInventoryRecord, CapabilityKind,
+    ArtifactInputClassification, ArtifactInputDigest, AuthoredSemanticFixtureCoverage,
+    AuthoringContract, AuthoringVersionSet, CapabilityDisposition, CapabilityId,
+    CapabilityInventoryEvidenceGrade, CapabilityInventoryRecord, CapabilityKind,
     CapabilityMaturity, CapabilityOwner, CapabilityUsageCounts, ClassifierSafeReportedValue,
     ConfigurationFieldReference, ConfigurationReferenceCoverageV1, ConfigurationReferenceV1,
     ConfigurationState, CoverageInvariant, CoverageStatus, DefaultBehavior, DefaultDocumentation,
@@ -178,7 +177,29 @@ const RELAY_IMAGE_REPOSITORY: &str = "ghcr.io/registrystack/registry-relay";
 const NOTARY_IMAGE_REPOSITORY: &str = "ghcr.io/registrystack/registry-notary";
 const LINUX_AMD64_PLATFORM: &str = "linux/amd64";
 const RELAY_BASE_URL: &str = "http://127.0.0.1:4242";
-const NOTARY_BASE_URL: &str = "http://127.0.0.1:4255";
+const CANONICAL_PROJECT_FILE: &str = "registry-stack.yaml";
+const CANONICAL_LOCAL_ENVIRONMENT_FILE: &str = "environments/local.yaml";
+const CANONICAL_LOCAL_ENVIRONMENT: &str = "local";
+const CANONICAL_BUILD_ROOT: &str = ".registry-stack/build/local";
+const CANONICAL_RELAY_CONFIG: &str = ".registry-stack/build/local/private/relay/config/relay.yaml";
+const CANONICAL_ARTIFACT_MANIFEST: &str = ".registry-stack/build/local/artifact-manifest.json";
+const CANONICAL_RUNTIME_ROOT: &str = ".registry-stack/runtime/local";
+const CANONICAL_RUNTIME_COMPOSE: &str = ".registry-stack/runtime/local/compose.yaml";
+const CANONICAL_RUNTIME_MANIFEST: &str = ".registry-stack/runtime/local/manifest.json";
+const CANONICAL_RUNTIME_SECRETS: &str = ".registry-stack/runtime/local/secrets";
+const CANONICAL_RUNTIME_ENV: &str = ".registry-stack/runtime/local/secrets/local.env";
+const CANONICAL_RUNTIME_RELAY_ENV: &str = ".registry-stack/runtime/local/secrets/relay.env";
+const CANONICAL_RUNTIME_MANIFEST_SCHEMA: &str = "registryctl.local_runtime.v1";
+const CANONICAL_RUNTIME_AUDIT_SECRET_ENV: &str = "REGISTRY_RELAY_AUDIT_HASH_SECRET";
+const CANONICAL_RUNTIME_MATCH_RAW_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_RAW";
+const CANONICAL_RUNTIME_NO_MATCH_RAW_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_RAW";
+const CANONICAL_RUNTIME_MATCH_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH";
+const CANONICAL_RUNTIME_NO_MATCH_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_HASH";
+const CANONICAL_RUNTIME_NO_MATCH_PRINCIPAL: &str = "registryctl_local_no_match";
+const REGISTRYCTL_RELAY_STAGING_IMAGE_ENV: &str = "REGISTRYCTL_RELAY_STAGING_IMAGE";
+const CANONICAL_RELAY_CONFIG_MOUNT: &str = "/etc/registry-relay/config.yaml";
+const CANONICAL_RELAY_CONTAINER_PORT: &str = "0.0.0.0:8080";
+const CANONICAL_RELAY_HOST_PORT: &str = "127.0.0.1:4242:8080";
 const RELAY_DOCS_PATH: &str = "/docs";
 const TUTORIAL_PURPOSE: &str = "https://example.local/purpose/tutorial";
 const TUTORIAL_IDENTITY_PURPOSE: &str = "https://example.local/purpose/identity-verification";
@@ -188,9 +209,9 @@ const REGISTRY_STACK_RUNTIME_UID_ENV: &str = "REGISTRY_STACK_RUNTIME_UID";
 const REGISTRY_STACK_RUNTIME_GID_ENV: &str = "REGISTRY_STACK_RUNTIME_GID";
 const DEFAULT_NONROOT_CONTAINER_ID: &str = "65532";
 const REGISTRYCTL_RELEASES_API: &str =
-    "https://api.github.com/repos/registrystack/registry-stack/releases/latest";
-const REGISTRYCTL_RAW_REPOSITORY: &str =
-    "https://raw.githubusercontent.com/registrystack/registry-stack";
+    "https://api.github.com/repos/registrystack/registry-stack/releases?per_page=100";
+const REGISTRYCTL_RELEASE_DOWNLOADS: &str =
+    "https://github.com/registrystack/registry-stack/releases/download";
 const REGISTRYCTL_VERIFY_GUIDE: &str =
     "https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md";
 const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
@@ -200,7 +221,6 @@ const PROJECT_SCHEMA_VERSION: &str = "registryctl/v1";
 const CONFIG_BUNDLE_SIGNATURE_SCHEMA: &str = "registry.platform.config_bundle_signatures.v1";
 const CONFIG_TRUST_ANCHOR_SCHEMA: &str = "registry.platform.config_trust_anchor.v1";
 const INIT_REPORT_SCHEMA_VERSION: &str = "registryctl.init.v1";
-const ADD_NOTARY_REPORT_SCHEMA_VERSION: &str = "registryctl.add_notary.v1";
 pub const SMOKE_REPORT_SCHEMA_V1: &str =
     include_str!("../schemas/registryctl.smoke.v1.schema.json");
 
@@ -244,28 +264,6 @@ pub struct InitReport {
     pub source: InitSource,
     pub artifacts: InitArtifacts,
 }
-const NOTARY_PROJECT_DIR: &str = "notary/project";
-const NOTARY_RUNTIME_VISIBILITY_SERVICE: &str = "registry-relay-consultation-bootstrap";
-const NOTARY_RUNTIME_VISIBILITY_ATTEMPTS: usize = 8;
-const NOTARY_RUNTIME_VISIBILITY_RETRY_DELAY: Duration = Duration::from_millis(500);
-const MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES: usize = 1024;
-#[cfg(test)]
-const NOTARY_CONFIG_DIR: &str = "notary/project/.registry-stack/build/local/private/notary/config";
-const NOTARY_CONFIG_PATH: &str =
-    "notary/project/.registry-stack/build/local/private/notary/config/notary.yaml";
-#[cfg(test)]
-const CONSULTATION_RELAY_CONFIG_DIR: &str =
-    "notary/project/.registry-stack/build/local/private/relay/config";
-const CONSULTATION_RELAY_CONFIG_PATH: &str =
-    "notary/project/.registry-stack/build/local/private/relay/config/relay.yaml";
-const NOTARY_CLAIM_FILE: &str = "notary/project/registry-stack.yaml";
-const NOTARY_RELAY_TOKEN_PATH: &str = "secrets/notary-relay.jwt";
-const NOTARY_RELAY_WORKLOAD_JWK_ENV: &str = "REGISTRY_NOTARY_RELAY_WORKLOAD_JWK";
-const NOTARY_RELAY_WORKLOAD_KID: &str = "registry-notary-relay-workload";
-const CONSULTATION_POSTGRES_CERT_PATH: &str = "secrets/consultation-postgres.crt";
-const CONSULTATION_POSTGRES_KEY_PATH: &str = "secrets/consultation-postgres.key";
-const CONSULTATION_RELAY_STATE_DIR: &str = "state/relay-consultation";
-const CONSULTATION_RELAY_CACHE_PATH: &str = "state/relay-consultation/cache";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -290,10 +288,6 @@ struct RegistryctlLockedImages {
 impl RegistryctlImageLock {
     fn relay_image(&self) -> &str {
         &self.images.registry_relay
-    }
-
-    fn notary_image(&self) -> &str {
-        &self.images.registry_notary
     }
 }
 
@@ -452,6 +446,50 @@ fn validate_locked_image_ref(field: &str, value: &str, repository: &str) -> Resu
         bail!("{field} digest must contain exactly 64 lowercase hexadecimal characters");
     }
     Ok(())
+}
+
+fn selected_canonical_relay_image(image_lock: &RegistryctlImageLock) -> Result<String> {
+    let staging = std::env::var_os(REGISTRYCTL_RELAY_STAGING_IMAGE_ENV);
+    select_canonical_relay_image(image_lock, staging.as_deref())
+}
+
+fn select_canonical_relay_image(
+    image_lock: &RegistryctlImageLock,
+    staging: Option<&OsStr>,
+) -> Result<String> {
+    let locked = image_lock.relay_image();
+    let Some(staging) = staging else {
+        return Ok(locked.to_string());
+    };
+    let staging = staging
+        .to_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("internal Relay staging image must be valid UTF-8"))?;
+    const STAGING_REPOSITORY: &str = "ghcr.io/registrystack/registry-relay-candidate";
+    validate_locked_image_ref("internal Relay staging image", &staging, STAGING_REPOSITORY)?;
+    let locked_digest = locked
+        .rsplit_once("@sha256:")
+        .map(|(_, digest)| digest)
+        .ok_or_else(|| anyhow!("release-locked Relay image is malformed"))?;
+    let staging_digest = staging
+        .rsplit_once("@sha256:")
+        .map(|(_, digest)| digest)
+        .ok_or_else(|| anyhow!("internal Relay staging image is malformed"))?;
+    if staging_digest != locked_digest {
+        bail!("internal Relay staging image digest must exactly match the release image lock");
+    }
+    Ok(staging)
+}
+
+fn validate_canonical_runtime_image_ref(image: &str) -> Result<()> {
+    const STAGING_REPOSITORY: &str = "ghcr.io/registrystack/registry-relay-candidate";
+    if image.starts_with(&format!("{RELAY_IMAGE_REPOSITORY}@sha256:")) {
+        validate_locked_image_ref("runtime relay image", image, RELAY_IMAGE_REPOSITORY)
+    } else if image.starts_with(&format!("{STAGING_REPOSITORY}@sha256:")) {
+        validate_locked_image_ref("runtime relay image", image, STAGING_REPOSITORY)
+    } else {
+        bail!("runtime relay image must use the closed release or staging repository")
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1240,12 +1278,25 @@ fn fetch_latest_registryctl_release() -> Result<String> {
     let body = response
         .into_string()
         .context("failed to read registryctl latest release response")?;
-    let latest: GitHubLatestRelease = serde_json::from_str(&body)
-        .context("failed to parse registryctl latest release response")?;
-    if VersionNumber::parse_release_tag(&latest.tag_name).is_none() {
-        bail!("registryctl latest release response did not include a canonical vMAJOR.MINOR.PATCH tag");
-    }
-    Ok(latest.tag_name)
+    let releases: Vec<GitHubRelease> =
+        serde_json::from_str(&body).context("failed to parse registryctl releases response")?;
+    select_latest_published_release(&releases).ok_or_else(|| {
+        anyhow!(
+            "registryctl releases response did not include a published canonical vMAJOR.MINOR.PATCH tag"
+        )
+    })
+}
+
+fn select_latest_published_release(releases: &[GitHubRelease]) -> Option<String> {
+    releases
+        .iter()
+        .filter(|release| !release.draft)
+        .filter_map(|release| {
+            VersionNumber::parse_release_tag(&release.tag_name)
+                .map(|version| (version, release.tag_name.as_str()))
+        })
+        .max_by_key(|(version, _)| *version)
+        .map(|(_, tag)| tag.to_string())
 }
 
 fn registryctl_release_http_error(error: ureq::Error) -> anyhow::Error {
@@ -1269,11 +1320,13 @@ fn update_notice(current_version: &str, latest_tag: &str) -> Option<String> {
     if latest <= current {
         return None;
     }
-    let install_script = format!(
-        "{REGISTRYCTL_RAW_REPOSITORY}/refs/tags/{latest_tag}/crates/registryctl/install.sh"
+    let install_script =
+        format!("{REGISTRYCTL_RELEASE_DOWNLOADS}/{latest_tag}/registryctl-{latest_tag}-install.sh");
+    let verify_guide = format!(
+        "https://github.com/registrystack/registry-stack/blob/{latest_tag}/release/VERIFY.md"
     );
     Some(format!(
-        "registryctl {latest_tag} is available. You have {}.\nThe quick installer verifies SHA256 integrity only. For canonical release authenticity guidance, see:\n  {REGISTRYCTL_VERIFY_GUIDE}\nUpgrade with:\n  curl -fsSL {install_script} | REGISTRYCTL_VERSION={latest_tag} bash",
+        "registryctl {latest_tag} is available. You have {}.\nExecuting the quick installer trusts GitHub and TLS; the installer verifies the downloaded binary and image lock against the release checksums. For signature and provenance verification, see:\n  {verify_guide}\nUpgrade with:\n  curl -fsSL {install_script} | REGISTRYCTL_VERSION={latest_tag} bash",
         display_version(current_version),
     ))
 }
@@ -1294,8 +1347,11 @@ fn unix_now() -> u64 {
 }
 
 #[derive(Debug, Deserialize)]
-struct GitHubLatestRelease {
+struct GitHubRelease {
     tag_name: String,
+    draft: bool,
+    #[allow(dead_code)]
+    prerelease: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1354,39 +1410,704 @@ impl VersionNumber {
     }
 }
 
+#[derive(Clone, Debug)]
+struct CanonicalRuntime {
+    compose_file: PathBuf,
+    relay_config: PathBuf,
+    secrets_env: PathBuf,
+    image: String,
+}
+
+#[derive(Clone, Debug)]
+struct CanonicalSpreadsheetBinding {
+    project_file_text: String,
+    runtime_path: String,
+    match_principal: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CanonicalRuntimeManifest {
+    schema_version: String,
+    environment: String,
+    relay_image: String,
+    compose_digest: String,
+    artifact_manifest_digest: String,
+    relay_config_digest: String,
+    workbook_digest: String,
+    workbook_classification: ArtifactInputClassification,
+    workbook_project_file: String,
+    workbook_runtime_path: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CanonicalRuntimeValidation {
+    GeneratedClosure,
+    Full,
+}
+
+fn retired_legacy_project_error() -> anyhow::Error {
+    anyhow!(
+        "legacy pre-1.0 direct projects are retired. Reinitialize with \
+         `registryctl init --from spreadsheet --project-dir <directory>` and re-express the \
+         reviewed project intent; registryctl does not silently migrate or dual-model legacy \
+         projects."
+    )
+}
+
+fn require_canonical_project(project_dir: &Path) -> Result<()> {
+    let root = fs::symlink_metadata(project_dir)
+        .context("failed to inspect the Registry Stack project root")?;
+    if root.file_type().is_symlink() || !root.is_dir() {
+        bail!("the Registry Stack project root must be a real directory");
+    }
+    if fs::symlink_metadata(project_dir.join("registryctl.yaml")).is_ok() {
+        return Err(retired_legacy_project_error());
+    }
+    let project_file = project_dir.join(CANONICAL_PROJECT_FILE);
+    let metadata = fs::symlink_metadata(&project_file)
+        .map_err(|_| anyhow!("the canonical project is missing registry-stack.yaml"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("registry-stack.yaml must be a regular non-symlink file");
+    }
+    Ok(())
+}
+
+fn canonical_spreadsheet_binding(project_dir: &Path) -> Result<CanonicalSpreadsheetBinding> {
+    let environment_path = project_dir.join(CANONICAL_LOCAL_ENVIRONMENT_FILE);
+    ensure_no_symlink_components(project_dir, &environment_path)?;
+    let metadata = fs::symlink_metadata(&environment_path)
+        .map_err(|_| anyhow!("the canonical project is missing environments/local.yaml"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("environments/local.yaml must be a regular non-symlink file");
+    }
+    let contents = fs::read_to_string(&environment_path)
+        .context("failed to read the canonical local environment")?;
+    let document: serde_norway::Value = serde_norway::from_str(&contents)
+        .context("failed to parse the canonical local environment")?;
+    let local_api_keys = &document["relay"]["local_api_keys"];
+    let match_principal = local_api_keys["match_principal"]
+        .as_str()
+        .ok_or_else(|| anyhow!("the local spreadsheet matching principal is absent"))?
+        .to_string();
+    if local_api_keys["no_match_principal"].as_str() != Some(CANONICAL_RUNTIME_NO_MATCH_PRINCIPAL) {
+        bail!("the local spreadsheet maintained no-match principal is invalid");
+    }
+    let entities = document["entities"]
+        .as_mapping()
+        .ok_or_else(|| anyhow!("the canonical local environment must declare entities"))?;
+    let mut bindings = Vec::new();
+    for binding in entities.values() {
+        let provider = &binding["provider"];
+        if provider["type"].as_str() != Some("xlsx") {
+            continue;
+        }
+        let project_file = provider["project_file"]
+            .as_str()
+            .ok_or_else(|| anyhow!("the XLSX provider must declare project_file"))?;
+        let runtime_path = provider["path"]
+            .as_str()
+            .ok_or_else(|| anyhow!("the XLSX provider must declare its runtime path"))?;
+        bindings.push((project_file.to_string(), runtime_path.to_string()));
+    }
+    if bindings.len() != 1 {
+        bail!("the canonical local runtime requires exactly one declared XLSX project workbook");
+    }
+    let (project_file_text, runtime_path) = bindings.remove(0);
+    let relative = Path::new(&project_file_text);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        bail!("the declared XLSX project_file must be a contained project-relative path");
+    }
+    if !runtime_path.starts_with('/')
+        || runtime_path.contains(':')
+        || Path::new(&runtime_path)
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("the declared XLSX runtime path must be a contained absolute container path");
+    }
+    let project_file = project_dir.join(relative);
+    ensure_no_symlink_components(project_dir, &project_file)?;
+    let metadata = fs::symlink_metadata(&project_file)
+        .map_err(|_| anyhow!("the declared XLSX project workbook is missing"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("the declared XLSX project workbook must be a regular non-symlink file");
+    }
+    Ok(CanonicalSpreadsheetBinding {
+        project_file_text,
+        runtime_path,
+        match_principal,
+    })
+}
+
+fn canonical_compose_document(
+    image: &str,
+    binding: &CanonicalSpreadsheetBinding,
+) -> serde_json::Value {
+    serde_json::json!({
+        "services": {
+            "registry-relay": {
+                "image": image,
+                "command": [
+                    "serve",
+                    "--config",
+                    CANONICAL_RELAY_CONFIG_MOUNT,
+                    "--bind",
+                    CANONICAL_RELAY_CONTAINER_PORT,
+                ],
+                "env_file": ["secrets/relay.env"],
+                "ports": [CANONICAL_RELAY_HOST_PORT],
+                "volumes": [
+                    format!("../../build/local/private/relay/config/relay.yaml:{CANONICAL_RELAY_CONFIG_MOUNT}:ro"),
+                    format!("../../../{}:{}:ro", binding.project_file_text, binding.runtime_path),
+                ],
+                "read_only": true,
+                "init": true,
+                "cap_drop": ["ALL"],
+                "security_opt": ["no-new-privileges:true"],
+                "tmpfs": ["/tmp:rw,noexec,nosuid,size=64m"],
+            }
+        }
+    })
+}
+
+fn render_canonical_compose(image: &str, binding: &CanonicalSpreadsheetBinding) -> Result<String> {
+    let document = canonical_compose_document(image, binding);
+    let rendered =
+        serde_norway::to_string(&document).context("failed to render the local Compose file")?;
+    validate_canonical_compose(&rendered, image, binding)?;
+    Ok(rendered)
+}
+
+fn validate_canonical_compose(
+    contents: &str,
+    image: &str,
+    binding: &CanonicalSpreadsheetBinding,
+) -> Result<()> {
+    let actual: serde_json::Value =
+        serde_norway::from_str(contents).context("generated local Compose did not parse")?;
+    if actual != canonical_compose_document(image, binding) {
+        bail!("generated local Compose does not match the closed runtime contract");
+    }
+    Ok(())
+}
+
+fn digest_path(path: &Path, label: &'static str) -> Result<String> {
+    let bytes = fs::read(path).with_context(|| format!("failed to read {label}"))?;
+    Ok(sha256_uri(&bytes))
+}
+
+fn validate_private_file_mode(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("private runtime input must be a regular non-symlink file");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o777 != 0o600 {
+            bail!("private runtime input must use Unix mode 0600");
+        }
+    }
+    Ok(())
+}
+
+fn validate_private_dir_mode(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("private runtime directory must be a real directory");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o777 != 0o700 {
+            bail!("private runtime directory must use Unix mode 0700");
+        }
+    }
+    Ok(())
+}
+
+fn validate_compiled_artifact_manifest(project_dir: &Path, check_inputs: bool) -> Result<()> {
+    let manifest_path = project_dir.join(CANONICAL_ARTIFACT_MANIFEST);
+    ensure_no_symlink_components(project_dir, &manifest_path)?;
+    let bytes = fs::read(&manifest_path)
+        .context("failed to read the generated project artifact manifest")?;
+    let manifest: ProjectArtifactManifestV1 = serde_json::from_slice(&bytes)
+        .context("failed to parse the generated project artifact manifest")?;
+    if manifest.environment != CANONICAL_LOCAL_ENVIRONMENT {
+        bail!("generated project artifact manifest has the wrong environment");
+    }
+    for artifact in &manifest.artifacts {
+        let path = project_dir.join(artifact.path.as_str());
+        ensure_no_symlink_components(project_dir, &path)?;
+        if digest_path(&path, "generated project artifact")? != artifact.digest.as_str() {
+            bail!("generated project artifact integrity check failed");
+        }
+    }
+    if check_inputs {
+        for input in &manifest.inputs {
+            let path = project_dir.join(input.path.as_str());
+            ensure_no_symlink_components(project_dir, &path)
+                .map_err(|_| anyhow!("generated project input containment check failed"))?;
+            let label = match input.classification {
+                ArtifactInputClassification::AuthoredProjectInput => "authored project input",
+                ArtifactInputClassification::OperatorOwnedSourceData => {
+                    "operator-owned source data"
+                }
+            };
+            if digest_path(&path, label)? != input.digest.as_str() {
+                match input.classification {
+                    ArtifactInputClassification::AuthoredProjectInput => {
+                        bail!("the authored project changed after the local runtime was compiled")
+                    }
+                    ArtifactInputClassification::OperatorOwnedSourceData => {
+                        bail!(
+                            "operator-owned source data changed after the local runtime was compiled"
+                        )
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn compiled_workbook_input(
+    project_dir: &Path,
+    binding: &CanonicalSpreadsheetBinding,
+) -> Result<ArtifactInputDigest> {
+    let manifest_path = project_dir.join(CANONICAL_ARTIFACT_MANIFEST);
+    ensure_no_symlink_components(project_dir, &manifest_path)
+        .map_err(|_| anyhow!("generated project artifact manifest containment check failed"))?;
+    let manifest: ProjectArtifactManifestV1 = serde_json::from_slice(
+        &fs::read(&manifest_path)
+            .context("failed to read the generated project artifact manifest")?,
+    )
+    .context("failed to parse the generated project artifact manifest")?;
+    let matches = manifest
+        .inputs
+        .into_iter()
+        .filter(|input| input.path.as_str() == binding.project_file_text)
+        .collect::<Vec<_>>();
+    if matches.len() != 1
+        || matches[0].classification != ArtifactInputClassification::OperatorOwnedSourceData
+    {
+        bail!(
+            "generated project artifact manifest must contain the exact classified workbook input"
+        );
+    }
+    Ok(matches.into_iter().next().expect("one workbook input"))
+}
+
+fn validate_compiled_local_relay_auth(
+    relay_config: &Path,
+    binding: &CanonicalSpreadsheetBinding,
+) -> Result<()> {
+    let contents =
+        fs::read_to_string(relay_config).context("failed to read the compiled Relay config")?;
+    let config: serde_norway::Value =
+        serde_norway::from_str(&contents).context("failed to parse the compiled Relay config")?;
+    if config["auth"]["mode"].as_str() != Some("api_key") {
+        bail!("the compiled local spreadsheet Relay must use API-key authentication");
+    }
+    let keys = config["auth"]["api_keys"]
+        .as_sequence()
+        .ok_or_else(|| anyhow!("compiled local Relay API keys are absent"))?;
+    if keys.len() != 2 {
+        bail!("compiled local Relay must contain exactly two synthetic principals");
+    }
+    let expected = [
+        (
+            binding.match_principal.as_str(),
+            CANONICAL_RUNTIME_MATCH_HASH_ENV,
+        ),
+        (
+            CANONICAL_RUNTIME_NO_MATCH_PRINCIPAL,
+            CANONICAL_RUNTIME_NO_MATCH_HASH_ENV,
+        ),
+    ];
+    let mut expected_scopes: Option<Vec<&str>> = None;
+    for (principal, fingerprint_env) in expected {
+        let key = keys
+            .iter()
+            .find(|key| key["id"].as_str() == Some(principal))
+            .ok_or_else(|| anyhow!("compiled local Relay principal binding is absent"))?;
+        if key["fingerprint"]["provider"].as_str() != Some("env")
+            || key["fingerprint"]["name"].as_str() != Some(fingerprint_env)
+        {
+            bail!("compiled local Relay fingerprint binding is not closed");
+        }
+        let scopes = key["scopes"]
+            .as_sequence()
+            .ok_or_else(|| anyhow!("compiled local Relay scopes are absent"))?
+            .iter()
+            .map(|scope| {
+                scope
+                    .as_str()
+                    .ok_or_else(|| anyhow!("compiled local Relay scope is invalid"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if scopes.is_empty()
+            || expected_scopes
+                .as_ref()
+                .is_some_and(|expected| expected != &scopes)
+        {
+            bail!("compiled local Relay principals must share non-empty reviewed scopes");
+        }
+        expected_scopes = Some(scopes);
+    }
+    if contents.contains(CANONICAL_RUNTIME_MATCH_RAW_ENV)
+        || contents.contains(CANONICAL_RUNTIME_NO_MATCH_RAW_ENV)
+    {
+        bail!("compiled local Relay config must not reference raw API keys");
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct CanonicalRuntimeCredentials {
+    audit_secret: String,
+    match_raw: String,
+    match_hash: String,
+    no_match_raw: String,
+    no_match_hash: String,
+}
+
+impl CanonicalRuntimeCredentials {
+    fn generate() -> Result<Self> {
+        let match_raw = random_token(32)?;
+        let no_match_raw = random_token(32)?;
+        validate_api_key_entropy(&match_raw)?;
+        validate_api_key_entropy(&no_match_raw)?;
+        Ok(Self {
+            audit_secret: random_token(48)?,
+            match_hash: fingerprint_api_key(&match_raw),
+            match_raw,
+            no_match_hash: fingerprint_api_key(&no_match_raw),
+            no_match_raw,
+        })
+    }
+
+    fn relay_env_file(&self) -> String {
+        format!(
+            "{CANONICAL_RUNTIME_AUDIT_SECRET_ENV}={}\n\
+             {}={}\n\
+             {}={}\n",
+            self.audit_secret,
+            CANONICAL_RUNTIME_MATCH_HASH_ENV,
+            self.match_hash,
+            CANONICAL_RUNTIME_NO_MATCH_HASH_ENV,
+            self.no_match_hash,
+        )
+    }
+
+    fn client_env_file(&self) -> String {
+        format!(
+            "{CANONICAL_RUNTIME_MATCH_RAW_ENV}={}\n\
+             {CANONICAL_RUNTIME_NO_MATCH_RAW_ENV}={}\n",
+            self.match_raw, self.no_match_raw,
+        )
+    }
+}
+
+fn strict_runtime_credentials(
+    relay_path: &Path,
+    client_path: &Path,
+) -> Result<CanonicalRuntimeCredentials> {
+    validate_private_file_mode(relay_path)?;
+    validate_private_file_mode(client_path)?;
+    let relay_contents =
+        fs::read_to_string(relay_path).context("failed to read Relay runtime credentials")?;
+    let client_contents =
+        fs::read_to_string(client_path).context("failed to read local client credentials")?;
+    let relay_values = parse_local_env(&relay_contents);
+    let client_values = parse_local_env(&client_contents);
+    let relay_expected = [
+        CANONICAL_RUNTIME_AUDIT_SECRET_ENV,
+        CANONICAL_RUNTIME_MATCH_HASH_ENV,
+        CANONICAL_RUNTIME_NO_MATCH_HASH_ENV,
+    ];
+    let client_expected = [
+        CANONICAL_RUNTIME_MATCH_RAW_ENV,
+        CANONICAL_RUNTIME_NO_MATCH_RAW_ENV,
+    ];
+    if relay_values.len() != relay_expected.len()
+        || relay_expected
+            .iter()
+            .any(|name| !relay_values.contains_key(*name))
+        || client_values.len() != client_expected.len()
+        || client_expected
+            .iter()
+            .any(|name| !client_values.contains_key(*name))
+    {
+        bail!("local runtime credentials contain unexpected entries");
+    }
+    let relay_required = |name: &str| {
+        relay_values
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow!("local runtime credentials have an unexpected shape"))
+    };
+    let client_required = |name: &str| {
+        client_values
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow!("local runtime credentials have an unexpected shape"))
+    };
+    let credentials = CanonicalRuntimeCredentials {
+        audit_secret: relay_required(CANONICAL_RUNTIME_AUDIT_SECRET_ENV)?,
+        match_raw: client_required(CANONICAL_RUNTIME_MATCH_RAW_ENV)?,
+        match_hash: relay_required(CANONICAL_RUNTIME_MATCH_HASH_ENV)?,
+        no_match_raw: client_required(CANONICAL_RUNTIME_NO_MATCH_RAW_ENV)?,
+        no_match_hash: relay_required(CANONICAL_RUNTIME_NO_MATCH_HASH_ENV)?,
+    };
+    if credentials.audit_secret.len() < 32 {
+        bail!("local runtime credentials do not meet the minimum entropy shape");
+    }
+    validate_api_key_entropy(&credentials.match_raw)
+        .map_err(|_| anyhow!("local runtime credentials do not meet the minimum entropy shape"))?;
+    validate_api_key_entropy(&credentials.no_match_raw)
+        .map_err(|_| anyhow!("local runtime credentials do not meet the minimum entropy shape"))?;
+    if fingerprint_api_key(&credentials.match_raw) != credentials.match_hash
+        || fingerprint_api_key(&credentials.no_match_raw) != credentials.no_match_hash
+    {
+        bail!("local runtime raw keys and fingerprints do not match");
+    }
+    Ok(credentials)
+}
+
+fn prepare_canonical_runtime(
+    project_dir: &Path,
+    image_lock: &RegistryctlImageLock,
+) -> Result<CanonicalRuntime> {
+    require_canonical_project(project_dir)?;
+    let relay_image = selected_canonical_relay_image(image_lock)?;
+    prepare_canonical_runtime_with_image(project_dir, &relay_image)
+}
+
+fn prepare_canonical_runtime_with_image(
+    project_dir: &Path,
+    relay_image: &str,
+) -> Result<CanonicalRuntime> {
+    require_canonical_project(project_dir)?;
+    validate_canonical_runtime_image_ref(relay_image)?;
+    if project_dir.join(CANONICAL_RUNTIME_ROOT).exists() {
+        let _ = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::GeneratedClosure)?;
+    }
+    if project_dir.join(CANONICAL_ARTIFACT_MANIFEST).exists() {
+        validate_compiled_artifact_manifest(project_dir, false)?;
+    }
+    let binding = canonical_spreadsheet_binding(project_dir)?;
+    let report = build_registry_project(&ProjectBuildOptions {
+        project_directory: project_dir.to_path_buf(),
+        environment: CANONICAL_LOCAL_ENVIRONMENT.to_string(),
+        against: None,
+        anchor: None,
+    })?;
+    if report.status != "built"
+        || report.output.as_deref() != Some(CANONICAL_BUILD_ROOT)
+        || report.artifact_manifest.is_none()
+    {
+        bail!("the canonical local project build did not produce its closed artifact manifest");
+    }
+    validate_compiled_artifact_manifest(project_dir, true)?;
+    validate_compiled_local_relay_auth(&project_dir.join(CANONICAL_RELAY_CONFIG), &binding)?;
+    publish_canonical_runtime(project_dir, relay_image, &binding)?;
+    load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Full)
+}
+
+fn publish_canonical_runtime(
+    project_dir: &Path,
+    image: &str,
+    binding: &CanonicalSpreadsheetBinding,
+) -> Result<()> {
+    validate_canonical_runtime_image_ref(image)?;
+    let runtime_parent = project_dir.join(".registry-stack/runtime");
+    ensure_no_symlink_components(project_dir, &runtime_parent)?;
+    create_private_dir_all(&runtime_parent)?;
+    let runtime_dir = project_dir.join(CANONICAL_RUNTIME_ROOT);
+    let prior_credentials = if runtime_dir.exists() {
+        Some(strict_runtime_credentials(
+            &project_dir.join(CANONICAL_RUNTIME_RELAY_ENV),
+            &project_dir.join(CANONICAL_RUNTIME_ENV),
+        )?)
+    } else {
+        None
+    };
+    let credentials = prior_credentials
+        .map(Ok)
+        .unwrap_or_else(CanonicalRuntimeCredentials::generate)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".local.runtime-")
+        .tempdir_in(&runtime_parent)
+        .context("failed to stage the local runtime")?;
+    create_private_dir_all(staging.path())?;
+    create_private_dir_all(&staging.path().join("secrets"))?;
+    let compose = render_canonical_compose(image, binding)?;
+    let workbook_input = compiled_workbook_input(project_dir, binding)?;
+    write_private_text(&staging.path().join("compose.yaml"), &compose)?;
+    write_private_text(
+        &staging.path().join("secrets/relay.env"),
+        &credentials.relay_env_file(),
+    )?;
+    write_private_text(
+        &staging.path().join("secrets/local.env"),
+        &credentials.client_env_file(),
+    )?;
+    let manifest = CanonicalRuntimeManifest {
+        schema_version: CANONICAL_RUNTIME_MANIFEST_SCHEMA.to_string(),
+        environment: CANONICAL_LOCAL_ENVIRONMENT.to_string(),
+        relay_image: image.to_string(),
+        compose_digest: sha256_uri(compose.as_bytes()),
+        artifact_manifest_digest: digest_path(
+            &project_dir.join(CANONICAL_ARTIFACT_MANIFEST),
+            "generated project artifact manifest",
+        )?,
+        relay_config_digest: digest_path(
+            &project_dir.join(CANONICAL_RELAY_CONFIG),
+            "compiled Relay config",
+        )?,
+        workbook_digest: workbook_input.digest.as_str().to_string(),
+        workbook_classification: workbook_input.classification,
+        workbook_project_file: binding.project_file_text.clone(),
+        workbook_runtime_path: binding.runtime_path.clone(),
+    };
+    write_private_text(
+        &staging.path().join("manifest.json"),
+        &serde_json::to_string_pretty(&manifest)
+            .context("failed to render the local runtime manifest")?,
+    )?;
+    let staged = staging.keep();
+    let backup = runtime_parent.join(format!(".local.previous-{}", std::process::id()));
+    if backup.exists() {
+        fs::remove_dir_all(&backup).context("failed to discard stale local runtime backup")?;
+    }
+    if runtime_dir.exists() {
+        fs::rename(&runtime_dir, &backup).context("failed to stage the prior local runtime")?;
+    }
+    if let Err(error) = fs::rename(&staged, &runtime_dir) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, &runtime_dir);
+        }
+        return Err(error).context("failed to publish the local runtime");
+    }
+    if backup.exists() {
+        fs::remove_dir_all(&backup).context("failed to discard the prior local runtime")?;
+    }
+    Ok(())
+}
+
+fn load_canonical_runtime(
+    project_dir: &Path,
+    validation: CanonicalRuntimeValidation,
+) -> Result<CanonicalRuntime> {
+    require_canonical_project(project_dir)?;
+    let runtime_dir = project_dir.join(CANONICAL_RUNTIME_ROOT);
+    let secrets_dir = project_dir.join(CANONICAL_RUNTIME_SECRETS);
+    let compose_file = project_dir.join(CANONICAL_RUNTIME_COMPOSE);
+    let manifest_file = project_dir.join(CANONICAL_RUNTIME_MANIFEST);
+    let secrets_env = project_dir.join(CANONICAL_RUNTIME_ENV);
+    let relay_env = project_dir.join(CANONICAL_RUNTIME_RELAY_ENV);
+    for path in [
+        &runtime_dir,
+        &secrets_dir,
+        &compose_file,
+        &manifest_file,
+        &secrets_env,
+        &relay_env,
+    ] {
+        ensure_no_symlink_components(project_dir, path)?;
+    }
+    validate_private_dir_mode(&runtime_dir)
+        .map_err(|_| anyhow!("local runtime is absent or unsafe; rerun `registryctl start`"))?;
+    validate_private_dir_mode(&secrets_dir)?;
+    validate_private_file_mode(&compose_file)?;
+    validate_private_file_mode(&manifest_file)?;
+    let _ = strict_runtime_credentials(&relay_env, &secrets_env)?;
+    let manifest: CanonicalRuntimeManifest = serde_json::from_slice(
+        &fs::read(&manifest_file).context("failed to read the local runtime manifest")?,
+    )
+    .context("failed to parse the local runtime manifest")?;
+    if manifest.schema_version != CANONICAL_RUNTIME_MANIFEST_SCHEMA
+        || manifest.environment != CANONICAL_LOCAL_ENVIRONMENT
+    {
+        bail!("local runtime manifest has an unsupported contract");
+    }
+    validate_canonical_runtime_image_ref(&manifest.relay_image)?;
+    let binding = canonical_spreadsheet_binding(project_dir)?;
+    let workbook_input = compiled_workbook_input(project_dir, &binding)?;
+    if binding.project_file_text != manifest.workbook_project_file
+        || binding.runtime_path != manifest.workbook_runtime_path
+    {
+        bail!("the authored project changed after the local runtime was compiled");
+    }
+    if workbook_input.digest.as_str() != manifest.workbook_digest
+        || workbook_input.classification != manifest.workbook_classification
+        || manifest.workbook_classification != ArtifactInputClassification::OperatorOwnedSourceData
+    {
+        bail!("local runtime workbook provenance does not match the artifact manifest");
+    }
+    let compose = fs::read_to_string(&compose_file).context("failed to read local Compose")?;
+    if sha256_uri(compose.as_bytes()) != manifest.compose_digest {
+        bail!("generated local Compose integrity check failed");
+    }
+    validate_canonical_compose(&compose, &manifest.relay_image, &binding)?;
+    let relay_config = project_dir.join(CANONICAL_RELAY_CONFIG);
+    ensure_no_symlink_components(project_dir, &relay_config)?;
+    if digest_path(&relay_config, "compiled Relay config")? != manifest.relay_config_digest {
+        bail!("compiled Relay config integrity check failed");
+    }
+    validate_compiled_local_relay_auth(&relay_config, &binding)?;
+    if digest_path(
+        &project_dir.join(CANONICAL_ARTIFACT_MANIFEST),
+        "generated project artifact manifest",
+    )? != manifest.artifact_manifest_digest
+    {
+        bail!("generated project artifact manifest integrity check failed");
+    }
+    validate_compiled_artifact_manifest(
+        project_dir,
+        validation == CanonicalRuntimeValidation::Full,
+    )?;
+    Ok(CanonicalRuntime {
+        compose_file,
+        relay_config,
+        secrets_env,
+        image: manifest.relay_image,
+    })
+}
+
 pub fn start_project(project_dir: &Path) -> Result<()> {
     start_project_with_timeout(project_dir, Duration::from_secs(60))
 }
 
 fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<()> {
-    let mut project = Project::load(project_dir)?;
-    if project.notary.is_some() {
-        prepare_notary_runtime(project_dir)?;
-        project = Project::load(project_dir)?;
-    }
-    validate_project_fingerprints(project_dir, &project)?;
-    if project.notary.is_some() {
-        wait_for_notary_runtime_visibility(project_dir, &project)?;
-    }
-    run_compose_for_project(project_dir, &project, &["up", "-d"])?;
-    if project.relay.is_some() {
-        let relay_base_url = project.relay_base_url()?;
-        wait_for_ready("Relay", relay_base_url, timeout)?;
-        println!("Relay API:  {relay_base_url}");
-        println!("API docs:   {relay_base_url}{RELAY_DOCS_PATH}");
-    }
-    if project.notary.is_some() {
-        let notary_base_url = project.notary_base_url()?;
-        wait_for_ready("Notary", notary_base_url, timeout)?;
-        println!("Notary API: {notary_base_url}");
-        println!("Notary docs: {notary_base_url}{RELAY_DOCS_PATH}");
-    }
+    let image_lock = load_registryctl_image_lock()?;
+    let runtime = prepare_canonical_runtime(project_dir, &image_lock)?;
+    run_compose_for_canonical_runtime(project_dir, &runtime, &["up", "-d"])?;
+    wait_for_ready("Relay", RELAY_BASE_URL, timeout).map_err(|_| {
+        anyhow!(
+            "local Relay did not become ready; the compiled configuration or declared workbook \
+             was rejected. Inspect `registryctl logs`; no workbook values were included in this \
+             diagnostic."
+        )
+    })?;
+    println!("PASS readiness: compiled workbook source is ready");
+    println!("Relay API:  {RELAY_BASE_URL}");
+    println!("API docs:   {RELAY_BASE_URL}{RELAY_DOCS_PATH}");
     Ok(())
 }
 
 pub fn stop_project(project_dir: &Path) -> Result<()> {
-    let project = Project::load(project_dir)?;
-    run_compose_for_project(project_dir, &project, &["down"])?;
+    let runtime =
+        load_canonical_runtime(project_dir, CanonicalRuntimeValidation::GeneratedClosure)?;
+    run_compose_for_canonical_runtime(project_dir, &runtime, &["down"])?;
     Ok(())
 }
 
@@ -1398,28 +2119,18 @@ pub fn restart_project(project_dir: &Path) -> Result<()> {
 }
 
 pub fn status_project(project_dir: &Path) -> Result<()> {
-    let project = Project::load(project_dir)?;
-    run_compose_for_project(project_dir, &project, &["ps"])?;
-    if project.relay.is_some() {
-        let relay_base_url = project.relay_base_url()?;
-        print_probe_status("healthz", &format!("{relay_base_url}/healthz"));
-        print_probe_status("ready", &format!("{relay_base_url}/ready"));
-        println!("Relay API:  {relay_base_url}");
-        println!("API docs:   {relay_base_url}{RELAY_DOCS_PATH}");
-    }
-    if project.notary.is_some() {
-        let notary_base_url = project.notary_base_url()?;
-        print_probe_status("notary healthz", &format!("{notary_base_url}/healthz"));
-        print_probe_status("notary ready", &format!("{notary_base_url}/ready"));
-        println!("Notary API: {notary_base_url}");
-        println!("Notary docs: {notary_base_url}{RELAY_DOCS_PATH}");
-    }
+    let runtime = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Full)?;
+    run_compose_for_canonical_runtime(project_dir, &runtime, &["ps"])?;
+    print_probe_status("healthz", &format!("{RELAY_BASE_URL}/healthz"));
+    print_probe_status("ready", &format!("{RELAY_BASE_URL}/ready"));
+    println!("Relay API:  {RELAY_BASE_URL}");
+    println!("API docs:   {RELAY_BASE_URL}{RELAY_DOCS_PATH}");
     Ok(())
 }
 
 pub fn open_project(project_dir: &Path) -> Result<()> {
-    let project = Project::load(project_dir)?;
-    let docs_url = format!("{}{}", project.relay_base_url()?, RELAY_DOCS_PATH);
+    let _ = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Full)?;
+    let docs_url = format!("{RELAY_BASE_URL}{RELAY_DOCS_PATH}");
     // Always surface the URL: `open` reports success even in headless macOS
     // sessions where nothing actually launches, so a conditional fallback would
     // silently print nothing. Then best-effort open a browser for desktops.
@@ -1435,25 +2146,25 @@ fn relay_open_lines(docs_url: &str) -> Vec<String> {
 }
 
 pub fn logs_project(project_dir: &Path) -> Result<()> {
-    let project = Project::load(project_dir)?;
-    run_compose_for_project(project_dir, &project, &["logs"])?;
+    let runtime = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Full)?;
+    run_compose_for_canonical_runtime(project_dir, &runtime, &["logs"])?;
     Ok(())
 }
 
 pub fn smoke_project(project_dir: &Path) -> Result<()> {
-    let project = Project::load(project_dir)?;
-    let relay_base_url = project.relay_base_url()?;
-    validate_project_fingerprints(project_dir, &project)?;
-    let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
-    let report = run_smoke_checks(relay_base_url, &secrets);
+    let runtime = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Full)?;
+    let credentials = strict_runtime_credentials(
+        &project_dir.join(CANONICAL_RUNTIME_RELAY_ENV),
+        &runtime.secrets_env,
+    )?;
+    let report = run_canonical_smoke_checks(RELAY_BASE_URL, &credentials);
     let output_path = project_dir
-        .join(project.local.output_dir)
+        .join(CANONICAL_RUNTIME_ROOT)
         .join("smoke-results.json");
-    fs::create_dir_all(output_path.parent().unwrap_or(project_dir))?;
     let json =
         serde_json::to_string_pretty(&report).context("failed to render smoke result JSON")?;
     parse_smoke_report(&json)?;
-    write_text(output_path, &json)?;
+    write_private_text(&output_path, &json)?;
 
     for check in &report.checks {
         let status = if check.passed { "PASS" } else { "FAIL" };
@@ -1537,6 +2248,8 @@ pub fn doctor_project(
     format: DoctorFormat,
     deployment_profile: Option<DeploymentProfile>,
 ) -> Result<()> {
+    let image_lock = load_registryctl_image_lock()?;
+    let _ = prepare_canonical_runtime(project_dir, &image_lock)?;
     let report = run_doctor_report_with_path(project_dir, deployment_profile, None)?;
     match format {
         DoctorFormat::Human => println!("{}", render_doctor_report(&report)),
@@ -1661,9 +2374,67 @@ struct ProductDoctorInvocation {
     cwd: PathBuf,
     config_path: PathBuf,
     args: Vec<String>,
+    platform_override: Option<&'static str>,
 }
 
 fn run_doctor_report_with_path(
+    project_dir: &Path,
+    deployment_profile: Option<DeploymentProfile>,
+    path: Option<&Path>,
+) -> Result<DoctorReport> {
+    #[cfg(test)]
+    if project_dir.join("registryctl.yaml").is_file() {
+        return run_legacy_doctor_report_with_path(project_dir, deployment_profile, path);
+    }
+    let runtime = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Full)?;
+    let _ = strict_runtime_credentials(
+        &project_dir.join(CANONICAL_RUNTIME_RELAY_ENV),
+        &runtime.secrets_env,
+    )?;
+    let mut values = parse_local_env(
+        &fs::read_to_string(project_dir.join(CANONICAL_RUNTIME_RELAY_ENV))
+            .context("failed to read Relay runtime credentials")?,
+    );
+    values.extend(parse_local_env(
+        &fs::read_to_string(&runtime.secrets_env)
+            .context("failed to read local client credentials")?,
+    ));
+    let secrets = LocalEnv { values };
+    let redactor = SecretRedactor::new(&secrets);
+    let generated_at = rfc3339_now();
+    let products = product_doctor_invocations(
+        project_dir,
+        &runtime,
+        deployment_profile,
+        path.map(Path::as_os_str),
+    )?
+    .into_iter()
+    .map(|invocation| {
+        run_product_doctor(
+            invocation,
+            path.map(Path::as_os_str),
+            &redactor,
+            &generated_at,
+        )
+    })
+    .collect::<Vec<_>>();
+    Ok(RegistryctlValidationReport {
+        schema_version: REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1.to_string(),
+        project: RegistryctlProjectRef {
+            path: ".".to_string(),
+            profile: deployment_profile
+                .map_or("project", DeploymentProfile::as_str)
+                .to_string(),
+        },
+        status: registryctl_report_status(&products),
+        products,
+        cross_product_diagnostics: Vec::new(),
+        generated_at,
+    })
+}
+
+#[cfg(test)]
+fn run_legacy_doctor_report_with_path(
     project_dir: &Path,
     deployment_profile: Option<DeploymentProfile>,
     path: Option<&Path>,
@@ -1673,17 +2444,22 @@ fn run_doctor_report_with_path(
     let secrets = LocalEnv::load(&secrets_path)?;
     let redactor = SecretRedactor::new(&secrets);
     let generated_at = rfc3339_now();
-    let products = product_doctor_invocations(project_dir, &project, deployment_profile)?
-        .into_iter()
-        .map(|invocation| {
-            run_product_doctor(
-                invocation,
-                path.map(Path::as_os_str),
-                &redactor,
-                &generated_at,
-            )
-        })
-        .collect::<Vec<_>>();
+    let products = legacy_product_doctor_invocations(
+        project_dir,
+        &project,
+        deployment_profile,
+        path.map(Path::as_os_str),
+    )?
+    .into_iter()
+    .map(|invocation| {
+        run_product_doctor(
+            invocation,
+            path.map(Path::as_os_str),
+            &redactor,
+            &generated_at,
+        )
+    })
+    .collect::<Vec<_>>();
     Ok(RegistryctlValidationReport {
         schema_version: REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1.to_string(),
         project: RegistryctlProjectRef {
@@ -1697,6 +2473,48 @@ fn run_doctor_report_with_path(
         cross_product_diagnostics: Vec::new(),
         generated_at,
     })
+}
+
+#[cfg(test)]
+fn legacy_product_doctor_invocations(
+    project_dir: &Path,
+    project: &Project,
+    deployment_profile: Option<DeploymentProfile>,
+    path: Option<&OsStr>,
+) -> Result<Vec<ProductDoctorInvocation>> {
+    let mut invocations = Vec::new();
+    if let Some(relay) = &project.relay {
+        let mut doctor_args = vec![
+            "run",
+            "--rm",
+            "--no-deps",
+            "-T",
+            "registry-relay",
+            "doctor",
+            "--config",
+            CANONICAL_RELAY_CONFIG_MOUNT,
+            "--format",
+            "json",
+        ];
+        if let Some(profile) = deployment_profile {
+            doctor_args.push("--profile");
+            doctor_args.push(profile.as_str());
+        }
+        invocations.push(ProductDoctorInvocation {
+            product: "registry-relay",
+            binary: project.runtime.engine.binary(),
+            cwd: project_dir.to_path_buf(),
+            config_path: project_dir.join(&relay.config),
+            args: compose_command_args(&project.runtime.compose_file, &doctor_args),
+            platform_override: compose_platform_for_project_with_path(
+                project,
+                project.runtime.engine.binary(),
+                true,
+                path,
+            ),
+        });
+    }
+    Ok(invocations)
 }
 
 type DoctorReport = RegistryctlValidationReport;
@@ -1737,132 +2555,38 @@ fn rfc3339_now() -> String {
 
 fn product_doctor_invocations(
     project_dir: &Path,
-    project: &Project,
+    runtime: &CanonicalRuntime,
     deployment_profile: Option<DeploymentProfile>,
+    path: Option<&OsStr>,
 ) -> Result<Vec<ProductDoctorInvocation>> {
-    let env_file = project_dir.join(&project.local.secrets_env);
-    let mut invocations = Vec::new();
-    if let Some(relay) = &project.relay {
-        let config = relay_doctor_config_path(project_dir, project, relay)?;
-        invocations.push(ProductDoctorInvocation {
-            product: "registry-relay",
-            binary: "registry-relay",
-            cwd: project_dir.to_path_buf(),
-            config_path: config.clone(),
-            args: product_doctor_args(config, &env_file, deployment_profile),
-        });
-    }
-    Ok(invocations)
-}
-
-fn relay_doctor_config_path(
-    project_dir: &Path,
-    project: &Project,
-    relay: &ProjectRelay,
-) -> Result<PathBuf> {
-    let config_path = project_dir.join(&relay.config);
-    if relay.metadata.is_none() && relay.data.is_empty() {
-        return Ok(config_path);
-    }
-
-    let raw = fs::read_to_string(&config_path)
-        .with_context(|| format!("failed to read {}", config_path.display()))?;
-    let mut value: serde_norway::Value = serde_norway::from_str(&raw)
-        .with_context(|| format!("failed to parse {}", config_path.display()))?;
-
-    if let Some(metadata) = &relay.metadata {
-        set_yaml_path_string(
-            &mut value,
-            &["metadata", "source", "path"],
-            project_dir.join(metadata).display().to_string(),
-        );
-    }
-    rewrite_relay_container_data_paths(&mut value, project_dir, relay);
-
-    let output_dir = project_dir.join(&project.local.output_dir).join("doctor");
-    fs::create_dir_all(&output_dir)
-        .with_context(|| format!("failed to create {}", output_dir.display()))?;
-    let doctor_config = output_dir.join("relay.config.yaml");
-    let rendered =
-        serde_norway::to_string(&value).context("failed to render Relay doctor config")?;
-    write_text(doctor_config.clone(), &rendered)?;
-    Ok(doctor_config)
-}
-
-fn set_yaml_path_string(value: &mut serde_norway::Value, path: &[&str], replacement: String) {
-    let mut current = value;
-    for segment in &path[..path.len().saturating_sub(1)] {
-        let serde_norway::Value::Mapping(map) = current else {
-            return;
-        };
-        let key = serde_norway::Value::String((*segment).to_string());
-        let Some(next) = map.get_mut(&key) else {
-            return;
-        };
-        current = next;
-    }
-    let Some(last) = path.last() else {
-        return;
-    };
-    if let serde_norway::Value::Mapping(map) = current {
-        map.insert(
-            serde_norway::Value::String((*last).to_string()),
-            serde_norway::Value::String(replacement),
-        );
-    }
-}
-
-fn rewrite_relay_container_data_paths(
-    value: &mut serde_norway::Value,
-    project_dir: &Path,
-    relay: &ProjectRelay,
-) {
-    match value {
-        serde_norway::Value::String(text) => {
-            const PREFIX: &str = "/var/lib/registry-relay/data/";
-            if let Some(relative) = text.strip_prefix(PREFIX) {
-                let host_path = relay
-                    .data
-                    .iter()
-                    .find(|path| path.ends_with(relative))
-                    .cloned()
-                    .unwrap_or_else(|| PathBuf::from("data").join(relative));
-                *text = project_dir.join(host_path).display().to_string();
-            }
-        }
-        serde_norway::Value::Sequence(items) => {
-            for item in items {
-                rewrite_relay_container_data_paths(item, project_dir, relay);
-            }
-        }
-        serde_norway::Value::Mapping(map) => {
-            for value in map.values_mut() {
-                rewrite_relay_container_data_paths(value, project_dir, relay);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn product_doctor_args(
-    config: PathBuf,
-    env_file: &Path,
-    deployment_profile: Option<DeploymentProfile>,
-) -> Vec<String> {
-    let mut args = vec![
-        "doctor".to_string(),
-        "--config".to_string(),
-        config.display().to_string(),
-        "--env-file".to_string(),
-        env_file.display().to_string(),
-        "--format".to_string(),
-        "json".to_string(),
+    let mut doctor_args = vec![
+        "run",
+        "--rm",
+        "--no-deps",
+        "-T",
+        "registry-relay",
+        "doctor",
+        "--config",
+        CANONICAL_RELAY_CONFIG_MOUNT,
+        "--format",
+        "json",
     ];
     if let Some(profile) = deployment_profile {
-        args.push("--profile".to_string());
-        args.push(profile.as_str().to_string());
+        doctor_args.push("--profile");
+        doctor_args.push(profile.as_str());
     }
-    args
+    let compose_file = runtime
+        .compose_file
+        .strip_prefix(project_dir)
+        .map_err(|_| anyhow!("local Compose path escaped the canonical project"))?;
+    Ok(vec![ProductDoctorInvocation {
+        product: "registry-relay",
+        binary: "docker",
+        cwd: project_dir.to_path_buf(),
+        config_path: runtime.relay_config.clone(),
+        args: compose_command_args(compose_file, &doctor_args),
+        platform_override: canonical_compose_platform_override(&runtime.image, true, path),
+    }])
 }
 
 fn run_product_doctor(
@@ -1877,6 +2601,9 @@ fn run_product_doctor(
     if let Some(path) = path {
         command.env("PATH", path);
     }
+    if let Some(platform) = invocation.platform_override {
+        command.env("DOCKER_DEFAULT_PLATFORM", platform);
+    }
     match command.output() {
         Ok(output) => product_report_from_output(invocation, output, redactor, generated_at),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => RegistryctlProductReport {
@@ -1888,10 +2615,8 @@ fn run_product_doctor(
                 ReportStatus::NotRun,
                 "registryctl.product_doctor.binary_missing",
                 DiagnosticSeverity::Error,
-                format!(
-                    "Install {} and ensure it is on PATH, then rerun `registryctl doctor`.",
-                    invocation.binary
-                ),
+                "Install Docker Engine or Docker Desktop with Docker Compose v2, then rerun `registryctl doctor`."
+                    .to_string(),
                 generated_at,
             ),
         },
@@ -2057,470 +2782,17 @@ impl SecretRedactor {
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct AddNotaryReport {
-    pub schema_version: &'static str,
-    pub status: &'static str,
-    pub project: String,
-    pub notary_url: &'static str,
-    pub claim_file: &'static str,
-}
-
-/// Adds the local tutorial Notary journey to a generated spreadsheet project.
-///
-/// The authored files remain the source of truth. `registryctl start` rebuilds
-/// the reviewed Relay and Notary inputs so edits to the claim take effect after
-/// a restart.
-pub fn add_notary_to_project(
-    project_dir: &Path,
-    image_lock: &RegistryctlImageLock,
-) -> Result<AddNotaryReport> {
-    add_notary_to_project_with_runtime_preparer(project_dir, image_lock, prepare_notary_runtime)
-}
-
-fn add_notary_to_project_with_runtime_preparer(
-    project_dir: &Path,
-    image_lock: &RegistryctlImageLock,
-    prepare_runtime: fn(&Path) -> Result<()>,
-) -> Result<AddNotaryReport> {
-    let mut project = Project::load(project_dir)?;
-    if project.relay.is_none() {
-        bail!("add notary requires a generated Relay spreadsheet project");
-    }
-    if project.notary.is_some() {
-        bail!("this project already has a Notary add-on");
-    }
-    let workbook = project_dir.join("data/benefits_casework.xlsx");
-    if !workbook.is_file() {
-        bail!(
-            "add notary requires the benefits workbook at {}",
-            workbook.display()
-        );
-    }
-    let notary_dir = project_dir.join("notary");
-    for relative in [
-        "notary",
-        NOTARY_RELAY_TOKEN_PATH,
-        CONSULTATION_POSTGRES_CERT_PATH,
-        CONSULTATION_POSTGRES_KEY_PATH,
-        CONSULTATION_RELAY_STATE_DIR,
-    ] {
-        let path = project_dir.join(relative);
-        match fs::symlink_metadata(&path) {
-            Ok(_) => bail!(
-                "Notary destination already exists and was not modified: {}",
-                path.display()
-            ),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("failed to stat {}", path.display()));
-            }
-        }
-    }
-    let secrets_path = project_dir.join(&project.local.secrets_env);
-    let compose_path = project_dir.join("compose.yaml");
-    let manifest_path = project_dir.join("registryctl.yaml");
-    let original_secrets = fs::read_to_string(&secrets_path)
-        .with_context(|| format!("failed to read {}", secrets_path.display()))?;
-    let original_compose = fs::read_to_string(&compose_path)
-        .with_context(|| format!("failed to read {}", compose_path.display()))?;
-    let original_manifest = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("failed to read {}", manifest_path.display()))?;
-
-    let result = (|| {
-        write_notary_addon_files(project_dir)?;
-        write_local_postgres_tls(project_dir)?;
-        add_notary_local_secrets(project_dir)?;
-        create_notary_state_dirs(project_dir)?;
-        prepare_runtime(project_dir)?;
-        merge_notary_compose(project_dir, image_lock)?;
-
-        project.project.products.push("registry-notary".to_string());
-        project.runtime.notary_image = Some(image_lock.notary_image().to_string());
-        project.runtime.notary_base_url = Some(NOTARY_BASE_URL.to_string());
-        project.notary = Some(ProjectNotary {
-            project: PathBuf::from(NOTARY_PROJECT_DIR),
-            config: PathBuf::from(NOTARY_CONFIG_PATH),
-            consultation_relay_config: PathBuf::from(CONSULTATION_RELAY_CONFIG_PATH),
-            claim_file: PathBuf::from(NOTARY_CLAIM_FILE),
-            workload_token: PathBuf::from(NOTARY_RELAY_TOKEN_PATH),
-        });
-        let manifest = serde_norway::to_string(&project)
-            .context("failed to render registryctl manifest with Notary")?;
-        write_text(project_dir.join("registryctl.yaml"), &manifest)?;
-        Ok(())
-    })();
-
-    if let Err(error) = result {
-        let mut rollback_errors = Vec::new();
-        if let Err(rollback) = fs::remove_dir_all(&notary_dir) {
-            if rollback.kind() != std::io::ErrorKind::NotFound {
-                rollback_errors.push(format!("remove {}: {rollback}", notary_dir.display()));
-            }
-        }
-        let consultation_state_dir = project_dir.join(CONSULTATION_RELAY_STATE_DIR);
-        if let Err(rollback) = fs::remove_dir_all(&consultation_state_dir) {
-            if rollback.kind() != std::io::ErrorKind::NotFound {
-                rollback_errors.push(format!(
-                    "remove {}: {rollback}",
-                    consultation_state_dir.display()
-                ));
-            }
-        }
-        if let Err(rollback) = write_private_text(&secrets_path, &original_secrets) {
-            rollback_errors.push(format!("restore {}: {rollback:#}", secrets_path.display()));
-        }
-        for generated_sidecar_path in [
-            NOTARY_RELAY_TOKEN_PATH,
-            CONSULTATION_POSTGRES_CERT_PATH,
-            CONSULTATION_POSTGRES_KEY_PATH,
-        ] {
-            let path = project_dir.join(generated_sidecar_path);
-            if let Err(rollback) = fs::remove_file(&path) {
-                if rollback.kind() != std::io::ErrorKind::NotFound {
-                    rollback_errors.push(format!("remove {}: {rollback}", path.display()));
-                }
-            }
-        }
-        if let Err(rollback) = write_text(compose_path, &original_compose) {
-            rollback_errors.push(format!("restore Compose file: {rollback:#}"));
-        }
-        if let Err(rollback) = write_text(manifest_path, &original_manifest) {
-            rollback_errors.push(format!("restore project manifest: {rollback:#}"));
-        }
-        if !rollback_errors.is_empty() {
-            bail!(
-                "failed to add Notary: {error:#}; rollback also failed: {}",
-                rollback_errors.join("; ")
-            );
-        }
-        return Err(error);
-    }
-
-    Ok(AddNotaryReport {
-        schema_version: ADD_NOTARY_REPORT_SCHEMA_VERSION,
-        status: "added",
-        project: project.project.name,
-        notary_url: NOTARY_BASE_URL,
-        claim_file: NOTARY_CLAIM_FILE,
-    })
-}
-
-fn write_notary_addon_files(project_dir: &Path) -> Result<()> {
-    let files = [
-        (
-            "notary/project/registry-stack.yaml",
-            include_str!("templates/notary_addon/registry-stack.yaml"),
-        ),
-        (
-            "notary/project/entities/person.yaml",
-            include_str!("templates/notary_addon/entities/person.yaml"),
-        ),
-        (
-            "notary/project/integrations/person-demographics/integration.yaml",
-            include_str!(
-                "templates/notary_addon/integrations/person-demographics/integration.yaml"
-            ),
-        ),
-        (
-            "notary/project/integrations/person-demographics/fixtures/match.yaml",
-            include_str!(
-                "templates/notary_addon/integrations/person-demographics/fixtures/match.yaml"
-            ),
-        ),
-        (
-            "notary/project/integrations/person-demographics/fixtures/pending.yaml",
-            include_str!(
-                "templates/notary_addon/integrations/person-demographics/fixtures/pending.yaml"
-            ),
-        ),
-        (
-            "notary/project/integrations/person-demographics/fixtures/no-match.yaml",
-            include_str!(
-                "templates/notary_addon/integrations/person-demographics/fixtures/no-match.yaml"
-            ),
-        ),
-        (
-            "notary/project/integrations/person-demographics/fixtures/ambiguous.yaml",
-            include_str!(
-                "templates/notary_addon/integrations/person-demographics/fixtures/ambiguous.yaml"
-            ),
-        ),
-        (
-            "notary/project/environments/local.yaml",
-            include_str!("templates/notary_addon/environments/local.yaml"),
-        ),
-        (
-            "notary/postgres-init.sql",
-            include_str!("templates/notary_addon/postgres-init.sql"),
-        ),
-    ];
-    for (relative, contents) in files {
-        let path = project_dir.join(relative);
-        let parent = path
-            .parent()
-            .ok_or_else(|| anyhow!("generated Notary path has no parent"))?;
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-        write_text(path, contents)?;
-    }
-    write_text(
-        project_dir.join("notary/project/.gitignore"),
-        ".registry-stack/\n",
-    )?;
-    Ok(())
-}
-
-fn add_notary_local_secrets(project_dir: &Path) -> Result<()> {
-    let evaluator = Credential::generate("tutorial-evaluator")?;
-    let workload_jwk = generate_ed25519_jwk(NOTARY_RELAY_WORKLOAD_KID)?;
-    write_local_workload_jwks(project_dir, &workload_jwk)?;
-    let env_path = project_dir.join("secrets/local.env");
-    let current = fs::read_to_string(&env_path)
-        .with_context(|| format!("failed to read {}", env_path.display()))?;
-    let values = vec![
-        ("TUTORIAL_EVALUATOR_RAW".to_string(), evaluator.raw),
-        (
-            "TUTORIAL_EVALUATOR_HASH".to_string(),
-            evaluator.fingerprint,
-        ),
-        (
-            "REGISTRY_NOTARY_AUDIT_HASH_SECRET".to_string(),
-            random_token(48)?,
-        ),
-        (
-            "REGISTRY_RELAY_AUDIT_PSEUDONYM_EPOCH_1".to_string(),
-            random_token(48)?,
-        ),
-        (
-            NOTARY_RELAY_WORKLOAD_JWK_ENV.to_string(),
-            workload_jwk,
-        ),
-        (
-            "REGISTRY_RELAY_CONSULTATION_DATABASE_URL".to_string(),
-            "postgresql://relay_state_runtime@registry-consultation-db:5432/registry_relay?sslmode=require".to_string(),
-        ),
-        (
-            "REGISTRY_RELAY_STATE_MIGRATION_URL".to_string(),
-            "postgresql://postgres@registry-consultation-db:5432/registry_relay?sslmode=require".to_string(),
-        ),
-        (
-            "REGISTRY_RELAY_STATE_KEYRING_MAINTENANCE_URL".to_string(),
-            "postgresql://relay_state_maintenance@registry-consultation-db:5432/registry_relay?sslmode=require".to_string(),
-        ),
-        (
-            "REGISTRY_RELAY_STATE_KEYRING_READER_URL".to_string(),
-            "postgresql://relay_state_reader@registry-consultation-db:5432/registry_relay?sslmode=require".to_string(),
-        ),
-    ];
-    write_private_text(&env_path, &upsert_env_values(&current, &values))?;
-    Ok(())
-}
-
-fn write_local_workload_jwks(project_dir: &Path, private_jwk: &str) -> Result<()> {
-    let mut public_jwk: serde_json::Value =
-        serde_json::from_str(private_jwk).context("generated workload JWK is invalid")?;
-    public_jwk
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("generated workload JWK must be an object"))?
-        .remove("d");
-    let document = serde_json::to_string_pretty(&serde_json::json!({ "keys": [public_jwk] }))
-        .context("failed to render local workload JWKS")?;
-    write_text(
-        project_dir.join("notary/jwks.json"),
-        &format!("{document}\n"),
-    )
-}
-
-fn write_local_postgres_tls(project_dir: &Path) -> Result<()> {
-    let CertifiedKey { cert, key_pair } =
-        generate_simple_self_signed(vec!["registry-consultation-db".to_string()])
-            .context("failed to generate local consultation database TLS identity")?;
-    let certificate_pem = pem_block("CERTIFICATE", cert.der().as_ref());
-    let private_key_pem = Zeroizing::new(pem_block("PRIVATE KEY", &key_pair.serialize_der()));
-    write_text(
-        project_dir.join(CONSULTATION_POSTGRES_CERT_PATH),
-        &certificate_pem,
-    )?;
-    write_private_text(
-        &project_dir.join(CONSULTATION_POSTGRES_KEY_PATH),
-        &private_key_pem,
-    )
-}
-
-fn pem_block(label: &str, der: &[u8]) -> String {
-    let encoded = base64::engine::general_purpose::STANDARD.encode(der);
-    let body = encoded
-        .as_bytes()
-        .chunks(64)
-        .map(|line| std::str::from_utf8(line).expect("base64 output is UTF-8"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
-}
-
-fn generate_ed25519_jwk(kid: &str) -> Result<String> {
-    let mut seed = [0_u8; 32];
-    getrandom::fill(&mut seed).map_err(|error| anyhow!("random generation failed: {error}"))?;
-    let signing_key = Ed25519SigningKey::from_bytes(&seed);
-    let x = signing_key.verifying_key().to_bytes();
-    serde_json::to_string(&serde_json::json!({
-        "kty": "OKP",
-        "crv": "Ed25519",
-        "d": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(seed),
-        "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(x),
-        "alg": "EdDSA",
-        "kid": kid,
-    }))
-    .context("failed to render workload JWK")
-}
-
-fn prepare_notary_runtime(project_dir: &Path) -> Result<()> {
-    #[cfg(unix)]
-    let runtime_identity = Some(compose_runtime_identity_values(project_dir)?);
-    #[cfg(not(unix))]
-    let runtime_identity = None;
-    project_authoring::build_registry_project_for_local_tutorial(
-        &ProjectBuildOptions {
-            project_directory: project_dir.join(NOTARY_PROJECT_DIR),
-            environment: "local".to_string(),
-            against: None,
-            anchor: None,
-        },
-        runtime_identity,
-    )?;
-    refresh_notary_relay_token(project_dir, runtime_identity)
-}
-
-/// Unit-test-only publication path that deliberately performs static product
-/// validation but does not execute authored project fixtures.
-#[cfg(test)]
-fn prepare_notary_runtime_static_validation_only_for_unit_test(project_dir: &Path) -> Result<()> {
-    #[cfg(unix)]
-    let runtime_identity = Some(compose_runtime_identity_values(project_dir)?);
-    #[cfg(not(unix))]
-    let runtime_identity = None;
-    project_authoring::build_registry_project_static_validation_only_for_unit_test(
-        &ProjectBuildOptions {
-            project_directory: project_dir.join(NOTARY_PROJECT_DIR),
-            environment: "local".to_string(),
-            against: None,
-            anchor: None,
-        },
-        runtime_identity,
-    )?;
-    refresh_notary_relay_token(project_dir, runtime_identity)
-}
-
-fn refresh_notary_relay_token(
-    project_dir: &Path,
-    runtime_identity: Option<RuntimeIdentity>,
-) -> Result<()> {
-    let project = Project::load(project_dir).ok();
-    let secrets_path = project
-        .as_ref()
-        .map(|project| project_dir.join(&project.local.secrets_env))
-        .unwrap_or_else(|| project_dir.join("secrets/local.env"));
-    let secrets = LocalEnv::load(&secrets_path)?;
-    let private_jwk = PrivateJwk::parse(secrets.required(NOTARY_RELAY_WORKLOAD_JWK_ENV)?)
-        .context("local Notary workload JWK is invalid")?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before the Unix epoch")?
-        .as_secs();
-    let header = serde_json::json!({
-        "alg": "EdDSA",
-        "typ": "at+jwt",
-        "kid": NOTARY_RELAY_WORKLOAD_KID,
-    });
-    let claims = serde_json::json!({
-        "iss": "http://127.0.0.1:8081",
-        "sub": "registry-notary",
-        "client_id": "registry-notary",
-        "azp": "registry-notary",
-        "aud": "registry-relay",
-        "scope": "registry:consult:registration-verification",
-        "iat": now,
-        "nbf": now.saturating_sub(5),
-        "exp": now.saturating_add(3600),
-        "jti": random_token(16)?,
-    });
-    let encoded_header =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header)?);
-    let encoded_claims =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims)?);
-    let signing_input = format!("{encoded_header}.{encoded_claims}");
-    let signature = sign_payload(signing_input.as_bytes(), &private_jwk)
-        .context("failed to sign local Relay workload token")?;
-    let token = format!(
-        "{signing_input}.{}\n",
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature)
-    );
-    write_private_runtime_text(
-        &project_dir.join(NOTARY_RELAY_TOKEN_PATH),
-        &token,
-        runtime_identity,
-    )
-}
-
-fn merge_notary_compose(project_dir: &Path, image_lock: &RegistryctlImageLock) -> Result<()> {
-    let path = project_dir.join("compose.yaml");
-    let contents =
-        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
-    let mut compose: serde_norway::Value = serde_norway::from_str(&contents)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
-    let fragment = include_str!("templates/notary_addon/compose-fragment.yaml.tmpl")
-        .replace("{{relay_image}}", image_lock.relay_image())
-        .replace("{{notary_image}}", image_lock.notary_image());
-    let fragment: serde_norway::Value =
-        serde_norway::from_str(&fragment).context("failed to parse Notary Compose fragment")?;
-    merge_yaml_mapping(&mut compose, &fragment, "services")?;
-    merge_yaml_mapping(&mut compose, &fragment, "volumes")?;
-    merge_yaml_mapping(&mut compose, &fragment, "networks")?;
-    let rendered = serde_norway::to_string(&compose).context("failed to render Compose file")?;
-    write_text(path, &format!("# Generated by registryctl.\n{rendered}"))
-}
-
-fn merge_yaml_mapping(
-    target: &mut serde_norway::Value,
-    source: &serde_norway::Value,
-    key: &str,
-) -> Result<()> {
-    let target_root = target
-        .as_mapping_mut()
-        .ok_or_else(|| anyhow!("Compose document must be a mapping"))?;
-    let yaml_key = serde_norway::Value::String(key.to_owned());
-    if !target_root.contains_key(&yaml_key) {
-        target_root.insert(
-            yaml_key.clone(),
-            serde_norway::Value::Mapping(serde_norway::Mapping::new()),
-        );
-    }
-    let target_mapping = target_root
-        .get_mut(&yaml_key)
-        .and_then(serde_norway::Value::as_mapping_mut)
-        .ok_or_else(|| anyhow!("Compose {key} must be a mapping"))?;
-    let source_mapping = source[key]
-        .as_mapping()
-        .ok_or_else(|| anyhow!("Notary Compose {key} must be a mapping"))?;
-    for (entry_key, value) in source_mapping {
-        if target_mapping.contains_key(entry_key) {
-            bail!("Compose {key} already contains a generated Notary entry");
-        }
-        target_mapping.insert(entry_key.clone(), value.clone());
-    }
-    Ok(())
-}
-
 #[cfg(unix)]
 fn write_private_text(path: &Path, contents: &str) -> Result<()> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
+    reject_private_path_symlinks(path)?;
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
         .open(path)
         .with_context(|| format!("failed to write {}", path.display()))?;
     file.write_all(contents.as_bytes())
@@ -2533,95 +2805,28 @@ fn write_private_text(path: &Path, contents: &str) -> Result<()> {
 
 #[cfg(not(unix))]
 fn write_private_text(path: &Path, contents: &str) -> Result<()> {
+    reject_private_path_symlinks(path)?;
     write_text(path.to_path_buf(), contents)
 }
 
-#[cfg(unix)]
-fn write_private_runtime_text(
-    path: &Path,
-    contents: &str,
-    runtime_identity: Option<RuntimeIdentity>,
-) -> Result<()> {
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("private runtime input has no parent"))?;
-    let name = path
-        .file_name()
-        .and_then(OsStr::to_str)
-        .ok_or_else(|| anyhow!("private runtime input name is invalid"))?;
-    let mut staged = None;
-    for _ in 0..8 {
-        let mut random = [0_u8; 16];
-        getrandom::fill(&mut random).context("failed to create private runtime input identity")?;
-        let staged_path = parent.join(format!(
-            ".{name}.tmp-{}-{}",
-            std::process::id(),
-            hex::encode(random)
-        ));
-        let file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&staged_path);
-        match file {
-            Ok(file) => {
-                staged = Some((staged_path, file));
-                break;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                return Err(error).with_context(|| format!("failed to stage {}", path.display()));
-            }
-        }
-    }
-    let (staged_path, mut file) =
-        staged.ok_or_else(|| anyhow!("failed to allocate private runtime input staging file"))?;
-    let staged_result = (|| {
-        file.write_all(contents.as_bytes())
-            .with_context(|| format!("failed to write {}", staged_path.display()))?;
-        let metadata = file.metadata()?;
-        let mut permissions = metadata.permissions();
-        permissions.set_mode(0o600);
-        file.set_permissions(permissions)?;
-        if let Some(identity) = runtime_identity {
-            if metadata.uid() != identity.uid || metadata.gid() != identity.gid {
-                rustix::fs::fchown(
-                    &file,
-                    Some(rustix::fs::Uid::from_raw(identity.uid)),
-                    Some(rustix::fs::Gid::from_raw(identity.gid)),
+fn reject_private_path_symlinks(path: &Path) -> Result<()> {
+    for candidate in [path.parent(), Some(path)].into_iter().flatten() {
+        match fs::symlink_metadata(candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!(
+                    "private path must not be a symlink: {}",
+                    candidate.display()
                 )
-                .with_context(|| {
-                    format!(
-                        "failed to assign staged Notary runtime input to {}:{}",
-                        identity.uid, identity.gid
-                    )
-                })?;
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect {}", candidate.display()))
             }
         }
-        file.sync_all()
-            .with_context(|| format!("failed to sync {}", staged_path.display()))
-    })();
-    drop(file);
-    if let Err(error) = staged_result {
-        let _ = fs::remove_file(&staged_path);
-        return Err(error);
-    }
-    if let Err(error) = fs::rename(&staged_path, path) {
-        let _ = fs::remove_file(&staged_path);
-        return Err(error).with_context(|| format!("failed to publish {}", path.display()));
     }
     Ok(())
-}
-
-#[cfg(not(unix))]
-fn write_private_runtime_text(
-    path: &Path,
-    contents: &str,
-    _runtime_identity: Option<RuntimeIdentity>,
-) -> Result<()> {
-    write_private_text(path, contents)
 }
 
 fn init_benefits_project(dir: &Path, image_lock: &RegistryctlImageLock) -> Result<InitReport> {
@@ -2638,7 +2843,7 @@ fn init_benefits_project(dir: &Path, image_lock: &RegistryctlImageLock) -> Resul
 
     fs::create_dir_all(dir.join("relay"))?;
     fs::create_dir_all(dir.join("data"))?;
-    fs::create_dir_all(dir.join("secrets"))?;
+    create_private_dir_all(&dir.join("secrets"))?;
     fs::create_dir_all(dir.join("output"))?;
     create_relay_state_dirs(dir)?;
     write_compose_runtime_env(dir)?;
@@ -2648,11 +2853,11 @@ fn init_benefits_project(dir: &Path, image_lock: &RegistryctlImageLock) -> Resul
         dir.join("registryctl.yaml"),
         &registryctl_manifest(dir, image_lock)?,
     )?;
-    write_text(dir.join("compose.yaml"), &compose_yaml(image_lock))?;
+    write_text(dir.join("compose.yaml"), &compose_yaml(image_lock)?)?;
     write_text(dir.join("README.md"), project_readme())?;
     write_text(dir.join(".gitignore"), include_str!("templates/gitignore"))?;
     write_text(dir.join("relay/config.yaml"), &relay_config(&credentials))?;
-    write_text(dir.join("secrets/local.env"), &credentials.env_file())?;
+    write_private_text(&dir.join("secrets/local.env"), &credentials.env_file())?;
     write_text(dir.join("output/.gitkeep"), "")?;
     sample::write_benefits_workbook(&dir.join("data/benefits_casework.xlsx"))?;
     let bruno_collection = bruno_generate_project(dir, false)?;
@@ -2686,17 +2891,6 @@ fn create_relay_state_dirs(dir: &Path) -> Result<()> {
             "state/relay/cache",
             "state/relay/config-state",
             "state/relay/audit",
-        ],
-    )
-}
-
-fn create_notary_state_dirs(dir: &Path) -> Result<()> {
-    create_state_dirs(
-        dir,
-        &[
-            "state",
-            CONSULTATION_RELAY_STATE_DIR,
-            CONSULTATION_RELAY_CACHE_PATH,
         ],
     )
 }
@@ -2821,13 +3015,13 @@ fn create_private_dir_all(path: &Path) -> Result<()> {
         fs::symlink_metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
     if metadata.file_type().is_symlink() {
         bail!(
-            "state directory path must not be a symlink: {}",
+            "private directory path must not be a symlink: {}",
             path.display()
         );
     }
     if !metadata.is_dir() {
         bail!(
-            "state directory path must be a directory: {}",
+            "private directory path must be a directory: {}",
             path.display()
         );
     }
@@ -2841,9 +3035,17 @@ fn create_private_dir_all(path: &Path) -> Result<()> {
 #[cfg(not(unix))]
 fn create_private_dir_all(path: &Path) -> Result<()> {
     fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))?;
-    if !path.is_dir() {
+    let metadata =
+        fs::symlink_metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
+    if metadata.file_type().is_symlink() {
         bail!(
-            "state directory path must be a directory: {}",
+            "private directory path must not be a symlink: {}",
+            path.display()
+        );
+    }
+    if !metadata.is_dir() {
+        bail!(
+            "private directory path must be a directory: {}",
             path.display()
         );
     }
@@ -2854,6 +3056,13 @@ fn create_private_dir_all(path: &Path) -> Result<()> {
 struct GeneratedFile {
     relative_path: String,
     contents: String,
+    sensitivity: GeneratedFileSensitivity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneratedFileSensitivity {
+    Public,
+    Private,
 }
 
 fn write_generated_files(
@@ -2870,11 +3079,13 @@ fn write_generated_files(
     files.push(GeneratedFile {
         relative_path: ".registryctl-generated".to_string(),
         contents: generated_manifest_contents(&manifest_paths),
+        sensitivity: GeneratedFileSensitivity::Public,
     });
     let known = read_generated_manifest(project_dir);
 
     for file in &files {
         let path = collection_dir.join(&file.relative_path);
+        ensure_no_symlink_components(project_dir, &path)?;
         if path.exists() && !force && !known.contains_key(&file.relative_path) {
             bail!(
                 "{} already exists and is not marked as registryctl-generated; rerun with --force to overwrite it",
@@ -2886,9 +3097,42 @@ fn write_generated_files(
     for file in files {
         let path = collection_dir.join(&file.relative_path);
         fs::create_dir_all(path.parent().unwrap_or(collection_dir))?;
-        write_text(path, &file.contents)?;
+        ensure_no_symlink_components(project_dir, &path)?;
+        match file.sensitivity {
+            GeneratedFileSensitivity::Private => write_private_text(&path, &file.contents)?,
+            GeneratedFileSensitivity::Public => write_text(path, &file.contents)?,
+        }
     }
 
+    Ok(())
+}
+
+fn ensure_no_symlink_components(project_dir: &Path, path: &Path) -> Result<()> {
+    let relative = path.strip_prefix(project_dir).with_context(|| {
+        format!(
+            "generated path {} must stay inside project {}",
+            path.display(),
+            project_dir.display()
+        )
+    })?;
+    let mut candidate = project_dir.to_path_buf();
+    for component in relative.components() {
+        candidate.push(component);
+        match fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!(
+                    "generated path must not contain a symlink: {}",
+                    candidate.display()
+                )
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect {}", candidate.display()))
+            }
+        }
+    }
     Ok(())
 }
 
@@ -2936,7 +3180,7 @@ fn bruno_files(project: &Project, secrets: &LocalEnv) -> Result<Vec<GeneratedFil
     if project.relay.is_some() {
         files.extend(bruno_relay_files(project.relay_base_url()?, secrets));
     }
-    files.push(generated_file(
+    files.push(generated_private_file(
         "environments/local.bru",
         &bruno_local_env(project, secrets)?,
     ));
@@ -2951,6 +3195,15 @@ fn generated_file(path: &str, contents: &str) -> GeneratedFile {
     GeneratedFile {
         relative_path: path.to_string(),
         contents: contents.to_string(),
+        sensitivity: GeneratedFileSensitivity::Public,
+    }
+}
+
+fn generated_private_file(path: &str, contents: &str) -> GeneratedFile {
+    GeneratedFile {
+        relative_path: path.to_string(),
+        contents: contents.to_string(),
+        sensitivity: GeneratedFileSensitivity::Private,
     }
 }
 
@@ -3308,8 +3561,6 @@ struct Project {
     project: ProjectMeta,
     #[serde(default)]
     relay: Option<ProjectRelay>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    notary: Option<ProjectNotary>,
     runtime: ProjectRuntime,
     local: ProjectLocal,
 }
@@ -3348,16 +3599,6 @@ struct ProjectRelay {
     data: Vec<PathBuf>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ProjectNotary {
-    project: PathBuf,
-    config: PathBuf,
-    consultation_relay_config: PathBuf,
-    claim_file: PathBuf,
-    workload_token: PathBuf,
-}
-
 /// Validates `schema_version` against `PROJECT_SCHEMA_VERSION`, the only version
 /// `registryctl_manifest` generates today, so a future/incompatible schema file fails project
 /// load instead of half-parsing.
@@ -3379,20 +3620,43 @@ where
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectRuntime {
-    // Not read anywhere today (the compose engine/file are hardcoded elsewhere); modeled so
-    // `deny_unknown_fields` doesn't reject registryctl's own generated files.
-    #[allow(dead_code)]
-    engine: String,
-    #[allow(dead_code)]
+    engine: RuntimeEngine,
+    #[serde(deserialize_with = "deserialize_compose_file")]
     compose_file: PathBuf,
     #[serde(default)]
     relay_image: Option<String>,
     #[serde(default)]
     relay_base_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    notary_image: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    notary_base_url: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RuntimeEngine {
+    DockerCompose,
+}
+
+impl RuntimeEngine {
+    #[allow(dead_code)]
+    const fn binary(self) -> &'static str {
+        match self {
+            Self::DockerCompose => "docker",
+        }
+    }
+}
+
+fn deserialize_compose_file<'de, D>(deserializer: D) -> std::result::Result<PathBuf, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+
+    let path = PathBuf::deserialize(deserializer)?;
+    if path != Path::new("compose.yaml") {
+        return Err(D::Error::custom(format!(
+            "unsupported runtime compose_file {path:?}; expected \"compose.yaml\""
+        )));
+    }
+    Ok(path)
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -3412,16 +3676,6 @@ impl Project {
             .as_deref()
             .ok_or_else(|| anyhow!("project runtime is missing relay_base_url"))
     }
-
-    fn notary_base_url(&self) -> Result<&str> {
-        if self.notary.is_none() {
-            bail!("project does not have a Notary section");
-        }
-        self.runtime
-            .notary_base_url
-            .as_deref()
-            .ok_or_else(|| anyhow!("project runtime is missing notary_base_url"))
-    }
 }
 
 #[derive(Debug)]
@@ -3431,6 +3685,7 @@ struct LocalEnv {
 
 impl LocalEnv {
     fn load(path: &Path) -> Result<Self> {
+        reject_private_path_symlinks(path)?;
         let contents = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
         Ok(Self {
@@ -3488,20 +3743,75 @@ fn upsert_env_values(contents: &str, values: &[(String, String)]) -> String {
     output
 }
 
+#[allow(dead_code)]
 fn run_compose_for_project(project_dir: &Path, project: &Project, args: &[&str]) -> Result<()> {
+    let binary = project.runtime.engine.binary();
     let platform_override =
-        compose_platform_for_project(project, "docker", should_probe_compose_platform(args));
-    run_compose_command_with_platform(project_dir, "docker", args, platform_override)
+        compose_platform_for_project(project, binary, should_probe_compose_platform(args));
+    run_compose_command_with_platform(
+        project_dir,
+        binary,
+        &project.runtime.compose_file,
+        args,
+        platform_override,
+    )
 }
 
+fn run_compose_for_canonical_runtime(
+    project_dir: &Path,
+    runtime: &CanonicalRuntime,
+    args: &[&str],
+) -> Result<()> {
+    let compose_file = runtime
+        .compose_file
+        .strip_prefix(project_dir)
+        .map_err(|_| anyhow!("local Compose path escaped the canonical project"))?;
+    let platform_override = canonical_compose_platform_override(
+        &runtime.image,
+        should_probe_compose_platform(args),
+        None,
+    );
+    run_compose_command_with_platform(project_dir, "docker", compose_file, args, platform_override)
+}
+
+fn canonical_compose_platform_override(
+    image: &str,
+    probe_server_platform: bool,
+    path: Option<&OsStr>,
+) -> Option<&'static str> {
+    if std::env::var("DOCKER_DEFAULT_PLATFORM")
+        .ok()
+        .is_some_and(|platform| !platform.trim().is_empty())
+        || !(image.starts_with(&format!("{RELAY_IMAGE_REPOSITORY}@sha256:"))
+            || image.starts_with("ghcr.io/registrystack/registry-relay-candidate@sha256:"))
+        || !probe_server_platform
+    {
+        return None;
+    }
+    docker_server_platform("docker", path)
+        .filter(|platform| is_linux_arm64_platform(platform))
+        .map(|_| LINUX_AMD64_PLATFORM)
+}
+
+#[allow(dead_code)]
 fn compose_platform_for_project(
     project: &Project,
     binary: &str,
     probe_server_platform: bool,
 ) -> Option<&'static str> {
+    compose_platform_for_project_with_path(project, binary, probe_server_platform, None)
+}
+
+#[allow(dead_code)]
+fn compose_platform_for_project_with_path(
+    project: &Project,
+    binary: &str,
+    probe_server_platform: bool,
+    path: Option<&OsStr>,
+) -> Option<&'static str> {
     let explicit_platform = std::env::var("DOCKER_DEFAULT_PLATFORM").ok();
     let server_platform = probe_server_platform
-        .then(|| docker_server_platform(binary))
+        .then(|| docker_server_platform(binary, path))
         .flatten();
     compose_platform_override(
         project,
@@ -3510,283 +3820,14 @@ fn compose_platform_for_project(
     )
 }
 
-fn wait_for_notary_runtime_visibility(project_dir: &Path, project: &Project) -> Result<()> {
-    let platform_override = compose_platform_for_project(project, "docker", true);
-    let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
-    let redactor = SecretRedactor::new(&secrets);
-    let relay_config_path = project_dir.join(CONSULTATION_RELAY_CONFIG_PATH);
-    let expected_config_digest = sha256_uri(
-        &fs::read(&relay_config_path)
-            .with_context(|| "failed to read generated Relay consultation configuration")?,
-    );
-    retry_verified_runtime_closure(
-        NOTARY_RUNTIME_VISIBILITY_ATTEMPTS,
-        NOTARY_RUNTIME_VISIBILITY_RETRY_DELAY,
-        || {
-            run_compose_probe_with_platform(
-                project_dir,
-                "docker",
-                &[
-                    "run",
-                    "--rm",
-                    "--no-deps",
-                    "-T",
-                    NOTARY_RUNTIME_VISIBILITY_SERVICE,
-                    "doctor",
-                    "--config",
-                    "/etc/registry-relay/relay.yaml",
-                    "--format",
-                    "json",
-                    "--profile",
-                    "local",
-                    "--expected-config-digest",
-                    &expected_config_digest,
-                ],
-                platform_override,
-                &redactor,
-            )
-        },
-    )
-}
-
-fn retry_verified_runtime_closure<F>(
-    attempts: usize,
-    retry_delay: Duration,
-    mut check: F,
-) -> Result<()>
-where
-    F: FnMut() -> Result<RuntimeClosureProbe>,
-{
-    if attempts == 0 {
-        bail!("generated Notary runtime visibility check has no configured attempts");
-    }
-    let mut last_failure = RuntimeClosureProbeFailure::ComposeVerificationFailed(None);
-    for attempt in 0..attempts {
-        match check()? {
-            RuntimeClosureProbe::Verified => return Ok(()),
-            RuntimeClosureProbe::Rejected(failure) => last_failure = failure,
-        }
-        if attempt + 1 < attempts {
-            thread::sleep(retry_delay);
-        }
-    }
-    bail!(last_failure.message())
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum RuntimeClosureProbe {
-    Verified,
-    Rejected(RuntimeClosureProbeFailure),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum RuntimeClosureProbeFailure {
-    GenerationMismatch,
-    GenerationUnavailable,
-    ConsultationArtifactsRejected,
-    ConsultationConfigurationMissing,
-    ConsultationQuotaLimitsRejected,
-    ConsultationPlanUnsupported,
-    ConsultationWorkloadBindingRejected,
-    ConfigurationRejected,
-    EnvironmentRejected,
-    ComposeVerificationFailed(Option<String>),
-}
-
-impl RuntimeClosureProbeFailure {
-    fn message(&self) -> String {
-        match self {
-            Self::GenerationMismatch => {
-                "Docker did not expose the just-generated Relay consultation configuration before the bounded verification retry expired"
-            }
-            Self::GenerationUnavailable => {
-                "Docker could not read the generated Relay consultation configuration before the bounded verification retry expired"
-            }
-            Self::ConsultationArtifactsRejected => {
-                "Docker rejected the generated Relay consultation artifact closure; run registryctl check for the authored project, correct it, and retry"
-            }
-            Self::ConsultationConfigurationMissing => {
-                "Docker could not find the generated Relay consultation configuration; rebuild the reviewed Relay consultation configuration and retry"
-            }
-            Self::ConsultationQuotaLimitsRejected => {
-                "Docker rejected the generated Relay consultation quota limits; correct the reviewed quota limits, rebuild the consultation artifacts, and retry"
-            }
-            Self::ConsultationPlanUnsupported => {
-                "Docker could not activate a capability required by the generated Relay consultation plan; use a Relay release that supports the reviewed plan or rebuild it with supported capabilities, and retry"
-            }
-            Self::ConsultationWorkloadBindingRejected => {
-                "Docker rejected the Relay consultation workload binding; align the reviewed workload binding with Relay authentication, rebuild, and retry"
-            }
-            Self::ConfigurationRejected => {
-                "Docker rejected the generated Relay consultation configuration; run registryctl check for the authored project, correct it, and retry"
-            }
-            Self::EnvironmentRejected => {
-                "Docker could not verify the Relay consultation environment bindings; run registryctl doctor --profile local, correct the reported requirement, and retry"
-            }
-            Self::ComposeVerificationFailed(process_diagnostic) => {
-                return match process_diagnostic {
-                    Some(process_diagnostic) => format!(
-                        "Docker Compose could not verify the generated Relay consultation artifact closure before the bounded retry expired; Docker Compose reported: {process_diagnostic}"
-                    ),
-                    None => {
-                        "Docker Compose could not verify the generated Relay consultation artifact closure before the bounded retry expired".to_string()
-                    }
-                };
-            }
-        }
-        .to_string()
-    }
-}
-
-fn run_compose_probe_with_platform(
-    project_dir: &Path,
-    binary: &str,
-    args: &[&str],
-    platform_override: Option<&str>,
-    redactor: &SecretRedactor,
-) -> Result<RuntimeClosureProbe> {
-    let command_args = compose_command_args("compose.yaml", args);
-    let mut command = Command::new(binary);
-    command.args(&command_args).current_dir(project_dir);
-    if let Some(platform) = platform_override {
-        command.env("DOCKER_DEFAULT_PLATFORM", platform);
-    }
-    let output = command
-        .output()
-        .with_context(|| format!("failed to run {binary} compose visibility check"))?;
-    if output.status.success() {
-        Ok(RuntimeClosureProbe::Verified)
-    } else {
-        let mut failure = runtime_closure_probe_failure(&output.stdout);
-        if matches!(
-            failure,
-            RuntimeClosureProbeFailure::ComposeVerificationFailed(_)
-        ) {
-            failure = RuntimeClosureProbeFailure::ComposeVerificationFailed(
-                compose_process_diagnostic(&output, redactor),
-            );
-        }
-        Ok(RuntimeClosureProbe::Rejected(failure))
-    }
-}
-
-fn compose_process_diagnostic(output: &Output, redactor: &SecretRedactor) -> Option<String> {
-    let stderr = bounded_redacted_process_diagnostic(&output.stderr, redactor);
-    match (output.status.code(), stderr) {
-        (Some(code), Some(stderr)) => Some(format!("exit code {code}: {stderr}")),
-        (Some(code), None) => Some(format!("exit code {code} with no stderr output")),
-        (None, Some(stderr)) => Some(format!("terminated without an exit code: {stderr}")),
-        (None, None) => Some("terminated without an exit code or stderr output".to_string()),
-    }
-}
-
-fn bounded_redacted_process_diagnostic(stderr: &[u8], redactor: &SecretRedactor) -> Option<String> {
-    let redacted = redactor.redact_output(stderr)?;
-    let normalized = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.is_empty() {
-        return None;
-    }
-    if normalized.len() <= MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES {
-        return Some(normalized);
-    }
-
-    let content_limit = MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES.saturating_sub(3);
-    let mut bounded = String::with_capacity(MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES);
-    for character in normalized.chars() {
-        if bounded.len() + character.len_utf8() > content_limit {
-            break;
-        }
-        bounded.push(character);
-    }
-    bounded.push_str("...");
-    Some(bounded)
-}
-
-fn runtime_closure_probe_failure(stdout: &[u8]) -> RuntimeClosureProbeFailure {
-    let codes = serde_json::from_slice::<serde_json::Value>(stdout)
-        .ok()
-        .and_then(|report| report["diagnostics"].as_array().cloned())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|diagnostic| diagnostic["severity"] == "error")
-        .filter_map(|diagnostic| diagnostic["code"].as_str().map(str::to_string))
-        .collect::<Vec<_>>();
-
-    if codes
-        .iter()
-        .any(|code| code == "relay.config.generation_mismatch")
-    {
-        RuntimeClosureProbeFailure::GenerationMismatch
-    } else if codes
-        .iter()
-        .any(|code| code == "relay.config.generation_unavailable")
-    {
-        RuntimeClosureProbeFailure::GenerationUnavailable
-    } else if let Some(failure) = codes
-        .iter()
-        .find_map(|code| consultation_activation_failure(code))
-    {
-        failure
-    } else if codes.iter().any(|code| {
-        code == "relay.env_file.failed"
-            || code == "config.missing_secret"
-            || code.starts_with("relay.startup.environment_")
-            || code.starts_with("relay.startup.secret_")
-    }) {
-        RuntimeClosureProbeFailure::EnvironmentRejected
-    } else if codes.iter().any(|code| {
-        code.starts_with("relay.consultation_artifacts.")
-            || code == "relay.startup.consultation_artifacts_rejected"
-    }) {
-        RuntimeClosureProbeFailure::ConsultationArtifactsRejected
-    } else if codes.iter().any(|code| {
-        code.starts_with("config.")
-            || code.contains(".config.")
-            || code.starts_with("relay.config.")
-            || code.starts_with("relay.startup.config_")
-            || code == "relay.entity_registry.failed"
-            || code.starts_with("deployment.")
-    }) {
-        RuntimeClosureProbeFailure::ConfigurationRejected
-    } else {
-        RuntimeClosureProbeFailure::ComposeVerificationFailed(None)
-    }
-}
-
-fn consultation_activation_failure(code: &str) -> Option<RuntimeClosureProbeFailure> {
-    match code {
-        "relay.consultation.activation.artifact_registry_invalid"
-        | "relay.consultation.activation.protected_metadata_invalid" => {
-            Some(RuntimeClosureProbeFailure::ConsultationArtifactsRejected)
-        }
-        "relay.consultation.activation.configuration_missing" => {
-            Some(RuntimeClosureProbeFailure::ConsultationConfigurationMissing)
-        }
-        "relay.consultation.activation.quota_limits_invalid" => {
-            Some(RuntimeClosureProbeFailure::ConsultationQuotaLimitsRejected)
-        }
-        "relay.consultation.activation.unsupported_plan" => {
-            Some(RuntimeClosureProbeFailure::ConsultationPlanUnsupported)
-        }
-        "relay.consultation.activation.workload_binding_invalid" => {
-            Some(RuntimeClosureProbeFailure::ConsultationWorkloadBindingRejected)
-        }
-        "relay.consultation.activation.pseudonym_material_unavailable"
-        | "relay.consultation.activation.source_credentials_unavailable"
-        | "relay.consultation.activation.state_plane_unavailable" => {
-            Some(RuntimeClosureProbeFailure::EnvironmentRejected)
-        }
-        _ => None,
-    }
-}
-
 fn run_compose_command_with_platform(
     project_dir: &Path,
     binary: &str,
+    compose_file: &Path,
     args: &[&str],
     platform_override: Option<&str>,
 ) -> Result<()> {
-    let command_args = compose_command_args("compose.yaml", args);
+    let command_args = compose_command_args(compose_file, args);
     let mut command = Command::new(binary);
     command.args(&command_args).current_dir(project_dir);
     if let Some(platform) = platform_override {
@@ -3807,11 +3848,13 @@ fn should_probe_compose_platform(args: &[&str]) -> bool {
     args.first().is_some_and(|arg| *arg == "up")
 }
 
-fn docker_server_platform(binary: &str) -> Option<String> {
-    let output = Command::new(binary)
-        .args(["version", "--format", "{{.Server.Os}}/{{.Server.Arch}}"])
-        .output()
-        .ok()?;
+fn docker_server_platform(binary: &str, path: Option<&OsStr>) -> Option<String> {
+    let mut command = Command::new(binary);
+    command.args(["version", "--format", "{{.Server.Os}}/{{.Server.Arch}}"]);
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -3819,6 +3862,7 @@ fn docker_server_platform(binary: &str) -> Option<String> {
     (!platform.is_empty()).then_some(platform)
 }
 
+#[allow(dead_code)]
 fn compose_platform_override(
     project: &Project,
     explicit_platform: Option<&str>,
@@ -3835,18 +3879,14 @@ fn compose_platform_override(
         .map(|_| LINUX_AMD64_PLATFORM)
 }
 
+#[allow(dead_code)]
 fn project_uses_amd64_only_release_image(project: &Project) -> bool {
     let relay_is_amd64_only = project
         .runtime
         .relay_image
         .as_deref()
         .is_some_and(|image| image.starts_with(&format!("{RELAY_IMAGE_REPOSITORY}@sha256:")));
-    let notary_is_amd64_only = project
-        .runtime
-        .notary_image
-        .as_deref()
-        .is_some_and(|image| image.starts_with(&format!("{NOTARY_IMAGE_REPOSITORY}@sha256:")));
-    relay_is_amd64_only || notary_is_amd64_only
+    relay_is_amd64_only
 }
 
 fn is_linux_arm64_platform(platform: &str) -> bool {
@@ -3855,29 +3895,26 @@ fn is_linux_arm64_platform(platform: &str) -> bool {
         || normalized.starts_with("linux/arm64/")
 }
 
-fn compose_command_args(compose_file: &str, args: &[&str]) -> Vec<String> {
-    ["compose", "-f", compose_file]
-        .into_iter()
-        .chain(args.iter().copied())
-        .map(String::from)
-        .collect()
+fn compose_command_args(compose_file: &Path, args: &[&str]) -> Vec<String> {
+    let mut command = vec![
+        "compose".to_string(),
+        "-f".to_string(),
+        compose_file.display().to_string(),
+    ];
+    command.extend(args.iter().map(|arg| (*arg).to_string()));
+    command
 }
 
+#[allow(dead_code)]
 fn validate_project_fingerprints(project_dir: &Path, project: &Project) -> Result<()> {
     let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
     if let Some(relay) = &project.relay {
         validate_config_api_key_fingerprints(&project_dir.join(&relay.config), "Relay", &secrets)?;
     }
-    if let Some(notary) = &project.notary {
-        validate_config_api_key_fingerprints(
-            &project_dir.join(&notary.config),
-            "Notary",
-            &secrets,
-        )?;
-    }
     Ok(())
 }
 
+#[allow(dead_code)]
 fn validate_config_api_key_fingerprints(
     config_path: &Path,
     product: &str,
@@ -3906,6 +3943,7 @@ fn validate_config_api_key_fingerprints(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn raw_env_name_for(id: &str) -> Result<&'static str> {
     match id {
         "metadata_reader" => Ok("METADATA_READER_RAW"),
@@ -4087,8 +4125,34 @@ fn generated_project_name(dir: &Path) -> String {
         .to_string()
 }
 
-fn compose_yaml(image_lock: &RegistryctlImageLock) -> String {
-    include_str!("templates/compose.yaml").replace("{{relay_image}}", image_lock.relay_image())
+fn compose_yaml(image_lock: &RegistryctlImageLock) -> Result<String> {
+    let rendered =
+        include_str!("templates/compose.yaml").replace("{{relay_image}}", image_lock.relay_image());
+    validate_generated_compose_ports(&rendered)?;
+    Ok(rendered)
+}
+
+fn validate_generated_compose_ports(contents: &str) -> Result<()> {
+    let compose: serde_norway::Value =
+        serde_norway::from_str(contents).context("failed to parse generated Compose file")?;
+    validate_generated_service_port(&compose, "registry-relay", "127.0.0.1:4242:8080")?;
+    Ok(())
+}
+
+fn validate_generated_service_port(
+    compose: &serde_norway::Value,
+    service: &str,
+    expected: &str,
+) -> Result<()> {
+    let ports = compose["services"][service]["ports"]
+        .as_sequence()
+        .ok_or_else(|| anyhow!("generated Compose service {service} must declare ports"))?;
+    if ports.len() != 1 || ports[0].as_str() != Some(expected) {
+        bail!(
+            "generated Compose service {service} must publish exactly {expected:?} on IPv4 loopback"
+        );
+    }
+    Ok(())
 }
 
 fn project_readme() -> &'static str {
@@ -4130,6 +4194,80 @@ struct SmokeCheck {
     error: Option<String>,
 }
 
+fn run_canonical_smoke_checks(
+    base_url: &str,
+    credentials: &CanonicalRuntimeCredentials,
+) -> SmokeReport {
+    const RECORDS_PATH: &str = "/v1/datasets/projects/entities/projects/records";
+    const PURPOSE: &str = "public-works-case-management";
+
+    let mut checks = Vec::new();
+    record_smoke_check(
+        &mut checks,
+        base_url,
+        "allowed public health check",
+        "/healthz",
+        200,
+        &[],
+    );
+    record_smoke_check(
+        &mut checks,
+        base_url,
+        "allowed match source is ready",
+        "/ready",
+        200,
+        &[],
+    );
+    record_smoke_check(
+        &mut checks,
+        base_url,
+        "denied anonymous records request",
+        RECORDS_PATH,
+        401,
+        &[("Data-Purpose".to_string(), PURPOSE.to_string())],
+    );
+    record_smoke_check(
+        &mut checks,
+        base_url,
+        "denied wrong local API key",
+        RECORDS_PATH,
+        401,
+        &[
+            bearer_header("registryctl-intentionally-wrong-local-key"),
+            ("Data-Purpose".to_string(), PURPOSE.to_string()),
+        ],
+    );
+    record_row_count_smoke_check(
+        &mut checks,
+        base_url,
+        "allowed matching principal returns one record",
+        RECORDS_PATH,
+        &[
+            bearer_header(&credentials.match_raw),
+            ("Data-Purpose".to_string(), PURPOSE.to_string()),
+        ],
+        1,
+    );
+    record_row_count_smoke_check(
+        &mut checks,
+        base_url,
+        "wrong principal safely returns no match",
+        RECORDS_PATH,
+        &[
+            bearer_header(&credentials.no_match_raw),
+            ("Data-Purpose".to_string(), PURPOSE.to_string()),
+        ],
+        0,
+    );
+    SmokeReport {
+        schema_version: SmokeReportSchema::V1,
+        base_url: base_url.to_string(),
+        passed: checks.iter().all(|check| check.passed),
+        checks,
+    }
+}
+
+#[allow(dead_code)]
 fn run_smoke_checks(base_url: &str, secrets: &LocalEnv) -> SmokeReport {
     let mut checks = Vec::new();
 
@@ -4248,6 +4386,62 @@ fn run_smoke_checks(base_url: &str, secrets: &LocalEnv) -> SmokeReport {
     }
 }
 
+fn record_row_count_smoke_check(
+    checks: &mut Vec<SmokeCheck>,
+    base_url: &str,
+    name: &'static str,
+    path: &'static str,
+    headers: &[(String, String)],
+    expected_rows: usize,
+) {
+    let url = format!("{base_url}{path}");
+    match http_get(&url, headers) {
+        Ok(response) => {
+            let passed = response.status == 200
+                && validate_exact_row_count_response(&response.body, expected_rows).is_ok();
+            checks.push(SmokeCheck {
+                name: name.to_string(),
+                method: "GET".to_string(),
+                path: path.to_string(),
+                expected_status: 200,
+                actual_status: Some(response.status),
+                passed,
+                error: (!passed).then(|| {
+                    "record response did not match the expected exact row shape".to_string()
+                }),
+            });
+        }
+        Err(error) => checks.push(SmokeCheck {
+            name: name.to_string(),
+            method: "GET".to_string(),
+            path: path.to_string(),
+            expected_status: 200,
+            actual_status: None,
+            passed: false,
+            error: Some(redact_error(&error.to_string())),
+        }),
+    }
+}
+
+fn validate_exact_row_count_response(contents: &str, expected_rows: usize) -> Result<()> {
+    let document: serde_json::Value =
+        serde_json::from_str(contents).context("record response was not valid JSON")?;
+    let object = document
+        .as_object()
+        .ok_or_else(|| anyhow!("record response was not a JSON object"))?;
+    let rows = object
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("record response data was not an array"))?;
+    if rows.iter().any(|row| !row.is_object()) {
+        bail!("record response data contained a non-object row");
+    }
+    if rows.len() != expected_rows {
+        bail!("record response did not contain the expected exact row count");
+    }
+    Ok(())
+}
+
 fn parse_smoke_report(contents: &str) -> Result<SmokeReport> {
     serde_json::from_str(contents).context("failed to parse smoke result JSON")
 }
@@ -4283,6 +4477,7 @@ fn record_smoke_check(
     }
 }
 
+#[allow(dead_code)]
 fn record_row_data_smoke_check(
     checks: &mut Vec<SmokeCheck>,
     base_url: &str,
@@ -4574,6 +4769,42 @@ mod tests {
     }
 
     #[test]
+    fn canonical_staging_image_allows_only_the_candidate_repository_at_locked_digest() {
+        let image_lock = test_image_lock();
+        let candidate = format!(
+            "ghcr.io/registrystack/registry-relay-candidate@sha256:{}",
+            "a".repeat(64)
+        );
+        assert_eq!(
+            select_canonical_relay_image(&image_lock, Some(OsStr::new(&candidate))).unwrap(),
+            candidate
+        );
+        for invalid in [
+            format!(
+                "ghcr.io/registrystack/registry-relay-candidate@sha256:{}",
+                "b".repeat(64)
+            ),
+            "ghcr.io/registrystack/registry-relay-candidate:v0.13.0".to_string(),
+            format!(
+                "ghcr.io/example/registry-relay-candidate@sha256:{}",
+                "a".repeat(64)
+            ),
+            TEST_RELAY_IMAGE.to_string(),
+        ] {
+            let error =
+                select_canonical_relay_image(&image_lock, Some(OsStr::new(&invalid))).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("staging"),
+                "unexpected error for {invalid}: {error:#}"
+            );
+        }
+        assert_eq!(
+            select_canonical_relay_image(&image_lock, None).unwrap(),
+            TEST_RELAY_IMAGE
+        );
+    }
+
+    #[test]
     fn image_lock_rejects_missing_nonregular_and_oversized_files() {
         let missing = TempDir::new().unwrap();
         let missing_executable = missing.path().join("registryctl");
@@ -4854,6 +5085,37 @@ mod tests {
     }
 
     #[test]
+    fn update_check_selects_the_highest_published_release_including_prereleases() {
+        let releases = vec![
+            GitHubRelease {
+                tag_name: "v0.13.0".to_string(),
+                draft: false,
+                prerelease: true,
+            },
+            GitHubRelease {
+                tag_name: "v0.14.0".to_string(),
+                draft: true,
+                prerelease: false,
+            },
+            GitHubRelease {
+                tag_name: "not-a-release".to_string(),
+                draft: false,
+                prerelease: false,
+            },
+            GitHubRelease {
+                tag_name: "v0.12.0".to_string(),
+                draft: false,
+                prerelease: false,
+            },
+        ];
+
+        assert_eq!(
+            select_latest_published_release(&releases).as_deref(),
+            Some("v0.13.0")
+        );
+    }
+
+    #[test]
     fn update_notice_uses_explicit_tag_ref_and_env_on_bash() {
         let notice = update_notice("0.1.0", "v0.2.0").unwrap();
 
@@ -4862,28 +5124,25 @@ mod tests {
         assert_eq!(
             notice.lines().last(),
             Some(
-                "  curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.2.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.2.0 bash"
+                "  curl -fsSL https://github.com/registrystack/registry-stack/releases/download/v0.2.0/registryctl-v0.2.0-install.sh | REGISTRYCTL_VERSION=v0.2.0 bash"
             )
         );
-        assert!(!notice.contains(
-            "https://raw.githubusercontent.com/registrystack/registry-stack/main/crates/registryctl/install.sh"
-        ));
-        assert!(!notice.contains(
-            "https://raw.githubusercontent.com/registrystack/registry-stack/v0.2.0/crates/registryctl/install.sh"
-        ));
+        assert!(!notice.contains("raw.githubusercontent.com"));
+        assert!(!notice.contains("/releases/latest/"));
         assert!(!notice.contains("REGISTRYCTL_VERSION=v0.2.0 curl"));
     }
 
     #[test]
-    fn update_notice_warns_about_checksum_only_installer_before_command() {
+    fn update_notice_states_installer_and_payload_trust_before_command() {
         let notice = update_notice("0.1.0", "v0.2.0").unwrap();
-        let warning = notice
-            .find("The quick installer verifies SHA256 integrity only.")
-            .unwrap();
+        let warning = notice.find("trusts GitHub and TLS").unwrap();
         let command = notice.find("Upgrade with:").unwrap();
 
         assert!(warning < command);
-        assert!(notice.contains(REGISTRYCTL_VERIFY_GUIDE));
+        assert!(notice.contains(
+            "https://github.com/registrystack/registry-stack/blob/v0.2.0/release/VERIFY.md"
+        ));
+        assert!(notice.contains("signature and provenance verification"));
     }
 
     #[test]
@@ -4975,6 +5234,9 @@ mod tests {
                 "state/relay/audit",
             ],
         );
+        assert_private_state_dir(&project, "secrets");
+        assert_private_file(&project, "secrets/local.env");
+        assert_private_file(&project, "bruno/registry-api/environments/local.bru");
         assert_runtime_env_matches_project_owner(&project);
         assert!(!project.join("relay/metadata.yaml").exists());
 
@@ -5063,6 +5325,8 @@ mod tests {
 
         let readme = fs::read_to_string(project.join("README.md")).unwrap();
         assert!(readme.contains("registryctl doctor --profile local"));
+        assert!(readme.contains("no host Relay binary is needed"));
+        assert!(readme.contains("raw API keys and an audit hash secret"));
         assert!(readme.contains("redacts local secret"));
         assert!(readme.contains("Back up that file before upgrades"));
         assert!(readme.contains("Notary evaluation state is in memory"));
@@ -5074,400 +5338,21 @@ mod tests {
     }
 
     #[test]
-    fn notary_addon_no_match_false_requires_a_positive_bounded_existence_claim() {
-        let project: Value =
-            serde_norway::from_str(include_str!("templates/notary_addon/registry-stack.yaml"))
-                .unwrap();
-        let claims = project["services"]["registration-verification"]["claims"]
-            .as_mapping()
-            .unwrap();
-        assert_eq!(claims.len(), 1);
-        let (claim_id, claim) = claims.iter().next().unwrap();
-        let claim_id = claim_id.as_str().unwrap();
-
-        assert_eq!(claim_id, "active-registration-exists");
-        assert!(
-            claim_id.ends_with("-exists"),
-            "a no-match false result must use an explicit positive existence predicate"
-        );
-        for forbidden in [
-            "accepted",
-            "absent",
-            "denied",
-            "does-not-exist",
-            "eligible",
-            "fraud",
-            "ineligible",
-            "missing",
-            "nonexistent",
-            "not-found",
-            "rejected",
-        ] {
-            assert!(
-                !claim_id.contains(forbidden),
-                "no-match false must not imply the broader fact {forbidden:?}: {claim_id}"
-            );
-        }
+    fn generated_compose_ports_are_exact_ipv4_loopback_bindings() {
+        let relay = compose_yaml(&test_image_lock()).unwrap();
+        validate_generated_compose_ports(&relay).unwrap();
+        let relay_document: Value = serde_norway::from_str(&relay).unwrap();
         assert_eq!(
-            claim["cel"],
-            r#"enrollment.matched && enrollment.registration_status == "active""#
-        );
-
-        for (fixture, expected) in [
-            (
-                include_str!(
-                    "templates/notary_addon/integrations/person-demographics/fixtures/match.yaml"
-                ),
-                true,
-            ),
-            (
-                include_str!(
-                    "templates/notary_addon/integrations/person-demographics/fixtures/pending.yaml"
-                ),
-                false,
-            ),
-            (
-                include_str!(
-                    "templates/notary_addon/integrations/person-demographics/fixtures/no-match.yaml"
-                ),
-                false,
-            ),
-        ] {
-            let fixture: Value = serde_norway::from_str(fixture).unwrap();
-            assert_eq!(
-                fixture["expect"]["claims"][claim_id].as_bool(),
-                Some(expected)
-            );
-        }
-        let ambiguous: Value = serde_norway::from_str(include_str!(
-            "templates/notary_addon/integrations/person-demographics/fixtures/ambiguous.yaml"
-        ))
-        .unwrap();
-        assert!(
-            ambiguous["expect"]["claims"]
-                .as_mapping()
-                .is_some_and(serde_norway::Mapping::is_empty),
-            "ambiguous consultation outcomes must not be converted into a false claim"
+            relay_document["services"]["registry-relay"]["ports"][0],
+            "127.0.0.1:4242:8080"
         );
     }
 
     #[test]
-    fn add_notary_builds_an_editable_live_tutorial_addon() {
-        let temp = TempDir::new().unwrap();
-        let project = temp.path().join("my-first-api");
-        let image_lock = test_image_lock();
-        init_spreadsheet_api(&project, Sample::Benefits, &image_lock).unwrap();
-
-        let report = add_notary_to_project_with_runtime_preparer(
-            &project,
-            &image_lock,
-            prepare_notary_runtime_static_validation_only_for_unit_test,
-        )
-        .unwrap();
-
-        assert_eq!(report.status, "added");
-        for path in [
-            NOTARY_CLAIM_FILE,
-            NOTARY_CONFIG_PATH,
-            CONSULTATION_RELAY_CONFIG_PATH,
-            NOTARY_RELAY_TOKEN_PATH,
-            CONSULTATION_POSTGRES_CERT_PATH,
-            CONSULTATION_POSTGRES_KEY_PATH,
-            "notary/postgres-init.sql",
-            "notary/jwks.json",
-        ] {
-            assert!(project.join(path).is_file(), "{path} should exist");
-        }
-        let manifest: Value =
-            serde_norway::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
-                .unwrap();
-        assert_eq!(manifest["runtime"]["notary_base_url"], NOTARY_BASE_URL);
-        assert_eq!(manifest["notary"]["claim_file"], NOTARY_CLAIM_FILE);
-        assert!(project.join(CONSULTATION_RELAY_CACHE_PATH).is_dir());
-        assert_private_state_dirs(
-            &project,
-            &[
-                CONSULTATION_RELAY_STATE_DIR,
-                CONSULTATION_RELAY_CACHE_PATH,
-                NOTARY_CONFIG_DIR,
-                CONSULTATION_RELAY_CONFIG_DIR,
-            ],
-        );
-        assert_private_file(&project, NOTARY_RELAY_TOKEN_PATH);
-        assert_private_file(&project, CONSULTATION_POSTGRES_KEY_PATH);
-        assert_private_file(&project, NOTARY_CONFIG_PATH);
-        assert_private_file(&project, CONSULTATION_RELAY_CONFIG_PATH);
-        assert_notary_runtime_input_owners_match_project(&project);
-        let compose_text = fs::read_to_string(project.join("compose.yaml")).unwrap();
-        let compose: Value = serde_norway::from_str(&compose_text).unwrap();
-        let services = &compose["services"];
-        let runtime_user =
-            "${REGISTRY_STACK_RUNTIME_UID:-65532}:${REGISTRY_STACK_RUNTIME_GID:-65532}";
-        for service in [
-            "registry-relay-consultation-bootstrap",
-            "registry-relay-consultation",
-            "registry-notary",
-        ] {
-            assert_eq!(services[service]["user"], runtime_user);
-        }
-        for service in ["registry-consultation-db", "registry-notary-jwks"] {
-            assert!(
-                services[service].get("user").is_none(),
-                "{service} must keep its image-provided runtime identity"
-            );
-        }
-        let consultation_mounts = services["registry-relay-consultation"]["volumes"]
-            .as_sequence()
-            .unwrap();
-        assert!(consultation_mounts.iter().any(|mount| {
-            mount == "./state/relay-consultation/cache:/var/lib/registry-relay/cache"
-        }));
-        assert!(!compose["volumes"]
-            .as_mapping()
-            .unwrap()
-            .contains_key("registry-consultation-cache"));
-        assert_eq!(
-            services["registry-notary"]["network_mode"],
-            "service:registry-notary-jwks"
-        );
-        assert_eq!(
-            services["registry-notary"]["environment"]["REGISTRY_NOTARY_BIND"],
-            "0.0.0.0:8081"
-        );
-        assert_eq!(
-            services["registry-notary"]["environment"]["REGISTRY_NOTARY_HEALTHCHECK_URL"],
-            "http://127.0.0.1:8081/healthz"
-        );
-        assert!(consultation_mounts.iter().any(|mount| {
-            mount
-                == "./notary/project/.registry-stack/build/local/private/relay/config:/etc/registry-relay:ro"
-        }));
-        assert!(services["registry-notary"]["volumes"]
-            .as_sequence()
-            .unwrap()
-            .iter()
-            .any(|mount| {
-                mount
-                    == "./notary/project/.registry-stack/build/local/private/notary/config:/etc/registry-notary:ro"
-            }));
-        assert!(!compose_text.contains("config/notary.yaml:/etc/registry-notary/notary.yaml"));
-        let postgres_init = fs::read_to_string(project.join("notary/postgres-init.sql")).unwrap();
-        assert!(!postgres_init.contains("GRANT relay_state_owner"));
-        assert!(
-            postgres_init.contains("GRANT CREATE ON DATABASE registry_relay TO relay_state_owner")
-        );
-        assert_eq!(services["registry-notary-jwks"]["ports"][0], "4255:8081");
-        assert!(services["registry-consultation-db"]["entrypoint"][2]
-            .as_str()
-            .unwrap()
-            .contains("ssl_cert_file=/var/lib/postgresql/tls/server.crt"));
-        assert_eq!(
-            compose["networks"]["registry-notary-internal"]["internal"],
-            true
-        );
-        assert!(compose["networks"].get("registry-notary-public").is_some());
-        assert_eq!(services["registry-notary"]["image"], TEST_NOTARY_IMAGE);
-        let claim_source = fs::read_to_string(project.join(NOTARY_CLAIM_FILE)).unwrap();
-        assert!(claim_source.contains("request.target.attributes.given_name"));
-        assert!(claim_source.contains("request.target.attributes.date_of_birth"));
-        assert!(claim_source.contains("active-registration-exists"));
-        assert!(!claim_source.contains("person-registration-accepted"));
-        assert!(claim_source.contains("enrollment.registration_status == \"active\""));
-        assert!(!claim_source.contains("age_on"));
-        let explanation = project_authoring::generated_explanation_for_test(
-            &project.join("notary/project"),
-            "local",
-        )
-        .unwrap();
-        let claim_evidence = explanation
-            .fields
-            .iter()
-            .find(|field| {
-                matches!(
-                    &field.address,
-                    ProjectFieldAddress::Project { path }
-                        if path.as_str()
-                            == "/services/registration-verification/claims/active-registration-exists/evidence"
-                )
-            })
-            .expect("generated Notary claim evidence is explained");
-        let ClassifierSafeReportedValue::Public { value } = &claim_evidence.reported_value else {
-            panic!("claim evidence classification is value-free and public");
-        };
-        assert_eq!(value.as_value(), &serde_json::json!("registry_backed"));
-        let integration = fs::read_to_string(
-            project.join("notary/project/integrations/person-demographics/integration.yaml"),
-        )
-        .unwrap();
-        assert!(integration.contains("outputs: [registration_status]"));
-        assert!(!integration.contains("outputs: [date_of_birth]"));
-        assert!(!integration.contains("outputs: [national_id]"));
-        let environment =
-            fs::read_to_string(project.join("notary/project/environments/local.yaml")).unwrap();
-        assert!(environment.contains("worker_memory_bytes: 1073741824"));
-        let secrets = LocalEnv::load(&project.join("secrets/local.env")).unwrap();
-        assert!(!secrets.value("TUTORIAL_EVALUATOR_RAW").is_empty());
-        assert_eq!(
-            secrets.required("TUTORIAL_EVALUATOR_HASH").unwrap(),
-            fingerprint_api_key(secrets.required("TUTORIAL_EVALUATOR_RAW").unwrap())
-        );
-        let token = fs::read_to_string(project.join(NOTARY_RELAY_TOKEN_PATH)).unwrap();
-        assert_eq!(token.trim().split('.').count(), 3);
-        let claims = token.trim().split('.').nth(1).unwrap();
-        let claims: serde_json::Value = serde_json::from_slice(
-            &base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .decode(claims)
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            claims["scope"],
-            "registry:consult:registration-verification"
-        );
-        let claim_path = project.join(NOTARY_CLAIM_FILE);
-        let claim = fs::read_to_string(&claim_path)
-            .unwrap()
-            .replace(
-                "active-registration-exists",
-                "active-or-pending-registration-exists",
-            )
-            .replace(
-                "enrollment.registration_status == \"active\"",
-                "(enrollment.registration_status == \"active\" || enrollment.registration_status == \"pending\")",
-            );
-        fs::write(&claim_path, claim).unwrap();
-        for (fixture_name, expected_before, expected_after) in [
-            ("match.yaml", "true", "true"),
-            ("pending.yaml", "false", "true"),
-            ("no-match.yaml", "false", "false"),
-        ] {
-            let fixture_path = project
-                .join("notary/project/integrations/person-demographics/fixtures")
-                .join(fixture_name);
-            let fixture = fs::read_to_string(&fixture_path).unwrap().replace(
-                &format!("claims: {{ active-registration-exists: {expected_before} }}"),
-                &format!("claims: {{ active-or-pending-registration-exists: {expected_after} }}"),
-            );
-            fs::write(&fixture_path, fixture).unwrap();
-        }
-        prepare_notary_runtime_static_validation_only_for_unit_test(&project).unwrap();
-        assert_notary_runtime_input_owners_match_project(&project);
-        let notary_config_text = fs::read_to_string(project.join(NOTARY_CONFIG_PATH)).unwrap();
-        assert!(notary_config_text.contains("active-or-pending-registration-exists"));
-        assert!(!notary_config_text.contains("active-registration-exists"));
-        assert!(!notary_config_text.contains("person-registration-accepted"));
-        assert!(notary_config_text.contains("pending"));
-        let notary_config: Value = serde_norway::from_str(&notary_config_text).unwrap();
-        assert_eq!(notary_config["server"]["bind"], "0.0.0.0:8081");
-        assert_eq!(notary_config["state"]["storage"], "in_memory");
-        assert!(notary_config["evidence"]["credential_profiles"]
-            .as_mapping()
-            .is_some_and(serde_norway::Mapping::is_empty));
-        let claims = notary_config["evidence"]["claims"].as_sequence().unwrap();
-        assert!(!claims.is_empty());
-        assert!(claims
-            .iter()
-            .all(|claim| claim["evidence_mode"]["type"] == "registry_backed"));
-        assert!(claims.iter().all(|claim| claim["credential_profiles"]
-            .as_sequence()
-            .is_some_and(Vec::is_empty)));
-        let signing_keys = notary_config["evidence"]["signing_keys"]
-            .as_mapping()
-            .unwrap();
-        assert_eq!(signing_keys.len(), 1);
-        assert!(signing_keys.contains_key("relay-workload"));
-
-        let consultation_relay_config: Value = serde_norway::from_str(
-            &fs::read_to_string(project.join(CONSULTATION_RELAY_CONFIG_PATH)).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(consultation_relay_config["server"]["bind"], "0.0.0.0:8082");
-
-        let error = add_notary_to_project_with_runtime_preparer(
-            &project,
-            &image_lock,
-            prepare_notary_runtime_static_validation_only_for_unit_test,
-        )
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("already has a Notary"));
-    }
-
-    #[test]
-    fn add_notary_rolls_back_generated_project_files_on_failure() {
-        let temp = TempDir::new().unwrap();
-        let project = temp.path().join("my-first-api");
-        let image_lock = test_image_lock();
-        init_spreadsheet_api(&project, Sample::Benefits, &image_lock).unwrap();
-        let compose_path = project.join("compose.yaml");
-        let secrets_path = project.join("secrets/local.env");
-        let manifest_path = project.join("registryctl.yaml");
-        let conflicting_compose = fs::read_to_string(&compose_path)
-            .unwrap()
-            .replace("services:\n", "services:\n  registry-notary: {}\n");
-        fs::write(&compose_path, &conflicting_compose).unwrap();
-        let original_secrets = fs::read_to_string(&secrets_path).unwrap();
-        let original_manifest = fs::read_to_string(&manifest_path).unwrap();
-
-        let error = add_notary_to_project_with_runtime_preparer(
-            &project,
-            &image_lock,
-            prepare_notary_runtime_static_validation_only_for_unit_test,
-        )
-        .unwrap_err();
-
-        assert!(format!("{error:#}").contains("already contains a generated Notary entry"));
-        assert!(!project.join("notary").exists());
-        for path in [
-            NOTARY_RELAY_TOKEN_PATH,
-            CONSULTATION_POSTGRES_CERT_PATH,
-            CONSULTATION_POSTGRES_KEY_PATH,
-        ] {
-            assert!(!project.join(path).exists());
-        }
-        assert!(!project.join(CONSULTATION_RELAY_STATE_DIR).exists());
-        assert_eq!(
-            fs::read_to_string(compose_path).unwrap(),
-            conflicting_compose
-        );
-        assert_eq!(fs::read_to_string(secrets_path).unwrap(), original_secrets);
-        assert_eq!(
-            fs::read_to_string(manifest_path).unwrap(),
-            original_manifest
-        );
-    }
-
-    #[test]
-    fn add_notary_refuses_a_preexisting_sidecar_without_modifying_it() {
-        let temp = TempDir::new().unwrap();
-        let project = temp.path().join("my-first-api");
-        let image_lock = test_image_lock();
-        init_spreadsheet_api(&project, Sample::Benefits, &image_lock).unwrap();
-        let token_path = project.join(NOTARY_RELAY_TOKEN_PATH);
-        fs::write(&token_path, "operator-owned\n").unwrap();
-
-        let error = add_notary_to_project(&project, &image_lock).unwrap_err();
-
-        assert!(format!("{error:#}").contains("destination already exists"));
-        assert_eq!(fs::read_to_string(token_path).unwrap(), "operator-owned\n");
-        assert!(!project.join("notary").exists());
-    }
-
-    #[test]
-    fn add_notary_refuses_preexisting_consultation_state_without_modifying_it() {
-        let temp = TempDir::new().unwrap();
-        let project = temp.path().join("my-first-api");
-        let image_lock = test_image_lock();
-        init_spreadsheet_api(&project, Sample::Benefits, &image_lock).unwrap();
-        let state_dir = project.join(CONSULTATION_RELAY_STATE_DIR);
-        fs::create_dir_all(&state_dir).unwrap();
-        let marker = state_dir.join("operator-owned");
-        fs::write(&marker, "keep\n").unwrap();
-
-        let error = add_notary_to_project(&project, &image_lock).unwrap_err();
-
-        assert!(format!("{error:#}").contains("destination already exists"));
-        assert_eq!(fs::read_to_string(marker).unwrap(), "keep\n");
-        assert!(!project.join("notary").exists());
+    fn generated_compose_port_validation_rejects_planted_wide_bindings() {
+        let relay = compose_yaml(&test_image_lock()).unwrap();
+        let widened_relay = relay.replace("127.0.0.1:4242:8080", "0.0.0.0:4242:8080");
+        assert!(validate_generated_compose_ports(&widened_relay).is_err());
     }
 
     #[test]
@@ -5679,6 +5564,38 @@ mod tests {
             format!("{error:#}").contains("bogus_runtime_key"),
             "error should name the offending key `bogus_runtime_key`: {error:#}"
         );
+    }
+
+    #[test]
+    fn runtime_rejects_unimplemented_compose_providers() {
+        let temp = TempDir::new().unwrap();
+        write_project_yaml(
+            temp.path(),
+            &format!(
+                "{MINIMAL_SCHEMA_AND_PROJECT_BLOCK}runtime:\n  engine: podman_compose\n  compose_file: compose.yaml\n{MINIMAL_LOCAL_BLOCK}"
+            ),
+        );
+
+        let error = Project::load(temp.path()).unwrap_err();
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("podman_compose"), "{rendered}");
+        assert!(rendered.contains("docker_compose"), "{rendered}");
+    }
+
+    #[test]
+    fn runtime_rejects_arbitrary_compose_files() {
+        let temp = TempDir::new().unwrap();
+        write_project_yaml(
+            temp.path(),
+            &format!(
+                "{MINIMAL_SCHEMA_AND_PROJECT_BLOCK}runtime:\n  engine: docker_compose\n  compose_file: ../alternate.yaml\n{MINIMAL_LOCAL_BLOCK}"
+            ),
+        );
+
+        let error = Project::load(temp.path()).unwrap_err();
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("../alternate.yaml"), "{rendered}");
+        assert!(rendered.contains("compose.yaml"), "{rendered}");
     }
 
     #[test]
@@ -5896,6 +5813,100 @@ mod tests {
     }
 
     #[test]
+    fn planted_credential_sentinel_stays_private_and_is_redacted() {
+        const SENTINEL: &str = "registryctl-credential-sentinel-do-not-leak";
+
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
+        let env_path = project.join("secrets/local.env");
+        let env = fs::read_to_string(&env_path).unwrap();
+        let planted = env
+            .lines()
+            .map(|line| {
+                if line.starts_with("METADATA_READER_RAW=") {
+                    format!("METADATA_READER_RAW={SENTINEL}")
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        write_private_text(&env_path, &planted).unwrap();
+        bruno_generate_project(&project, true).unwrap();
+
+        assert!(fs::read_to_string(&env_path).unwrap().contains(SENTINEL));
+        assert!(
+            fs::read_to_string(project.join("bruno/registry-api/environments/local.bru"))
+                .unwrap()
+                .contains(SENTINEL)
+        );
+        for path in [
+            "registryctl.yaml",
+            "compose.yaml",
+            "README.md",
+            "relay/config.yaml",
+            "bruno/registry-api/environments/local.example.bru",
+            "bruno/registry-api/.registryctl-generated",
+        ] {
+            let contents = fs::read_to_string(project.join(path)).unwrap();
+            assert!(!contents.contains(SENTINEL), "{path} leaked the sentinel");
+        }
+
+        let secrets = LocalEnv::load(&env_path).unwrap();
+        let redactor = SecretRedactor::new(&secrets);
+        assert_eq!(
+            redactor.redact_output(format!("failure: {SENTINEL}").as_bytes()),
+            Some("failure: [REDACTED]".to_string())
+        );
+        let smoke =
+            serde_json::to_string(&run_smoke_checks("http://127.0.0.1:1", &secrets)).unwrap();
+        assert!(!smoke.contains(SENTINEL));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_bruno_credential_modes_survive_regeneration_and_force() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
+        let bruno_path = project.join("bruno/registry-api/environments/local.bru");
+
+        fs::set_permissions(&bruno_path, fs::Permissions::from_mode(0o644)).unwrap();
+        bruno_generate_project(&project, false).unwrap();
+        assert_private_file(&project, "bruno/registry-api/environments/local.bru");
+
+        fs::set_permissions(&bruno_path, fs::Permissions::from_mode(0o666)).unwrap();
+        bruno_generate_project(&project, true).unwrap();
+        assert_private_file(&project, "bruno/registry-api/environments/local.bru");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forced_bruno_generation_rejects_private_output_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
+        let local_bru = project.join("bruno/registry-api/environments/local.bru");
+        let external = temp.path().join("external-local.bru");
+        fs::write(&external, "external sentinel\n").unwrap();
+        fs::remove_file(&local_bru).unwrap();
+        symlink(&external, &local_bru).unwrap();
+
+        let error = bruno_generate_project(&project, true).unwrap_err();
+        assert!(format!("{error:#}").contains("must not contain a symlink"));
+        assert_eq!(
+            fs::read_to_string(&external).unwrap(),
+            "external sentinel\n"
+        );
+    }
+
+    #[test]
     fn generated_workbook_is_xlsx_with_benefits_sample_sheets() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
@@ -5921,51 +5932,9 @@ mod tests {
 
     #[test]
     fn compose_command_arguments_are_stable() {
-        let expected_config_digest =
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         assert_eq!(
-            compose_command_args("compose.yaml", &["up", "-d"]),
+            compose_command_args(Path::new("compose.yaml"), &["up", "-d"]),
             ["compose", "-f", "compose.yaml", "up", "-d"]
-        );
-        assert_eq!(
-            compose_command_args(
-                "compose.yaml",
-                &[
-                    "run",
-                    "--rm",
-                    "--no-deps",
-                    "-T",
-                    NOTARY_RUNTIME_VISIBILITY_SERVICE,
-                    "doctor",
-                    "--config",
-                    "/etc/registry-relay/relay.yaml",
-                    "--format",
-                    "json",
-                    "--profile",
-                    "local",
-                    "--expected-config-digest",
-                    expected_config_digest,
-                ],
-            ),
-            [
-                "compose",
-                "-f",
-                "compose.yaml",
-                "run",
-                "--rm",
-                "--no-deps",
-                "-T",
-                "registry-relay-consultation-bootstrap",
-                "doctor",
-                "--config",
-                "/etc/registry-relay/relay.yaml",
-                "--format",
-                "json",
-                "--profile",
-                "local",
-                "--expected-config-digest",
-                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            ]
         );
     }
 
@@ -5973,258 +5942,33 @@ mod tests {
     fn compose_runner_surfaces_nonzero_exit() {
         let temp = TempDir::new().unwrap();
 
-        run_compose_command_with_platform(temp.path(), "true", &["ps"], None).unwrap();
-        let error =
-            run_compose_command_with_platform(temp.path(), "false", &["ps"], None).unwrap_err();
+        run_compose_command_with_platform(
+            temp.path(),
+            "true",
+            Path::new("compose.yaml"),
+            &["ps"],
+            None,
+        )
+        .unwrap();
+        let error = run_compose_command_with_platform(
+            temp.path(),
+            "false",
+            Path::new("compose.yaml"),
+            &["ps"],
+            None,
+        )
+        .unwrap_err();
 
         assert!(error.to_string().contains("false compose exited"));
     }
 
     #[test]
-    fn compose_visibility_check_returns_process_outcome() {
-        let temp = TempDir::new().unwrap();
-        let redactor = SecretRedactor { secrets: vec![] };
-
-        assert_eq!(
-            run_compose_probe_with_platform(temp.path(), "true", &["ps"], None, &redactor).unwrap(),
-            RuntimeClosureProbe::Verified
-        );
-        assert!(matches!(
-            run_compose_probe_with_platform(temp.path(), "false", &["ps"], None, &redactor)
-                .unwrap(),
-            RuntimeClosureProbe::Rejected(RuntimeClosureProbeFailure::ComposeVerificationFailed(
-                Some(_)
-            ))
-        ));
-    }
-
-    #[test]
-    fn compose_visibility_check_surfaces_bounded_redacted_stderr() {
-        let temp = TempDir::new().unwrap();
-        let binary = temp.path().join("docker");
-        let secret = "sentinel-secret-value";
-        write_fake_product(
-            &binary,
-            &format!(
-                "printf 'not JSON\\n'\nprintf 'pull failed for {} {}\\n' >&2\nexit 17\n",
-                shell_single_quoted(secret),
-                shell_single_quoted(&"x".repeat(MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES * 2)),
-            ),
-        );
-        let redactor = SecretRedactor {
-            secrets: vec![secret.to_string()],
-        };
-
-        let probe = run_compose_probe_with_platform(
-            temp.path(),
-            binary.to_str().unwrap(),
-            &["ps"],
-            None,
-            &redactor,
-        )
-        .unwrap();
-        let RuntimeClosureProbe::Rejected(failure) = probe else {
-            panic!("expected Compose visibility failure");
-        };
-        let message = failure.message();
-
-        assert!(message.contains("exit code 17: pull failed for [REDACTED]"));
-        assert!(!message.contains(secret));
-        assert!(message.ends_with("..."));
-        let RuntimeClosureProbeFailure::ComposeVerificationFailed(Some(diagnostic)) = failure
-        else {
-            panic!("expected process diagnostic");
-        };
-        let stderr = diagnostic
-            .strip_prefix("exit code 17: ")
-            .expect("exit status prefix");
-        assert!(stderr.len() <= MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES);
-    }
-
-    #[test]
-    fn runtime_visibility_retry_waits_for_the_just_generated_verified_closure() {
-        let mut calls = 0;
-
-        retry_verified_runtime_closure(3, Duration::from_millis(0), || {
-            calls += 1;
-            Ok(if calls == 2 {
-                RuntimeClosureProbe::Verified
-            } else {
-                RuntimeClosureProbe::Rejected(RuntimeClosureProbeFailure::GenerationMismatch)
-            })
-        })
-        .unwrap();
-
-        assert_eq!(calls, 2);
-    }
-
-    #[test]
-    fn runtime_visibility_retry_fails_closed_after_its_bound() {
-        let mut calls = 0;
-
-        let error = retry_verified_runtime_closure(3, Duration::from_millis(0), || {
-            calls += 1;
-            Ok(RuntimeClosureProbe::Rejected(
-                RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
-            ))
-        })
-        .unwrap_err();
-
-        assert_eq!(calls, 3);
-        assert_eq!(
-            error.to_string(),
-            "Docker rejected the generated Relay consultation artifact closure; run registryctl check for the authored project, correct it, and retry"
-        );
-    }
-
-    #[test]
-    fn runtime_visibility_retry_preserves_the_last_process_diagnostic() {
-        let mut calls = 0;
-
-        let error = retry_verified_runtime_closure(2, Duration::from_millis(0), || {
-            calls += 1;
-            Ok(RuntimeClosureProbe::Rejected(
-                RuntimeClosureProbeFailure::ComposeVerificationFailed(Some(format!(
-                    "exit code {calls}: daemon unavailable"
-                ))),
-            ))
-        })
-        .unwrap_err();
-
-        assert_eq!(calls, 2);
-        assert!(error
-            .to_string()
-            .ends_with("Docker Compose reported: exit code 2: daemon unavailable"));
-    }
-
-    #[test]
-    fn runtime_visibility_failure_classification_is_value_free_and_specific() {
-        for (code, expected) in [
-            (
-                "relay.config.generation_mismatch",
-                RuntimeClosureProbeFailure::GenerationMismatch,
-            ),
-            (
-                "relay.config.generation_unavailable",
-                RuntimeClosureProbeFailure::GenerationUnavailable,
-            ),
-            (
-                "relay.consultation.activation.artifact_registry_invalid",
-                RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
-            ),
-            (
-                "relay.consultation.activation.protected_metadata_invalid",
-                RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
-            ),
-            (
-                "relay.consultation.activation.configuration_missing",
-                RuntimeClosureProbeFailure::ConsultationConfigurationMissing,
-            ),
-            (
-                "relay.consultation.activation.quota_limits_invalid",
-                RuntimeClosureProbeFailure::ConsultationQuotaLimitsRejected,
-            ),
-            (
-                "relay.consultation.activation.unsupported_plan",
-                RuntimeClosureProbeFailure::ConsultationPlanUnsupported,
-            ),
-            (
-                "relay.consultation.activation.workload_binding_invalid",
-                RuntimeClosureProbeFailure::ConsultationWorkloadBindingRejected,
-            ),
-            (
-                "relay.startup.consultation_artifacts_rejected",
-                RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
-            ),
-            (
-                "relay.env_file.failed",
-                RuntimeClosureProbeFailure::EnvironmentRejected,
-            ),
-            (
-                "config.missing_secret",
-                RuntimeClosureProbeFailure::EnvironmentRejected,
-            ),
-            (
-                "relay.consultation.activation.source_credentials_unavailable",
-                RuntimeClosureProbeFailure::EnvironmentRejected,
-            ),
-            (
-                "relay.consultation.activation.pseudonym_material_unavailable",
-                RuntimeClosureProbeFailure::EnvironmentRejected,
-            ),
-            (
-                "relay.consultation.activation.state_plane_unavailable",
-                RuntimeClosureProbeFailure::EnvironmentRejected,
-            ),
-            (
-                "relay.startup.environment_binding_rejected",
-                RuntimeClosureProbeFailure::EnvironmentRejected,
-            ),
-            (
-                "config.validation_error",
-                RuntimeClosureProbeFailure::ConfigurationRejected,
-            ),
-            (
-                "relay.startup.config_document_invalid",
-                RuntimeClosureProbeFailure::ConfigurationRejected,
-            ),
-        ] {
-            let output = serde_json::to_vec(&serde_json::json!({
-                "diagnostics": [{
-                    "severity": "error",
-                    "code": code,
-                    "message": "sentinel supplied value"
-                }]
-            }))
-            .unwrap();
-            let actual = runtime_closure_probe_failure(&output);
-
-            assert_eq!(actual, expected);
-            assert!(!actual.message().contains("sentinel"));
-        }
-        assert_eq!(
-            runtime_closure_probe_failure(b"not JSON"),
-            RuntimeClosureProbeFailure::ComposeVerificationFailed(None)
-        );
-        assert_eq!(
-            runtime_closure_probe_failure(
-                br#"{"diagnostics":[{"severity":"error","code":"relay.consultation.activation.future_code"}]}"#
-            ),
-            RuntimeClosureProbeFailure::ComposeVerificationFailed(None)
-        );
-    }
-
-    #[test]
-    fn consultation_activation_failures_have_specific_safe_remediation() {
-        for (failure, expected) in [
-            (
-                RuntimeClosureProbeFailure::ConsultationConfigurationMissing,
-                "Docker could not find the generated Relay consultation configuration; rebuild the reviewed Relay consultation configuration and retry",
-            ),
-            (
-                RuntimeClosureProbeFailure::ConsultationQuotaLimitsRejected,
-                "Docker rejected the generated Relay consultation quota limits; correct the reviewed quota limits, rebuild the consultation artifacts, and retry",
-            ),
-            (
-                RuntimeClosureProbeFailure::ConsultationPlanUnsupported,
-                "Docker could not activate a capability required by the generated Relay consultation plan; use a Relay release that supports the reviewed plan or rebuild it with supported capabilities, and retry",
-            ),
-            (
-                RuntimeClosureProbeFailure::ConsultationWorkloadBindingRejected,
-                "Docker rejected the Relay consultation workload binding; align the reviewed workload binding with Relay authentication, rebuild, and retry",
-            ),
-        ] {
-            assert_eq!(failure.message(), expected);
-        }
-    }
-
-    #[test]
-    fn restart_project_requires_a_project_manifest() {
+    fn restart_project_requires_a_canonical_project() {
         let temp = TempDir::new().unwrap();
 
         let error = restart_project(temp.path()).unwrap_err();
 
-        assert!(error.to_string().contains("registryctl.yaml"));
+        assert!(error.to_string().contains("registry-stack.yaml"));
     }
 
     #[test]
@@ -6278,6 +6022,66 @@ mod tests {
     }
 
     #[test]
+    fn exact_row_count_smoke_rejects_duplicate_match_rows() {
+        let response = serde_json::json!({
+            "data": [
+                {"project_id": "project-1"},
+                {"project_id": "project-1"}
+            ]
+        });
+
+        assert!(validate_exact_row_count_response(&response.to_string(), 1).is_err());
+    }
+
+    #[test]
+    fn exact_row_count_smoke_rejects_unexpected_nonempty_no_match() {
+        let response = serde_json::json!({
+            "data": [{"project_id": "unexpected"}]
+        });
+
+        assert!(validate_exact_row_count_response(&response.to_string(), 0).is_err());
+    }
+
+    #[test]
+    fn exact_row_count_smoke_accepts_one_object_match_and_empty_no_match() {
+        let match_response = serde_json::json!({
+            "data": [{
+                "project_id": "project-1",
+                "district_code": "D-01",
+                "sector": "transport",
+                "status": "active"
+            }]
+        });
+        let no_match_response = serde_json::json!({"data": []});
+
+        validate_exact_row_count_response(&match_response.to_string(), 1).unwrap();
+        validate_exact_row_count_response(&no_match_response.to_string(), 0).unwrap();
+    }
+
+    #[test]
+    fn exact_row_count_smoke_rejects_malformed_and_non_object_data() {
+        for response in ["not JSON", "[]", r#"{"data": {}}"#, r#"{"data": [42]}"#] {
+            assert!(
+                validate_exact_row_count_response(response, 1).is_err(),
+                "unexpectedly accepted {response}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_row_count_smoke_allows_disclosure_field_changes() {
+        let response = serde_json::json!({
+            "data": [{
+                "project_id": "project-1",
+                "district_code": "D-01",
+                "newly_disclosed_field": "reviewed"
+            }]
+        });
+
+        validate_exact_row_count_response(&response.to_string(), 1).unwrap();
+    }
+
+    #[test]
     fn smoke_report_rejects_another_schema_version() {
         let secrets = LocalEnv {
             values: BTreeMap::new(),
@@ -6310,37 +6114,28 @@ mod tests {
     }
 
     #[test]
-    fn smoke_project_writes_redacted_failure_report() {
+    fn smoke_project_retires_legacy_direct_projects_without_writing() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
         init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
 
         let error = smoke_project(&project_dir).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("one or more smoke checks failed"));
-
-        let env = fs::read_to_string(project_dir.join("secrets/local.env")).unwrap();
-        let report = fs::read_to_string(project_dir.join("output/smoke-results.json")).unwrap();
-        for (_, secret) in env.lines().filter_map(|line| line.split_once('=')) {
-            assert!(!report.contains(secret));
-        }
-        assert!(report.contains("\"schema_version\": \"registryctl.smoke.v1\""));
-        assert!(report.contains("\"passed\": false"));
+        assert!(error.to_string().contains("legacy pre-1.0 direct projects"));
+        assert!(!project_dir.join("output/smoke-results.json").exists());
     }
 
     #[test]
-    fn doctor_invokes_relay_product_for_relay_project() {
+    fn doctor_invokes_digest_pinned_compose_relay_for_relay_project() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("my-first-api");
         init_spreadsheet_api(&project_dir, Sample::Benefits, &test_image_lock()).unwrap();
         let fake_bin = temp.path().join("bin");
         fs::create_dir_all(&fake_bin).unwrap();
         write_fake_product(
-            &fake_bin.join("registry-relay"),
+            &fake_bin.join("docker"),
             &format!(
                 "printf '%s\\n' \"$@\" > {}\nprintf '%s\\n' {}\nexit 0\n",
-                shell_single_quoted(&temp.path().join("relay.args").display().to_string()),
+                shell_single_quoted(&temp.path().join("docker.args").display().to_string()),
                 shell_single_quoted(&fake_product_report("registry-relay", "ok", vec![]))
             ),
         );
@@ -6360,24 +6155,14 @@ mod tests {
         );
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["project"]["profile"], "project");
-        let args = fs::read_to_string(temp.path().join("relay.args")).unwrap();
-        let doctor_config = project_dir.join("output/doctor/relay.config.yaml");
+        let args = fs::read_to_string(temp.path().join("docker.args")).unwrap();
         assert_eq!(
             args,
-            format!(
-                "doctor\n--config\n{}\n--env-file\n{}\n--format\njson\n",
-                doctor_config.display(),
-                project_dir.join("secrets/local.env").display(),
-            )
+            "compose\n-f\ncompose.yaml\nrun\n--rm\n--no-deps\n-T\nregistry-relay\ndoctor\n--config\n/etc/registry-relay/config.yaml\n--format\njson\n"
         );
-        let rendered = fs::read_to_string(&doctor_config).unwrap();
-        assert!(!rendered.contains("metadata.yaml"));
-        assert!(rendered.contains(
-            &project_dir
-                .join("data/benefits_casework.xlsx")
-                .display()
-                .to_string()
-        ));
+        assert!(!project_dir.join("output/doctor/relay.config.yaml").exists());
+        let compose = fs::read_to_string(project_dir.join("compose.yaml")).unwrap();
+        assert!(compose.contains(test_image_lock().relay_image()));
     }
 
     #[test]
@@ -6388,10 +6173,10 @@ mod tests {
         let fake_bin = temp.path().join("bin");
         fs::create_dir_all(&fake_bin).unwrap();
         write_fake_product(
-            &fake_bin.join("registry-relay"),
+            &fake_bin.join("docker"),
             &format!(
                 "printf '%s\\n' \"$@\" > {}\nprintf '%s\\n' {}\nexit 0\n",
-                shell_single_quoted(&temp.path().join("relay.args").display().to_string()),
+                shell_single_quoted(&temp.path().join("docker.args").display().to_string()),
                 shell_single_quoted(&fake_product_report("registry-relay", "ok", vec![]))
             ),
         );
@@ -6406,16 +6191,10 @@ mod tests {
         assert_eq!(report.status, ReportStatus::Ok);
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["project"]["profile"], "local");
-        let args = fs::read_to_string(temp.path().join("relay.args")).unwrap();
+        let args = fs::read_to_string(temp.path().join("docker.args")).unwrap();
         assert_eq!(
             args,
-            format!(
-                "doctor\n--config\n{}\n--env-file\n{}\n--format\njson\n--profile\nlocal\n",
-                project_dir
-                    .join("output/doctor/relay.config.yaml")
-                    .display(),
-                project_dir.join("secrets/local.env").display(),
-            )
+            "compose\n-f\ncompose.yaml\nrun\n--rm\n--no-deps\n-T\nregistry-relay\ndoctor\n--config\n/etc/registry-relay/config.yaml\n--format\njson\n--profile\nlocal\n"
         );
     }
 
@@ -6433,7 +6212,7 @@ mod tests {
         assert_eq!(report.products[0].status, ReportStatus::NotRun);
         assert!(report.products[0].report.diagnostics[0]
             .message
-            .contains("Install registry-relay"));
+            .contains("Docker Compose v2"));
     }
 
     #[test]
@@ -6461,7 +6240,7 @@ mod tests {
             })
             .collect::<String>();
         write_fake_product(
-            &fake_bin.join("registry-relay"),
+            &fake_bin.join("docker"),
             &format!("{secret_prints}exit 17\n"),
         );
 
@@ -6539,7 +6318,7 @@ mod tests {
         let fake_bin = temp.path().join("bin");
         fs::create_dir_all(&fake_bin).unwrap();
         write_fake_product(
-            &fake_bin.join("registry-relay"),
+            &fake_bin.join("docker"),
             &format!(
                 "printf '%s\\n' {}\nexit 1\n",
                 shell_single_quoted(&product_json)
@@ -6591,7 +6370,7 @@ mod tests {
         let fake_bin = temp.path().join("bin");
         fs::create_dir_all(&fake_bin).unwrap();
         write_fake_product(
-            &fake_bin.join("registry-relay"),
+            &fake_bin.join("docker"),
             &format!(
                 "printf '%s\\n' {}\nexit 0\n",
                 shell_single_quoted(&product_json)
@@ -6617,7 +6396,7 @@ mod tests {
         let fake_bin = temp.path().join("bin");
         fs::create_dir_all(&fake_bin).unwrap();
         write_fake_product(
-            &fake_bin.join("registry-relay"),
+            &fake_bin.join("docker"),
             &format!(
                 "printf '%s\\n' {}\nexit 0\n",
                 shell_single_quoted(&fake_product_report("registry-relay", "ok", vec![]))
@@ -6737,44 +6516,271 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
-    fn assert_notary_runtime_input_owners_match_project(project: &Path) {
-        use std::os::unix::fs::MetadataExt;
-
-        let project_metadata = fs::metadata(project).unwrap();
-        let identity = runtime_identity_for_owner(project_metadata.uid(), project_metadata.gid());
-        for relative in [NOTARY_CONFIG_DIR, CONSULTATION_RELAY_CONFIG_DIR] {
-            assert_runtime_input_tree_owner(&project.join(relative), identity);
-        }
-        let token = project.join(NOTARY_RELAY_TOKEN_PATH);
-        assert_runtime_input_owner(&token, identity);
+    fn init_canonical_spreadsheet(project: &Path) {
+        init_registry_project(&ProjectInitOptions {
+            starter: ProjectStarter::Spreadsheet,
+            directory: project.to_path_buf(),
+        })
+        .unwrap();
     }
 
-    #[cfg(not(unix))]
-    fn assert_notary_runtime_input_owners_match_project(_project: &Path) {}
+    #[test]
+    fn canonical_runtime_is_closed_private_and_secret_free_outside_credentials() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
 
-    #[cfg(unix)]
-    fn assert_runtime_input_tree_owner(path: &Path, expected: RuntimeIdentity) {
-        let metadata = assert_runtime_input_owner(path, expected);
-        if metadata.is_dir() {
-            for entry in fs::read_dir(path).unwrap() {
-                assert_runtime_input_tree_owner(&entry.unwrap().path(), expected);
+        let runtime = prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap();
+        let binding = canonical_spreadsheet_binding(&project).unwrap();
+        let compose = fs::read_to_string(&runtime.compose_file).unwrap();
+        validate_canonical_compose(&compose, TEST_RELAY_IMAGE, &binding).unwrap();
+        validate_compiled_local_relay_auth(&runtime.relay_config, &binding).unwrap();
+
+        let credentials = strict_runtime_credentials(
+            &project.join(CANONICAL_RUNTIME_RELAY_ENV),
+            &runtime.secrets_env,
+        )
+        .unwrap();
+        for secret in [
+            &credentials.audit_secret,
+            &credentials.match_raw,
+            &credentials.match_hash,
+            &credentials.no_match_raw,
+            &credentials.no_match_hash,
+        ] {
+            for relative in [
+                CANONICAL_RUNTIME_COMPOSE,
+                CANONICAL_RUNTIME_MANIFEST,
+                CANONICAL_RELAY_CONFIG,
+                CANONICAL_ARTIFACT_MANIFEST,
+            ] {
+                assert!(
+                    !fs::read_to_string(project.join(relative))
+                        .unwrap()
+                        .contains(secret),
+                    "{relative} leaked a generated credential"
+                );
+            }
+        }
+        assert!(
+            !fs::read_to_string(project.join(CANONICAL_RUNTIME_RELAY_ENV))
+                .unwrap()
+                .contains(&credentials.match_raw)
+        );
+        assert!(
+            !fs::read_to_string(project.join(CANONICAL_RUNTIME_RELAY_ENV))
+                .unwrap()
+                .contains(&credentials.no_match_raw)
+        );
+        let document: JsonValue = serde_norway::from_str(&compose).unwrap();
+        assert_eq!(
+            document["services"]["registry-relay"]["ports"],
+            serde_json::json!([CANONICAL_RELAY_HOST_PORT])
+        );
+        assert_eq!(
+            document["services"]["registry-relay"]["volumes"],
+            serde_json::json!([
+                "../../build/local/private/relay/config/relay.yaml:/etc/registry-relay/config.yaml:ro",
+                "../../../data/public_works_projects.xlsx:/var/lib/registry/public_works_projects.xlsx:ro"
+            ])
+        );
+        assert_eq!(
+            document["services"]["registry-relay"]["env_file"],
+            serde_json::json!(["secrets/relay.env"])
+        );
+        let compose_file = runtime.compose_file.strip_prefix(&project).unwrap();
+        assert_eq!(
+            compose_command_args(compose_file, &["up", "-d"]),
+            vec!["compose", "-f", CANONICAL_RUNTIME_COMPOSE, "up", "-d",]
+        );
+        let doctor = product_doctor_invocations(&project, &runtime, None, None).unwrap();
+        assert_eq!(doctor.len(), 1);
+        assert_eq!(
+            doctor[0].args,
+            vec![
+                "compose",
+                "-f",
+                CANONICAL_RUNTIME_COMPOSE,
+                "run",
+                "--rm",
+                "--no-deps",
+                "-T",
+                "registry-relay",
+                "doctor",
+                "--config",
+                CANONICAL_RELAY_CONFIG_MOUNT,
+                "--format",
+                "json",
+            ]
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            for relative in [CANONICAL_RUNTIME_ROOT, CANONICAL_RUNTIME_SECRETS] {
+                assert_eq!(
+                    fs::metadata(project.join(relative))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o700
+                );
+            }
+            for relative in [
+                CANONICAL_RUNTIME_COMPOSE,
+                CANONICAL_RUNTIME_MANIFEST,
+                CANONICAL_RUNTIME_ENV,
+                CANONICAL_RUNTIME_RELAY_ENV,
+            ] {
+                assert_eq!(
+                    fs::metadata(project.join(relative))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o600
+                );
             }
         }
     }
 
     #[cfg(unix)]
-    fn assert_runtime_input_owner(path: &Path, expected: RuntimeIdentity) -> fs::Metadata {
-        use std::os::unix::fs::MetadataExt;
+    #[test]
+    fn canonical_runtime_rejects_a_permissive_credential_file() {
+        use std::os::unix::fs::PermissionsExt as _;
 
-        let metadata = fs::symlink_metadata(path).unwrap();
-        assert_eq!(
-            (metadata.uid(), metadata.gid()),
-            (expected.uid, expected.gid),
-            "{} should be owned by the selected runtime identity",
-            path.display()
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap();
+        let credential_path = project.join(CANONICAL_RUNTIME_ENV);
+        let credentials = fs::read_to_string(&credential_path).unwrap();
+        let mut permissions = fs::metadata(&credential_path).unwrap().permissions();
+        permissions.set_mode(0o644);
+        fs::set_permissions(&credential_path, permissions).unwrap();
+
+        let error = load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap_err();
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("Unix mode 0600"), "{rendered}");
+        for (_, value) in credentials.lines().filter_map(|line| line.split_once('=')) {
+            assert!(!rendered.contains(value), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn canonical_runtime_rejects_generated_compose_and_config_tampering() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap();
+
+        let compose_path = project.join(CANONICAL_RUNTIME_COMPOSE);
+        let compose = fs::read_to_string(&compose_path).unwrap();
+        write_private_text(
+            &compose_path,
+            &compose.replace(CANONICAL_RELAY_HOST_PORT, "0.0.0.0:4242:8080"),
+        )
+        .unwrap();
+        let error = load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap_err();
+        assert!(format!("{error:#}").contains("Compose integrity"));
+
+        prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap_err();
+        write_private_text(&compose_path, &compose).unwrap();
+        let config_path = project.join(CANONICAL_RELAY_CONFIG);
+        let config = fs::read_to_string(&config_path).unwrap();
+        write_private_text(&config_path, &(config + "\n# planted tamper\n")).unwrap();
+        let error = load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap_err();
+        assert!(format!("{error:#}").contains("Relay config integrity"));
+    }
+
+    #[test]
+    fn canonical_runtime_rejects_missing_source_without_value_echo() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        fs::remove_file(project.join("data/public_works_projects.xlsx")).unwrap();
+
+        let error = prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap_err();
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("project workbook is missing"),
+            "{rendered}"
         );
-        metadata
+        assert!(
+            !rendered.contains("public_works_projects.xlsx"),
+            "{rendered}"
+        );
+        assert!(!project.join(CANONICAL_RUNTIME_ROOT).exists());
+    }
+
+    #[test]
+    fn canonical_runtime_full_validation_rejects_workbook_content_drift_without_value_echo() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap();
+        let workbook = project.join("data/public_works_projects.xlsx");
+        let mut bytes = fs::read(&workbook).unwrap();
+        bytes.push(0);
+        fs::write(&workbook, bytes).unwrap();
+
+        let error = load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap_err();
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("operator-owned source data changed"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("public_works_projects.xlsx"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("PW-001"), "{rendered}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn canonical_runtime_rejects_source_and_generated_path_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        let workbook = project.join("data/public_works_projects.xlsx");
+        let external = temp.path().join("external.xlsx");
+        let bytes = fs::read(&workbook).unwrap();
+        fs::write(&external, &bytes).unwrap();
+        fs::remove_file(&workbook).unwrap();
+        symlink(&external, &workbook).unwrap();
+
+        let error = prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap_err();
+        assert!(format!("{error:#}").contains("symlink"));
+        assert_eq!(fs::read(&external).unwrap(), bytes);
+        assert!(!project.join(CANONICAL_RUNTIME_ROOT).exists());
+    }
+
+    #[test]
+    fn canonical_runtime_records_and_validates_candidate_transport() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        let candidate = format!(
+            "ghcr.io/registrystack/registry-relay-candidate@sha256:{}",
+            "a".repeat(64)
+        );
+
+        let runtime = prepare_canonical_runtime_with_image(&project, &candidate).unwrap();
+        let manifest: CanonicalRuntimeManifest =
+            serde_json::from_slice(&fs::read(project.join(CANONICAL_RUNTIME_MANIFEST)).unwrap())
+                .unwrap();
+        assert_eq!(manifest.relay_image, candidate);
+        assert_eq!(
+            manifest.workbook_classification,
+            ArtifactInputClassification::OperatorOwnedSourceData
+        );
+        let compose = fs::read_to_string(runtime.compose_file).unwrap();
+        assert!(compose.contains(&candidate));
+        load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap();
     }
 
     fn fake_product_report(product: &str, status: &str, diagnostics: Vec<JsonValue>) -> String {

@@ -168,14 +168,7 @@ fn decode_xlsx(bytes: Vec<u8>, hints: FormatHints) -> Result<DecodedStream, Form
             (start_row, start_col, end_row, end_col)
         };
 
-    reject_formula_cells_in_window(
-        &mut wb,
-        &sheet_name,
-        window_row_start,
-        window_col_start,
-        window_row_end,
-        window_col_end,
-    )?;
+    reject_formula_cells(&mut wb, &sheet_name)?;
 
     // The header row within the window (0-indexed within the full range).
     // header_row_1indexed is relative to the workbook sheet row numbers (1-indexed).
@@ -197,9 +190,12 @@ fn decode_xlsx(bytes: Vec<u8>, hints: FormatHints) -> Result<DecodedStream, Form
                 .unwrap_or(&Data::Empty);
             let name = match cell {
                 Data::String(s) => s.clone(),
-                Data::Int(i) => i.to_string(),
-                Data::Float(f) => f.to_string(),
-                other if !CalaDataType::is_empty(other) => format!("{other}"),
+                other if !CalaDataType::is_empty(other) => {
+                    return Err(FormatError::Parse(format!(
+                        "xlsx header cell in column {} must be text",
+                        col - window_col_start + 1
+                    )));
+                }
                 _ => format!("c{}", col - window_col_start),
             };
             names.push(name);
@@ -257,23 +253,24 @@ fn build_arrow_arrays(
 ) -> Result<Vec<ArrayRef>, FormatError> {
     let mut arrays: Vec<ArrayRef> = Vec::with_capacity(col_names.len());
 
-    for (col_idx, col_name) in col_names.iter().enumerate() {
+    for col_idx in 0..col_names.len() {
         let arrow_type = schema.field(col_idx).data_type();
 
         let col_data: Vec<&Data> = data_rows.iter().map(|row| &row[col_idx]).collect();
 
         let array: ArrayRef = match arrow_type {
-            DataType::Int64 => build_int64_col(col_name, &col_data)?,
-            DataType::Float64 => build_float64_col(col_name, &col_data)?,
-            DataType::Boolean => build_bool_col(col_name, &col_data)?,
-            DataType::Date32 => build_date32_col(col_name, &col_data)?,
+            DataType::Int64 => build_int64_col(col_idx, &col_data)?,
+            DataType::Float64 => build_float64_col(col_idx, &col_data)?,
+            DataType::Boolean => build_bool_col(col_idx, &col_data)?,
+            DataType::Date32 => build_date32_col(col_idx, &col_data)?,
             DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                build_timestamp_millis_col(col_name, &col_data)?
+                build_timestamp_millis_col(col_idx, &col_data)?
             }
-            DataType::Utf8 => build_utf8_col(&col_data),
+            DataType::Utf8 => build_utf8_col(col_idx, &col_data)?,
             other => {
                 return Err(FormatError::Parse(format!(
-                    "unsupported Arrow type {other:?} for column {col_name:?}"
+                    "unsupported Arrow type {other:?} for XLSX column {}",
+                    col_idx + 1
                 )));
             }
         };
@@ -284,7 +281,7 @@ fn build_arrow_arrays(
     Ok(arrays)
 }
 
-fn build_int64_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, FormatError> {
+fn build_int64_col(col_idx: usize, col_data: &[&Data]) -> Result<ArrayRef, FormatError> {
     let mut builder = Int64Builder::new();
     for (row_idx, cell) in col_data.iter().enumerate() {
         match *cell {
@@ -292,7 +289,8 @@ fn build_int64_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, Forma
             other => {
                 let v = CalaDataType::as_i64(other).ok_or_else(|| {
                     FormatError::Parse(format!(
-                        "column {col_name:?}, row {}: cannot coerce {other:?} to Integer",
+                        "XLSX column {}, row {} cannot be coerced to Integer",
+                        col_idx + 1,
                         row_idx + 2 // +2: 1-indexed + skip header
                     ))
                 })?;
@@ -303,7 +301,7 @@ fn build_int64_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, Forma
     Ok(Arc::new(builder.finish()))
 }
 
-fn build_float64_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, FormatError> {
+fn build_float64_col(col_idx: usize, col_data: &[&Data]) -> Result<ArrayRef, FormatError> {
     let mut builder = Float64Builder::new();
     for (row_idx, cell) in col_data.iter().enumerate() {
         match *cell {
@@ -311,7 +309,8 @@ fn build_float64_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, For
             other => {
                 let v = CalaDataType::as_f64(other).ok_or_else(|| {
                     FormatError::Parse(format!(
-                        "column {col_name:?}, row {}: cannot coerce {other:?} to Number",
+                        "XLSX column {}, row {} cannot be coerced to Number",
+                        col_idx + 1,
                         row_idx + 2
                     ))
                 })?;
@@ -322,7 +321,7 @@ fn build_float64_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, For
     Ok(Arc::new(builder.finish()))
 }
 
-fn build_bool_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, FormatError> {
+fn build_bool_col(col_idx: usize, col_data: &[&Data]) -> Result<ArrayRef, FormatError> {
     let mut builder = BooleanBuilder::new();
     for (row_idx, cell) in col_data.iter().enumerate() {
         match cell {
@@ -333,15 +332,17 @@ fn build_bool_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, Format
             Data::String(s) => {
                 let v = parse_bool_str(s).ok_or_else(|| {
                     FormatError::Parse(format!(
-                        "column {col_name:?}, row {}: cannot coerce {s:?} to Boolean",
+                        "XLSX column {}, row {} cannot be coerced to Boolean",
+                        col_idx + 1,
                         row_idx + 2
                     ))
                 })?;
                 builder.append_value(v);
             }
-            other => {
+            _ => {
                 return Err(FormatError::Parse(format!(
-                    "column {col_name:?}, row {}: cannot coerce {other:?} to Boolean",
+                    "XLSX column {}, row {} cannot be coerced to Boolean",
+                    col_idx + 1,
                     row_idx + 2
                 )));
             }
@@ -358,7 +359,7 @@ fn parse_bool_str(s: &str) -> Option<bool> {
     }
 }
 
-fn build_date32_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, FormatError> {
+fn build_date32_col(col_idx: usize, col_data: &[&Data]) -> Result<ArrayRef, FormatError> {
     let mut builder = Date32Builder::new();
     for (row_idx, cell) in col_data.iter().enumerate() {
         match cell {
@@ -366,7 +367,8 @@ fn build_date32_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, Form
             Data::DateTime(edt) => {
                 let days = excel_datetime_to_date32(*edt).ok_or_else(|| {
                     FormatError::Parse(format!(
-                        "column {col_name:?}, row {}: Excel date serial out of range",
+                        "XLSX column {}, row {} contains an out-of-range date",
+                        col_idx + 1,
                         row_idx + 2
                     ))
                 })?;
@@ -375,7 +377,8 @@ fn build_date32_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, Form
             Data::DateTimeIso(s) => {
                 let days = parse_date_string_to_days(s).ok_or_else(|| {
                     FormatError::Parse(format!(
-                        "column {col_name:?}, row {}: cannot parse {s:?} as Date",
+                        "XLSX column {}, row {} cannot be parsed as Date",
+                        col_idx + 1,
                         row_idx + 2
                     ))
                 })?;
@@ -384,7 +387,8 @@ fn build_date32_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, Form
             Data::String(s) => {
                 let days = parse_date_string_to_days(s).ok_or_else(|| {
                     FormatError::Parse(format!(
-                        "column {col_name:?}, row {}: cannot parse {s:?} as Date",
+                        "XLSX column {}, row {} cannot be parsed as Date",
+                        col_idx + 1,
                         row_idx + 2
                     ))
                 })?;
@@ -395,7 +399,8 @@ fn build_date32_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, Form
                 let edt = ExcelDateTime::new(*f, ExcelDateTimeType::DateTime, false);
                 let days = excel_datetime_to_date32(edt).ok_or_else(|| {
                     FormatError::Parse(format!(
-                        "column {col_name:?}, row {}: Excel date serial {f} out of range",
+                        "XLSX column {}, row {} contains an out-of-range date",
+                        col_idx + 1,
                         row_idx + 2
                     ))
                 })?;
@@ -405,15 +410,17 @@ fn build_date32_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, Form
                 let edt = ExcelDateTime::new(*i as f64, ExcelDateTimeType::DateTime, false);
                 let days = excel_datetime_to_date32(edt).ok_or_else(|| {
                     FormatError::Parse(format!(
-                        "column {col_name:?}, row {}: Excel date serial {i} out of range",
+                        "XLSX column {}, row {} contains an out-of-range date",
+                        col_idx + 1,
                         row_idx + 2
                     ))
                 })?;
                 builder.append_value(days);
             }
-            other => {
+            _ => {
                 return Err(FormatError::Parse(format!(
-                    "column {col_name:?}, row {}: cannot coerce {other:?} to Date",
+                    "XLSX column {}, row {} cannot be coerced to Date",
+                    col_idx + 1,
                     row_idx + 2
                 )));
             }
@@ -471,7 +478,7 @@ fn ymd_to_unix_days(year: i32, month: u32, day: u32) -> Option<i32> {
     i32::try_from(unix_days).ok()
 }
 
-fn build_timestamp_millis_col(col_name: &str, col_data: &[&Data]) -> Result<ArrayRef, FormatError> {
+fn build_timestamp_millis_col(col_idx: usize, col_data: &[&Data]) -> Result<ArrayRef, FormatError> {
     let mut builder = TimestampMillisecondBuilder::new().with_timezone("UTC".to_string());
     for (row_idx, cell) in col_data.iter().enumerate() {
         match cell {
@@ -479,7 +486,8 @@ fn build_timestamp_millis_col(col_name: &str, col_data: &[&Data]) -> Result<Arra
             Data::DateTime(edt) => {
                 let ms = excel_datetime_to_millis(*edt).ok_or_else(|| {
                     FormatError::Parse(format!(
-                        "column {col_name:?}, row {}: Excel datetime out of range",
+                        "XLSX column {}, row {} contains an out-of-range timestamp",
+                        col_idx + 1,
                         row_idx + 2
                     ))
                 })?;
@@ -488,7 +496,8 @@ fn build_timestamp_millis_col(col_name: &str, col_data: &[&Data]) -> Result<Arra
             Data::DateTimeIso(s) | Data::String(s) => {
                 let ms = parse_rfc3339_to_millis(s).ok_or_else(|| {
                     FormatError::Parse(format!(
-                        "column {col_name:?}, row {}: cannot parse {s:?} as Timestamp",
+                        "XLSX column {}, row {} cannot be parsed as Timestamp",
+                        col_idx + 1,
                         row_idx + 2
                     ))
                 })?;
@@ -498,7 +507,8 @@ fn build_timestamp_millis_col(col_name: &str, col_data: &[&Data]) -> Result<Arra
                 let edt = ExcelDateTime::new(*f, ExcelDateTimeType::DateTime, false);
                 let ms = excel_datetime_to_millis(edt).ok_or_else(|| {
                     FormatError::Parse(format!(
-                        "column {col_name:?}, row {}: Excel datetime serial {f} out of range",
+                        "XLSX column {}, row {} contains an out-of-range timestamp",
+                        col_idx + 1,
                         row_idx + 2
                     ))
                 })?;
@@ -508,15 +518,17 @@ fn build_timestamp_millis_col(col_name: &str, col_data: &[&Data]) -> Result<Arra
                 let edt = ExcelDateTime::new(*i as f64, ExcelDateTimeType::DateTime, false);
                 let ms = excel_datetime_to_millis(edt).ok_or_else(|| {
                     FormatError::Parse(format!(
-                        "column {col_name:?}, row {}: Excel datetime serial {i} out of range",
+                        "XLSX column {}, row {} contains an out-of-range timestamp",
+                        col_idx + 1,
                         row_idx + 2
                     ))
                 })?;
                 builder.append_value(ms);
             }
-            other => {
+            _ => {
                 return Err(FormatError::Parse(format!(
-                    "column {col_name:?}, row {}: cannot coerce {other:?} to Timestamp",
+                    "XLSX column {}, row {} cannot be coerced to Timestamp",
+                    col_idx + 1,
                     row_idx + 2
                 )));
             }
@@ -545,9 +557,9 @@ fn parse_rfc3339_to_millis(s: &str) -> Option<i64> {
     i64::try_from(nanos.div_euclid(1_000_000)).ok()
 }
 
-fn build_utf8_col(col_data: &[&Data]) -> ArrayRef {
+fn build_utf8_col(col_idx: usize, col_data: &[&Data]) -> Result<ArrayRef, FormatError> {
     let mut builder = StringBuilder::new();
-    for cell in col_data.iter() {
+    for (row_idx, cell) in col_data.iter().enumerate() {
         match cell {
             Data::Empty => builder.append_null(),
             Data::String(s) => builder.append_value(s.as_str()),
@@ -562,19 +574,21 @@ fn build_utf8_col(col_data: &[&Data]) -> ArrayRef {
             }
             Data::DateTimeIso(s) => builder.append_value(s.as_str()),
             Data::DurationIso(s) => builder.append_value(s.as_str()),
-            Data::Error(e) => builder.append_value(format!("{e}")),
+            Data::Error(_) => {
+                return Err(FormatError::Parse(format!(
+                    "XLSX column {}, row {} contains an error cell",
+                    col_idx + 1,
+                    row_idx + 2
+                )));
+            }
         }
     }
-    Arc::new(builder.finish())
+    Ok(Arc::new(builder.finish()))
 }
 
-fn reject_formula_cells_in_window(
+fn reject_formula_cells(
     wb: &mut calamine::Xlsx<Cursor<Vec<u8>>>,
     sheet_name: &str,
-    window_row_start: u32,
-    window_col_start: u32,
-    window_row_end: u32,
-    window_col_end: u32,
 ) -> Result<(), FormatError> {
     let mut reader = wb
         .worksheet_cells_reader(sheet_name)
@@ -587,16 +601,9 @@ fn reject_formula_cells_in_window(
         if cell.get_value().is_empty() {
             continue;
         }
-        let (row, col) = cell.get_position();
-        if row >= window_row_start
-            && row <= window_row_end
-            && col >= window_col_start
-            && col <= window_col_end
-        {
-            return Err(FormatError::Parse(
-                "xlsx worksheet contains formula cell within configured range".to_string(),
-            ));
-        }
+        return Err(FormatError::Parse(
+            "xlsx worksheet contains a formula cell".to_string(),
+        ));
     }
 
     Ok(())

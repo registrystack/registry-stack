@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-19"
+last_reviewed: "2026-07-27"
 doc_type: tutorial
 locale: en
 standards_referenced: []
@@ -20,15 +20,8 @@ You will copy the built-in starter, prove its synthetic journey offline, inspect
 acquisition and disclosure plan, and build separate unsigned inputs for Registry Relay and
 Registry Notary.
 
-This tutorial documents Main source (unreleased).
-The source has not been designated as a release candidate.
-The `v0.13.0` `registryctl` command-tree source does not define the `preflight`, `capabilities`,
-`compare`, `promote`, `migrate`, `authoring reference`, or `project diagnostics` steps required
-by this tutorial.
-The `Registry Stack 0.13.0` value printed by `init` is bundled starter provenance, not evidence
-that every command in this tutorial shipped in `v0.13.0`.
-Follow [Test one current source revision](../../start/test-current-source-revision/) to pin the
-checkout and build the exact `registryctl` used for this journey.
+This tutorial uses Registryctl 0.14.0 and its matching release material. Do not
+mix the page with an older CLI, image lock, or starter.
 
 One project defines one registry trust domain. A deployment can use Relay only for governed
 materialization and records APIs, Notary only for source-free or self-attested evidence, or both
@@ -39,7 +32,7 @@ registries require separate projects.
   outcome="A tested project workspace with reviewable bounded HTTP configuration and unsigned Relay and Notary Config Bundle inputs."
   time="About 10 minutes after registryctl is installed"
   level="Local authoring with synthetic fixtures"
-  prerequisites={['A registryctl build with project authoring commands', 'A shell and a text editor']}
+  prerequisites={['registryctl 0.14.0 and its matching image lock', 'A shell and a text editor']}
 />
 
 This tutorial uses a fictional registry and synthetic records.
@@ -71,7 +64,7 @@ The human-readable result confirms the project, starter provenance, and next com
 ```text
 Initialized Registry Stack project "fictional-citizen-registry".
   Directory: registry-project
-  Starter: http (Registry Stack 0.13.0)
+  Starter: http (Registry Stack 0.14.0)
   Starter content: matches bundled digest
   Editor support: VS Code and Zed (registry-project/.registry-stack-editor/manifest.json)
 
@@ -84,7 +77,7 @@ Add `--format json` when another program needs the versioned initialization repo
 
 The copied `registry-stack.yaml` keeps the complete starter provenance,
 including its authored-content digest. Compare normalized effective state with
-the exact starter embedded in the current source build:
+the exact starter embedded in the installed release:
 
 ```sh
 registryctl compare \

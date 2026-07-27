@@ -204,4 +204,4 @@ unset REGISTRYCTL_IMAGE_LOCK
 | The source gate reports that Docker is unavailable | The Docker daemon is stopped or inaccessible | Start Docker and verify `docker info` before retrying |
 | The gate reports that a loopback port is occupied | Another process uses `4242` or `4255` | Stop that local process, then rerun the complete gate |
 | The lock field check exits nonzero | The lock is malformed, belongs to another package version or commit, or uses an unsupported image reference | Reject the lock; do not edit it into agreement |
-| A source-built generation command reports a missing lock | The command is `init relay` or `add notary`, which selects runnable images | Use the complete source-under-test gate, or use a verified released binary and its matching released lock |
+| A source-built local runtime command reports a missing lock | The runtime must select exact Relay and Notary image digests | Use the complete source-under-test gate, or use a verified released binary and its matching released lock |

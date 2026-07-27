@@ -4,19 +4,18 @@ use anyhow::{Context, Result};
 use clap::{error::ErrorKind, CommandFactory, Parser, Subcommand, ValueEnum};
 
 use registryctl::{
-    AddNotaryReport, AnchorReport, BundleInspectReport, BundleSignOptions, BundleSignReport,
-    BundleVerifyReport, ClassifierSafeReportedValue, DeploymentProfile, DoctorFormat,
-    FieldSourceKind, FixtureRequestBindingState, InitProjectKind, InitReport, InitSource,
-    MigrationDisposition, ProjectBuildBaselineSetOptions, ProjectBuildOptions,
-    ProjectCapabilityInventoryReportV1, ProjectCapabilityOptions, ProjectCheckOptions,
-    ProjectCommandReport, ProjectEditorSetupOptions, ProjectEditorSetupReport,
-    ProjectEnvironmentSemanticComparisonOptions, ProjectExecutionContext, ProjectFieldAddress,
-    ProjectFieldExplanation, ProjectInitOptions, ProjectMigrationOptions, ProjectMigrationReportV1,
-    ProjectPreflightOptions, ProjectPreflightReportV1, ProjectPromotionOptions,
-    ProjectPromotionReportV1, ProjectSchemaKind, ProjectSemanticComparisonOptions,
-    ProjectSemanticComparisonReportV1, ProjectStarter, ProjectStarterSemanticComparisonOptions,
-    ProjectTestOptions, ProjectTestSelection, ProjectTrustedLocalAuthoredValue,
-    PromotionDisposition, RedactionReason, Sample,
+    AnchorReport, BundleInspectReport, BundleSignOptions, BundleSignReport, BundleVerifyReport,
+    ClassifierSafeReportedValue, DeploymentProfile, DoctorFormat, FieldSourceKind,
+    FixtureRequestBindingState, InitProjectKind, InitReport, InitSource, MigrationDisposition,
+    ProjectBuildBaselineSetOptions, ProjectBuildOptions, ProjectCapabilityInventoryReportV1,
+    ProjectCapabilityOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
+    ProjectEditorSetupReport, ProjectEnvironmentSemanticComparisonOptions, ProjectExecutionContext,
+    ProjectFieldAddress, ProjectFieldExplanation, ProjectInitOptions, ProjectMigrationOptions,
+    ProjectMigrationReportV1, ProjectPreflightOptions, ProjectPreflightReportV1,
+    ProjectPromotionOptions, ProjectPromotionReportV1, ProjectSchemaKind,
+    ProjectSemanticComparisonOptions, ProjectSemanticComparisonReportV1, ProjectStarter,
+    ProjectStarterSemanticComparisonOptions, ProjectTestOptions, ProjectTestSelection,
+    ProjectTrustedLocalAuthoredValue, PromotionDisposition, RedactionReason, Sample,
 };
 
 fn main() -> Result<()> {
@@ -47,7 +46,6 @@ fn main() -> Result<()> {
         } => {
             let destination = match (&from, command.as_deref()) {
                 (Some(_), None) => Some(project_dir.as_path()),
-                (None, Some(InitCommand::Relay { dir, .. })) => Some(dir.as_path()),
                 _ => None,
             };
             if format == OutputFormat::Json
@@ -60,14 +58,14 @@ fn main() -> Result<()> {
                     starter,
                     directory: project_dir,
                 })?,
-                (None, Some(command)) => {
-                    let image_lock = registryctl::load_registryctl_image_lock()?;
-                    match *command {
-                        InitCommand::Relay { dir, sample } => {
-                            registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?
-                        }
-                    }
-                }
+                (None, Some(command)) => match *command {
+                    InitCommand::Relay { .. } => anyhow::bail!(
+                        "`registryctl init relay` was retired before 1.0. Reinitialize with \
+                         `registryctl init --from spreadsheet --project-dir <directory>` and \
+                         re-express the reviewed project intent; legacy direct projects are not \
+                         migrated automatically."
+                    ),
+                },
                 (None, None) => Cli::command()
                     .error(
                         ErrorKind::MissingRequiredArgument,
@@ -86,13 +84,13 @@ fn main() -> Result<()> {
                 OutputFormat::Json => print_json(&report)?,
             }
         }
-        Commands::Add { format, command } => match command {
-            AddCommand::Notary => {
-                let image_lock = registryctl::load_registryctl_image_lock()?;
-                let report =
-                    registryctl::add_notary_to_project(&std::env::current_dir()?, &image_lock)?;
-                print_formatted_report(format, &report, render_add_notary_report)?;
-            }
+        Commands::Add { format: _, command } => match command {
+            AddCommand::Notary => anyhow::bail!(
+                "`registryctl add notary` was retired before 1.0. Initialize a canonical project \
+                 with `registryctl init --from spreadsheet`, then author and test a Notary \
+                 evidence service in registry-stack.yaml; registryctl does not automatically \
+                 migrate the legacy add-on project."
+            ),
         },
         Commands::Test {
             project_dir,
@@ -686,26 +684,6 @@ fn render_semantic_comparison_report(report: &ProjectSemanticComparisonReportV1)
         "External approval: not evaluated; runtime behavior: not observed."
     )?;
     Ok(output.trim_end().to_owned())
-}
-
-fn render_add_notary_report(report: &AddNotaryReport) -> Result<String> {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    writeln!(output, "Added Registry Notary to {:?}.", report.project)?;
-    writeln!(
-        output,
-        "  Claim: {}",
-        human_path(std::path::Path::new(report.claim_file))
-    )?;
-    writeln!(
-        output,
-        "  Notary API after start: {}",
-        human_line(report.notary_url)
-    )?;
-    writeln!(output, "\nNext:")?;
-    writeln!(output, "  registryctl start")?;
-    Ok(output.trim_end().to_string())
 }
 
 fn render_test_report(report: &ProjectCommandReport, trace: bool) -> Result<String> {
@@ -2945,6 +2923,7 @@ mod tests {
             );
             let starter = workspace["starter"].as_str().map(|starter| match starter {
                 "http" => ProjectStarter::Http,
+                "spreadsheet" => ProjectStarter::Spreadsheet,
                 "dhis2-tracker" => ProjectStarter::Dhis2Tracker,
                 "opencrvs-dci" => ProjectStarter::OpencrvsDci,
                 "fhir-r4" => ProjectStarter::FhirR4,
@@ -3341,7 +3320,7 @@ mod tests {
 #[derive(Debug, Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum InitCommand {
-    /// Create a local Relay-backed spreadsheet API project.
+    /// Retired pre-1.0 direct Relay initializer.
     Relay {
         /// Directory to create.
         dir: PathBuf,
@@ -3548,6 +3527,7 @@ mod semantic_comparison_cli_tests {
 
         for (value, expected) in [
             ("http", ProjectStarter::Http),
+            ("spreadsheet", ProjectStarter::Spreadsheet),
             ("dhis2-tracker", ProjectStarter::Dhis2Tracker),
             ("opencrvs-dci", ProjectStarter::OpencrvsDci),
             ("fhir-r4", ProjectStarter::FhirR4),

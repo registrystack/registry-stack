@@ -20,10 +20,12 @@
       "release": null
     },
     "canonical_sources": [
-      "crates/registryctl/src/lib.rs",
-      "crates/registryctl/src/sample.rs",
-      "crates/registryctl/src/templates/relay_config.yaml.tmpl",
-      "crates/registryctl/src/templates/compose.yaml",
+      "crates/registryctl/assets/project-starters/spreadsheet/registry-stack.yaml",
+      "crates/registryctl/assets/project-starters/spreadsheet/environments/local.yaml",
+      "crates/registryctl/assets/project-starters/spreadsheet/entities/projects.yaml",
+      "crates/registryctl/assets/project-starters/spreadsheet/README.md",
+      "crates/registryctl/src/project_authoring/compiler/relay.rs",
+      "crates/registryctl/tests/project_authoring.rs",
       "crates/registryctl/tests/init_output.rs"
     ],
     "canonical_workspace": {
@@ -39,33 +41,53 @@
     "minimal_configuration": {
       "files": [
         {
-          "source": "crates/registryctl/src/templates/relay_config.yaml.tmpl",
-          "destination": "my-first-api/relay/config.yaml",
-          "format": "scaffolded",
-          "public_boundary": "generated_template"
+          "source": "crates/registryctl/assets/project-starters/spreadsheet/registry-stack.yaml",
+          "destination": "my-first-api/registry-stack.yaml",
+          "format": "yaml",
+          "public_boundary": "maintained_synthetic"
+        },
+        {
+          "source": "crates/registryctl/assets/project-starters/spreadsheet/environments/local.yaml",
+          "destination": "my-first-api/environments/local.yaml",
+          "format": "yaml",
+          "public_boundary": "maintained_synthetic"
+        },
+        {
+          "source": "crates/registryctl/assets/project-starters/spreadsheet/entities/projects.yaml",
+          "destination": "my-first-api/entities/projects.yaml",
+          "format": "yaml",
+          "public_boundary": "maintained_synthetic"
         }
       ],
-      "note": "The exact init step emits the complete disposable sample. The template is linked as its canonical source but is not rendered with unresolved generation tokens; review the emitted relay/config.yaml before runtime use."
+      "note": "The embedded spreadsheet starter is the complete maintained authored project. The workbook remains a synthetic fixture; review all authored files before building or starting the local runtime."
     },
     "artifacts": [
       {
-        "path": "my-first-api/registryctl.yaml",
-        "classification": "scaffolded_human_owned",
+        "path": "my-first-api/registry-stack.yaml",
+        "classification": "authored",
         "owner": "country_author",
         "human_edit": true,
         "version_control": true,
-        "note": "Registryctl creates this project manifest, but later edits are human-authored intent. It is not registryctl build output."
+        "note": "Human-owned registry intent, service purpose, scopes, and disclosure projection."
       },
       {
-        "path": "my-first-api/relay/config.yaml",
-        "classification": "scaffolded_human_owned",
+        "path": "my-first-api/entities/projects.yaml",
+        "classification": "authored",
+        "owner": "country_author",
+        "human_edit": true,
+        "version_control": true,
+        "note": "Human-owned strict spreadsheet schema and materialization bounds."
+      },
+      {
+        "path": "my-first-api/environments/local.yaml",
+        "classification": "environment_binding",
         "owner": "operator",
         "human_edit": true,
         "version_control": true,
-        "note": "Registryctl creates the first Relay runtime configuration. The operator owns subsequent policy, caller, and data-binding review."
+        "note": "Operator-owned local workbook binding, source generation, and local caller setup."
       },
       {
-        "path": "my-first-api/data/benefits_casework.xlsx",
+        "path": "my-first-api/data/public_works_projects.xlsx",
         "classification": "synthetic_fixture",
         "owner": "country_author",
         "human_edit": true,
@@ -73,37 +95,37 @@
         "note": "The generated workbook contains synthetic tutorial records only."
       },
       {
-        "path": "my-first-api/secrets/local.env",
-        "classification": "environment_binding",
-        "owner": "operator",
-        "human_edit": true,
+        "path": "my-first-api/.registry-stack/build/local",
+        "classification": "generated_unsigned",
+        "owner": "registryctl",
+        "human_edit": false,
         "version_control": false,
-        "note": "Registryctl generates local-only credentials. This file must not be reused or committed."
+        "note": "Registryctl-owned deterministic unsigned Relay input and artifact manifest."
       },
       {
-        "path": "my-first-api/output/smoke-results.json",
+        "path": "my-first-api/.registry-stack/runtime/local",
         "classification": "runtime_observed",
         "owner": "registryctl",
         "human_edit": false,
         "version_control": false,
-        "note": "The report records one local runtime observation and is not authored configuration."
+        "note": "Registryctl-owned private local credentials and closed Compose runtime material."
       }
     ],
     "fixture": {
       "source": "crates/registryctl/src/sample.rs",
       "format": "generated_sample",
       "expected_trace": [
-        "Registryctl generates the synthetic benefits workbook and local-only credentials.",
-        "Relay starts only after strict configuration and deployment gates pass.",
-        "Anonymous access is denied, purpose and scope are enforced, and the row reader receives only allowed fields.",
-        "The smoke report records local statuses without exposing credential values."
+        "Registryctl initializes the embedded synthetic workbook and complete authored project.",
+        "Preflight, check, and build validate the strict spreadsheet binding and compile the Relay input.",
+        "Doctor and start prepare the isolated local runtime after the authored and generated surfaces are reviewed.",
+        "Smoke exercises maintained local allowed and denied requests without publishing credentials."
       ]
     },
     "contract": {
       "proves": [
-        "The source-under-test scaffold can start one local Relay over synthetic tabular data.",
+        "The embedded starter compiles one local Relay over synthetic tabular data.",
         "Protected metadata and record operations enforce configured caller, scope, purpose, and field-release boundaries.",
-        "Scaffolded runtime files and runtime-observed reports have distinct ownership."
+        "Authored, generated build, and generated runtime surfaces have distinct ownership."
       ],
       "does_not_prove": [
         "Compatibility with a country spreadsheet, database, identity provider, or network.",
@@ -115,9 +137,9 @@
       "kind": "spreadsheet_runtime"
     },
     "review": [
-      "Inspect registryctl.yaml and relay/config.yaml before first start; treat both as human-owned after scaffolding.",
-      "Confirm secrets/local.env is excluded from version control and contains no real credential.",
-      "Inspect output/smoke-results.json as runtime evidence, not as configuration or production acceptance."
+      "Inspect registry-stack.yaml, entities/projects.yaml, and environments/local.yaml before first build.",
+      "Confirm the synthetic workbook and generated runtime material are not substituted for country data or production credentials.",
+      "Inspect .registry-stack/build/local and .registry-stack/runtime/local as generated output, not as authored configuration or production acceptance."
     ],
     "gates": [
       {
@@ -205,19 +227,19 @@
       },
       "execution": {
         "status": "verified",
-        "source_path": "docs/site/scripts/check-registryctl-tutorials.sh",
-        "test_id": "run_relay_tutorial()",
-        "command": "npm run check:tutorial:registryctl",
-        "workflow": ".github/workflows/ci.yml#registryctl-tutorials",
+        "source_path": "docs/site/scripts/registryctl-tutorial.test.mjs",
+        "test_id": "source tutorial gate validates canonical authoring without rewriting release images",
+        "command": "node --test scripts/registryctl-tutorial.test.mjs",
+        "workflow": ".github/workflows/ci.yml#docs",
         "revision": "main",
         "lifecycle": "current_unreleased"
       },
       "runtime": {
-        "status": "verified",
-        "source_path": "docs/site/scripts/check-registryctl-tutorials.sh",
-        "test_id": "run_relay_tutorial()",
-        "command": "npm run check:tutorial:registryctl",
-        "workflow": ".github/workflows/ci.yml#registryctl-tutorials",
+        "status": "not_claimed",
+        "source_path": "docs/site/scripts/generate-standard-journeys.test.mjs",
+        "test_id": "keeps runtime and product activation claims bounded to traceable evidence",
+        "command": "node --test scripts/generate-standard-journeys.test.mjs",
+        "workflow": ".github/workflows/ci.yml#docs",
         "revision": "main",
         "lifecycle": "current_unreleased"
       }
@@ -237,12 +259,28 @@
     ],
     "configuration_files": [
       {
-        "source": "crates/registryctl/src/templates/relay_config.yaml.tmpl",
-        "destination": "my-first-api/relay/config.yaml",
-        "format": "scaffolded",
-        "public_boundary": "generated_template",
-        "language": null,
-        "content": null
+        "source": "crates/registryctl/assets/project-starters/spreadsheet/registry-stack.yaml",
+        "destination": "my-first-api/registry-stack.yaml",
+        "format": "yaml",
+        "public_boundary": "maintained_synthetic",
+        "language": "yaml",
+        "content": "entities:\n  projects:\n    file: entities/projects.yaml\nregistry:\n  id: fictional-public-works-registry\nservices:\n  projects-records:\n    access_rights: restricted\n    api:\n      filters:\n        project_id:\n          - eq\n      pagination:\n        default_limit: 50\n        max_limit: 100\n      projection:\n        - project_id\n        - district_code\n        - sector\n        - status\n      purposes:\n        - public-works-case-management\n      required_principal_filters:\n        - project_id\n      scopes:\n        aggregate: projects:aggregate\n        evidence_verification: projects:evidence_verification\n        metadata: projects:metadata\n        rows: projects:rows\n      standards:\n        ogc_features: false\n        sp_dci: false\n    description: Protected operational view of synthetic public works projects.\n    entity: projects\n    kind: records_api\n    owner: Public Works Delivery Unit\n    sensitivity: confidential\n    title: Fictional public works projects\n    update_frequency: as_needed\nstarter:\n  content_digest: sha256:67f94eaa7c657df498db5e5bfe9adaa022f6f2ecad2b3883a5174e9c1b2dd531\n  id: spreadsheet\n  release: 0.13.0\nversion: 1\n"
+      },
+      {
+        "source": "crates/registryctl/assets/project-starters/spreadsheet/environments/local.yaml",
+        "destination": "my-first-api/environments/local.yaml",
+        "format": "yaml",
+        "public_boundary": "maintained_synthetic",
+        "language": "yaml",
+        "content": "deployment:\n  profile: local\n  relay:\n    service: records-relay\nentities:\n  projects:\n    columns:\n      district_code: district_code\n      project_id: project_id\n      sector: sector\n      status: status\n    generation: \"1\"\n    provider:\n      header_row: 1\n      path: /var/lib/registry/public_works_projects.xlsx\n      project_file: data/public_works_projects.xlsx\n      sheet: Projects\n      type: xlsx\n    source_revision: synthetic-public-works-v1\nrelay:\n  allowed_clients:\n    - public-works-casework\n  audience: registry-relay\n  issuer: https://workload-issuer.internal.invalid\n  jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json\n  local_api_keys:\n    match_principal: pw_001\n    no_match_principal: registryctl_local_no_match\n    scopes:\n      - projects:metadata\n      - projects:rows\n  origin: https://records-relay.internal.invalid\nversion: 1\n"
+      },
+      {
+        "source": "crates/registryctl/assets/project-starters/spreadsheet/entities/projects.yaml",
+        "destination": "my-first-api/entities/projects.yaml",
+        "format": "yaml",
+        "public_boundary": "maintained_synthetic",
+        "language": "yaml",
+        "content": "id: projects\nmaterialization:\n  max_bytes: 16MiB\n  max_records: 10000\n  refresh: manual\n  retain_generations: 2\nprimary_key: project_id\nrevision: 1\nschema:\n  additionalProperties: false\n  properties:\n    district_code:\n      maxLength: 32\n      minLength: 1\n      type: string\n    project_id:\n      maxLength: 64\n      minLength: 1\n      type: string\n    sector:\n      maxLength: 64\n      minLength: 1\n      type: string\n    status:\n      maxLength: 32\n      minLength: 1\n      type: string\n  required:\n    - project_id\n    - district_code\n    - sector\n    - status\n  type: object\nversion: 1\n"
       }
     ],
     "fixture_excerpt": {
@@ -253,15 +291,15 @@
       {
         "id": "spreadsheet-init",
         "kind": "command",
-        "label": "Create the disposable spreadsheet scaffold",
+        "label": "Create the canonical spreadsheet project",
         "cwd": ".",
         "argv": [
           "registryctl",
           "init",
-          "relay",
-          "my-first-api",
-          "--sample",
-          "benefits"
+          "--from",
+          "spreadsheet",
+          "--project-dir",
+          "my-first-api"
         ]
       },
       {
@@ -324,7 +362,9 @@
     "canonical_sources": [
       "crates/registry-relay/openapi/registry-relay.openapi.json",
       "crates/registry-relay/tests/api_docs.rs",
-      "crates/registryctl/src/templates/relay_config.yaml.tmpl"
+      "crates/registryctl/assets/project-starters/spreadsheet/registry-stack.yaml",
+      "crates/registryctl/assets/project-starters/spreadsheet/environments/local.yaml",
+      "crates/registryctl/assets/project-starters/spreadsheet/entities/projects.yaml"
     ],
     "canonical_workspace": {
       "id": "registry-relay",
@@ -343,22 +383,34 @@
     "minimal_configuration": {
       "files": [
         {
-          "source": "crates/registryctl/src/templates/relay_config.yaml.tmpl",
-          "destination": "openapi-inspection/relay/config.yaml",
-          "format": "scaffolded",
-          "public_boundary": "generated_template"
+          "source": "crates/registryctl/assets/project-starters/spreadsheet/registry-stack.yaml",
+          "destination": "openapi-inspection/registry-stack.yaml",
+          "format": "yaml",
+          "public_boundary": "maintained_synthetic"
+        },
+        {
+          "source": "crates/registryctl/assets/project-starters/spreadsheet/environments/local.yaml",
+          "destination": "openapi-inspection/environments/local.yaml",
+          "format": "yaml",
+          "public_boundary": "maintained_synthetic"
+        },
+        {
+          "source": "crates/registryctl/assets/project-starters/spreadsheet/entities/projects.yaml",
+          "destination": "openapi-inspection/entities/projects.yaml",
+          "format": "yaml",
+          "public_boundary": "maintained_synthetic"
         }
       ],
-      "note": "The exact init step emits the complete disposable local configuration. That sample explicitly sets server.openapi_requires_auth to false; the product default remains true."
+      "note": "The exact init step emits the complete embedded spreadsheet project. Configure and authenticate the running instance according to its reviewed local environment before capturing its OpenAPI document."
     },
     "artifacts": [
       {
-        "path": "openapi-inspection/relay/config.yaml",
-        "classification": "scaffolded_human_owned",
+        "path": "openapi-inspection/registry-stack.yaml",
+        "classification": "authored",
         "owner": "operator",
         "human_edit": true,
         "version_control": true,
-        "note": "Exact configuration emitted by the disposable init step. It explicitly selects the local public OpenAPI opt-out and becomes operator-owned after scaffolding."
+        "note": "Exact authored project emitted by the disposable init step and reviewed before local runtime use."
       },
       {
         "path": "crates/registry-relay/openapi/registry-relay.openapi.json",
@@ -381,20 +433,20 @@
       "source": "crates/registry-relay/tests/api_docs.rs",
       "format": "source_reference",
       "expected_trace": [
-        "Registryctl creates a disposable local scaffold whose generated config explicitly sets server.openapi_requires_auth to false.",
-        "The separately started local instance exposes an unauthenticated GET /openapi.json only because that explicit opt-out is selected.",
-        "The captured OpenAPI document declares version 3.1.0 and is written to openapi-inspection/output/instance.openapi.json."
+        "Registryctl creates a disposable local spreadsheet project.",
+        "The separately started local instance exposes the OpenAPI document according to its reviewed authentication configuration.",
+        "The captured OpenAPI document is written to openapi-inspection/output/instance.openapi.json."
       ]
     },
     "contract": {
       "proves": [
-        "The cited product source test proves that the explicit local opt-out exposes an OpenAPI 3.1.0 document without authentication.",
-        "Performing the separate runtime interface captures the generated contract selected by that disposable instance."
+        "The cited product source test covers the local OpenAPI route behavior.",
+        "Performing the separate authenticated runtime interface captures the generated contract selected by that disposable instance."
       ],
       "does_not_prove": [
         "Downstream consumers remain compatible with every changed operation.",
         "OpenAPI-assisted upstream source authoring; that compiler contract remains deferred.",
-        "That the product default is public, or that any operation described by the captured document is authorized without its configured credentials."
+        "That the product default is public, or that any operation described by the captured document is authorized without configured credentials."
       ]
     },
     "command_recipe": {
@@ -402,9 +454,9 @@
     },
     "review": [
       "Review the server and catalog configuration selecting the API surface.",
-      "Confirm the generated disposable config is the intended local-only openapi_requires_auth false opt-out before starting it.",
-      "Inspect the exact instance document returned through the unauthenticated local route.",
-      "Record the source revision, instance binding, capture time, and document digest; no credential is required or recorded for this explicit local opt-out."
+      "Confirm the generated disposable project selects the intended authentication configuration before starting it.",
+      "Inspect the exact instance document returned through the authenticated local route.",
+      "Record the source revision, instance binding, capture time, and document digest without recording credentials."
     ],
     "gates": [
       {
@@ -513,12 +565,28 @@
     ],
     "configuration_files": [
       {
-        "source": "crates/registryctl/src/templates/relay_config.yaml.tmpl",
-        "destination": "openapi-inspection/relay/config.yaml",
-        "format": "scaffolded",
-        "public_boundary": "generated_template",
-        "language": null,
-        "content": null
+        "source": "crates/registryctl/assets/project-starters/spreadsheet/registry-stack.yaml",
+        "destination": "openapi-inspection/registry-stack.yaml",
+        "format": "yaml",
+        "public_boundary": "maintained_synthetic",
+        "language": "yaml",
+        "content": "entities:\n  projects:\n    file: entities/projects.yaml\nregistry:\n  id: fictional-public-works-registry\nservices:\n  projects-records:\n    access_rights: restricted\n    api:\n      filters:\n        project_id:\n          - eq\n      pagination:\n        default_limit: 50\n        max_limit: 100\n      projection:\n        - project_id\n        - district_code\n        - sector\n        - status\n      purposes:\n        - public-works-case-management\n      required_principal_filters:\n        - project_id\n      scopes:\n        aggregate: projects:aggregate\n        evidence_verification: projects:evidence_verification\n        metadata: projects:metadata\n        rows: projects:rows\n      standards:\n        ogc_features: false\n        sp_dci: false\n    description: Protected operational view of synthetic public works projects.\n    entity: projects\n    kind: records_api\n    owner: Public Works Delivery Unit\n    sensitivity: confidential\n    title: Fictional public works projects\n    update_frequency: as_needed\nstarter:\n  content_digest: sha256:67f94eaa7c657df498db5e5bfe9adaa022f6f2ecad2b3883a5174e9c1b2dd531\n  id: spreadsheet\n  release: 0.13.0\nversion: 1\n"
+      },
+      {
+        "source": "crates/registryctl/assets/project-starters/spreadsheet/environments/local.yaml",
+        "destination": "openapi-inspection/environments/local.yaml",
+        "format": "yaml",
+        "public_boundary": "maintained_synthetic",
+        "language": "yaml",
+        "content": "deployment:\n  profile: local\n  relay:\n    service: records-relay\nentities:\n  projects:\n    columns:\n      district_code: district_code\n      project_id: project_id\n      sector: sector\n      status: status\n    generation: \"1\"\n    provider:\n      header_row: 1\n      path: /var/lib/registry/public_works_projects.xlsx\n      project_file: data/public_works_projects.xlsx\n      sheet: Projects\n      type: xlsx\n    source_revision: synthetic-public-works-v1\nrelay:\n  allowed_clients:\n    - public-works-casework\n  audience: registry-relay\n  issuer: https://workload-issuer.internal.invalid\n  jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json\n  local_api_keys:\n    match_principal: pw_001\n    no_match_principal: registryctl_local_no_match\n    scopes:\n      - projects:metadata\n      - projects:rows\n  origin: https://records-relay.internal.invalid\nversion: 1\n"
+      },
+      {
+        "source": "crates/registryctl/assets/project-starters/spreadsheet/entities/projects.yaml",
+        "destination": "openapi-inspection/entities/projects.yaml",
+        "format": "yaml",
+        "public_boundary": "maintained_synthetic",
+        "language": "yaml",
+        "content": "id: projects\nmaterialization:\n  max_bytes: 16MiB\n  max_records: 10000\n  refresh: manual\n  retain_generations: 2\nprimary_key: project_id\nrevision: 1\nschema:\n  additionalProperties: false\n  properties:\n    district_code:\n      maxLength: 32\n      minLength: 1\n      type: string\n    project_id:\n      maxLength: 64\n      minLength: 1\n      type: string\n    sector:\n      maxLength: 64\n      minLength: 1\n      type: string\n    status:\n      maxLength: 32\n      minLength: 1\n      type: string\n  required:\n    - project_id\n    - district_code\n    - sector\n    - status\n  type: object\nversion: 1\n"
       }
     ],
     "fixture_excerpt": {
@@ -534,10 +602,10 @@
         "argv": [
           "registryctl",
           "init",
-          "relay",
-          "openapi-inspection",
-          "--sample",
-          "benefits"
+          "--from",
+          "spreadsheet",
+          "--project-dir",
+          "openapi-inspection"
         ]
       },
       {
@@ -549,7 +617,7 @@
           "registryctl",
           "start"
         ],
-        "note": "The generated local sample explicitly opts out of OpenAPI authentication. Product defaults remain authentication-gated."
+        "note": "The generated local project uses its reviewed authentication configuration. Product defaults remain authentication-gated."
       },
       {
         "id": "openapi-capture",
@@ -557,9 +625,9 @@
         "label": "Capture the disposable instance contract",
         "method": "GET",
         "url": "http://127.0.0.1:4242/openapi.json",
-        "authentication": "none_disposable_local_opt_out",
+        "authentication": "configured_local_authentication",
         "output_path": "openapi-inspection/output/instance.openapi.json",
-        "note": "Use an HTTP client that preserves the response bytes. This interface is public only because the generated disposable local configuration sets server.openapi_requires_auth to false."
+        "note": "Use an HTTP client that preserves the response bytes and authenticates according to the reviewed local configuration."
       },
       {
         "id": "openapi-consumer-review",
@@ -1845,17 +1913,17 @@
   {
     "id": "registry-backed-notary-claim",
     "slug": "journeys/registry-backed-notary-claim",
-    "title": "Evaluate a registry-backed Notary predicate",
-    "description": "Evaluate one disclosure-minimizing Notary claim from normalized Relay evidence.",
-    "outcome": "Notary returns the explicit active-registration-exists predicate from registry-backed evidence.",
+    "title": "Evaluate a registry-backed claim offline",
+    "description": "Evaluate maintained match and no-match claim fixtures from the embedded exact snapshot starter.",
+    "outcome": "Offline fixture tests show the bounded claim result for one exact local snapshot selector.",
     "level": "Intermediate",
     "prerequisites": [
-      "A Relay person-demographics integration",
-      "registryctl and images built from one exact source revision",
-      "Synthetic match, pending, non-match, and ambiguity fixtures"
+      "registryctl built from the current source revision",
+      "The embedded exact snapshot starter",
+      "Synthetic match and no-match fixture expectations"
     ],
     "expected_time": "25 minutes",
-    "evidence_class": "source_and_generated_contract",
+    "evidence_class": "maintained_offline_fixture",
     "evidence_lifecycle": "main_unreleased",
     "availability": {
       "status": "current_unreleased",
@@ -1863,139 +1931,150 @@
       "release": null
     },
     "canonical_sources": [
-      "crates/registryctl/src/templates/notary_addon/registry-stack.yaml",
-      "crates/registryctl/src/templates/notary_addon/environments/local.yaml",
-      "crates/registryctl/src/templates/notary_addon/integrations/person-demographics/integration.yaml",
-      "crates/registryctl/src/templates/notary_addon/integrations/person-demographics/fixtures/match.yaml"
+      "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/registry-stack.yaml",
+      "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/environments/local.yaml",
+      "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/entities/people.yaml",
+      "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/integrations/person-snapshot/integration.yaml",
+      "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/integrations/person-snapshot/fixtures/match.yaml",
+      "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/integrations/person-snapshot/fixtures/no-match.yaml"
     ],
     "canonical_workspace": {
-      "id": "registry-notary",
-      "path": "crates/registryctl/src/templates/notary_addon"
+      "id": "snapshot",
+      "path": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact"
     },
     "catalog_references": [
       {
+        "catalog": "project_authoring",
+        "id": "snapshot"
+      },
+      {
         "catalog": "projects",
         "id": "registry-relay"
-      },
-      {
-        "catalog": "projects",
-        "id": "registry-notary"
-      },
-      {
-        "catalog": "contracts",
-        "id": "registry-notary.openapi"
       }
     ],
     "minimal_configuration": {
       "files": [
         {
-          "source": "crates/registryctl/src/templates/notary_addon/registry-stack.yaml",
-          "destination": "my-first-api/notary/project/registry-stack.yaml",
+          "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/registry-stack.yaml",
+          "destination": "snapshot-project/registry-stack.yaml",
           "format": "yaml",
           "public_boundary": "maintained_synthetic"
         },
         {
-          "source": "crates/registryctl/src/templates/notary_addon/environments/local.yaml",
-          "destination": "my-first-api/notary/project/environments/local.yaml",
+          "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/environments/local.yaml",
+          "destination": "snapshot-project/environments/local.yaml",
           "format": "yaml",
           "public_boundary": "maintained_synthetic"
         },
         {
-          "source": "crates/registryctl/src/templates/notary_addon/integrations/person-demographics/integration.yaml",
-          "destination": "my-first-api/notary/project/integrations/person-demographics/integration.yaml",
+          "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/entities/people.yaml",
+          "destination": "snapshot-project/entities/people.yaml",
+          "format": "yaml",
+          "public_boundary": "maintained_synthetic"
+        },
+        {
+          "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/integrations/person-snapshot/integration.yaml",
+          "destination": "snapshot-project/integrations/person-snapshot/integration.yaml",
           "format": "yaml",
           "public_boundary": "maintained_synthetic"
         }
       ],
-      "note": "The add-on step emits this complete authored Notary project set. The explicit active-registration-exists predicate remains in the full project file and is checked against the maintained fixture."
+      "note": "The embedded snapshot starter is the complete authored project. It proves offline claim behavior from a local exact selector, not a live Notary request or source checkout claim."
     },
     "artifacts": [
       {
-        "path": "my-first-api/notary/project/registry-stack.yaml",
+        "path": "snapshot-project/registry-stack.yaml",
         "classification": "authored",
         "owner": "country_author",
         "human_edit": true,
         "version_control": true,
-        "note": "Human-owned consultation and claim rule."
+        "note": "Human-owned registry and claim intent for the embedded snapshot project."
       },
       {
-        "path": "my-first-api/notary/project/integrations/person-demographics/fixtures/match.yaml",
+        "path": "snapshot-project/integrations/person-snapshot/fixtures/match.yaml",
         "classification": "synthetic_fixture",
         "owner": "country_author",
         "human_edit": true,
         "version_control": true,
-        "note": "Maintained predicate expectation."
+        "note": "Maintained offline match expectation."
       },
       {
-        "path": "my-first-api/notary/project/.registry-stack/build/local/reviewable",
+        "path": "snapshot-project/integrations/person-snapshot/fixtures/no-match.yaml",
+        "classification": "synthetic_fixture",
+        "owner": "country_author",
+        "human_edit": true,
+        "version_control": true,
+        "note": "Maintained offline no-match expectation."
+      },
+      {
+        "path": "snapshot-project/.registry-stack/build/local/reviewable",
         "classification": "generated_unsigned",
         "owner": "registryctl",
         "human_edit": false,
         "version_control": false,
-        "note": "Exact emitted human-review directory for the Notary project build."
+        "note": "Exact emitted human-review directory for the snapshot project build."
       },
       {
-        "path": "my-first-api/notary/project/.registry-stack/build/local/private/relay",
+        "path": "snapshot-project/.registry-stack/build/local/private/relay",
         "classification": "generated_unsigned",
         "owner": "registryctl",
         "human_edit": false,
         "version_control": false,
-        "note": "Exact emitted unsigned Relay consultation input."
+        "note": "Exact emitted unsigned Relay input for snapshot materialization."
       },
       {
-        "path": "my-first-api/notary/project/.registry-stack/build/local/private/notary",
+        "path": "snapshot-project/.registry-stack/build/local/private/notary",
         "classification": "generated_unsigned",
         "owner": "registryctl",
         "human_edit": false,
         "version_control": false,
-        "note": "Exact emitted unsigned Notary product input."
+        "note": "Exact emitted unsigned Notary input for the combined snapshot project."
       }
     ],
     "fixture": {
-      "source": "crates/registryctl/src/templates/notary_addon/integrations/person-demographics/fixtures/match.yaml",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/integrations/person-snapshot/fixtures/match.yaml",
       "format": "yaml",
       "expected_trace": [
-        "Relay-backed enrollment evidence matches with active status.",
-        "Notary evaluates active-registration-exists.",
-        "The response discloses the predicate rather than the source record."
+        "The exact local selector returns the maintained match result for one synthetic key.",
+        "The focused no-match fixture returns no_match for a different synthetic key.",
+        "Claims are evaluated offline from normalized snapshot evidence."
       ]
     },
     "contract": {
       "proves": [
-        "The maintained fixture expects active-registration-exists to be true.",
-        "Relay evidence and the Notary predicate agree in current source.",
-        "True means the bounded selected source returned exactly one matching active registration."
+        "The maintained match fixture expects population-record-exists to be true.",
+        "The maintained no-match fixture expects population-record-exists to be false.",
+        "The exact selector and its normalized claims are coherent in the embedded snapshot project."
       ],
       "does_not_prove": [
-        "Live registry data, workload identity, or production policy approval.",
-        "False does not prove global nonexistence, identity fraud, ineligibility, or a legal negative.",
-        "The result does not prove that the caller is the matched person."
+        "A live Notary claim, live source checkout, workload identity, or production policy approval.",
+        "False proves only the maintained no-match fixture, not global nonexistence, identity fraud, ineligibility, or a legal negative.",
+        "The fixture result does not prove that a live caller is the matched person."
       ]
     },
     "command_recipe": {
-      "kind": "notary_claim"
+      "kind": "snapshot_first_claim"
     },
     "review": [
-      "Review the consultation mapping, claim identifier, CEL rule, and all fixture claim keys.",
-      "Confirm the rule discloses no unnecessary attributes.",
-      "Keep false bounded to no active matching record found by this consultation in the selected source.",
+      "Review the exact selector, claim identifiers, and both focused fixture expectations.",
+      "Keep match and no-match results bounded to the synthetic snapshot fixture.",
       "Review Relay and Notary generated inputs independently."
     ],
     "gates": [
       {
-        "name": "fixture",
-        "proves": "The maintained match produces the explicit predicate.",
-        "does_not_prove": "Live registry data produces the same result."
+        "name": "focused fixtures",
+        "proves": "The maintained match and no-match claims evaluate as expected offline.",
+        "does_not_prove": "A live Notary request or source checkout produces the same result."
       },
       {
-        "name": "cross-product check",
-        "proves": "Relay outputs and Notary dependencies are statically compatible.",
-        "does_not_prove": "Runtime trust and network configuration are valid."
+        "name": "preflight and check",
+        "proves": "The authored snapshot project and local environment are statically coherent.",
+        "does_not_prove": "Runtime trust, network configuration, or operator approval are valid."
       },
       {
-        "name": "smoke",
-        "proves": "The local combined runtime satisfies its packaged smoke contract.",
-        "does_not_prove": "Production legal, disclosure, or availability requirements."
+        "name": "compare and build",
+        "proves": "Authored semantics match the embedded starter and produce unsigned product inputs.",
+        "does_not_prove": "A packaged runtime, production legal approval, disclosure approval, or availability."
       }
     ],
     "production_delta": {
@@ -2029,15 +2108,15 @@
         "evidence_limitation": "Offline synthetic evidence does not prove live source compatibility."
       },
       {
-        "code": "notary.relay.profile_mismatch",
-        "family": "notary_activation",
-        "product": "registry_notary",
-        "meaning": "Relay consultation profile does not match the configured contract pin",
-        "remediation": "reconcile the Notary profile id and contract hash with the reviewed Relay consultation contract",
-        "docs_anchor": "/reference/diagnostics/operator/#registry_notary--relay-profile-mismatch",
+        "code": "registryctl.preflight.runtime_file_missing",
+        "family": "operator_preflight",
+        "product": "registryctl",
+        "meaning": "A declared runtime file is missing.",
+        "remediation": "Replace the runtime file.",
+        "docs_anchor": "/reference/diagnostics/operator/#registryctl--registryctl.preflight.runtime_file_missing",
         "lifecycle": "unreleased",
         "introduced_in": null,
-        "evidence_limitation": "The category confirms only the failed activation boundary; it does not disclose paths, URLs, hashes, credentials, identifiers, parser text, authored values, source responses, or country values."
+        "evidence_limitation": "Preflight does not contact live sources or prove remote availability."
       }
     ],
     "next_task": {
@@ -2056,19 +2135,19 @@
       },
       "execution": {
         "status": "verified",
-        "source_path": "docs/site/scripts/check-registryctl-tutorials.sh",
-        "test_id": "run_notary_tutorial()",
-        "command": "npm run check:tutorial:registryctl",
-        "workflow": ".github/workflows/ci.yml#registryctl-tutorials",
+        "source_path": "crates/registryctl/tests/project_authoring.rs",
+        "test_id": "subject_mismatch_not_applicable_rejects_comparable_output_contract",
+        "command": "cargo test --locked -p registryctl --test project_authoring subject_mismatch_not_applicable_rejects_comparable_output_contract -- --exact",
+        "workflow": ".github/workflows/ci.yml#project-authoring-determinism",
         "revision": "main",
         "lifecycle": "current_unreleased"
       },
       "runtime": {
-        "status": "verified",
-        "source_path": "docs/site/scripts/check-registryctl-tutorials.sh",
-        "test_id": "run_notary_tutorial()",
-        "command": "npm run check:tutorial:registryctl",
-        "workflow": ".github/workflows/ci.yml#registryctl-tutorials",
+        "status": "not_claimed",
+        "source_path": "docs/site/scripts/generate-standard-journeys.test.mjs",
+        "test_id": "keeps runtime and product activation claims bounded to traceable evidence",
+        "command": "node --test scripts/generate-standard-journeys.test.mjs",
+        "workflow": ".github/workflows/ci.yml#docs",
         "revision": "main",
         "lifecycle": "current_unreleased"
       }
@@ -2088,111 +2167,148 @@
     ],
     "configuration_files": [
       {
-        "source": "crates/registryctl/src/templates/notary_addon/registry-stack.yaml",
-        "destination": "my-first-api/notary/project/registry-stack.yaml",
+        "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/registry-stack.yaml",
+        "destination": "snapshot-project/registry-stack.yaml",
         "format": "yaml",
         "public_boundary": "maintained_synthetic",
         "language": "yaml",
-        "content": "entities:\n  person:\n    file: entities/person.yaml\nintegrations:\n  person-demographics:\n    file: integrations/person-demographics/integration.yaml\nregistry:\n  id: tutorial-benefits-registry\nservices:\n  registration-verification:\n    access:\n      scopes:\n        - benefits_casework:evidence\n    claims:\n      active-registration-exists:\n        cel: enrollment.matched && enrollment.registration_status == \"active\"\n        disclosure: predicate\n    consent: not_required\n    consultations:\n      enrollment:\n        input:\n          date_of_birth: request.target.attributes.date_of_birth\n          family_name: request.target.attributes.family_name\n          given_name: request.target.attributes.given_name\n        integration: person-demographics\n    kind: evidence\n    legal_basis: public-service-delivery\n    purpose: https://example.local/purpose/tutorial\n    version: 1\nversion: 1\n"
+        "content": "entities:\n  people:\n    file: entities/people.yaml\nintegrations:\n  person-snapshot:\n    file: integrations/person-snapshot/integration.yaml\nregistry:\n  id: fictional-population-registry\nservices:\n  benefits-eligibility:\n    access:\n      scopes:\n        - evidence:population:read\n    claims:\n      population-record-exists:\n        cel: person.matched\n        disclosure: predicate\n      population-registration-status:\n        disclosure: value\n        output: person.registration_status\n      residency-confirmed:\n        disclosure: predicate\n        output: person.residency_confirmed\n    consent: not_required\n    consultations:\n      person:\n        input:\n          person_id: request.target.identifiers.population_person_id\n        integration: person-snapshot\n    credential_profiles:\n      population-evidence:\n        claims:\n          - population-record-exists\n          - population-registration-status\n          - residency-confirmed\n        format: dc+sd-jwt\n        type: https://credentials.invalid/population-evidence/v1\n        validity: 10m\n    kind: evidence\n    legal_basis: public-service-delivery\n    purpose: benefits-eligibility\n    version: 1\n  emergency-assistance:\n    access:\n      scopes:\n        - evidence:population:emergency\n    claims:\n      emergency-record-exists:\n        cel: person.matched\n        disclosure: predicate\n      emergency-status:\n        disclosure: redacted\n        output: person.registration_status\n    consent: not_required\n    consultations:\n      person:\n        input:\n          person_id: request.target.identifiers.population_person_id\n        integration: person-snapshot\n    credential_profiles:\n      emergency-status:\n        claims:\n          - emergency-record-exists\n          - emergency-status\n        format: dc+sd-jwt\n        type: https://credentials.invalid/emergency-status/v1\n        validity: 5m\n    kind: evidence\n    legal_basis: vital-interests\n    purpose: emergency-assistance\n    version: 1\nstarter:\n  content_digest: sha256:8fb0772e01333fd084974550f76829e829bc43f6e6941ac50d2e92522baadede\n  id: snapshot\n  release: 0.13.0\nversion: 1\n"
       },
       {
-        "source": "crates/registryctl/src/templates/notary_addon/environments/local.yaml",
-        "destination": "my-first-api/notary/project/environments/local.yaml",
+        "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/environments/local.yaml",
+        "destination": "snapshot-project/environments/local.yaml",
         "format": "yaml",
         "public_boundary": "maintained_synthetic",
         "language": "yaml",
-        "content": "callers:\n  tutorial-evaluator:\n    api_key_fingerprint:\n      secret: TUTORIAL_EVALUATOR_HASH\n    scopes:\n      - benefits_casework:evidence\ndeployment:\n  notary:\n    service: registry-notary\n  profile: local\n  relay:\n    service: registry-relay-consultation\nentities:\n  person:\n    columns:\n      date_of_birth: date_of_birth\n      family_name: family_name\n      given_name: given_name\n      household_id: household_id\n      national_id: national_id\n      person_id: person_id\n      registration_status: registration_status\n      relationship_to_head: relationship_to_head\n    generation: tutorial-local-v1\n    provider:\n      header_row: 1\n      path: /var/lib/registry/benefits_casework.xlsx\n      sheet: Persons\n      type: xlsx\n    source_revision: tutorial-benefits-workbook-v1\nnotary_cel:\n  worker_memory_bytes: 1073741824\nnotary_relay:\n  base_url: http://127.0.0.1:8082\n  token_file: /run/secrets/notary-relay.jwt\n  workload_client_id: registry-notary\nrelay:\n  allowed_clients:\n    - registry-notary\n  audience: registry-relay\n  issuer: http://127.0.0.1:8081\n  jwks_url: http://127.0.0.1:8083/jwks.json\n  origin: http://127.0.0.1:8082\nversion: 1\n"
+        "content": "callers:\n  benefits-service:\n    api_key_fingerprint:\n      secret: BENEFITS_SERVICE_TOKEN_HASH\n    scopes:\n      - evidence:population:read\n  emergency-service:\n    api_key_fingerprint:\n      secret: EMERGENCY_SERVICE_TOKEN_HASH\n    scopes:\n      - evidence:population:emergency\ndeployment:\n  notary:\n    service: population-notary\n  profile: local\n  relay:\n    service: population-relay\nentities:\n  people:\n    columns:\n      guardian_id: guardian_key\n      person_id: subject_key\n      registration_status: status_code\n      residency_confirmed: residency_flag\n    generation: 2026-07-12\n    provider:\n      header_row: 1\n      path: /var/lib/registry/population.csv\n      type: csv\n    source_revision: population-export-v1\nissuance:\n  generation: 1\n  issuer: did:web:population-notary.invalid\n  signing_key:\n    secret: REGISTRY_NOTARY_ISSUER_JWK\n  signing_kid: project-issuer-key\nnotary_relay:\n  base_url: http://127.0.0.1:8080\n  token_file: /run/secrets/relay-workload-token\n  workload_client_id: population-notary\nrelay:\n  allowed_clients:\n    - population-relay-client\n  audience: registry-relay\n  issuer: https://workload-issuer.internal.invalid\n  jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json\n  origin: https://population-relay.internal.invalid\nversion: 1\n"
       },
       {
-        "source": "crates/registryctl/src/templates/notary_addon/integrations/person-demographics/integration.yaml",
-        "destination": "my-first-api/notary/project/integrations/person-demographics/integration.yaml",
+        "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/entities/people.yaml",
+        "destination": "snapshot-project/entities/people.yaml",
         "format": "yaml",
         "public_boundary": "maintained_synthetic",
         "language": "yaml",
-        "content": "capability:\n  snapshot:\n    entity: person\n    exact:\n      date_of_birth:\n        input: date_of_birth\n      family_name:\n        input: family_name\n      given_name:\n        input: given_name\n    freshness: 24h\nid: tutorial-person-demographics\ninput:\n  date_of_birth:\n    format: date\n    maxLength: 10\n    role: selector\n    type: string\n  family_name:\n    maxLength: 80\n    role: selector\n    type: string\n  given_name:\n    maxLength: 80\n    role: selector\n    type: string\nnot_applicable:\n  subject_mismatch:\n    rationale: The exact snapshot selector applies name and date of birth before returning registration status; the minimized projection contains no selector-comparable identifier.\n    request_fixture: jo-elm-match\noutputs:\n  - registration_status\nrevision: 1\nversion: 1\n"
+        "content": "id: people\nmaterialization:\n  max_bytes: 256MiB\n  max_records: 1000000\n  refresh: manual\n  retain_generations: 2\nprimary_key: person_id\nrevision: 1\nschema:\n  additionalProperties: false\n  properties:\n    guardian_id:\n      maxLength: 64\n      type:\n        - string\n        - \"null\"\n    person_id:\n      maxLength: 64\n      type: string\n    registration_status:\n      maxLength: 32\n      type:\n        - string\n        - \"null\"\n    residency_confirmed:\n      type:\n        - boolean\n        - \"null\"\n  required:\n    - person_id\n    - registration_status\n    - residency_confirmed\n    - guardian_id\n  type: object\nversion: 1\n"
+      },
+      {
+        "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/integrations/person-snapshot/integration.yaml",
+        "destination": "snapshot-project/integrations/person-snapshot/integration.yaml",
+        "format": "yaml",
+        "public_boundary": "maintained_synthetic",
+        "language": "yaml",
+        "content": "capability:\n  snapshot:\n    entity: people\n    exact:\n      person_id:\n        input: person_id\n    freshness: 24h\nid: population-person-snapshot\ninput:\n  person_id:\n    maxLength: 12\n    pattern: ^PER-[0-9]{8}$\n    role: selector\n    type: string\nnot_applicable:\n  ambiguity:\n    rationale: The exact snapshot selector is the entity primary key, whose materialized unique-key constraint permits at most one record.\n    request_fixture: snapshot-match\n  subject_mismatch:\n    rationale: The selected snapshot output projection omits the primary key, so it contains no identifier comparable with the requested person identifier.\n    request_fixture: snapshot-match\noutputs:\n  - registration_status\n  - residency_confirmed\nrevision: 1\nversion: 1\n"
       }
     ],
     "fixture_excerpt": {
       "language": "yaml",
-      "content": "classification: synthetic\nexpect:\n  claims:\n    active-registration-exists: true\n  outcome: match\n  outputs:\n    registration_status: active\ninput:\n  date_of_birth: 2019-02-03\n  family_name: Elm\n  given_name: Jo\ninteractions:\n  - expect:\n      method: GET\n      path: /snapshot\n    respond:\n      body:\n        registration_status: active\n      status: 200\nname: jo-elm-match\n"
+      "content": "classification: synthetic\nexpect:\n  claims:\n    emergency-record-exists: true\n    emergency-status: redacted\n    population-record-exists: true\n    population-registration-status: active\n    residency-confirmed: true\n  outcome: match\n  outputs:\n    registration_status: active\n    residency_confirmed: true\ninput:\n  person_id: PER-00000001\ninteractions:\n  - expect:\n      method: GET\n      path: /snapshot\n    respond:\n      body:\n        registration_status: active\n        residency_confirmed: true\n      status: 200\nname: snapshot-match\nrequest:\n  claims:\n    - population-record-exists\n  disclosure: predicate\n  format: application/vnd.registry-notary.claim-result+json\n  purpose: benefits-eligibility\n  target:\n    identifiers:\n      - scheme: population_person_id\n        value: PER-00000001\n    type: Person\n"
     },
     "steps": [
       {
-        "id": "notary-init",
+        "id": "snapshot-first-claim-init",
         "kind": "command",
-        "label": "Create the disposable Relay scaffold",
+        "label": "Create the embedded snapshot project",
         "cwd": ".",
         "argv": [
           "registryctl",
           "init",
-          "relay",
-          "my-first-api",
-          "--sample",
-          "benefits"
+          "--from",
+          "snapshot",
+          "--project-dir",
+          "snapshot-project"
         ]
       },
       {
-        "id": "notary-add",
+        "id": "snapshot-first-claim-match",
         "kind": "command",
-        "label": "Add the maintained Notary project",
-        "cwd": "my-first-api",
-        "argv": [
-          "registryctl",
-          "add",
-          "notary"
-        ]
-      },
-      {
-        "id": "notary-test",
-        "kind": "command",
-        "label": "Execute every Notary project fixture offline",
+        "label": "Run the focused matching claim fixture offline",
         "cwd": ".",
         "argv": [
           "registryctl",
           "test",
           "--project-dir",
-          "my-first-api/notary/project"
+          "snapshot-project",
+          "--integration",
+          "person-snapshot",
+          "--fixture",
+          "snapshot-match",
+          "--trace"
         ]
       },
       {
-        "id": "notary-check",
+        "id": "snapshot-first-claim-no-match",
         "kind": "command",
-        "label": "Check and explain the combined project",
+        "label": "Run the focused no-match claim fixture offline",
+        "cwd": ".",
+        "argv": [
+          "registryctl",
+          "test",
+          "--project-dir",
+          "snapshot-project",
+          "--integration",
+          "person-snapshot",
+          "--fixture",
+          "snapshot-no-match",
+          "--trace"
+        ]
+      },
+      {
+        "id": "snapshot-first-claim-preflight",
+        "kind": "command",
+        "label": "Validate the embedded snapshot project inputs",
+        "cwd": ".",
+        "argv": [
+          "registryctl",
+          "preflight",
+          "--project-dir",
+          "snapshot-project",
+          "--environment",
+          "local"
+        ]
+      },
+      {
+        "id": "snapshot-first-claim-check",
+        "kind": "command",
+        "label": "Check and explain the embedded snapshot project",
         "cwd": ".",
         "argv": [
           "registryctl",
           "check",
           "--project-dir",
-          "my-first-api/notary/project",
+          "snapshot-project",
           "--environment",
           "local",
           "--explain"
         ]
       },
       {
-        "id": "notary-build",
+        "id": "snapshot-first-claim-compare",
         "kind": "command",
-        "label": "Build separate unsigned product inputs",
+        "label": "Compare authored semantics with the embedded starter",
+        "cwd": ".",
+        "argv": [
+          "registryctl",
+          "compare",
+          "--project-dir",
+          "snapshot-project",
+          "--environment",
+          "local",
+          "--from-starter"
+        ]
+      },
+      {
+        "id": "snapshot-first-claim-build",
+        "kind": "command",
+        "label": "Build unsigned product inputs",
         "cwd": ".",
         "argv": [
           "registryctl",
           "build",
           "--project-dir",
-          "my-first-api/notary/project",
+          "snapshot-project",
           "--environment",
           "local"
         ]
-      },
-      {
-        "id": "notary-start",
-        "kind": "long_running",
-        "label": "Start the combined disposable runtime",
-        "cwd": "my-first-api",
-        "argv": [
-          "registryctl",
-          "start"
-        ],
-        "note": "This runtime step is exercised by the source tutorial gate and remains separate from the required clean-temp sequence."
       }
     ]
   },

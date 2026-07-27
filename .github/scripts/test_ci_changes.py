@@ -518,11 +518,13 @@ class CiChangesTest(unittest.TestCase):
         watched_paths = (
             "crates/registryctl/assets/project-starters/**",
             "crates/registryctl/src/main.rs",
+            "crates/registryctl/src/project_authoring/compiler/relay.rs",
             "crates/registryctl/src/project_authoring/output.rs",
             "crates/registryctl/src/project_authoring/report_contract.rs",
             "crates/registryctl/src/templates/**",
             "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml",
             "crates/registryctl/tests/fixtures/project-authoring/**",
+            "crates/registryctl/tests/project_authoring.rs",
             "crates/registry-relay/src/api/openapi.rs",
             "crates/registry-relay/src/main.rs",
             "crates/registry-relay/src/server.rs",

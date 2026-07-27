@@ -3,6 +3,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ProjectStarter {
     Http,
+    Spreadsheet,
     Dhis2Tracker,
     OpencrvsDci,
     FhirR4,
@@ -13,6 +14,7 @@ impl ProjectStarter {
     const fn directory(self) -> &'static str {
         match self {
             Self::Http => "bounded-http",
+            Self::Spreadsheet => "spreadsheet",
             Self::Dhis2Tracker => "dhis2-tracker",
             Self::OpencrvsDci => "opencrvs-dci",
             Self::FhirR4 => "fhir-r4",
@@ -25,6 +27,9 @@ impl ProjectStarter {
             Self::Http => PROJECT_STARTERS
                 .get_dir(self.directory())
                 .ok_or_else(|| anyhow!("project starter is unavailable")),
+            Self::Spreadsheet => PROJECT_STARTERS
+                .get_dir(self.directory())
+                .ok_or_else(|| anyhow!("project starter is unavailable")),
             Self::Dhis2Tracker => Ok(&DHIS2_TRACKER_STARTER),
             Self::OpencrvsDci => Ok(&OPENCRVS_DCI_STARTER),
             Self::FhirR4 => Ok(&FHIR_R4_STARTER),
@@ -35,6 +40,7 @@ impl ProjectStarter {
     const fn id(self) -> &'static str {
         match self {
             Self::Http => "http",
+            Self::Spreadsheet => "spreadsheet",
             Self::Dhis2Tracker => "dhis2-tracker",
             Self::OpencrvsDci => "opencrvs-dci",
             Self::FhirR4 => "fhir-r4",
@@ -1513,9 +1519,7 @@ impl schemars::JsonSchema for SchemaField {
         "SchemaField".into()
     }
 
-    fn json_schema(
-        generator: &mut schemars::SchemaGenerator,
-    ) -> schemars::Schema {
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
         <SchemaFieldWireShape as schemars::JsonSchema>::json_schema(generator)
     }
 }
@@ -1757,6 +1761,7 @@ enum RecordProvider {
         quote: Option<u8>,
     },
     Xlsx {
+        project_file: PathBuf,
         path: PathBuf,
         sheet: String,
         #[serde(default)]
@@ -1822,6 +1827,17 @@ struct RelayBinding {
     jwks_url: String,
     audience: String,
     allowed_clients: Vec<String>,
+    #[serde(default)]
+    local_api_keys: Option<RelayLocalApiKeyBinding>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RelayLocalApiKeyBinding {
+    match_principal: String,
+    no_match_principal: String,
+    scopes: Vec<String>,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]

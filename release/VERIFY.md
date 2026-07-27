@@ -352,11 +352,81 @@ The file-subject SBOM and release capsule classify this payload as
 `registry-docs-archive`. Pages verifies the same locked bundle and extracted
 tree digests before serving it.
 
-## Install Or Move Registryctl
+## Install Registryctl From A Versioned Release Asset
 
-For `v0.9.0` and later, the matching release installer checksum-verifies and
-installs the binary and versioned image lock beside each other. Fetch the
-installer from the same pinned tag whose assets it installs:
+Releases whose manifest declares `registryctl-installer` publish
+`registryctl-${tag}-install.sh` as a checksummed, signed, provenance-covered
+release file. The quick path downloads that exact release asset:
+
+```bash
+tag="${RELEASE_TAG:?set RELEASE_TAG to an exact published tag}"
+installer="registryctl-${tag}-install.sh"
+base_url="https://github.com/registrystack/registry-stack/releases/download/${tag}"
+
+curl -fsSLo "${installer}" "${base_url}/${installer}"
+bash "./${installer}"
+```
+
+This convenience path trusts GitHub and TLS to deliver the installer. The
+installer then verifies the downloaded Registryctl binary and image lock
+against the release `SHA256SUMS`. It does not authenticate itself or those
+assets. Use the higher-assurance procedure below when release identity matters.
+
+### Higher-Assurance Verified Installation
+
+This Linux amd64 example authenticates the installer, Registryctl binary,
+image lock, and checksum file against the exact tag-bound release workflow and
+SLSA provenance before installing from those already-verified local files:
+
+```bash
+tag="${RELEASE_TAG:?set RELEASE_TAG to an exact published tag}"
+installer="registryctl-${tag}-install.sh"
+asset="registryctl-${tag}-linux-amd64"
+image_lock="registryctl-${tag}-image-lock.json"
+checksums="SHA256SUMS"
+provenance="registry-stack-${tag}-release-provenance.intoto.jsonl"
+
+mkdir -p "verify-install-${tag}"
+cd "verify-install-${tag}"
+
+for subject in "${installer}" "${asset}" "${image_lock}" "${checksums}"; do
+  gh release download "${tag}" \
+    --repo registrystack/registry-stack \
+    --pattern "${subject}" \
+    --pattern "${subject}.sig" \
+    --pattern "${subject}.pem"
+done
+gh release download "${tag}" \
+  --repo registrystack/registry-stack \
+  --pattern "${provenance}"
+
+for subject in "${installer}" "${asset}" "${image_lock}" "${checksums}"; do
+  cosign verify-blob "${subject}" \
+    --signature "${subject}.sig" \
+    --certificate "${subject}.pem" \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    --certificate-identity \
+      "https://github.com/registrystack/registry-stack/.github/workflows/release.yml@refs/tags/${tag}"
+
+  slsa-verifier verify-artifact "${subject}" \
+    --provenance-path "${provenance}" \
+    --source-uri github.com/registrystack/registry-stack \
+    --source-tag "${tag}"
+done
+
+sha256sum --check --ignore-missing "${checksums}"
+REGISTRYCTL_VERSION="${tag}" \
+REGISTRYCTL_ASSET_DIR="${PWD}" \
+  bash "./${installer}"
+```
+
+Select the published `linux-arm64` or `macos-arm64` Registryctl asset instead
+when that matches the target machine. The installer rejects platform
+combinations that the release does not publish.
+
+`v0.13.0` and earlier do not contain the versioned installer release asset.
+Their tag-frozen raw installer remains available for historical use, but it is
+not signed or provenance-covered:
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/${tag}/crates/registryctl/install.sh" |
@@ -379,8 +449,8 @@ installation.
 The candidate workflow compiles the release payload before the tag exists.
 The tag-bound workflow verifies the exact candidate run, attempt, receipt, and
 bytes, then promotes those bytes without rebuilding product binaries.
-It signs binaries, the registryctl image lock, the immutable documentation
-archive, checksums, release file SBOMs,
+It signs binaries, the Registryctl installer, the registryctl image lock, the
+immutable documentation archive, checksums, release file SBOMs,
 image-input binary SBOMs, image evidence files, image SBOMs, Grype reports,
 release capsules, and the candidate receipt before upload.
 The separate SLSA generator publishes tag-bound provenance for those

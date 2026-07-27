@@ -72,7 +72,7 @@ fn validate_artifact_manifest_inputs(inputs: &[ArtifactInputDigest]) -> Result<(
     }
     for input in inputs {
         if input.path.as_str().starts_with(".registry-stack/") {
-            bail!("artifact manifest input provenance must name authored project files");
+            bail!("artifact manifest input provenance must name project-contained inputs");
         }
     }
     if inputs.windows(2).any(|pair| pair[0].path >= pair[1].path) {

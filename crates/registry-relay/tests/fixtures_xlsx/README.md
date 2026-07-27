@@ -9,6 +9,7 @@ Requires Python 3 with `openpyxl` installed:
 ```sh
 pip install openpyxl   # or: uv pip install openpyxl
 bash tests/fixtures_xlsx/generate.sh
+bash tests/fixtures_xlsx/generate_validation_negatives.sh
 ```
 
 ## Fixture Descriptions
@@ -19,6 +20,8 @@ bash tests/fixtures_xlsx/generate.sh
 | `two_sheets.xlsx` | `summary`, `details` | 1 | 3 in `details` | `summary` has metadata; `details` has country/population. Tests named-sheet selection. |
 | `with_data_range.xlsx` | `Sheet1` | 5 | 5 (rows 6–10) | Rows 1–4 are human-readable metadata. Tests `data_range: "A5:E10"` + `header_row: 5`. |
 | `mistyped_date.xlsx` | `data` | 1 | 3 | Column `joined` declared as Date, but row 2 contains `"not-a-date"`. Tests parse error handling. |
+| `formula_outside_projection.xlsx` | `Projects` | 1 | 1 | Spreadsheet-starter columns plus a formula-bearing unprojected column. Proves formula rejection covers the selected worksheet, not only projected cells. |
+| `duplicate_primary_key_after_1000.xlsx` | `Projects` | 1 | 1,002 | Spreadsheet-starter columns with a repeated `project_id` in the last row. Proves primary-key validation is not limited to a 1,000-row sample. |
 
 ## Columns in `simple.xlsx` / `with_data_range.xlsx`
 

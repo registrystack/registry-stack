@@ -1,10 +1,10 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { dirname, join, normalize, relative } from 'node:path';
+import { dirname, join, normalize, relative, resolve } from 'node:path';
 
 import { extractEvidenceUrlsFromYaml } from './check-evidence-links.mjs';
 import { loadDocsets } from './docsets.mjs';
 
-const distDir = 'dist';
+const distDir = resolve(process.env.DOCS_DIST_DIR || 'dist');
 const attrPattern = /\s(?:href|src)=["']([^"']+)["']/g;
 const idPattern = /\sid=["']([^"']+)["']/g;
 

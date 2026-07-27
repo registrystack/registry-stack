@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -44,6 +45,7 @@ use crate::ingest::declared_schema::DeclaredSchema;
 use crate::ingest::refresh::{run_refresh_loop, RefreshPolicy};
 use crate::ingest::validation::validate;
 use crate::source::Source;
+use crate::source::{OpenedSource, SourceDescriptor, SourceError, SourceFuture, SourceMetadata};
 use crate::source_backend::{SnapshotMaterializationCandidate, SnapshotMaterializationCoordinator};
 use crate::table_provider::{
     mark_versioned_table_unavailable, publication_write_guard, register_or_replace_versioned_table,
@@ -57,11 +59,128 @@ pub mod declared_schema;
 pub mod refresh;
 pub mod validation;
 
-/// Default number of sample rows forwarded to validation for the
-/// not-null and primary-key uniqueness checks.
-const DEFAULT_SAMPLE_ROWS: usize = 1_000;
 const DEFAULT_XLSX_MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_MAX_SOURCE_FILE_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Clone)]
+struct ProjectWorkbookSource {
+    bytes: Arc<[u8]>,
+}
+
+impl Source for ProjectWorkbookSource {
+    fn descriptor(&self) -> SourceDescriptor {
+        SourceDescriptor {
+            scheme: "memory",
+            target: "validated-project-workbook".to_string(),
+        }
+    }
+
+    fn open<'a>(&'a self) -> SourceFuture<'a, OpenedSource> {
+        Box::pin(async move {
+            let size_bytes = u64::try_from(self.bytes.len())
+                .map_err(|_| SourceError::Unreadable("workbook size overflow".to_string()))?;
+            Ok(OpenedSource {
+                reader: Pin::from(Box::new(std::io::Cursor::new(Arc::clone(&self.bytes)))),
+                metadata: SourceMetadata {
+                    size_bytes: Some(size_bytes),
+                    ..SourceMetadata::default()
+                },
+            })
+        })
+    }
+
+    fn metadata<'a>(&'a self) -> SourceFuture<'a, SourceMetadata> {
+        Box::pin(async move {
+            let size_bytes = u64::try_from(self.bytes.len())
+                .map_err(|_| SourceError::Unreadable("workbook size overflow".to_string()))?;
+            Ok(SourceMetadata {
+                size_bytes: Some(size_bytes),
+                ..SourceMetadata::default()
+            })
+        })
+    }
+}
+
+/// Effective production byte ceiling for an XLSX source.
+///
+/// Callers that acquire source bytes before invoking
+/// [`validate_xlsx_source_bytes`] can use this value for a `limit + 1`
+/// bounded read without duplicating Relay's limit-composition rule.
+#[must_use]
+pub fn xlsx_source_byte_limit(config: &Config) -> u64 {
+    config
+        .server
+        .xlsx_max_file_bytes
+        .min(config.server.max_source_file_bytes)
+}
+
+/// Decode and completely validate exact XLSX source bytes without caching,
+/// writing Parquet, or registering a table.
+///
+/// This is the bounded, Relay-owned validation path for callers that already
+/// hold the source bytes. It uses the production resource hints, configured
+/// byte ceilings, XLSX decoder, and materialized schema validation. Failures
+/// expose only [`IngestError`] categories and their stable
+/// [`IngestError::code`] values.
+pub async fn validate_xlsx_source_bytes(
+    config: &Config,
+    resource: &ResourceConfig,
+    workbook_bytes: &[u8],
+) -> Result<(), IngestError> {
+    if !matches!(resource.source, SourceConfig::File { .. }) {
+        return Err(IngestError::SourceUnreadable);
+    }
+    let format_name = resource
+        .format_name()
+        .or_else(|| format_name_from_source(&resource.source))
+        .unwrap_or_else(|| infer_format(&resource.source));
+    if format_name != "xlsx" {
+        return Err(IngestError::SourceUnreadable);
+    }
+    let byte_count =
+        u64::try_from(workbook_bytes.len()).map_err(|_| IngestError::SourceUnreadable)?;
+    if byte_count > xlsx_source_byte_limit(config) {
+        return Err(IngestError::SourceUnreadable);
+    }
+
+    let declared = Arc::new(DeclaredSchema::from(&resource.schema));
+    let connector = FileConnector::new(
+        Arc::new(ProjectWorkbookSource {
+            bytes: Arc::from(workbook_bytes),
+        }),
+        Arc::new(crate::format::xlsx::XlsxFormat::new()),
+        hints_from_config(Arc::clone(&declared), resource),
+        config.server.xlsx_max_file_bytes,
+        config.server.max_source_file_bytes,
+    );
+    let snapshot = connector
+        .snapshot()
+        .await
+        .map_err(ingest_error_from_connector)?;
+    let observed_schema = snapshot.observed_schema;
+    let mut batches = Vec::new();
+    let mut batch_stream = snapshot.batches;
+    while let Some(batch) = batch_stream.next().await {
+        batches.push(batch.map_err(ingest_error_from_connector)?);
+    }
+    let validation_batch = build_validation_batch(&batches, &observed_schema);
+    let dataset_id: DatasetId =
+        serde_json::from_str("\"project_workbook\"").expect("static dataset id is valid");
+    let resource_id: ResourceId =
+        serde_json::from_str("\"authored_xlsx\"").expect("static resource id is valid");
+    let projection = validate(
+        &dataset_id,
+        &resource_id,
+        &declared,
+        &observed_schema,
+        resource.primary_key.as_deref(),
+        validation_batch.as_ref(),
+    )?;
+    for batch in &batches {
+        projection.apply(batch)?;
+    }
+    Ok(())
+}
 
 /// Per-resource ingestion lifecycle. One `IngestPlan` per
 /// `(dataset_id, resource_id)`.
@@ -482,7 +601,7 @@ impl IngestPlan {
             ingest_error_from_connector(e)
         })?;
 
-        // Step 2: materialise all batches and build a sample.
+        // Step 2: materialise all batches for complete-source validation.
         // Current implementation: full materialisation in memory.
         // Streaming ingest can replace this path later.
         let source_byte_count = snapshot.metadata.size_bytes;
@@ -529,8 +648,9 @@ impl IngestPlan {
             all_batches.push(batch);
         }
 
-        // Build the sample batch for validation (concatenate first N rows).
-        let sample = build_sample(&all_batches, DEFAULT_SAMPLE_ROWS, &observed_schema);
+        // Validate the complete materialized source, including nullability,
+        // value types, and primary-key uniqueness beyond batch boundaries.
+        let validation_batch = build_validation_batch(&all_batches, &observed_schema);
 
         // Step 3: validate schema and build projection plan.
         let projection_plan = validate(
@@ -539,7 +659,7 @@ impl IngestPlan {
             &self.declared,
             &observed_schema,
             self.primary_key.as_deref(),
-            sample.as_ref(),
+            validation_batch.as_ref(),
         )?;
 
         let output_schema = projection_plan.output_schema();
@@ -1526,23 +1646,16 @@ fn encode_sha256(bytes: [u8; 32]) -> String {
     output
 }
 
-/// Build a sample `RecordBatch` from the first `n` rows across batches.
-fn build_sample(batches: &[RecordBatch], n: usize, schema: &SchemaRef) -> Option<RecordBatch> {
+/// Build one `RecordBatch` containing every materialized source row.
+fn build_validation_batch(batches: &[RecordBatch], schema: &SchemaRef) -> Option<RecordBatch> {
     let total: usize = batches.iter().map(|b| b.num_rows()).sum();
     if total == 0 {
         return Some(RecordBatch::new_empty(Arc::clone(schema)));
     }
 
-    // Collect up to n rows from the front.
-    let mut remaining = n;
-    let mut slices: Vec<RecordBatch> = Vec::new();
+    let mut slices: Vec<RecordBatch> = Vec::with_capacity(batches.len());
     for batch in batches {
-        if remaining == 0 {
-            break;
-        }
-        let take = batch.num_rows().min(remaining);
-        slices.push(batch.slice(0, take));
-        remaining -= take;
+        slices.push(batch.clone());
     }
 
     if slices.is_empty() {

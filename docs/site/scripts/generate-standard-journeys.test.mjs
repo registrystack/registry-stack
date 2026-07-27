@@ -117,15 +117,26 @@ test("extracts every declared complete configuration file from its canonical sou
     /primary_key: person_id/u,
   );
 
-  for (const id of ["spreadsheet-protected-api", "instance-openapi"]) {
-    assert.deepEqual(
-      journeys[id].configuration_files.map((file) => ({
-        content: file.content,
-        format: file.format,
-      })),
-      [{ content: null, format: "scaffolded" }],
-    );
-  }
+  const spreadsheet = journeys["spreadsheet-protected-api"];
+  assert.deepEqual(
+    spreadsheet.configuration_files.map((file) => file.destination),
+    [
+      "my-first-api/registry-stack.yaml",
+      "my-first-api/environments/local.yaml",
+      "my-first-api/entities/projects.yaml",
+    ],
+  );
+  assert.match(
+    spreadsheet.configuration_files.find((file) =>
+      file.destination.endsWith("/entities/projects.yaml"),
+    ).content,
+    /primary_key: project_id/u,
+  );
+
+  assert.deepEqual(
+    journeys["instance-openapi"].configuration_files.map((file) => file.source),
+    spreadsheet.configuration_files.map((file) => file.source),
+  );
 });
 
 test("preserves exact scaffold ownership and emitted build paths", async () => {
@@ -133,15 +144,21 @@ test("preserves exact scaffold ownership and emitted build paths", async () => {
   const spreadsheet = journeys["spreadsheet-protected-api"];
   assert.equal(
     spreadsheet.artifacts.find(
-      (artifact) => artifact.path === "my-first-api/registryctl.yaml",
+      (artifact) => artifact.path === "my-first-api/registry-stack.yaml",
     ).classification,
-    "scaffolded_human_owned",
+    "authored",
   );
   assert.equal(
     spreadsheet.artifacts.find(
-      (artifact) => artifact.path === "my-first-api/relay/config.yaml",
+      (artifact) => artifact.path === "my-first-api/.registry-stack/build/local",
     ).classification,
-    "scaffolded_human_owned",
+    "generated_unsigned",
+  );
+  assert.equal(
+    spreadsheet.artifacts.find(
+      (artifact) => artifact.path === "my-first-api/.registry-stack/runtime/local",
+    ).classification,
+    "runtime_observed",
   );
 
   for (const [id, projectDirectory] of Object.entries({
@@ -176,7 +193,7 @@ test("preserves exact scaffold ownership and emitted build paths", async () => {
   );
 });
 
-test("uses the current explicit registry-backed predicate and matching fixture", async () => {
+test("uses the canonical snapshot starter for offline first-claim assurance", async () => {
   const journey = byId(await buildStandardJourneys(repoRoot))[
     "registry-backed-notary-claim"
   ];
@@ -186,12 +203,24 @@ test("uses the current explicit registry-backed predicate and matching fixture",
 
   assert.match(
     project.content,
-    /cel: enrollment\.matched && enrollment\.registration_status == "active"/u,
+    /id: snapshot/u,
   );
-  assert.match(journey.fixture_excerpt.content, /active-registration-exists: true/u);
+  assert.match(journey.fixture_excerpt.content, /population-record-exists: true/u);
   assert.doesNotMatch(
     project.content + journey.fixture_excerpt.content,
-    /person-registration-accepted|v0\.13\.0/u,
+    /person-registration-accepted|active-registration-exists/u,
+  );
+  assert.deepEqual(
+    commandSteps(journey).map((step) => step.argv),
+    [
+      ["registryctl", "init", "--from", "snapshot", "--project-dir", "snapshot-project"],
+      ["registryctl", "test", "--project-dir", "snapshot-project", "--integration", "person-snapshot", "--fixture", "snapshot-match", "--trace"],
+      ["registryctl", "test", "--project-dir", "snapshot-project", "--integration", "person-snapshot", "--fixture", "snapshot-no-match", "--trace"],
+      ["registryctl", "preflight", "--project-dir", "snapshot-project", "--environment", "local"],
+      ["registryctl", "check", "--project-dir", "snapshot-project", "--environment", "local", "--explain"],
+      ["registryctl", "compare", "--project-dir", "snapshot-project", "--environment", "local", "--from-starter"],
+      ["registryctl", "build", "--project-dir", "snapshot-project", "--environment", "local"],
+    ],
   );
 });
 
@@ -333,18 +362,22 @@ test("initializes every journey before its first project use", async () => {
 
 test("keeps runtime and product activation claims bounded to traceable evidence", async () => {
   const journeys = byId(await buildStandardJourneys(repoRoot));
+  const firstApi = journeys["spreadsheet-protected-api"];
+  assert.equal(firstApi.evidence.execution.status, "verified");
+  assert.equal(firstApi.evidence.runtime.status, "not_claimed");
+
   const openapi = journeys["instance-openapi"];
   const capture = openapi.steps.find((step) => step.kind === "runtime_interface");
-  assert.equal(capture.authentication, "none_disposable_local_opt_out");
+  assert.equal(capture.authentication, "configured_local_authentication");
   assert.equal(capture.output_path, "openapi-inspection/output/instance.openapi.json");
-  assert.match(openapi.minimal_configuration.note, /product default remains true/u);
+  assert.match(openapi.minimal_configuration.note, /authenticate/u);
   assert.doesNotMatch(
     openapi.prerequisites.join(" "),
     /authorization material|protected instance route/u,
   );
   assert.match(
     openapi.fixture.expected_trace.join(" "),
-    /explicitly sets server\.openapi_requires_auth to false/u,
+    /according to its reviewed authentication configuration/u,
   );
   assert.doesNotMatch(
     openapi.contract.proves.join(" "),
@@ -435,6 +468,42 @@ test("rejects incomplete, partial, and non-allowlisted configuration sources", a
     () => validateStandardJourneyManifest(copied),
     /not an explicitly approved public configuration source/u,
   );
+
+  const spreadsheetDrift = await readManifest();
+  spreadsheetDrift.journeys[0].minimal_configuration.files.pop();
+  assert.throws(
+    () => validateStandardJourneyManifest(spreadsheetDrift),
+    /exact complete source set/u,
+  );
+
+  const snapshotDrift = await readManifest();
+  snapshotDrift.journeys[5].minimal_configuration.files[3].source =
+    "crates/registryctl/assets/project-starters/spreadsheet/entities/projects.yaml";
+  snapshotDrift.journeys[5].canonical_sources[3] =
+    "crates/registryctl/assets/project-starters/spreadsheet/entities/projects.yaml";
+  assert.throws(
+    () => validateStandardJourneyManifest(snapshotDrift),
+    /exact complete source set/u,
+  );
+});
+
+test("does not reintroduce retired relay initialization or Notary add-on commands", async () => {
+  const journeys = await buildStandardJourneys(repoRoot);
+  const commands = journeys
+    .flatMap((journey) => journey.steps)
+    .filter((step) => ["command", "long_running", "readiness_gate", "alternative"].includes(step.kind))
+    .map((step) => renderStandardJourneyCommand(step))
+    .join("\n");
+  assert.doesNotMatch(commands, /registryctl init relay/u);
+  assert.doesNotMatch(commands, /registryctl add notary/u);
+  assert.match(
+    commands,
+    /registryctl init --from spreadsheet --project-dir my-first-api/u,
+  );
+  assert.match(
+    commands,
+    /registryctl init --from snapshot --project-dir snapshot-project/u,
+  );
 });
 
 test("accepts schema-shaped secret references and rejects literal credential extraction", async () => {
@@ -480,8 +549,7 @@ test("accepts schema-shaped secret references and rejects literal credential ext
 
 test("rejects stale canonical files, diagnostics, catalogs, and evidence links", async () => {
   await withManifest(async ({ manifest, candidatePath }) => {
-    manifest.journeys[0].canonical_sources[0] =
-      "crates/registryctl/src/missing.rs";
+    manifest.journeys[0].canonical_sources.push("crates/registryctl/src/missing.rs");
     await writeManifest(candidatePath, manifest);
     await assert.rejects(buildStandardJourneys(repoRoot, candidatePath), /ENOENT/u);
   });

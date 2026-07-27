@@ -20,7 +20,7 @@ test('keeps the current preview path for the selected current docset', () => {
 test('removes an archive base when linking to current documentation', () => {
   assert.equal(
     pathForDocset('/v/0.8.4/tutorials/example/', '/v/0.8.4/', '/', '/v/0.8.4/'),
-    '/tutorials/example/',
+    '/preview/tutorials/example/',
   );
 });
 
