@@ -520,6 +520,31 @@ struct SnapshotField {
     comparable: Option<Value>,
 }
 
+#[derive(Clone, Copy)]
+struct ComparisonProductTopology {
+    relay: bool,
+    notary: bool,
+}
+
+impl ComparisonProductTopology {
+    fn from_loaded(loaded: &LoadedRegistryProject) -> Self {
+        let (relay, notary) = project_product_topology(&loaded.project);
+        Self { relay, notary }
+    }
+
+    const fn union(self, other: Self) -> Self {
+        Self {
+            relay: self.relay || other.relay,
+            notary: self.notary || other.notary,
+        }
+    }
+
+    fn retains_runtime_consumer(self, consumers: &[SemanticComparisonConsumer]) -> bool {
+        (self.relay && consumers.contains(&SemanticComparisonConsumer::RegistryRelay))
+            || (self.notary && consumers.contains(&SemanticComparisonConsumer::RegistryNotary))
+    }
+}
+
 fn compare_loaded_projects(
     current: &LoadedRegistryProject,
     baseline: &LoadedRegistryProject,
@@ -535,6 +560,8 @@ fn compare_loaded_projects(
     if generated_projections_equal(&current_snapshot, &baseline_snapshot) {
         return Ok(equivalent_report(comparison, assurance));
     }
+    let product_topology = ComparisonProductTopology::from_loaded(current)
+        .union(ComparisonProductTopology::from_loaded(baseline));
     let subjects = affected_subject_inventory(current, baseline)?;
     let mut changes = Vec::new();
     let keys = current_snapshot
@@ -560,6 +587,11 @@ fn compare_loaded_projects(
             (Some(current), Some(baseline)) => comparison_direction(current, baseline),
             (None, None) => unreachable!(),
         };
+        let consumers = filter_consumers_for_topology(&field.consumers, product_topology);
+        let generated_artifacts =
+            filter_artifacts_for_topology(&field.generated_artifacts, product_topology);
+        let review_classes = filter_reviews_for_topology(&field.review_classes, product_topology);
+        let requirements = requirements_for_consumers(&consumers);
         changes.push(ProjectSemanticComparisonChange {
             address: field.address.clone(),
             source: field.source,
@@ -568,12 +600,12 @@ fn compare_loaded_projects(
             sensitivity: field.sensitivity,
             semantic_owner: field.semantic_owner,
             human_owner: field.human_owner,
-            consumers: field.consumers.clone(),
-            generated_artifacts: field.generated_artifacts.clone(),
-            review_classes: field.review_classes.clone(),
+            consumers,
+            generated_artifacts,
+            review_classes,
             affected_subjects: subjects.clone(),
             occurrences: 1,
-            requirements: requirements_for_consumers(&field.consumers),
+            requirements,
         });
         if changes.len() > MAX_SEMANTIC_COMPARISON_CHANGES {
             bail!("semantic comparison exceeds the bounded change-report capacity");
@@ -997,6 +1029,29 @@ fn comparison_consumers(consumers: &[knowledge::Consumer]) -> Vec<SemanticCompar
     result.into_iter().collect()
 }
 
+fn filter_consumers_for_topology(
+    consumers: &[SemanticComparisonConsumer],
+    topology: ComparisonProductTopology,
+) -> Vec<SemanticComparisonConsumer> {
+    let retains_runtime_consumer = topology.retains_runtime_consumer(consumers);
+    consumers
+        .iter()
+        .copied()
+        .filter(|consumer| match consumer {
+            SemanticComparisonConsumer::RegistryRelay => topology.relay,
+            SemanticComparisonConsumer::RegistryNotary => topology.notary,
+            SemanticComparisonConsumer::BundleSigner
+            | SemanticComparisonConsumer::DeploymentTooling
+            | SemanticComparisonConsumer::Operator => retains_runtime_consumer,
+            SemanticComparisonConsumer::RegistryctlAuthoring
+            | SemanticComparisonConsumer::EditorTooling
+            | SemanticComparisonConsumer::DocsGenerator => true,
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 fn comparison_artifacts(
     artifacts: &[knowledge::GeneratedArtifact],
 ) -> Vec<SemanticComparisonGeneratedArtifact> {
@@ -1027,6 +1082,28 @@ fn comparison_artifacts(
         .collect()
 }
 
+fn filter_artifacts_for_topology(
+    artifacts: &[SemanticComparisonGeneratedArtifact],
+    topology: ComparisonProductTopology,
+) -> Vec<SemanticComparisonGeneratedArtifact> {
+    artifacts
+        .iter()
+        .copied()
+        .filter(|artifact| match artifact {
+            SemanticComparisonGeneratedArtifact::RelayConfig => topology.relay,
+            SemanticComparisonGeneratedArtifact::NotaryConfig => topology.notary,
+            SemanticComparisonGeneratedArtifact::EditorSchemas
+            | SemanticComparisonGeneratedArtifact::ProjectBuild
+            | SemanticComparisonGeneratedArtifact::FixtureReport
+            | SemanticComparisonGeneratedArtifact::FieldReference
+            | SemanticComparisonGeneratedArtifact::ReviewPlan
+            | SemanticComparisonGeneratedArtifact::ApprovalProjection => true,
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 fn comparison_reviews(reviews: &[knowledge::ReviewClass]) -> Vec<SemanticComparisonReviewClass> {
     let mut result = reviews
         .iter()
@@ -1049,6 +1126,33 @@ fn comparison_reviews(reviews: &[knowledge::ReviewClass]) -> Vec<SemanticCompari
         SemanticComparisonReviewClass::Release,
     ]);
     result.into_iter().collect()
+}
+
+fn filter_reviews_for_topology(
+    reviews: &[SemanticComparisonReviewClass],
+    topology: ComparisonProductTopology,
+) -> Vec<SemanticComparisonReviewClass> {
+    reviews
+        .iter()
+        .copied()
+        .filter(|review| match review {
+            SemanticComparisonReviewClass::Relay => topology.relay,
+            SemanticComparisonReviewClass::Notary => topology.notary,
+            SemanticComparisonReviewClass::Contract
+            | SemanticComparisonReviewClass::Authoring
+            | SemanticComparisonReviewClass::Semantics
+            | SemanticComparisonReviewClass::Interoperability
+            | SemanticComparisonReviewClass::Privacy
+            | SemanticComparisonReviewClass::Security
+            | SemanticComparisonReviewClass::Compatibility
+            | SemanticComparisonReviewClass::Documentation
+            | SemanticComparisonReviewClass::Testing
+            | SemanticComparisonReviewClass::Operations
+            | SemanticComparisonReviewClass::Release => true,
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn fingerprint_json(value: &Value) -> Result<[u8; 32]> {
