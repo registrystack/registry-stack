@@ -2254,8 +2254,8 @@
       },
       {
         "id": "snapshot-first-claim-preflight",
-        "kind": "command",
-        "label": "Validate the embedded snapshot project inputs",
+        "kind": "readiness_gate",
+        "label": "Inspect missing local runtime requirements",
         "cwd": ".",
         "argv": [
           "registryctl",
@@ -2263,8 +2263,11 @@
           "--project-dir",
           "snapshot-project",
           "--environment",
-          "local"
-        ]
+          "local",
+          "--format",
+          "json"
+        ],
+        "note": "This clean-workspace step is expected to exit 1 with a value-free not_ready report because operator-provisioned runtime files and secret references are absent. Provision those inputs and require a passing preflight before starting a local runtime."
       },
       {
         "id": "snapshot-first-claim-check",

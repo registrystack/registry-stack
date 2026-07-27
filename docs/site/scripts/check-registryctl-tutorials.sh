@@ -39,7 +39,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' HUP INT TERM
 
-for tool in cargo node rg; do
+for tool in cargo node grep; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		printf 'required tool not on PATH: %s\n' "$tool" >&2
 		exit 1
@@ -55,11 +55,11 @@ if [[ "$BUILD_PROFILE" != "ci" && "$BUILD_PROFILE" != "release" ]]; then
 fi
 
 node "$HELPER" assert-layout "$TUTORIAL" \
-	'["Install Registryctl","Create the canonical project","Run the required preflight","Start the API","Run the maintained checks","Make one denied request","Make one allowed request","Make one allowed request","Inspect the human-owned boundary","Inspect the human-owned boundary","Change one disclosure rule","Stop and clean up"]'
+	'["Before you start","Install Registryctl","Create the sample project","Check your computer and project","Start the API","Check the API","Make one denied request","Make one allowed request","Make one allowed request","See what you can edit","Stop and clean up"]'
 node "$HELPER" extract-shell "$TUTORIAL" "$BLOCKS"
 
 expected_install=$'tag=v0.14.0\ncurl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/registryctl-${tag}-install.sh"\nbash "./registryctl-${tag}-install.sh"\nregistryctl --version'
-if [[ "$(cat "$BLOCKS/01.sh")" != "$expected_install" ]]; then
+if [[ "$(cat "$BLOCKS/02.sh")" != "$expected_install" ]]; then
 	printf 'release-form installer block changed without updating its source contract\n' >&2
 	exit 1
 fi
@@ -101,7 +101,7 @@ export REGISTRYCTL_BIN REGISTRYCTL_NO_UPDATE_CHECK=1
 
 mkdir -p "$PROJECT_ROOT"
 cd "$PROJECT_ROOT"
-source "$BLOCKS/02.sh"
+source "$BLOCKS/03.sh"
 
 test -f registry-stack.yaml
 test -f entities/projects.yaml
@@ -119,7 +119,7 @@ test -f .registry-stack/build/local/artifact-manifest.json
 test -f .registry-stack/build/local/private/relay/config/relay.yaml
 test ! -e .registry-stack/runtime/local
 
-if rg -n 'REGISTRYCTL_LOCAL_RELAY_.*_RAW=|api_key_raw|audit_hash_secret' \
+if grep -E -r -n 'REGISTRYCTL_LOCAL_RELAY_.*_RAW=|api_key_raw|audit_hash_secret' \
 	.registry-stack/build registry-stack.yaml entities environments data; then
 	printf 'raw local runtime material leaked into the source-contract closure\n' >&2
 	exit 1
