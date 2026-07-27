@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
-import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -43,16 +44,23 @@ async function run(command, args, env) {
   });
 }
 
-async function readOptionalRegularFile(path) {
+export async function readOptionalRegularFile(path) {
+  let file;
   try {
-    const info = await lstat(path);
+    file = await open(
+      path,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    );
+    const info = await file.stat();
     if (!info.isFile()) {
       throw new Error(`generated archive input must be a regular file: ${path}`);
     }
-    return await readFile(path);
+    return await file.readFile();
   } catch (error) {
     if (error?.code === 'ENOENT') return null;
     throw error;
+  } finally {
+    await file?.close();
   }
 }
 

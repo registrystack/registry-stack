@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import test from 'node:test';
@@ -10,6 +17,7 @@ import { promisify } from 'node:util';
 import {
   buildDocsetArchive,
   currentSourceGeneratedArtifacts,
+  readOptionalRegularFile,
 } from './build-archives.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -25,6 +33,26 @@ const archivedDocset = {
     },
   },
 };
+
+test('archive snapshot reads one no-follow regular-file descriptor', async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-snapshot-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const regular = resolve(root, 'regular.json');
+  const link = resolve(root, 'linked.json');
+
+  await writeFile(regular, '{"source_label":"current"}\n');
+  await symlink(regular, link);
+
+  assert.equal(
+    (await readOptionalRegularFile(regular)).toString('utf8'),
+    '{"source_label":"current"}\n',
+  );
+  await assert.rejects(
+    readOptionalRegularFile(link),
+    (error) => error?.code === 'ELOOP' || /regular file/.test(error?.message),
+  );
+  assert.equal(await readOptionalRegularFile(resolve(root, 'missing.json')), null);
+});
 
 test('archive generation excludes current-source generators', async () => {
   const packageJson = JSON.parse(
