@@ -1359,7 +1359,7 @@
     {
       "schema": "integration",
       "pointer": "/$defs/capability/oneOf/2/properties/snapshot/properties/freshness",
-      "purpose": "Sets the maximum accepted age of the materialized entity snapshot."
+      "purpose": "Sets the maximum accepted age of the materialized entity snapshot within the product-owned 31-day ceiling."
     },
     {
       "schema": "integration",

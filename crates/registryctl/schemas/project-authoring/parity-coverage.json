@@ -933,6 +933,19 @@
       }
     },
     {
+      "id": "integration-snapshot-freshness-over-ceiling",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
+      "schema": "integration",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact",
+      "document": "integrations/person-snapshot/integration.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/capability/snapshot/freshness",
+        "value": "32d"
+      }
+    },
+    {
       "id": "entity-zero-max-records",
       "dimension": "boundary",
       "expected_failing_keywords": ["minimum"],
@@ -982,6 +995,19 @@
         "operation": "set",
         "pointer": "/materialization/max_bytes",
         "value": "1025MiB"
+      }
+    },
+    {
+      "id": "entity-materialization-refresh-over-ceiling",
+      "dimension": "boundary",
+      "expected_failing_keywords": ["oneOf"],
+      "schema": "entity",
+      "source": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
+      "document": "entities/population.yaml",
+      "mutation": {
+        "operation": "set",
+        "pointer": "/materialization/refresh",
+        "value": "31d"
       }
     },
     {

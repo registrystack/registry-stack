@@ -561,6 +561,54 @@ fn embedded_coverage_is_complete_and_generates_the_canonical_reference() {
             && field.version_history.is_empty()
             && field.default.source_version.is_none()
     }));
+    let duration_field = |schema, pointer: &str| {
+        reference
+            .fields
+            .iter()
+            .find(|field| field.address.schema == schema && field.address.pointer == pointer)
+            .unwrap_or_else(|| panic!("{schema} reference contains {pointer}"))
+    };
+    let freshness = duration_field(
+        ConfigurationSchemaKind::Integration,
+        "/$defs/capability/oneOf/2/properties/snapshot/properties/freshness",
+    );
+    assert!(freshness.purpose.contains("31-day ceiling"));
+    let entity_refresh = duration_field(
+        ConfigurationSchemaKind::Entity,
+        "/properties/materialization/properties/refresh",
+    );
+    assert!(entity_refresh.purpose.contains("no greater than 30 days"));
+    for (schema, pointer, maximum, over_ceiling) in [
+        (
+            ConfigurationSchemaKind::Integration,
+            "/$defs/capability/oneOf/2/properties/snapshot/properties/freshness",
+            "31d",
+            "32d",
+        ),
+        (
+            ConfigurationSchemaKind::Entity,
+            "/properties/materialization/properties/refresh/oneOf/1",
+            "30d",
+            "31d",
+        ),
+    ] {
+        let field = duration_field(schema, pointer);
+        let pattern = field
+            .constraints
+            .iter()
+            .find(|constraint| constraint.keyword == "pattern")
+            .map(|constraint| constraint.value.clone())
+            .unwrap_or_else(|| panic!("{schema}#{pointer} publishes its duration pattern"));
+        let validator = compile_schema(&json!({"type": "string", "pattern": pattern}));
+        assert!(
+            validator.is_valid(&json!(maximum)),
+            "{schema}#{pointer} reference must accept its product-owned ceiling"
+        );
+        assert!(
+            !validator.is_valid(&json!(over_ceiling)),
+            "{schema}#{pointer} reference must reject an over-ceiling duration"
+        );
+    }
     assert_eq!(
         (
             reference
