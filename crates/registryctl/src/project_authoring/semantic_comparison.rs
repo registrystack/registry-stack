@@ -587,7 +587,8 @@ fn compare_loaded_projects(
             (Some(current), Some(baseline)) => comparison_direction(current, baseline),
             (None, None) => unreachable!(),
         };
-        let consumers = filter_consumers_for_topology(&field.consumers, product_topology);
+        let consumers =
+            filter_consumers_for_topology(&field.consumers, product_topology, field.source);
         let generated_artifacts =
             filter_artifacts_for_topology(&field.generated_artifacts, product_topology);
         let review_classes = filter_reviews_for_topology(&field.review_classes, product_topology);
@@ -1032,8 +1033,10 @@ fn comparison_consumers(consumers: &[knowledge::Consumer]) -> Vec<SemanticCompar
 fn filter_consumers_for_topology(
     consumers: &[SemanticComparisonConsumer],
     topology: ComparisonProductTopology,
+    source: SemanticComparisonChangeSource,
 ) -> Vec<SemanticComparisonConsumer> {
-    let retains_runtime_consumer = topology.retains_runtime_consumer(consumers);
+    let retains_generic_runtime_consumer = topology.retains_runtime_consumer(consumers)
+        || source == SemanticComparisonChangeSource::Generated;
     consumers
         .iter()
         .copied()
@@ -1042,7 +1045,7 @@ fn filter_consumers_for_topology(
             SemanticComparisonConsumer::RegistryNotary => topology.notary,
             SemanticComparisonConsumer::BundleSigner
             | SemanticComparisonConsumer::DeploymentTooling
-            | SemanticComparisonConsumer::Operator => retains_runtime_consumer,
+            | SemanticComparisonConsumer::Operator => retains_generic_runtime_consumer,
             SemanticComparisonConsumer::RegistryctlAuthoring
             | SemanticComparisonConsumer::EditorTooling
             | SemanticComparisonConsumer::DocsGenerator => true,

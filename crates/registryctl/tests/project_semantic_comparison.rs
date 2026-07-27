@@ -782,7 +782,39 @@ fn fixture_change_is_included_in_the_generated_pending_review_plan() {
         .changes
         .iter()
         .any(|change| change.dimension == SemanticComparisonDimension::Fixture));
-    assert!(report.changes.iter().any(|change| {
-        change.address.schema_family == SemanticComparisonSchemaFamily::GeneratedApproval
-    }));
+    let generated_change = report
+        .changes
+        .iter()
+        .find(|change| {
+            change.address.schema_family == SemanticComparisonSchemaFamily::GeneratedApproval
+                || change.address.schema_family == SemanticComparisonSchemaFamily::GeneratedReview
+        })
+        .expect("generated approval or review projection change is classified");
+    assert!(generated_change
+        .consumers
+        .contains(&SemanticComparisonConsumer::BundleSigner));
+    assert!(generated_change
+        .consumers
+        .contains(&SemanticComparisonConsumer::DeploymentTooling));
+    assert!(generated_change
+        .consumers
+        .contains(&SemanticComparisonConsumer::Operator));
+    assert!(!generated_change
+        .consumers
+        .contains(&SemanticComparisonConsumer::RegistryRelay));
+    assert!(!generated_change
+        .consumers
+        .contains(&SemanticComparisonConsumer::RegistryNotary));
+    assert_eq!(
+        generated_change.requirements.signing,
+        SemanticComparisonSigningRequirement::None
+    );
+    assert_eq!(
+        generated_change.requirements.activation,
+        SemanticComparisonActivationRequirement::None
+    );
+    assert_eq!(
+        generated_change.requirements.restart,
+        SemanticComparisonRestartRequirement::None
+    );
 }
