@@ -1,5 +1,16 @@
 name: coverage-active
 classification: synthetic
+request:
+  target:
+    type: Person
+    identifiers:
+      - { scheme: birthdate, value: 2018-05-12 }
+      - { scheme: family, value: Example }
+      - { scheme: given, value: Ada }
+  claims: [coverage-active]
+  disclosure: predicate
+  format: application/vnd.registry-notary.claim-result+json
+  purpose: coverage-verification
 input: { birthdate: 2018-05-12, family: Example, given: Ada }
 interactions:
   - expect:

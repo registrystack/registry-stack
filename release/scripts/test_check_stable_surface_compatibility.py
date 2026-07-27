@@ -133,6 +133,115 @@ class StableSurfaceCompatibilityTest(unittest.TestCase):
         self.assertEqual(1, len(errors))
         self.assertIn("item.not_found", errors[0])
 
+    def diagnostic_entry(self, code: str = "registryctl.authoring.test") -> dict:
+        return {
+            "family": "authoring_validation",
+            "code": code,
+            "owner": "registryctl",
+            "product": "registryctl",
+            "phase": "static_validation",
+            "safe_meaning": "The authored project failed a static rule.",
+            "rule": "authored project must satisfy the closed static rule",
+            "safe_remediation": "Correct the reviewed authored field and retry.",
+            "field_address_pattern": None,
+            "evidence_scope": "offline authored project files",
+            "secret_sensitive_value_policy": "no_received_value",
+            "docs_anchor": f"/reference/diagnostics/authoring/#registryctl--{code}",
+            "lifecycle": "unreleased",
+            "introduced_in": None,
+            "stability": "pre1_stable_code",
+            "evidence_limitation": "Static evidence does not prove live compatibility.",
+        }
+
+    def diagnostic_catalog(self, *entries: dict) -> dict:
+        return {
+            "schema_version": "registryctl.authoring_error_reference.v1",
+            "entries": list(entries),
+        }
+
+    def test_diagnostic_additions_are_allowed_but_removal_and_semantic_drift_are_not(
+        self,
+    ) -> None:
+        key = ("authoring_validation", "registryctl", "registryctl.authoring.test")
+        old = {
+            key: self.module.DiagnosticContract(
+                "registryctl",
+                "The authored project failed a static rule.",
+                "authored project must satisfy the closed static rule",
+                "/reference/diagnostics/authoring/#registryctl--registryctl.authoring.test",
+            )
+        }
+        additive = {
+            **old,
+            (
+                "authoring_validation",
+                "registryctl",
+                "registryctl.authoring.second",
+            ): self.module.DiagnosticContract(
+                "registryctl",
+                "A second static meaning.",
+                "a second static rule",
+                "/reference/diagnostics/authoring/#registryctl--registryctl.authoring.second",
+            ),
+        }
+        self.assertEqual([], self.module.compare_diagnostic_contracts(old, additive))
+        self.assertTrue(self.module.compare_diagnostic_contracts(old, {}))
+        for field, value in (
+            ("owner", "registry_relay"),
+            ("safe_meaning", "A changed meaning."),
+            ("rule", "a changed rule"),
+            (
+                "docs_anchor",
+                "/reference/diagnostics/authoring/#registryctl--registryctl.authoring.changed",
+            ),
+        ):
+            changed = {
+                key: self.module.DiagnosticContract(
+                    value if field == "owner" else old[key].owner,
+                    value if field == "safe_meaning" else old[key].safe_meaning,
+                    value if field == "rule" else old[key].rule,
+                    value if field == "docs_anchor" else old[key].docs_anchor,
+                )
+            }
+            errors = self.module.compare_diagnostic_contracts(old, changed)
+            self.assertTrue(any(f"changed {field}" in error for error in errors))
+
+    def test_diagnostic_catalog_rejects_shape_duplicates_reordering_and_lifecycle_drift(
+        self,
+    ) -> None:
+        valid = self.diagnostic_catalog(self.diagnostic_entry())
+        result = self.module.validate_diagnostic_catalog(valid, "authoring")
+        self.assertEqual(1, len(result))
+
+        malformed = self.diagnostic_catalog(self.diagnostic_entry())
+        malformed["entries"][0]["unexpected"] = True
+        with self.assertRaisesRegex(self.module.ContractError, "strict entry shape"):
+            self.module.validate_diagnostic_catalog(malformed, "authoring")
+
+        duplicate = self.diagnostic_catalog(
+            self.diagnostic_entry(),
+            self.diagnostic_entry(),
+        )
+        with self.assertRaisesRegex(self.module.ContractError, "duplicate"):
+            self.module.validate_diagnostic_catalog(duplicate, "authoring")
+
+        reordered = self.diagnostic_catalog(
+            self.diagnostic_entry("registryctl.authoring.z"),
+            self.diagnostic_entry("registryctl.authoring.a"),
+        )
+        with self.assertRaisesRegex(self.module.ContractError, "not ordered"):
+            self.module.validate_diagnostic_catalog(reordered, "authoring")
+
+        stale = self.diagnostic_catalog(self.diagnostic_entry())
+        stale["entries"][0]["introduced_in"] = "0.13.0"
+        with self.assertRaisesRegex(self.module.ContractError, "introduced_in: null"):
+            self.module.validate_diagnostic_catalog(stale, "authoring")
+
+        reassigned = self.diagnostic_catalog(self.diagnostic_entry())
+        reassigned["entries"][0]["owner"] = "registry_relay"
+        with self.assertRaisesRegex(self.module.ContractError, "product-owner"):
+            self.module.validate_diagnostic_catalog(reassigned, "authoring")
+
     def test_real_current_contract_validates_without_a_base(self) -> None:
         self.assertEqual([], self.module.check(None, ROOT))
 

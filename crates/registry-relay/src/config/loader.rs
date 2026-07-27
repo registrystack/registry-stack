@@ -2,10 +2,11 @@
 //! Read a config file from disk, parse it, and run cross-field
 //! validation.
 //!
-//! The loader deliberately scrubs the surfaced [`crate::error::Error`]
-//! detail: response and audit detail strings never carry the source
-//! path. The operational `tracing::error!` line includes the path so
-//! operators can locate the offending file in their logs.
+//! The loader deliberately scrubs both the surfaced [`crate::error::Error`]
+//! detail and the default operational tracing boundary. Source paths, parser
+//! excerpts, supplied values, hashes, and identities never cross that
+//! boundary. Operators receive stable product-owned codes with static meaning
+//! and remediation from [`crate::process_startup`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,7 +19,7 @@ use registry_platform_config::{
     ConfigBundleError, DeprecatedConfigField, VerifiedConfigBundle,
 };
 use registry_platform_ops::{
-    antirollback_key_from_verified_bundle, bundle_verify_rejection_result, internal_config_hash,
+    antirollback_key_from_verified_bundle, bundle_verify_rejection_code, internal_config_hash,
     is_sha256_config_hash, load_unsigned_break_glass_or_pin, posture_safe_runtime_config_hash,
     resolve_bundle_state_action, BundleStateRequest, ConfigBootError, ConfigProvenance,
     ConfigSource, UnsignedConfigSelection,
@@ -27,6 +28,7 @@ pub use registry_platform_ops::{BundleStateAction, PendingBundleAcceptance};
 use serde_json::Value;
 
 use crate::error::{ConfigError, Error, MetadataError};
+use crate::process_startup::{emit_process_startup_failure, ProcessStartupCode};
 
 use super::consultation_artifacts::{
     load_consultation_artifacts, ConsultationArtifactClosureError, SignedBundleRuntimeFiles,
@@ -56,8 +58,8 @@ pub struct LoadOptions {
 /// # Errors
 ///
 /// - [`ConfigError::ParseError`] on filesystem read failure or YAML
-///   deserialisation failure. The path and serde error are logged via
-///   `tracing` at error level; the returned `Error` is scrubbed.
+///   deserialisation failure. The process boundary emits only a stable,
+///   catalog-owned classification without the path or parser detail.
 /// - [`ConfigError::ValidationError`], [`ConfigError::MissingSecret`],
 ///   [`ConfigError::DuplicateId`] propagated from
 ///   [`validate::run`] on cross-field validation failures.
@@ -68,60 +70,35 @@ pub fn load(path: &Path) -> Result<Config, Error> {
 fn load_config_document(path: &Path, options: LoadOptions) -> Result<LoadedConfigDocument, Error> {
     let raw = match fs::read_to_string(path) {
         Ok(s) => s,
-        Err(err) => {
-            tracing::error!(
-                code = "config.parse_error",
-                path = %path.display(),
-                error = %err,
-                "failed to read config file"
-            );
+        Err(_) => {
+            emit_process_startup_failure(ProcessStartupCode::CONFIG_SOURCE_UNAVAILABLE);
             return Err(Error::from(ConfigError::ParseError));
         }
     };
 
     let expanded = match expand_config_env_vars(&raw) {
         Ok(expanded) => expanded,
-        Err(err) => {
-            tracing::error!(
-                code = "config.parse_error",
-                path = %path.display(),
-                error = %err,
-                "failed to expand config environment expressions"
-            );
+        Err(_) => {
+            emit_process_startup_failure(ProcessStartupCode::CONFIG_ENVIRONMENT_BINDING_REJECTED);
             return Err(Error::from(ConfigError::ParseError));
         }
     };
 
     let config_value: Value = match serde_saphyr::from_str(&expanded) {
         Ok(value) => value,
-        Err(err) => {
-            tracing::error!(
-                code = "config.parse_error",
-                path = %path.display(),
-                error = %err,
-                "failed to parse config YAML"
-            );
+        Err(_) => {
+            emit_process_startup_failure(ProcessStartupCode::CONFIG_DOCUMENT_INVALID);
             return Err(Error::from(ConfigError::ParseError));
         }
     };
-    if let Err(err) = reject_deprecated_config_fields(&config_value, &deprecated_config_fields()) {
-        tracing::error!(
-            code = "config.parse_error",
-            path = %path.display(),
-            error = %err,
-            "config uses a removed or renamed field"
-        );
+    if reject_deprecated_config_fields(&config_value, &deprecated_config_fields()).is_err() {
+        emit_process_startup_failure(ProcessStartupCode::CONFIG_DEPRECATED_FIELD_REJECTED);
         return Err(Error::from(ConfigError::ParseError));
     }
     let config: Config = match serde_saphyr::from_str(&expanded) {
         Ok(c) => c,
-        Err(err) => {
-            tracing::error!(
-                code = "config.parse_error",
-                path = %path.display(),
-                error = %err,
-                "failed to parse config YAML"
-            );
+        Err(_) => {
+            emit_process_startup_failure(ProcessStartupCode::CONFIG_DOCUMENT_INVALID);
             return Err(Error::from(ConfigError::ParseError));
         }
     };
@@ -130,10 +107,13 @@ fn load_config_document(path: &Path, options: LoadOptions) -> Result<LoadedConfi
         return load_bundle_config_document(&config, options);
     }
 
-    validate::run(&config)?;
-    let consultation_artifacts =
+    suppress_source_diagnostics(|| validate::run(&config)).inspect_err(|_| {
+        emit_process_startup_failure(ProcessStartupCode::CONFIG_VALIDATION_REJECTED);
+    })?;
+    let consultation_artifacts = suppress_source_diagnostics(|| {
         load_consultation_artifacts(path, &config, ConfigSource::LocalFile, None)
-            .map_err(map_consultation_artifact_error)?;
+    })
+    .map_err(map_consultation_artifact_error)?;
     let provenance = ConfigProvenance::local_file(
         internal_config_hash(expanded.as_bytes()),
         posture_safe_runtime_config_hash(&config_value),
@@ -206,12 +186,14 @@ fn load_verified_bundle_config_document(
         parse_config_bytes_for_bundle(&verified.config_bytes, ConfigSource::SignedBundleFile)?;
     let signed_bundle_files = SignedBundleRuntimeFiles::from_verified(&verified)
         .map_err(map_consultation_artifact_error)?;
-    let consultation_artifacts = load_consultation_artifacts(
-        &verified.config_path,
-        &config,
-        ConfigSource::SignedBundleFile,
-        Some(&signed_bundle_files),
-    )
+    let consultation_artifacts = suppress_source_diagnostics(|| {
+        load_consultation_artifacts(
+            &verified.config_path,
+            &config,
+            ConfigSource::SignedBundleFile,
+            Some(&signed_bundle_files),
+        )
+    })
     .map_err(map_consultation_artifact_error)?;
     let provenance = ConfigProvenance {
         source: ConfigSource::SignedBundleFile,
@@ -277,12 +259,14 @@ fn load_unsigned_pin_config_document(
     let (config, config_value) =
         parse_config_bytes_for_bundle(&selection.config_bytes, ConfigSource::LocalFile)?;
     let override_pin = Some(selection.pin.clone());
-    let consultation_artifacts = load_consultation_artifacts(
-        &selection.config_path,
-        &config,
-        ConfigSource::LocalFile,
-        None,
-    )
+    let consultation_artifacts = suppress_source_diagnostics(|| {
+        load_consultation_artifacts(
+            &selection.config_path,
+            &config,
+            ConfigSource::LocalFile,
+            None,
+        )
+    })
     .map_err(map_consultation_artifact_error)?;
     Ok(LoadedConfigDocument {
         config_path: selection.config_path,
@@ -328,99 +312,50 @@ fn parse_config_bytes_for_bundle(
     bytes: &[u8],
     source: ConfigSource,
 ) -> Result<(Config, Value), Error> {
-    let config_text = std::str::from_utf8(bytes).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "config bundle primary config is not UTF-8"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
+    let config_text = std::str::from_utf8(bytes).map_err(|_| {
+        emit_process_startup_failure(ProcessStartupCode::BUNDLE_VALIDATION_REJECTED);
         Error::from(ConfigError::ParseError)
     })?;
-    let expanded_config_text = expand_config_env_vars(config_text).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "config bundle primary config failed environment expansion"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
+    let expanded_config_text = expand_config_env_vars(config_text).map_err(|_| {
+        emit_process_startup_failure(ProcessStartupCode::BUNDLE_VALIDATION_REJECTED);
         Error::from(ConfigError::ParseError)
     })?;
-    let config_value: Value = serde_saphyr::from_str(&expanded_config_text).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "config bundle primary config failed to parse"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
+    let config_value: Value = serde_saphyr::from_str(&expanded_config_text).map_err(|_| {
+        emit_process_startup_failure(ProcessStartupCode::BUNDLE_VALIDATION_REJECTED);
         Error::from(ConfigError::ParseError)
     })?;
-    if let Err(err) = reject_deprecated_config_fields(&config_value, &deprecated_config_fields()) {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %err,
-            "config bundle primary config uses a removed or renamed field"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={err}");
+    if reject_deprecated_config_fields(&config_value, &deprecated_config_fields()).is_err() {
+        emit_process_startup_failure(ProcessStartupCode::BUNDLE_VALIDATION_REJECTED);
         return Err(Error::from(ConfigError::ParseError));
     }
-    let config: Config = serde_saphyr::from_str(&expanded_config_text).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "config bundle primary config failed to deserialize"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
+    let config: Config = serde_saphyr::from_str(&expanded_config_text).map_err(|_| {
+        emit_process_startup_failure(ProcessStartupCode::BUNDLE_VALIDATION_REJECTED);
         Error::from(ConfigError::ParseError)
     })?;
-    validate::run_with_source(&config, source).map_err(|error| {
-        tracing::error!(
-            code = "config.bundle_rejected",
-            result = "rejected_validation",
-            error = %error,
-            "config bundle primary config failed product validation"
-        );
-        eprintln!("config.bundle_rejected result=rejected_validation error={error}");
-        error
-    })?;
+    suppress_source_diagnostics(|| validate::run_with_source(&config, source)).inspect_err(
+        |_| {
+            emit_process_startup_failure(ProcessStartupCode::BUNDLE_VALIDATION_REJECTED);
+        },
+    )?;
     Ok((config, config_value))
 }
 
 fn log_bundle_verification_error(error: &ConfigBundleError) {
-    let result = bundle_verify_rejection_result(error);
-    tracing::error!(
-        code = "config.bundle_rejected",
-        result,
-        error = %error,
-        "signed config bundle verification failed"
-    );
-    eprintln!("config.bundle_rejected result={result} error={error}");
+    emit_process_startup_failure(ProcessStartupCode::from_bundle_verification(
+        bundle_verify_rejection_code(error),
+    ));
 }
 
 fn map_config_boot_error(error: ConfigBootError) -> Error {
-    if let Some(reason) = error.break_glass_invalid_reason() {
-        tracing::error!(
-            code = "config.break_glass_invalid",
-            error = %error,
-            reason,
-            "config break-glass override rejected"
-        );
-        eprintln!("config.break_glass_invalid error={error}");
-    }
-    let result = error.bundle_rejection_result();
-    tracing::error!(
-        code = "config.bundle_rejected",
-        result,
-        error = %error,
-        "config bundle boot state rejected startup"
-    );
-    eprintln!("config.bundle_rejected result={result} error={error}");
+    emit_process_startup_failure(ProcessStartupCode::from_bundle_verification(
+        error.bundle_rejection_code(),
+    ));
     Error::from(ConfigError::ValidationError)
+}
+
+fn suppress_source_diagnostics<T>(action: impl FnOnce() -> T) -> T {
+    let dispatch = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    tracing::dispatcher::with_default(&dispatch, action)
 }
 
 fn deprecated_config_fields() -> Vec<DeprecatedConfigField> {
@@ -505,31 +440,23 @@ fn load_config_metadata_for_source(
             if (config.config_trust.is_some() || source == ConfigSource::SignedBundleFile)
                 && metadata.source.digest.is_none()
             {
-                tracing::error!(
-                    code = "metadata.manifest.digest_required",
-                    "governed configuration requires metadata.source.digest"
-                );
+                emit_process_startup_failure(ProcessStartupCode::CONFIG_VALIDATION_REJECTED);
                 return Err(MetadataError::ManifestDigestRequired.into());
             }
             if let Some(expected) = metadata.source.digest.as_deref() {
                 if !is_sha256_config_hash(expected) {
-                    tracing::error!(
-                        code = "metadata.manifest.digest_invalid",
-                        "metadata manifest configured digest is not a canonical sha256 digest"
-                    );
+                    emit_process_startup_failure(ProcessStartupCode::CONFIG_VALIDATION_REJECTED);
                     return Err(MetadataError::ManifestDigestInvalid.into());
                 }
                 if expected != digest {
-                    tracing::error!(
-                        code = "metadata.manifest.digest_mismatch",
-                        expected = %expected,
-                        actual = %digest,
-                        "metadata manifest configured digest does not match loaded manifest"
-                    );
+                    emit_process_startup_failure(ProcessStartupCode::CONFIG_VALIDATION_REJECTED);
                     return Err(MetadataError::ManifestDigestMismatch.into());
                 }
             }
-            validate::validate_runtime_bindings(config, &compiled)?;
+            suppress_source_diagnostics(|| validate::validate_runtime_bindings(config, &compiled))
+                .inspect_err(|_| {
+                    emit_process_startup_failure(ProcessStartupCode::CONFIG_VALIDATION_REJECTED);
+                })?;
             (Some(compiled), Some(digest))
         }
         None => (None, None),
@@ -555,48 +482,24 @@ pub fn load_metadata_manifest_with_digest(
 ) -> Result<(CompiledMetadata, String), Error> {
     let raw = match fs::read_to_string(path) {
         Ok(s) => s,
-        Err(err) => {
-            tracing::error!(
-                code = "metadata.manifest.file_not_found",
-                path = %path.display(),
-                error = %err,
-                "failed to read metadata manifest"
-            );
+        Err(_) => {
+            emit_process_startup_failure(ProcessStartupCode::CONFIG_SOURCE_UNAVAILABLE);
             return Err(MetadataError::ManifestFileNotFound.into());
         }
     };
     let manifest: MetadataManifest = match serde_saphyr::from_str(&raw) {
         Ok(manifest) => manifest,
-        Err(err) => {
-            tracing::error!(
-                code = "metadata.manifest.parse_failed",
-                path = %path.display(),
-                error = %err,
-                "failed to parse metadata manifest YAML"
-            );
+        Err(_) => {
+            emit_process_startup_failure(ProcessStartupCode::CONFIG_DOCUMENT_INVALID);
             return Err(MetadataError::ManifestParseFailed.into());
         }
     };
-    let digest = metadata_core::source_manifest_digest(&manifest).map_err(|err| {
-        tracing::error!(
-            code = "metadata.manifest.digest_invalid",
-            path = %path.display(),
-            error = %err,
-            "failed to compute metadata manifest digest"
-        );
+    let digest = metadata_core::source_manifest_digest(&manifest).map_err(|_| {
+        emit_process_startup_failure(ProcessStartupCode::CONFIG_VALIDATION_REJECTED);
         Error::from(MetadataError::ManifestDigestInvalid)
     })?;
     let compiled = metadata_core::compile_manifest(&manifest).map_err(|err| {
-        let code = match &err {
-            CoreMetadataError::VersionUnsupported => "metadata.manifest.version_unsupported",
-            CoreMetadataError::Validation { .. } => "metadata.manifest.validation_failed",
-        };
-        tracing::error!(
-            code = code,
-            path = %path.display(),
-            error = %err,
-            "metadata manifest failed validation"
-        );
+        emit_process_startup_failure(ProcessStartupCode::CONFIG_VALIDATION_REJECTED);
         match err {
             CoreMetadataError::VersionUnsupported => {
                 Error::from(MetadataError::ManifestVersionUnsupported)
@@ -619,12 +522,8 @@ fn resolve_relative_to_config(config_path: &Path, target: &Path) -> PathBuf {
         .join(target)
 }
 
-fn map_consultation_artifact_error(error: ConsultationArtifactClosureError) -> Error {
-    tracing::error!(
-        code = "config.consultation_artifact_closure_rejected",
-        error = %error,
-        "consultation artifact closure rejected startup"
-    );
+fn map_consultation_artifact_error(_error: ConsultationArtifactClosureError) -> Error {
+    emit_process_startup_failure(ProcessStartupCode::CONSULTATION_ARTIFACTS_REJECTED);
     Error::from(ConfigError::ValidationError)
 }
 

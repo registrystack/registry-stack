@@ -31,6 +31,7 @@ pub mod metadata;
 mod net;
 pub mod observability;
 pub use consultation::offline_fixture;
+pub mod process_startup;
 pub mod query;
 pub mod rhai_worker;
 pub mod runtime_config;

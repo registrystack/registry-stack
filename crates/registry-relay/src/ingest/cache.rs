@@ -320,7 +320,7 @@ mod tests {
     use futures::stream;
     use tempfile::TempDir;
 
-    use super::{gc_resource, write_atomic, CacheLayout};
+    use super::{gc_resource, gc_resource_with_retention, write_atomic, CacheLayout};
     use crate::config::{DatasetId, ResourceId};
     use crate::error::IngestError;
 
@@ -438,5 +438,35 @@ mod tests {
         assert!(layout.final_path(&dataset, &resource, current).exists());
         assert!(!layout.final_path(&dataset, &resource, future).exists());
         assert!(!layout.tmp_path(&dataset, &resource, current).exists());
+    }
+
+    #[tokio::test]
+    async fn later_publication_bounds_retained_recovery_generations() {
+        let tmp = TempDir::new().expect("tempdir");
+        let layout = CacheLayout::new(Arc::from(tmp.path()));
+        let dataset: DatasetId = id("dataset");
+        let resource: ResourceId = id("resource");
+        let oldest = ulid::Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let previous = ulid::Ulid::from_string("01BRZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let recovered = ulid::Ulid::from_string("01CRZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+        let successor = ulid::Ulid::from_string("01DRZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+
+        for generation in [oldest, previous, recovered, successor] {
+            let path = layout.final_path(&dataset, &resource, generation);
+            tokio::fs::create_dir_all(path.parent().unwrap())
+                .await
+                .unwrap();
+            tokio::fs::write(path, b"cache").await.unwrap();
+        }
+
+        gc_resource_with_retention(&layout, &dataset, &resource, successor, 2).await;
+
+        assert!(!layout.final_path(&dataset, &resource, oldest).exists());
+        assert!(!layout.final_path(&dataset, &resource, previous).exists());
+        assert!(
+            layout.final_path(&dataset, &resource, recovered).exists(),
+            "the recovered active generation remains as the bounded rollback predecessor"
+        );
+        assert!(layout.final_path(&dataset, &resource, successor).exists());
     }
 }

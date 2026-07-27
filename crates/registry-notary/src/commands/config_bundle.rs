@@ -1,4 +1,8 @@
 use crate::*;
+use registry_platform_ops::{
+    bundle_verify_rejection_code, ApplyReportResult, BundleVerificationCode,
+    BundleVerificationFailure,
+};
 
 pub(crate) async fn config_verify_bundle(
     args: ConfigVerifyBundleArgs,
@@ -6,17 +10,8 @@ pub(crate) async fn config_verify_bundle(
     let verified = match verify_config_bundle(&args.bundle_dir, &args.anchor_path) {
         Ok(verified) => verified,
         Err(error) => {
-            let result = bundle_verify_rejection_result(&error);
-            print_config_verify_bundle_report(config_verify_bundle_report(
-                result,
-                "unknown",
-                None,
-                None,
-                None,
-                None,
-                Some((result, error.to_string())),
-            ))?;
-            return Err(Box::new(error));
+            let code = bundle_verify_rejection_code(&error);
+            return reject_config_verify_bundle(code);
         }
     };
     let key = antirollback_key_from_verified_bundle(&verified);
@@ -27,52 +22,31 @@ pub(crate) async fn config_verify_bundle(
         &verified.manifest.config_hash,
         &verified.manifest_hash,
     ) {
-        print_config_verify_bundle_report(config_verify_bundle_report(
-            "rejected_rollback",
-            &verified.manifest.stream_id,
-            Some(verified.manifest.bundle_id.clone()),
-            Some(verified.manifest.sequence),
-            verified.manifest.previous_config_hash.clone(),
-            Some(verified.manifest.config_hash.clone()),
-            Some(("rejected_rollback", error.to_string())),
-        ))?;
-        return Err(Box::new(error));
+        let code = error.bundle_rejection_code();
+        return reject_config_verify_bundle(code);
     }
-    let config_text = std::str::from_utf8(&verified.config_bytes)?;
+    let config_text = match std::str::from_utf8(&verified.config_bytes) {
+        Ok(config_text) => config_text,
+        Err(_) => {
+            return reject_config_verify_bundle(BundleVerificationCode::REJECTED_VALIDATION);
+        }
+    };
     let parsed = match parse_config_document(config_text).and_then(|parsed| {
         validate_signed_bundle_config_document(&parsed)?;
         Ok(parsed)
     }) {
         Ok(parsed) => parsed,
-        Err(error) => {
-            print_config_verify_bundle_report(config_verify_bundle_report(
-                "rejected_validation",
-                &verified.manifest.stream_id,
-                Some(verified.manifest.bundle_id.clone()),
-                Some(verified.manifest.sequence),
-                verified.manifest.previous_config_hash.clone(),
-                Some(verified.manifest.config_hash.clone()),
-                Some(("rejected_validation", error.to_string())),
-            ))?;
-            return Err(error);
+        Err(_) => {
+            return reject_config_verify_bundle(BundleVerificationCode::REJECTED_VALIDATION);
         }
     };
-    if let Err(error) =
-        compile_notary_runtime_with_provenance(parsed.config, ConfigSource::SignedBundleFile, None)
+    if compile_notary_runtime_with_provenance(parsed.config, ConfigSource::SignedBundleFile, None)
+        .is_err()
     {
-        print_config_verify_bundle_report(config_verify_bundle_report(
-            "rejected_validation",
-            &verified.manifest.stream_id,
-            Some(verified.manifest.bundle_id.clone()),
-            Some(verified.manifest.sequence),
-            verified.manifest.previous_config_hash.clone(),
-            Some(verified.manifest.config_hash.clone()),
-            Some(("rejected_validation", error.to_string())),
-        ))?;
-        return Err(Box::new(error));
+        return reject_config_verify_bundle(BundleVerificationCode::REJECTED_VALIDATION);
     }
     print_config_verify_bundle_report(config_verify_bundle_report(
-        "verified",
+        ApplyReportResult::Verified,
         &verified.manifest.stream_id,
         Some(verified.manifest.bundle_id),
         Some(verified.manifest.sequence),
@@ -83,6 +57,21 @@ pub(crate) async fn config_verify_bundle(
     Ok(())
 }
 
+fn reject_config_verify_bundle(
+    code: BundleVerificationCode,
+) -> Result<(), Box<dyn std::error::Error>> {
+    print_config_verify_bundle_report(config_verify_bundle_report(
+        ApplyReportResult::from(code),
+        "unknown",
+        None,
+        None,
+        None,
+        None,
+        Some(code),
+    ))?;
+    Err(Box::new(BundleVerificationFailure::from(code)))
+}
+
 pub(crate) fn print_config_verify_bundle_report(
     report: Value,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -91,16 +80,28 @@ pub(crate) fn print_config_verify_bundle_report(
 }
 
 pub(crate) fn config_verify_bundle_report(
-    result: &'static str,
+    result: ApplyReportResult,
     stream_id: &str,
     bundle_id: Option<String>,
     bundle_sequence: Option<u64>,
     previous_config_hash: Option<String>,
     config_hash: Option<String>,
-    error: Option<(&'static str, String)>,
+    error: Option<BundleVerificationCode>,
 ) -> Value {
+    let rejected = error.is_some();
+    let stream_id = if rejected { "unknown" } else { stream_id };
+    let bundle_id = if rejected { None } else { bundle_id };
+    let bundle_sequence = if rejected { None } else { bundle_sequence };
+    let previous_config_hash = if rejected { None } else { previous_config_hash };
+    let config_hash = if rejected { None } else { config_hash };
     let errors = error
-        .map(|(code, message)| vec![json!({ "code": code, "message": message })])
+        .map(|code| {
+            let definition = code.definition();
+            vec![json!({
+                "code": code.as_str(),
+                "message": definition.safe_report_message,
+            })]
+        })
         .unwrap_or_default();
     json!({
         "schema": "registry.platform.config_apply_report.v1",
@@ -112,7 +113,7 @@ pub(crate) fn config_verify_bundle_report(
         "bundle_sequence": bundle_sequence,
         "previous_config_hash": previous_config_hash,
         "config_hash": config_hash,
-        "result": result,
+        "result": result.as_str(),
         "restart_required": false,
         "change_classes": [],
         "affected_components": [],

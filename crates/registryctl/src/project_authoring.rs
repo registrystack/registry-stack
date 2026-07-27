@@ -19,7 +19,7 @@ use registry_relay::source_plan::{
     },
     EvidenceClass, PinnedEvidenceArtifact, PinnedSourcePlanArtifact, SourcePlanArtifactBundle,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -43,7 +43,9 @@ const PROJECT_COMMAND_REPORT_SCHEMA_VERSION: &str = "registryctl.project_command
 const PROJECT_DIAGNOSTICS_SCHEMA_VERSION: &str = "registryctl.project_diagnostics.v1";
 const PROJECT_EDITOR_REPORT_SCHEMA_VERSION: &str = "registryctl.project_editor.v1";
 const REVIEW_SCHEMA: &str = "registry.project.review.v1";
-const APPROVAL_STATE_SCHEMA: &str = "registry.project.approval-state.v1";
+const APPROVAL_STATE_SCHEMA_V1: &str = "registry.project.approval-state.v1";
+const APPROVAL_STATE_SCHEMA_V2: &str = "registry.project.approval-state.v2";
+const APPROVAL_STATE_SCHEMA: &str = "registry.project.approval-state.v3";
 const APPROVAL_REVIEW_PATH: &str = "approval/review.json";
 const APPROVAL_STATE_PATH: &str = "approval/project-state.json";
 const MAX_AUTHORED_FILE_BYTES: u64 = 1024 * 1024;
@@ -63,11 +65,38 @@ const RELEASED_SCRIPT_RUNTIMES: &[ReleasedScriptRuntime] = &[ReleasedScriptRunti
 // These ownership-oriented source units share this private module so the
 // authoring compiler can retain one closed internal type system without a
 // public API or visibility expansion.
+mod report_contract;
+pub use report_contract::*;
+mod diagnostic_reference;
+mod fixture_diagnostics;
+pub use diagnostic_reference::*;
+mod fixture_coverage;
+pub use fixture_coverage::*;
+mod capability_inventory;
+pub use capability_inventory::*;
+mod documentation;
+pub use documentation::*;
+mod knowledge;
+mod preflight;
+pub use preflight::*;
+mod promotion;
+pub use promotion::*;
+mod migration;
+pub use migration::*;
+mod semantic_comparison;
+pub use semantic_comparison::*;
+mod duration_authority;
+use duration_authority::*;
+mod byte_size_authority;
+use byte_size_authority::*;
 include!("project_authoring/model.rs");
 include!("project_authoring/editor.rs");
+include!("project_authoring/schema_authority.rs");
 include!("project_authoring/authoring_contract.rs");
 include!("project_authoring/diagnostics.rs");
 include!("project_authoring/commands.rs");
+include!("project_authoring/compiler/semantic_impact.rs");
+include!("project_authoring/compiler/explanation.rs");
 include!("project_authoring/compiler/artifacts.rs");
 include!("project_authoring/compiler/relay.rs");
 include!("project_authoring/compiler/notary.rs");

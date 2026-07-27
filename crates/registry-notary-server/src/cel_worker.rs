@@ -6,7 +6,10 @@ use std::ffi::OsString;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 
 use crosswalk_core::{
@@ -15,6 +18,7 @@ use crosswalk_core::{
 use registry_notary_core::RegistryNotaryCelConfig;
 use registry_notary_worker_harness::{
     WorkerCommand, WorkerError, WorkerPool, WorkerPoolConfig, WorkerPoolSnapshot,
+    WorkerStartupProbe,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -37,6 +41,7 @@ pub struct CelWorkerConfig {
     pub current_dir: Option<PathBuf>,
     pub forbidden_env_names: BTreeSet<OsString>,
     pub max_workers: usize,
+    pub startup_timeout: Duration,
     pub request_timeout: Duration,
     pub max_request_bytes: usize,
     pub max_response_bytes: usize,
@@ -71,6 +76,7 @@ impl CelWorkerConfig {
             current_dir: None,
             forbidden_env_names,
             max_workers: 2,
+            startup_timeout: Duration::from_secs(10),
             request_timeout: Duration::from_secs(2),
             max_request_bytes: 64 * 1024,
             max_response_bytes: 16 * 1024,
@@ -105,6 +111,7 @@ impl CelWorkerConfig {
 pub struct CelWorker {
     config: Arc<CelWorkerConfig>,
     pool: OnceCell<WorkerPool>,
+    activated: AtomicBool,
     metrics: Option<Arc<AppMetrics>>,
 }
 
@@ -120,6 +127,7 @@ impl CelWorker {
         Self {
             config: Arc::new(config),
             pool: OnceCell::new(),
+            activated: AtomicBool::new(false),
             metrics: None,
         }
     }
@@ -132,8 +140,36 @@ impl CelWorker {
 
     pub async fn new(config: CelWorkerConfig) -> Result<Self, CelWorkerError> {
         let worker = Self::lazy(config);
-        worker.pool().await?;
+        worker.activate().await?;
         Ok(worker)
+    }
+
+    pub async fn activate(&self) -> Result<(), CelWorkerError> {
+        match self.pool().await {
+            Ok(pool) => {
+                let snapshot = pool.snapshot().await;
+                self.record_snapshot(&snapshot);
+                let ready = pool.check_ready().await;
+                self.activated.store(ready, Ordering::Release);
+                if ready {
+                    self.record_startup(true);
+                    Ok(())
+                } else {
+                    self.record_startup(false);
+                    Err(CelWorkerError::Unavailable)
+                }
+            }
+            Err(_) => {
+                self.activated.store(false, Ordering::Release);
+                self.record_startup(false);
+                Err(CelWorkerError::Unavailable)
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn is_activated(&self) -> bool {
+        self.activated.load(Ordering::Acquire)
     }
 
     async fn pool(&self) -> Result<&WorkerPool, CelWorkerError> {
@@ -175,6 +211,7 @@ impl CelWorker {
         let pool = match self.pool().await {
             Ok(pool) => pool,
             Err(error) => {
+                self.record_startup(false);
                 self.record_evaluation(&error, started_at.elapsed());
                 return Err(error);
             }
@@ -232,7 +269,7 @@ impl CelWorker {
     }
 
     pub async fn check_ready(&self) -> bool {
-        let Ok(pool) = self.pool().await else {
+        let Some(pool) = self.pool.get() else {
             return false;
         };
         let ready = pool.check_ready().await;
@@ -257,9 +294,17 @@ impl CelWorker {
         if let Some(metrics) = &self.metrics {
             metrics.set_cel_worker_pool("max", snapshot.max_workers as u64);
             metrics.set_cel_worker_pool("idle", snapshot.idle_workers as u64);
+            metrics.set_cel_worker_pool("warming", snapshot.warming_workers as u64);
             metrics.set_cel_worker_pool("in_flight", snapshot.in_flight as u64);
             metrics.set_cel_worker_pool("replacements_total", snapshot.replacements_total);
             metrics.set_cel_worker_pool("circuit_open", u64::from(snapshot.circuit_open));
+        }
+    }
+
+    fn record_startup(&self, ready: bool) {
+        if let Some(metrics) = &self.metrics {
+            metrics.set_cel_worker_pool("startup_ready", u64::from(ready));
+            metrics.set_cel_worker_pool("startup_failed", u64::from(!ready));
         }
     }
 }
@@ -273,6 +318,7 @@ pub fn cel_policy_hash(expression: &str) -> String {
 }
 
 fn worker_pool_config(config: CelWorkerConfig) -> WorkerPoolConfig {
+    let startup_probe = cel_startup_probe(&config);
     let mut command = WorkerCommand::new(config.command);
     for arg in config.command_args {
         command = command.arg(arg);
@@ -287,6 +333,8 @@ fn worker_pool_config(config: CelWorkerConfig) -> WorkerPoolConfig {
         command,
         forbidden_env_names: config.forbidden_env_names,
         max_workers: config.max_workers,
+        startup_probe: Some(startup_probe),
+        startup_timeout: config.startup_timeout,
         request_timeout: config.request_timeout,
         max_request_bytes: config.max_request_bytes,
         max_stdout_bytes: config.max_response_bytes,
@@ -295,6 +343,32 @@ fn worker_pool_config(config: CelWorkerConfig) -> WorkerPoolConfig {
         replacement_window: Duration::from_secs(60),
         max_replacements_per_window: config.max_workers.saturating_mul(4).max(4),
         circuit_breaker_cooldown: Duration::from_secs(30),
+    }
+}
+
+fn cel_startup_probe(config: &CelWorkerConfig) -> WorkerStartupProbe {
+    let expression = "true";
+    let policy_hash = cel_policy_hash(expression);
+    let request = CelWorkerRequest {
+        protocol: CEL_WORKER_PROTOCOL_V1.to_string(),
+        expression: expression.to_string(),
+        policy_hash: Some(policy_hash.clone()),
+        allow_regex: config.allow_regex,
+        limits: config.limits.clone(),
+        root_bindings: Value::Object(serde_json::Map::new()),
+    };
+    let response = CelWorkerResponse {
+        protocol: CEL_WORKER_PROTOCOL_V1.to_string(),
+        policy_hash: Some(policy_hash),
+        outcome: CelWorkerResponseOutcome::Success {
+            value: Value::Bool(true),
+        },
+    };
+    WorkerStartupProbe {
+        request: serde_json::to_value(request)
+            .expect("CEL startup probe request must serialize to JSON"),
+        expected_response: serde_json::to_value(response)
+            .expect("CEL startup probe response must serialize to JSON"),
     }
 }
 
@@ -326,6 +400,8 @@ fn sibling_worker_binary(current_exe: &Path) -> Option<PathBuf> {
 
 #[derive(Debug, Error)]
 pub enum CelWorkerError {
+    #[error("CEL worker is unavailable")]
+    Unavailable,
     #[error("CEL worker harness failed")]
     Harness(#[source] WorkerError),
     #[error("CEL worker protocol mismatch")]
@@ -339,12 +415,15 @@ pub enum CelWorkerError {
 impl CelWorkerError {
     fn metric_outcome(&self) -> &'static str {
         match self {
+            Self::Unavailable => "worker_unavailable",
             Self::Harness(WorkerError::Saturated { .. }) => "saturated",
             Self::Harness(WorkerError::CircuitOpen { .. }) => "circuit_open",
             Self::Harness(WorkerError::Timeout { .. }) => "timeout",
+            Self::Harness(WorkerError::StartupTimeout { .. }) => "startup_timeout",
             Self::Harness(WorkerError::RequestTooLarge { .. }) => "request_too_large",
             Self::Harness(WorkerError::StdoutTooLarge { .. }) => "output_too_large",
             Self::Harness(WorkerError::InvalidOutput { .. }) | Self::Protocol => "protocol_error",
+            Self::Harness(WorkerError::StartupProbeFailed { .. }) => "startup_probe_error",
             Self::Harness(
                 WorkerError::InvalidConfig { .. }
                 | WorkerError::Encode { .. }

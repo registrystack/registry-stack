@@ -1,0 +1,81 @@
+{
+  "schema_version": "registry.project.artifact_manifest.v1",
+  "format_version": "registry.project.artifact_manifest.format.v1",
+  "project": "fictional-citizen-registry",
+  "environment": "local",
+  "generator": {
+    "name": "registryctl",
+    "version": "0.13.0"
+  },
+  "inputs": [
+    {
+      "path": "registry-stack.yaml",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "path": "environments/local.yaml",
+      "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+      "path": "integrations/person-record/integration.yaml",
+      "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": ".registry-stack/build/local/relay/source-plans/person-record.json",
+      "format_version": "registry.relay.source_plan.v1",
+      "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "classes": [
+        "source_plan",
+        "deployment_input"
+      ],
+      "sensitivity": "internal",
+      "publication": "operator_only",
+      "edit": "generated_do_not_edit",
+      "version_control": "ignore",
+      "review": "generated_candidate",
+      "lifecycle": "unsigned_non_deployable",
+      "actions": [
+        "compare",
+        "validate",
+        "sign",
+        "verify"
+      ],
+      "consumers": [
+        "registry_relay",
+        "bundle_signer",
+        "deployment_tooling"
+      ]
+    },
+    {
+      "path": ".registry-stack/build/local/relay/config/relay.yaml",
+      "format_version": "registry.relay.config.v1",
+      "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "classes": [
+        "runtime_config",
+        "deployment_input"
+      ],
+      "sensitivity": "topology_sensitive",
+      "publication": "never_publish",
+      "edit": "generated_do_not_edit",
+      "version_control": "ignore",
+      "review": "generated_candidate",
+      "lifecycle": "unsigned_non_deployable",
+      "actions": [
+        "regenerate",
+        "compare",
+        "validate",
+        "sign",
+        "verify",
+        "discard"
+      ],
+      "consumers": [
+        "registry_relay",
+        "bundle_signer",
+        "deployment_tooling",
+        "operator"
+      ]
+    }
+  ]
+}

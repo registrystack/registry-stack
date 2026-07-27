@@ -75,6 +75,14 @@
   },
   "recovery_set": [
     {
+      "item": "relay_source_inputs",
+      "artifact_sha256": "<RELAY_SOURCE_INPUTS_BACKUP_SHA256>"
+    },
+    {
+      "item": "relay_ingest_cache",
+      "artifact_sha256": "<RELAY_INGEST_CACHE_BACKUP_SHA256>"
+    },
+    {
       "item": "relay_database",
       "artifact_sha256": "<RELAY_DATABASE_BACKUP_SHA256>"
     },
@@ -103,111 +111,160 @@
       "artifact_sha256": "<RELAY_KEY_LIFECYCLE_REFERENCE_SHA256>"
     }
   ],
+  "materialization_recovery": {
+    "source_inputs_sha256": "<RELAY_SOURCE_INPUTS_BACKUP_SHA256>",
+    "ingest_cache_sha256": "<RELAY_INGEST_CACHE_BACKUP_SHA256>",
+    "relay_database_sha256": "<RELAY_DATABASE_BACKUP_SHA256>",
+    "coordinated_recovery_point_sha256": "<COORDINATED_RECOVERY_POINT_SHA256>",
+    "active_publication_tuple_sha256": "<ACTIVE_PUBLICATION_TUPLE_SHA256>",
+    "target_release_sha256": "<TARGET_RELEASE_SHA256>",
+    "relay_config_schema_sha256": "<RELAY_CONFIG_SCHEMA_SHA256>",
+    "relay_role_bootstrap_identity_sha256": "<RELAY_ROLE_BOOTSTRAP_IDENTITY_SHA256>",
+    "recovery_metadata_sha256": "<RECOVERY_METADATA_SHA256>",
+    "audit_watermark_sha256": "<AUDIT_WATERMARK_SHA256>",
+    "binding_sha256": "<MATERIALIZATION_RECOVERY_BINDING_SHA256>"
+  },
   "results": [
     {
       "check_id": "candidate_artifacts_independently_verified",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "source_release_ready",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "pre_upgrade_complete_backup",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "notary_forward_schema_upgrade",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "older_notary_rejects_newer_schema",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "target_products_ready_before_traffic",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "one_notary_authority_per_relay_authority",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "registry_backed_direct_issuance",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "registry_backed_oid4vci_issuance",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "target_restart_retains_correctness_state",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "rollback_before_target_traffic",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "post_write_fix_forward_boundary",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "complete_restore",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "restored_products_ready",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     },
     {
       "check_id": "anti_rollback_rejects_older_bundle",
       "outcome": "not_run",
-      "observed_at": "<OBSERVED_AT>",
-      "evidence_label": "<EVIDENCE_LABEL>",
-      "evidence_sha256": "<EVIDENCE_SHA256>"
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
+    },
+    {
+      "check_id": "materialization_exact_restart_zero_source_calls",
+      "outcome": "not_run",
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
+    },
+    {
+      "check_id": "materialization_missing_cache_fail_closed",
+      "outcome": "not_run",
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
+    },
+    {
+      "check_id": "materialization_mismatched_cache_fail_closed",
+      "outcome": "not_run",
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
+    },
+    {
+      "check_id": "materialization_pointer_mutation_rejected",
+      "outcome": "not_run",
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
+    },
+    {
+      "check_id": "materialization_stale_or_live_fallback_rejected",
+      "outcome": "not_run",
+      "observed_at": null,
+      "evidence_label": null,
+      "evidence_sha256": null
     }
-  ]
+  ],
+  "record_binding_sha256": "<UPGRADE_EXERCISE_RECORD_BINDING_SHA256>"
 }

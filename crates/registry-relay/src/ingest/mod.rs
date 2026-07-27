@@ -240,12 +240,12 @@ impl IngestPlan {
     ) -> Result<(), IngestError> {
         let provider_id = table_name(&self.dataset_id, &self.resource_id);
 
-        if matches!(prior, ResourceReadiness::NotReady) {
-            if let Some(active) = coordinator
-                .active_candidate(&provider_id)
-                .await
-                .map_err(|_| IngestError::MaterializationFailed)?
-            {
+        if let Some(active) = coordinator
+            .active_candidate(&provider_id)
+            .await
+            .map_err(|_| IngestError::MaterializationFailed)?
+        {
+            if snapshot_exact_requires_reconciliation(prior, active.generation) {
                 return self.reconcile_snapshot_exact(coordinator, active).await;
             }
         }
@@ -284,20 +284,17 @@ impl IngestPlan {
                 return Err(IngestError::MaterializationFailed);
             }
         };
-        let result = {
-            let _publication_guard = publication_write_guard().await;
-            self.commit_prepared(&prepared).await
-        };
+        let result = { self.commit_durably_published_snapshot(&prepared).await };
         match result {
             Ok(()) => {
                 pending.finish();
                 self.finalize_prepared(&prepared).await;
                 Ok(())
             }
-            Err(error) => {
-                self.discard_prepared(&prepared).await;
-                Err(error)
-            }
+            // The state-plane active pointer already names this exact
+            // generation. Keep its immutable bytes for restart reconciliation;
+            // dropping `pending` leaves the local publication slot unavailable.
+            Err(error) => Err(error),
         }
     }
 
@@ -307,13 +304,9 @@ impl IngestPlan {
         active: crate::source_backend::ActiveSnapshotCandidate,
     ) -> Result<(), IngestError> {
         let provider_id = table_name(&self.dataset_id, &self.resource_id);
-        let path =
-            self.cache_layout
-                .final_path(&self.dataset_id, &self.resource_id, active.generation);
-        let digest = sha256_file(&path).await?;
-        if digest != active.digest {
-            return Err(IngestError::MaterializationFailed);
-        }
+        let (path, digest) = self
+            .verified_active_snapshot_path(active.generation, active.digest)
+            .await?;
         let schema = self.declared.to_arrow_schema();
         let provider = self
             .snapshot_table_provider(&path, Arc::clone(&schema))
@@ -350,10 +343,25 @@ impl IngestPlan {
             source_revision: None,
             source_observed_at_unix_ms: None,
         };
-        self.commit_prepared(&prepared).await?;
+        self.commit_durably_published_snapshot(&prepared).await?;
         pending.finish();
         self.finalize_prepared(&prepared).await;
         Ok(())
+    }
+
+    async fn verified_active_snapshot_path(
+        &self,
+        generation: Ulid,
+        expected_digest: [u8; 32],
+    ) -> Result<(PathBuf, [u8; 32]), IngestError> {
+        let path = self
+            .cache_layout
+            .final_path(&self.dataset_id, &self.resource_id, generation);
+        let digest = sha256_file(&path).await?;
+        if digest != expected_digest {
+            return Err(IngestError::MaterializationFailed);
+        }
+        Ok((path, digest))
     }
 
     /// Current readiness state. Cheap arc-swap load.
@@ -599,23 +607,12 @@ impl IngestPlan {
         use datafusion::datasource::file_format::parquet::ParquetFormat as DFParquetFormat;
 
         let parquet_path = tokio::fs::canonicalize(parquet_path).await.map_err(|e| {
-            tracing::error!(
-                event = "ingest.registration_failed",
-                dataset_id = %self.dataset_id,
-                resource_id = %self.resource_id,
-                path = %parquet_path.display(),
-                error = %e,
-            );
+            self.log_registration_failure(&e, Some(parquet_path));
             IngestError::RegistrationFailed
         })?;
         let url_str = format!("file://{}", parquet_path.display());
         let table_url = ListingTableUrl::parse(&url_str).map_err(|e| {
-            tracing::error!(
-                event = "ingest.registration_failed",
-                dataset_id = %self.dataset_id,
-                resource_id = %self.resource_id,
-                error = %e,
-            );
+            self.log_registration_failure(&e, None);
             IngestError::RegistrationFailed
         })?;
 
@@ -627,16 +624,41 @@ impl IngestPlan {
             .with_schema(schema);
 
         let table = ListingTable::try_new(config).map_err(|e| {
-            tracing::error!(
-                event = "ingest.registration_failed",
-                dataset_id = %self.dataset_id,
-                resource_id = %self.resource_id,
-                error = %e,
-            );
+            self.log_registration_failure(&e, None);
             IngestError::RegistrationFailed
         })?;
 
         Ok(Arc::new(table))
+    }
+
+    fn log_registration_failure(
+        &self,
+        error: &dyn std::fmt::Display,
+        path: Option<&std::path::Path>,
+    ) {
+        if self.materializations.get().is_some() {
+            tracing::error!(
+                event = "ingest.registration_failed",
+                dataset_id = %self.dataset_id,
+                resource_id = %self.resource_id,
+                "snapshot-exact registration failed with redacted diagnostics",
+            );
+        } else if let Some(path) = path {
+            tracing::error!(
+                event = "ingest.registration_failed",
+                dataset_id = %self.dataset_id,
+                resource_id = %self.resource_id,
+                path = %path.display(),
+                error = %error,
+            );
+        } else {
+            tracing::error!(
+                event = "ingest.registration_failed",
+                dataset_id = %self.dataset_id,
+                resource_id = %self.resource_id,
+                error = %error,
+            );
+        }
     }
 
     async fn commit_prepared(&self, prepared: &PreparedIngest) -> Result<(), IngestError> {
@@ -648,12 +670,7 @@ impl IngestPlan {
         )
         .await
         .map_err(|e| {
-            tracing::error!(
-                event = "ingest.registration_failed",
-                dataset_id = %self.dataset_id,
-                resource_id = %self.resource_id,
-                error = %e,
-            );
+            self.log_registration_failure(&e, None);
             IngestError::RegistrationFailed
         })?;
 
@@ -667,6 +684,21 @@ impl IngestPlan {
         }));
 
         Ok(())
+    }
+
+    /// Install a candidate after its audited publication advanced the durable
+    /// active pointer.
+    ///
+    /// A registration failure must leave the exact Parquet candidate intact.
+    /// The pending publication guard then leaves consultations unavailable,
+    /// and the next attempt reconciles these bytes against the durable pointer
+    /// before the connector may be opened again.
+    async fn commit_durably_published_snapshot(
+        &self,
+        prepared: &PreparedIngest,
+    ) -> Result<(), IngestError> {
+        let _publication_guard = publication_write_guard().await;
+        self.commit_prepared(prepared).await
     }
 
     async fn finalize_prepared(&self, prepared: &PreparedIngest) {
@@ -684,7 +716,15 @@ impl IngestPlan {
             .await;
         }
 
-        if let Some(path) = &prepared.cache_path {
+        if self.materializations.get().is_some() {
+            tracing::info!(
+                event = "ingest.complete",
+                dataset_id = %self.dataset_id,
+                resource_id = %self.resource_id,
+                ingest_ulid = %prepared.readiness_ingest_ulid,
+                materialization = materialization_label(self.materialization),
+            );
+        } else if let Some(path) = &prepared.cache_path {
             tracing::info!(
                 event = "ingest.complete",
                 dataset_id = %self.dataset_id,
@@ -710,24 +750,43 @@ impl IngestPlan {
         };
         match tokio::fs::remove_file(path).await {
             Ok(()) => {
-                tracing::debug!(
-                    event = "ingest.prepared_cache_discarded",
-                    dataset_id = %self.dataset_id,
-                    resource_id = %self.resource_id,
-                    ingest_ulid = %prepared.readiness_ingest_ulid,
-                    path = %path.display(),
-                );
+                if self.materializations.get().is_some() {
+                    tracing::debug!(
+                        event = "ingest.prepared_cache_discarded",
+                        dataset_id = %self.dataset_id,
+                        resource_id = %self.resource_id,
+                        ingest_ulid = %prepared.readiness_ingest_ulid,
+                    );
+                } else {
+                    tracing::debug!(
+                        event = "ingest.prepared_cache_discarded",
+                        dataset_id = %self.dataset_id,
+                        resource_id = %self.resource_id,
+                        ingest_ulid = %prepared.readiness_ingest_ulid,
+                        path = %path.display(),
+                    );
+                }
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => {
-                tracing::warn!(
-                    event = "ingest.prepared_cache_cleanup_failed",
-                    dataset_id = %self.dataset_id,
-                    resource_id = %self.resource_id,
-                    ingest_ulid = %prepared.readiness_ingest_ulid,
-                    path = %path.display(),
-                    error = %error,
-                );
+                if self.materializations.get().is_some() {
+                    tracing::warn!(
+                        event = "ingest.prepared_cache_cleanup_failed",
+                        dataset_id = %self.dataset_id,
+                        resource_id = %self.resource_id,
+                        ingest_ulid = %prepared.readiness_ingest_ulid,
+                        "snapshot-exact cache cleanup failed with redacted diagnostics",
+                    );
+                } else {
+                    tracing::warn!(
+                        event = "ingest.prepared_cache_cleanup_failed",
+                        dataset_id = %self.dataset_id,
+                        resource_id = %self.resource_id,
+                        ingest_ulid = %prepared.readiness_ingest_ulid,
+                        path = %path.display(),
+                        error = %error,
+                    );
+                }
             }
         }
     }
@@ -793,6 +852,16 @@ pub enum ResourceReadiness {
         code: &'static str,
         since: OffsetDateTime,
     },
+}
+
+fn snapshot_exact_requires_reconciliation(
+    prior: &ResourceReadiness,
+    active_generation: Ulid,
+) -> bool {
+    match prior {
+        ResourceReadiness::Ready { ingest_ulid, .. } => *ingest_ulid != active_generation,
+        ResourceReadiness::NotReady | ResourceReadiness::Failed { .. } => true,
+    }
 }
 
 // ── IngestRegistry ────────────────────────────────────────────────────────────
@@ -1591,6 +1660,7 @@ mod tests {
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    use datafusion::execution::context::SessionConfig;
     use tempfile::TempDir;
     use tokio::sync::Notify;
     use tokio::time::{timeout, Duration};
@@ -1785,6 +1855,119 @@ mod tests {
             } => (ingest_ulid, registered_at),
             other => panic!("expected ready resource, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn snapshot_exact_reconciles_uninstalled_durable_generation_before_acquisition() {
+        let active = Ulid::from_string("01J5K8M0000000000000000002").expect("active generation");
+        let previous =
+            Ulid::from_string("01J5K8M0000000000000000001").expect("previous generation");
+        let schema = DeclaredSchema::from(&csv_schema_config()).to_arrow_schema();
+        let failed = ResourceReadiness::Failed {
+            code: "ingest.registration_failed",
+            since: OffsetDateTime::UNIX_EPOCH,
+        };
+        let stale_ready = ResourceReadiness::Ready {
+            ingest_ulid: previous,
+            schema: Arc::clone(&schema),
+            registered_at: OffsetDateTime::UNIX_EPOCH,
+            source_revision: None,
+        };
+        let current_ready = ResourceReadiness::Ready {
+            ingest_ulid: active,
+            schema,
+            registered_at: OffsetDateTime::UNIX_EPOCH,
+            source_revision: None,
+        };
+
+        assert!(snapshot_exact_requires_reconciliation(
+            &ResourceReadiness::NotReady,
+            active
+        ));
+        assert!(snapshot_exact_requires_reconciliation(&failed, active));
+        assert!(snapshot_exact_requires_reconciliation(&stale_ready, active));
+        assert!(
+            !snapshot_exact_requires_reconciliation(&current_ready, active),
+            "only an already installed exact generation may acquire a successor"
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_exact_reconciliation_rejects_missing_and_mismatched_active_bytes() {
+        let tmp = TempDir::new().expect("tempdir");
+        let source = ToggleSource::new("resource");
+        let plan = successful_plan(
+            "dataset",
+            "resource",
+            Arc::clone(&source),
+            Arc::from(tmp.path()),
+            Arc::new(SessionContext::new()),
+        );
+        let generation =
+            Ulid::from_string("01J5K8M0000000000000000002").expect("active generation");
+        let path = plan
+            .cache_layout
+            .final_path(&id("dataset"), &id("resource"), generation);
+        let expected_digest: [u8; 32] = Sha256::digest(b"exact active bytes").into();
+
+        assert!(matches!(
+            plan.verified_active_snapshot_path(generation, expected_digest)
+                .await,
+            Err(IngestError::MaterializationFailed)
+        ));
+
+        tokio::fs::create_dir_all(path.parent().expect("cache path has parent"))
+            .await
+            .expect("create cache directory");
+        tokio::fs::write(&path, b"different bytes")
+            .await
+            .expect("write mismatched candidate");
+        assert!(matches!(
+            plan.verified_active_snapshot_path(generation, expected_digest)
+                .await,
+            Err(IngestError::MaterializationFailed)
+        ));
+        assert_eq!(
+            source.open_count.load(Ordering::SeqCst),
+            0,
+            "reconciliation failures must not fall back to connector access"
+        );
+    }
+
+    #[tokio::test]
+    async fn durably_published_candidate_survives_local_registration_failure() {
+        let tmp = TempDir::new().expect("tempdir");
+        let source = ToggleSource::new("resource");
+        let session = SessionContext::new_with_config(
+            SessionConfig::new().with_create_default_catalog_and_schema(false),
+        );
+        let plan = successful_plan(
+            "dataset",
+            "resource",
+            source,
+            Arc::from(tmp.path()),
+            Arc::new(session),
+        );
+        let prepared = plan
+            .prepare_snapshot_pipeline(None)
+            .await
+            .expect("candidate preparation succeeds before registration");
+        let candidate_path = prepared
+            .cache_path
+            .clone()
+            .expect("snapshot candidate has a cache path");
+
+        let error = plan
+            .commit_durably_published_snapshot(&prepared)
+            .await
+            .expect_err("missing catalog makes local registration fail");
+
+        assert!(matches!(error, IngestError::RegistrationFailed));
+        assert!(
+            candidate_path.exists(),
+            "durable active bytes must remain available for exact reconciliation"
+        );
+        assert!(matches!(plan.readiness(), ResourceReadiness::NotReady));
     }
 
     #[tokio::test]

@@ -12,13 +12,22 @@ use registry_platform_config::{
 use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 use registry_platform_ops::{
     AntiRollbackKey, AntiRollbackRecord, ConfigOverrideMode, ConfigOverridePin,
-    FileAntiRollbackStore,
+    FileAntiRollbackStore, BUNDLE_VERIFICATION_CODE_DEFINITIONS,
 };
 use serde_json::Value;
 use tempfile::TempDir;
 
 const PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 const ZERO_HASH: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+const VALIDATION_SENTINEL_PATH: &str = "REDACTION_COUNTRY_VALUE/redaction-user@example.test/REDACTION_SECRET_VALUE/REDACTION_PARSER_STRING/REDACTION_LOCAL_PATH.yaml";
+const ERROR_MESSAGE_SENTINELS: &[&str] = &[
+    "REDACTION_COUNTRY_VALUE",
+    "redaction-user@example.test",
+    "REDACTION_SECRET_VALUE",
+    "REDACTION_PARSER_STRING",
+    "REDACTION_LOCAL_PATH",
+    "/Users/",
+];
 
 struct BundleFixture {
     bundle_dir: PathBuf,
@@ -64,6 +73,17 @@ fn config_verify_bundle_cli_reports_rejected_rollback() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "rejected_rollback");
     assert_eq!(report["errors"][0]["code"], "rejected_rollback");
+    assert_safe_bundle_error(&report, "rejected_rollback");
+    assert_rejected_identity_is_redacted(&report);
+    assert_output_excludes(
+        &output,
+        &[
+            "relay-test-stream",
+            "relay-test-bundle",
+            fixture.config_hash.as_str(),
+            fixture.state_path.to_str().expect("path is UTF-8"),
+        ],
+    );
 }
 
 #[test]
@@ -111,6 +131,19 @@ fn config_verify_bundle_cli_rejects_expired_override_pin() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "rejected_rollback");
     assert_eq!(report["errors"][0]["code"], "rejected_rollback");
+    assert_safe_bundle_error(&report, "rejected_rollback");
+    assert_rejected_identity_is_redacted(&report);
+    assert_output_excludes(
+        &output,
+        &[
+            "jeremi",
+            "expired rollback",
+            "relay-test-stream",
+            "relay-test-bundle",
+            fixture.config_hash.as_str(),
+            fixture.state_path.to_str().expect("path is UTF-8"),
+        ],
+    );
 }
 
 #[test]
@@ -126,13 +159,25 @@ fn config_verify_bundle_cli_reports_rejected_binding() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "rejected_binding");
     assert_eq!(report["errors"][0]["code"], "rejected_binding");
+    assert_safe_bundle_error(&report, "rejected_binding");
+    assert_rejected_identity_is_redacted(&report);
+    assert_output_excludes(
+        &output,
+        &[
+            "relay-test-stream",
+            "relay-test-bundle",
+            fixture.config_hash.as_str(),
+        ],
+    );
 }
 
 #[test]
 fn config_verify_bundle_cli_reports_rejected_signature_for_hash_mismatch() {
     let temp = TempDir::new().expect("tempdir");
     let fixture = write_bundle_fixture(&temp, "registry-relay", 0);
-    std::fs::write(&fixture.config_path, b"changed config bytes").expect("config changes");
+    let changed = b"changed config bytes";
+    let actual_hash = sha256_uri(changed);
+    std::fs::write(&fixture.config_path, changed).expect("config changes");
 
     let output = verify_bundle_command(&fixture)
         .output()
@@ -142,6 +187,25 @@ fn config_verify_bundle_cli_reports_rejected_signature_for_hash_mismatch() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "rejected_signature");
     assert_eq!(report["errors"][0]["code"], "rejected_signature");
+    assert_safe_bundle_error(&report, "rejected_signature");
+    assert_error_message_excludes(
+        &report,
+        &[
+            "config/relay.yaml",
+            fixture.config_hash.as_str(),
+            actual_hash.as_str(),
+            fixture.config_path.to_str().expect("path is UTF-8"),
+        ],
+    );
+    assert_rejected_identity_is_redacted(&report);
+    assert_output_excludes(
+        &output,
+        &[
+            fixture.config_hash.as_str(),
+            actual_hash.as_str(),
+            fixture.config_path.to_str().expect("path is UTF-8"),
+        ],
+    );
 }
 
 #[test]
@@ -202,6 +266,8 @@ fn config_verify_bundle_cli_shared_parity_matrix() {
             assert_eq!(report["component"], "registry-relay", "{name}");
         } else {
             assert_eq!(report["errors"][0]["code"], expected, "{name}");
+            assert_safe_bundle_error(&report, expected);
+            assert_rejected_identity_is_redacted(&report);
         }
     }
 }
@@ -211,7 +277,7 @@ fn config_verify_bundle_cli_rejects_missing_split_metadata() {
     let temp = TempDir::new().expect("tempdir");
     let config = relay_config_yaml().replace(
         "catalog:\n",
-        "metadata:\n  source:\n    path: missing-metadata.yaml\ncatalog:\n",
+        &format!("metadata:\n  source:\n    path: {VALIDATION_SENTINEL_PATH}\ncatalog:\n"),
     );
     let fixture = write_bundle_fixture_with_config(&temp, "registry-relay", 0, config);
 
@@ -223,6 +289,13 @@ fn config_verify_bundle_cli_rejects_missing_split_metadata() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "rejected_validation");
     assert_eq!(report["errors"][0]["code"], "rejected_validation");
+    assert_safe_bundle_error(&report, "rejected_validation");
+    assert_error_message_excludes(
+        &report,
+        &[fixture.config_path.to_str().expect("path is UTF-8")],
+    );
+    assert_rejected_identity_is_redacted(&report);
+    assert_output_excludes(&output, ERROR_MESSAGE_SENTINELS);
 }
 
 #[test]
@@ -251,6 +324,160 @@ fn config_verify_bundle_cli_requires_signed_metadata_digest() {
     let report = stdout_json(&output);
     assert_eq!(report["result"], "rejected_validation");
     assert_eq!(report["errors"][0]["code"], "rejected_validation");
+    assert_safe_bundle_error(&report, "rejected_validation");
+    assert_rejected_identity_is_redacted(&report);
+}
+
+#[test]
+fn config_verify_bundle_cli_redacts_malformed_anchor_from_stdout_and_stderr() {
+    let temp = TempDir::new().expect("tempdir");
+    let fixture = write_bundle_fixture(&temp, "registry-relay", 0);
+    let sentinel = "COUNTRY_PARSER_ERROR redaction-user@example.test /COUNTRY/private/anchor.json";
+    std::fs::write(&fixture.anchor_path, format!("{{ {sentinel}")).expect("anchor corrupts");
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_safe_bundle_error(&report, "rejected_validation");
+    assert_rejected_identity_is_redacted(&report);
+    assert_output_excludes(
+        &output,
+        &[
+            sentinel,
+            "redaction-user@example.test",
+            "/COUNTRY/private/anchor.json",
+            fixture.anchor_path.to_str().expect("path is UTF-8"),
+        ],
+    );
+}
+
+#[test]
+fn config_verify_bundle_cli_redacts_file_closure_from_stdout_and_stderr() {
+    let temp = TempDir::new().expect("tempdir");
+    let fixture = write_bundle_fixture(&temp, "registry-relay", 0);
+    let unlisted = fixture
+        .bundle_dir
+        .join("COUNTRY_PRIVATE_REDACTION_SENTINEL.yaml");
+    std::fs::write(&unlisted, "country: COUNTRY_VALUE").expect("unlisted file writes");
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_safe_bundle_error(&report, "rejected_signature");
+    assert_rejected_identity_is_redacted(&report);
+    assert_output_excludes(
+        &output,
+        &[
+            "COUNTRY_PRIVATE_REDACTION_SENTINEL",
+            "COUNTRY_VALUE",
+            unlisted.to_str().expect("path is UTF-8"),
+        ],
+    );
+}
+
+#[test]
+fn config_verify_bundle_cli_redacts_bundle_parser_sentinel_from_stdout_and_stderr() {
+    let temp = TempDir::new().expect("tempdir");
+    let parser_sentinel =
+        "COUNTRY_PARSER_ERROR redaction-user@example.test /COUNTRY/private/config.yaml";
+    let fixture = write_bundle_fixture_with_config(
+        &temp,
+        "registry-relay",
+        0,
+        format!("deployment:\n  profile: local\n{parser_sentinel}\n\t- invalid"),
+    );
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_safe_bundle_error(&report, "rejected_validation");
+    assert_rejected_identity_is_redacted(&report);
+    assert_output_excludes(
+        &output,
+        &[
+            parser_sentinel,
+            "COUNTRY_PARSER_ERROR",
+            "redaction-user@example.test",
+            "/COUNTRY/private/config.yaml",
+        ],
+    );
+}
+
+fn assert_safe_bundle_error(report: &Value, expected_code: &str) {
+    assert_eq!(report["result"], expected_code);
+    assert_eq!(report["errors"][0]["code"], expected_code);
+    let definition = BUNDLE_VERIFICATION_CODE_DEFINITIONS
+        .iter()
+        .find(|definition| definition.code.as_str() == expected_code)
+        .expect("published code has a catalog definition");
+    assert_eq!(
+        report["errors"][0]["message"], definition.safe_report_message,
+        "public message must be the reviewed static catalog meaning and remediation"
+    );
+    assert_error_message_excludes(report, ERROR_MESSAGE_SENTINELS);
+}
+
+fn assert_error_message_excludes(report: &Value, sentinels: &[&str]) {
+    let message = report["errors"][0]["message"]
+        .as_str()
+        .expect("error message is a string");
+    for sentinel in sentinels {
+        assert!(
+            !message.contains(sentinel),
+            "public error message leaked sentinel {sentinel:?}: {message:?}"
+        );
+    }
+}
+
+fn assert_rejected_identity_is_redacted(report: &Value) {
+    for field in [
+        "stream_id",
+        "bundle_id",
+        "bundle_sequence",
+        "previous_config_hash",
+        "config_hash",
+    ] {
+        assert!(
+            report[field].is_null(),
+            "rejected report leaked untrusted identity field {field}: {}",
+            report[field]
+        );
+    }
+    let object = report.as_object().expect("report is an object");
+    for field in ["signer_kids", "signers", "operator", "operator_id"] {
+        assert!(
+            object.get(field).is_none_or(Value::is_null),
+            "rejected report leaked untrusted identity field {field}"
+        );
+    }
+}
+
+fn assert_output_excludes(output: &std::process::Output, sentinels: &[&str]) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for sentinel in sentinels {
+        assert!(
+            !stdout.contains(sentinel),
+            "stdout leaked sentinel {sentinel:?}: {stdout}"
+        );
+        assert!(
+            !stderr.contains(sentinel),
+            "stderr leaked sentinel {sentinel:?}: {stderr}"
+        );
+    }
+    assert!(
+        stderr.contains("relay.startup."),
+        "stderr must contain a stable Relay startup code: {stderr}"
+    );
 }
 
 fn verify_bundle_command(fixture: &BundleFixture) -> Command {

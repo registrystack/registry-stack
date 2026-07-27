@@ -48,6 +48,22 @@ class PrepareUpgradeExerciseAssetsTest(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def write_product_input_record(
+        self,
+        directory: Path,
+        name: str,
+        version: str,
+    ) -> None:
+        (directory / name).write_text(
+            json.dumps(
+                {
+                    "record_kind": "candidate_evidence",
+                    "candidate": {"version": version},
+                }
+            ),
+            encoding="utf-8",
+        )
+
     def download_fixture(
         self, command: list[str], *, omit: str | None = None
     ) -> None:
@@ -68,6 +84,9 @@ class PrepareUpgradeExerciseAssetsTest(unittest.TestCase):
             versions = self.module.prepare_assets(
                 ROOT / "release" / "exercises",
                 asset_root,
+                product_input_records=(
+                    ROOT / "release" / "exercises" / "product-input-lifecycle"
+                ),
                 downloader=downloader,
             )
 
@@ -124,6 +143,192 @@ class PrepareUpgradeExerciseAssetsTest(unittest.TestCase):
             self.assertTrue((root / "assets" / "v0.11.0").is_dir())
             self.assertTrue((root / "assets" / "v0.12.1").is_dir())
             self.assertTrue((root / "assets" / "v0.12.2").is_dir())
+
+    def test_product_input_candidate_prepares_release_assets_and_receipt(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            upgrade_records = root / "upgrades"
+            product_input_records = root / "product-input-lifecycle"
+            upgrade_records.mkdir()
+            product_input_records.mkdir()
+            (
+                product_input_records / "product-input-lifecycle-v1.schema.json"
+            ).write_text("{}", encoding="utf-8")
+            self.write_product_input_record(
+                product_input_records,
+                "candidate.json",
+                "v0.12.2",
+            )
+
+            versions = self.module.prepare_assets(
+                upgrade_records,
+                root / "assets",
+                product_input_records=product_input_records,
+                downloader=self.download_fixture,
+            )
+
+            self.assertEqual(("v0.12.2",), versions)
+            prepared = {
+                path.name for path in (root / "assets" / "v0.12.2").iterdir()
+            }
+            self.assertEqual(
+                set(self.module.required_asset_names("v0.12.2"))
+                | {"release-candidate-receipt.json"},
+                prepared,
+            )
+            self.assertNotIn(
+                "registry-stack-v0.12.2-candidate-receipt.json",
+                prepared,
+            )
+
+    def test_product_input_candidate_requires_published_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            upgrade_records = root / "upgrades"
+            product_input_records = root / "product-input-lifecycle"
+            upgrade_records.mkdir()
+            product_input_records.mkdir()
+            self.write_product_input_record(
+                product_input_records,
+                "candidate.json",
+                "v0.12.2",
+            )
+
+            with self.assertRaisesRegex(
+                self.module.PreparationError,
+                "incomplete or unsafe",
+            ):
+                self.module.prepare_assets(
+                    upgrade_records,
+                    root / "assets",
+                    product_input_records=product_input_records,
+                    downloader=lambda command: self.download_fixture(
+                        command,
+                        omit="registry-stack-v0.12.2-candidate-receipt.json",
+                    ),
+                )
+
+    def test_upgrade_and_product_input_candidate_share_one_asset_download(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            upgrade_records = root / "upgrades"
+            product_input_records = root / "product-input-lifecycle"
+            upgrade_records.mkdir()
+            product_input_records.mkdir()
+            self.write_record(
+                upgrade_records,
+                "candidate.json",
+                "v0.12.2",
+                source_version="v0.12.2",
+            )
+            self.write_product_input_record(
+                product_input_records,
+                "candidate.json",
+                "v0.12.2",
+            )
+            commands: list[list[str]] = []
+
+            def download(command: list[str]) -> None:
+                commands.append(command)
+                self.download_fixture(command)
+
+            versions = self.module.prepare_assets(
+                upgrade_records,
+                root / "assets",
+                product_input_records=product_input_records,
+                downloader=download,
+            )
+
+            self.assertEqual(("v0.12.2",), versions)
+            self.assertEqual(1, len(commands))
+            self.assertIn(
+                "registry-stack-v0.12.2-candidate-receipt.json",
+                commands[0],
+            )
+
+    def test_invalid_product_input_candidate_version_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            upgrade_records = root / "upgrades"
+            product_input_records = root / "product-input-lifecycle"
+            upgrade_records.mkdir()
+            product_input_records.mkdir()
+            self.write_product_input_record(
+                product_input_records,
+                "candidate.json",
+                "v0.12",
+            )
+            downloader = unittest.mock.Mock()
+
+            with self.assertRaisesRegex(
+                self.module.PreparationError,
+                "product-input lifecycle candidate version is invalid",
+            ):
+                self.module.prepare_assets(
+                    upgrade_records,
+                    root / "assets",
+                    product_input_records=product_input_records,
+                    downloader=downloader,
+                )
+
+            downloader.assert_not_called()
+
+    def test_duplicate_upgrade_field_is_rejected_before_download(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            records = root / "records"
+            records.mkdir()
+            (records / "candidate.json").write_text(
+                '{"record_kind":"candidate_evidence",'
+                '"record_kind":"template"}',
+                encoding="utf-8",
+            )
+            downloader = unittest.mock.Mock()
+
+            with self.assertRaisesRegex(
+                self.module.PreparationError,
+                "upgrade exercise record contains a duplicate JSON field",
+            ):
+                self.module.prepare_assets(
+                    records,
+                    root / "assets",
+                    downloader=downloader,
+                )
+
+            downloader.assert_not_called()
+
+    def test_duplicate_product_input_field_is_rejected_before_download(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            upgrade_records = root / "upgrades"
+            product_input_records = root / "product-input-lifecycle"
+            upgrade_records.mkdir()
+            product_input_records.mkdir()
+            (product_input_records / "candidate.json").write_text(
+                '{"record_kind":"candidate_evidence",'
+                '"candidate":{"version":"v0.12.2","version":"v0.12.3"}}',
+                encoding="utf-8",
+            )
+            downloader = unittest.mock.Mock()
+
+            with self.assertRaisesRegex(
+                self.module.PreparationError,
+                "product-input lifecycle record contains a duplicate JSON field",
+            ):
+                self.module.prepare_assets(
+                    upgrade_records,
+                    root / "assets",
+                    product_input_records=product_input_records,
+                    downloader=downloader,
+                )
+
+            downloader.assert_not_called()
 
     def test_invalid_source_version_is_rejected_before_download(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

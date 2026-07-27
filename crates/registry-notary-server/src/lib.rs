@@ -50,8 +50,10 @@ pub use standalone::{
     compile_notary_runtime, compile_notary_runtime_with_provenance,
     notary_admin_router_from_runtime, notary_public_router_from_runtime,
     notary_routers_from_runtime, notary_shared_router_from_runtime, standalone_router,
-    verify_relay_from_config, EvidenceIssuerRegistry, NotaryRouters, NotaryRuntimeSnapshot,
-    StandaloneServerError,
+    verify_relay_from_config, EvidenceIssuerRegistry, NotaryActivationCode,
+    NotaryActivationCodeDefinition, NotaryActivationCodeLifecycle, NotaryActivationFailure,
+    NotaryRouters, NotaryRuntimeSnapshot, StandaloneServerError,
+    NOTARY_ACTIVATION_CODE_DEFINITIONS,
 };
 pub use subject_access_rate_limit::{
     SubjectAccessRateLimitBucket, SubjectAccessRateLimitError, SubjectAccessRateLimitKeys,

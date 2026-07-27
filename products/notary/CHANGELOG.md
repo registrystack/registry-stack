@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added optional 1 to 65536-byte UTF-8 result bounds for string claims.
+  Evaluation accepts exact-bound and nullable results, rejects over-bound
+  values with the existing value-free rule-failure classification, and keeps
+  direct configurations without the field backward compatible.
+- Added product-owned, value-free activation diagnostics and stateful Config
+  Bundle verification with explicit anti-rollback state. Startup and doctor
+  boundaries retain stable classifications without exposing sensitive
+  configuration values or paths.
+
+### Fixed
+
+- CEL startup preflight now uses type-correct string previews that honor claim
+  and Relay output byte bounds below nine bytes. Evaluated values retain the
+  configured runtime byte-bound enforcement.
+- CEL worker activation now gives each worker one fixed protocol probe within
+  the pool-wide spawn-and-probe deadline, then verifies live capacity without a
+  duplicate protocol round trip. Initial activation remains all-or-nothing.
+
 ## [0.13.0] - 2026-07-25
 
 ### Changed

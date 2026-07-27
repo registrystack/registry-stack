@@ -154,6 +154,56 @@ outputs:
     }
 
     #[test]
+    fn integer_entity_fields_enforce_json_safe_bounds() {
+        let safe: EntityFieldSchema = serde_norway::from_str(
+            r#"type: integer
+minimum: -9007199254740991
+maximum: 9007199254740991
+"#,
+        )
+        .expect("JSON-safe entity field parses");
+        let (output_type, nullable, max_bytes) =
+            entity_output_contract("sequence", &safe).expect("JSON-safe entity field lowers");
+        assert_eq!(output_type, OutputType::Integer);
+        assert!(!nullable);
+        assert_eq!(max_bytes, None);
+
+        for (name, source) in [
+            (
+                "below",
+                "type: integer\nminimum: -9007199254740992\nmaximum: 1\n",
+            ),
+            (
+                "above",
+                "type: integer\nminimum: 0\nmaximum: 9007199254740992\n",
+            ),
+        ] {
+            let field: EntityFieldSchema =
+                serde_norway::from_str(source).expect("adjacent unsafe entity field parses");
+            assert!(
+                entity_output_contract(name, &field)
+                    .expect_err("adjacent unsafe entity field rejects")
+                    .to_string()
+                    .contains("incompatible constraints"),
+                "{name} must fail at the runtime authority"
+            );
+        }
+    }
+
+    #[test]
+    fn integer_integration_outputs_preserve_full_i64_bounds() {
+        let output: AuthoredOutputDeclaration = serde_norway::from_str(
+            r#"type: integer
+minimum: -9223372036854775808
+maximum: 9223372036854775807
+"#,
+        )
+        .expect("full i64 output contract parses");
+        validate_authored_output("sequence", &output)
+            .expect("integration output bounds intentionally retain full i64");
+    }
+
+    #[test]
     fn corrected_authoring_rejects_the_superseded_operation_graph() {
         serde_norway::from_str::<AuthoredIntegrationDocument>(
             r#"
@@ -302,16 +352,40 @@ outputs:
             .to_string()
             .contains("selector inputs cannot be nullable"));
 
-        let unsafe_integer = base.replace(
+        let safe_integer = base.replace(
+            "type: string, maxLength: 64",
+            "type: integer, minimum: -9007199254740991, maximum: 9007199254740991",
+        );
+        let authored: AuthoredIntegrationDocument =
+            serde_norway::from_str(&safe_integer).expect("JSON-safe integer parses");
+        lower_authored_integration(&authored).expect("JSON-safe integer lowers");
+
+        let unsafe_lower_integer = base.replace(
             "type: string, maxLength: 64",
             "type: integer, minimum: -9007199254740992, maximum: 1",
         );
         let authored: AuthoredIntegrationDocument =
-            serde_norway::from_str(&unsafe_integer).expect("unsafe integer parses");
+            serde_norway::from_str(&unsafe_lower_integer).expect("unsafe lower integer parses");
         assert!(lower_authored_integration(&authored)
-            .expect_err("unsafe integer rejects")
+            .expect_err("unsafe lower integer rejects")
             .to_string()
             .contains("Integer schema has incompatible constraints"));
+
+        let unsafe_upper_integer = base.replace(
+            "type: string, maxLength: 64",
+            "type: integer, minimum: 0, maximum: 9007199254740992",
+        );
+        let authored: AuthoredIntegrationDocument =
+            serde_norway::from_str(&unsafe_upper_integer).expect("unsafe upper integer parses");
+        assert!(lower_authored_integration(&authored)
+            .expect_err("unsafe upper integer rejects")
+            .to_string()
+            .contains("Integer schema has incompatible constraints"));
+
+        let boundary_selector = base.replace("maxLength: 64", "maxLength: 1024");
+        let authored: AuthoredIntegrationDocument =
+            serde_norway::from_str(&boundary_selector).expect("boundary selector parses");
+        lower_authored_integration(&authored).expect("4096-byte selector lowers");
 
         let oversized_selector = base.replace("maxLength: 64", "maxLength: 1025");
         let authored: AuthoredIntegrationDocument =
@@ -376,31 +450,6 @@ outputs:
             .expect_err("seventeen inputs reject")
             .to_string()
             .contains("between one and sixteen entries"));
-    }
-
-    fn run_code_owned_project_conformance(project: &Path) -> Result<Vec<FixtureReport>> {
-        let loaded = load_registry_project(project, None)?;
-        run_code_owned_loaded_project_conformance(&loaded)
-    }
-
-    fn run_code_owned_loaded_project_conformance(
-        loaded: &LoadedRegistryProject,
-    ) -> Result<Vec<FixtureReport>> {
-        let offline_environment = offline_fixture_environment(loaded)?;
-        let compiled =
-            compile_project_for_environment(loaded, "offline-fixture", &offline_environment, None)?;
-        let relay_config = compiled
-            .relay_private
-            .get(Path::new("config/relay.yaml"))
-            .ok_or_else(|| anyhow!("generated Relay config is absent"))?;
-        // This structural compiler bypass is selected only by this cfg(test)
-        // harness. No authored field, CLI flag, environment variable, startup
-        // path, or runtime API can request it.
-        compile_generated_relay_fixture(relay_config, &compiled.relay_private).map(drop)?;
-        validate_generated_notary(&compiled)?;
-        let reports = execute_all_fixtures(loaded, &compiled, None, None, false)?;
-        require_passing_fixtures(&reports)?;
-        Ok(reports)
     }
 
     fn project_golden(name: &str) -> PathBuf {
@@ -760,75 +809,6 @@ outputs:
                     "services.nia-population-records.api.scopes.{record_scope_field}"
                 )),
                 "unexpected {record_scope_field} collision diagnostic: {diagnostic}"
-            );
-        }
-    }
-
-    #[test]
-    fn code_owned_rhai_conformance_matches_http_and_is_deterministic() {
-        let bounded = run_code_owned_project_conformance(&project_golden("dhis2-tracker"))
-            .expect("bounded DHIS2 conformance passes");
-        let rhai_project = project_golden("dhis2-script");
-        let rhai = run_code_owned_project_conformance(&rhai_project)
-            .expect("Rhai DHIS2 conformance passes");
-        let repeated = run_code_owned_project_conformance(&rhai_project)
-            .expect("repeated Rhai DHIS2 conformance passes");
-        let mut unknown_product =
-            load_registry_project(&rhai_project, None).expect("Rhai golden loads");
-        unknown_product
-            .integrations
-            .get_mut("health-record")
-            .expect("Rhai integration exists")
-            .document
-            .source
-            .product = Some("previously-unknown-source-system".to_string());
-        let unknown_product_report = run_code_owned_loaded_project_conformance(&unknown_product)
-            .expect("unknown product uses the same Rhai authoring contract");
-        assert_eq!(
-            serde_json::to_value(&unknown_product_report)
-                .expect("unknown-product report serializes"),
-            serde_json::to_value(&rhai).expect("Rhai report serializes"),
-            "source.product may alter provenance but not Rhai fixture behavior"
-        );
-        assert_eq!(
-            serde_json::to_value(&rhai).expect("first Rhai report serializes"),
-            serde_json::to_value(&repeated).expect("repeated Rhai report serializes"),
-            "fresh one-shot workers must produce deterministic fixture reports"
-        );
-
-        let rhai_by_name = rhai
-            .iter()
-            .map(|fixture| (fixture.fixture.as_str(), fixture))
-            .collect::<BTreeMap<_, _>>();
-        for expected in &bounded {
-            let actual = rhai_by_name
-                .get(expected.fixture.as_str())
-                .unwrap_or_else(|| panic!("Rhai omitted fixture {}", expected.fixture));
-            assert_eq!(
-                actual.inputs, expected.inputs,
-                "{} inputs",
-                expected.fixture
-            );
-            assert_eq!(actual.calls, expected.calls, "{} calls", expected.fixture);
-            assert_eq!(
-                actual.outputs, expected.outputs,
-                "{} outputs",
-                expected.fixture
-            );
-            assert_eq!(
-                actual.claims, expected.claims,
-                "{} claims",
-                expected.fixture
-            );
-            assert_eq!(
-                actual.outcome, expected.outcome,
-                "{} outcome",
-                expected.fixture
-            );
-            assert_eq!(
-                actual.passed, expected.passed,
-                "{} result",
-                expected.fixture
             );
         }
     }
@@ -1735,6 +1715,13 @@ outputs:
         let request = validate_live_request(
             &loaded,
             &json!({
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{
+                        "scheme": "openspp_individual_id",
+                        "value": "IND-AB12CD34",
+                    }],
+                },
                 "purpose": "social-programme-verification",
                 "claims": ["social-registry-record-exists"],
                 "disclosure": "predicate",
@@ -1798,6 +1785,13 @@ outputs:
         let request = validate_live_request(
             &loaded,
             &json!({
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{
+                        "scheme": "openspp_individual_id",
+                        "value": "IND-AB12CD34",
+                    }],
+                },
                 "purpose": "social-programme-verification",
                 "claims": ["social-registry-record-exists"],
                 "disclosure": "predicate",
@@ -2293,6 +2287,13 @@ outputs:
             ("redacted", vec!["household-reference"]),
         ] {
             let request = json!({
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{
+                        "scheme": "openspp_individual_id",
+                        "value": "IND-AB12CD34",
+                    }],
+                },
                 "purpose": "social-programme-verification",
                 "claims": claims,
                 "disclosure": disclosure,
@@ -2306,6 +2307,13 @@ outputs:
         }
 
         let mixed = json!({
+            "target": {
+                "type": "Person",
+                "identifiers": [{
+                    "scheme": "openspp_individual_id",
+                    "value": "IND-AB12CD34",
+                }],
+            },
             "purpose": "social-programme-verification",
             "claims": [
                 "social-registry-record-exists",
@@ -2327,6 +2335,13 @@ outputs:
             .expect("OpenSPP golden project loads");
         let request = |version| {
             json!({
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{
+                        "scheme": "openspp_individual_id",
+                        "value": "IND-AB12CD34",
+                    }],
+                },
                 "purpose": "social-programme-verification",
                 "claims": [{
                     "id": "social-registry-record-exists",
@@ -2405,6 +2420,13 @@ outputs:
         let request = validate_live_request(
             &loaded,
             &json!({
+                "target": {
+                    "type": "Person",
+                    "identifiers": [{
+                        "scheme": "household_reference",
+                        "value": "HH-AB12CD34",
+                    }],
+                },
                 "purpose": "household-support-screening",
                 "claims": ["household-category", "source-household-approval-decision"],
                 "disclosure": "redacted",
@@ -2566,6 +2588,15 @@ outputs:
         validate_signed_review_record(&review).expect("current review record is valid");
         validate_signed_approval_state(&approval_state).expect("current approval state is valid");
 
+        let mut legacy_state = approval_state.clone();
+        legacy_state["schema"] = json!(APPROVAL_STATE_SCHEMA_V1);
+        legacy_state
+            .as_object_mut()
+            .expect("legacy approval state is an object")
+            .remove("promotion_projection");
+        validate_signed_approval_state(&legacy_state)
+            .expect("legacy signed state remains parseable for fail-closed migration reporting");
+
         let mut leaked_digest = review.clone();
         leaked_digest
             .as_object_mut()
@@ -2597,6 +2628,31 @@ outputs:
             .expect_err("approval state without semantic digests must fail")
             .to_string()
             .contains("missing or unknown fields"));
+
+        let mut inconsistent_products = approval_state.clone();
+        inconsistent_products["promotion_projection"]["products"] = json!(["relay"]);
+        assert!(validate_signed_approval_state(&inconsistent_products)
+            .expect_err("projection products must match signed generated closures")
+            .to_string()
+            .contains("product inventory disagrees"));
+
+        let mut missing_projection = approval_state.clone();
+        missing_projection
+            .as_object_mut()
+            .expect("approval state is an object")
+            .remove("promotion_projection");
+        assert!(validate_signed_approval_state(&missing_projection)
+            .expect_err("approval state without promotion projection must fail")
+            .to_string()
+            .contains("missing or unknown fields"));
+
+        let mut malformed_projection = approval_state.clone();
+        malformed_projection["promotion_projection"]["fields"][0]["address"]["path"] =
+            json!("/not/a/closed/promotion/address");
+        assert!(validate_signed_approval_state(&malformed_projection)
+            .expect_err("approval state promotion projection must remain closed")
+            .to_string()
+            .contains("promotion_projection is invalid"));
 
         let mut malformed_state = approval_state.clone();
         malformed_state["report_digest"] = Value::String("sha256:not-a-digest".to_string());

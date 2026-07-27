@@ -9,6 +9,7 @@ use super::*;
 
 pub const MAX_CLAIM_DEPENDENCY_NODES_V1: usize = 64;
 pub const MAX_CLAIM_DEPENDENCY_EDGES_V1: usize = 256;
+pub const MAX_CLAIM_VALUE_STRING_BYTES_V1: u32 = 64 * 1024;
 
 fn default_claim_formats() -> Vec<String> {
     vec![FORMAT_CLAIM_RESULT_JSON.to_string()]
@@ -426,6 +427,29 @@ pub(in crate::config) fn validate_claim_evidence_mode(
     Ok(())
 }
 
+pub(in crate::config) fn validate_claim_value_config(
+    claim: &ClaimDefinition,
+) -> Result<(), EvidenceConfigError> {
+    let Some(max_bytes) = claim.value.max_bytes else {
+        return Ok(());
+    };
+    if claim.value.value_type != "string" {
+        return Err(EvidenceConfigError::InvalidClaimValueConfig {
+            claim: claim.id.clone(),
+            reason: "value.max_bytes is allowed only when value.type is string".to_string(),
+        });
+    }
+    if !(1..=MAX_CLAIM_VALUE_STRING_BYTES_V1).contains(&max_bytes) {
+        return Err(EvidenceConfigError::InvalidClaimValueConfig {
+            claim: claim.id.clone(),
+            reason: format!(
+                "value.max_bytes must be between 1 and {MAX_CLAIM_VALUE_STRING_BYTES_V1}"
+            ),
+        });
+    }
+    Ok(())
+}
+
 pub(in crate::config) fn validate_self_attested_dependency_modes(
     claims: &[ClaimDefinition],
     delegation: &SubjectAccessDelegationConfig,
@@ -767,6 +791,11 @@ pub struct ClaimValueConfig {
     pub value_type: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub nullable: bool,
+    /// Optional evaluated UTF-8 string byte ceiling. Absence preserves the
+    /// direct-configuration behavior that predates per-claim byte bounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 65536))]
+    pub max_bytes: Option<u32>,
     #[serde(default)]
     pub unit: Option<String>,
 }

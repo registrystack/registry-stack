@@ -21,6 +21,65 @@ OPENAPI_SPECS = {
     "registry-relay": Path("crates/registry-relay/openapi/registry-relay.openapi.json"),
     "registry-notary": Path("products/notary/openapi/registry-notary.openapi.json"),
 }
+DIAGNOSTIC_CATALOGS = {
+    "authoring": (
+        Path("docs/site/public/generated/diagnostics/authoring.v1.json"),
+        "registryctl.authoring_error_reference.v1",
+        frozenset({"authoring_validation"}),
+    ),
+    "fixture": (
+        Path("docs/site/public/generated/diagnostics/fixture.v1.json"),
+        "registryctl.fixture_error_reference.v1",
+        frozenset({"fixture_execution"}),
+    ),
+    "operator": (
+        Path("docs/site/public/generated/diagnostics/operator.v1.json"),
+        "registryctl.operator_error_reference.v1",
+        frozenset(
+            {
+                "bundle_verification",
+                "notary_activation",
+                "operator_preflight",
+                "relay_activation",
+                "relay_process_startup",
+            }
+        ),
+    ),
+}
+DIAGNOSTIC_ENTRY_FIELDS = {
+    "family",
+    "code",
+    "owner",
+    "product",
+    "phase",
+    "safe_meaning",
+    "rule",
+    "safe_remediation",
+    "field_address_pattern",
+    "evidence_scope",
+    "secret_sensitive_value_policy",
+    "docs_anchor",
+    "lifecycle",
+    "introduced_in",
+    "stability",
+    "evidence_limitation",
+}
+DIAGNOSTIC_OWNER_BY_PRODUCT = {
+    "registry_notary": "registry_notary",
+    "registry_platform_ops": "registry_platform_ops",
+    "registry_relay": "registry_relay",
+    "registryctl": "registryctl",
+    "registryctl_relay_offline_harness": "registryctl",
+}
+NUMERIC_RELEASE_VERSION = re.compile(
+    r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
+)
+PRODUCT_OWNED_DOCS_SLUG_FAMILIES = {
+    "bundle_verification",
+    "notary_activation",
+    "relay_activation",
+    "relay_process_startup",
+}
 MACHINE_CODE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$")
 ERROR_ROW = re.compile(r"^\| `([^`]+)` \| ([^|]+) \|")
 HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put", "trace"}
@@ -34,6 +93,148 @@ class ContractError(ValueError):
 class ErrorContract:
     meaning: str
     products: frozenset[str]
+
+
+@dataclass(frozen=True)
+class DiagnosticContract:
+    owner: str
+    safe_meaning: str
+    rule: str
+    docs_anchor: str
+
+
+def validate_diagnostic_catalog(
+    data: Any,
+    catalog: str,
+) -> dict[tuple[str, str, str], DiagnosticContract]:
+    try:
+        _, schema_version, families = DIAGNOSTIC_CATALOGS[catalog]
+    except KeyError as error:
+        raise ContractError(f"unknown diagnostic catalog: {catalog}") from error
+    top_level = {"schema_version", "entries", "omissions"} if catalog == "operator" else {
+        "schema_version",
+        "entries",
+    }
+    if not isinstance(data, dict) or set(data) != top_level:
+        raise ContractError(
+            f"{catalog} diagnostic catalog must contain exactly "
+            f"{', '.join(sorted(top_level))}"
+        )
+    if data["schema_version"] != schema_version:
+        raise ContractError(f"{catalog} diagnostic catalog has an unsupported schema")
+    entries = data["entries"]
+    if not isinstance(entries, list) or not entries:
+        raise ContractError(f"{catalog} diagnostic catalog must contain entries")
+
+    result: dict[tuple[str, str, str], DiagnosticContract] = {}
+    previous_key: tuple[str, str, str] | None = None
+    docs_anchors: set[str] = set()
+    for index, entry in enumerate(entries):
+        label = f"{catalog}.entries[{index}]"
+        if not isinstance(entry, dict) or set(entry) != DIAGNOSTIC_ENTRY_FIELDS:
+            raise ContractError(f"{label} does not have the strict entry shape")
+        family = entry["family"]
+        product = entry["product"]
+        code = entry["code"]
+        owner = entry["owner"]
+        if family not in families:
+            raise ContractError(f"{label}.family is not part of {catalog}")
+        if DIAGNOSTIC_OWNER_BY_PRODUCT.get(product) != owner:
+            raise ContractError(f"{label} has an invalid product-owner mapping")
+        for field in DIAGNOSTIC_ENTRY_FIELDS - {"field_address_pattern", "introduced_in"}:
+            if not isinstance(entry[field], str) or not entry[field].strip():
+                raise ContractError(f"{label}.{field} must be a non-empty string")
+        address = entry["field_address_pattern"]
+        if address is not None and (not isinstance(address, str) or not address.strip()):
+            raise ContractError(f"{label}.field_address_pattern must be non-empty or null")
+        lifecycle = entry["lifecycle"]
+        introduced_in = entry["introduced_in"]
+        if lifecycle == "unreleased":
+            if introduced_in is not None:
+                raise ContractError(f"{label} unreleased lifecycle requires introduced_in: null")
+        elif lifecycle not in {"active", "deprecated", "released"} or not (
+            isinstance(introduced_in, str)
+            and NUMERIC_RELEASE_VERSION.fullmatch(introduced_in)
+        ):
+            raise ContractError(f"{label} released lifecycle requires a numeric introduced_in")
+        if entry["stability"] != "pre1_stable_code":
+            raise ContractError(f"{label}.stability is unsupported")
+        key = (family, product, code)
+        if key in result:
+            raise ContractError(f"duplicate diagnostic key: {' '.join(key)}")
+        if previous_key is not None and key <= previous_key:
+            raise ContractError(f"{label} is not ordered by family, product, code")
+        previous_key = key
+
+        if family in PRODUCT_OWNED_DOCS_SLUG_FAMILIES:
+            anchor_pattern = re.compile(
+                rf"^/reference/diagnostics/{catalog}/#{product}--"
+                r"[a-z0-9]+(?:-[a-z0-9]+)*$"
+            )
+            anchor_valid = anchor_pattern.fullmatch(entry["docs_anchor"]) is not None
+        else:
+            expected_anchor = f"/reference/diagnostics/{catalog}/#{product}--{code}"
+            anchor_valid = entry["docs_anchor"] == expected_anchor
+        if not anchor_valid:
+            raise ContractError(f"{label}.docs_anchor is not derived from owned metadata")
+        if entry["docs_anchor"] in docs_anchors:
+            raise ContractError(f"{label}.docs_anchor is duplicated")
+        docs_anchors.add(entry["docs_anchor"])
+        result[key] = DiagnosticContract(
+            owner,
+            entry["safe_meaning"],
+            entry["rule"],
+            entry["docs_anchor"],
+        )
+
+    if catalog == "operator":
+        _validate_diagnostic_omissions(data["omissions"], families)
+    return result
+
+
+def _validate_diagnostic_omissions(omissions: Any, families: frozenset[str]) -> None:
+    if not isinstance(omissions, list):
+        raise ContractError("operator.omissions must be an array")
+    expected_fields = {"family", "product", "reason", "evidence", "required_action"}
+    previous_key: tuple[str, str] | None = None
+    for index, omission in enumerate(omissions):
+        label = f"operator.omissions[{index}]"
+        if not isinstance(omission, dict) or set(omission) != expected_fields:
+            raise ContractError(f"{label} does not have the strict omission shape")
+        if omission["family"] not in families:
+            raise ContractError(f"{label}.family is not an operator family")
+        if omission["product"] not in DIAGNOSTIC_OWNER_BY_PRODUCT:
+            raise ContractError(f"{label}.product is not closed")
+        if omission["reason"] != "no_complete_public_code_catalog":
+            raise ContractError(f"{label}.reason is unsupported")
+        for field in expected_fields:
+            if not isinstance(omission[field], str) or not omission[field].strip():
+                raise ContractError(f"{label}.{field} must be a non-empty string")
+        key = (omission["family"], omission["product"])
+        if previous_key is not None and key <= previous_key:
+            raise ContractError(f"{label} is duplicated or not lexically ordered")
+        previous_key = key
+
+
+def compare_diagnostic_contracts(
+    base: dict[tuple[str, str, str], DiagnosticContract],
+    current: dict[tuple[str, str, str], DiagnosticContract],
+) -> list[str]:
+    errors: list[str] = []
+    for key, old in sorted(base.items()):
+        family, product, code = key
+        new = current.get(key)
+        label = f"{family} {product} {code}"
+        if new is None:
+            errors.append(f"diagnostic code removed: {label}")
+            continue
+        for field in ("owner", "safe_meaning", "rule", "docs_anchor"):
+            if getattr(new, field) != getattr(old, field):
+                errors.append(
+                    f"diagnostic {label} changed {field}: "
+                    f"{getattr(old, field)!r} -> {getattr(new, field)!r}"
+                )
+    return errors
 
 
 def parse_error_registry(text: str) -> dict[str, ErrorContract]:
@@ -298,6 +499,14 @@ def check(base_ref: str | None, root: Path = ROOT) -> list[str]:
     for product, path in OPENAPI_SPECS.items():
         document = load_json((root / path).read_text(encoding="utf-8"), str(path))
         current_mappings.update(openapi_error_mappings(document, product))
+    current_diagnostics: dict[
+        str, dict[tuple[str, str, str], DiagnosticContract]
+    ] = {}
+    for catalog, (path, _, _) in DIAGNOSTIC_CATALOGS.items():
+        current_diagnostics[catalog] = validate_diagnostic_catalog(
+            load_json((root / path).read_text(encoding="utf-8"), str(path)),
+            catalog,
+        )
 
     if not base_ref:
         return errors
@@ -331,6 +540,17 @@ def check(base_ref: str | None, root: Path = ROOT) -> list[str]:
             continue
         base_mappings.update(openapi_error_mappings(load_json(base_text, f"{base_ref}:{path}"), product))
     errors.extend(compare_openapi_mappings(base_mappings, current_mappings))
+    for catalog, (path, _, _) in DIAGNOSTIC_CATALOGS.items():
+        base_text = git_show(base_ref, path, root)
+        if base_text is None:
+            continue
+        base_diagnostics = validate_diagnostic_catalog(
+            load_json(base_text, f"{base_ref}:{path}"),
+            catalog,
+        )
+        errors.extend(
+            compare_diagnostic_contracts(base_diagnostics, current_diagnostics[catalog])
+        )
     return errors
 
 

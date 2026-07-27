@@ -391,6 +391,16 @@
     "ClaimValueConfig": {
       "additionalProperties": false,
       "properties": {
+        "max_bytes": {
+          "description": "Optional evaluated UTF-8 string byte ceiling. Absence preserves the\ndirect-configuration behavior that predates per-claim byte bounds.",
+          "format": "uint32",
+          "maximum": 65536,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "nullable": {
           "type": "boolean"
         },

@@ -220,6 +220,7 @@ fn worker_config() -> CelWorkerConfig {
             OsString::from("OFFLINE_UNUSED_ISSUER_KEY"),
         ]),
         max_workers: 1,
+        startup_timeout: Duration::from_secs(10),
         request_timeout: Duration::from_secs(5),
         max_request_bytes: 64 * 1024,
         max_response_bytes: 16 * 1024,

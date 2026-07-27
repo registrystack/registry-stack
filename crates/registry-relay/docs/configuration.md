@@ -789,6 +789,14 @@ Run `registry-relay doctor --config <path> --profile <profile> --format json`
 before bootstrap or startup. Consultation activation is restart-only, so deploy
 the reviewed config and artifact closure as one unit.
 
+Orchestration that publishes generated files through a container bind mount can
+also pass `--expected-config-digest sha256:<digest>`. Doctor then fails before
+configuration loading unless the mounted configuration bytes match that exact
+digest. Use this together with the normal consultation artifact checks: the
+digest binds the intended generated revision, while the artifact checks prove
+that the revision's complete hash-covered closure is readable and valid.
+Doctor does not include the expected digest in its output or error messages.
+
 ## Instance
 
 ```yaml

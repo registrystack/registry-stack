@@ -73,10 +73,10 @@ Product names are always in English, including on future translated pages.
   <dd>Registry Notary configuration that names which non-delegated registry-backed claims may be issued as a credential. Profile and claim bindings are mutually validated. Only evaluations whose selected roots share a profile retain private issuance provenance, and issuance requires exact claim pins, per-claim execution bindings, and unique Relay execution records for every selected root's dependency closure.</dd>
 
   <dt>deployment bundle</dt>
-  <dd>The target generated, signed artifact for one Registry Stack project and environment. Its root manifest binds compatible Relay and Notary submanifests when both are present. The current authoring command builds separate unsigned product inputs, not a deployment bundle; signed project-root bundles are deferred.</dd>
+  <dd>A deferred project-root packaging concept tracked by <a href="https://github.com/registrystack/registry-stack/issues/361">registry-stack issue #361</a>. Current source does not generate, sign, verify, or activate a project-root bundle. Relay and Notary instead use separate product-owned bundles, and no Registry Stack coordinator binds or atomically activates them.</dd>
 
   <dt>deployment</dt>
-  <dd>One activated deployment-bundle generation. Replicas of that generation are one logical deployment.</dd>
+  <dd>An operated set of Registry Relay or Registry Notary product instances. A combined topology stages each product's separately verified bundle and admits traffic only after both products are ready and their consultation contract agrees; this is not atomic project activation.</dd>
 
   <dt>decision owner</dt>
   <dd>The institution accountable for the requirements, rules, decisions, and actions that use evidence. The decision owner can operate the evidence consumer directly or rely on a separate caller or intermediary.</dd>
@@ -235,7 +235,7 @@ Product names are always in English, including on future translated pages.
   <dd>Standalone Rust service for Relay-backed or self-attested claim evaluation, disclosure policy, credential issuance from exact Relay-backed evaluation provenance, and audit. Source-free claims are evaluation-only. Repo slug: `registry-notary`.</dd>
 
   <dt>Registry Stack project</dt>
-  <dd>The authored root for one registry trust domain. A project can describe a Relay-only, Notary-only, or combined deployment and compiles separate product inputs for the selected topology.</dd>
+  <dd>The authored root for one registry trust domain. A project can describe a Relay-only, Notary-only, or combined deployment and compiles separate product inputs for the selected topology. It is not a deployment bundle or an activation coordinator.</dd>
 
   <dt>Registry Stack project workspace</dt>
   <dd>The local directory containing one Registry Stack project's authored YAML, scripts, fixtures, and generated review and build outputs.</dd>

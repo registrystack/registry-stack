@@ -1,0 +1,25 @@
+---
+title: Fixture diagnostic reference
+description: Generated static meanings, rules, remediation, evidence limitations, and lifecycle for offline fixture execution diagnostics.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-07-26"
+doc_type: reference
+locale: en
+standards_referenced: []
+wide: true
+---
+
+import DiagnosticReference from '../../../../components/DiagnosticReference.astro';
+
+Use this catalog for the safe error codes produced by Registryctl's offline synthetic fixture
+harness. These entries describe bounded fixture evidence. They do not prove that a live source is
+reachable, compatible, or authorized.
+
+Run `registryctl project diagnostics --catalog fixture --format json` for the exact
+workspace-independent machine catalog. The command does not open a country project, contact a
+runtime, or read environment variables and secrets.
+
+<DiagnosticReference catalog="fixture" />

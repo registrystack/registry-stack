@@ -13,6 +13,7 @@ use registry_platform_audit::{
     DurableAuditStreamKind, DurableAuditWrite, DurableAuditWriteError, DurableAuditWriteOutcome,
 };
 use registry_platform_httputil::destination::json::MAX_CLOSED_JSON_STRING_BYTES;
+use serde::{Serialize, Serializer};
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::{oneshot, Semaphore};
@@ -149,6 +150,529 @@ pub enum ConsultationServiceActivationError {
     PseudonymMaterial,
     #[error("consultation service state plane is unavailable")]
     StatePlane,
+}
+
+/// Stable, product-owned code for one Relay consultation activation failure.
+///
+/// The representation is private so callers can only observe reviewed codes
+/// from [`Self::ALL`] or an exact activation-error mapping.
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ConsultationServiceActivationCode(ConsultationServiceActivationCodeRepr);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum ConsultationServiceActivationCodeRepr {
+    ArtifactRegistryInvalid,
+    ConfigurationMissing,
+    ProtectedMetadataInvalid,
+    PseudonymMaterialUnavailable,
+    QuotaLimitsInvalid,
+    SourceCredentialsUnavailable,
+    StatePlaneUnavailable,
+    UnsupportedPlan,
+    WorkloadBindingInvalid,
+}
+
+impl ConsultationServiceActivationCode {
+    pub const ARTIFACT_REGISTRY_INVALID: Self =
+        Self(ConsultationServiceActivationCodeRepr::ArtifactRegistryInvalid);
+    pub const CONFIGURATION_MISSING: Self =
+        Self(ConsultationServiceActivationCodeRepr::ConfigurationMissing);
+    pub const PROTECTED_METADATA_INVALID: Self =
+        Self(ConsultationServiceActivationCodeRepr::ProtectedMetadataInvalid);
+    pub const PSEUDONYM_MATERIAL_UNAVAILABLE: Self =
+        Self(ConsultationServiceActivationCodeRepr::PseudonymMaterialUnavailable);
+    pub const QUOTA_LIMITS_INVALID: Self =
+        Self(ConsultationServiceActivationCodeRepr::QuotaLimitsInvalid);
+    pub const SOURCE_CREDENTIALS_UNAVAILABLE: Self =
+        Self(ConsultationServiceActivationCodeRepr::SourceCredentialsUnavailable);
+    pub const STATE_PLANE_UNAVAILABLE: Self =
+        Self(ConsultationServiceActivationCodeRepr::StatePlaneUnavailable);
+    pub const UNSUPPORTED_PLAN: Self = Self(ConsultationServiceActivationCodeRepr::UnsupportedPlan);
+    pub const WORKLOAD_BINDING_INVALID: Self =
+        Self(ConsultationServiceActivationCodeRepr::WorkloadBindingInvalid);
+
+    /// Complete stable code set in lexical code order.
+    pub const ALL: [Self; 9] = [
+        Self::ARTIFACT_REGISTRY_INVALID,
+        Self::CONFIGURATION_MISSING,
+        Self::PROTECTED_METADATA_INVALID,
+        Self::PSEUDONYM_MATERIAL_UNAVAILABLE,
+        Self::QUOTA_LIMITS_INVALID,
+        Self::SOURCE_CREDENTIALS_UNAVAILABLE,
+        Self::STATE_PLANE_UNAVAILABLE,
+        Self::UNSUPPORTED_PLAN,
+        Self::WORKLOAD_BINDING_INVALID,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self.0 {
+            ConsultationServiceActivationCodeRepr::ArtifactRegistryInvalid => {
+                "relay.consultation.activation.artifact_registry_invalid"
+            }
+            ConsultationServiceActivationCodeRepr::ConfigurationMissing => {
+                "relay.consultation.activation.configuration_missing"
+            }
+            ConsultationServiceActivationCodeRepr::ProtectedMetadataInvalid => {
+                "relay.consultation.activation.protected_metadata_invalid"
+            }
+            ConsultationServiceActivationCodeRepr::PseudonymMaterialUnavailable => {
+                "relay.consultation.activation.pseudonym_material_unavailable"
+            }
+            ConsultationServiceActivationCodeRepr::QuotaLimitsInvalid => {
+                "relay.consultation.activation.quota_limits_invalid"
+            }
+            ConsultationServiceActivationCodeRepr::SourceCredentialsUnavailable => {
+                "relay.consultation.activation.source_credentials_unavailable"
+            }
+            ConsultationServiceActivationCodeRepr::StatePlaneUnavailable => {
+                "relay.consultation.activation.state_plane_unavailable"
+            }
+            ConsultationServiceActivationCodeRepr::UnsupportedPlan => {
+                "relay.consultation.activation.unsupported_plan"
+            }
+            ConsultationServiceActivationCodeRepr::WorkloadBindingInvalid => {
+                "relay.consultation.activation.workload_binding_invalid"
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn definition(self) -> &'static ConsultationServiceActivationDefinition {
+        match self.0 {
+            ConsultationServiceActivationCodeRepr::ArtifactRegistryInvalid => {
+                &CONSULTATION_SERVICE_ACTIVATION_DEFINITIONS[0]
+            }
+            ConsultationServiceActivationCodeRepr::ConfigurationMissing => {
+                &CONSULTATION_SERVICE_ACTIVATION_DEFINITIONS[1]
+            }
+            ConsultationServiceActivationCodeRepr::ProtectedMetadataInvalid => {
+                &CONSULTATION_SERVICE_ACTIVATION_DEFINITIONS[2]
+            }
+            ConsultationServiceActivationCodeRepr::PseudonymMaterialUnavailable => {
+                &CONSULTATION_SERVICE_ACTIVATION_DEFINITIONS[3]
+            }
+            ConsultationServiceActivationCodeRepr::QuotaLimitsInvalid => {
+                &CONSULTATION_SERVICE_ACTIVATION_DEFINITIONS[4]
+            }
+            ConsultationServiceActivationCodeRepr::SourceCredentialsUnavailable => {
+                &CONSULTATION_SERVICE_ACTIVATION_DEFINITIONS[5]
+            }
+            ConsultationServiceActivationCodeRepr::StatePlaneUnavailable => {
+                &CONSULTATION_SERVICE_ACTIVATION_DEFINITIONS[6]
+            }
+            ConsultationServiceActivationCodeRepr::UnsupportedPlan => {
+                &CONSULTATION_SERVICE_ACTIVATION_DEFINITIONS[7]
+            }
+            ConsultationServiceActivationCodeRepr::WorkloadBindingInvalid => {
+                &CONSULTATION_SERVICE_ACTIVATION_DEFINITIONS[8]
+            }
+        }
+    }
+}
+
+impl fmt::Debug for ConsultationServiceActivationCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ConsultationServiceActivationCode")
+            .field(&self.as_str())
+            .finish()
+    }
+}
+
+impl fmt::Display for ConsultationServiceActivationCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for ConsultationServiceActivationCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// Release lifecycle for a product-owned activation code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+#[serde(rename_all = "snake_case")]
+pub enum ConsultationServiceActivationLifecycle {
+    Unreleased,
+    Active,
+    Deprecated,
+}
+
+/// Product release that first published a stable activation code.
+///
+/// The representation is private so release versions can only be introduced
+/// through reviewed Relay-owned constants.
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ConsultationServiceActivationVersion(&'static str);
+
+impl ConsultationServiceActivationVersion {
+    /// Construct a release version only from a reviewed static catalog value.
+    ///
+    /// Each canonical numeric component is bounded to `u16`, which limits the
+    /// complete representation to 17 ASCII bytes.
+    const fn from_reviewed(value: &'static str) -> Option<Self> {
+        match parse_bounded_numeric_release_version(value) {
+            Some(_) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+
+    const fn is_valid(self) -> bool {
+        parse_bounded_numeric_release_version(self.0).is_some()
+    }
+}
+
+impl fmt::Debug for ConsultationServiceActivationVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ConsultationServiceActivationVersion")
+            .field(&self.as_str())
+            .finish()
+    }
+}
+
+impl fmt::Display for ConsultationServiceActivationVersion {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for ConsultationServiceActivationVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+const fn parse_bounded_numeric_release_version(value: &str) -> Option<[u16; 3]> {
+    let bytes = value.as_bytes();
+    if bytes.len() < 5 || bytes.len() > 17 {
+        return None;
+    }
+
+    let mut components = [0_u16; 3];
+    let mut component_index = 0_usize;
+    let mut digits_in_component = 0_usize;
+    let mut index = 0_usize;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'.' {
+            if digits_in_component == 0 || component_index == 2 {
+                return None;
+            }
+            component_index += 1;
+            digits_in_component = 0;
+        } else if byte.is_ascii_digit() {
+            if digits_in_component > 0 && components[component_index] == 0 {
+                return None;
+            }
+            let digit = (byte - b'0') as u16;
+            let Some(shifted) = components[component_index].checked_mul(10) else {
+                return None;
+            };
+            let Some(next) = shifted.checked_add(digit) else {
+                return None;
+            };
+            components[component_index] = next;
+            digits_in_component += 1;
+        } else {
+            return None;
+        }
+        index += 1;
+    }
+
+    if component_index == 2 && digits_in_component > 0 {
+        Some(components)
+    } else {
+        None
+    }
+}
+
+const TAGGED_BEFORE_ACTIVATION_CATALOG: ConsultationServiceActivationVersion =
+    match ConsultationServiceActivationVersion::from_reviewed("0.13.0") {
+        Some(version) => version,
+        None => panic!("the tagged release sentinel must be valid"),
+    };
+
+/// Static, value-free meaning and recovery contract for an activation code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct ConsultationServiceActivationDefinition {
+    pub code: ConsultationServiceActivationCode,
+    pub lifecycle: ConsultationServiceActivationLifecycle,
+    pub introduced_in: Option<ConsultationServiceActivationVersion>,
+    pub phase: &'static str,
+    pub meaning: &'static str,
+    pub rule: &'static str,
+    pub remediation: &'static str,
+    pub evidence_scope: &'static str,
+    pub evidence_policy: &'static str,
+    pub evidence_limitation: &'static str,
+    pub docs_slug: &'static str,
+}
+
+impl ConsultationServiceActivationDefinition {
+    /// Check the typed lifecycle/version relationship required by release
+    /// gates and downstream catalog aggregation.
+    #[must_use]
+    pub const fn lifecycle_metadata_is_valid(&self) -> bool {
+        match self.lifecycle {
+            ConsultationServiceActivationLifecycle::Unreleased => self.introduced_in.is_none(),
+            ConsultationServiceActivationLifecycle::Active
+            | ConsultationServiceActivationLifecycle::Deprecated => match self.introduced_in {
+                Some(version) => version.is_valid(),
+                None => false,
+            },
+        }
+    }
+
+    /// Check catalog-specific release attribution in addition to lifecycle
+    /// shape. These definitions were created after v0.13.0 was tagged.
+    #[must_use]
+    pub const fn catalog_metadata_is_valid(&self) -> bool {
+        self.lifecycle_metadata_is_valid()
+            && match self.introduced_in {
+                Some(version) => {
+                    !release_versions_are_equal(version, TAGGED_BEFORE_ACTIVATION_CATALOG)
+                }
+                None => true,
+            }
+    }
+}
+
+const fn release_versions_are_equal(
+    left: ConsultationServiceActivationVersion,
+    right: ConsultationServiceActivationVersion,
+) -> bool {
+    let left = left.as_str().as_bytes();
+    let right = right.as_str().as_bytes();
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut index = 0_usize;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+/// Safe public projection of one Relay consultation activation failure.
+///
+/// Every field comes from the static product catalog. Source errors, paths,
+/// hashes, parser text, credentials, identifiers, and authored values cannot
+/// enter this shape.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct ConsultationServiceActivationFailure {
+    pub code: ConsultationServiceActivationCode,
+    pub lifecycle: ConsultationServiceActivationLifecycle,
+    pub introduced_in: Option<ConsultationServiceActivationVersion>,
+    pub phase: &'static str,
+    pub meaning: &'static str,
+    pub rule: &'static str,
+    pub remediation: &'static str,
+    pub evidence_scope: &'static str,
+    pub evidence_policy: &'static str,
+    pub evidence_limitation: &'static str,
+    pub docs_slug: &'static str,
+}
+
+const ACTIVATION_EVIDENCE_POLICY: &str = "Publish only this stable Relay code and static definition; keep any source diagnostic only in protected operator logs.";
+const ACTIVATION_EVIDENCE_LIMITATION: &str = "The category does not disclose paths, URLs, parser excerpts, hashes, credentials, identifiers, or authored values.";
+
+static CONSULTATION_SERVICE_ACTIVATION_DEFINITIONS:
+    [ConsultationServiceActivationDefinition; 9] = [
+    ConsultationServiceActivationDefinition {
+        code: ConsultationServiceActivationCode::ARTIFACT_REGISTRY_INVALID,
+        lifecycle: ConsultationServiceActivationLifecycle::Unreleased,
+        introduced_in: None,
+        phase: "consultation_activation",
+        meaning: "Relay could not compile the verified consultation artifact registry.",
+        rule: "The verified artifact closure must compile into one closed registry without conflicting public profiles.",
+        remediation: "Rebuild and verify the exact consultation artifact closure before restarting Relay.",
+        evidence_scope: "verified consultation artifact closure and compiled public profiles",
+        evidence_policy: ACTIVATION_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "artifact-registry-invalid",
+    },
+    ConsultationServiceActivationDefinition {
+        code: ConsultationServiceActivationCode::CONFIGURATION_MISSING,
+        lifecycle: ConsultationServiceActivationLifecycle::Unreleased,
+        introduced_in: None,
+        phase: "consultation_activation",
+        meaning: "Relay consultation activation requires configuration that is not present.",
+        rule: "The closed consultation configuration must exist before Relay compiles serving authority.",
+        remediation: "Provide a validated Relay consultation configuration and restart Relay.",
+        evidence_scope: "Relay consultation configuration and serving authority",
+        evidence_policy: ACTIVATION_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "configuration-missing",
+    },
+    ConsultationServiceActivationDefinition {
+        code: ConsultationServiceActivationCode::PROTECTED_METADATA_INVALID,
+        lifecycle: ConsultationServiceActivationLifecycle::Unreleased,
+        introduced_in: None,
+        phase: "consultation_activation",
+        meaning: "Relay could not construct bounded protected consultation metadata.",
+        rule: "Protected metadata must contain one strict bounded public contract and its reviewed binding.",
+        remediation: "Regenerate and verify the consultation artifact closure, then restart Relay.",
+        evidence_scope: "protected consultation metadata, public contract, and reviewed binding",
+        evidence_policy: ACTIVATION_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "protected-metadata-invalid",
+    },
+    ConsultationServiceActivationDefinition {
+        code: ConsultationServiceActivationCode::PSEUDONYM_MATERIAL_UNAVAILABLE,
+        lifecycle: ConsultationServiceActivationLifecycle::Unreleased,
+        introduced_in: None,
+        phase: "consultation_activation",
+        meaning: "Relay could not activate the pseudonym material required for consultation audit evidence.",
+        rule: "The configured pseudonym material must be valid and bind to the current write authority.",
+        remediation: "Restore the reviewed pseudonym material and write authority, then restart Relay.",
+        evidence_scope: "consultation pseudonym material and current write authority",
+        evidence_policy: ACTIVATION_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "pseudonym-material-unavailable",
+    },
+    ConsultationServiceActivationDefinition {
+        code: ConsultationServiceActivationCode::QUOTA_LIMITS_INVALID,
+        lifecycle: ConsultationServiceActivationLifecycle::Unreleased,
+        introduced_in: None,
+        phase: "consultation_activation",
+        meaning: "Relay could not activate the bounded consultation quota contract.",
+        rule: "Public and effective quota limits must remain representable, positive, and non-widening.",
+        remediation: "Correct the reviewed quota limits and rebuild the consultation artifacts.",
+        evidence_scope: "public and effective consultation quota limits",
+        evidence_policy: ACTIVATION_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "quota-limits-invalid",
+    },
+    ConsultationServiceActivationDefinition {
+        code: ConsultationServiceActivationCode::SOURCE_CREDENTIALS_UNAVAILABLE,
+        lifecycle: ConsultationServiceActivationLifecycle::Unreleased,
+        introduced_in: None,
+        phase: "consultation_activation",
+        meaning: "Relay could not activate the source-credential capability required by the consultation registry.",
+        rule: "Every compiled source plan must have exactly the credential capability it declares.",
+        remediation: "Restore the reviewed source-credential references and restart Relay.",
+        evidence_scope: "compiled consultation source plans and credential capabilities",
+        evidence_policy: ACTIVATION_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "source-credentials-unavailable",
+    },
+    ConsultationServiceActivationDefinition {
+        code: ConsultationServiceActivationCode::STATE_PLANE_UNAVAILABLE,
+        lifecycle: ConsultationServiceActivationLifecycle::Unreleased,
+        introduced_in: None,
+        phase: "consultation_activation",
+        meaning: "Relay could not activate the consultation state plane and its current authority.",
+        rule: "The state plane, durable audit boundary, quota state, and current write authority must activate together.",
+        remediation: "Restore the reviewed Relay state-plane dependencies and restart Relay.",
+        evidence_scope: "consultation state plane, audit boundary, quota state, and write authority",
+        evidence_policy: ACTIVATION_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "state-plane-unavailable",
+    },
+    ConsultationServiceActivationDefinition {
+        code: ConsultationServiceActivationCode::UNSUPPORTED_PLAN,
+        lifecycle: ConsultationServiceActivationLifecycle::Unreleased,
+        introduced_in: None,
+        phase: "consultation_activation",
+        meaning: "A compiled consultation plan requires a capability this Relay runtime cannot activate.",
+        rule: "Every plan, worker, transport, snapshot binding, and dispatch budget must use a compiled supported capability.",
+        remediation: "Use a Relay release that supports the reviewed plan or rebuild the plan with supported capabilities.",
+        evidence_scope: "compiled consultation plan and Relay runtime capabilities",
+        evidence_policy: ACTIVATION_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "unsupported-plan",
+    },
+    ConsultationServiceActivationDefinition {
+        code: ConsultationServiceActivationCode::WORKLOAD_BINDING_INVALID,
+        lifecycle: ConsultationServiceActivationLifecycle::Unreleased,
+        introduced_in: None,
+        phase: "consultation_activation",
+        meaning: "The configured consultation workload binding is incompatible with Relay authentication.",
+        rule: "Issuer, audience, client binding, principal, and selector must satisfy the closed Relay workload contract.",
+        remediation: "Align the reviewed consultation workload binding with Relay authentication and restart Relay.",
+        evidence_scope: "consultation workload binding and Relay authentication contract",
+        evidence_policy: ACTIVATION_EVIDENCE_POLICY,
+        evidence_limitation: ACTIVATION_EVIDENCE_LIMITATION,
+        docs_slug: "workload-binding-invalid",
+    },
+];
+
+/// Product-owned static catalog for downstream diagnostic aggregation.
+#[must_use]
+pub const fn consultation_service_activation_definitions(
+) -> &'static [ConsultationServiceActivationDefinition; 9] {
+    &CONSULTATION_SERVICE_ACTIVATION_DEFINITIONS
+}
+
+impl ConsultationServiceActivationError {
+    /// Exhaustive public-code mapping for the closed activation error taxonomy.
+    #[must_use]
+    pub const fn code(self) -> ConsultationServiceActivationCode {
+        match self {
+            Self::MissingConfiguration => ConsultationServiceActivationCode::CONFIGURATION_MISSING,
+            Self::InvalidWorkloadBinding => {
+                ConsultationServiceActivationCode::WORKLOAD_BINDING_INVALID
+            }
+            Self::RegistryActivation => {
+                ConsultationServiceActivationCode::ARTIFACT_REGISTRY_INVALID
+            }
+            Self::UnsupportedPlan => ConsultationServiceActivationCode::UNSUPPORTED_PLAN,
+            Self::InvalidQuotaLimits => ConsultationServiceActivationCode::QUOTA_LIMITS_INVALID,
+            Self::InvalidMetadata => ConsultationServiceActivationCode::PROTECTED_METADATA_INVALID,
+            Self::SourceCredentials => {
+                ConsultationServiceActivationCode::SOURCE_CREDENTIALS_UNAVAILABLE
+            }
+            Self::PseudonymMaterial => {
+                ConsultationServiceActivationCode::PSEUDONYM_MATERIAL_UNAVAILABLE
+            }
+            Self::StatePlane => ConsultationServiceActivationCode::STATE_PLANE_UNAVAILABLE,
+        }
+    }
+
+    #[must_use]
+    pub const fn safe_projection(self) -> ConsultationServiceActivationFailure {
+        let definition = self.code().definition();
+        ConsultationServiceActivationFailure {
+            code: definition.code,
+            lifecycle: definition.lifecycle,
+            introduced_in: definition.introduced_in,
+            phase: definition.phase,
+            meaning: definition.meaning,
+            rule: definition.rule,
+            remediation: definition.remediation,
+            evidence_scope: definition.evidence_scope,
+            evidence_policy: definition.evidence_policy,
+            evidence_limitation: definition.evidence_limitation,
+            docs_slug: definition.docs_slug,
+        }
+    }
+}
+
+impl From<ConsultationServiceActivationError> for ConsultationServiceActivationFailure {
+    fn from(error: ConsultationServiceActivationError) -> Self {
+        error.safe_projection()
+    }
 }
 
 /// Conjunctive readiness for consultation admission.
@@ -1465,6 +1989,125 @@ mod tests {
         bounded_runtime_vector_plan_fixture, dhis2_runtime_vector_plan_fixture,
         rhai_runtime_vector_plan_fixture,
     };
+
+    #[test]
+    fn activation_catalog_versions_require_bounded_canonical_numeric_releases() {
+        for version in ["0.0.0", "1.2.3", "65535.65535.65535"] {
+            assert_eq!(
+                ConsultationServiceActivationVersion::from_reviewed(version)
+                    .expect("version is valid")
+                    .as_str(),
+                version
+            );
+        }
+
+        for version in [
+            "",
+            "1",
+            "1.2",
+            "1.2.3.4",
+            "v1.2.3",
+            "1.2.3-alpha",
+            "1.2.3+build",
+            "01.2.3",
+            "1.02.3",
+            "1.2.03",
+            "65536.0.0",
+            "0.65536.0",
+            "0.0.65536",
+            " 1.2.3",
+            "1.2.3 ",
+        ] {
+            assert!(
+                ConsultationServiceActivationVersion::from_reviewed(version).is_none(),
+                "{version:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn activation_catalog_lifecycle_requires_valid_non_retroactive_versions() {
+        let base = CONSULTATION_SERVICE_ACTIVATION_DEFINITIONS[0];
+        let released =
+            ConsultationServiceActivationVersion::from_reviewed("0.13.1").expect("valid version");
+        let tagged = ConsultationServiceActivationVersion::from_reviewed("0.13.0")
+            .expect("valid tagged version");
+        let invalid = ConsultationServiceActivationVersion("unreleased");
+        let cases = [
+            (
+                ConsultationServiceActivationLifecycle::Unreleased,
+                None,
+                true,
+                true,
+            ),
+            (
+                ConsultationServiceActivationLifecycle::Unreleased,
+                Some(released),
+                false,
+                false,
+            ),
+            (
+                ConsultationServiceActivationLifecycle::Active,
+                None,
+                false,
+                false,
+            ),
+            (
+                ConsultationServiceActivationLifecycle::Active,
+                Some(invalid),
+                false,
+                false,
+            ),
+            (
+                ConsultationServiceActivationLifecycle::Active,
+                Some(released),
+                true,
+                true,
+            ),
+            (
+                ConsultationServiceActivationLifecycle::Deprecated,
+                None,
+                false,
+                false,
+            ),
+            (
+                ConsultationServiceActivationLifecycle::Deprecated,
+                Some(invalid),
+                false,
+                false,
+            ),
+            (
+                ConsultationServiceActivationLifecycle::Deprecated,
+                Some(released),
+                true,
+                true,
+            ),
+            (
+                ConsultationServiceActivationLifecycle::Active,
+                Some(tagged),
+                true,
+                false,
+            ),
+        ];
+
+        for (lifecycle, introduced_in, lifecycle_valid, catalog_valid) in cases {
+            let definition = ConsultationServiceActivationDefinition {
+                lifecycle,
+                introduced_in,
+                ..base
+            };
+            assert_eq!(
+                definition.lifecycle_metadata_is_valid(),
+                lifecycle_valid,
+                "{lifecycle:?} with {introduced_in:?}"
+            );
+            assert_eq!(
+                definition.catalog_metadata_is_valid(),
+                catalog_valid,
+                "{lifecycle:?} with {introduced_in:?}"
+            );
+        }
+    }
 
     fn fixed_identity() -> ConfiguredOidcWorkloadProof {
         ConfiguredOidcWorkloadProof::new(

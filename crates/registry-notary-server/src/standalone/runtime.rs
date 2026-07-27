@@ -77,6 +77,8 @@ use crate::{
     RegistryNotaryApiState, SubjectAccessRateLimitKeys, SubjectAccessRateLimiter,
 };
 
+#[path = "activation.rs"]
+mod activation;
 #[path = "assembly.rs"]
 mod assembly;
 #[path = "auth/mod.rs"]
@@ -97,6 +99,7 @@ mod relay;
 #[path = "transport/mod.rs"]
 mod transport;
 
+pub use activation::*;
 pub use assembly::*;
 use auth::*;
 pub use auth::{find_credential, ResolvedCredential};

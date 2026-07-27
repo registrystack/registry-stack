@@ -37,12 +37,133 @@ use zeroize::Zeroizing;
 mod project_authoring;
 
 pub use project_authoring::{
-    build_registry_project, check_registry_project, init_registry_project,
-    render_project_authoring_diagnostics, setup_registry_project_editor, test_registry_project,
-    test_registry_project_selected, ProjectAuthoringDiagnostic, ProjectAuthoringDiagnostics,
-    ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
-    ProjectEditorSetupReport, ProjectInitOptions, ProjectSchemaKind, ProjectStarter,
-    ProjectTestOptions, ProjectTestSelection, SemanticChange,
+    authoring_error_reference, fixture_error_reference, operator_error_reference,
+    validate_authoring_error_reference, validate_fixture_error_reference,
+    validate_operator_error_reference, AuthoringErrorReferenceV1, ErrorReferenceEntry,
+    ErrorReferenceFamily, ErrorReferenceLifecycle, ErrorReferenceOwner, ErrorReferenceProduct,
+    ErrorReferenceStability, ErrorReferenceValidationError, ErrorReferenceValuePolicy,
+    FixtureErrorReferenceV1, OperatorErrorOmission, OperatorErrorOmissionFamily,
+    OperatorErrorOmissionReason, OperatorErrorReferenceV1,
+    AUTHORING_ERROR_REFERENCE_SCHEMA_VERSION_V1, FIXTURE_ERROR_REFERENCE_SCHEMA_VERSION_V1,
+    OPERATOR_ERROR_REFERENCE_SCHEMA_VERSION_V1,
+};
+pub use project_authoring::{
+    build_project_migration_report, build_project_promotion_report, build_registry_project,
+    build_registry_project_with_baselines, build_registry_project_with_baselines_and_context,
+    build_registry_project_with_context, check_registry_project,
+    check_registry_project_with_context, check_registry_project_with_trusted_local_authored_values,
+    embedded_configuration_reference, embedded_configuration_reference_coverage,
+    init_registry_project, inspect_project_capabilities, migrate_registry_project,
+    migrate_registry_project_with_context, preflight_registry_project, promote_registry_project,
+    redacted_project_check_failure_diagnostics, render_project_authoring_diagnostics,
+    setup_registry_project_editor, test_registry_project, test_registry_project_selected,
+    test_registry_project_selected_with_context, test_registry_project_with_context,
+    AuthoredSemanticFixtureCoverage, AuthoringContract, AuthoringVersionSet, CapabilityDisposition,
+    CapabilityId, CapabilityInventoryEvidenceGrade, CapabilityInventoryRecord, CapabilityKind,
+    CapabilityMaturity, CapabilityOwner, CapabilityUsageCounts, ClassifierSafeReportedValue,
+    ConfigurationFieldReference, ConfigurationReferenceCoverageV1, ConfigurationReferenceV1,
+    ConfigurationState, CoverageInvariant, CoverageStatus, DefaultBehavior, DefaultDocumentation,
+    DocumentationDomainIntent, DocumentationError, DocumentationFieldAddress,
+    DocumentationIntentCatalog, DocumentationIntentPolicy, DocumentationSchema,
+    DocumentationSchemaAddress, EmptyBehavior,
+    EnvironmentBehavior as DocumentationEnvironmentBehavior, EnvironmentEnablementState,
+    ExampleDocumentation, FieldIntentOverride, FieldSensitivity, FieldSourceKind,
+    FieldTypeDocumentation, FixtureCapability, FixtureCompatibilityClaim,
+    FixtureCoverageChangeImpact, FixtureCoverageChangeKind, FixtureCoverageClassification,
+    FixtureCoverageComparisonInput, FixtureCoverageDimensions, FixtureCoverageEvidence,
+    FixtureCoverageEvidenceKind, FixtureCoverageGapReason, FixtureCoverageNotApplicableReason,
+    FixtureCoverageNotEvaluatedReason, FixtureCoverageRequirementCounts,
+    FixtureCoverageRequirementState, FixtureCoverageReviewedNotApplicable,
+    FixtureCoverageSemanticComparison, FixtureCoverageSummary, FixtureCoverageTarget,
+    FixtureCoverageTargetComparisonInput, FixtureCoverageTargetContract,
+    FixtureCoverageTargetIdentity, FixtureCoverageTargetSetState, FixtureDisclosureMode,
+    FixtureEvidenceScope, FixtureLimit, FixtureMutationTargetClass, FixturePassState,
+    FixtureProtocolHelper, FixtureRequestBindingCoverage, FixtureRequestBindingState,
+    FixtureRequirementCoverage, FixtureSafeCode, FixtureSemanticExpectation,
+    FixtureSemanticOutcome, FixtureSetState, FixtureStatusMapping, FixtureStatusOutcome,
+    GeneratedFixtureCoverage, GeneratedNotApplicableReason, GeneratedRecipeApplicability,
+    GeneratedSourceFixture, GeneratorRecipe, GeneratorRecipeId, GeneratorRecipeVersion,
+    GovernedRequestEvidence, HumanIntentSource, InactiveOrUnusedDeclaration,
+    InactiveOrUnusedReason, InstalledCapabilityEvidence, InstalledCapabilityState,
+    LiveCompatibilityEvaluation, MigrationAffectedCount, MigrationAffectedState,
+    MigrationAffectedSurfaces, MigrationApplicationPolicy, MigrationArtifact,
+    MigrationAuthoredFilePolicy, MigrationBlockingReason, MigrationCandidateArtifact,
+    MigrationCandidateEligibility, MigrationCandidateEmission, MigrationChange,
+    MigrationChangeInput, MigrationCompatibility, MigrationDecisionKind, MigrationDecisionOwner,
+    MigrationDecisionScope, MigrationDiagnostic, MigrationDiagnosticCode, MigrationDiagnosticPhase,
+    MigrationDiagnosticRemediation, MigrationDisposition, MigrationDocument,
+    MigrationEvidenceGrade, MigrationEvidenceLimitation, MigrationExecution, MigrationField,
+    MigrationFieldAddress, MigrationFieldClassification, MigrationFieldPath,
+    MigrationGateAssessment, MigrationGateResults, MigrationGateStatus, MigrationOperation,
+    MigrationOutputMode, MigrationOutputPlan, MigrationOutputRequest, MigrationOwner,
+    MigrationReplacement, MigrationReplacementDisposition, MigrationReplacementInput,
+    MigrationRerunGate, MigrationReviewAssessment, MigrationReviewClass, MigrationReviewStatus,
+    MigrationSafety, MigrationSemanticEffect, MigrationVersionDirection, MigrationVersionSupport,
+    MigrationVersionSupportAssessment, MigrationVersionTransition, MigrationWriteAuthority,
+    MissingSupport, NullBehavior, PlatformCoverageComponent, PlatformGeneratedCaseId,
+    PlatformGeneratedFixtureCoverage, PreflightAttemptState, PreflightCheckState, PreflightContact,
+    PreflightDiagnostic, PreflightDiagnosticCode, PreflightDiagnosticMessage,
+    PreflightExecutionBoundary, PreflightFieldAddress, PreflightGenerationState,
+    PreflightJsonPointer, PreflightMode, PreflightPermissionInvariant, PreflightPhase,
+    PreflightProduct, PreflightProductCapability, PreflightProductValidatorCheck,
+    PreflightProjectRelativeFile, PreflightRemediation, PreflightReportLimits, PreflightRuleId,
+    PreflightRuntimeBoundary, PreflightRuntimeFileCheck, PreflightRuntimeFileKind,
+    PreflightRuntimeScope, PreflightSecretCheck, PreflightSecretConsumer, PreflightSeverity,
+    PreflightStaticCapability, PreflightStaticCheck, PreflightStatus, PreflightWriteState,
+    ProhibitedIntentSource, ProjectArtifactManifestRef, ProjectArtifactManifestV1,
+    ProjectAuthoringDiagnostic, ProjectAuthoringDiagnostics, ProjectBuildBaselineSetOptions,
+    ProjectBuildOptions, ProjectCapabilityInventoryReportV1,
+    ProjectCapabilityInventorySchemaVersion, ProjectCapabilityOptions, ProjectCheckOptions,
+    ProjectCommandReport, ProjectCommandReportV1, ProjectDeclarationState,
+    ProjectEditorSetupOptions, ProjectEditorSetupReport, ProjectExecutionContext,
+    ProjectExplanationReportV1, ProjectFieldAddress, ProjectFieldExplanation,
+    ProjectFixtureCoverageReportV1, ProjectFixtureCoverageSchemaVersion, ProjectInitOptions,
+    ProjectMigrationBuildError, ProjectMigrationInput, ProjectMigrationOptions,
+    ProjectMigrationReportV1, ProjectMigrationSchemaVersion, ProjectPreflightOptions,
+    ProjectPreflightReportV1, ProjectPreflightSchemaVersion, ProjectPromotionBuildError,
+    ProjectPromotionInput, ProjectPromotionOptions, ProjectPromotionReportV1,
+    ProjectPromotionSchemaVersion, ProjectRelativePath, ProjectSchemaKind,
+    ProjectSemanticImpactReportV1, ProjectStarter, ProjectTestOptions, ProjectTestSelection,
+    ProjectTrustedLocalAuthoredValue, ProjectTrustedLocalCheck, PromotionActivationEvaluation,
+    PromotionBlockingReason, PromotionBoundaryAssessment, PromotionChange, PromotionChangeEffect,
+    PromotionChangeInput, PromotionChangeKind, PromotionCompatibilityAssessment,
+    PromotionCompatibilityComponent, PromotionCompatibilityInput, PromotionCompatibilityState,
+    PromotionDeploymentEvaluation, PromotionDisposition, PromotionDocument, PromotionEvidenceGrade,
+    PromotionEvidenceLimitation, PromotionFieldAddress, PromotionFieldClassification,
+    PromotionFieldOwnership, PromotionFieldPath, PromotionProductAction, PromotionRequiredActions,
+    PromotionReviewClass, RedactionReason, ReferenceCoverageSummary, ReferenceSourceContract,
+    RequiredFixtureCoverageRequirement, Requiredness, ReviewedCeilingAssessment,
+    ReviewedCeilingInput, ReviewedRevisionComparison, RuntimeActivationEvaluation,
+    SchemaConstraint, SemanticChange, Sha256Digest, SourceAccessAssertion, SourceCallExpectation,
+    StructuralIntent, SupportAssessment, SupportComponent, SupportEvidence, SupportKind,
+    SupportState, SupportedCapabilityVersion, TrustResolutionAssessment, TrustResolutionInput,
+    UnresolvedMigrationDecision, ValidationStage, VersionChange, VersionHistoryEntry,
+    CONFIGURATION_REFERENCE_COVERAGE_SCHEMA_ID, CONFIGURATION_REFERENCE_FORMAT_VERSION,
+    CONFIGURATION_REFERENCE_SCHEMA_ID, PROJECT_ARTIFACT_MANIFEST_FORMAT_VERSION_V1,
+    PROJECT_ARTIFACT_MANIFEST_SCHEMA_VERSION_V1, PROJECT_CAPABILITY_INVENTORY_SCHEMA_VERSION_V1,
+    PROJECT_COMMAND_REPORT_SCHEMA_VERSION_V1, PROJECT_EXPLANATION_SCHEMA_VERSION_V1,
+    PROJECT_FIXTURE_COVERAGE_SCHEMA_VERSION_V1, PROJECT_MIGRATION_SCHEMA_VERSION_V1,
+    PROJECT_PREFLIGHT_SCHEMA_VERSION_V1, PROJECT_PROMOTION_SCHEMA_VERSION_V1,
+    PROJECT_SEMANTIC_IMPACT_SCHEMA_VERSION_V1,
+};
+pub use project_authoring::{
+    compare_registry_project_environments_semantically,
+    compare_registry_project_to_embedded_starter_semantically,
+    compare_registry_projects_semantically, ProjectEnvironmentSemanticComparisonOptions,
+    ProjectSemanticComparisonChange, ProjectSemanticComparisonOptions,
+    ProjectSemanticComparisonReportV1, ProjectSemanticComparisonSchemaVersion,
+    ProjectStarterSemanticComparisonOptions, SemanticComparisonActivationRequirement,
+    SemanticComparisonAffectedSubject, SemanticComparisonAffectedSubjectKind,
+    SemanticComparisonAssurance, SemanticComparisonChangeSource, SemanticComparisonConsumer,
+    SemanticComparisonDimension, SemanticComparisonDirection, SemanticComparisonEquivalence,
+    SemanticComparisonEvidenceGrade, SemanticComparisonEvidenceLimitation,
+    SemanticComparisonExternalApproval, SemanticComparisonFieldAddress,
+    SemanticComparisonGeneratedArtifact, SemanticComparisonKind, SemanticComparisonPrecision,
+    SemanticComparisonRequiredAction, SemanticComparisonRequirements,
+    SemanticComparisonRestartRequirement, SemanticComparisonReviewClass,
+    SemanticComparisonReviewPlan, SemanticComparisonReviewPlanState,
+    SemanticComparisonSchemaFamily, SemanticComparisonSigningRequirement,
+    PROJECT_SEMANTIC_COMPARISON_SCHEMA_VERSION_V1,
 };
 
 pub use crate::sample::Sample;
@@ -124,6 +245,10 @@ pub struct InitReport {
     pub artifacts: InitArtifacts,
 }
 const NOTARY_PROJECT_DIR: &str = "notary/project";
+const NOTARY_RUNTIME_VISIBILITY_SERVICE: &str = "registry-relay-consultation-bootstrap";
+const NOTARY_RUNTIME_VISIBILITY_ATTEMPTS: usize = 8;
+const NOTARY_RUNTIME_VISIBILITY_RETRY_DELAY: Duration = Duration::from_millis(500);
+const MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES: usize = 1024;
 #[cfg(test)]
 const NOTARY_CONFIG_DIR: &str = "notary/project/.registry-stack/build/local/private/notary/config";
 const NOTARY_CONFIG_PATH: &str =
@@ -1240,6 +1365,9 @@ fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<(
         project = Project::load(project_dir)?;
     }
     validate_project_fingerprints(project_dir, &project)?;
+    if project.notary.is_some() {
+        wait_for_notary_runtime_visibility(project_dir, &project)?;
+    }
     run_compose_for_project(project_dir, &project, &["up", "-d"])?;
     if project.relay.is_some() {
         let relay_base_url = project.relay_base_url()?;
@@ -1947,6 +2075,14 @@ pub fn add_notary_to_project(
     project_dir: &Path,
     image_lock: &RegistryctlImageLock,
 ) -> Result<AddNotaryReport> {
+    add_notary_to_project_with_runtime_preparer(project_dir, image_lock, prepare_notary_runtime)
+}
+
+fn add_notary_to_project_with_runtime_preparer(
+    project_dir: &Path,
+    image_lock: &RegistryctlImageLock,
+    prepare_runtime: fn(&Path) -> Result<()>,
+) -> Result<AddNotaryReport> {
     let mut project = Project::load(project_dir)?;
     if project.relay.is_none() {
         bail!("add notary requires a generated Relay spreadsheet project");
@@ -1996,7 +2132,7 @@ pub fn add_notary_to_project(
         write_local_postgres_tls(project_dir)?;
         add_notary_local_secrets(project_dir)?;
         create_notary_state_dirs(project_dir)?;
-        prepare_notary_runtime(project_dir)?;
+        prepare_runtime(project_dir)?;
         merge_notary_compose(project_dir, image_lock)?;
 
         project.project.products.push("registry-notary".to_string());
@@ -2245,6 +2381,26 @@ fn prepare_notary_runtime(project_dir: &Path) -> Result<()> {
     #[cfg(not(unix))]
     let runtime_identity = None;
     project_authoring::build_registry_project_for_local_tutorial(
+        &ProjectBuildOptions {
+            project_directory: project_dir.join(NOTARY_PROJECT_DIR),
+            environment: "local".to_string(),
+            against: None,
+            anchor: None,
+        },
+        runtime_identity,
+    )?;
+    refresh_notary_relay_token(project_dir, runtime_identity)
+}
+
+/// Unit-test-only publication path that deliberately performs static product
+/// validation but does not execute authored project fixtures.
+#[cfg(test)]
+fn prepare_notary_runtime_static_validation_only_for_unit_test(project_dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    let runtime_identity = Some(compose_runtime_identity_values(project_dir)?);
+    #[cfg(not(unix))]
+    let runtime_identity = None;
+    project_authoring::build_registry_project_static_validation_only_for_unit_test(
         &ProjectBuildOptions {
             project_directory: project_dir.join(NOTARY_PROJECT_DIR),
             environment: "local".to_string(),
@@ -3333,16 +3489,295 @@ fn upsert_env_values(contents: &str, values: &[(String, String)]) -> String {
 }
 
 fn run_compose_for_project(project_dir: &Path, project: &Project, args: &[&str]) -> Result<()> {
+    let platform_override =
+        compose_platform_for_project(project, "docker", should_probe_compose_platform(args));
+    run_compose_command_with_platform(project_dir, "docker", args, platform_override)
+}
+
+fn compose_platform_for_project(
+    project: &Project,
+    binary: &str,
+    probe_server_platform: bool,
+) -> Option<&'static str> {
     let explicit_platform = std::env::var("DOCKER_DEFAULT_PLATFORM").ok();
-    let server_platform = should_probe_compose_platform(args)
-        .then(|| docker_server_platform("docker"))
+    let server_platform = probe_server_platform
+        .then(|| docker_server_platform(binary))
         .flatten();
-    let platform_override = compose_platform_override(
+    compose_platform_override(
         project,
         explicit_platform.as_deref(),
         server_platform.as_deref(),
+    )
+}
+
+fn wait_for_notary_runtime_visibility(project_dir: &Path, project: &Project) -> Result<()> {
+    let platform_override = compose_platform_for_project(project, "docker", true);
+    let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
+    let redactor = SecretRedactor::new(&secrets);
+    let relay_config_path = project_dir.join(CONSULTATION_RELAY_CONFIG_PATH);
+    let expected_config_digest = sha256_uri(
+        &fs::read(&relay_config_path)
+            .with_context(|| "failed to read generated Relay consultation configuration")?,
     );
-    run_compose_command_with_platform(project_dir, "docker", args, platform_override)
+    retry_verified_runtime_closure(
+        NOTARY_RUNTIME_VISIBILITY_ATTEMPTS,
+        NOTARY_RUNTIME_VISIBILITY_RETRY_DELAY,
+        || {
+            run_compose_probe_with_platform(
+                project_dir,
+                "docker",
+                &[
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "-T",
+                    NOTARY_RUNTIME_VISIBILITY_SERVICE,
+                    "doctor",
+                    "--config",
+                    "/etc/registry-relay/relay.yaml",
+                    "--format",
+                    "json",
+                    "--profile",
+                    "local",
+                    "--expected-config-digest",
+                    &expected_config_digest,
+                ],
+                platform_override,
+                &redactor,
+            )
+        },
+    )
+}
+
+fn retry_verified_runtime_closure<F>(
+    attempts: usize,
+    retry_delay: Duration,
+    mut check: F,
+) -> Result<()>
+where
+    F: FnMut() -> Result<RuntimeClosureProbe>,
+{
+    if attempts == 0 {
+        bail!("generated Notary runtime visibility check has no configured attempts");
+    }
+    let mut last_failure = RuntimeClosureProbeFailure::ComposeVerificationFailed(None);
+    for attempt in 0..attempts {
+        match check()? {
+            RuntimeClosureProbe::Verified => return Ok(()),
+            RuntimeClosureProbe::Rejected(failure) => last_failure = failure,
+        }
+        if attempt + 1 < attempts {
+            thread::sleep(retry_delay);
+        }
+    }
+    bail!(last_failure.message())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RuntimeClosureProbe {
+    Verified,
+    Rejected(RuntimeClosureProbeFailure),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum RuntimeClosureProbeFailure {
+    GenerationMismatch,
+    GenerationUnavailable,
+    ConsultationArtifactsRejected,
+    ConsultationConfigurationMissing,
+    ConsultationQuotaLimitsRejected,
+    ConsultationPlanUnsupported,
+    ConsultationWorkloadBindingRejected,
+    ConfigurationRejected,
+    EnvironmentRejected,
+    ComposeVerificationFailed(Option<String>),
+}
+
+impl RuntimeClosureProbeFailure {
+    fn message(&self) -> String {
+        match self {
+            Self::GenerationMismatch => {
+                "Docker did not expose the just-generated Relay consultation configuration before the bounded verification retry expired"
+            }
+            Self::GenerationUnavailable => {
+                "Docker could not read the generated Relay consultation configuration before the bounded verification retry expired"
+            }
+            Self::ConsultationArtifactsRejected => {
+                "Docker rejected the generated Relay consultation artifact closure; run registryctl check for the authored project, correct it, and retry"
+            }
+            Self::ConsultationConfigurationMissing => {
+                "Docker could not find the generated Relay consultation configuration; rebuild the reviewed Relay consultation configuration and retry"
+            }
+            Self::ConsultationQuotaLimitsRejected => {
+                "Docker rejected the generated Relay consultation quota limits; correct the reviewed quota limits, rebuild the consultation artifacts, and retry"
+            }
+            Self::ConsultationPlanUnsupported => {
+                "Docker could not activate a capability required by the generated Relay consultation plan; use a Relay release that supports the reviewed plan or rebuild it with supported capabilities, and retry"
+            }
+            Self::ConsultationWorkloadBindingRejected => {
+                "Docker rejected the Relay consultation workload binding; align the reviewed workload binding with Relay authentication, rebuild, and retry"
+            }
+            Self::ConfigurationRejected => {
+                "Docker rejected the generated Relay consultation configuration; run registryctl check for the authored project, correct it, and retry"
+            }
+            Self::EnvironmentRejected => {
+                "Docker could not verify the Relay consultation environment bindings; run registryctl doctor --profile local, correct the reported requirement, and retry"
+            }
+            Self::ComposeVerificationFailed(process_diagnostic) => {
+                return match process_diagnostic {
+                    Some(process_diagnostic) => format!(
+                        "Docker Compose could not verify the generated Relay consultation artifact closure before the bounded retry expired; Docker Compose reported: {process_diagnostic}"
+                    ),
+                    None => {
+                        "Docker Compose could not verify the generated Relay consultation artifact closure before the bounded retry expired".to_string()
+                    }
+                };
+            }
+        }
+        .to_string()
+    }
+}
+
+fn run_compose_probe_with_platform(
+    project_dir: &Path,
+    binary: &str,
+    args: &[&str],
+    platform_override: Option<&str>,
+    redactor: &SecretRedactor,
+) -> Result<RuntimeClosureProbe> {
+    let command_args = compose_command_args("compose.yaml", args);
+    let mut command = Command::new(binary);
+    command.args(&command_args).current_dir(project_dir);
+    if let Some(platform) = platform_override {
+        command.env("DOCKER_DEFAULT_PLATFORM", platform);
+    }
+    let output = command
+        .output()
+        .with_context(|| format!("failed to run {binary} compose visibility check"))?;
+    if output.status.success() {
+        Ok(RuntimeClosureProbe::Verified)
+    } else {
+        let mut failure = runtime_closure_probe_failure(&output.stdout);
+        if matches!(
+            failure,
+            RuntimeClosureProbeFailure::ComposeVerificationFailed(_)
+        ) {
+            failure = RuntimeClosureProbeFailure::ComposeVerificationFailed(
+                compose_process_diagnostic(&output, redactor),
+            );
+        }
+        Ok(RuntimeClosureProbe::Rejected(failure))
+    }
+}
+
+fn compose_process_diagnostic(output: &Output, redactor: &SecretRedactor) -> Option<String> {
+    let stderr = bounded_redacted_process_diagnostic(&output.stderr, redactor);
+    match (output.status.code(), stderr) {
+        (Some(code), Some(stderr)) => Some(format!("exit code {code}: {stderr}")),
+        (Some(code), None) => Some(format!("exit code {code} with no stderr output")),
+        (None, Some(stderr)) => Some(format!("terminated without an exit code: {stderr}")),
+        (None, None) => Some("terminated without an exit code or stderr output".to_string()),
+    }
+}
+
+fn bounded_redacted_process_diagnostic(stderr: &[u8], redactor: &SecretRedactor) -> Option<String> {
+    let redacted = redactor.redact_output(stderr)?;
+    let normalized = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+    if normalized.len() <= MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES {
+        return Some(normalized);
+    }
+
+    let content_limit = MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES.saturating_sub(3);
+    let mut bounded = String::with_capacity(MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES);
+    for character in normalized.chars() {
+        if bounded.len() + character.len_utf8() > content_limit {
+            break;
+        }
+        bounded.push(character);
+    }
+    bounded.push_str("...");
+    Some(bounded)
+}
+
+fn runtime_closure_probe_failure(stdout: &[u8]) -> RuntimeClosureProbeFailure {
+    let codes = serde_json::from_slice::<serde_json::Value>(stdout)
+        .ok()
+        .and_then(|report| report["diagnostics"].as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|diagnostic| diagnostic["severity"] == "error")
+        .filter_map(|diagnostic| diagnostic["code"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+
+    if codes
+        .iter()
+        .any(|code| code == "relay.config.generation_mismatch")
+    {
+        RuntimeClosureProbeFailure::GenerationMismatch
+    } else if codes
+        .iter()
+        .any(|code| code == "relay.config.generation_unavailable")
+    {
+        RuntimeClosureProbeFailure::GenerationUnavailable
+    } else if let Some(failure) = codes
+        .iter()
+        .find_map(|code| consultation_activation_failure(code))
+    {
+        failure
+    } else if codes.iter().any(|code| {
+        code == "relay.env_file.failed"
+            || code == "config.missing_secret"
+            || code.starts_with("relay.startup.environment_")
+            || code.starts_with("relay.startup.secret_")
+    }) {
+        RuntimeClosureProbeFailure::EnvironmentRejected
+    } else if codes.iter().any(|code| {
+        code.starts_with("relay.consultation_artifacts.")
+            || code == "relay.startup.consultation_artifacts_rejected"
+    }) {
+        RuntimeClosureProbeFailure::ConsultationArtifactsRejected
+    } else if codes.iter().any(|code| {
+        code.starts_with("config.")
+            || code.contains(".config.")
+            || code.starts_with("relay.config.")
+            || code.starts_with("relay.startup.config_")
+            || code == "relay.entity_registry.failed"
+            || code.starts_with("deployment.")
+    }) {
+        RuntimeClosureProbeFailure::ConfigurationRejected
+    } else {
+        RuntimeClosureProbeFailure::ComposeVerificationFailed(None)
+    }
+}
+
+fn consultation_activation_failure(code: &str) -> Option<RuntimeClosureProbeFailure> {
+    match code {
+        "relay.consultation.activation.artifact_registry_invalid"
+        | "relay.consultation.activation.protected_metadata_invalid" => {
+            Some(RuntimeClosureProbeFailure::ConsultationArtifactsRejected)
+        }
+        "relay.consultation.activation.configuration_missing" => {
+            Some(RuntimeClosureProbeFailure::ConsultationConfigurationMissing)
+        }
+        "relay.consultation.activation.quota_limits_invalid" => {
+            Some(RuntimeClosureProbeFailure::ConsultationQuotaLimitsRejected)
+        }
+        "relay.consultation.activation.unsupported_plan" => {
+            Some(RuntimeClosureProbeFailure::ConsultationPlanUnsupported)
+        }
+        "relay.consultation.activation.workload_binding_invalid" => {
+            Some(RuntimeClosureProbeFailure::ConsultationWorkloadBindingRejected)
+        }
+        "relay.consultation.activation.pseudonym_material_unavailable"
+        | "relay.consultation.activation.source_credentials_unavailable"
+        | "relay.consultation.activation.state_plane_unavailable" => {
+            Some(RuntimeClosureProbeFailure::EnvironmentRejected)
+        }
+        _ => None,
+    }
 }
 
 fn run_compose_command_with_platform(
@@ -4639,13 +5074,96 @@ mod tests {
     }
 
     #[test]
+    fn notary_addon_no_match_false_requires_a_positive_bounded_existence_claim() {
+        let project: Value =
+            serde_norway::from_str(include_str!("templates/notary_addon/registry-stack.yaml"))
+                .unwrap();
+        let claims = project["services"]["registration-verification"]["claims"]
+            .as_mapping()
+            .unwrap();
+        assert_eq!(claims.len(), 1);
+        let (claim_id, claim) = claims.iter().next().unwrap();
+        let claim_id = claim_id.as_str().unwrap();
+
+        assert_eq!(claim_id, "active-registration-exists");
+        assert!(
+            claim_id.ends_with("-exists"),
+            "a no-match false result must use an explicit positive existence predicate"
+        );
+        for forbidden in [
+            "accepted",
+            "absent",
+            "denied",
+            "does-not-exist",
+            "eligible",
+            "fraud",
+            "ineligible",
+            "missing",
+            "nonexistent",
+            "not-found",
+            "rejected",
+        ] {
+            assert!(
+                !claim_id.contains(forbidden),
+                "no-match false must not imply the broader fact {forbidden:?}: {claim_id}"
+            );
+        }
+        assert_eq!(
+            claim["cel"],
+            r#"enrollment.matched && enrollment.registration_status == "active""#
+        );
+
+        for (fixture, expected) in [
+            (
+                include_str!(
+                    "templates/notary_addon/integrations/person-demographics/fixtures/match.yaml"
+                ),
+                true,
+            ),
+            (
+                include_str!(
+                    "templates/notary_addon/integrations/person-demographics/fixtures/pending.yaml"
+                ),
+                false,
+            ),
+            (
+                include_str!(
+                    "templates/notary_addon/integrations/person-demographics/fixtures/no-match.yaml"
+                ),
+                false,
+            ),
+        ] {
+            let fixture: Value = serde_norway::from_str(fixture).unwrap();
+            assert_eq!(
+                fixture["expect"]["claims"][claim_id].as_bool(),
+                Some(expected)
+            );
+        }
+        let ambiguous: Value = serde_norway::from_str(include_str!(
+            "templates/notary_addon/integrations/person-demographics/fixtures/ambiguous.yaml"
+        ))
+        .unwrap();
+        assert!(
+            ambiguous["expect"]["claims"]
+                .as_mapping()
+                .is_some_and(serde_norway::Mapping::is_empty),
+            "ambiguous consultation outcomes must not be converted into a false claim"
+        );
+    }
+
+    #[test]
     fn add_notary_builds_an_editable_live_tutorial_addon() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("my-first-api");
         let image_lock = test_image_lock();
         init_spreadsheet_api(&project, Sample::Benefits, &image_lock).unwrap();
 
-        let report = add_notary_to_project(&project, &image_lock).unwrap();
+        let report = add_notary_to_project_with_runtime_preparer(
+            &project,
+            &image_lock,
+            prepare_notary_runtime_static_validation_only_for_unit_test,
+        )
+        .unwrap();
 
         assert_eq!(report.status, "added");
         for path in [
@@ -4752,9 +5270,31 @@ mod tests {
         let claim_source = fs::read_to_string(project.join(NOTARY_CLAIM_FILE)).unwrap();
         assert!(claim_source.contains("request.target.attributes.given_name"));
         assert!(claim_source.contains("request.target.attributes.date_of_birth"));
-        assert!(claim_source.contains("person-registration-accepted"));
+        assert!(claim_source.contains("active-registration-exists"));
+        assert!(!claim_source.contains("person-registration-accepted"));
         assert!(claim_source.contains("enrollment.registration_status == \"active\""));
         assert!(!claim_source.contains("age_on"));
+        let explanation = project_authoring::generated_explanation_for_test(
+            &project.join("notary/project"),
+            "local",
+        )
+        .unwrap();
+        let claim_evidence = explanation
+            .fields
+            .iter()
+            .find(|field| {
+                matches!(
+                    &field.address,
+                    ProjectFieldAddress::Project { path }
+                        if path.as_str()
+                            == "/services/registration-verification/claims/active-registration-exists/evidence"
+                )
+            })
+            .expect("generated Notary claim evidence is explained");
+        let ClassifierSafeReportedValue::Public { value } = &claim_evidence.reported_value else {
+            panic!("claim evidence classification is value-free and public");
+        };
+        assert_eq!(value.as_value(), &serde_json::json!("registry_backed"));
         let integration = fs::read_to_string(
             project.join("notary/project/integrations/person-demographics/integration.yaml"),
         )
@@ -4785,22 +5325,37 @@ mod tests {
             "registry:consult:registration-verification"
         );
         let claim_path = project.join(NOTARY_CLAIM_FILE);
-        let claim = fs::read_to_string(&claim_path).unwrap().replace(
-            "enrollment.registration_status == \"active\"",
-            "(enrollment.registration_status == \"active\" || enrollment.registration_status == \"pending\")",
-        );
+        let claim = fs::read_to_string(&claim_path)
+            .unwrap()
+            .replace(
+                "active-registration-exists",
+                "active-or-pending-registration-exists",
+            )
+            .replace(
+                "enrollment.registration_status == \"active\"",
+                "(enrollment.registration_status == \"active\" || enrollment.registration_status == \"pending\")",
+            );
         fs::write(&claim_path, claim).unwrap();
-        let fixture_path =
-            project.join("notary/project/integrations/person-demographics/fixtures/pending.yaml");
-        let fixture = fs::read_to_string(&fixture_path).unwrap().replace(
-            "claims: { person-registration-accepted: false }",
-            "claims: { person-registration-accepted: true }",
-        );
-        fs::write(&fixture_path, fixture).unwrap();
-        prepare_notary_runtime(&project).unwrap();
+        for (fixture_name, expected_before, expected_after) in [
+            ("match.yaml", "true", "true"),
+            ("pending.yaml", "false", "true"),
+            ("no-match.yaml", "false", "false"),
+        ] {
+            let fixture_path = project
+                .join("notary/project/integrations/person-demographics/fixtures")
+                .join(fixture_name);
+            let fixture = fs::read_to_string(&fixture_path).unwrap().replace(
+                &format!("claims: {{ active-registration-exists: {expected_before} }}"),
+                &format!("claims: {{ active-or-pending-registration-exists: {expected_after} }}"),
+            );
+            fs::write(&fixture_path, fixture).unwrap();
+        }
+        prepare_notary_runtime_static_validation_only_for_unit_test(&project).unwrap();
         assert_notary_runtime_input_owners_match_project(&project);
         let notary_config_text = fs::read_to_string(project.join(NOTARY_CONFIG_PATH)).unwrap();
-        assert!(notary_config_text.contains("person-registration-accepted"));
+        assert!(notary_config_text.contains("active-or-pending-registration-exists"));
+        assert!(!notary_config_text.contains("active-registration-exists"));
+        assert!(!notary_config_text.contains("person-registration-accepted"));
         assert!(notary_config_text.contains("pending"));
         let notary_config: Value = serde_norway::from_str(&notary_config_text).unwrap();
         assert_eq!(notary_config["server"]["bind"], "0.0.0.0:8081");
@@ -4828,7 +5383,12 @@ mod tests {
         .unwrap();
         assert_eq!(consultation_relay_config["server"]["bind"], "0.0.0.0:8082");
 
-        let error = add_notary_to_project(&project, &image_lock).unwrap_err();
+        let error = add_notary_to_project_with_runtime_preparer(
+            &project,
+            &image_lock,
+            prepare_notary_runtime_static_validation_only_for_unit_test,
+        )
+        .unwrap_err();
         assert!(format!("{error:#}").contains("already has a Notary"));
     }
 
@@ -4848,7 +5408,12 @@ mod tests {
         let original_secrets = fs::read_to_string(&secrets_path).unwrap();
         let original_manifest = fs::read_to_string(&manifest_path).unwrap();
 
-        let error = add_notary_to_project(&project, &image_lock).unwrap_err();
+        let error = add_notary_to_project_with_runtime_preparer(
+            &project,
+            &image_lock,
+            prepare_notary_runtime_static_validation_only_for_unit_test,
+        )
+        .unwrap_err();
 
         assert!(format!("{error:#}").contains("already contains a generated Notary entry"));
         assert!(!project.join("notary").exists());
@@ -5356,9 +5921,51 @@ mod tests {
 
     #[test]
     fn compose_command_arguments_are_stable() {
+        let expected_config_digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         assert_eq!(
             compose_command_args("compose.yaml", &["up", "-d"]),
             ["compose", "-f", "compose.yaml", "up", "-d"]
+        );
+        assert_eq!(
+            compose_command_args(
+                "compose.yaml",
+                &[
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "-T",
+                    NOTARY_RUNTIME_VISIBILITY_SERVICE,
+                    "doctor",
+                    "--config",
+                    "/etc/registry-relay/relay.yaml",
+                    "--format",
+                    "json",
+                    "--profile",
+                    "local",
+                    "--expected-config-digest",
+                    expected_config_digest,
+                ],
+            ),
+            [
+                "compose",
+                "-f",
+                "compose.yaml",
+                "run",
+                "--rm",
+                "--no-deps",
+                "-T",
+                "registry-relay-consultation-bootstrap",
+                "doctor",
+                "--config",
+                "/etc/registry-relay/relay.yaml",
+                "--format",
+                "json",
+                "--profile",
+                "local",
+                "--expected-config-digest",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ]
         );
     }
 
@@ -5371,6 +5978,244 @@ mod tests {
             run_compose_command_with_platform(temp.path(), "false", &["ps"], None).unwrap_err();
 
         assert!(error.to_string().contains("false compose exited"));
+    }
+
+    #[test]
+    fn compose_visibility_check_returns_process_outcome() {
+        let temp = TempDir::new().unwrap();
+        let redactor = SecretRedactor { secrets: vec![] };
+
+        assert_eq!(
+            run_compose_probe_with_platform(temp.path(), "true", &["ps"], None, &redactor).unwrap(),
+            RuntimeClosureProbe::Verified
+        );
+        assert!(matches!(
+            run_compose_probe_with_platform(temp.path(), "false", &["ps"], None, &redactor)
+                .unwrap(),
+            RuntimeClosureProbe::Rejected(RuntimeClosureProbeFailure::ComposeVerificationFailed(
+                Some(_)
+            ))
+        ));
+    }
+
+    #[test]
+    fn compose_visibility_check_surfaces_bounded_redacted_stderr() {
+        let temp = TempDir::new().unwrap();
+        let binary = temp.path().join("docker");
+        let secret = "sentinel-secret-value";
+        write_fake_product(
+            &binary,
+            &format!(
+                "printf 'not JSON\\n'\nprintf 'pull failed for {} {}\\n' >&2\nexit 17\n",
+                shell_single_quoted(secret),
+                shell_single_quoted(&"x".repeat(MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES * 2)),
+            ),
+        );
+        let redactor = SecretRedactor {
+            secrets: vec![secret.to_string()],
+        };
+
+        let probe = run_compose_probe_with_platform(
+            temp.path(),
+            binary.to_str().unwrap(),
+            &["ps"],
+            None,
+            &redactor,
+        )
+        .unwrap();
+        let RuntimeClosureProbe::Rejected(failure) = probe else {
+            panic!("expected Compose visibility failure");
+        };
+        let message = failure.message();
+
+        assert!(message.contains("exit code 17: pull failed for [REDACTED]"));
+        assert!(!message.contains(secret));
+        assert!(message.ends_with("..."));
+        let RuntimeClosureProbeFailure::ComposeVerificationFailed(Some(diagnostic)) = failure
+        else {
+            panic!("expected process diagnostic");
+        };
+        let stderr = diagnostic
+            .strip_prefix("exit code 17: ")
+            .expect("exit status prefix");
+        assert!(stderr.len() <= MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES);
+    }
+
+    #[test]
+    fn runtime_visibility_retry_waits_for_the_just_generated_verified_closure() {
+        let mut calls = 0;
+
+        retry_verified_runtime_closure(3, Duration::from_millis(0), || {
+            calls += 1;
+            Ok(if calls == 2 {
+                RuntimeClosureProbe::Verified
+            } else {
+                RuntimeClosureProbe::Rejected(RuntimeClosureProbeFailure::GenerationMismatch)
+            })
+        })
+        .unwrap();
+
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn runtime_visibility_retry_fails_closed_after_its_bound() {
+        let mut calls = 0;
+
+        let error = retry_verified_runtime_closure(3, Duration::from_millis(0), || {
+            calls += 1;
+            Ok(RuntimeClosureProbe::Rejected(
+                RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
+            ))
+        })
+        .unwrap_err();
+
+        assert_eq!(calls, 3);
+        assert_eq!(
+            error.to_string(),
+            "Docker rejected the generated Relay consultation artifact closure; run registryctl check for the authored project, correct it, and retry"
+        );
+    }
+
+    #[test]
+    fn runtime_visibility_retry_preserves_the_last_process_diagnostic() {
+        let mut calls = 0;
+
+        let error = retry_verified_runtime_closure(2, Duration::from_millis(0), || {
+            calls += 1;
+            Ok(RuntimeClosureProbe::Rejected(
+                RuntimeClosureProbeFailure::ComposeVerificationFailed(Some(format!(
+                    "exit code {calls}: daemon unavailable"
+                ))),
+            ))
+        })
+        .unwrap_err();
+
+        assert_eq!(calls, 2);
+        assert!(error
+            .to_string()
+            .ends_with("Docker Compose reported: exit code 2: daemon unavailable"));
+    }
+
+    #[test]
+    fn runtime_visibility_failure_classification_is_value_free_and_specific() {
+        for (code, expected) in [
+            (
+                "relay.config.generation_mismatch",
+                RuntimeClosureProbeFailure::GenerationMismatch,
+            ),
+            (
+                "relay.config.generation_unavailable",
+                RuntimeClosureProbeFailure::GenerationUnavailable,
+            ),
+            (
+                "relay.consultation.activation.artifact_registry_invalid",
+                RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
+            ),
+            (
+                "relay.consultation.activation.protected_metadata_invalid",
+                RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
+            ),
+            (
+                "relay.consultation.activation.configuration_missing",
+                RuntimeClosureProbeFailure::ConsultationConfigurationMissing,
+            ),
+            (
+                "relay.consultation.activation.quota_limits_invalid",
+                RuntimeClosureProbeFailure::ConsultationQuotaLimitsRejected,
+            ),
+            (
+                "relay.consultation.activation.unsupported_plan",
+                RuntimeClosureProbeFailure::ConsultationPlanUnsupported,
+            ),
+            (
+                "relay.consultation.activation.workload_binding_invalid",
+                RuntimeClosureProbeFailure::ConsultationWorkloadBindingRejected,
+            ),
+            (
+                "relay.startup.consultation_artifacts_rejected",
+                RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
+            ),
+            (
+                "relay.env_file.failed",
+                RuntimeClosureProbeFailure::EnvironmentRejected,
+            ),
+            (
+                "config.missing_secret",
+                RuntimeClosureProbeFailure::EnvironmentRejected,
+            ),
+            (
+                "relay.consultation.activation.source_credentials_unavailable",
+                RuntimeClosureProbeFailure::EnvironmentRejected,
+            ),
+            (
+                "relay.consultation.activation.pseudonym_material_unavailable",
+                RuntimeClosureProbeFailure::EnvironmentRejected,
+            ),
+            (
+                "relay.consultation.activation.state_plane_unavailable",
+                RuntimeClosureProbeFailure::EnvironmentRejected,
+            ),
+            (
+                "relay.startup.environment_binding_rejected",
+                RuntimeClosureProbeFailure::EnvironmentRejected,
+            ),
+            (
+                "config.validation_error",
+                RuntimeClosureProbeFailure::ConfigurationRejected,
+            ),
+            (
+                "relay.startup.config_document_invalid",
+                RuntimeClosureProbeFailure::ConfigurationRejected,
+            ),
+        ] {
+            let output = serde_json::to_vec(&serde_json::json!({
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": code,
+                    "message": "sentinel supplied value"
+                }]
+            }))
+            .unwrap();
+            let actual = runtime_closure_probe_failure(&output);
+
+            assert_eq!(actual, expected);
+            assert!(!actual.message().contains("sentinel"));
+        }
+        assert_eq!(
+            runtime_closure_probe_failure(b"not JSON"),
+            RuntimeClosureProbeFailure::ComposeVerificationFailed(None)
+        );
+        assert_eq!(
+            runtime_closure_probe_failure(
+                br#"{"diagnostics":[{"severity":"error","code":"relay.consultation.activation.future_code"}]}"#
+            ),
+            RuntimeClosureProbeFailure::ComposeVerificationFailed(None)
+        );
+    }
+
+    #[test]
+    fn consultation_activation_failures_have_specific_safe_remediation() {
+        for (failure, expected) in [
+            (
+                RuntimeClosureProbeFailure::ConsultationConfigurationMissing,
+                "Docker could not find the generated Relay consultation configuration; rebuild the reviewed Relay consultation configuration and retry",
+            ),
+            (
+                RuntimeClosureProbeFailure::ConsultationQuotaLimitsRejected,
+                "Docker rejected the generated Relay consultation quota limits; correct the reviewed quota limits, rebuild the consultation artifacts, and retry",
+            ),
+            (
+                RuntimeClosureProbeFailure::ConsultationPlanUnsupported,
+                "Docker could not activate a capability required by the generated Relay consultation plan; use a Relay release that supports the reviewed plan or rebuild it with supported capabilities, and retry",
+            ),
+            (
+                RuntimeClosureProbeFailure::ConsultationWorkloadBindingRejected,
+                "Docker rejected the Relay consultation workload binding; align the reviewed workload binding with Relay authentication, rebuild, and retry",
+            ),
+        ] {
+            assert_eq!(failure.message(), expected);
+        }
     }
 
     #[test]

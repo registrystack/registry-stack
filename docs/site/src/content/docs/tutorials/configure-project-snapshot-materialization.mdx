@@ -1,6 +1,6 @@
 ---
 title: Configure an exact snapshot materialization
-description: Use one private materialization binding for a governed records API and exact evidence consultations in a Registry Stack project.
+description: Use one private materialization binding for exact evidence consultations, then optionally share it with a governed records API.
 status: draft
 owner: registry-docs
 source_repos:
@@ -16,10 +16,11 @@ import ProjectStarterSequence from '../../../components/ProjectStarterSequence.a
 Use this guide when Registry Relay must query an immutable local materialization instead of
 opening a source connection for each consultation.
 You will declare one logical entity, bind its physical source once in the private
-environment, and reuse the published snapshot for a governed records API and exact `snapshot`
-consultations.
+environment, and use the published snapshot for exact `snapshot` consultations. An advanced
+variant can expose the same materialization through a governed records API.
 
-{/* Evidence: crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/ and
+{/* Evidence: crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/,
+    crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records/, and
     crates/registryctl/tests/project_authoring.rs,
     records_and_snapshot_share_one_generated_materialization. */}
 
@@ -64,11 +65,12 @@ primary_key: person_id
 schema:
   type: object
   additionalProperties: false
-  required: [person_id, registration_status, residency_confirmed]
+  required: [person_id, registration_status, residency_confirmed, guardian_id]
   properties:
     person_id: { type: string, maxLength: 64 }
     registration_status: { type: [string, "null"], maxLength: 32 }
     residency_confirmed: { type: [boolean, "null"] }
+    guardian_id: { type: [string, "null"], maxLength: 64 }
 materialization:
   max_records: 1000000
   max_bytes: 256MiB
@@ -79,10 +81,15 @@ materialization:
 The entity owns the reusable logical schema and bounded materialization footprint.
 It rejects physical provider, path, table, worksheet, and column members. A records service is
 optional and does not change the entity used by `snapshot`.
+`retain_generations` is an authored value from `1` through `16`. It includes the active completed
+generation in a bounded cache recovery set. Retaining a generation does not make that generation
+an operator-selectable rollback target.
 
-## Add the records service
+## Optionally add the records service
 
-Reference the entity and configure its optional records service in `registry-stack.yaml`:
+The smallest `snapshot-exact` workspace has evidence services only. The maintained
+`snapshot-with-records` workspace proves the advanced shared-materialization shape. In that
+variant, reference the same entity from an optional records service in `registry-stack.yaml`:
 
 ```yaml
 entities:
@@ -136,9 +143,11 @@ capability:
 outputs: [registration_status, residency_confirmed]
 ```
 
-The `snapshot` capability applies the complete exact selector to one immutable published handle and probes at
-most two rows.
-Two matches return `ambiguous`; Registry Relay does not choose one.
+The `snapshot` capability applies the complete exact selector to one immutable published handle.
+In this canonical journey, the selector is the entity primary key and its materialized unique-key
+constraint permits at most one record. Ambiguity is therefore explicitly not applicable, with the
+reviewed rationale and `snapshot-match` request fixture recorded in the integration. Registry Relay
+does not probe for or invent an ambiguity case that the compiled contract makes impossible.
 
 Add an evidence service and consultation in `registry-stack.yaml`, mapping `person_id` from one
 declared request identifier. This Notary-owned service defines its service policy, claims,
@@ -170,6 +179,7 @@ entities:
       person_id: subject_key
       registration_status: status_code
       residency_confirmed: residency_flag
+      guardian_id: guardian_key
     source_revision: population-export-v1
     generation: 2026-07-12
 ```
@@ -177,23 +187,26 @@ entities:
 Every logical field has one physical column, and physical columns must be unique.
 Change `generation` when the provider or mapping changes.
 
-`registryctl build` emits one ingest plan and one materialization identity.
-The records service and compatible snapshot profiles capture the same published handle
-instead of creating another source path or copying the physical mapping.
+`registryctl build` emits one ingest plan and one materialization identity. In the
+`snapshot-with-records` advanced variant, the records service and compatible snapshot profiles
+capture the same published handle instead of creating another source path or copying the physical
+mapping.
 
 ## Verify shared materialization
 
 Run the fixtures, semantic check, and build:
 
 ```sh
-registryctl test --project-dir <project>
+PROJECT_DIR=snapshot-project
+ENVIRONMENT=local
+registryctl test --project-dir "$PROJECT_DIR"
 registryctl check \
-  --project-dir <project> \
-  --environment <environment> \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
   --explain
 registryctl build \
-  --project-dir <project> \
-  --environment <environment>
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT"
 ```
 
 The human-readable test report starts with `PASS`, the check report marks the project `valid`, and
@@ -202,8 +215,19 @@ Confirm that the explanation names one logical materialization and that no revie
 pack or consultation contract contains the provider path or physical column names.
 
 If the snapshot is absent, stale, or does not match the active generation and digest, only the
-dependent profiles become unready.
+dependent SnapshotExact execution fails closed with `consultation.unavailable`.
+An execution-time freshness failure does not change global `/ready`, which can remain `200`.
 Registry Relay does not fall back to live source access.
+
+Reload the audited SnapshotExact source through its table-specific protected admin endpoint.
+When any audited SnapshotExact binding is configured, Registry Relay rejects
+`POST /admin/v1/reload` before source access and refreshes no resources. Current Relay does not
+provide atomic multi-materialization reload.
+
+Back up immutable source inputs, the Relay ingest cache, and the complete Relay consultation
+database at one coordinated quiesced recovery point. Retain access-controlled evidence that binds
+their artifact hashes to the exact active generation and restricted content digest. Do not infer a
+recoverable set from independently timed backups.
 
 ## Troubleshooting
 

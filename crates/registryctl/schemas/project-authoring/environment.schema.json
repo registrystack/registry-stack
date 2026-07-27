@@ -1,4 +1,5 @@
 {
+  "x-registry-field": "root",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://registrystack.example/schemas/project-authoring/environment.v1.json",
   "title": "Registry Stack project environment v1",
@@ -7,125 +8,149 @@
   "additionalProperties": false,
   "required": ["version", "deployment"],
   "properties": {
-    "version": { "const": 1, "default": 1, "description": "Environment authoring format version." },
-    "integrations": { "type": "object", "maxProperties": 16, "description": "Environment bindings keyed by authored integration identifier.", "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "$ref": "#/$defs/integration" } },
-    "entities": { "type": "object", "maxProperties": 32, "description": "Environment-specific source bindings keyed by entity identifier.", "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "$ref": "#/$defs/entity" } },
+    "version": {"x-registry-field": "public_property", "const": 1, "description": "Environment authoring format version." },
+    "integrations": {"x-registry-field": "property", "type": "object", "maxProperties": 16, "description": "Environment bindings keyed by authored integration identifier.", "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" }, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/integration" } },
+    "entities": {"x-registry-field": "property", "type": "object", "maxProperties": 32, "description": "Environment-specific source bindings keyed by entity identifier.", "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" }, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/entity" } },
     "issuance": {
+      "x-registry-field": "property",
       "description": "Notary issuer and signing-key bindings for credential issuance.",
       "type": "object", "additionalProperties": false, "required": ["issuer", "signing_key", "signing_kid", "generation"],
-      "properties": { "issuer": { "type": "string", "minLength": 1 }, "signing_key": { "$ref": "#/$defs/secret" }, "signing_kid": { "$ref": "#/$defs/token2048" }, "algorithm": { "enum": ["EdDSA", "ES256"], "default": "EdDSA", "description": "Credential issuer signing algorithm. Holder proof remains EdDSA with did:jwk." }, "generation": { "type": "integer", "minimum": 1 } }
+      "properties": { "issuer": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 1 }, "signing_key": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "signing_kid": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/token2048" }, "algorithm": {"x-registry-field": "property", "enum": ["EdDSA", "ES256"], "default": "EdDSA", "description": "Credential issuer signing algorithm. Holder proof remains EdDSA with did:jwk." }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } }
     },
     "callers": {
+      "x-registry-field": "property",
       "description": "Notary API-key caller identities and the scopes each identity receives.",
-      "type": "object", "maxProperties": 64, "propertyNames": { "$ref": "#/$defs/stableId" },
+      "type": "object", "maxProperties": 64, "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
       "additionalProperties": {
+        "x-registry-field": "map_value",
         "type": "object", "additionalProperties": false, "required": ["api_key_fingerprint", "scopes"],
-        "properties": { "api_key_fingerprint": { "$ref": "#/$defs/secret" }, "scopes": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 128 } } }
+        "properties": { "api_key_fingerprint": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "scopes": {"x-registry-field": "property", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"x-registry-field": "array_item", "type": "string", "minLength": 1, "maxLength": 128 } } }
       }
     },
     "relay": {
+      "x-registry-field": "property",
       "description": "Public Relay identity and token-validation settings for a Relay deployment.",
       "type": "object", "additionalProperties": false,
       "required": ["origin", "issuer", "jwks_url", "audience", "allowed_clients"],
-      "properties": { "origin": { "$ref": "#/$defs/relayOrigin" }, "issuer": { "$ref": "#/$defs/relayOrigin" }, "jwks_url": { "$ref": "#/$defs/relayResource" }, "audience": { "type": "string", "minLength": 1, "maxLength": 256 }, "allowed_clients": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 256 } } }
+      "properties": { "origin": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relayOrigin" }, "issuer": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relayOrigin" }, "jwks_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relayResource" }, "audience": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 1, "maxLength": 256 }, "allowed_clients": {"x-registry-field": "sensitive_property", "type": "array", "maxItems": 64, "uniqueItems": true, "items": {"x-registry-field": "array_item", "type": "string", "minLength": 1, "maxLength": 256 } } }
     },
     "notary_relay": {
+      "x-registry-field": "property",
       "description": "Deployment-internal Relay connection, Notary workload identity, and token file used only when Notary consults Relay.",
       "type": "object", "additionalProperties": false, "required": ["base_url", "workload_client_id", "token_file"],
-      "properties": { "base_url": { "$ref": "#/$defs/internalOrigin" }, "workload_client_id": { "type": "string", "minLength": 1, "maxLength": 256 }, "token_file": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$" } }
+      "properties": { "base_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/internalOrigin" }, "workload_client_id": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 1, "maxLength": 256 }, "token_file": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$" } }
     },
     "relay_state": {
+      "x-registry-field": "property",
       "description": "Optional deployment binding for Relay-owned consultation PostgreSQL state transport trust.",
       "type": "object", "additionalProperties": false, "required": ["postgresql"],
       "properties": {
         "postgresql": {
+          "x-registry-field": "property",
           "type": "object", "additionalProperties": false, "required": ["root_certificate_path"],
-          "properties": { "root_certificate_path": { "$ref": "#/$defs/absolutePath" } }
+          "properties": { "root_certificate_path": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" } }
         }
       }
     },
     "notary_state": {
+      "x-registry-field": "property",
       "description": "Optional deployment binding for Notary-owned PostgreSQL state transport trust.",
       "type": "object", "additionalProperties": false, "required": ["postgresql"],
       "properties": {
         "postgresql": {
+          "x-registry-field": "property",
           "type": "object", "additionalProperties": false, "required": ["root_certificate_path"],
-          "properties": { "root_certificate_path": { "$ref": "#/$defs/absolutePath" } }
+          "properties": { "root_certificate_path": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" } }
         }
       }
     },
     "notary_cel": {
+      "x-registry-field": "property",
       "description": "Optional per-worker data/address-space ceiling for dedicated Notary CEL processes. The Notary default is 134217728 bytes; 1073741824 is the maximum emulation-compatible exception and remains a limit, not an allocation.",
       "type": "object", "additionalProperties": false, "required": ["worker_memory_bytes"],
       "properties": {
-        "worker_memory_bytes": { "type": "integer", "minimum": 33554432, "maximum": 1073741824 }
+        "worker_memory_bytes": {"x-registry-field": "property", "type": "integer", "minimum": 33554432, "maximum": 1073741824 }
       }
     },
     "oid4vci": {
+      "x-registry-field": "property",
       "description": "Explicit registry-backed holder-wallet OID4VCI binding for one authored Notary credential profile.",
       "$ref": "#/$defs/oid4vci"
     },
     "deployment": {
+      "x-registry-field": "property",
       "description": "Products deployed in this environment and the operational profile they use.",
       "type": "object", "additionalProperties": false, "required": ["profile"],
-      "properties": { "profile": { "enum": ["local", "hosted_lab", "production", "evidence_grade"] }, "relay": { "$ref": "#/$defs/service" }, "notary": { "$ref": "#/$defs/service" } },
-      "anyOf": [{ "required": ["relay"] }, { "required": ["notary"] }]
+      "properties": { "profile": {"x-registry-field": "property", "enum": ["local", "hosted_lab", "production", "evidence_grade"] }, "relay": {"x-registry-field": "property", "$ref": "#/$defs/service" }, "notary": {"x-registry-field": "property", "$ref": "#/$defs/service" } },
+      "anyOf": [{"x-registry-field": "branch", "required": ["relay"] }, {"x-registry-field": "branch", "required": ["notary"] }]
     }
   },
   "allOf": [
     {
-      "if": { "required": ["deployment"], "properties": { "deployment": { "required": ["relay"] } } },
-      "then": { "required": ["relay"] },
-      "else": { "not": { "required": ["relay"] } }
+      "x-registry-field": "branch",
+      "if": {"x-registry-field": "branch", "required": ["deployment"], "properties": { "deployment": {"x-registry-field": "property", "required": ["relay"] } } },
+      "then": {"x-registry-field": "branch", "required": ["relay"] },
+      "else": {"x-registry-field": "branch", "not": {"x-registry-field": "branch", "required": ["relay"] } }
     },
     {
-      "if": { "required": ["notary_relay"] },
-      "then": { "properties": { "deployment": { "required": ["relay", "notary"] } } }
+      "x-registry-field": "branch",
+      "if": {"x-registry-field": "branch", "required": ["notary_relay"] },
+      "then": {"x-registry-field": "branch", "properties": { "deployment": {"x-registry-field": "property", "required": ["relay", "notary"] } } }
     },
     {
-      "if": { "required": ["relay_state"] },
-      "then": { "properties": { "deployment": { "required": ["relay"] } } }
+      "x-registry-field": "branch",
+      "if": {"x-registry-field": "branch", "required": ["relay_state"] },
+      "then": {"x-registry-field": "branch", "properties": { "deployment": {"x-registry-field": "property", "required": ["relay"] } } }
     },
     {
-      "if": { "required": ["notary_state"] },
-      "then": { "properties": { "deployment": { "required": ["notary"] } } }
+      "x-registry-field": "branch",
+      "if": {"x-registry-field": "branch", "required": ["notary_state"] },
+      "then": {"x-registry-field": "branch", "properties": { "deployment": {"x-registry-field": "property", "required": ["notary"] } } }
     },
     {
-      "if": { "required": ["notary_cel"] },
-      "then": { "properties": { "deployment": { "required": ["notary"] } } }
+      "x-registry-field": "branch",
+      "if": {"x-registry-field": "branch", "required": ["notary_cel"] },
+      "then": {"x-registry-field": "branch", "properties": { "deployment": {"x-registry-field": "property", "required": ["notary"] } } }
     },
     {
-      "if": { "required": ["oid4vci"] },
+      "x-registry-field": "branch",
+      "if": {"x-registry-field": "branch", "required": ["oid4vci"] },
       "then": {
+        "x-registry-field": "branch",
         "required": ["notary_state"],
         "properties": {
-          "deployment": { "required": ["notary"] }
+          "deployment": {"x-registry-field": "property", "required": ["notary"] }
         }
       },
-      "else": { "properties": { "callers": { "minProperties": 1 } } }
+      "else": {"x-registry-field": "branch", "properties": { "callers": {"x-registry-field": "property", "minProperties": 1 } } }
     },
     {
-      "if": { "properties": { "deployment": { "required": ["profile"], "properties": { "profile": { "const": "local" } } } } },
+      "x-registry-field": "branch",
+      "if": {"x-registry-field": "branch", "properties": { "deployment": {"x-registry-field": "property", "required": ["profile"], "properties": { "profile": {"x-registry-field": "property", "const": "local" } } } } },
       "else": {
+        "x-registry-field": "branch",
         "properties": {
           "relay": {
+            "x-registry-field": "property",
             "properties": {
-              "origin": { "$ref": "#/$defs/origin" },
-              "issuer": { "$ref": "#/$defs/origin" },
-              "jwks_url": { "$ref": "#/$defs/httpsResource" }
+              "origin": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/origin" },
+              "issuer": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/origin" },
+              "jwks_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/httpsResource" }
             }
           },
           "oid4vci": {
+            "x-registry-field": "property",
             "properties": {
-              "public_base_url": { "$ref": "#/$defs/origin" },
-              "redirect_uri": { "$ref": "#/$defs/httpsResource" },
+              "public_base_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/origin" },
+              "redirect_uri": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/httpsResource" },
               "authorization_server": {
+                "x-registry-field": "property",
                 "properties": {
-                  "issuer": { "$ref": "#/$defs/origin" },
-                  "jwks_url": { "$ref": "#/$defs/httpsResource" },
-                  "userinfo_url": { "$ref": "#/$defs/httpsResource" },
-                  "authorize_url": { "$ref": "#/$defs/httpsResource" },
-                  "token_url": { "$ref": "#/$defs/httpsResource" }
+                  "issuer": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/origin" },
+                  "jwks_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/httpsResource" },
+                  "userinfo_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/httpsResource" },
+                  "authorize_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/httpsResource" },
+                  "token_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/httpsResource" }
                 }
               }
             }
@@ -146,151 +171,163 @@
   "$defs": {
     "stableId": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$", "description": "Lowercase stable identifier used in project references." },
     "token2048": { "type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^[!-~]+$", "description": "Bounded visible-ASCII token, including full verification-method identifiers." },
-    "secret": { "type": "object", "additionalProperties": false, "description": "Reference to a process-environment variable; secret values are never authored here.", "required": ["secret"], "properties": { "secret": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]{0,127}$" } } },
+    "secret": { "type": "object", "additionalProperties": false, "description": "Reference to a process-environment variable; secret values are never authored here.", "required": ["secret"], "properties": { "secret": {"x-registry-field": "secret_reference_property", "type": "string", "pattern": "^[A-Z_][A-Z0-9_]{0,127}$" } } },
     "origin": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP][sS]://[^/?#]+/?$", "description": "HTTPS origin without path, query, or fragment." },
     "httpsResource": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP][sS]://[^/?#]+/[^?#]+$", "description": "Exact HTTPS resource without query or fragment." },
     "localLoopbackOrigin": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP]://(?:127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]+)?/?$", "description": "HTTP IP-loopback origin; public Relay and issuer fields restrict it to the local profile, while internal Notary-to-Relay connections allow it in any profile." },
     "localLoopbackResource": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP]://(?:127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]+)?/[^?#]+$", "description": "HTTP IP-loopback resource accepted only with the local deployment profile." },
-    "internalOrigin": { "description": "Deployment-internal HTTPS or HTTP IP-loopback origin.", "anyOf": [{ "$ref": "#/$defs/origin" }, { "$ref": "#/$defs/localLoopbackOrigin" }] },
-    "relayOrigin": { "description": "Relay or issuer origin using HTTPS, or HTTP IP-loopback under the local profile.", "anyOf": [{ "$ref": "#/$defs/origin" }, { "$ref": "#/$defs/localLoopbackOrigin" }] },
-    "relayResource": { "description": "Relay authentication resource using HTTPS, or HTTP IP-loopback under the local profile.", "anyOf": [{ "$ref": "#/$defs/httpsResource" }, { "$ref": "#/$defs/localLoopbackResource" }] },
+    "internalOrigin": { "description": "Deployment-internal HTTPS or HTTP IP-loopback origin.", "anyOf": [{"x-registry-field": "branch", "$ref": "#/$defs/origin" }, {"x-registry-field": "branch", "$ref": "#/$defs/localLoopbackOrigin" }] },
+    "relayOrigin": { "description": "Relay or issuer origin using HTTPS, or HTTP IP-loopback under the local profile.", "anyOf": [{"x-registry-field": "branch", "$ref": "#/$defs/origin" }, {"x-registry-field": "branch", "$ref": "#/$defs/localLoopbackOrigin" }] },
+    "relayResource": { "description": "Relay authentication resource using HTTPS, or HTTP IP-loopback under the local profile.", "anyOf": [{"x-registry-field": "branch", "$ref": "#/$defs/httpsResource" }, {"x-registry-field": "branch", "$ref": "#/$defs/localLoopbackResource" }] },
     "oid4vci": {
       "description": "Closed OID4VCI trust, key, subject, wallet, and credential-profile binding.",
       "type": "object",
       "additionalProperties": false,
       "required": ["public_base_url", "credential", "authorization_server", "client", "access_token", "sensitive_state_key", "subject", "redirect_uri", "allowed_wallet_origins"],
       "properties": {
-        "public_base_url": { "$ref": "#/$defs/relayOrigin" },
+        "public_base_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relayOrigin" },
         "credential": {
+          "x-registry-field": "property",
           "description": "Existing project service and credential profile exposed through OID4VCI.",
           "type": "object", "additionalProperties": false, "required": ["service", "profile"],
           "properties": {
-            "service": { "$ref": "#/$defs/stableId" },
-            "profile": { "$ref": "#/$defs/stableId" }
+            "service": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+            "profile": {"x-registry-field": "property", "$ref": "#/$defs/stableId" }
           }
         },
         "authorization_server": {
+          "x-registry-field": "property",
           "description": "Pinned eSignet issuer and exact endpoints used for login and token validation.",
           "type": "object", "additionalProperties": false, "required": ["issuer", "jwks_url", "userinfo_url", "authorize_url", "token_url"],
           "properties": {
-            "issuer": { "$ref": "#/$defs/relayOrigin" },
-            "jwks_url": { "$ref": "#/$defs/relayResource" },
-            "userinfo_url": { "$ref": "#/$defs/relayResource" },
-            "authorize_url": { "$ref": "#/$defs/relayResource" },
-            "token_url": { "$ref": "#/$defs/relayResource" }
+            "issuer": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relayOrigin" },
+            "jwks_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relayResource" },
+            "userinfo_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relayResource" },
+            "authorize_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relayResource" },
+            "token_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relayResource" }
           }
         },
         "client": {
+          "x-registry-field": "property",
           "description": "eSignet relying-party identity and dedicated private-key reference.",
           "type": "object", "additionalProperties": false, "required": ["id", "signing_key", "signing_kid"],
           "properties": {
-            "id": { "$ref": "#/$defs/token256" },
-            "signing_key": { "$ref": "#/$defs/secret" },
-            "signing_kid": { "$ref": "#/$defs/token2048" }
+            "id": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/token256" },
+            "signing_key": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" },
+            "signing_kid": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/token2048" }
           }
         },
         "access_token": {
+          "x-registry-field": "property",
           "description": "Dedicated Notary access-token signing key and published key identifier.",
           "type": "object", "additionalProperties": false, "required": ["signing_key", "signing_kid"],
           "properties": {
-            "signing_key": { "$ref": "#/$defs/secret" },
-            "signing_kid": { "$ref": "#/$defs/token2048" }
+            "signing_key": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" },
+            "signing_kid": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/token2048" }
           }
         },
-        "sensitive_state_key": { "$ref": "#/$defs/secret" },
+        "sensitive_state_key": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" },
         "subject": {
+          "x-registry-field": "property",
           "description": "Verified eSignet userinfo claim bound exactly to the credential subject identifier.",
           "type": "object", "additionalProperties": false, "required": ["token_claim", "id_type"],
           "properties": {
-            "token_claim": { "$ref": "#/$defs/token256" },
-            "id_type": { "$ref": "#/$defs/token256" }
+            "token_claim": {"x-registry-field": "property", "$ref": "#/$defs/token256" },
+            "id_type": {"x-registry-field": "property", "$ref": "#/$defs/token256" }
           }
         },
-        "redirect_uri": { "$ref": "#/$defs/relayResource" },
+        "redirect_uri": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relayResource" },
         "allowed_wallet_origins": {
+          "x-registry-field": "sensitive_property",
           "description": "Exact HTTPS browser origins admitted to the wallet-facing Notary routes.",
           "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
-          "items": { "$ref": "#/$defs/origin" }
+          "items": {"x-registry-field": "sensitive_array_item", "$ref": "#/$defs/origin" }
         },
         "tx_code": {
+          "x-registry-field": "property",
           "description": "Transaction-code policy. Omit for the secure required-PIN default. Set required=false only for a bounded bearer-offer interoperability profile; the compiler fixes the offer lifetime at 300 seconds.",
           "type": "object", "additionalProperties": false,
-          "properties": { "required": { "type": "boolean", "default": true } }
+          "properties": { "required": {"x-registry-field": "property", "type": "boolean", "default": true } }
         }
       }
     },
     "privateCidrs": {
       "description": "Explicit private network ranges this source may resolve to.",
       "type": "array", "maxItems": 16, "uniqueItems": true,
-      "items": { "type": "string", "minLength": 3, "maxLength": 64 }
+      "items": {"x-registry-field": "sensitive_array_item", "type": "string", "minLength": 3, "maxLength": 64 }
     },
     "ca": {
       "description": "Pinned certificate-authority file and its rotation generation.",
       "type": "object", "additionalProperties": false, "required": ["file", "generation"],
-      "properties": { "file": { "$ref": "#/$defs/absolutePath" }, "generation": { "type": "integer", "minimum": 1 } }
+      "properties": { "file": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } }
     },
     "mtls": {
       "description": "Client certificate and private-key reference for mutual TLS.",
       "type": "object", "additionalProperties": false, "required": ["certificate_file", "private_key", "generation"],
-      "properties": { "certificate_file": { "$ref": "#/$defs/absolutePath" }, "private_key": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } }
+      "properties": { "certificate_file": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" }, "private_key": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } }
     },
     "endpoint": {
       "description": "Security-bound HTTPS endpoint with optional private-network, CA, and mTLS policy.",
       "type": "object", "additionalProperties": false, "required": ["origin", "path", "generation"],
       "properties": {
-        "origin": { "$ref": "#/$defs/origin" },
-        "path": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//)(?!.*[?#]).+$" },
-        "allowed_private_cidrs": { "$ref": "#/$defs/privateCidrs" },
-        "ca": { "$ref": "#/$defs/ca" },
-        "mtls": { "$ref": "#/$defs/mtls" },
-        "generation": { "type": "integer", "minimum": 1 }
+        "origin": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/origin" },
+        "path": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//)(?!.*[?#]).+$" },
+        "allowed_private_cidrs": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/privateCidrs" },
+        "ca": {"x-registry-field": "property", "$ref": "#/$defs/ca" },
+        "mtls": {"x-registry-field": "property", "$ref": "#/$defs/mtls" },
+        "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 }
       }
     },
     "credential": {
       "description": "One supported source credential shape, containing references rather than values.",
       "oneOf": [
-        { "type": "object", "additionalProperties": false, "required": ["username", "password", "generation"], "properties": { "username": { "$ref": "#/$defs/secret" }, "password": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } },
-        { "type": "object", "additionalProperties": false, "required": ["token", "generation"], "properties": { "token": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } },
-        { "type": "object", "additionalProperties": false, "required": ["client_id", "client_secret", "generation"], "properties": { "client_id": { "$ref": "#/$defs/secret" }, "client_secret": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } },
-        { "type": "object", "additionalProperties": false, "required": ["value", "generation"], "properties": { "value": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } }
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["username", "password", "generation"], "properties": { "username": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "password": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } } },
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["token", "generation"], "properties": { "token": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } } },
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["client_id", "client_secret", "generation"], "properties": { "client_id": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "client_secret": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } } },
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["value", "generation"], "properties": { "value": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "generation": {"x-registry-field": "sensitive_property", "type": "integer", "minimum": 1, "maximum": 18446744073709551615 } } }
       ]
     },
     "provider": {
       "description": "Environment-specific physical provider for a materialized entity.",
       "oneOf": [
-        { "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": { "const": "csv" }, "path": { "$ref": "#/$defs/absolutePath" }, "header_row": { "type": "integer", "minimum": 1 }, "delimiter": { "type": "integer", "minimum": 0, "maximum": 255 }, "quote": { "type": "integer", "minimum": 0, "maximum": 255 } } },
-        { "type": "object", "additionalProperties": false, "required": ["type", "path", "sheet"], "properties": { "type": { "const": "xlsx" }, "path": { "$ref": "#/$defs/absolutePath" }, "sheet": { "type": "string", "minLength": 1, "maxLength": 256 }, "header_row": { "type": "integer", "minimum": 1 }, "data_range": { "type": "string", "minLength": 1, "maxLength": 256 } } },
-        { "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": { "const": "parquet" }, "path": { "$ref": "#/$defs/absolutePath" } } },
-        { "type": "object", "additionalProperties": false, "required": ["type", "connection", "schema", "table"], "properties": { "type": { "const": "postgres" }, "connection": { "$ref": "#/$defs/secret" }, "schema": { "$ref": "#/$defs/postgresIdentifier" }, "table": { "$ref": "#/$defs/postgresIdentifier" } } }
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": {"x-registry-field": "property", "const": "csv" }, "path": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" }, "header_row": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4294967295 }, "delimiter": {"x-registry-field": "property", "type": "integer", "minimum": 0, "maximum": 255 }, "quote": {"x-registry-field": "property", "type": "integer", "minimum": 0, "maximum": 255 } } },
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["type", "path", "sheet"], "properties": { "type": {"x-registry-field": "property", "const": "xlsx" }, "path": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" }, "sheet": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 256 }, "header_row": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4294967295 }, "data_range": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 256 } } },
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": {"x-registry-field": "property", "const": "parquet" }, "path": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/absolutePath" } } },
+        {"x-registry-field": "branch", "type": "object", "additionalProperties": false, "required": ["type", "connection", "schema", "table"], "properties": { "type": {"x-registry-field": "property", "const": "postgres" }, "connection": {"x-registry-field": "secret_reference_property", "$ref": "#/$defs/secret" }, "schema": {"x-registry-field": "property", "$ref": "#/$defs/postgresIdentifier" }, "table": {"x-registry-field": "property", "$ref": "#/$defs/postgresIdentifier" } } }
       ]
     },
     "entity": {
       "description": "Maps an authored entity to provider columns and immutable source-generation identifiers.",
       "type": "object", "additionalProperties": false, "required": ["provider", "columns", "source_revision", "generation"],
-      "properties": { "provider": { "$ref": "#/$defs/provider" }, "columns": { "type": "object", "minProperties": 1, "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "$ref": "#/$defs/stableId" } }, "source_revision": { "type": "string", "minLength": 1, "maxLength": 256 }, "generation": { "type": "string", "minLength": 1, "maxLength": 256 } }
+      "properties": { "provider": {"x-registry-field": "property", "$ref": "#/$defs/provider" }, "columns": {"x-registry-field": "property", "type": "object", "minProperties": 1, "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" }, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/stableId" } }, "source_revision": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 1, "maxLength": 256 }, "generation": {"x-registry-field": "sensitive_property", "type": "string", "minLength": 1, "maxLength": 256 } }
     },
     "source": {
       "description": "Runtime source connection policy for one authored integration.",
       "type": "object", "additionalProperties": false, "required": ["origin"],
       "properties": {
-        "origin": { "$ref": "#/$defs/origin" },
-        "allowed_private_cidrs": { "$ref": "#/$defs/privateCidrs" },
-        "ca": { "$ref": "#/$defs/ca" },
-        "mtls": { "$ref": "#/$defs/mtls" },
-        "credential": { "$ref": "#/$defs/credential" },
-        "oauth": { "$ref": "#/$defs/endpoint" },
-        "jwks": { "$ref": "#/$defs/endpoint" },
-        "rate": { "type": "object", "additionalProperties": false, "required": ["per_minute", "burst"], "properties": { "per_minute": { "type": "integer", "minimum": 1, "maximum": 60000 }, "burst": { "type": "integer", "minimum": 1, "maximum": 1024 } } },
-        "concurrency": { "type": "integer", "minimum": 1, "maximum": 64 },
-        "timeout": { "type": "string", "pattern": "^[1-9][0-9]*(?:ms|s)$" }
+        "origin": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/origin" },
+        "allowed_private_cidrs": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/privateCidrs" },
+        "ca": {"x-registry-field": "property", "$ref": "#/$defs/ca" },
+        "mtls": {"x-registry-field": "property", "$ref": "#/$defs/mtls" },
+        "credential": {"x-registry-field": "property", "$ref": "#/$defs/credential" },
+        "oauth": {"x-registry-field": "property", "$ref": "#/$defs/endpoint" },
+        "jwks": {"x-registry-field": "property", "$ref": "#/$defs/endpoint" },
+        "rate": {"x-registry-field": "property", "type": "object", "additionalProperties": false, "required": ["per_minute", "burst"], "properties": { "per_minute": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 60000 }, "burst": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 1024 } } },
+        "concurrency": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 64 },
+        "timeout": {
+          "x-registry-field": "property",
+          "description": "Optional request timeout no greater than 20 seconds; generated bindings narrow it to the integration deadline.",
+          "type": "string",
+          "pattern": "^(?:(?:[1-9][0-9]{0,3}|1[0-9]{4}|20000)ms|(?:[1-9]|1[0-9]|20)s)$"
+        }
       }
     },
     "integration": {
       "description": "Environment binding for an authored source integration.",
       "type": "object", "additionalProperties": false, "required": ["source"],
-      "properties": { "source": { "$ref": "#/$defs/source" } }
+      "properties": { "source": {"x-registry-field": "property", "$ref": "#/$defs/source" } }
     },
-    "service": { "type": "object", "additionalProperties": false, "description": "Binds an authored product role to a deployed service identifier.", "required": ["service"], "properties": { "service": { "$ref": "#/$defs/stableId" } } },
+    "service": { "type": "object", "additionalProperties": false, "description": "Binds an authored product role to a deployed service identifier.", "required": ["service"], "properties": { "service": {"x-registry-field": "property", "$ref": "#/$defs/stableId" } } },
     "token256": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[!-~]+$", "description": "Bounded visible-ASCII protocol token." },
     "postgresIdentifier": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$", "description": "Portable unquoted PostgreSQL schema or table identifier." },
     "absolutePath": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$", "description": "Normalized absolute path without dot segments or duplicate separators." }

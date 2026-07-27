@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 
 const SCHEMA_ARTIFACT: &str = "schemas/registry-notary.config.schema.json";
 const CONFIG_REFERENCE: &str = "products/notary/docs/operator-config-reference.md";
+const DOCUMENTATION_INTENT: &str = "crates/registry-notary-core/config/documentation-intent.json";
 const KEY_PATHS_START: &str = "{/* registry-notary-config-key-paths:start */}";
 const KEY_PATHS_END: &str = "{/* registry-notary-config-key-paths:end */}";
 
@@ -268,6 +269,27 @@ fn schema_command_is_exactly_the_committed_artifact() {
 }
 
 #[test]
+fn schema_command_does_not_read_config_environment_or_secret_values() {
+    let marker = "NOTARY_SCHEMA_MUST_NOT_READ_OR_EMIT_THIS_SECRET_VALUE";
+    let temp = tempfile::tempdir().expect("temporary working directory");
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-notary"))
+        .arg("schema")
+        .current_dir(temp.path())
+        .env(
+            "REGISTRY_NOTARY_CONFIG",
+            temp.path().join("missing-config.yaml"),
+        )
+        .env("REGISTRY_NOTARY_SCHEMA_SECRET_SENTINEL", marker)
+        .output()
+        .expect("schema command runs without runtime inputs");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(output.stdout, document_json().as_bytes());
+    assert!(!String::from_utf8(output.stdout).unwrap().contains(marker));
+}
+
+#[test]
 fn maintained_runtime_config_fixtures_validate_and_deserialize() {
     let schema = document();
     let fixtures = maintained_runtime_fixtures();
@@ -327,6 +349,56 @@ fn strict_nested_objects_and_tagged_variants_match_runtime_deserialization() {
         "unknown signing-key status",
     );
     assert_runtime_rejects(&unknown_signing_status, "unknown signing-key status");
+}
+
+#[test]
+fn claim_value_max_bytes_schema_matches_runtime_bounds_and_compatibility() {
+    let schema = document();
+    let max_bytes_schema = schema
+        .pointer("/$defs/ClaimValueConfig/properties/max_bytes")
+        .expect("claim value max_bytes schema exists");
+    assert_eq!(max_bytes_schema["minimum"], json!(1));
+    assert_eq!(max_bytes_schema["maximum"], json!(65_536));
+
+    let mut absent = example_config();
+    absent["evidence"]["claims"][0]["value"]
+        .as_object_mut()
+        .expect("claim value is an object")
+        .remove("max_bytes");
+    assert_valid(&schema, &absent, "claim value without max_bytes");
+    assert_runtime_deserializes(&absent, "claim value without max_bytes");
+
+    for max_bytes in [1_u32, 65_536] {
+        let mut bounded = example_config();
+        bounded["evidence"]["claims"][0]["value"]["max_bytes"] = json!(max_bytes);
+        assert_valid(
+            &schema,
+            &bounded,
+            &format!("claim value max_bytes {max_bytes}"),
+        );
+        assert_runtime_deserializes(&bounded, &format!("claim value max_bytes {max_bytes}"));
+    }
+
+    for max_bytes in [0_u32, 65_537] {
+        let mut invalid = example_config();
+        invalid["evidence"]["claims"][0]["value"]["max_bytes"] = json!(max_bytes);
+        assert_invalid(
+            &schema,
+            &invalid,
+            &format!("claim value max_bytes {max_bytes}"),
+        );
+        assert_runtime_load_rejects(&invalid, &format!("claim value max_bytes {max_bytes}"));
+    }
+
+    let mut non_string = example_config();
+    non_string["evidence"]["claims"][0]["value"]["type"] = json!("boolean");
+    non_string["evidence"]["claims"][0]["value"]["max_bytes"] = json!(16);
+    assert_valid(
+        &schema,
+        &non_string,
+        "structural non-string max_bytes left to semantic validation",
+    );
+    assert_runtime_load_rejects(&non_string, "non-string claim value max_bytes");
 }
 
 #[test]
@@ -726,5 +798,43 @@ fn schema_and_configuration_reference_have_exact_bidirectional_key_path_parity()
         schema_paths,
         "configuration key paths differ; generated schema paths follow:\n{}",
         schema_paths.iter().cloned().collect::<Vec<_>>().join("\n")
+    );
+}
+
+#[test]
+fn product_owned_documentation_intent_has_exact_runtime_key_inventory() {
+    let schema = document();
+    let mut schema_paths = BTreeSet::new();
+    collect_key_paths(&schema, &schema, "", &mut schema_paths, &mut HashSet::new());
+    let intent: Value = serde_json::from_slice(
+        &fs::read(stack_root().join(DOCUMENTATION_INTENT))
+            .expect("Notary documentation intent exists"),
+    )
+    .expect("Notary documentation intent parses");
+    assert_eq!(intent["runtime_schema"], "notary");
+    assert_eq!(intent["schema_id"], CONFIG_SCHEMA_ID);
+    let assignments = intent["assignments"]
+        .as_array()
+        .expect("Notary intent assignments are an array");
+    assert_eq!(assignments.len(), 530);
+    let assigned_paths = assignments
+        .iter()
+        .map(|assignment| {
+            assert_eq!(assignment["schema"], "notary");
+            assert_eq!(assignment["schema_facts_reviewed"], true);
+            assignment["key_path"]
+                .as_str()
+                .expect("assignment key_path is a string")
+                .to_owned()
+        })
+        .filter(|path| !path.is_empty())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(assigned_paths, schema_paths);
+    assert_eq!(
+        assignments
+            .iter()
+            .filter(|assignment| assignment["path_kind"] == "map_value")
+            .count(),
+        9
     );
 }

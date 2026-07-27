@@ -1,4 +1,5 @@
 {
+  "x-registry-field": "root",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://registrystack.example/schemas/project-authoring/fixture.v1.json",
   "title": "Registry Stack project integration fixture v1",
@@ -7,33 +8,42 @@
   "additionalProperties": false,
   "required": ["name", "classification", "input", "interactions", "expect"],
   "properties": {
-    "name": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Human-readable scenario name shown in test output.", "examples": ["existing household matches"] },
-    "classification": { "const": "synthetic", "default": "synthetic", "description": "Declares that fixture data is synthetic and safe for offline testing." },
+    "name": {"x-registry-field": "public_property", "type": "string", "minLength": 1, "maxLength": 256, "description": "Human-readable scenario name shown in test output.", "examples": ["existing household matches"] },
+    "classification": {"x-registry-field": "public_property", "const": "synthetic", "description": "Declares that fixture data is synthetic and safe for offline testing." },
+    "request": {
+      "x-registry-field": "redacted_fixture_property",
+      "$ref": "#/$defs/governedRequest",
+      "description": "Optional independently authored synthetic Notary request used to prove the request-to-consultation binding before Relay access."
+    },
     "input": {
+      "x-registry-field": "redacted_fixture_property",
       "description": "Typed consultation inputs supplied to the adapter under test.",
       "type": "object",
       "minProperties": 1,
       "maxProperties": 16,
-      "propertyNames": { "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+      "propertyNames": {"x-registry-field": "redacted_fixture_map_key", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
       "additionalProperties": {
+        "x-registry-field": "redacted_fixture_map_value",
         "type": ["string", "boolean", "integer", "null"]
       }
     },
     "variables": {
+      "x-registry-field": "redacted_fixture_property",
       "description": "Named date values available to deterministic fixture interpolation.",
       "type": "object",
       "maxProperties": 16,
-      "propertyNames": { "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
-      "additionalProperties": { "type": "string", "format": "date" }
+      "propertyNames": {"x-registry-field": "redacted_fixture_map_key", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
+      "additionalProperties": {"x-registry-field": "redacted_fixture_map_value", "type": "string", "format": "date" }
     },
     "interactions": {
+      "x-registry-field": "redacted_fixture_property",
       "description": "Ordered upstream request and response exchanges expected during execution.",
       "type": "array",
       "minItems": 1,
       "maxItems": 16,
-      "items": { "$ref": "#/$defs/interaction" }
+      "items": {"x-registry-field": "redacted_fixture_array_item", "$ref": "#/$defs/interaction" }
     },
-    "expect": { "$ref": "#/$defs/expectation", "description": "Observable adapter result required for the scenario to pass." }
+    "expect": {"x-registry-field": "redacted_fixture_property", "$ref": "#/$defs/expectation", "description": "Observable adapter result required for the scenario to pass." }
   },
   "examples": [
     {
@@ -50,14 +60,92 @@
     }
   ],
   "$defs": {
+    "governedRequest": {
+      "description": "The same closed governed request shape accepted by project test --live.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "claims", "purpose"],
+      "properties": {
+        "target": {"x-registry-field": "redacted_fixture_property", "$ref": "#/$defs/governedTarget" },
+        "variables": {
+          "x-registry-field": "redacted_fixture_property",
+          "description": "Supplies synthetic date variables to the governed evaluation request.",
+          "type": "object",
+          "maxProperties": 16,
+          "propertyNames": {"x-registry-field": "redacted_fixture_map_key", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
+          "additionalProperties": {"x-registry-field": "redacted_fixture_map_value", "type": "string", "format": "date" }
+        },
+        "claims": {
+          "x-registry-field": "redacted_fixture_property",
+          "description": "Lists the authored claims evaluated by this synthetic request witness.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"x-registry-field": "redacted_fixture_array_item", "$ref": "#/$defs/governedClaimRef" }
+        },
+        "disclosure": {"x-registry-field": "redacted_fixture_property", "type": "string", "description": "Selects the disclosure mode requested from the authored claim policy." },
+        "format": {"x-registry-field": "redacted_fixture_property", "type": "string", "description": "Selects the claim-result media type requested from the governed Notary path." },
+        "purpose": {"x-registry-field": "redacted_fixture_property", "type": "string", "minLength": 1, "maxLength": 256, "description": "Names the authored service purpose exercised by this synthetic request witness." }
+      }
+    },
+    "governedTarget": {
+      "description": "The synthetic subject target presented to the same governed request boundary as a live Notary evaluation.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {"x-registry-field": "redacted_fixture_property", "type": "string", "minLength": 1, "maxLength": 64, "description": "Names the authored target entity type used for claim evaluation." },
+        "id": {"x-registry-field": "redacted_fixture_property", "type": "string", "description": "Supplies an optional synthetic direct target identifier." },
+        "identifiers": {
+          "x-registry-field": "redacted_fixture_property",
+          "description": "Supplies independently authored synthetic identifiers for consultation input mapping.",
+          "type": "array",
+          "maxItems": 16,
+          "items": {"x-registry-field": "redacted_fixture_array_item", "$ref": "#/$defs/governedIdentifier" }
+        },
+        "attributes": {
+          "x-registry-field": "redacted_fixture_property",
+          "description": "Supplies independently authored typed target attributes for consultation input mapping.",
+          "type": "object",
+          "maxProperties": 16,
+          "additionalProperties": {"x-registry-field": "redacted_fixture_map_value", "type": ["string", "boolean", "integer", "null"] }
+        }
+      }
+    },
+    "governedIdentifier": {
+      "description": "One synthetic target identifier with an authored scheme and string value.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scheme", "value"],
+      "properties": {
+        "scheme": {"x-registry-field": "redacted_fixture_property", "type": "string", "minLength": 1, "maxLength": 96, "description": "Names the authored identifier scheme selected by a consultation input mapping." },
+        "value": {"x-registry-field": "redacted_fixture_property", "type": "string", "description": "Supplies the synthetic string value bound to this identifier scheme." }
+      }
+    },
+    "governedClaimRef": {
+      "description": "A requested claim ID, optionally pinned to one authored claim version.",
+      "oneOf": [
+        {"x-registry-field": "branch", "type": "string"},
+        {
+          "x-registry-field": "branch",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id"],
+          "properties": {
+            "id": {"x-registry-field": "redacted_fixture_property", "type": "string", "description": "Names one authored claim requested by this fixture witness."},
+            "version": {"x-registry-field": "redacted_fixture_property", "type": "string", "description": "Pins the requested claim to one authored claim-policy version."}
+          }
+        }
+      ]
+    },
     "interaction": {
       "description": "One expected upstream request paired with its synthetic response.",
       "type": "object",
       "additionalProperties": false,
       "required": ["expect", "respond"],
       "properties": {
-        "expect": { "$ref": "#/$defs/request" },
-        "respond": { "$ref": "#/$defs/response" }
+        "expect": {"x-registry-field": "redacted_fixture_property", "$ref": "#/$defs/request" },
+        "respond": {"x-registry-field": "redacted_fixture_property", "$ref": "#/$defs/response" }
       }
     },
     "request": {
@@ -66,54 +154,94 @@
       "additionalProperties": false,
       "required": ["method", "path"],
       "properties": {
-        "method": { "enum": ["GET", "POST"] },
-        "path": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/[^?#]*$" },
+        "method": {"x-registry-field": "redacted_fixture_property", "enum": ["GET", "POST"] },
+        "path": {"x-registry-field": "redacted_fixture_property", "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^/[^?#]*$" },
         "query": {
+          "x-registry-field": "redacted_fixture_property",
           "type": "object",
           "maxProperties": 64,
           "additionalProperties": {
+            "x-registry-field": "redacted_fixture_map_value",
             "oneOf": [
-              { "type": ["string", "boolean", "integer", "null"] },
+              {"x-registry-field": "branch", "type": ["string", "boolean", "integer", "null"] },
               {
+                "x-registry-field": "branch",
                 "type": "array",
                 "maxItems": 64,
-                "items": { "type": ["string", "boolean", "integer", "null"] }
+                "items": {"x-registry-field": "redacted_fixture_array_item", "type": ["string", "boolean", "integer", "null"] }
               }
             ]
           }
         },
         "headers": {
+          "x-registry-field": "redacted_fixture_property",
           "type": "object",
           "maxProperties": 32,
-          "propertyNames": { "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$" },
-          "additionalProperties": { "type": "string", "maxLength": 8192 }
+          "propertyNames": {"x-registry-field": "redacted_fixture_map_key", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,63}$" },
+          "additionalProperties": {"x-registry-field": "redacted_fixture_map_value", "type": "string", "maxLength": 8192 }
         },
-        "body": true
+        "body": {"x-registry-field": "redacted_fixture_property", "$ref": "#/$defs/fixtureBody" }
       }
     },
     "response": {
       "description": "Synthetic HTTP response or timeout returned to the adapter.",
       "oneOf": [
         {
+          "x-registry-field": "branch",
           "type": "object",
           "additionalProperties": false,
           "required": ["status"],
           "properties": {
-            "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+            "status": {"x-registry-field": "redacted_fixture_property", "type": "integer", "minimum": 100, "maximum": 599 },
             "headers": {
+              "x-registry-field": "redacted_fixture_property",
               "type": "object",
               "maxProperties": 32,
-              "additionalProperties": { "type": "string", "maxLength": 8192 }
+              "additionalProperties": {"x-registry-field": "redacted_fixture_map_value", "type": "string", "maxLength": 8192 }
             },
-            "body": true
+            "body": {"x-registry-field": "redacted_fixture_property", "$ref": "#/$defs/fixtureBody" }
           }
         },
         {
+          "x-registry-field": "branch",
           "type": "object",
           "additionalProperties": false,
           "required": ["timeout"],
           "properties": {
-            "timeout": { "type": "string", "pattern": "^[1-9][0-9]*(?:ms|s)$" }
+            "timeout": {
+              "x-registry-field": "redacted_fixture_property",
+              "description": "Reviewed synthetic timeout intent no greater than 20 seconds; offline execution returns a timeout outcome without sleeping.",
+              "type": "string",
+              "pattern": "^(?:(?:[1-9][0-9]{0,3}|1[0-9]{4}|20000)ms|(?:[1-9]|1[0-9]|20)s)$"
+            }
+          }
+        }
+      ]
+    },
+    "fixtureBody": {
+      "description": "Inline JSON, or an exact closed reference to a strict JSON file below the fixture bodies directory. The top-level file key is reserved for file references.",
+      "oneOf": [
+        {
+          "x-registry-field": "branch",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["file"],
+          "properties": {
+            "file": {
+              "x-registry-field": "redacted_fixture_property",
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 4096,
+              "pattern": "^bodies/(?!\\.\\.?/)(?!.*(?:/)\\.\\.?/)(?!.*//).+$"
+            }
+          }
+        },
+        {
+          "x-registry-field": "branch",
+          "not": {
+            "x-registry-field": "branch",
+            "type": "object",
+            "required": ["file"]
           }
         }
       ]
@@ -124,10 +252,10 @@
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
-        "outcome": { "enum": ["match", "no_match", "ambiguous"] },
-        "outputs": { "type": "object", "maxProperties": 64 },
-        "claims": { "type": "object", "maxProperties": 64 },
-        "error": { "type": "string", "minLength": 1, "maxLength": 256 }
+        "outcome": {"x-registry-field": "redacted_fixture_property", "enum": ["match", "no_match", "ambiguous"] },
+        "outputs": {"x-registry-field": "redacted_fixture_property", "type": "object", "maxProperties": 64 },
+        "claims": {"x-registry-field": "redacted_fixture_property", "type": "object", "maxProperties": 64 },
+        "error": {"x-registry-field": "redacted_fixture_property", "type": "string", "minLength": 1, "maxLength": 256 }
       }
     }
   }

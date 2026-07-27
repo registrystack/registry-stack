@@ -1,0 +1,442 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registryctl/project-reports/registry.project.explanation.v1.schema.json",
+  "title": "Registry Project Explanation v1",
+  "type": "object",
+  "required": ["schema_version", "project", "environment", "fields"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "registry.project.explanation.v1"
+    },
+    "project": {
+      "$ref": "#/$defs/identifier"
+    },
+    "environment": {
+      "$ref": "#/$defs/identifier"
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/field_explanation"
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "non_empty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "json_pointer": {
+      "type": "string",
+      "pattern": "^(/([^~/]|~[01])*)*$"
+    },
+    "field_address": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["document", "path"],
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "const": "project"
+            },
+            "path": {
+              "$ref": "#/$defs/json_pointer"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["document", "integration", "path"],
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "const": "integration"
+            },
+            "integration": {
+              "$ref": "#/$defs/identifier"
+            },
+            "path": {
+              "$ref": "#/$defs/json_pointer"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["document", "entity", "path"],
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "const": "entity"
+            },
+            "entity": {
+              "$ref": "#/$defs/identifier"
+            },
+            "path": {
+              "$ref": "#/$defs/json_pointer"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["document", "environment", "path"],
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "const": "environment"
+            },
+            "environment": {
+              "$ref": "#/$defs/identifier"
+            },
+            "path": {
+              "$ref": "#/$defs/json_pointer"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["document", "integration", "fixture", "path"],
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "const": "fixture"
+            },
+            "integration": {
+              "$ref": "#/$defs/identifier"
+            },
+            "fixture": {
+              "$ref": "#/$defs/identifier"
+            },
+            "path": {
+              "$ref": "#/$defs/json_pointer"
+            }
+          }
+        }
+      ]
+    },
+    "field_source": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "authored",
+            "defaulted",
+            "detected",
+            "derived",
+            "environment_bound",
+            "generated",
+            "runtime",
+            "absent"
+          ]
+        },
+        "address": {
+          "$ref": "#/$defs/field_address"
+        },
+        "semantic_rule_id": {
+          "$ref": "#/$defs/non_empty_string"
+        }
+      }
+    },
+    "field_state": {
+      "type": "object",
+      "required": ["presence", "effect"],
+      "additionalProperties": false,
+      "properties": {
+        "presence": {
+          "enum": [
+            "authored",
+            "defaulted",
+            "detected",
+            "derived",
+            "environment_bound",
+            "generated",
+            "runtime",
+            "absent"
+          ]
+        },
+        "effect": {
+          "enum": ["effective", "shadowed", "inactive", "not_applicable"]
+        }
+      }
+    },
+    "reported_value": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["state", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "public"
+            },
+            "value": {
+              "type": ["object", "array", "string", "number", "boolean", "null"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["state", "classification", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "redacted"
+            },
+            "classification": {
+              "enum": [
+                "public",
+                "internal",
+                "sensitive",
+                "secret_reference",
+                "secret_value",
+                "redacted_fixture",
+                "structural"
+              ]
+            },
+            "reason": {
+              "enum": ["policy", "secret_material", "sensitive_metadata"]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["state"],
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "const": "absent"
+            }
+          }
+        }
+      ]
+    },
+    "field_default": {
+      "type": "object",
+      "required": ["source", "applied"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "enum": ["authoring_schema", "semantic_rule", "compiler", "product"]
+        },
+        "applied": {
+          "type": "boolean"
+        },
+        "reported_value": {
+          "$ref": "#/$defs/reported_value"
+        }
+      }
+    },
+    "schema_ref": {
+      "type": "object",
+      "required": ["schema", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "enum": ["project", "integration", "entity", "environment", "fixture"]
+        },
+        "path": {
+          "$ref": "#/$defs/json_pointer"
+        }
+      }
+    },
+    "field_constraints": {
+      "type": "object",
+      "required": ["schema_refs", "semantic_rule_ids"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_refs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema_ref"
+          }
+        },
+        "semantic_rule_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/non_empty_string"
+          }
+        }
+      }
+    },
+    "field_knowledge_consumer": {
+      "enum": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ]
+    },
+    "field_knowledge_review_class": {
+      "enum": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing"
+      ]
+    },
+    "field_knowledge": {
+      "type": "object",
+      "required": [
+        "path_kind",
+        "semantic_owner",
+        "human_owner",
+        "sensitivity",
+        "products",
+        "introduced_in",
+        "availability",
+        "stability",
+        "migration",
+        "consumers",
+        "generated_artifacts",
+        "review_classes",
+        "semantic_rules"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path_kind": {
+          "enum": ["root", "property", "map_key", "map_value", "array_item", "branch"]
+        },
+        "semantic_owner": {
+          "enum": [
+            "authoring_contract",
+            "deployment_security",
+            "integration_contract",
+            "fixture_harness",
+            "entity_contract"
+          ]
+        },
+        "human_owner": {
+          "enum": [
+            "registry_maintainers",
+            "security_maintainers",
+            "integration_maintainers",
+            "test_maintainers",
+            "data_model_maintainers"
+          ]
+        },
+        "sensitivity": {
+          "enum": [
+            "public",
+            "internal",
+            "sensitive",
+            "secret_reference",
+            "secret_value",
+            "redacted_fixture",
+            "structural"
+          ]
+        },
+        "products": {
+          "type": "array",
+          "items": {
+            "enum": ["registryctl", "relay", "notary", "editor", "docs"]
+          }
+        },
+        "introduced_in": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+        },
+        "availability": {
+          "const": "published"
+        },
+        "stability": {
+          "enum": ["experimental", "stable"]
+        },
+        "migration": {
+          "enum": [
+            "regenerate_editor_schemas",
+            "rebuild_project",
+            "coordinate_deployment",
+            "update_fixtures"
+          ]
+        },
+        "consumers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/field_knowledge_consumer"
+          }
+        },
+        "generated_artifacts": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "editor_schemas",
+              "project_build",
+              "relay_config",
+              "notary_config",
+              "fixture_report",
+              "field_reference"
+            ]
+          }
+        },
+        "review_classes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/field_knowledge_review_class"
+          }
+        },
+        "semantic_rules": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "knowledge_only",
+              "generated_docs_never_load_country_values",
+              "secret_never_reportable",
+              "synthetic_fixture_value_redacted",
+              "sensitive_operational_metadata",
+              "arbitrary_map_keys_not_fixed_properties",
+              "array_items_share_element_contract",
+              "branch_has_no_authored_value"
+            ]
+          }
+        }
+      }
+    },
+    "field_explanation": {
+      "type": "object",
+      "required": [
+        "address",
+        "source",
+        "state",
+        "constraints",
+        "knowledge",
+        "reported_value"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "$ref": "#/$defs/field_address"
+        },
+        "source": {
+          "$ref": "#/$defs/field_source"
+        },
+        "state": {
+          "$ref": "#/$defs/field_state"
+        },
+        "default": {
+          "$ref": "#/$defs/field_default"
+        },
+        "constraints": {
+          "$ref": "#/$defs/field_constraints"
+        },
+        "knowledge": {
+          "$ref": "#/$defs/field_knowledge"
+        },
+        "reported_value": {
+          "$ref": "#/$defs/reported_value"
+        }
+      }
+    }
+  }
+}

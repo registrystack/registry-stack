@@ -7,11 +7,52 @@ on:
     paths:
       - ".github/workflows/docs-pages.yml"
       - "docs/site/**"
+      - "crates/registryctl/assets/project-starters/**"
+      - "crates/registryctl/schemas/project-authoring/**"
+      - "crates/registryctl/schemas/project-documentation/**"
+      - "crates/registryctl/schemas/project-reports/**"
+      - "crates/registryctl/src/lib.rs"
+      - "crates/registryctl/src/main.rs"
+      - "crates/registryctl/src/project_authoring/capability_inventory.rs"
+      - "crates/registryctl/src/project_authoring/diagnostic_reference.rs"
+      - "crates/registryctl/src/project_authoring/diagnostics.rs"
+      - "crates/registryctl/src/project_authoring/documentation.rs"
+      - "crates/registryctl/src/project_authoring/fixture_diagnostics.rs"
+      - "crates/registryctl/src/project_authoring/fixture_coverage.rs"
+      - "crates/registryctl/src/project_authoring/knowledge.rs"
+      - "crates/registryctl/src/project_authoring/migration.rs"
+      - "crates/registryctl/src/project_authoring/output.rs"
+      - "crates/registryctl/src/project_authoring/preflight.rs"
+      - "crates/registryctl/src/project_authoring/promotion.rs"
+      - "crates/registryctl/src/project_authoring/report_contract.rs"
+      - "crates/registryctl/src/project_authoring/semantic_comparison.rs"
+      - "crates/registryctl/src/sample.rs"
+      - "crates/registryctl/src/templates/**"
+      - "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml"
+      - "crates/registryctl/tests/fixtures/project-authoring/**"
+      - "crates/registryctl/tests/fixtures/project-reports/**"
+      - "crates/registryctl/tests/init_output.rs"
       - "crates/registry-relay/docs/**"
       - "crates/registry-relay/openapi/**"
+      - "crates/registry-relay/config/documentation-intent.json"
+      - "crates/registry-relay/src/api/openapi.rs"
+      - "crates/registry-relay/src/consultation/**"
+      - "crates/registry-relay/src/config/**"
+      - "crates/registry-relay/src/main.rs"
+      - "crates/registry-relay/src/process_startup.rs"
+      - "crates/registry-relay/src/server.rs"
+      - "crates/registry-relay/tests/api_docs.rs"
+      - "crates/registry-notary-core/config/documentation-intent.json"
+      - "crates/registry-notary-core/src/config.rs"
+      - "crates/registry-notary-core/src/config/**"
+      - "crates/registry-notary-core/src/deployment.rs"
+      - "crates/registry-notary-server/src/standalone/activation.rs"
+      - "crates/registry-platform-ops/src/lib.rs"
       - "products/notary/docs/**"
       - "products/notary/openapi/**"
       - "products/manifest/docs/**"
+      - "schemas/registry-relay.config.schema.json"
+      - "schemas/registry-notary.config.schema.json"
   workflow_dispatch:
 
 permissions:
@@ -44,6 +85,10 @@ jobs:
       - name: Install docs dependencies
         working-directory: docs/site
         run: npm ci
+
+      - name: Check standard journey generation
+        working-directory: docs/site
+        run: node scripts/generate-standard-journeys.mjs --check
 
       - name: Build latest docs
         working-directory: docs/site

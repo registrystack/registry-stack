@@ -6,6 +6,9 @@
 - Confirm the topology is Relay-only, Notary-only, or combined as intended.
 - For combined deployments, verify Notary and Relay expect the same semantic
   consultation contracts and hashes.
+- Build, sign, and verify the Relay and Notary product bundles separately.
+  Preserve separate anti-rollback state and signed-bundle acceptance evidence
+  for each product.
 - Keep source destinations and credentials only in Relay's private environment.
 - Keep the Notary workload token, signing keys, audit secret, and store
   credentials in mounted secret files or an approved secret manager.
@@ -94,10 +97,29 @@ documented same-identity file refresh is specifically supported.
 
 ## Rollout
 
-For blue-green rollout, stage a complete Relay and Notary generation without
-traffic, verify both products, then switch. For drain-and-restart, stop new
-traffic, drain active work, restart both products, verify readiness, and
-resume. A mixed semantic contract generation must remain unavailable.
+Combined rollout is compatible staging across two product-owned bundle
+boundaries, not atomic project activation. Current source has no signed
+project-root deployment bundle and no coordinator that activates Relay and
+Notary together.
+
+1. Verify both signed product bundles and their independent anti-rollback
+   state before starting either replacement.
+2. Start or stage Relay without admitting caller traffic. Require Relay health,
+   readiness, audit, and deployment-posture checks to pass.
+3. Start or stage Notary against the ready Relay. Require Notary startup and
+   readiness to validate its complete expected Relay consultation contract,
+   and require every configured CEL worker to pass its pool-wide bounded
+   protocol probe and remain live through activation. Then require Notary
+   health, audit, and deployment-posture checks to pass.
+4. Admit caller traffic only after both products are ready and the contract
+   check succeeds.
+
+For drain-and-restart, stop new traffic and drain active work before the same
+ordered restart. A contract mismatch during execute is rejected by Relay
+before source access. Do not restore traffic merely because both processes are
+live. `notary.cel.worker_unavailable` means the adjacent worker artifact,
+execution permission, supported platform, resource ceiling, or protocol must
+be corrected before traffic returns.
 
 Run:
 
@@ -115,5 +137,6 @@ Never load secrets through command-line values or retain them in test evidence.
 
 If a workload credential, signing key, caller credential, or audit secret may
 be exposed, revoke or rotate it first, stop affected traffic, preserve redacted
-audit evidence, and activate a fully compatible generation. Do not restore a
-direct source path as a recovery mechanism.
+audit evidence, verify and stage compatible Relay and Notary product bundles,
+and restore traffic only after both are ready. Do not restore a direct source
+path as a recovery mechanism.

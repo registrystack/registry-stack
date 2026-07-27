@@ -7,10 +7,12 @@
 
 use std::{
     collections::HashMap,
-    env, fmt,
+    env,
+    error::Error as StdError,
+    fmt,
     fs::File,
     future::Future,
-    io::Read,
+    io::{self, Read},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -32,6 +34,7 @@ use tokio::task::{AbortHandle, JoinHandle};
 use tokio::time::MissedTickBehavior;
 use tokio_postgres::{
     config::{SslMode, TargetSessionAttrs},
+    error::SqlState,
     Client, Config as TokioPostgresConfig,
 };
 use zeroize::Zeroizing;
@@ -54,6 +57,10 @@ const RETENTION_CATCH_UP_INITIAL_BACKOFF: Duration = Duration::from_millis(10);
 const RETENTION_CATCH_UP_MAX_BACKOFF: Duration = Duration::from_millis(100);
 const RETENTION_PRUNE_QUERY: &str =
     "SELECT deleted_count, batch_saturated FROM registry_notary_api.retention_prune_v1($1)";
+// tokio-postgres uses this closed driver-owned cause when
+// `target_session_attrs=read-write` reaches a read-only server. Match it only
+// to classify the posture. Never expose the cause or any driver error text.
+const TARGET_SESSION_READ_ONLY_CAUSE: &str = "database does not allow writes";
 
 type ConnectionDriver = JoinHandle<Result<(), tokio_postgres::Error>>;
 type CredentialGeneration = [u8; 32];
@@ -302,7 +309,7 @@ impl NotaryPostgresOperatorConnection {
         )
         .await
         .map_err(|_| NotaryPostgresStatePlaneError::DatabaseUnavailable)?
-        .map_err(|_| NotaryPostgresStatePlaneError::DatabaseUnavailable)?;
+        .map_err(map_connection_error)?;
         Ok(Self {
             client,
             driver: Some(tokio::spawn(connection)),
@@ -683,7 +690,7 @@ impl PhysicalPostgresSession {
         )
         .await
         .map_err(|_| NotaryPostgresStatePlaneError::DatabaseUnavailable)?
-        .map_err(|_| NotaryPostgresStatePlaneError::DatabaseUnavailable)?;
+        .map_err(map_connection_error)?;
         Ok(())
     }
 
@@ -770,7 +777,7 @@ impl ConnectionFactory {
             tokio::time::timeout(self.connect_timeout, postgres_config.connect(connector))
                 .await
                 .map_err(|_| NotaryPostgresStatePlaneError::DatabaseUnavailable)?
-                .map_err(|_| NotaryPostgresStatePlaneError::DatabaseUnavailable)?;
+                .map_err(map_connection_error)?;
         drop(postgres_config);
 
         let driver = tokio::spawn(connection);
@@ -972,6 +979,32 @@ fn map_pool_error(
     }
 }
 
+fn map_connection_error(error: tokio_postgres::Error) -> NotaryPostgresStatePlaneError {
+    classify_connection_failure(error.code(), StdError::source(&error))
+}
+
+fn classify_connection_failure(
+    sqlstate: Option<&SqlState>,
+    cause: Option<&(dyn StdError + 'static)>,
+) -> NotaryPostgresStatePlaneError {
+    if sqlstate == Some(&SqlState::READ_ONLY_SQL_TRANSACTION)
+        || is_target_session_read_only_cause(cause)
+    {
+        NotaryPostgresStatePlaneError::DatabaseNotWritable
+    } else {
+        NotaryPostgresStatePlaneError::DatabaseUnavailable
+    }
+}
+
+fn is_target_session_read_only_cause(cause: Option<&(dyn StdError + 'static)>) -> bool {
+    cause
+        .and_then(|cause| cause.downcast_ref::<io::Error>())
+        .is_some_and(|cause| {
+            cause.kind() == io::ErrorKind::PermissionDenied
+                && cause.to_string() == TARGET_SESSION_READ_ONLY_CAUSE
+        })
+}
+
 const fn map_attestation_error(error: StatePlaneMigrationError) -> NotaryPostgresStatePlaneError {
     match error {
         StatePlaneMigrationError::UnsupportedServerMajor => {
@@ -1077,6 +1110,36 @@ mod tests {
             secure.get_target_session_attrs(),
             TargetSessionAttrs::ReadWrite
         );
+    }
+
+    #[test]
+    fn connection_failures_preserve_only_the_safe_read_only_classification() {
+        assert_eq!(
+            classify_connection_failure(Some(&SqlState::READ_ONLY_SQL_TRANSACTION), None),
+            NotaryPostgresStatePlaneError::DatabaseNotWritable
+        );
+
+        let target_session_cause = io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            TARGET_SESSION_READ_ONLY_CAUSE,
+        );
+        assert_eq!(
+            classify_connection_failure(None, Some(&target_session_cause)),
+            NotaryPostgresStatePlaneError::DatabaseNotWritable
+        );
+
+        let unrelated = io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "SENTINEL_DATABASE_PATH_OR_DRIVER_VALUE",
+        );
+        let classified = classify_connection_failure(None, Some(&unrelated));
+        assert_eq!(
+            classified,
+            NotaryPostgresStatePlaneError::DatabaseUnavailable
+        );
+        let rendered = format!("{classified:?} {classified}");
+        assert!(!rendered.contains("SENTINEL"));
+        assert!(!rendered.contains("driver"));
     }
 
     #[test]

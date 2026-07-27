@@ -1,0 +1,167 @@
+---
+title: Operate bounded Script workers and protocol helpers
+description: Review, verify, stage, and recover Registry Relay Script workers and versioned protocol helpers without adding ambient authority.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+  - registry-relay
+last_reviewed: "2026-07-26"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Use this procedure when a Registry Relay integration needs bounded branching, pagination,
+normalization, or a versioned protocol helper that one declarative HTTP request cannot express.
+
+## Prerequisites
+
+- Start from a passing integration with synthetic request-aware fixtures.
+- Document why one fixed `http` request cannot express the source journey.
+- Identify every method, path, header, response header, call, byte, and deadline requirement.
+- Keep a verified Relay baseline and a staged no-traffic environment.
+
+## Ownership and trust boundary
+
+The authored integration selects the product-neutral `script` capability and declares source
+authority.
+Registry Relay owns the code-built worker executable, isolation, host API, request authorization,
+credential resolution, dispatch permits, response bounds, and result validation.
+The worker cannot access the network, filesystem, environment, subprocesses, clock, random source,
+credentials, or production logs.
+
+Protocol helpers add closed parsing or verified exchange behavior.
+They do not add an origin, credential, method, path, or output.
+Source product and version labels remain review evidence and do not enable a helper.
+
+{/* Evidence: docs/site/src/content/docs/tutorials/configure-project-script-adapter.mdx,
+    docs/site/src/content/docs/tutorials/configure-project-fhir-r4.mdx,
+    crates/registry-relay/src/rhai_worker.rs, and
+    crates/registryctl/src/project_authoring/authoring_contract.rs. */}
+
+## Review the bounded contract
+
+1. Keep source methods and path patterns as narrow as the real read journey permits.
+2. Keep source credentials and origin in the private environment binding.
+3. Set only limits demonstrated by fixtures.
+   Deployment settings may narrow the integration but cannot widen it.
+4. Return only the complete declared output map with exact types and nullability.
+5. Preserve `match`, `no_match`, `ambiguous`, subject mismatch, source rejection, and null as
+   distinct outcomes.
+6. Put larger adapters into explicitly ordered local Rhai modules.
+   Module paths and bytes remain hash-covered and cannot load another file at runtime.
+
+The [Script source adapter guide](../../../tutorials/configure-project-script-adapter/) defines the
+host API, defaults, hard ceilings, modules, and fixture shape.
+
+## Use code-owned helpers
+
+Print the exact generated `xw.v1` callable reference from the installed CLI:
+
+```sh
+registryctl authoring xw --format reference
+```
+
+`xw.v1` provides deterministic bounded text, date, identifier, JSON, email, and redaction helpers.
+Date helpers require an explicit reference date.
+The helper catalog excludes filesystem, clock, random, network, logging, regex, and ambient
+package functions.
+
+Use `protocol.fhir.parse_searchset` only for the reviewed FHIR R4 search-set journey.
+The helper validates the Bundle type, resource type, match and included collections, outcome
+entries, and next-link shape before the Script uses the result.
+Every followed link still passes same-origin, path, method, call, byte, and deadline checks.
+
+Use `protocol.dci.search` only when the authored `source.protocol.signed_dci` profile enables the
+closed helper.
+The profile permits one high-level Script call and binds the signed exchange, verification
+destination, selector mappings, and minimized response pointers.
+A generic Script source POST cannot substitute for that helper.
+
+## Verify and stage the worker
+
+Run the focused trace, complete fixture set, semantic explanation, preflight, and capability
+inventory:
+
+```sh
+PROJECT_DIR=registry-project
+ENVIRONMENT=local
+INTEGRATION_ID=person-record
+FIXTURE_ID=active-person
+registryctl test \
+  --project-dir "$PROJECT_DIR" \
+  --integration "$INTEGRATION_ID" \
+  --fixture "$FIXTURE_ID" \
+  --trace
+registryctl test --project-dir "$PROJECT_DIR"
+registryctl check \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
+  --explain
+registryctl preflight \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
+  --format json
+registryctl capabilities \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
+  --format json
+```
+
+Confirm fixture traces contain only reviewed canonical requests in the expected order.
+Confirm generated artifacts hash every Script entrypoint and module.
+Confirm the capability inventory distinguishes compiled, declared, enabled, used, available,
+missing, and inactive without claiming activation.
+
+Build and verify the Relay product bundle, then stage Relay without traffic.
+Require the code-owned worker, health, readiness, audit, and redacted posture to pass before a
+bounded canary.
+
+## Expected evidence
+
+Retain:
+
+- The rationale for `script` rather than `http`.
+- The source allow rules and effective cumulative limits.
+- Synthetic traces for every meaningful branch and request order.
+- Derived authorization-before-source, malformed-response, timeout, byte, call, and output
+  minimization results.
+- Script and module hashes in the generated artifact closure.
+- The capability inventory and staged worker readiness.
+- An authorized bounded canary when separate source authority permits one.
+
+## What this proves
+
+Offline fixtures prove deterministic Script and helper behavior against synthetic observations.
+The generated closure proves which reviewed Script and module bytes enter the Relay input.
+Preflight proves required local bindings and non-widening without source contact.
+Staged readiness proves that the code-owned worker is available to that Relay process.
+
+These checks do not prove live source interoperability, source-owner approval, every production
+response shape, legal suitability, or country acceptance.
+A product or version label does not prove helper compatibility.
+
+## Roll back or recover
+
+Before traffic, restore the prior verified Relay bundle and matching worker artifact.
+After accepting a higher sequence, create a higher-sequence recovery bundle instead of deleting
+anti-rollback state.
+Keep Notary traffic blocked until the restored Relay contract matches Notary.
+
+If the worker is unavailable, repair the code-owned adjacent worker and process isolation.
+Do not configure an in-process fallback or grant the Script ambient network, filesystem,
+environment, credential, or logging access.
+
+## Escalate
+
+Escalate to the Relay product owner when the source requires cross-origin calls, writes, unbounded
+pagination, dynamic code loading, another helper, or limits above the closed ceilings.
+Escalate to security when a Script or fixture can select credentials, expose raw source values,
+bypass authorization-before-source, or reach an ambient host capability.
+
+## Next
+
+- [Compare and reapprove a source change](../compare-and-reapprove-source-change/)
+- [Inspect and diagnose the deployment](../inspect-and-diagnose/)
+- [Configure a FHIR R4 integration](../../../tutorials/configure-project-fhir-r4/)

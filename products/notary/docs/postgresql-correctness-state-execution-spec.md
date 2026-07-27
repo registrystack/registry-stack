@@ -426,11 +426,23 @@ Startup fails before listener bind for:
 
 Every readiness probe performs the complete server, writeability, durability,
 schema, catalog, and role attestation on a bounded pooled session. Startup
-performs the same attestation before listener bind. It reports a stable
-component code such as `database_unavailable`, `schema_incompatible`, or
-`role_incompatible` without table names, role names, paths, URLs, credentials,
-SQL, or stored identifiers. Detailed logs remain value-free and name the
-operator action.
+performs the same attestation before listener bind. Startup and `state doctor`
+report the same stable public classification:
+
+- `notary.state.postgresql.database_unavailable` for transport, TLS trust, or
+  service outage;
+- `notary.state.postgresql.database_read_only` for a read-only or recovering
+  database;
+- `notary.state.postgresql.database_unsupported` for an unsupported server
+  major;
+- `notary.state.postgresql.durability_unsafe` for unsafe durability settings;
+- `notary.state.postgresql.schema_incompatible` for schema, catalog,
+  fingerprint, or privilege drift; and
+- `notary.state.postgresql.role_incompatible` for runtime-role contract drift.
+
+Each code renders only its static safe meaning and remediation. Diagnostics do
+not expose table names, role names, paths, URLs, credentials, SQL, or stored
+identifiers.
 
 Readiness recovers after database availability is restored and a fresh
 connection passes complete attestation. Failed or closed sessions are evicted,

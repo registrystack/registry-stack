@@ -1,0 +1,854 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/schemas/release/product-input-lifecycle-v1.json",
+  "title": "Registry Stack product-input lifecycle evidence",
+  "description": "Closed, redaction-safe template and evidence contract for the separate Relay and Notary product-input lifecycle. Candidate evidence requires one authenticated non-production candidate; the template is never evidence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_kind",
+    "exercise_id",
+    "recorded_at",
+    "candidate",
+    "candidate_binding_sha256",
+    "attestations",
+    "product_inputs",
+    "product_input_set_sha256",
+    "activation",
+    "evidence",
+    "reviews",
+    "evidence_limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "registry-stack.product-input-lifecycle.v1"
+    },
+    "record_kind": {
+      "enum": [
+        "template",
+        "candidate_evidence"
+      ]
+    },
+    "exercise_id": {
+      "type": "string"
+    },
+    "recorded_at": {
+      "type": "string"
+    },
+    "candidate": {
+      "type": "object"
+    },
+    "candidate_binding_sha256": {
+      "type": "string"
+    },
+    "attestations": {
+      "type": "object"
+    },
+    "product_inputs": {
+      "type": "object"
+    },
+    "product_input_set_sha256": {
+      "type": "string"
+    },
+    "activation": {
+      "type": "object"
+    },
+    "evidence": {
+      "type": "object"
+    },
+    "reviews": {
+      "type": "array"
+    },
+    "evidence_limitations": {
+      "$ref": "#/$defs/evidenceLimitations"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "record_kind": {
+            "const": "template"
+          }
+        }
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "exercise_id": {
+            "$ref": "#/$defs/placeholder"
+          },
+          "recorded_at": {
+            "$ref": "#/$defs/placeholder"
+          },
+          "candidate": {
+            "$ref": "#/$defs/templateCandidate"
+          },
+          "candidate_binding_sha256": {
+            "$ref": "#/$defs/placeholder"
+          },
+          "attestations": {
+            "$ref": "#/$defs/templateAttestations"
+          },
+          "product_inputs": {
+            "$ref": "#/$defs/templateProductInputs"
+          },
+          "product_input_set_sha256": {
+            "$ref": "#/$defs/placeholder"
+          },
+          "activation": {
+            "$ref": "#/$defs/templateActivation"
+          },
+          "evidence": {
+            "$ref": "#/$defs/templateEvidence"
+          },
+          "reviews": {
+            "$ref": "#/$defs/templateReviews"
+          }
+        }
+      },
+      "else": {
+        "type": "object",
+        "properties": {
+          "exercise_id": {
+            "$ref": "#/$defs/exerciseId"
+          },
+          "recorded_at": {
+            "$ref": "#/$defs/timestamp"
+          },
+          "candidate": {
+            "$ref": "#/$defs/candidateEvidenceCandidate"
+          },
+          "candidate_binding_sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "attestations": {
+            "$ref": "#/$defs/candidateAttestations"
+          },
+          "product_inputs": {
+            "$ref": "#/$defs/candidateProductInputs"
+          },
+          "product_input_set_sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "activation": {
+            "$ref": "#/$defs/candidateActivation"
+          },
+          "evidence": {
+            "$ref": "#/$defs/candidateEvidence"
+          },
+          "reviews": {
+            "$ref": "#/$defs/candidateReviews"
+          }
+        }
+      }
+    }
+  ],
+  "x-registry-evidence-groups": {
+    "authoring_and_build": [
+      "authored_revision_closed",
+      "fixture_coverage_closed",
+      "preflight_closed",
+      "capabilities_closed",
+      "promotion_closed",
+      "deterministic_artifact_manifest_built",
+      "relay_unsigned_input_built",
+      "notary_unsigned_input_built"
+    ],
+    "product_lifecycle": [
+      "relay_bundle_signed",
+      "notary_bundle_signed",
+      "relay_trust_generation_verified",
+      "notary_trust_generation_verified",
+      "relay_anti_rollback_lineage_verified",
+      "notary_anti_rollback_lineage_verified",
+      "relay_bundle_verified",
+      "notary_bundle_verified",
+      "cross_product_compatibility_verified",
+      "relay_staged_activation",
+      "notary_staged_activation",
+      "consultation_contract_mismatch_zero_source_calls",
+      "redacted_runtime_posture_inspected",
+      "traffic_admission_after_compatible_activation"
+    ],
+    "advanced_operations": [
+      "upgrade_exercised",
+      "recovery_exercised",
+      "rollback_exercised"
+    ]
+  },
+  "x-registry-review-classes": [
+    "correctness",
+    "security",
+    "maintainability",
+    "operator"
+  ],
+  "$defs": {
+    "placeholder": {
+      "type": "string",
+      "pattern": "^<[A-Z0-9_]+>$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^v(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "exerciseId": {
+      "type": "string",
+      "pattern": "^product-input-lifecycle-[0-9a-f]{16,64}$"
+    },
+    "evidenceLabel": {
+      "type": "string",
+      "pattern": "^evidence-[0-9a-f]{16,64}$"
+    },
+    "reviewerLabel": {
+      "type": "string",
+      "pattern": "^reviewer-[0-9a-f]{16,64}$"
+    },
+    "templateCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "release_id",
+        "version",
+        "source_ref",
+        "source_commit",
+        "release_manifest_sha256",
+        "image_lock_sha256",
+        "release_capsule_sha256",
+        "candidate_receipt_sha256",
+        "relay_image_digest",
+        "notary_image_digest"
+      ],
+      "properties": {
+        "repository": {
+          "const": "registrystack/registry-stack"
+        },
+        "release_id": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "version": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "source_ref": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "source_commit": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "release_manifest_sha256": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "image_lock_sha256": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "release_capsule_sha256": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "candidate_receipt_sha256": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "relay_image_digest": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "notary_image_digest": {
+          "$ref": "#/$defs/placeholder"
+        }
+      }
+    },
+    "candidateEvidenceCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "release_id",
+        "version",
+        "source_ref",
+        "source_commit",
+        "release_manifest_sha256",
+        "image_lock_sha256",
+        "release_capsule_sha256",
+        "candidate_receipt_sha256",
+        "relay_image_digest",
+        "notary_image_digest"
+      ],
+      "properties": {
+        "repository": {
+          "const": "registrystack/registry-stack"
+        },
+        "release_id": {
+          "$ref": "#/$defs/slug"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "source_ref": {
+          "$ref": "#/$defs/commit"
+        },
+        "source_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "release_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "image_lock_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "release_capsule_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "candidate_receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "relay_image_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "notary_image_digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "templateAttestations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_frozen",
+        "candidate_independently_verified"
+      ],
+      "properties": {
+        "candidate_frozen": {
+          "const": false
+        },
+        "candidate_independently_verified": {
+          "const": false
+        }
+      }
+    },
+    "candidateAttestations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_frozen",
+        "candidate_independently_verified"
+      ],
+      "properties": {
+        "candidate_frozen": {
+          "const": true
+        },
+        "candidate_independently_verified": {
+          "const": true
+        }
+      }
+    },
+    "templateProduct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unsigned_input_sha256",
+        "signed_bundle_sha256",
+        "trust_generation",
+        "trust_set_sha256",
+        "anti_rollback_lineage_sha256"
+      ],
+      "properties": {
+        "unsigned_input_sha256": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "signed_bundle_sha256": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "trust_generation": {
+          "const": 0
+        },
+        "trust_set_sha256": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "anti_rollback_lineage_sha256": {
+          "$ref": "#/$defs/placeholder"
+        }
+      }
+    },
+    "candidateProduct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unsigned_input_sha256",
+        "signed_bundle_sha256",
+        "trust_generation",
+        "trust_set_sha256",
+        "anti_rollback_lineage_sha256"
+      ],
+      "properties": {
+        "unsigned_input_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "signed_bundle_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trust_generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "trust_set_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "anti_rollback_lineage_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "templateProductInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_manifest_sha256",
+        "relay",
+        "notary"
+      ],
+      "properties": {
+        "artifact_manifest_sha256": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "relay": {
+          "$ref": "#/$defs/templateProduct"
+        },
+        "notary": {
+          "$ref": "#/$defs/templateProduct"
+        }
+      }
+    },
+    "candidateProductInputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_manifest_sha256",
+        "relay",
+        "notary"
+      ],
+      "properties": {
+        "artifact_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "relay": {
+          "$ref": "#/$defs/candidateProduct"
+        },
+        "notary": {
+          "$ref": "#/$defs/candidateProduct"
+        }
+      }
+    },
+    "templateActivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stack_generation",
+        "compatibility_report_sha256",
+        "runtime_posture_sha256",
+        "consultation_contract_mismatch"
+      ],
+      "properties": {
+        "stack_generation": {
+          "const": 0
+        },
+        "compatibility_report_sha256": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "runtime_posture_sha256": {
+          "$ref": "#/$defs/placeholder"
+        },
+        "consultation_contract_mismatch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "failure_class",
+            "observed_source_calls",
+            "report_sha256"
+          ],
+          "properties": {
+            "failure_class": {
+              "const": "consultation_contract_mismatch"
+            },
+            "observed_source_calls": {
+              "const": 0
+            },
+            "report_sha256": {
+              "$ref": "#/$defs/placeholder"
+            }
+          }
+        }
+      }
+    },
+    "candidateActivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stack_generation",
+        "compatibility_report_sha256",
+        "runtime_posture_sha256",
+        "consultation_contract_mismatch"
+      ],
+      "properties": {
+        "stack_generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "compatibility_report_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "runtime_posture_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "consultation_contract_mismatch": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "failure_class",
+            "observed_source_calls",
+            "report_sha256"
+          ],
+          "properties": {
+            "failure_class": {
+              "const": "consultation_contract_mismatch"
+            },
+            "observed_source_calls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "report_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    },
+    "checkId": {
+      "enum": [
+        "authored_revision_closed",
+        "fixture_coverage_closed",
+        "preflight_closed",
+        "capabilities_closed",
+        "promotion_closed",
+        "deterministic_artifact_manifest_built",
+        "relay_unsigned_input_built",
+        "notary_unsigned_input_built",
+        "relay_bundle_signed",
+        "notary_bundle_signed",
+        "relay_trust_generation_verified",
+        "notary_trust_generation_verified",
+        "relay_anti_rollback_lineage_verified",
+        "notary_anti_rollback_lineage_verified",
+        "relay_bundle_verified",
+        "notary_bundle_verified",
+        "cross_product_compatibility_verified",
+        "relay_staged_activation",
+        "notary_staged_activation",
+        "consultation_contract_mismatch_zero_source_calls",
+        "redacted_runtime_posture_inspected",
+        "traffic_admission_after_compatible_activation",
+        "upgrade_exercised",
+        "recovery_exercised",
+        "rollback_exercised"
+      ]
+    },
+    "templateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "check_id",
+        "outcome",
+        "subject_sha256",
+        "observed_at",
+        "evidence_label",
+        "evidence_sha256"
+      ],
+      "properties": {
+        "check_id": {
+          "$ref": "#/$defs/checkId"
+        },
+        "outcome": {
+          "const": "not_run"
+        },
+        "subject_sha256": {
+          "type": "null"
+        },
+        "observed_at": {
+          "type": "null"
+        },
+        "evidence_label": {
+          "type": "null"
+        },
+        "evidence_sha256": {
+          "type": "null"
+        }
+      }
+    },
+    "candidateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "check_id",
+        "outcome",
+        "subject_sha256",
+        "observed_at",
+        "evidence_label",
+        "evidence_sha256"
+      ],
+      "properties": {
+        "check_id": {
+          "$ref": "#/$defs/checkId"
+        },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed"
+          ]
+        },
+        "subject_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "evidence_label": {
+          "$ref": "#/$defs/evidenceLabel"
+        },
+        "evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "templateEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authoring_and_build",
+        "product_lifecycle",
+        "advanced_operations"
+      ],
+      "properties": {
+        "authoring_and_build": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/templateResult"
+          }
+        },
+        "product_lifecycle": {
+          "type": "array",
+          "minItems": 14,
+          "maxItems": 14,
+          "items": {
+            "$ref": "#/$defs/templateResult"
+          }
+        },
+        "advanced_operations": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/templateResult"
+          }
+        }
+      }
+    },
+    "candidateEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authoring_and_build",
+        "product_lifecycle",
+        "advanced_operations"
+      ],
+      "properties": {
+        "authoring_and_build": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/candidateResult"
+          }
+        },
+        "product_lifecycle": {
+          "type": "array",
+          "minItems": 14,
+          "maxItems": 14,
+          "items": {
+            "$ref": "#/$defs/candidateResult"
+          }
+        },
+        "advanced_operations": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/candidateResult"
+          }
+        }
+      }
+    },
+    "templateReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_class",
+        "outcome",
+        "independence_attested",
+        "reviewer_label",
+        "observed_at",
+        "evidence_label",
+        "evidence_sha256"
+      ],
+      "properties": {
+        "review_class": {
+          "enum": [
+            "correctness",
+            "security",
+            "maintainability",
+            "operator"
+          ]
+        },
+        "outcome": {
+          "const": "not_run"
+        },
+        "independence_attested": {
+          "const": false
+        },
+        "reviewer_label": {
+          "type": "null"
+        },
+        "observed_at": {
+          "type": "null"
+        },
+        "evidence_label": {
+          "type": "null"
+        },
+        "evidence_sha256": {
+          "type": "null"
+        }
+      }
+    },
+    "candidateReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_class",
+        "outcome",
+        "independence_attested",
+        "reviewer_label",
+        "observed_at",
+        "evidence_label",
+        "evidence_sha256"
+      ],
+      "properties": {
+        "review_class": {
+          "enum": [
+            "correctness",
+            "security",
+            "maintainability",
+            "operator"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "passed",
+            "failed"
+          ]
+        },
+        "independence_attested": {
+          "const": true
+        },
+        "reviewer_label": {
+          "$ref": "#/$defs/reviewerLabel"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "evidence_label": {
+          "$ref": "#/$defs/evidenceLabel"
+        },
+        "evidence_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "templateReviews": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "$ref": "#/$defs/templateReview"
+      }
+    },
+    "candidateReviews": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "$ref": "#/$defs/candidateReview"
+      }
+    },
+    "evidenceLimitations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_grade",
+        "retained_evidence_content_authenticated_by_validator",
+        "live_country_interoperability_proven",
+        "country_owner_acceptance_recorded",
+        "legal_approval_recorded",
+        "production_authorization_recorded",
+        "production_signing_keys_used",
+        "country_credentials_used",
+        "country_personal_data_used"
+      ],
+      "properties": {
+        "evidence_grade": {
+          "const": "candidate_non_production"
+        },
+        "retained_evidence_content_authenticated_by_validator": {
+          "const": false
+        },
+        "live_country_interoperability_proven": {
+          "const": false
+        },
+        "country_owner_acceptance_recorded": {
+          "const": false
+        },
+        "legal_approval_recorded": {
+          "const": false
+        },
+        "production_authorization_recorded": {
+          "const": false
+        },
+        "production_signing_keys_used": {
+          "const": false
+        },
+        "country_credentials_used": {
+          "const": false
+        },
+        "country_personal_data_used": {
+          "const": false
+        }
+      }
+    }
+  }
+}

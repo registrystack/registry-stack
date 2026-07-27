@@ -1,0 +1,23 @@
+{
+  "schema_version": "registry.project.fixture_coverage.v1",
+  "project": "fictional-records-registry",
+  "environment": null,
+  "evidence_scope": "offline_synthetic",
+  "compatibility_claim": "none",
+  "live_compatibility": "not_evaluated",
+  "governed_request_evidence": "per_consultation_authored_request_witness_evaluation",
+  "targets": [],
+  "summary": {
+    "target_set_state": "no_targets",
+    "target_count": 0,
+    "fixture_bearing_target_count": 0,
+    "fixtureless_target_count": 0,
+    "requirements": {
+      "covered": 0,
+      "missing": 0,
+      "not_applicable": 0,
+      "not_evaluated": 0,
+      "total": 0
+    }
+  }
+}

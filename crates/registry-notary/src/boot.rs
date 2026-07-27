@@ -1,11 +1,23 @@
 use crate::*;
 
+pub(crate) fn value_free_configuration_failure<E>(
+    _: E,
+) -> registry_notary_server::NotaryActivationFailure {
+    registry_notary_server::NotaryActivationCode::CONFIGURATION_INVALID.into()
+}
+
+fn value_free_runtime_activation_failure<E>(
+    _: E,
+) -> registry_notary_server::NotaryActivationFailure {
+    registry_notary_server::NotaryActivationCode::RUNTIME_ACTIVATION_FAILED.into()
+}
+
 pub(crate) async fn run_server(
     config_path: &Path,
     bind_override: Option<SocketAddr>,
     initialize_state: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    init_tracing()?;
+    init_tracing().map_err(value_free_configuration_failure)?;
 
     let loaded = load_server_config(config_path, initialize_state)?;
     let mut config = loaded.config;
@@ -18,9 +30,11 @@ pub(crate) async fn run_server(
         config,
         loaded.config_source,
         loaded.config_provenance.clone(),
-    )?
+    )
+    .map_err(registry_notary_server::NotaryActivationFailure::from)?
     .activate()
-    .await?;
+    .await
+    .map_err(registry_notary_server::NotaryActivationFailure::from)?;
     match admin_mode {
         RegistryNotaryAdminListenerMode::Dedicated => {
             let public_listener = tokio::net::TcpListener::bind(bind).await?;
@@ -28,8 +42,10 @@ pub(crate) async fn run_server(
             let admin_listener = tokio::net::TcpListener::bind(admin_bind).await?;
             let admin_addr: SocketAddr = admin_listener.local_addr()?;
             emit_and_persist_boot_acceptance(&runtime, loaded.pending_bundle_acceptance.as_ref())
-                .await?;
-            let routers = notary_routers_from_runtime(runtime)?;
+                .await
+                .map_err(value_free_runtime_activation_failure)?;
+            let routers = notary_routers_from_runtime(runtime)
+                .map_err(registry_notary_server::NotaryActivationFailure::from)?;
             tracing::info!(
                 %public_addr,
                 %admin_addr,
@@ -66,8 +82,10 @@ pub(crate) async fn run_server(
             let listener = tokio::net::TcpListener::bind(bind).await?;
             let local_addr: SocketAddr = listener.local_addr()?;
             emit_and_persist_boot_acceptance(&runtime, loaded.pending_bundle_acceptance.as_ref())
-                .await?;
-            let app = notary_shared_router_from_runtime(runtime)?
+                .await
+                .map_err(value_free_runtime_activation_failure)?;
+            let app = notary_shared_router_from_runtime(runtime)
+                .map_err(registry_notary_server::NotaryActivationFailure::from)?
                 .layer(TraceLayer::new_for_http().make_span_with(http_trace_span));
             tracing::info!(
                 %local_addr,
@@ -81,8 +99,10 @@ pub(crate) async fn run_server(
             let listener = tokio::net::TcpListener::bind(bind).await?;
             let local_addr: SocketAddr = listener.local_addr()?;
             emit_and_persist_boot_acceptance(&runtime, loaded.pending_bundle_acceptance.as_ref())
-                .await?;
-            let app = notary_routers_from_runtime(runtime)?
+                .await
+                .map_err(value_free_runtime_activation_failure)?;
+            let app = notary_routers_from_runtime(runtime)
+                .map_err(registry_notary_server::NotaryActivationFailure::from)?
                 .public
                 .layer(TraceLayer::new_for_http().make_span_with(http_trace_span));
             tracing::info!(

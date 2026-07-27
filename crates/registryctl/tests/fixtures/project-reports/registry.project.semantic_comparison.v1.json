@@ -1,0 +1,138 @@
+{
+  "schema_version": "registry.project.semantic_comparison.v1",
+  "comparison": "local_project_to_project",
+  "evidence_grade": "offline_static",
+  "assurance": "local_unverified",
+  "external_approval": "not_evaluated",
+  "equivalence": "different",
+  "comparison_precision": "field_and_generated_projection",
+  "review_plan": {
+    "state": "generated_pending_review",
+    "review_classes": [
+      "contract",
+      "authoring",
+      "semantics",
+      "interoperability",
+      "privacy",
+      "security",
+      "relay",
+      "notary",
+      "compatibility",
+      "documentation",
+      "testing",
+      "operations",
+      "release"
+    ]
+  },
+  "changes": [
+    {
+      "address": {
+        "schema_family": "project",
+        "field": "/$defs/service/properties/purpose"
+      },
+      "source": "authored",
+      "dimension": "service_policy",
+      "direction": "changed",
+      "sensitivity": "internal",
+      "semantic_owner": "authoring_contract",
+      "human_owner": "registry_maintainers",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator",
+        "bundle_signer",
+        "deployment_tooling",
+        "operator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "fixture_report",
+        "field_reference",
+        "review_plan",
+        "approval_projection"
+      ],
+      "review_classes": [
+        "contract",
+        "authoring",
+        "semantics",
+        "interoperability",
+        "privacy",
+        "security",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation",
+        "testing",
+        "operations",
+        "release"
+      ],
+      "affected_subjects": [
+        {
+          "kind": "integration",
+          "count": 1
+        },
+        {
+          "kind": "fixture",
+          "count": 4
+        },
+        {
+          "kind": "entity",
+          "count": 1
+        },
+        {
+          "kind": "service_policy",
+          "count": 1
+        },
+        {
+          "kind": "consultation",
+          "count": 1
+        },
+        {
+          "kind": "claim",
+          "count": 2
+        },
+        {
+          "kind": "disclosure",
+          "count": 2
+        },
+        {
+          "kind": "product_input",
+          "count": 2
+        },
+        {
+          "kind": "generated_artifact",
+          "count": 8
+        }
+      ],
+      "occurrences": 1,
+      "requirements": {
+        "signing": "relay_and_notary_bundles",
+        "activation": "apply_relay_and_notary_config",
+        "restart": "registry_relay_and_notary"
+      }
+    }
+  ],
+  "required_actions": [
+    "review_semantic_changes",
+    "run_affected_fixtures",
+    "regenerate_generated_artifacts",
+    "resign_relay_bundle",
+    "resign_notary_bundle",
+    "reactivate_relay_configuration",
+    "reactivate_notary_configuration",
+    "restart_registry_relay",
+    "restart_registry_notary"
+  ],
+  "evidence_limitations": [
+    "offline_inputs_only",
+    "runtime_not_observed",
+    "signed_bundle_authority_not_evaluated",
+    "external_approval_not_evaluated",
+    "fingerprints_not_published"
+  ]
+}

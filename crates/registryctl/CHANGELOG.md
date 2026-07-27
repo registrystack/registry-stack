@@ -6,8 +6,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added strict, value-free project authoring reports and commands for field
+  explanation, offline preflight, capability inventory, semantic comparison,
+  signed-baseline promotion analysis, same-v1 migration, fixture coverage, and
+  generated artifact provenance. `registryctl compare` supports exact embedded
+  starter, local project, and same-project environment baselines without
+  reading runtime state or treating local files as signed approval.
+- Added generated seven-domain configuration and ownership reference data plus
+  separate authoring, fixture, and operator diagnostic catalogs. Release gates
+  fail when schemas, runtime semantics, editor metadata, examples, generated
+  references, or stable diagnostics drift.
+- Added platform-generated fixture boundary cases and per-integration coverage
+  classifications. Offline coverage remains explicitly distinct from live
+  source compatibility or country acceptance.
+
 ### Changed
 
+- Source-free string claim compilation now preserves the authored
+  `value.max_bytes` contract in generated Notary configuration instead of
+  silently discarding it.
+- Semantic comparison now preserves exact JSON-integer ordering when
+  classifying policy bounds, while retaining floating-point comparison for
+  non-integer numbers.
+- Entity `materialization.max_records` now exposes the same 100,000,000-record
+  ceiling in the authoring schema, editor setup, and generated configuration
+  reference that Registryctl already enforces at runtime.
+- Entity integer fields and integration integer inputs now expose the same
+  inclusive JSON-safe bounds in authoring schemas, editor setup, and generated
+  configuration reference that Registryctl already enforces at runtime.
+- Generated configuration references now evaluate empty strings against the
+  complete published schema constraint instead of inferring behavior only from
+  `minLength`. Pattern, enum, const, and composed constraints now report
+  rejected or conditional empty behavior accurately.
+- **BREAKING:** Before the Registry Stack 1.0 compatibility promise takes
+  effect, integration response, request, and aggregate source byte fields now
+  publish distinct schema bounds and defaults. Their integer and canonical
+  KiB/MiB forms expose the existing runtime ceilings of 8 MiB, 1 MiB, and
+  16 MiB, respectively. Entity generation KiB/MiB values now expose the
+  existing 1 GiB runtime ceiling as well. Schema-only consumers may newly
+  reject out-of-bound human-readable values that Registryctl runtime already
+  rejected.
+- **BREAKING:** Before the Registry Stack 1.0 compatibility promise takes
+  effect, integration input `maxLength` now publishes the existing
+  1,024-character schema ceiling and its derived 4,096-byte UTF-8 ceiling.
+  Schema-only consumers may newly reject values from 1,025 through 16,384,
+  which Registryctl runtime already rejected.
+- OAuth `refresh_skew` now accepts the documented safe interval through
+  59,999ms, including an explicit `30s` value that matches the generated
+  default, while the schema, generated configuration reference, and runtime
+  reject values at or above the generated token contract's 60-second minimum
+  lifetime.
+- **BREAKING:** Before the Registry Stack 1.0 compatibility promise takes
+  effect, integration deadlines, environment source timeouts, and fixture
+  timeout intent now expose Registryctl's end-to-end 20-second project ceiling
+  in authoring schemas, generated configuration reference, and runtime
+  validation. Schema-only consumers may newly reject values above 20 seconds,
+  which Registryctl runtime already rejected. This preserves compatibility
+  with Notary's fixed 25-second Relay service-hop boundary.
+- **BREAKING:** Before the Registry Stack 1.0 compatibility promise takes
+  effect, `registry.project.fixture_coverage.v1` now distinguishes
+  mapping-derived fixtures from independently executed, per-consultation
+  governed-request witnesses. The closed report adds governed-request proof scope,
+  reachable service/consultation identities, per-fixture binding evidence, and
+  the `request_to_consultation_binding` requirement. Previously saved v1
+  reports are intentionally rejected. Regenerate them with
+  `registryctl test --project-dir <project> --format json` and update consumers
+  to use the per-target requirement state as the authoritative pass or missing
+  result.
 - Attribute-release project authoring now emits the stable Relay profile
   contract with required purpose, exact subject type, and exact-one lookup
   semantics. It rejects non-portable profile version path segments and Relay

@@ -1,0 +1,1344 @@
+{
+  "schema_version": "registry.project.fixture_coverage.v1",
+  "project": "fictional-citizen-registry",
+  "environment": null,
+  "evidence_scope": "offline_synthetic",
+  "compatibility_claim": "none",
+  "live_compatibility": "not_evaluated",
+  "governed_request_evidence": "per_consultation_authored_request_witness_evaluation",
+  "targets": [
+    {
+      "identity": {
+        "integration": "person-record",
+        "capability": "declarative_http"
+      },
+      "contract": {
+        "source_operation_count": 1,
+        "reviewed_not_applicable": [
+          "subject_mismatch"
+        ],
+        "registry_backed_consultations": [
+          {
+            "service_id": "person-verification",
+            "consultation_id": "person_record"
+          }
+        ]
+      },
+      "fixture_set_state": "fixture_bearing",
+      "compiled_contract": {
+        "kind": "compiled_contract",
+        "id": "target/person-record/compiled-contract/v1",
+        "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+      },
+      "fixture_inventory": [
+        {
+          "evidence": {
+            "kind": "authored_fixture",
+            "id": "target/person-record/fixture/active-person",
+            "digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+          },
+          "fixture_id": "active-person",
+          "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3",
+          "expectation": {
+            "kind": "outcome",
+            "outcome": "match"
+          },
+          "semantic_null": false,
+          "interaction_count": 1,
+          "input_ids": [
+            "person_id"
+          ],
+          "output_ids": [
+            "active"
+          ],
+          "claim_ids": [
+            "person-active",
+            "person-record-exists"
+          ],
+          "exercised_status_mappings": [],
+          "classification": "synthetic",
+          "pass_state": "passed",
+          "request_to_consultation_binding": {
+            "state": "passed",
+            "consultations": [
+              {
+                "service_id": "person-verification",
+                "consultation_id": "person_record"
+              }
+            ],
+            "actual_relay_consultations": 1,
+            "safe_error_code": null
+          }
+        },
+        {
+          "evidence": {
+            "kind": "authored_fixture",
+            "id": "target/person-record/fixture/ambiguous-person",
+            "digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+          },
+          "fixture_id": "ambiguous-person",
+          "fixture_digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232",
+          "expectation": {
+            "kind": "outcome",
+            "outcome": "ambiguous"
+          },
+          "semantic_null": false,
+          "interaction_count": 1,
+          "input_ids": [
+            "person_id"
+          ],
+          "output_ids": [],
+          "claim_ids": [],
+          "exercised_status_mappings": [
+            {
+              "outcome": "ambiguous",
+              "statuses": [
+                409
+              ]
+            }
+          ],
+          "classification": "synthetic",
+          "pass_state": "passed",
+          "request_to_consultation_binding": {
+            "state": "not_authored",
+            "consultations": [],
+            "actual_relay_consultations": null,
+            "safe_error_code": null
+          }
+        },
+        {
+          "evidence": {
+            "kind": "authored_fixture",
+            "id": "target/person-record/fixture/no-person",
+            "digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+          },
+          "fixture_id": "no-person",
+          "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5",
+          "expectation": {
+            "kind": "outcome",
+            "outcome": "no_match"
+          },
+          "semantic_null": true,
+          "interaction_count": 1,
+          "input_ids": [
+            "person_id"
+          ],
+          "output_ids": [],
+          "claim_ids": [
+            "person-active",
+            "person-record-exists"
+          ],
+          "exercised_status_mappings": [
+            {
+              "outcome": "no_match",
+              "statuses": [
+                404
+              ]
+            }
+          ],
+          "classification": "synthetic",
+          "pass_state": "passed",
+          "request_to_consultation_binding": {
+            "state": "not_authored",
+            "consultations": [],
+            "actual_relay_consultations": null,
+            "safe_error_code": null
+          }
+        }
+      ],
+      "generated_cases": [
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/active-person/generated/request_authority/v1",
+            "digest": "sha256:691232c9fff919e9dd9f361be7b141a07cd9fc56a0864d40a9c5decf6719ed85"
+          },
+          "recipe": {
+            "id": "request_authority",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "active-person",
+            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "request_path_authority",
+          "expected_safe_code": "fixture.request_mismatch",
+          "actual_safe_code": "fixture.request_mismatch",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/active-person/generated/request_order/v1",
+            "digest": "sha256:1b714bff4811578892f09bd3fe3fe79c634b2fed0c470984f25d373d679cce8c"
+          },
+          "recipe": {
+            "id": "request_order",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "active-person",
+            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+          },
+          "applicability": {
+            "state": "not_applicable",
+            "reason": "single_source_interaction",
+            "invariant": "order_mutation_requires_multiple_source_interactions"
+          },
+          "mutation_target_class": "request_interaction_order",
+          "expected_safe_code": "fixture.request_mismatch",
+          "actual_safe_code": null,
+          "pass_state": "not_executed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/active-person/generated/status_rejection/v1",
+            "digest": "sha256:365e50a447ad14ef0ad14689f569acc4f8c935e03fa85a6fe18f07f64666c451"
+          },
+          "recipe": {
+            "id": "status_rejection",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "active-person",
+            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "source_status",
+          "expected_safe_code": "source.status_rejected",
+          "actual_safe_code": "source.status_rejected",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/active-person/generated/malformed_decode/v1",
+            "digest": "sha256:00a9b0010878b27345c9ce26b7d2089c21312749ccedfaa98849d97ced748765"
+          },
+          "recipe": {
+            "id": "malformed_decode",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "active-person",
+            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "response_body_decoding",
+          "expected_safe_code": "source.response_malformed",
+          "actual_safe_code": "source.response_malformed",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/active-person/generated/byte_ceiling/v1",
+            "digest": "sha256:1111c0c5d0542692d8c3efe821e719ee1235654102af5a399ee1da2b4167691e"
+          },
+          "recipe": {
+            "id": "byte_ceiling",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "active-person",
+            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "declared_response_byte_count",
+          "expected_safe_code": "source.response_too_large",
+          "actual_safe_code": "source.response_too_large",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/active-person/generated/timeout/v1",
+            "digest": "sha256:b491ba87e856a5f652fdef4077861a1cc2c95cca45029856eb72e28a6b0c06e1"
+          },
+          "recipe": {
+            "id": "timeout",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "active-person",
+            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "source_deadline",
+          "expected_safe_code": "source.deadline_exceeded",
+          "actual_safe_code": "source.deadline_exceeded",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/active-person/generated/protocol_verification/v1",
+            "digest": "sha256:891f622340293bffcd8ef3b6f46e45657b194b5b3be228f37054f57655f38b0c"
+          },
+          "recipe": {
+            "id": "protocol_verification",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "active-person",
+            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+          },
+          "applicability": {
+            "state": "not_applicable",
+            "reason": "no_generated_request_matcher",
+            "invariant": "protocol_mutation_requires_generated_request_matcher"
+          },
+          "mutation_target_class": "protocol_response_envelope",
+          "expected_safe_code": "source.response_malformed",
+          "actual_safe_code": null,
+          "pass_state": "not_executed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/active-person/generated/authorization_before_source/v1",
+            "digest": "sha256:2d5485575a39c37edec432a39f1d2ba08be39c45cc38e55c1dd1e4a75dccb74a"
+          },
+          "recipe": {
+            "id": "authorization_before_source",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "active-person",
+            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "authorization_gate",
+          "expected_safe_code": "authorization.denied",
+          "actual_safe_code": "authorization.denied",
+          "pass_state": "passed",
+          "source_access_assertion": {
+            "expected_source_calls": "zero",
+            "actual_source_calls": 0,
+            "passed": true
+          }
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/active-person/generated/output_minimization/v1",
+            "digest": "sha256:dc7c3bbc4489276a37f90f03591ce9cd3e568ad11d2244e1fcb2b3381463c8f0"
+          },
+          "recipe": {
+            "id": "output_minimization",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "active-person",
+            "fixture_digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "unselected_response_member",
+          "expected_safe_code": null,
+          "actual_safe_code": null,
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/ambiguous-person/generated/request_authority/v1",
+            "digest": "sha256:37104336a5fc0b48e66157167df95bd3be54a5c83ecb7a2fce1c4a62223974a7"
+          },
+          "recipe": {
+            "id": "request_authority",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "ambiguous-person",
+            "fixture_digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "request_path_authority",
+          "expected_safe_code": "fixture.request_mismatch",
+          "actual_safe_code": "fixture.request_mismatch",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/ambiguous-person/generated/request_order/v1",
+            "digest": "sha256:db7f52d696a31e99b6fb7770b67af97658e13d433e8be67a4e17a7a803b8ae00"
+          },
+          "recipe": {
+            "id": "request_order",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "ambiguous-person",
+            "fixture_digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+          },
+          "applicability": {
+            "state": "not_applicable",
+            "reason": "single_source_interaction",
+            "invariant": "order_mutation_requires_multiple_source_interactions"
+          },
+          "mutation_target_class": "request_interaction_order",
+          "expected_safe_code": "fixture.request_mismatch",
+          "actual_safe_code": null,
+          "pass_state": "not_executed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/ambiguous-person/generated/status_rejection/v1",
+            "digest": "sha256:17c91679f0bcafb1d73a632361167111fe3adc821d7362b5f73d57cc8e646aec"
+          },
+          "recipe": {
+            "id": "status_rejection",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "ambiguous-person",
+            "fixture_digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "source_status",
+          "expected_safe_code": "source.status_rejected",
+          "actual_safe_code": "source.status_rejected",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/ambiguous-person/generated/malformed_decode/v1",
+            "digest": "sha256:16358fa165c4d86fb69c57c9fbb1d47db083b933ac7c449a47ac03a2b3a722a1"
+          },
+          "recipe": {
+            "id": "malformed_decode",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "ambiguous-person",
+            "fixture_digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "response_body_decoding",
+          "expected_safe_code": "source.response_malformed",
+          "actual_safe_code": "source.response_malformed",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/ambiguous-person/generated/byte_ceiling/v1",
+            "digest": "sha256:cdfe77bfe9fa27c36bc01f6e9635a1dd593990153c8010657f87fbf8760a36f2"
+          },
+          "recipe": {
+            "id": "byte_ceiling",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "ambiguous-person",
+            "fixture_digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "declared_response_byte_count",
+          "expected_safe_code": "source.response_too_large",
+          "actual_safe_code": "source.response_too_large",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/ambiguous-person/generated/timeout/v1",
+            "digest": "sha256:aa73c4fe1667260942dd69968f60973cd0a19dbdde38b991fafb89ef288fbc01"
+          },
+          "recipe": {
+            "id": "timeout",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "ambiguous-person",
+            "fixture_digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "source_deadline",
+          "expected_safe_code": "source.deadline_exceeded",
+          "actual_safe_code": "source.deadline_exceeded",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/ambiguous-person/generated/protocol_verification/v1",
+            "digest": "sha256:5a891e5db4eaa349bc1f03f1548fa6759078b953629eea15e2821350d26cf945"
+          },
+          "recipe": {
+            "id": "protocol_verification",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "ambiguous-person",
+            "fixture_digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+          },
+          "applicability": {
+            "state": "not_applicable",
+            "reason": "no_generated_request_matcher",
+            "invariant": "protocol_mutation_requires_generated_request_matcher"
+          },
+          "mutation_target_class": "protocol_response_envelope",
+          "expected_safe_code": "source.response_malformed",
+          "actual_safe_code": null,
+          "pass_state": "not_executed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/ambiguous-person/generated/authorization_before_source/v1",
+            "digest": "sha256:9c96a3b1b8bb205e135572dee4d2f82d689482ef642eb83f498d8e14c115ad4f"
+          },
+          "recipe": {
+            "id": "authorization_before_source",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "ambiguous-person",
+            "fixture_digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "authorization_gate",
+          "expected_safe_code": "authorization.denied",
+          "actual_safe_code": "authorization.denied",
+          "pass_state": "passed",
+          "source_access_assertion": {
+            "expected_source_calls": "zero",
+            "actual_source_calls": 0,
+            "passed": true
+          }
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/ambiguous-person/generated/output_minimization/v1",
+            "digest": "sha256:2b5e0499735227031d349d9c8ba7b2ccf070228e2ecbdfc97f1632b2352eb7c2"
+          },
+          "recipe": {
+            "id": "output_minimization",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "ambiguous-person",
+            "fixture_digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "unselected_response_member",
+          "expected_safe_code": null,
+          "actual_safe_code": null,
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/no-person/generated/request_authority/v1",
+            "digest": "sha256:e7ae1794d2cca59818de6b3baf66439dca503d79b6f3196e887956f552ee4881"
+          },
+          "recipe": {
+            "id": "request_authority",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "no-person",
+            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "request_path_authority",
+          "expected_safe_code": "fixture.request_mismatch",
+          "actual_safe_code": "fixture.request_mismatch",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/no-person/generated/request_order/v1",
+            "digest": "sha256:547b5db1d96930b17a4d855f9c699cddac23120d9c44c86b9ea9d829f91fd315"
+          },
+          "recipe": {
+            "id": "request_order",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "no-person",
+            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+          },
+          "applicability": {
+            "state": "not_applicable",
+            "reason": "single_source_interaction",
+            "invariant": "order_mutation_requires_multiple_source_interactions"
+          },
+          "mutation_target_class": "request_interaction_order",
+          "expected_safe_code": "fixture.request_mismatch",
+          "actual_safe_code": null,
+          "pass_state": "not_executed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/no-person/generated/status_rejection/v1",
+            "digest": "sha256:8bd1e632702cdf10d2841bce8527e2593858cdc0e46611a86f2199737e9829ae"
+          },
+          "recipe": {
+            "id": "status_rejection",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "no-person",
+            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "source_status",
+          "expected_safe_code": "source.status_rejected",
+          "actual_safe_code": "source.status_rejected",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/no-person/generated/malformed_decode/v1",
+            "digest": "sha256:560c723752d29a94f56203a1593bad292684cc7bde7420185da4191c0a400c26"
+          },
+          "recipe": {
+            "id": "malformed_decode",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "no-person",
+            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "response_body_decoding",
+          "expected_safe_code": "source.response_malformed",
+          "actual_safe_code": "source.response_malformed",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/no-person/generated/byte_ceiling/v1",
+            "digest": "sha256:9413c3591793f33e81592d852cea1e4e5b52407457d642f95b6b8d9366ac7510"
+          },
+          "recipe": {
+            "id": "byte_ceiling",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "no-person",
+            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "declared_response_byte_count",
+          "expected_safe_code": "source.response_too_large",
+          "actual_safe_code": "source.response_too_large",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/no-person/generated/timeout/v1",
+            "digest": "sha256:43b0454a34a0c5cdce6d6003d609004047ecfa7308fce2fcdfcb2b1a98fa8516"
+          },
+          "recipe": {
+            "id": "timeout",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "no-person",
+            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "source_deadline",
+          "expected_safe_code": "source.deadline_exceeded",
+          "actual_safe_code": "source.deadline_exceeded",
+          "pass_state": "passed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/no-person/generated/protocol_verification/v1",
+            "digest": "sha256:023a5c16d404902ae161f2d76688c74841afc120790831ccb6f6ec2e9c6f0a13"
+          },
+          "recipe": {
+            "id": "protocol_verification",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "no-person",
+            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+          },
+          "applicability": {
+            "state": "not_applicable",
+            "reason": "no_generated_request_matcher",
+            "invariant": "protocol_mutation_requires_generated_request_matcher"
+          },
+          "mutation_target_class": "protocol_response_envelope",
+          "expected_safe_code": "source.response_malformed",
+          "actual_safe_code": null,
+          "pass_state": "not_executed",
+          "source_access_assertion": null
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/no-person/generated/authorization_before_source/v1",
+            "digest": "sha256:32f15ede7285f1271d842c7d9a1cd1e9e5906fb0c5a16d1173a49849b117737e"
+          },
+          "recipe": {
+            "id": "authorization_before_source",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "no-person",
+            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "authorization_gate",
+          "expected_safe_code": "authorization.denied",
+          "actual_safe_code": "authorization.denied",
+          "pass_state": "passed",
+          "source_access_assertion": {
+            "expected_source_calls": "zero",
+            "actual_source_calls": 0,
+            "passed": true
+          }
+        },
+        {
+          "evidence": {
+            "kind": "generated_case",
+            "id": "target/person-record/fixture/no-person/generated/output_minimization/v1",
+            "digest": "sha256:ba70efd09852298f5635cf140ecc7ea8ea077b54c83620a57d486ab2f0b2a19f"
+          },
+          "recipe": {
+            "id": "output_minimization",
+            "version": "v1"
+          },
+          "source_fixture": {
+            "fixture_id": "no-person",
+            "fixture_digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+          },
+          "applicability": {
+            "state": "applicable"
+          },
+          "mutation_target_class": "unselected_response_member",
+          "expected_safe_code": null,
+          "actual_safe_code": null,
+          "pass_state": "passed",
+          "source_access_assertion": null
+        }
+      ],
+      "platform_cases": [],
+      "declared": {
+        "input_ids": [
+          "person_id"
+        ],
+        "output_ids": [
+          "active"
+        ],
+        "claim_ids": [
+          "person-active",
+          "person-record-exists"
+        ],
+        "disclosure_modes": [
+          "predicate",
+          "value"
+        ],
+        "status_mappings": [
+          {
+            "outcome": "ambiguous",
+            "statuses": [
+              409
+            ]
+          },
+          {
+            "outcome": "no_match",
+            "statuses": [
+              404
+            ]
+          }
+        ],
+        "protocol_helpers": [],
+        "limits": [
+          "aggregate_source_bytes",
+          "call_count",
+          "deadline",
+          "output_bytes",
+          "request_bytes",
+          "response_bytes"
+        ],
+        "script_branch_ids": []
+      },
+      "exercised": {
+        "input_ids": [
+          "person_id"
+        ],
+        "output_ids": [
+          "active"
+        ],
+        "claim_ids": [
+          "person-active",
+          "person-record-exists"
+        ],
+        "disclosure_modes": [],
+        "status_mappings": [
+          {
+            "outcome": "ambiguous",
+            "statuses": [
+              409
+            ]
+          },
+          {
+            "outcome": "no_match",
+            "statuses": [
+              404
+            ]
+          }
+        ],
+        "protocol_helpers": [],
+        "limits": [
+          "deadline",
+          "response_bytes"
+        ],
+        "script_branch_ids": []
+      },
+      "comparison": null,
+      "requirements": [
+        {
+          "state": "covered",
+          "requirement": "semantic_match",
+          "evidence": [
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/active-person",
+              "digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "semantic_no_match",
+          "evidence": [
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/no-person",
+              "digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "semantic_ambiguity",
+          "evidence": [
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/ambiguous-person",
+              "digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+            }
+          ]
+        },
+        {
+          "state": "not_applicable",
+          "requirement": "subject_mismatch",
+          "reason": "reviewed_subject_mismatch_not_applicable",
+          "evidence": [
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "semantic_null",
+          "evidence": [
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/no-person",
+              "digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            }
+          ]
+        },
+        {
+          "state": "missing",
+          "requirement": "authorization_denial",
+          "reason": "required_evidence_missing",
+          "evidence": []
+        },
+        {
+          "state": "missing",
+          "requirement": "source_failure",
+          "reason": "required_evidence_missing",
+          "evidence": []
+        },
+        {
+          "state": "covered",
+          "requirement": "request_rendering",
+          "evidence": [
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/active-person/generated/request_authority/v1",
+              "digest": "sha256:691232c9fff919e9dd9f361be7b141a07cd9fc56a0864d40a9c5decf6719ed85"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/ambiguous-person/generated/request_authority/v1",
+              "digest": "sha256:37104336a5fc0b48e66157167df95bd3be54a5c83ecb7a2fce1c4a62223974a7"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/no-person/generated/request_authority/v1",
+              "digest": "sha256:e7ae1794d2cca59818de6b3baf66439dca503d79b6f3196e887956f552ee4881"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "request_to_consultation_binding",
+          "evidence": [
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/active-person",
+              "digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "expected_source_interactions",
+          "evidence": [
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/active-person",
+              "digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            },
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/ambiguous-person",
+              "digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+            },
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/no-person",
+              "digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            }
+          ]
+        },
+        {
+          "state": "not_applicable",
+          "requirement": "source_interaction_order",
+          "reason": "single_compiled_source_operation",
+          "evidence": [
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "output_fields",
+          "evidence": [
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/active-person",
+              "digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "claims",
+          "evidence": [
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/active-person",
+              "digest": "sha256:4f0b0afa2cd1ac597e2d55a6bef4accee4549e7b74520fd23df10dde2fc02fc3"
+            },
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/no-person",
+              "digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "declared_disclosure_modes",
+          "evidence": [
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "missing",
+          "requirement": "exercised_disclosure_modes",
+          "reason": "runtime_dimension_not_observed",
+          "evidence": []
+        },
+        {
+          "state": "not_applicable",
+          "requirement": "script_branches",
+          "reason": "no_script_capability",
+          "evidence": [
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "not_applicable",
+          "requirement": "pagination_and_continuation",
+          "reason": "no_continuation_protocol_declared",
+          "evidence": [
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "status_mappings",
+          "evidence": [
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/ambiguous-person",
+              "digest": "sha256:6a375aa916a0b6b8dba04702b50cd7b1ec600063073c64881a9b62c31f16f232"
+            },
+            {
+              "kind": "authored_fixture",
+              "id": "target/person-record/fixture/no-person",
+              "digest": "sha256:f7968b31cee08af79d6160e1a3bb99fdc4962fcfc7ccd13b92fe35f0d87367a5"
+            }
+          ]
+        },
+        {
+          "state": "not_applicable",
+          "requirement": "protocol_helpers",
+          "reason": "no_protocol_helpers_declared",
+          "evidence": [
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "not_applicable",
+          "requirement": "protocol_verification",
+          "reason": "no_verification_protocol_declared",
+          "evidence": [
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "authorization_before_source",
+          "evidence": [
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/active-person/generated/authorization_before_source/v1",
+              "digest": "sha256:2d5485575a39c37edec432a39f1d2ba08be39c45cc38e55c1dd1e4a75dccb74a"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/ambiguous-person/generated/authorization_before_source/v1",
+              "digest": "sha256:9c96a3b1b8bb205e135572dee4d2f82d689482ef642eb83f498d8e14c115ad4f"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/no-person/generated/authorization_before_source/v1",
+              "digest": "sha256:32f15ede7285f1271d842c7d9a1cd1e9e5906fb0c5a16d1173a49849b117737e"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "malformed_decoding",
+          "evidence": [
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/active-person/generated/malformed_decode/v1",
+              "digest": "sha256:00a9b0010878b27345c9ce26b7d2089c21312749ccedfaa98849d97ced748765"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/ambiguous-person/generated/malformed_decode/v1",
+              "digest": "sha256:16358fa165c4d86fb69c57c9fbb1d47db083b933ac7c449a47ac03a2b3a722a1"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/no-person/generated/malformed_decode/v1",
+              "digest": "sha256:560c723752d29a94f56203a1593bad292684cc7bde7420185da4191c0a400c26"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "structural_limits",
+          "evidence": [
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "missing",
+          "requirement": "request_bytes",
+          "reason": "numeric_boundary_not_exercised",
+          "evidence": [
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "response_bytes",
+          "evidence": [
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/active-person/generated/byte_ceiling/v1",
+              "digest": "sha256:1111c0c5d0542692d8c3efe821e719ee1235654102af5a399ee1da2b4167691e"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/ambiguous-person/generated/byte_ceiling/v1",
+              "digest": "sha256:cdfe77bfe9fa27c36bc01f6e9635a1dd593990153c8010657f87fbf8760a36f2"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/no-person/generated/byte_ceiling/v1",
+              "digest": "sha256:9413c3591793f33e81592d852cea1e4e5b52407457d642f95b6b8d9366ac7510"
+            }
+          ]
+        },
+        {
+          "state": "missing",
+          "requirement": "aggregate_source_bytes",
+          "reason": "numeric_boundary_not_exercised",
+          "evidence": [
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "missing",
+          "requirement": "output_bytes",
+          "reason": "numeric_boundary_not_exercised",
+          "evidence": [
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "not_applicable",
+          "requirement": "call_limits",
+          "reason": "no_dynamic_source_calls_capability",
+          "evidence": [
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "timeout_classification",
+          "evidence": [
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/active-person/generated/timeout/v1",
+              "digest": "sha256:b491ba87e856a5f652fdef4077861a1cc2c95cca45029856eb72e28a6b0c06e1"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/ambiguous-person/generated/timeout/v1",
+              "digest": "sha256:aa73c4fe1667260942dd69968f60973cd0a19dbdde38b991fafb89ef288fbc01"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/no-person/generated/timeout/v1",
+              "digest": "sha256:43b0454a34a0c5cdce6d6003d609004047ecfa7308fce2fcdfcb2b1a98fa8516"
+            }
+          ]
+        },
+        {
+          "state": "missing",
+          "requirement": "numeric_deadline_enforcement",
+          "reason": "numeric_boundary_not_exercised",
+          "evidence": [
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/active-person/generated/timeout/v1",
+              "digest": "sha256:b491ba87e856a5f652fdef4077861a1cc2c95cca45029856eb72e28a6b0c06e1"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/ambiguous-person/generated/timeout/v1",
+              "digest": "sha256:aa73c4fe1667260942dd69968f60973cd0a19dbdde38b991fafb89ef288fbc01"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/no-person/generated/timeout/v1",
+              "digest": "sha256:43b0454a34a0c5cdce6d6003d609004047ecfa7308fce2fcdfcb2b1a98fa8516"
+            },
+            {
+              "kind": "compiled_contract",
+              "id": "target/person-record/compiled-contract/v1",
+              "digest": "sha256:f1b7c3c4a2ece745e634cfdc0c4507f7058fd7650fba342b8f8463e12dd8aea8"
+            }
+          ]
+        },
+        {
+          "state": "covered",
+          "requirement": "output_minimization",
+          "evidence": [
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/active-person/generated/output_minimization/v1",
+              "digest": "sha256:dc7c3bbc4489276a37f90f03591ce9cd3e568ad11d2244e1fcb2b3381463c8f0"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/ambiguous-person/generated/output_minimization/v1",
+              "digest": "sha256:2b5e0499735227031d349d9c8ba7b2ccf070228e2ecbdfc97f1632b2352eb7c2"
+            },
+            {
+              "kind": "generated_case",
+              "id": "target/person-record/fixture/no-person/generated/output_minimization/v1",
+              "digest": "sha256:ba70efd09852298f5635cf140ecc7ea8ea077b54c83620a57d486ab2f0b2a19f"
+            }
+          ]
+        },
+        {
+          "state": "not_evaluated",
+          "requirement": "changed_input_affected_fixtures",
+          "reason": "comparison_input_absent",
+          "evidence": []
+        },
+        {
+          "state": "not_evaluated",
+          "requirement": "changed_output_affected_fixtures",
+          "reason": "comparison_input_absent",
+          "evidence": []
+        },
+        {
+          "state": "not_evaluated",
+          "requirement": "changed_claim_affected_fixtures",
+          "reason": "comparison_input_absent",
+          "evidence": []
+        },
+        {
+          "state": "not_evaluated",
+          "requirement": "changed_source_contract_affected_fixtures",
+          "reason": "comparison_input_absent",
+          "evidence": []
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "target_set_state": "targets_present",
+    "target_count": 1,
+    "fixture_bearing_target_count": 1,
+    "fixtureless_target_count": 0,
+    "requirements": {
+      "covered": 17,
+      "missing": 7,
+      "not_applicable": 7,
+      "not_evaluated": 4,
+      "total": 35
+    }
+  }
+}

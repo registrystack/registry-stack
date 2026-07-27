@@ -10,6 +10,7 @@ fn test_claim(id: &str, depends_on: Vec<&str>, _has_source: bool) -> ClaimDefini
         value: registry_notary_core::ClaimValueConfig {
             value_type: "boolean".to_string(),
             nullable: false,
+            max_bytes: None,
             unit: None,
         },
         semantics: None,

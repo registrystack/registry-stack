@@ -1,0 +1,53 @@
+---
+title: Verify
+description: Verify Registry Stack authoring, fixtures, environment bindings, generated inputs, security posture, and runtime contracts.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+  - registry-relay
+  - registry-notary
+last_reviewed: "2026-07-26"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Run each verification gate for the artifact and authority boundary the gate owns.
+No single command establishes source compatibility, deployment approval, and runtime readiness.
+
+## Authoring and fixtures
+
+1. Run `registryctl test --project-dir <project>` for offline synthetic fixtures.
+2. Run `registryctl check --project-dir <project> --environment <name> --explain`.
+3. Review the redacted effective intent and semantic impact.
+
+These commands validate authored configuration, cross-file semantics, fixtures, and generated
+product inputs without contacting a source.
+Offline success does not prove live source behavior.
+
+## Environment and generated inputs
+
+Run the operator-authorized offline preflight for declared secret references, files, trust,
+availability, and environment narrowing.
+Then build the project and validate the separate Relay and Notary inputs with their owning product
+validators.
+
+Preflight does not read or print secret values, perform Domain Name System resolution, request a
+token, or contact a source.
+
+## Runtime and release evidence
+
+- [Security self-assessment](../security/self-assessment/)
+- [OpenSSF evidence](../security/openssf-evidence/)
+- [Relay API reference](../reference/apis/registry-relay/)
+- [Notary API reference](../reference/apis/registry-notary/)
+
+Live source checks, signing, promotion, activation, migration, and rollback require separate
+authorization and evidence.
+
+## Next
+
+- [Errors and status codes](../reference/errors/)
+- [Generated artifacts](../generated-artifacts/)
+- [Operate Registry Stack](../operate/)

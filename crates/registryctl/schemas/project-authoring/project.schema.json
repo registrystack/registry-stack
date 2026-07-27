@@ -1,4 +1,5 @@
 {
+  "x-registry-field": "root",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://registrystack.example/schemas/project-authoring/project.v1.json",
   "title": "Registry Stack project v1",
@@ -7,61 +8,68 @@
   "additionalProperties": false,
   "required": ["version", "registry", "services"],
   "properties": {
-    "version": { "const": 1, "default": 1, "description": "Project authoring format version." },
+    "version": {"x-registry-field": "public_property", "const": 1, "description": "Project authoring format version." },
     "starter": {
+      "x-registry-field": "property",
       "description": "Immutable provenance for a workspace initialized from a Registry Stack starter. The digest excludes this content_digest field and covers the starter's authored project files.",
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "release", "content_digest"],
       "properties": {
-        "id": { "$ref": "#/$defs/stableId", "description": "Registry Stack starter identifier." },
-        "release": { "$ref": "#/$defs/token", "description": "Registry Stack release that supplied the starter." },
-        "content_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Digest of the initialized starter authoring content, used to report later workspace divergence." }
+        "id": {"x-registry-field": "property", "$ref": "#/$defs/stableId", "description": "Registry Stack starter identifier." },
+        "release": {"x-registry-field": "property", "$ref": "#/$defs/token", "description": "Registry Stack release that supplied the starter." },
+        "content_digest": {"x-registry-field": "sensitive_property", "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Digest of the initialized starter authoring content, used to report later workspace divergence." }
       }
     },
     "registry": {
+      "x-registry-field": "property",
       "description": "Stable identity of the Registry Stack project.",
       "type": "object",
       "additionalProperties": false,
       "required": ["id"],
-      "properties": { "id": { "$ref": "#/$defs/stableId" } }
+      "properties": { "id": {"x-registry-field": "property", "$ref": "#/$defs/stableId" } }
     },
     "integrations": {
+      "x-registry-field": "property",
       "description": "Source adaptation definitions keyed by project-local integration identifier.",
       "type": "object",
       "maxProperties": 16,
-      "propertyNames": { "$ref": "#/$defs/stableId" },
+      "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
       "additionalProperties": {
+        "x-registry-field": "map_value",
         "type": "object",
         "additionalProperties": false,
         "required": ["file"],
-        "properties": { "file": { "$ref": "#/$defs/relativePath" } }
+        "properties": { "file": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relativePath" } }
       }
     },
     "entities": {
+      "x-registry-field": "property",
       "description": "Materialized entity definitions keyed by project-local entity identifier.",
       "type": "object",
       "maxProperties": 32,
-      "propertyNames": { "$ref": "#/$defs/stableId" },
+      "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
       "additionalProperties": {
+        "x-registry-field": "map_value",
         "type": "object",
         "additionalProperties": false,
         "required": ["file"],
-        "properties": { "file": { "$ref": "#/$defs/relativePath" } }
+        "properties": { "file": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/relativePath" } }
       }
     },
     "services": {
+      "x-registry-field": "property",
       "description": "Relay records APIs and Notary evidence services exposed by the project.",
       "type": "object",
       "maxProperties": 32,
-      "propertyNames": { "$ref": "#/$defs/stableId" },
-      "additionalProperties": { "$ref": "#/$defs/service" }
+      "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
+      "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/service" }
     }
   },
   "anyOf": [
-    { "required": ["integrations"], "properties": { "integrations": { "minProperties": 1 } } },
-    { "required": ["entities"], "properties": { "entities": { "minProperties": 1 } } },
-    { "required": ["services"], "properties": { "services": { "minProperties": 1 } } }
+    {"x-registry-field": "branch", "required": ["integrations"], "properties": { "integrations": {"x-registry-field": "property", "minProperties": 1 } } },
+    {"x-registry-field": "branch", "required": ["entities"], "properties": { "entities": {"x-registry-field": "property", "minProperties": 1 } } },
+    {"x-registry-field": "branch", "required": ["services"], "properties": { "services": {"x-registry-field": "property", "minProperties": 1 } } }
   ],
   "examples": [
     {
@@ -86,64 +94,71 @@
       "required": ["scopes", "projection", "pagination", "standards"],
       "properties": {
         "scopes": {
+          "x-registry-field": "property",
           "type": "object",
           "additionalProperties": false,
           "required": ["metadata", "rows"],
           "properties": {
-            "metadata": { "$ref": "#/$defs/scope" },
-            "rows": { "$ref": "#/$defs/scope" },
-            "aggregate": { "$ref": "#/$defs/scope" },
-            "evidence_verification": { "$ref": "#/$defs/scope" }
+            "metadata": {"x-registry-field": "property", "$ref": "#/$defs/scope" },
+            "rows": {"x-registry-field": "property", "$ref": "#/$defs/scope" },
+            "aggregate": {"x-registry-field": "property", "$ref": "#/$defs/scope" },
+            "evidence_verification": {"x-registry-field": "property", "$ref": "#/$defs/scope" }
           }
         },
-        "purposes": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "$ref": "#/$defs/token" } },
-        "projection": { "type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": { "$ref": "#/$defs/stableId" } },
+        "purposes": {"x-registry-field": "property", "type": "array", "maxItems": 32, "uniqueItems": true, "items": {"x-registry-field": "array_item", "$ref": "#/$defs/token" } },
+        "projection": {"x-registry-field": "property", "type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": {"x-registry-field": "array_item", "$ref": "#/$defs/stableId" } },
         "pagination": {
+          "x-registry-field": "property",
           "type": "object",
           "additionalProperties": false,
           "required": ["default_limit", "max_limit"],
           "properties": {
-            "default_limit": { "type": "integer", "minimum": 1, "maximum": 10000 },
-            "max_limit": { "type": "integer", "minimum": 1, "maximum": 10000 }
+            "default_limit": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 10000 },
+            "max_limit": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 10000 }
           }
         },
         "filters": {
+          "x-registry-field": "property",
           "type": "object",
           "maxProperties": 256,
-          "propertyNames": { "$ref": "#/$defs/stableId" },
-          "additionalProperties": { "$ref": "#/$defs/filterOperators" }
+          "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
+          "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/filterOperators" }
         },
-        "required_principal_filters": { "$ref": "#/$defs/fieldList" },
+        "required_principal_filters": {"x-registry-field": "property", "$ref": "#/$defs/fieldList" },
         "relationships": {
+          "x-registry-field": "property",
           "type": "object",
           "maxProperties": 64,
-          "propertyNames": { "$ref": "#/$defs/stableId" },
+          "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
           "additionalProperties": {
+            "x-registry-field": "map_value",
             "type": "object",
             "additionalProperties": false,
             "required": ["kind", "target", "foreign_key"],
             "properties": {
-              "kind": { "enum": ["belongs_to", "has_many", "has_one"] },
-              "target": { "$ref": "#/$defs/stableId" },
-              "foreign_key": { "$ref": "#/$defs/stableId" },
-              "concept_uri": { "$ref": "#/$defs/text" }
+              "kind": {"x-registry-field": "property", "enum": ["belongs_to", "has_many", "has_one"] },
+              "target": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+              "foreign_key": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+              "concept_uri": {"x-registry-field": "property", "$ref": "#/$defs/text" }
             }
           }
         },
         "aggregates": {
+          "x-registry-field": "property",
           "type": "object",
           "maxProperties": 64,
-          "propertyNames": { "$ref": "#/$defs/stableId" },
-          "additionalProperties": { "$ref": "#/$defs/recordAggregate" }
+          "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
+          "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/recordAggregate" }
         },
-        "attribute_release_profiles": { "$ref": "#/$defs/recordAttributeReleaseProfiles" },
+        "attribute_release_profiles": {"x-registry-field": "property", "$ref": "#/$defs/recordAttributeReleaseProfiles" },
         "standards": {
+          "x-registry-field": "property",
           "type": "object",
           "additionalProperties": false,
           "required": ["ogc_features", "sp_dci"],
           "properties": {
-            "ogc_features": { "oneOf": [{ "const": false }, { "type": "object" }] },
-            "sp_dci": { "oneOf": [{ "const": false }, { "type": "object" }] }
+            "ogc_features": {"x-registry-field": "property", "oneOf": [{"x-registry-field": "branch", "const": false }, {"x-registry-field": "branch", "$ref": "#/$defs/recordSpatial" }] },
+            "sp_dci": {"x-registry-field": "property", "oneOf": [{"x-registry-field": "branch", "const": false }, {"x-registry-field": "branch", "$ref": "#/$defs/recordSpdci" }] }
           }
         }
       }
@@ -152,8 +167,8 @@
       "description": "Purpose-bound, exact-one identity releases keyed by stable profile id. Generated Relay responses omit source metadata and are never cacheable.",
       "type": "object",
       "maxProperties": 16,
-      "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,95}$" },
-      "additionalProperties": { "$ref": "#/$defs/recordAttributeReleaseProfile" }
+      "propertyNames": {"x-registry-field": "map_key", "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,95}$" },
+      "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/recordAttributeReleaseProfile" }
     },
     "recordAttributeReleaseProfile": {
       "description": "One purpose-bound, minimized identity release compiled into the owning Relay entity.",
@@ -161,44 +176,48 @@
       "additionalProperties": false,
       "required": ["version", "purpose", "release_scope", "subject", "release_conditions", "claims"],
       "properties": {
-        "version": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^,\\s\\u0000-\\u001F\\u007F]+$" },
-        "title": { "$ref": "#/$defs/text" },
-        "description": { "$ref": "#/$defs/text" },
-        "purpose": { "$ref": "#/$defs/token" },
-        "release_scope": { "$ref": "#/$defs/scope" },
+        "version": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^,\\s\\u0000-\\u001F\\u007F]+$" },
+        "title": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "description": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "purpose": {"x-registry-field": "property", "$ref": "#/$defs/token" },
+        "release_scope": {"x-registry-field": "property", "$ref": "#/$defs/scope" },
         "subject": {
+          "x-registry-field": "property",
           "type": "object",
           "additionalProperties": false,
           "required": ["source_field", "id_type"],
           "properties": {
-            "source_field": { "$ref": "#/$defs/stableId" },
-            "id_type": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^,\\s\\u0000-\\u001F\\u007F]+$" }
+            "source_field": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+            "id_type": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^,\\s\\u0000-\\u001F\\u007F]+$" }
           }
         },
         "release_conditions": {
+          "x-registry-field": "property",
           "type": "object",
           "additionalProperties": false,
           "required": ["expression"],
-          "properties": { "expression": { "$ref": "#/$defs/recordAttributeReleaseExpression" } }
+          "properties": { "expression": {"x-registry-field": "property", "$ref": "#/$defs/recordAttributeReleaseExpression" } }
         },
         "claims": {
+          "x-registry-field": "property",
           "type": "object",
           "minProperties": 1,
           "maxProperties": 32,
-          "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+          "propertyNames": {"x-registry-field": "map_key", "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
           "additionalProperties": {
+            "x-registry-field": "map_value",
             "type": "object",
             "additionalProperties": false,
             "required": ["required", "sensitivity"],
             "properties": {
-              "source_field": { "$ref": "#/$defs/stableId" },
-              "expression": { "$ref": "#/$defs/recordAttributeReleaseExpression" },
-              "required": { "type": "boolean" },
-              "sensitivity": { "enum": ["direct_identifier", "personal", "public", "pseudonymous"] }
+              "source_field": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+              "expression": {"x-registry-field": "property", "$ref": "#/$defs/recordAttributeReleaseExpression" },
+              "required": {"x-registry-field": "property", "type": "boolean" },
+              "sensitivity": {"x-registry-field": "property", "enum": ["direct_identifier", "personal", "public", "pseudonymous"] }
             },
             "oneOf": [
-              { "required": ["source_field"] },
-              { "required": ["expression"] }
+              {"x-registry-field": "branch", "required": ["source_field"] },
+              {"x-registry-field": "branch", "required": ["expression"] }
             ]
           }
         }
@@ -209,52 +228,201 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["cel"],
-      "properties": { "cel": { "type": "string", "minLength": 1, "maxLength": 4096 } }
+      "properties": { "cel": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 4096 } }
     },
-    "filterOperators": { "type": "array", "minItems": 1, "uniqueItems": true, "description": "Allowed operators for one queryable field.", "items": { "enum": ["eq", "in", "gte", "lte", "between"] } },
-    "fieldList": { "type": "array", "maxItems": 16, "uniqueItems": true, "description": "Bounded unique list of entity field identifiers.", "items": { "$ref": "#/$defs/stableId" } },
+    "filterOperators": { "type": "array", "minItems": 1, "uniqueItems": true, "description": "Allowed operators for one queryable field.", "items": {"x-registry-field": "array_item", "enum": ["eq", "in", "gte", "lte", "between"] } },
+    "fieldList": { "type": "array", "maxItems": 16, "uniqueItems": true, "description": "Bounded unique list of entity field identifiers.", "items": {"x-registry-field": "array_item", "$ref": "#/$defs/stableId" } },
     "recordAggregate": {
       "description": "Governed aggregate definition with disclosure controls.",
       "type": "object",
       "additionalProperties": false,
       "required": ["description", "disclosure_control"],
       "properties": {
-        "title": { "$ref": "#/$defs/text" },
-        "description": { "$ref": "#/$defs/text" },
-        "default_group_by": { "$ref": "#/$defs/fieldList" },
-        "dimensions": { "type": "array" },
-        "indicators": { "type": "array" },
-        "allowed_filters": { "type": "object", "additionalProperties": { "$ref": "#/$defs/filterOperators" } },
-        "required_principal_filters": { "$ref": "#/$defs/fieldList" },
-        "temporal_field": { "$ref": "#/$defs/stableId" },
-        "access": { "type": "object" },
-        "spatial": { "type": "object" },
-        "joins": { "$ref": "#/$defs/fieldList" },
-        "group_by": { "$ref": "#/$defs/fieldList" },
-        "measures": { "type": "array", "minItems": 1 },
+        "title": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "description": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "default_group_by": {"x-registry-field": "property", "$ref": "#/$defs/fieldList" },
+        "dimensions": {"x-registry-field": "property", "type": "array", "items": {"x-registry-field": "array_item", "$ref": "#/$defs/recordAggregateDimension" } },
+        "indicators": {"x-registry-field": "property", "type": "array", "items": {"x-registry-field": "array_item", "$ref": "#/$defs/recordAggregateIndicator" } },
+        "allowed_filters": {"x-registry-field": "property", "type": "object", "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/filterOperators" } },
+        "required_principal_filters": {"x-registry-field": "property", "$ref": "#/$defs/fieldList" },
+        "temporal_field": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "access": {"x-registry-field": "property", "$ref": "#/$defs/recordAggregateAccess" },
+        "spatial": {"x-registry-field": "property", "$ref": "#/$defs/recordAggregateSpatial" },
+        "joins": {"x-registry-field": "property", "$ref": "#/$defs/fieldList" },
+        "group_by": {"x-registry-field": "property", "$ref": "#/$defs/fieldList" },
+        "measures": {"x-registry-field": "property", "type": "array", "minItems": 1, "items": {"x-registry-field": "array_item", "$ref": "#/$defs/recordAggregateMeasure" } },
         "disclosure_control": {
+          "x-registry-field": "property",
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "min_group_size": { "type": "integer", "minimum": 1 },
-            "suppression": { "enum": ["omit", "mask", "null"] }
+            "min_group_size": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4294967295 },
+            "suppression": {"x-registry-field": "property", "enum": ["omit", "mask", "null"] }
           }
         }
       },
-      "anyOf": [{ "required": ["measures"] }, { "required": ["indicators"] }]
+      "anyOf": [{"x-registry-field": "branch", "required": ["measures"] }, {"x-registry-field": "branch", "required": ["indicators"] }]
+    },
+    "recordAggregateAccess": {
+      "description": "Authorization scopes and execution policy for one governed aggregate.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metadata_scope": {"x-registry-field": "property", "$ref": "#/$defs/scope" },
+        "aggregate_scope": {"x-registry-field": "property", "$ref": "#/$defs/scope" },
+        "aggregate_only_execution": {"x-registry-field": "property", "type": "boolean" }
+      }
+    },
+    "recordAggregateSpatial": {
+      "description": "Administrative-area geometry join used to spatially group aggregate results.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "dimension", "geometry_entity", "geometry_id_field", "geometry_field"],
+      "properties": {
+        "mode": {"x-registry-field": "property", "const": "admin_area" },
+        "collection_id": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "dimension": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "geometry_entity": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "geometry_id_field": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "geometry_field": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "bbox_fields": {"x-registry-field": "property", "$ref": "#/$defs/recordSpatialBbox" },
+        "max_geometry_vertices": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4294967295 }
+      }
+    },
+    "recordSpatial": {
+      "description": "OGC API Features collection metadata and bounded geometry mapping.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["geometry"],
+      "properties": {
+        "collection_id": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "title": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "description": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "geometry": {"x-registry-field": "property", "$ref": "#/$defs/recordSpatialGeometry" },
+        "bbox_fields": {"x-registry-field": "property", "$ref": "#/$defs/recordSpatialBbox" },
+        "datetime_field": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "max_bbox_degrees": {"x-registry-field": "property", "type": "number", "exclusiveMinimum": 0 },
+        "max_geometry_vertices": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4294967295 }
+      }
+    },
+    "recordSpatialGeometry": {
+      "description": "Supported point or encoded-geometry field mapping for spatial records.",
+      "oneOf": [
+        {
+          "x-registry-field": "branch",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "longitude_field", "latitude_field", "crs"],
+          "properties": {
+            "kind": {"x-registry-field": "property", "const": "point" },
+            "longitude_field": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+            "latitude_field": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+            "crs": {"x-registry-field": "property", "$ref": "#/$defs/token" }
+          }
+        },
+        {
+          "x-registry-field": "branch",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "field", "crs"],
+          "properties": {
+            "kind": {"x-registry-field": "property", "enum": ["geojson", "wkt", "wkb"] },
+            "field": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+            "crs": {"x-registry-field": "property", "$ref": "#/$defs/token" }
+          }
+        }
+      ]
+    },
+    "recordSpatialBbox": {
+      "description": "Record fields carrying the four coordinates of a bounding box.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_x", "min_y", "max_x", "max_y"],
+      "properties": {
+        "min_x": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "min_y": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "max_x": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "max_y": {"x-registry-field": "property", "$ref": "#/$defs/stableId" }
+      }
+    },
+    "recordSpdci": {
+      "description": "SP-DCI registry identity and field mappings for a records service.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "registry_type", "record_type", "identifiers", "expression_fields"],
+      "properties": {
+        "registry": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "registry_type": {"x-registry-field": "property", "$ref": "#/$defs/token" },
+        "record_type": {"x-registry-field": "property", "$ref": "#/$defs/token" },
+        "identifiers": {"x-registry-field": "property", "$ref": "#/$defs/recordFieldMap" },
+        "expression_fields": {"x-registry-field": "property", "$ref": "#/$defs/recordFieldMap" },
+        "response_fields": {"x-registry-field": "property", "$ref": "#/$defs/recordFieldMap" }
+      }
+    },
+    "recordFieldMap": {
+      "description": "Bounded mapping from standard field names to entity field identifiers.",
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
+      "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/stableId" }
+    },
+    "recordAggregateDimension": {
+      "description": "Named grouping dimension backed by one entity field.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "field"],
+      "properties": {
+        "id": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "label": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "field": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "codelist": {"x-registry-field": "property", "$ref": "#/$defs/text" }
+      }
+    },
+    "recordAggregateIndicator": {
+      "description": "SDMX-style aggregate indicator with units and display metadata.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "function", "column", "unit_measure"],
+      "properties": {
+        "id": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "label": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "function": {"x-registry-field": "property", "$ref": "#/$defs/recordAggregateFunction" },
+        "column": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "unit_measure": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "unit_mult": {"x-registry-field": "property", "type": "integer", "minimum": -2147483648, "maximum": 2147483647 },
+        "decimals": {"x-registry-field": "property", "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "frequency": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "definition_uri": {"x-registry-field": "property", "$ref": "#/$defs/text" }
+      }
+    },
+    "recordAggregateMeasure": {
+      "description": "Named aggregate calculation over one entity column.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "function", "column"],
+      "properties": {
+        "name": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "function": {"x-registry-field": "property", "$ref": "#/$defs/recordAggregateFunction" },
+        "column": {"x-registry-field": "property", "$ref": "#/$defs/stableId" }
+      }
+    },
+    "recordAggregateFunction": {
+      "description": "Supported aggregate calculation function.",
+      "enum": ["count", "sum", "avg", "min", "max", "median", "count_distinct", "stddev"]
     },
     "disclosureMode": { "enum": ["value", "predicate", "redacted"], "description": "Maximum detail a claim may disclose." },
     "disclosure": {
       "description": "Fixed disclosure mode or a default constrained by explicitly allowed alternatives.",
       "oneOf": [
-        { "$ref": "#/$defs/disclosureMode" },
+        {"x-registry-field": "branch", "$ref": "#/$defs/disclosureMode" },
         {
+          "x-registry-field": "branch",
           "type": "object",
           "additionalProperties": false,
           "required": ["default", "allowed"],
           "properties": {
-            "default": { "$ref": "#/$defs/disclosureMode" },
-            "allowed": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/disclosureMode" } }
+            "default": {"x-registry-field": "property", "$ref": "#/$defs/disclosureMode" },
+            "allowed": {"x-registry-field": "property", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"x-registry-field": "array_item", "$ref": "#/$defs/disclosureMode" } }
           }
         }
       ]
@@ -262,8 +430,8 @@
     "service": {
       "description": "Closed choice between a Notary evidence service and a Relay records service.",
       "oneOf": [
-        { "$ref": "#/$defs/evidenceService" },
-        { "$ref": "#/$defs/recordsService" }
+        {"x-registry-field": "branch", "$ref": "#/$defs/evidenceService" },
+        {"x-registry-field": "branch", "$ref": "#/$defs/recordsService" }
       ]
     },
     "recordsService": {
@@ -272,16 +440,16 @@
       "additionalProperties": false,
       "required": ["kind", "entity", "api"],
       "properties": {
-        "kind": { "const": "records_api" },
-        "entity": { "$ref": "#/$defs/stableId" },
-        "title": { "$ref": "#/$defs/text" },
-        "description": { "$ref": "#/$defs/text" },
-        "owner": { "$ref": "#/$defs/text" },
-        "sensitivity": { "enum": ["public", "internal", "personal", "confidential", "secret"] },
-        "access_rights": { "enum": ["public", "restricted", "non_public"] },
-        "update_frequency": { "enum": ["continuous", "daily", "weekly", "termly", "monthly", "quarterly", "annual", "irregular", "as_needed", "unknown"] },
-        "conforms_to": { "type": "array", "maxItems": 32, "uniqueItems": true, "items": { "$ref": "#/$defs/text" } },
-        "api": { "$ref": "#/$defs/recordsApi" }
+        "kind": {"x-registry-field": "property", "const": "records_api" },
+        "entity": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+        "title": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "description": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "owner": {"x-registry-field": "property", "$ref": "#/$defs/text" },
+        "sensitivity": {"x-registry-field": "property", "enum": ["public", "internal", "personal", "confidential", "secret"] },
+        "access_rights": {"x-registry-field": "property", "enum": ["public", "restricted", "non_public"] },
+        "update_frequency": {"x-registry-field": "property", "enum": ["continuous", "daily", "weekly", "termly", "monthly", "quarterly", "annual", "irregular", "as_needed", "unknown"] },
+        "conforms_to": {"x-registry-field": "property", "type": "array", "maxItems": 32, "uniqueItems": true, "items": {"x-registry-field": "array_item", "$ref": "#/$defs/text" } },
+        "api": {"x-registry-field": "property", "$ref": "#/$defs/recordsApi" }
       }
     },
     "evidenceService": {
@@ -290,41 +458,45 @@
       "additionalProperties": false,
       "required": ["kind", "version", "purpose", "legal_basis", "consent", "access", "claims"],
       "properties": {
-        "kind": { "const": "evidence" },
-        "version": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
-        "purpose": { "$ref": "#/$defs/token" },
-        "legal_basis": { "$ref": "#/$defs/token" },
-        "consent": { "enum": ["not_required", "required"] },
-        "access": { "$ref": "#/$defs/access" },
-        "variables": { "$ref": "#/$defs/variables" },
-        "consultations": { "$ref": "#/$defs/consultations" },
+        "kind": {"x-registry-field": "property", "const": "evidence" },
+        "version": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "purpose": {"x-registry-field": "property", "$ref": "#/$defs/token" },
+        "legal_basis": {"x-registry-field": "property", "$ref": "#/$defs/token" },
+        "consent": {"x-registry-field": "property", "enum": ["not_required", "required"] },
+        "access": {"x-registry-field": "property", "$ref": "#/$defs/access" },
+        "variables": {"x-registry-field": "property", "$ref": "#/$defs/variables" },
+        "consultations": {"x-registry-field": "property", "$ref": "#/$defs/consultations" },
         "claims": {
+          "x-registry-field": "property",
           "type": "object",
           "minProperties": 1,
           "maxProperties": 64,
-          "propertyNames": { "$ref": "#/$defs/stableId" },
+          "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
           "additionalProperties": {
+            "x-registry-field": "map_value",
             "type": "object",
             "additionalProperties": false,
             "required": ["disclosure"],
-            "properties": { "output": { "type": "string" }, "cel": { "type": "string", "minLength": 1 }, "value": { "$ref": "#/$defs/claimValue" }, "disclosure": { "$ref": "#/$defs/disclosure" } },
-            "oneOf": [{ "required": ["output"] }, { "required": ["cel"] }]
+            "properties": { "output": {"x-registry-field": "property", "type": "string" }, "cel": {"x-registry-field": "property", "type": "string", "minLength": 1 }, "value": {"x-registry-field": "property", "$ref": "#/$defs/claimValue" }, "disclosure": {"x-registry-field": "property", "$ref": "#/$defs/disclosure" } },
+            "oneOf": [{"x-registry-field": "branch", "required": ["output"] }, {"x-registry-field": "branch", "required": ["cel"] }]
           }
         },
         "credential_profiles": {
+          "x-registry-field": "property",
           "description": "Credential profiles may select only claims backed by an exact Relay consultation. Source-free claim evaluation cannot be exposed as credential capability.",
           "type": "object",
           "maxProperties": 32,
-          "propertyNames": { "$ref": "#/$defs/stableId" },
+          "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
           "additionalProperties": {
+            "x-registry-field": "map_value",
             "type": "object",
             "additionalProperties": false,
             "required": ["format", "type", "validity", "claims"],
             "properties": {
-              "format": { "$ref": "#/$defs/token" },
-              "type": { "type": "string", "minLength": 1, "maxLength": 2048 },
-              "validity": { "type": "string", "pattern": "^[1-9][0-9]*(?:s|m|h)$" },
-              "claims": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/stableId" } }
+              "format": {"x-registry-field": "property", "$ref": "#/$defs/token" },
+              "type": {"x-registry-field": "property", "type": "string", "minLength": 1, "maxLength": 2048 },
+              "validity": {"x-registry-field": "property", "type": "string", "pattern": "^[1-9][0-9]*(?:s|m|h)$" },
+              "claims": {"x-registry-field": "property", "type": "array", "minItems": 1, "uniqueItems": true, "items": {"x-registry-field": "array_item", "$ref": "#/$defs/stableId" } }
             }
           }
         }
@@ -333,17 +505,17 @@
     "access": {
       "description": "Scopes a caller must hold to use an evidence service.",
       "type": "object", "additionalProperties": false, "required": ["scopes"],
-      "properties": { "scopes": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/token" } } }
+      "properties": { "scopes": {"x-registry-field": "property", "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"x-registry-field": "array_item", "$ref": "#/$defs/token" } } }
     },
     "variables": {
       "description": "Typed request variables exposed to evidence evaluation.",
-      "type": "object", "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/stableId" },
-      "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["from", "type"], "properties": { "from": { "type": "string", "pattern": "^request\\.variables\\.[a-z][a-z0-9._-]{0,95}$" }, "type": { "const": "date" } } }
+      "type": "object", "maxProperties": 16, "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
+      "additionalProperties": {"x-registry-field": "map_value", "type": "object", "additionalProperties": false, "required": ["from", "type"], "properties": { "from": {"x-registry-field": "property", "type": "string", "pattern": "^request\\.variables\\.[a-z][a-z0-9._-]{0,95}$" }, "type": {"x-registry-field": "property", "const": "date" } } }
     },
     "consultations": {
       "description": "Relay consultations and their closed bindings to target request identifiers or caller-supplied target attributes.",
-      "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/stableId" },
-      "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["integration", "input"], "properties": { "integration": { "$ref": "#/$defs/stableId" }, "input": { "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "$ref": "#/$defs/targetRequestMapping" } } } }
+      "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
+      "additionalProperties": {"x-registry-field": "map_value", "type": "object", "additionalProperties": false, "required": ["integration", "input"], "properties": { "integration": {"x-registry-field": "property", "$ref": "#/$defs/stableId" }, "input": {"x-registry-field": "property", "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" }, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/targetRequestMapping" } } } }
     },
     "targetRequestMapping": {
       "description": "Closed target request binding. Attribute values are bounded typed caller-supplied context, not authenticated identifiers.",
@@ -354,7 +526,7 @@
     "claimValue": {
       "description": "Explicit claim value type, nullability, and encoded-size bound for source-free evaluation. A source-free claim cannot be selected by a credential profile.",
       "type": "object", "additionalProperties": false, "required": ["type"],
-      "properties": { "type": { "enum": ["boolean", "integer", "string", "date"] }, "nullable": { "type": "boolean" }, "max_bytes": { "type": "integer", "minimum": 1, "maximum": 65536 } }
+      "properties": { "type": {"x-registry-field": "property", "enum": ["boolean", "integer", "string", "date"] }, "nullable": {"x-registry-field": "property", "type": "boolean" }, "max_bytes": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 65536 } }
     }
   }
 }

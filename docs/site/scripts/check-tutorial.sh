@@ -164,7 +164,7 @@ done
 # inside `sh` fences. Bump the expected count when you intentionally add or
 # remove a documented command.
 REGISTRYCTL_TUTORIALS=(
-	"author-registry-project:23"
+	"author-registry-project:32"
 	"publish-spreadsheet-secured-registry-api:49"
 	"verify-claim-registry-api:79"
 )

@@ -58,6 +58,16 @@ where
     serde_json::from_str(fixture).expect("fixture decodes")
 }
 
+fn assert_typed_invalid<T>(document: Value)
+where
+    T: DeserializeOwned,
+{
+    assert!(
+        serde_json::from_value::<T>(document).is_err(),
+        "document with an unknown field should not deserialize"
+    );
+}
+
 fn producer_explanation_from_document(document: ConfigExplanationDocument) -> ConfigExplanation {
     ConfigExplanation {
         schema_version: document.schema_version,
@@ -69,12 +79,48 @@ fn producer_explanation_from_document(document: ConfigExplanationDocument) -> Co
         optional_sections_absent: document.optional_sections_absent,
         live_apply: document.live_apply,
         context_constraints: document.context_constraints,
+        relay_connection: document.relay_connection,
+        relay_consultations: document.relay_consultations,
         resolved_config: RedactedConfig::redacted(&document.resolved_config, |_, _| {
             ConfigValueClassification::Public
         }),
         hashes: document.hashes,
         generated_at: document.generated_at,
     }
+}
+
+fn explanation_fixture_with_relay_sections() -> Value {
+    let mut fixture = parse(CONFIG_EXPLANATION_FIXTURE_V1);
+    fixture["relay_connection"] = json!({
+        "credential": {
+            "mode": "reloadable_token_file",
+            "reload": "per_operation",
+            "offline_file_status": "present"
+        },
+        "network": {
+            "transport": "https",
+            "allowed_private_cidr_count": 2,
+            "allow_insecure_localhost": false
+        }
+    });
+    fixture["relay_consultations"] = json!([
+        {
+            "container_path": "notary.claims.birth_record_exists",
+            "claim_id": "birth_record_exists",
+            "consultation": "birth_record_exists",
+            "profile": {
+                "id": "opencrvs.birth_record_exists",
+                "contract_hash": format!("sha256:{}", "a".repeat(64))
+            },
+            "purpose": "birth_registration",
+            "required_scopes": ["records:read"],
+            "inputs": {
+                "person_id": "request.target.identifiers.national_id",
+                "subject_id": "target.id"
+            }
+        }
+    ]);
+    fixture
 }
 
 #[test]
@@ -247,6 +293,89 @@ fn serde_types_round_trip_canonical_fixtures() {
     let _: ConfigExplanation = decode(CONFIG_EXPLANATION_FIXTURE_V1);
     let _: ConfigExplanationDocument = decode(CONFIG_EXPLANATION_FIXTURE_V1);
     round_trip::<RegistryctlValidationReport>(REGISTRYCTL_VALIDATION_FIXTURE_V1);
+}
+
+#[test]
+fn explanation_typed_round_trip_preserves_committed_relay_sections() {
+    let fixture = explanation_fixture_with_relay_sections();
+    assert_valid(CONFIG_EXPLANATION_SCHEMA_V1, &fixture);
+
+    let decoded: ConfigExplanationDocument =
+        serde_json::from_value(fixture.clone()).expect("relay sections decode");
+    let encoded = serde_json::to_value(producer_explanation_from_document(decoded.clone()))
+        .expect("relay sections re-encode");
+    assert_eq!(encoded, fixture);
+
+    let decoded_again: ConfigExplanationDocument =
+        serde_json::from_value(encoded).expect("re-encoded relay sections decode");
+    assert_eq!(decoded_again, decoded);
+}
+
+#[test]
+fn explanation_schema_accepts_all_authorized_relay_consultation_input_paths() {
+    for input in [
+        "target.id",
+        "request.requester.id",
+        "request.target.identifiers.national_id",
+        "request.target.attributes.person_sequence",
+        "request.requester.identifiers.national_id",
+    ] {
+        let mut fixture = explanation_fixture_with_relay_sections();
+        fixture["relay_consultations"][0]["inputs"]["person_id"] = json!(input);
+        assert_valid(CONFIG_EXPLANATION_SCHEMA_V1, &fixture);
+        serde_json::from_value::<ConfigExplanationDocument>(fixture)
+            .expect("authorized Relay consultation input decodes");
+    }
+}
+
+#[test]
+fn explanation_schema_and_typed_contract_reject_unowned_relay_profile_version() {
+    let mut fixture = explanation_fixture_with_relay_sections();
+    fixture["relay_consultations"][0]["profile"]["version"] = json!("1");
+
+    assert_invalid(CONFIG_EXPLANATION_SCHEMA_V1, &fixture);
+    assert_typed_invalid::<ConfigExplanationDocument>(fixture);
+}
+
+#[test]
+fn diagnostic_report_typed_deserialization_rejects_unknown_root_and_nested_fields() {
+    let mut unknown_root = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
+    unknown_root["future_field"] = json!(true);
+    assert_typed_invalid::<ConfigDiagnosticReport>(unknown_root);
+
+    let mut unknown_nested = parse(RELAY_DIAGNOSTIC_OK_FIXTURE_V1);
+    unknown_nested["source"]["future_field"] = json!(true);
+    assert_typed_invalid::<ConfigDiagnosticReport>(unknown_nested);
+}
+
+#[test]
+fn explanation_typed_deserialization_rejects_unknown_root_and_nested_fields() {
+    let mut unknown_root = parse(CONFIG_EXPLANATION_FIXTURE_V1);
+    unknown_root["future_field"] = json!(true);
+    assert_typed_invalid::<ConfigExplanationDocument>(unknown_root);
+
+    let mut unknown_nested = parse(CONFIG_EXPLANATION_FIXTURE_V1);
+    unknown_nested["live_apply"][0]["future_field"] = json!(true);
+    assert_typed_invalid::<ConfigExplanationDocument>(unknown_nested);
+
+    let mut unknown_relay_connection = explanation_fixture_with_relay_sections();
+    unknown_relay_connection["relay_connection"]["credential"]["future_field"] = json!(true);
+    assert_typed_invalid::<ConfigExplanationDocument>(unknown_relay_connection);
+
+    let mut unknown_relay_consultation = explanation_fixture_with_relay_sections();
+    unknown_relay_consultation["relay_consultations"][0]["profile"]["future_field"] = json!(true);
+    assert_typed_invalid::<ConfigExplanationDocument>(unknown_relay_consultation);
+}
+
+#[test]
+fn registryctl_report_typed_deserialization_rejects_unknown_root_and_nested_fields() {
+    let mut unknown_root = parse(REGISTRYCTL_VALIDATION_FIXTURE_V1);
+    unknown_root["future_field"] = json!(true);
+    assert_typed_invalid::<RegistryctlValidationReport>(unknown_root);
+
+    let mut unknown_nested = parse(REGISTRYCTL_VALIDATION_FIXTURE_V1);
+    unknown_nested["products"][0]["future_field"] = json!(true);
+    assert_typed_invalid::<RegistryctlValidationReport>(unknown_nested);
 }
 
 #[test]

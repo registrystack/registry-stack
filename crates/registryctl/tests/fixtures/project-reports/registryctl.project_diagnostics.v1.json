@@ -1,0 +1,28 @@
+{
+  "schema_version": "registryctl.project_diagnostics.v1",
+  "status": "invalid",
+  "diagnostics": [
+    {
+      "code": "registryctl.authoring.yaml.unknown_field",
+      "file": "integrations/eligibility/fixtures/example.yaml",
+      "field": "interactions.body",
+      "line": 12,
+      "column": 5,
+      "schema_hint": "registryctl authoring schema --kind fixture > fixture.schema.json",
+      "addresses": [
+        {
+          "file": "integrations/eligibility/fixtures/example.yaml",
+          "pointer": "/interactions/body"
+        }
+      ],
+      "phase": "syntax",
+      "rule": "closed_yaml_unknown_field",
+      "accepted": "Only documented fields in the closed authoring schema are accepted.",
+      "safe_summary_policy": "received_type_only",
+      "received_summary": "invalid_type_or_shape",
+      "documentation": "/reference/diagnostics/authoring/#registryctl--registryctl.authoring.yaml.unknown_field",
+      "cause": "The YAML document contains an unknown field.",
+      "remediation": "Correct the fixture YAML using the fixture authoring schema."
+    }
+  ]
+}

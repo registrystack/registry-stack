@@ -1,0 +1,22 @@
+version: 1
+id: population
+revision: 1
+primary_key: uin
+schema:
+  type: object
+  additionalProperties: false
+  required: [uin, legacy_nid, given_name, family_name, sex, birth_date, identity_status, alive]
+  properties:
+    uin: { type: string, maxLength: 16, pattern: "^[0-9]{10}$" }
+    legacy_nid: { type: [string, "null"], maxLength: 32 }
+    given_name: { type: string, maxLength: 128 }
+    family_name: { type: string, maxLength: 128 }
+    sex: { type: string, maxLength: 32 }
+    birth_date: { type: string, format: date, maxLength: 10 }
+    identity_status: { type: string, maxLength: 32 }
+    alive: { type: boolean }
+materialization:
+  max_records: 10000000
+  max_bytes: 512MiB
+  refresh: manual
+  retain_generations: 2

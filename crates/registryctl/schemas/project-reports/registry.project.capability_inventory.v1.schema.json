@@ -1,0 +1,574 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registryctl/project-reports/registry.project.capability_inventory.v1.schema.json",
+  "title": "Registry Stack project capability inventory v1",
+  "description": "Value-free offline inventory of installed, declared, enabled, used, missing, and inactive project capabilities.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_grade",
+    "runtime_activation",
+    "capabilities",
+    "support",
+    "missing_support",
+    "inactive_or_unused"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "registry.project.capability_inventory.v1"
+    },
+    "evidence_grade": {
+      "const": "offline_static"
+    },
+    "runtime_activation": {
+      "const": "not_evaluated"
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 12,
+      "maxItems": 12,
+      "items": {
+        "$ref": "#/$defs/capability_record"
+      },
+      "allOf": [
+        {"contains": {"properties": {"capability": {"const": "source_http"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"capability": {"const": "source_script"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"capability": {"const": "source_snapshot"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"capability": {"const": "rhai_runtime"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"capability": {"const": "rhai_abi"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"capability": {"const": "registry_relay_product"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"capability": {"const": "registry_notary_product"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"capability": {"const": "registry_relay_validator"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"capability": {"const": "registry_notary_validator"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"capability": {"const": "project_authoring_schemas"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"capability": {"const": "registry_relay_config_schema"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"capability": {"const": "registry_notary_config_schema"}}, "required": ["capability"]}, "minContains": 1, "maxContains": 1}
+      ]
+    },
+    "support": {
+      "type": "array",
+      "minItems": 14,
+      "maxItems": 14,
+      "items": {
+        "$ref": "#/$defs/support_assessment"
+      },
+      "allOf": [
+        {"contains": {"properties": {"component": {"const": "http_source_worker"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "rhai_script_worker"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "snapshot_materialization_worker"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "rhai_xw_protocol_helper"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "registry_relay_product"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "registry_notary_product"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "registry_relay_validator"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "registry_notary_validator"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "project_authoring_schema"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "registry_relay_config_schema"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "registry_notary_config_schema"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "registryctl_distribution"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "registry_relay_image"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1},
+        {"contains": {"properties": {"component": {"const": "registry_notary_image"}}, "required": ["component"]}, "minContains": 1, "maxContains": 1}
+      ]
+    },
+    "missing_support": {
+      "type": "array",
+      "maxItems": 14,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/missing_support"
+      }
+    },
+    "inactive_or_unused": {
+      "type": "array",
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/inactive_or_unused"
+      }
+    }
+  },
+  "$defs": {
+    "capability_id": {
+      "enum": [
+        "source_http",
+        "source_script",
+        "source_snapshot",
+        "rhai_runtime",
+        "rhai_abi",
+        "registry_relay_product",
+        "registry_notary_product",
+        "registry_relay_validator",
+        "registry_notary_validator",
+        "project_authoring_schemas",
+        "registry_relay_config_schema",
+        "registry_notary_config_schema"
+      ]
+    },
+    "capability_version": {
+      "enum": [
+        "project_authoring_v1",
+        "relay_integration_pack_v1",
+        "rhai_language_v1",
+        "rhai_xw_v1",
+        "registry_relay_config_v1",
+        "registry_notary_config_v1"
+      ]
+    },
+    "owner": {
+      "enum": [
+        "registryctl",
+        "registry_relay",
+        "registry_notary",
+        "release_engineering"
+      ]
+    },
+    "usage": {
+      "description": "Value-free usage counts. total is the bounded aggregate; strict typed ingress requires it to equal services + consultations + claims.",
+      "x-registry-aggregateMaximum": 1000000,
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "services",
+        "consultations",
+        "claims",
+        "total"
+      ],
+      "properties": {
+        "services": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "consultations": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "claims": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      }
+    },
+    "capability_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capability",
+        "kind",
+        "owner",
+        "maturity",
+        "supported_versions",
+        "installed_release",
+        "installed_evidence",
+        "project_declaration",
+        "environment_enablement",
+        "used_by",
+        "disposition"
+      ],
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/capability_id"
+        },
+        "kind": {
+          "enum": [
+            "source",
+            "runtime",
+            "abi",
+            "product",
+            "product_validator",
+            "schema"
+          ]
+        },
+        "owner": {
+          "$ref": "#/$defs/owner"
+        },
+        "maturity": {
+          "const": "release_gated"
+        },
+        "supported_versions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/capability_version"
+          }
+        },
+        "installed_release": {
+          "enum": [
+            "compiled",
+            "not_compiled",
+            "unsupported",
+            "not_evaluated"
+          ]
+        },
+        "installed_evidence": {
+          "enum": [
+            "linked_crate",
+            "embedded_compiler",
+            "embedded_schema",
+            "linked_product_validator",
+            "release_metadata",
+            "explicitly_unsupported",
+            "no_evidence"
+          ]
+        },
+        "project_declaration": {
+          "enum": [
+            "declared",
+            "not_declared",
+            "not_applicable"
+          ]
+        },
+        "environment_enablement": {
+          "enum": [
+            "enabled",
+            "not_enabled",
+            "not_applicable"
+          ]
+        },
+        "used_by": {
+          "$ref": "#/$defs/usage"
+        },
+        "disposition": {
+          "enum": [
+            "used",
+            "used_but_not_enabled",
+            "used_with_missing_support",
+            "declared_enabled_unused",
+            "declared_inactive",
+            "installed_unused",
+            "unavailable_unused"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "installed_release": {
+                "const": "compiled"
+              }
+            },
+            "required": ["installed_release"]
+          },
+          "then": {
+            "properties": {
+              "installed_evidence": {
+                "enum": [
+                  "linked_crate",
+                  "embedded_compiler",
+                  "embedded_schema",
+                  "linked_product_validator",
+                  "release_metadata"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "installed_release": {
+                "const": "not_compiled"
+              }
+            },
+            "required": ["installed_release"]
+          },
+          "then": {
+            "properties": {
+              "installed_evidence": {
+                "const": "release_metadata"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "installed_release": {
+                "const": "unsupported"
+              }
+            },
+            "required": ["installed_release"]
+          },
+          "then": {
+            "properties": {
+              "installed_evidence": {
+                "const": "explicitly_unsupported"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "installed_release": {
+                "const": "not_evaluated"
+              }
+            },
+            "required": ["installed_release"]
+          },
+          "then": {
+            "properties": {
+              "installed_evidence": {
+                "const": "no_evidence"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "support_component": {
+      "enum": [
+        "http_source_worker",
+        "rhai_script_worker",
+        "snapshot_materialization_worker",
+        "rhai_xw_protocol_helper",
+        "registry_relay_product",
+        "registry_notary_product",
+        "registry_relay_validator",
+        "registry_notary_validator",
+        "project_authoring_schema",
+        "registry_relay_config_schema",
+        "registry_notary_config_schema",
+        "registryctl_distribution",
+        "registry_relay_image",
+        "registry_notary_image"
+      ]
+    },
+    "support_kind": {
+      "enum": [
+        "worker",
+        "protocol_helper",
+        "product",
+        "product_validator",
+        "schema",
+        "distribution",
+        "image"
+      ]
+    },
+    "support_state": {
+      "enum": [
+        "available",
+        "missing",
+        "unsupported",
+        "not_evaluated"
+      ]
+    },
+    "support_assessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "kind",
+        "owner",
+        "state",
+        "evidence",
+        "required_by"
+      ],
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/support_component"
+        },
+        "kind": {
+          "$ref": "#/$defs/support_kind"
+        },
+        "owner": {
+          "$ref": "#/$defs/owner"
+        },
+        "state": {
+          "$ref": "#/$defs/support_state"
+        },
+        "evidence": {
+          "enum": [
+            "linked_crate",
+            "embedded_schema",
+            "linked_product_validator",
+            "release_metadata",
+            "explicitly_missing",
+            "explicitly_unsupported",
+            "no_evidence"
+          ]
+        },
+        "required_by": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/capability_id"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "component": {
+                "enum": [
+                  "registry_relay_image",
+                  "registry_notary_image"
+                ]
+              }
+            },
+            "required": [
+              "component"
+            ]
+          },
+          "then": {
+            "properties": {
+              "kind": {
+                "const": "image"
+              },
+              "state": {
+                "enum": [
+                  "unsupported",
+                  "not_evaluated"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "available"
+              }
+            },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "enum": [
+                  "linked_crate",
+                  "embedded_schema",
+                  "linked_product_validator",
+                  "release_metadata"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "missing"
+              }
+            },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "const": "explicitly_missing"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "unsupported"
+              }
+            },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "const": "explicitly_unsupported"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "not_evaluated"
+              }
+            },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "evidence": {
+                "const": "no_evidence"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "missing_support": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "kind",
+        "state",
+        "required_by"
+      ],
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/support_component"
+        },
+        "kind": {
+          "$ref": "#/$defs/support_kind"
+        },
+        "state": {
+          "enum": [
+            "missing",
+            "unsupported"
+          ]
+        },
+        "required_by": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/capability_id"
+          }
+        }
+      }
+    },
+    "inactive_or_unused": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capability",
+        "reason"
+      ],
+      "properties": {
+        "capability": {
+          "enum": [
+            "source_http",
+            "source_script",
+            "source_snapshot",
+            "registry_relay_product",
+            "registry_notary_product"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "declared_not_enabled",
+            "declared_enabled_not_used"
+          ]
+        }
+      }
+    }
+  }
+}

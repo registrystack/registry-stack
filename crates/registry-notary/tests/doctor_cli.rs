@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use registry_config_report::{CONFIG_EXPLANATION_SCHEMA_V1, PRODUCT_DIAGNOSTIC_REPORT_SCHEMA_V1};
+use registry_notary_server::NotaryActivationCode;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -12,6 +13,13 @@ const TEST_API_HASH: &str =
     "sha256:31f2999a69fa6301763a9f61eea44388a13318ce8b80a16a115a9efdb62b883b";
 const TEST_AUDIT_SECRET: &str = "doctor-audit-secret-32-bytes-minimum";
 const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+const DOCTOR_PATH_SENTINEL: &str = "REDACTION_DOCTOR_LOCAL_PATH";
+const DOCTOR_HASH_SENTINEL: &str =
+    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const DOCTOR_PARSER_SENTINEL: &str = "REDACTION_DOCTOR_PARSER_STRING";
+const DOCTOR_COUNTRY_SENTINEL: &str = "REDACTION_DOCTOR_COUNTRY_VALUE";
+const DOCTOR_SECRET_SENTINEL: &str = "REDACTION_DOCTOR_SECRET_VALUE";
+const DOCTOR_USER_SENTINEL: &str = "redaction-doctor-user@example.test";
 
 #[derive(Default)]
 struct TestConfigOptions<'a> {
@@ -220,8 +228,18 @@ REGISTRY_NOTARY_POSTGRES_URL='postgresql://registry_notary_runtime:test@127.0.0.
 }
 
 fn write_invalid_config(tmp: &TempDir) -> PathBuf {
-    let path = tmp.path().join("invalid.yaml");
-    std::fs::write(&path, "auth:\n  mode: definitely-not-valid\n").expect("config writes");
+    let private_dir = tmp
+        .path()
+        .join(format!("{DOCTOR_PATH_SENTINEL}-{DOCTOR_USER_SENTINEL}"));
+    std::fs::create_dir_all(&private_dir).expect("private config dir");
+    let path = private_dir.join(format!("{DOCTOR_COUNTRY_SENTINEL}.yaml"));
+    std::fs::write(
+        &path,
+        format!(
+            "country: {DOCTOR_COUNTRY_SENTINEL}\nhash: {DOCTOR_HASH_SENTINEL}\nsecret: [{DOCTOR_SECRET_SENTINEL}\nparser: {DOCTOR_PARSER_SENTINEL}\n"
+        ),
+    )
+    .expect("config writes");
     path
 }
 
@@ -284,6 +302,37 @@ fn diagnostic_with_code<'a>(report: &'a Value, code: &str) -> Option<&'a Value> 
         .expect("diagnostics array")
         .iter()
         .find(|diagnostic| diagnostic["code"] == code)
+}
+
+fn safe_configuration_message() -> String {
+    let definition = NotaryActivationCode::CONFIGURATION_INVALID.definition();
+    format!(
+        "{} Next action: {}",
+        definition.meaning, definition.remediation
+    )
+}
+
+fn assert_safe_configuration_diagnostic(report: &Value) -> &Value {
+    let diagnostic =
+        diagnostic_with_code(report, NotaryActivationCode::CONFIGURATION_INVALID.as_str())
+            .expect("stable configuration diagnostic");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["message"], safe_configuration_message());
+    diagnostic
+}
+
+fn assert_output_excludes(output: &std::process::Output, sentinels: &[&str]) {
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for sentinel in sentinels {
+        assert!(
+            !combined.contains(sentinel),
+            "doctor output leaked sentinel {sentinel:?}: {combined}"
+        );
+    }
 }
 
 fn assert_no_documentation_key(diagnostic: &Value) {
@@ -664,12 +713,7 @@ fn doctor_json_rejects_multi_instance_in_memory_state_before_profile_override() 
     assert_product_diagnostic_report(&report);
     assert_eq!(report["status"], "error");
 
-    let diagnostic = diagnostic_with_code(&report, "failed").expect("invalid state diagnostic");
-    assert_eq!(diagnostic["severity"], "error");
-    assert!(diagnostic["message"]
-        .as_str()
-        .expect("diagnostic message")
-        .contains("state.storage = in_memory requires deployment.multi_instance = false"));
+    assert_safe_configuration_diagnostic(&report);
 }
 
 #[test]
@@ -989,6 +1033,11 @@ fn doctor_json_reports_success_as_single_redacted_document() {
 
     assert_product_diagnostic_report(&report);
     assert_eq!(report["status"], "ok");
+    assert_eq!(report["source"], json!({ "kind": "local_file" }));
+    assert!(
+        report.get("hashes").is_none(),
+        "doctor must not publish raw internal config hashes"
+    );
     assert!(report["diagnostics"]
         .as_array()
         .expect("diagnostics array")
@@ -1007,6 +1056,7 @@ fn doctor_json_reports_success_as_single_redacted_document() {
     assert!(!stdout.contains(TEST_ISSUER_JWK));
     assert!(!stdout.contains(TEST_AUDIT_SECRET));
     assert!(!stdout.contains(TEST_API_HASH));
+    assert!(!stdout.contains(config.to_string_lossy().as_ref()));
 }
 
 #[test]
@@ -1058,27 +1108,122 @@ fn doctor_json_reports_config_parse_failure_without_text_preamble() {
         !output.status.success(),
         "doctor should fail for invalid config"
     );
-    let stdout = String::from_utf8(output.stdout).expect("stdout is utf8");
-    let report: Value = serde_json::from_str(&stdout).expect("failure emits JSON");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("failure emits JSON");
     assert_product_diagnostic_report(&report);
     assert_eq!(report["status"], "error");
-
-    assert!(report["diagnostics"]
-        .as_array()
-        .expect("diagnostics array")
-        .iter()
-        .any(|diagnostic| diagnostic["severity"] == "error"
-            && diagnostic["message"]
-                .as_str()
-                .expect("message")
-                .contains("config YAML parse or validation failed")
-            && diagnostic["message"]
-                .as_str()
-                .expect("message")
-                .contains("fix the YAML syntax and field names")));
+    assert_eq!(report["source"], json!({ "kind": "local_file" }));
+    assert!(report.get("hashes").is_none());
+    assert_safe_configuration_diagnostic(&report);
     assert_eq!(
-        String::from_utf8(output.stderr).expect("stderr is utf8"),
+        String::from_utf8(output.stderr.clone()).expect("stderr is utf8"),
         ""
+    );
+    assert_output_excludes(
+        &output,
+        &[
+            config.to_str().expect("config path is UTF-8"),
+            DOCTOR_PATH_SENTINEL,
+            DOCTOR_HASH_SENTINEL,
+            DOCTOR_PARSER_SENTINEL,
+            DOCTOR_COUNTRY_SENTINEL,
+            DOCTOR_SECRET_SENTINEL,
+            DOCTOR_USER_SENTINEL,
+        ],
+    );
+}
+
+#[test]
+fn doctor_text_reports_config_parse_failure_with_static_code_and_guidance() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_invalid_config(&tmp);
+
+    let output = doctor_command(&config, None).output().expect("doctor runs");
+
+    assert!(!output.status.success());
+    let definition = NotaryActivationCode::CONFIGURATION_INVALID.definition();
+    let stdout = String::from_utf8(output.stdout.clone()).expect("stdout is UTF-8");
+    assert!(stdout.contains(&format!(
+        "FAIL  {} [{}]",
+        definition.meaning,
+        definition.code.as_str()
+    )));
+    assert!(stdout.contains(&format!("Next action: {}", definition.remediation)));
+    assert_eq!(
+        String::from_utf8(output.stderr.clone()).expect("stderr is UTF-8"),
+        ""
+    );
+    assert_output_excludes(
+        &output,
+        &[
+            config.to_str().expect("config path is UTF-8"),
+            DOCTOR_PATH_SENTINEL,
+            DOCTOR_HASH_SENTINEL,
+            DOCTOR_PARSER_SENTINEL,
+            DOCTOR_COUNTRY_SENTINEL,
+            DOCTOR_SECRET_SENTINEL,
+            DOCTOR_USER_SENTINEL,
+        ],
+    );
+}
+
+#[test]
+fn doctor_json_missing_source_reports_classification_without_local_path() {
+    let tmp = TempDir::new().expect("tempdir");
+    let missing = tmp.path().join(format!(
+        "{DOCTOR_PATH_SENTINEL}-{DOCTOR_SECRET_SENTINEL}.yaml"
+    ));
+
+    let output = doctor_command(&missing, None)
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("failure emits JSON");
+    assert_product_diagnostic_report(&report);
+    assert_eq!(report["source"], json!({ "kind": "local_file" }));
+    assert!(report.get("hashes").is_none());
+    assert_safe_configuration_diagnostic(&report);
+    assert_output_excludes(
+        &output,
+        &[
+            missing.to_str().expect("missing path is UTF-8"),
+            DOCTOR_PATH_SENTINEL,
+            DOCTOR_SECRET_SENTINEL,
+        ],
+    );
+}
+
+#[test]
+fn doctor_missing_env_file_has_value_free_stderr() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config(&tmp);
+    let missing_env = tmp.path().join(format!(
+        "{DOCTOR_PATH_SENTINEL}-{DOCTOR_COUNTRY_SENTINEL}-{DOCTOR_SECRET_SENTINEL}.env"
+    ));
+
+    let output = doctor_command(&config, Some(&missing_env))
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let failure = registry_notary_server::NotaryActivationFailure::from(
+        NotaryActivationCode::CONFIGURATION_INVALID,
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr.clone()).expect("stderr is UTF-8"),
+        format!("ERROR {failure}\n")
+    );
+    assert_output_excludes(
+        &output,
+        &[
+            missing_env.to_str().expect("env path is UTF-8"),
+            DOCTOR_PATH_SENTINEL,
+            DOCTOR_COUNTRY_SENTINEL,
+            DOCTOR_SECRET_SENTINEL,
+        ],
     );
 }
 
@@ -1095,16 +1240,8 @@ fn doctor_json_reports_empty_claim_formats_with_remediation() {
     assert!(!output.status.success(), "doctor must reject empty formats");
     let report: Value = serde_json::from_slice(&output.stdout).expect("doctor emits JSON");
     assert_product_diagnostic_report(&report);
-    let diagnostic = diagnostic_with_code(&report, "failed").expect("failure diagnostic");
-    let message = diagnostic["message"].as_str().expect("message string");
-    assert!(
-        message.contains("empty-format"),
-        "claim id is reported: {message}"
-    );
-    assert!(
-        message.contains("omit formats"),
-        "remediation is reported: {message}"
-    );
+    assert_safe_configuration_diagnostic(&report);
+    assert_output_excludes(&output, &["empty-format", "omit formats"]);
 }
 
 #[test]
@@ -1123,15 +1260,14 @@ fn doctor_json_reports_sd_jwt_claim_format_with_remediation() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("doctor emits JSON");
     assert_product_diagnostic_report(&report);
-    let diagnostic = diagnostic_with_code(&report, "failed").expect("failure diagnostic");
-    let message = diagnostic["message"].as_str().expect("message string");
-    assert!(
-        message.contains("sd-jwt-format"),
-        "claim id is reported: {message}"
-    );
-    assert!(
-        message.contains("application/dc+sd-jwt") && message.contains("credential_profiles"),
-        "offending format and remediation are reported: {message}"
+    assert_safe_configuration_diagnostic(&report);
+    assert_output_excludes(
+        &output,
+        &[
+            "sd-jwt-format",
+            "application/dc+sd-jwt",
+            "credential_profiles",
+        ],
     );
 }
 
@@ -1158,16 +1294,8 @@ fn doctor_json_reports_unknown_claim_format_with_remediation() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("doctor emits JSON");
     assert_product_diagnostic_report(&report);
-    let diagnostic = diagnostic_with_code(&report, "failed").expect("failure diagnostic");
-    let message = diagnostic["message"].as_str().expect("message string");
-    assert!(
-        message.contains("unknown-format"),
-        "claim id is reported: {message}"
-    );
-    assert!(
-        message.contains("application/example+json") && message.contains("supported formats"),
-        "offending format and remediation are reported: {message}"
-    );
+    assert_safe_configuration_diagnostic(&report);
+    assert_output_excludes(&output, &["unknown-format", "application/example+json"]);
 }
 
 #[test]
@@ -1190,15 +1318,12 @@ fn doctor_json_reports_missing_canonical_claim_format_with_remediation() {
     );
     let report: Value = serde_json::from_slice(&output.stdout).expect("doctor emits JSON");
     assert_product_diagnostic_report(&report);
-    let diagnostic = diagnostic_with_code(&report, "failed").expect("failure diagnostic");
-    let message = diagnostic["message"].as_str().expect("message string");
-    assert!(
-        message.contains("missing-canonical"),
-        "claim id is reported: {message}"
-    );
-    assert!(
-        message.contains("application/vnd.registry-notary.claim-result+json")
-            && message.contains("add it"),
-        "canonical format and remediation are reported: {message}"
+    assert_safe_configuration_diagnostic(&report);
+    assert_output_excludes(
+        &output,
+        &[
+            "missing-canonical",
+            "application/vnd.registry-notary.claim-result+json",
+        ],
     );
 }

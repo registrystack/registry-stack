@@ -1,6 +1,6 @@
 ---
 title: Run a protected registry API locally
-description: Start a local Registry Relay over a tiny benefits workbook, make denied and allowed requests, inspect the generated contract, and change a disclosure rule.
+description: Start a local Registry Relay over a tiny benefits workbook, make denied and allowed requests, inspect the editable local scaffold, and change a disclosure rule.
 status: current
 owner: registry-docs
 source_repos:
@@ -19,7 +19,7 @@ Registry Relay turns a tabular source you already hold, such as a spreadsheet or
 table, into a protected, read-only API without copying the data out.
 Use this tutorial to start a protected registry API on your machine.
 You will create a local project from a tiny benefits workbook, compare operational and restricted
-identity reads, and inspect the contract Registry Stack generated.
+identity reads, and inspect the editable local contract scaffold Registry Stack initialized.
 
 <QuickstartMeta
   outcome="A protected local API over a benefits workbook, with operational and restricted identity reads separated, one canonical birth date retained, and an edited disclosure rule enforced."
@@ -299,17 +299,20 @@ This route is appropriate when an authorized caseworker needs the source fields.
 system needs only an age threshold or age band, use Notary to derive that result from
 `date_of_birth` without returning the birth date or the rest of the row.
 
-## Inspect the generated contract
+## Inspect the editable local scaffold
 
-Now that the API works, inspect what `registryctl` generated:
+Now that the API works, inspect the Relay configuration scaffold that `registryctl init relay`
+created:
 
 ```sh
 sed -n '1,520p' relay/config.yaml
 ```
 
-The generated Relay contract defines the local service metadata, API-key scopes, source tables,
-operational and restricted projections, purpose allowlists, filters, relationships, aggregates,
-and audit sink.
+`relay/config.yaml` is generated once as part of the legacy first-result scaffold, then becomes
+human-owned editable runtime configuration for this local project. It is not compiler-generated
+build output under `.registry-stack/build/`, and this tutorial intentionally edits it. The Relay
+contract defines the local service metadata, API-key scopes, source tables, operational and
+restricted projections, purpose allowlists, filters, relationships, aggregates, and audit sink.
 Raw keys stay in `secrets/local.env`.
 
 Open the runtime API reference:
@@ -417,17 +420,21 @@ Ask the logs why:
 registryctl logs
 ```
 
-The Relay container exited during config validation:
+The Relay container exited during product validation.
+The public diagnostic is a stable, value-free code:
 
 ```text
-ERROR aggregate_only_execution on personal, confidential, or secret datasets requires disclosure_control.min_cell_size >= 2 code="config.validation_error" dataset_id=benefits_casework aggregate_id=by_district
+relay.startup.config_validation_rejected
 ```
 
-The dataset is marked `sensitivity: personal` in the same file, and Relay refuses to run
-an aggregate-only definition over personal data with a disclosure floor under 2.
-You can raise the rule; you cannot weaken it past the floor.
-The error names `min_cell_size`, the API field that corresponds to the `min_group_size`
-config key; the aggregate response uses the API name too.
+The code establishes that the parsed Relay configuration failed a product invariant.
+It does not repeat configured identifiers, values, or raw validation text.
+In this controlled exercise, the only configuration edit was changing `min_group_size`
+from 3 to 1.
+The dataset is marked `sensitivity: personal` in the same file, so restore the documented
+floor instead of trying to diagnose the rule from private process output.
+Use the [operator diagnostic reference](../../reference/diagnostics/operator/) for the
+code's static meaning, evidence limit, and remediation.
 
 Restore `min_group_size` to 2 and restart once more:
 
@@ -447,7 +454,8 @@ registryctl stop
 ```
 
 This stops the local containers.
-It does not delete your workbook, generated config, local keys, or smoke results.
+It does not delete your workbook, editable Relay configuration scaffold, generated local keys, or
+smoke results.
 
 ## What you built
 
@@ -464,7 +472,7 @@ Relay refused to start when the floor dropped under 2 on personal data.
 
 ## Next
 
-- [Evaluate a registry-backed claim locally](../verify-claim-registry-api/): add Notary to this same
+- [Evaluate a registry-backed claim locally](/journeys/registry-backed-notary-claim/): add Notary to this same
   project, match by name and date of birth, and evaluate registration acceptance without exposing
   the source row.
 - [Author an HTTP Registry Stack project](../author-registry-project/): adapt a source through
@@ -478,8 +486,8 @@ Relay refused to start when the floor dropped under 2 on personal data.
 | The installer reports an unsupported platform | No binary is published for that OS or CPU. | Run the pinned `cargo install` command printed by the installer. For `v0.9.0` or later, also checksum-verify the matching `registryctl-vX.Y.Z-image-lock.json` release asset and place it beside the installed binary. |
 | `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, OrbStack, Colima, Podman, or your supported provider, then run `registryctl start` again. |
 | Docker reports no `linux/arm64` manifest for a Registry Stack image | The v0.13.0 Relay and Notary images are published for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`. |
-| `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | The locally cached container image does not match the digest-pinned image in the generated `compose.yaml`. | Run `docker compose pull` in the project directory (on Apple silicon, prefix it with `DOCKER_DEFAULT_PLATFORM=linux/amd64`), then `registryctl start` again. |
+| `registryctl start` fails and Relay reports `relay.startup.config_document_invalid` or `relay.startup.config_validation_rejected` after an image change | The locally cached container image may not match the digest-pinned image in the generated `compose.yaml`, or the scaffold is invalid for that image. | Pull the digest-pinned image, then validate the reviewed scaffold without pasting raw configuration into logs or support channels. |
 | `registryctl init` reports that its image lock is missing or invalid | The binary was moved or built without the strict image lock from the same release, or the file failed its release, source, platform, or digest checks. | Rerun the installer from the same pinned target tag so it checksum-verifies and installs both files. For an operator-managed or source-test location, set `REGISTRYCTL_IMAGE_LOCK` to the checksum-verified lock from that exact release. Do not substitute a lock from another version or a mutable image tag. |
-| `registryctl start` fails with `Relay did not become healthy and ready before timeout` after a config edit | The edited `relay/config.yaml` fails validation, so the container exits at startup. | Run `registryctl logs`, fix the field named in the `ERROR` line, then run `registryctl stop` and `registryctl start` again. |
+| `registryctl start` fails with `Relay did not become healthy and ready before timeout` after a config edit | The edited `relay/config.yaml` fails startup validation, so the container exits before readiness. | Use the stable Relay startup code and operator diagnostic reference to correct the reviewed field, then stop and start the project again. |
 | A row read returns `403 Forbidden` | The key is valid but lacks the row-read scope. | Use `ROW_READER_RAW` for row reads. |
 | A row read returns `400 auth.purpose_required` | The entity requires a `Data-Purpose` header. | Send `Data-Purpose: https://example.local/purpose/tutorial` or another purpose URI. |

@@ -3,6 +3,122 @@
 use super::*;
 use crate::test_support::*;
 
+const PATH_SENTINEL: &str = "/private/SENTINEL_COUNTRY_CONFIG_PATH";
+const HASH_SENTINEL: &str =
+    "sha256:SENTINEL_EXPECTED_COUNTRY_DIGEST_11111111111111111111111111111111";
+const OTHER_HASH_SENTINEL: &str =
+    "sha256:SENTINEL_ACTUAL_COUNTRY_DIGEST_2222222222222222222222222222222222";
+const PARSER_SENTINEL: &str = "SENTINEL_PRIVATE_PARSER_TEXT";
+const SECRET_SENTINEL: &str = "SENTINEL_PRIVATE_SECRET";
+const COUNTRY_SENTINEL: &str = "SENTINEL_PRIVATE_COUNTRY_VALUE";
+
+fn config_bundle_error_cases() -> Vec<(ConfigBundleError, BundleVerificationCode)> {
+    vec![
+        (
+            ConfigBundleError::Io(PATH_SENTINEL.to_string()),
+            BundleVerificationCode::REJECTED_VALIDATION,
+        ),
+        (
+            ConfigBundleError::Json(PARSER_SENTINEL.to_string()),
+            BundleVerificationCode::REJECTED_VALIDATION,
+        ),
+        (
+            ConfigBundleError::InvalidManifest(COUNTRY_SENTINEL),
+            BundleVerificationCode::REJECTED_VALIDATION,
+        ),
+        (
+            ConfigBundleError::InvalidTrustAnchor(SECRET_SENTINEL),
+            BundleVerificationCode::REJECTED_SIGNATURE,
+        ),
+        (
+            ConfigBundleError::InvalidPermissions(PATH_SENTINEL),
+            BundleVerificationCode::REJECTED_SIGNATURE,
+        ),
+        (
+            ConfigBundleError::InvalidBreakGlass(SECRET_SENTINEL),
+            BundleVerificationCode::REJECTED_VALIDATION,
+        ),
+        (
+            ConfigBundleError::InvalidSignatureEnvelope(SECRET_SENTINEL),
+            BundleVerificationCode::REJECTED_SIGNATURE,
+        ),
+        (
+            ConfigBundleError::BindingMismatch(COUNTRY_SENTINEL),
+            BundleVerificationCode::REJECTED_BINDING,
+        ),
+        (
+            ConfigBundleError::SignatureRejected,
+            BundleVerificationCode::REJECTED_SIGNATURE,
+        ),
+        (
+            ConfigBundleError::FileClosure(PATH_SENTINEL.to_string()),
+            BundleVerificationCode::REJECTED_SIGNATURE,
+        ),
+        (
+            ConfigBundleError::HashMismatch {
+                path: PATH_SENTINEL.to_string(),
+                expected: HASH_SENTINEL.to_string(),
+                actual: OTHER_HASH_SENTINEL.to_string(),
+            },
+            BundleVerificationCode::REJECTED_SIGNATURE,
+        ),
+    ]
+}
+
+fn config_boot_error_cases() -> Vec<(ConfigBootError, BundleVerificationCode)> {
+    vec![
+        (
+            ConfigBootError::Store(registry_platform_ops::AntiRollbackStoreError::InvalidState(
+                SECRET_SENTINEL.to_string(),
+            )),
+            BundleVerificationCode::REJECTED_ROLLBACK,
+        ),
+        (
+            ConfigBootError::Bundle(ConfigBundleError::BindingMismatch(COUNTRY_SENTINEL)),
+            BundleVerificationCode::REJECTED_BINDING,
+        ),
+        (
+            ConfigBootError::NonMonotonicSequence,
+            BundleVerificationCode::REJECTED_ROLLBACK,
+        ),
+        (
+            ConfigBootError::OverrideHashMismatch,
+            BundleVerificationCode::REJECTED_ROLLBACK,
+        ),
+        (
+            ConfigBootError::MissingUnsignedConfigPath,
+            BundleVerificationCode::REJECTED_ROLLBACK,
+        ),
+        (
+            ConfigBootError::UnsignedConfigHashMismatch {
+                expected: HASH_SENTINEL.to_string(),
+                actual: OTHER_HASH_SENTINEL.to_string(),
+            },
+            BundleVerificationCode::REJECTED_ROLLBACK,
+        ),
+        (
+            ConfigBootError::MissingSignedBundleId,
+            BundleVerificationCode::REJECTED_VALIDATION,
+        ),
+        (
+            ConfigBootError::MissingSignedBundleManifestHash,
+            BundleVerificationCode::REJECTED_VALIDATION,
+        ),
+        (
+            ConfigBootError::MissingSignedBundleSequence,
+            BundleVerificationCode::REJECTED_VALIDATION,
+        ),
+        (
+            ConfigBootError::MissingOverridePin,
+            BundleVerificationCode::REJECTED_VALIDATION,
+        ),
+        (
+            ConfigBootError::InvalidOverridePath,
+            BundleVerificationCode::REJECTED_VALIDATION,
+        ),
+    ]
+}
+
 #[test]
 fn config_env_expansion_replaces_required_and_default_values() {
     let _guard = ENV_LOCK.lock().expect("env lock");
@@ -36,6 +152,170 @@ fn config_env_expansion_rejects_invalid_variable_names() {
         expand_config_env_vars("${NOT-A-VALID-NAME:-fallback}").expect_err("invalid var fails");
 
     assert!(err.to_string().contains("invalid env var name"));
+}
+
+#[test]
+fn bundle_startup_rejections_use_every_exact_static_catalog_definition() {
+    for code in BundleVerificationCode::ALL {
+        let definition = code.definition();
+        let rejection = safe_bundle_rejection("config.bundle_rejected", *code, None);
+
+        assert_eq!(rejection.classification_code, "config.bundle_rejected");
+        assert_eq!(rejection.result, code.as_str());
+        assert_eq!(rejection.reason, "none");
+        assert_eq!(
+            rejection.activation_code,
+            NotaryActivationCode::CONFIGURATION_INVALID.as_str()
+        );
+        assert_eq!(rejection.safe_meaning, definition.safe_meaning);
+        assert_eq!(rejection.safe_remediation, definition.safe_remediation);
+    }
+}
+
+#[test]
+fn typed_bundle_failures_map_to_exact_value_free_startup_definitions() {
+    let forbidden = [
+        PATH_SENTINEL,
+        HASH_SENTINEL,
+        OTHER_HASH_SENTINEL,
+        PARSER_SENTINEL,
+        SECRET_SENTINEL,
+        COUNTRY_SENTINEL,
+    ];
+
+    for (error, expected) in config_bundle_error_cases() {
+        let code = bundle_verify_rejection_code(&error);
+        assert_eq!(code, expected);
+        let rejection = safe_bundle_rejection("config.bundle_rejected", code, None);
+        assert_eq!(rejection.result, expected.as_str());
+        assert_eq!(rejection.safe_meaning, expected.definition().safe_meaning);
+        assert_eq!(
+            rejection.safe_remediation,
+            expected.definition().safe_remediation
+        );
+        let rendered = format!("{rejection:?}");
+        for sentinel in forbidden {
+            assert!(
+                !rendered.contains(sentinel),
+                "safe startup rejection exposed {sentinel:?}: {rendered}"
+            );
+        }
+    }
+}
+
+#[test]
+fn typed_boot_failures_preserve_binding_rollback_and_validation_definitions() {
+    for (error, expected) in config_boot_error_cases() {
+        let code = error.bundle_rejection_code();
+        assert_eq!(code, expected);
+        let rejection = safe_bundle_rejection("config.bundle_rejected", code, None);
+        assert_eq!(rejection.result, expected.as_str());
+        assert_eq!(rejection.safe_meaning, expected.definition().safe_meaning);
+        assert_eq!(
+            rejection.safe_remediation,
+            expected.definition().safe_remediation
+        );
+    }
+}
+
+#[test]
+fn local_configuration_rejection_uses_notary_configuration_definition() {
+    let definition = NotaryActivationCode::CONFIGURATION_INVALID.definition();
+    let rejection = safe_configuration_rejection(
+        NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
+        BundleVerificationCode::REJECTED_VALIDATION.as_str(),
+        None,
+    );
+
+    assert_eq!(rejection.activation_code, definition.code.as_str());
+    assert_eq!(rejection.safe_meaning, definition.meaning);
+    assert_eq!(rejection.safe_remediation, definition.remediation);
+}
+
+#[test]
+fn config_boot_error_mapping_preserves_static_bundle_code_and_drops_hash_values() {
+    let error = map_config_boot_error(ConfigBootError::UnsignedConfigHashMismatch {
+        expected: HASH_SENTINEL.to_string(),
+        actual: OTHER_HASH_SENTINEL.to_string(),
+    });
+    let failure = error
+        .downcast_ref::<BundleVerificationFailure>()
+        .expect("config boot errors retain only the typed bundle rejection");
+
+    assert_eq!(failure.code(), BundleVerificationCode::REJECTED_ROLLBACK);
+    assert!(std::error::Error::source(failure).is_none());
+    let rendered = format!("{failure} {failure:?}");
+    assert!(rendered.contains(BundleVerificationCode::REJECTED_ROLLBACK.as_str()));
+    assert!(!rendered.contains(HASH_SENTINEL));
+    assert!(!rendered.contains(OTHER_HASH_SENTINEL));
+}
+
+#[test]
+fn verified_bundle_parse_failure_returns_static_validation_failure() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    let mut verified =
+        verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path).expect("bundle verifies");
+    verified.config_bytes = b"SENTINEL_PRIVATE_COUNTRY_VALUE: [invalid parser text".to_vec();
+    let bootstrap =
+        parse_config_document(&notary_bootstrap_config(&fixture)).expect("bootstrap config parses");
+    let config_trust = bootstrap
+        .config
+        .config_trust
+        .expect("bootstrap config has trust settings");
+
+    let error = load_verified_bundle_server_config(&config_trust, true, verified)
+        .expect_err("verified bundle parser failure rejects startup");
+    let failure = error
+        .downcast_ref::<BundleVerificationFailure>()
+        .expect("verified bundle parser failures retain a validation category");
+
+    assert_eq!(failure.code(), BundleVerificationCode::REJECTED_VALIDATION);
+    let rendered = format!("{failure} {failure:?}");
+    assert!(!rendered.contains("SENTINEL_PRIVATE_COUNTRY_VALUE"));
+    assert!(!rendered.contains("invalid parser text"));
+}
+
+#[test]
+fn verified_bundle_product_validation_failure_returns_static_validation_failure() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let governed_invalid =
+        notary_bundle_runtime_config().replace("mode: dedicated", "mode: shared_with_public");
+    let fixture = write_signed_notary_bundle_with_config(&tmp, governed_invalid);
+    let verified =
+        verify_config_bundle(&fixture.bundle_dir, &fixture.anchor_path).expect("bundle verifies");
+    let bootstrap =
+        parse_config_document(&notary_bootstrap_config(&fixture)).expect("bootstrap config parses");
+    let config_trust = bootstrap
+        .config
+        .config_trust
+        .expect("bootstrap config has trust settings");
+
+    let error = load_verified_bundle_server_config(&config_trust, true, verified)
+        .expect_err("verified bundle product validation failure rejects startup");
+    let failure = error
+        .downcast_ref::<BundleVerificationFailure>()
+        .expect("verified bundle validation failures retain a validation category");
+
+    assert_eq!(failure.code(), BundleVerificationCode::REJECTED_VALIDATION);
+}
+
+#[test]
+fn missing_startup_config_path_returns_value_free_failure() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let sentinel = "SENTINEL_PRIVATE_COUNTRY_CONFIG_PATH";
+    let config_path = tmp.path().join(sentinel).join("notary.yaml");
+
+    let error = load_server_config(&config_path, false)
+        .expect_err("missing startup config must fail closed");
+    let failure = error
+        .downcast_ref::<NotaryActivationFailure>()
+        .expect("missing startup config uses the redacted activation boundary");
+
+    assert_eq!(failure.code(), NotaryActivationCode::CONFIGURATION_INVALID);
+    let rendered = format!("{failure} {failure:?}");
+    assert!(!rendered.contains(sentinel));
+    assert!(!rendered.contains(config_path.to_string_lossy().as_ref()));
 }
 
 #[test]

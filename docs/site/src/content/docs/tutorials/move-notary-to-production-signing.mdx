@@ -59,8 +59,9 @@ check the complete provider contract and current limits before provisioning the 
 Find the demo key, issuer, and every profile that references the key:
 
 ```sh
+NOTARY_CONFIG=generated-inputs/notary/config/notary.yaml
 rg -n 'registry-notary-demo|local_jwk_env|private_jwk_env|signing_key:|issuer:' \
-  <notary-config.yaml>
+  "$NOTARY_CONFIG"
 ```
 
 A generated demo configuration contains fields like these:

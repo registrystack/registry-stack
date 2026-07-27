@@ -48,6 +48,13 @@ pub use identifiers::{
     ConsultationId, ConsultationIdentifierError, ConsultationKey, NotaryEvaluationId,
     ResolvedConsultationProfile,
 };
+pub use service::{
+    consultation_service_activation_definitions, ConsultationService,
+    ConsultationServiceActivationCode, ConsultationServiceActivationDefinition,
+    ConsultationServiceActivationError, ConsultationServiceActivationFailure,
+    ConsultationServiceActivationLifecycle, ConsultationServiceActivationVersion,
+    ConsultationServiceReadiness, ConsultationServiceShutdownError,
+};
 #[allow(
     unused_imports,
     reason = "reachable crate-private service return and error member types for the HTTP boundary"
@@ -56,10 +63,6 @@ pub(crate) use service::{
     ConsultationDenialReason, ConsultationDenialRecorded, ConsultationDenialRoute,
     ConsultationExecutionError, ConsultationRetryAfter, ConsultationServiceError,
     ResolvedConsultationContext,
-};
-pub use service::{
-    ConsultationService, ConsultationServiceActivationError, ConsultationServiceReadiness,
-    ConsultationServiceShutdownError,
 };
 pub use types::{
     AcquiredField, AcquisitionClass, ConsultationOutcome, ConsultationValidationError,

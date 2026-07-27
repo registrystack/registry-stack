@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-13"
+last_reviewed: "2026-07-26"
 doc_type: how-to
 locale: en
 standards_referenced:
@@ -64,7 +64,7 @@ revision: 1
 source:
   product: fhir-server
   versions: { unverified: [r4-api] }
-  auth: { type: none }
+  auth: { type: static_bearer }
   allow:
     - { method: GET, path: /fhir/Patient }
     - { method: GET, path: /fhir/Coverage }
@@ -84,13 +84,10 @@ capability:
   script: { file: adapter.rhai }
 
 outputs:
-  coverage_status: { type: string, maxLength: 32 }
-  insurer_name: { type: string, maxLength: 160 }
+  coverage_status: { type: [string, "null"], maxLength: 16 }
+  insurer_name: { type: [string, "null"], maxLength: 120 }
 
-limits:
-  calls: 5
-  source_bytes: 2MiB
-  deadline: 15s
+limits: { calls: 4, source_bytes: 512KiB, request_bytes: 8KiB, deadline: 12s }
 ```
 
 An exact rule admits only that path. `*` admits one bounded path segment. A terminal `/**` is
@@ -137,13 +134,15 @@ integrations:
   coverage:
     source:
       origin: https://fhir.internal.invalid
-      timeout: 10s
-      concurrency: 4
-      rate: { per_minute: 120, burst: 10 }
+      credential:
+        token: { secret: FHIR_ACCESS_TOKEN }
+        generation: 1
 ```
 
-Add private CIDRs, a private CA, mTLS, or a credential binding only when the deployment needs
-them. These settings cannot widen the stable method and path authority.
+The `static_bearer` declaration requires this environment-owned token reference. Preflight checks
+that the reference resolves without retaining or printing the token. Add private CIDRs, a private
+CA, or mTLS only when the deployment needs them. Environment settings cannot widen the stable
+method, path, call, byte, or deadline authority.
 
 ## Add request-aware fixtures
 
@@ -156,10 +155,12 @@ checks.
 ## Verify the journey
 
 ```sh
-registryctl test --project-dir <project>
+PROJECT_DIR=fhir-project
+ENVIRONMENT=local
+registryctl test --project-dir "$PROJECT_DIR"
 registryctl check \
-  --project-dir <project> \
-  --environment <environment> \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
   --explain
 ```
 

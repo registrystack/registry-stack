@@ -535,6 +535,69 @@ rule:
     .expect("minimal claim is valid YAML")
 }
 
+#[test]
+pub(super) fn claim_value_max_bytes_is_optional_for_direct_configs() {
+    let value: ClaimValueConfig = serde_norway::from_str("type: string\n")
+        .expect("legacy direct claim value config remains valid");
+    assert_eq!(value.max_bytes, None);
+    assert!(!serde_norway::to_string(&value)
+        .expect("claim value config serializes")
+        .contains("max_bytes"));
+}
+
+#[test]
+pub(super) fn string_claim_value_max_bytes_accepts_the_closed_platform_range() {
+    for max_bytes in [1, MAX_CLAIM_VALUE_STRING_BYTES_V1] {
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("bounded-string");
+        claim.value.value_type = "string".to_string();
+        claim.value.max_bytes = Some(max_bytes);
+        claim.rule = RuleConfig::Cel {
+            expression: r#""value""#.to_string(),
+            bindings: CelBindingsConfig::default(),
+        };
+        config.evidence.claims.push(claim);
+        config
+            .validate()
+            .unwrap_or_else(|error| panic!("max_bytes {max_bytes} must validate: {error}"));
+    }
+}
+
+#[test]
+pub(super) fn claim_value_max_bytes_rejects_out_of_range_and_non_string_use() {
+    for max_bytes in [0, MAX_CLAIM_VALUE_STRING_BYTES_V1 + 1] {
+        let mut config = minimal_config();
+        let mut claim = minimal_claim("invalid-bound");
+        claim.value.value_type = "string".to_string();
+        claim.value.max_bytes = Some(max_bytes);
+        config.evidence.claims.push(claim);
+        let error = config
+            .validate()
+            .expect_err("out-of-range max_bytes must fail configuration validation");
+        assert!(matches!(
+            error,
+            EvidenceConfigError::InvalidClaimValueConfig { ref claim, ref reason }
+                if claim == "invalid-bound"
+                    && reason.contains("between 1 and 65536")
+        ));
+    }
+
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("non-string-bound");
+    claim.value.value_type = "boolean".to_string();
+    claim.value.max_bytes = Some(16);
+    config.evidence.claims.push(claim);
+    let error = config
+        .validate()
+        .expect_err("non-string max_bytes must fail configuration validation");
+    assert!(matches!(
+        error,
+        EvidenceConfigError::InvalidClaimValueConfig { ref claim, ref reason }
+            if claim == "non-string-bound"
+                && reason.contains("only when value.type is string")
+    ));
+}
+
 pub(super) fn add_registry_credential_claim(
     config: &mut StandaloneRegistryNotaryConfig,
     claim_id: &str,
@@ -1128,6 +1191,12 @@ pub(super) fn server_limits_default_to_relay_parity_values() {
         Duration::from_secs(10)
     );
     assert_eq!(config.server.max_connections, 1024);
+}
+
+#[test]
+pub(super) fn cel_evaluation_timeout_keeps_the_fail_closed_product_default() {
+    let config = minimal_config();
+    assert_eq!(config.cel.eval_timeout_ms, 2_000);
 }
 
 #[test]

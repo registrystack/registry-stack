@@ -1,0 +1,491 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registryctl/project-documentation/registry.runtime.configuration_intent.v1.schema.json",
+  "title": "Registry Stack product-owned runtime configuration intent v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "format_version",
+    "runtime_schema",
+    "schema_id",
+    "schema_source",
+    "profiles",
+    "assignments",
+    "overrides"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "https://id.registrystack.org/schemas/registryctl/project-documentation/registry.runtime.configuration_intent.v1.schema.json"
+    },
+    "format_version": {
+      "const": "1.0"
+    },
+    "runtime_schema": {
+      "$ref": "#/$defs/runtimeSchema"
+    },
+    "schema_id": {
+      "type": "string",
+      "format": "uri"
+    },
+    "schema_source": {
+      "type": "string",
+      "pattern": "^[a-z0-9.-]+\\.schema\\.json$"
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/profile"
+      }
+    },
+    "assignments": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/assignment"
+      }
+    },
+    "overrides": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/override"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "runtime_schema": {
+            "const": "relay"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "profiles": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/profile"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "semantic_owner": {
+                      "const": "relay_runtime"
+                    },
+                    "human_owner": {
+                      "const": "relay_maintainers"
+                    },
+                    "products": {
+                      "const": [
+                        "relay",
+                        "docs"
+                      ]
+                    },
+                    "consumers": {
+                      "const": [
+                        "registry_relay",
+                        "docs_generator"
+                      ]
+                    },
+                    "generated_artifacts": {
+                      "const": [
+                        "relay_config",
+                        "field_reference"
+                      ]
+                    },
+                    "diagnostic": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^(registry\\.relay\\.config|config)\\.[a-z0-9_.]+$"
+                        },
+                        {
+                          "$ref": "#/$defs/prose"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "runtime_schema": {
+            "const": "notary"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "profiles": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/profile"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "semantic_owner": {
+                      "const": "notary_runtime"
+                    },
+                    "human_owner": {
+                      "const": "notary_maintainers"
+                    },
+                    "products": {
+                      "const": [
+                        "notary",
+                        "docs"
+                      ]
+                    },
+                    "consumers": {
+                      "const": [
+                        "registry_notary",
+                        "docs_generator"
+                      ]
+                    },
+                    "generated_artifacts": {
+                      "const": [
+                        "notary_config",
+                        "field_reference"
+                      ]
+                    },
+                    "diagnostic": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^(registry\\.notary\\.config|config)\\.[a-z0-9_.]+$"
+                        },
+                        {
+                          "$ref": "#/$defs/prose"
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "runtimeSchema": {
+      "enum": [
+        "relay",
+        "notary"
+      ]
+    },
+    "pathKind": {
+      "enum": [
+        "root",
+        "property",
+        "map_value",
+        "array_item"
+      ]
+    },
+    "prose": {
+      "type": "string",
+      "minLength": 24,
+      "pattern": "^(?![\\s\\S]*(?:TODO|TBD))[\\s\\S]*\\S$"
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "purpose",
+        "semantic_owner",
+        "human_owner",
+        "scope",
+        "environment_behavior",
+        "sensitivity",
+        "state",
+        "products",
+        "availability",
+        "stability",
+        "validation_stages",
+        "diagnostic",
+        "introduced_in",
+        "migration",
+        "migration_note",
+        "example_guidance",
+        "consumers",
+        "generated_artifacts",
+        "review_classes",
+        "semantic_rules"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "purpose": {
+          "$ref": "#/$defs/prose"
+        },
+        "semantic_owner": {
+          "enum": [
+            "relay_runtime",
+            "notary_runtime"
+          ]
+        },
+        "human_owner": {
+          "enum": [
+            "relay_maintainers",
+            "notary_maintainers"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/prose"
+        },
+        "environment_behavior": {
+          "enum": [
+            "bound_by_environment",
+            "narrows_reviewed_authority"
+          ]
+        },
+        "sensitivity": {
+          "enum": [
+            "public",
+            "internal",
+            "sensitive",
+            "secret_reference",
+            "structural"
+          ]
+        },
+        "state": {
+          "const": "runtime"
+        },
+        "products": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "relay",
+              "notary",
+              "docs"
+            ]
+          }
+        },
+        "availability": {
+          "const": "published"
+        },
+        "stability": {
+          "enum": [
+            "experimental",
+            "stable"
+          ]
+        },
+        "validation_stages": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "json_schema",
+              "rust_deserialization",
+              "operator_preflight"
+            ]
+          }
+        },
+        "diagnostic": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(registry\\.(relay|notary)\\.config|config)\\.[a-z0-9_.]+$"
+            },
+            {
+              "$ref": "#/$defs/prose"
+            }
+          ]
+        },
+        "introduced_in": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "migration": {
+          "const": "coordinate_deployment"
+        },
+        "migration_note": {
+          "$ref": "#/$defs/prose"
+        },
+        "example_guidance": {
+          "$ref": "#/$defs/prose"
+        },
+        "consumers": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "registry_relay",
+              "registry_notary",
+              "docs_generator"
+            ]
+          }
+        },
+        "generated_artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "relay_config",
+              "notary_config",
+              "field_reference"
+            ]
+          }
+        },
+        "review_classes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "contract",
+              "security",
+              "privacy",
+              "relay",
+              "notary",
+              "compatibility",
+              "documentation"
+            ]
+          }
+        },
+        "semantic_rules": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "knowledge_only",
+              "generated_docs_never_load_country_values",
+              "secret_never_reportable",
+              "sensitive_operational_metadata",
+              "arbitrary_map_keys_not_fixed_properties",
+              "array_items_share_element_contract"
+            ]
+          }
+        },
+        "open_map_semantics": {
+          "$ref": "#/$defs/prose"
+        }
+      }
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "pointer",
+        "key_path",
+        "path_kind",
+        "profile",
+        "purpose_source",
+        "default_source",
+        "schema_facts_reviewed"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/runtimeSchema"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "key_path": {
+          "type": "string"
+        },
+        "path_kind": {
+          "$ref": "#/$defs/pathKind"
+        },
+        "profile": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "purpose_source": {
+          "enum": [
+            "schema_description",
+            "profile",
+            "override"
+          ]
+        },
+        "default_source": {
+          "enum": [
+            "schema_default",
+            "no_schema_default",
+            "reviewed_runtime_default",
+            "not_applicable"
+          ]
+        },
+        "schema_facts_reviewed": {
+          "const": true
+        }
+      }
+    },
+    "override": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "pointer",
+        "key_path",
+        "path_kind"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/runtimeSchema"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "key_path": {
+          "type": "string"
+        },
+        "path_kind": {
+          "$ref": "#/$defs/pathKind"
+        },
+        "purpose": {
+          "$ref": "#/$defs/prose"
+        },
+        "runtime_default_note": {
+          "$ref": "#/$defs/prose"
+        }
+      },
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "purpose": {}
+          },
+          "required": [
+            "purpose"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "runtime_default_note": {}
+          },
+          "required": [
+            "runtime_default_note"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,5 +1,7 @@
 use crate::*;
 
+use registry_notary_server::NotaryActivationCode;
+
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 
@@ -109,6 +111,47 @@ impl Diagnostic {
     }
 }
 
+struct DoctorDiagnosticView<'a> {
+    severity: &'static str,
+    code: &'a str,
+    label: &'a str,
+    action: Option<&'a str>,
+}
+
+fn doctor_diagnostic_view(diagnostic: &Diagnostic) -> DoctorDiagnosticView<'_> {
+    let (severity, code) = if let (Some(severity), Some(code)) = (
+        diagnostic.report_severity,
+        diagnostic.report_code.as_deref(),
+    ) {
+        (shared_severity(severity), code)
+    } else if diagnostic.warning {
+        ("warning", "warning")
+    } else if diagnostic.ok {
+        ("info", "ok")
+    } else {
+        ("error", "failed")
+    };
+    if let Some(definition) = NotaryActivationCode::ALL
+        .iter()
+        .copied()
+        .find(|activation_code| activation_code.as_str() == code)
+        .map(NotaryActivationCode::definition)
+    {
+        return DoctorDiagnosticView {
+            severity,
+            code: definition.code.as_str(),
+            label: definition.meaning,
+            action: Some(definition.remediation),
+        };
+    }
+    DoctorDiagnosticView {
+        severity,
+        code,
+        label: &diagnostic.label,
+        action: diagnostic.action.as_deref(),
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct DoctorOptions {
     pub(crate) live: bool,
@@ -146,19 +189,12 @@ pub(crate) async fn doctor(
             raw
         }
         Err(err) => {
-            diagnostics.push(Diagnostic::fail(
+            diagnostics.push(Diagnostic::fail_with_code(
                 format!("config file read failed: {err}"),
                 "check --config points to a readable YAML file",
+                NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
             ));
-            render_doctor_output(
-                &diagnostics,
-                options.format,
-                None,
-                config_path,
-                None,
-                None,
-                env_report,
-            )?;
+            render_doctor_output(&diagnostics, options.format, None, None, env_report)?;
             return Ok(false);
         }
     };
@@ -170,9 +206,10 @@ pub(crate) async fn doctor(
             Some(config)
         }
         Err(err) => {
-            diagnostics.push(Diagnostic::fail(
+            diagnostics.push(Diagnostic::fail_with_code(
                 format!("config YAML parse or validation failed: {err}"),
                 "fix the YAML syntax and field names",
+                NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
             ));
             None
         }
@@ -215,8 +252,6 @@ pub(crate) async fn doctor(
         &diagnostics,
         options.format,
         expanded_config.as_ref(),
-        config_path,
-        Some(&raw),
         config.as_ref(),
         env_report,
     )?;
@@ -343,9 +378,10 @@ pub(crate) fn pkcs11_preflight_diagnostic(
         Ok(_) => Some(Diagnostic::ok(
             "PKCS#11 signing providers loaded and self-tested",
         )),
-        Err(err) => Some(Diagnostic::fail(
+        Err(err) => Some(Diagnostic::fail_with_code(
             format!("PKCS#11 signing preflight failed: {err}"),
             "check module_path, token_label, pin_env, key_label, key_id_hex, public_jwk_env, and whether this binary was built with pkcs11",
+            NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
         )),
     }
 }
@@ -359,8 +395,9 @@ pub(crate) fn print_diagnostics(diagnostics: &[Diagnostic]) {
         } else {
             "FAIL"
         };
-        println!("{status}  {}", diag.label);
-        if let Some(action) = &diag.action {
+        let view = doctor_diagnostic_view(diag);
+        println!("{status}  {} [{}]", view.label, view.code);
+        if let Some(action) = view.action {
             println!("     Next action: {action}");
         }
     }
@@ -370,8 +407,6 @@ pub(crate) fn render_doctor_output(
     diagnostics: &[Diagnostic],
     format: DoctorOutputFormat,
     expanded_config: Option<&Value>,
-    config_path: &Path,
-    raw_config: Option<&str>,
     config: Option<&StandaloneRegistryNotaryConfig>,
     env_report: &EnvFileReport,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -385,13 +420,7 @@ pub(crate) fn render_doctor_output(
         DoctorOutputFormat::Json => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&doctor_json_report(
-                    diagnostics,
-                    config_path,
-                    raw_config,
-                    config,
-                    env_report,
-                ))?
+                serde_json::to_string_pretty(&doctor_json_report(diagnostics, config, env_report))?
             );
         }
     }
@@ -400,8 +429,6 @@ pub(crate) fn render_doctor_output(
 
 pub(crate) fn doctor_json_report(
     diagnostics: &[Diagnostic],
-    config_path: &Path,
-    raw_config: Option<&str>,
     config: Option<&StandaloneRegistryNotaryConfig>,
     env_report: &EnvFileReport,
 ) -> Value {
@@ -423,7 +450,6 @@ pub(crate) fn doctor_json_report(
         "config_schema_version": NOTARY_CONFIG_SCHEMA_VERSION,
         "source": {
             "kind": "local_file",
-            "path": path_for_json(config_path),
         },
         "status": if error_count > 0 {
             ReportStatus::Error.as_str()
@@ -446,11 +472,6 @@ pub(crate) fn doctor_json_report(
     });
     if let Some(config) = config {
         report["audit_shipping"] = notary_audit_shipping(config);
-    }
-    if let Some(raw) = raw_config {
-        report["hashes"] = json!({
-            "internal_config_hash": sha256_hash(raw),
-        });
     }
     report
 }
@@ -499,26 +520,15 @@ pub(crate) fn notary_audit_shipping(config: &StandaloneRegistryNotaryConfig) -> 
 }
 
 pub(crate) fn doctor_json_diagnostic(diagnostic: &Diagnostic) -> Value {
-    let (severity, code) = if let (Some(severity), Some(code)) = (
-        diagnostic.report_severity,
-        diagnostic.report_code.as_deref(),
-    ) {
-        (shared_severity(severity), code)
-    } else if diagnostic.warning {
-        ("warning", "warning")
-    } else if diagnostic.ok {
-        ("info", "ok")
+    let view = doctor_diagnostic_view(diagnostic);
+    let message = if let Some(action) = view.action {
+        format!("{} Next action: {action}", view.label)
     } else {
-        ("error", "failed")
-    };
-    let message = if let Some(action) = &diagnostic.action {
-        format!("{} Next action: {action}", diagnostic.label)
-    } else {
-        diagnostic.label.clone()
+        view.label.to_string()
     };
     let value = json!({
-        "severity": severity,
-        "code": code,
+        "severity": view.severity,
+        "code": view.code,
         "message": message,
     });
     value
@@ -675,7 +685,7 @@ fn relay_token_file_diagnostic(config: &StandaloneRegistryNotaryConfig) -> Diagn
         return Diagnostic::fail_with_code(
             "Relay connection is not configured for Registry-backed claims",
             "configure evidence.relay before serving Registry-backed claims",
-            "notary.relay.configuration_invalid",
+            NotaryActivationCode::RELAY_CONFIGURATION_INVALID.as_str(),
         );
     };
     match fs::metadata(&relay.token_file) {
@@ -693,12 +703,12 @@ fn relay_token_file_diagnostic(config: &StandaloneRegistryNotaryConfig) -> Diagn
         Ok(_) => Diagnostic::fail_with_code(
             "Relay workload token file is not a non-empty regular file",
             "mount a non-empty workload JWT at the configured evidence.relay.token_file path",
-            "notary.relay.credential_unavailable",
+            NotaryActivationCode::RELAY_CREDENTIAL_UNAVAILABLE.as_str(),
         ),
         Err(_) => Diagnostic::fail_with_code(
             "Relay workload token file is unavailable",
             "mount a readable workload JWT at the configured evidence.relay.token_file path",
-            "notary.relay.credential_unavailable",
+            NotaryActivationCode::RELAY_CREDENTIAL_UNAVAILABLE.as_str(),
         ),
     }
 }
@@ -754,9 +764,10 @@ pub(crate) fn check_local_jwk_env(
                 .and_then(|jwk| LocalJwkSigner::new(jwk).map_err(|err| err.to_string()));
             match result {
                 Ok(_) => Diagnostic::ok(format!("{env} is a usable local JWK for {key_id}")),
-                Err(err) => Diagnostic::fail(
+                Err(err) => Diagnostic::fail_with_code(
                     format!("{env} is not a usable local JWK for {key_id}: {err}"),
                     "generate a local demo key with `registry-notary demo-issuer-key`",
+                    NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
                 ),
             }
         }
@@ -784,9 +795,10 @@ pub(crate) fn check_public_jwk_env(
             });
             match result {
                 Ok(_) => Diagnostic::ok(format!("{env} is a usable public JWK for {key_id}")),
-                Err(err) => Diagnostic::fail(
+                Err(err) => Diagnostic::fail_with_code(
                     format!("{env} is not a usable public JWK for {key_id}: {err}"),
                     "set it to a public JWK with the configured kid",
+                    NotaryActivationCode::CONFIGURATION_INVALID.as_str(),
                 ),
             }
         }
@@ -878,7 +890,7 @@ pub(crate) async fn live_diagnostics(config: &StandaloneRegistryNotaryConfig) ->
             Ok(false) => Diagnostic::fail_with_code(
                 "Relay activation plan did not include Registry-backed claims",
                 "check the Registry-backed claim and evidence.relay configuration",
-                "notary.relay.configuration_invalid",
+                NotaryActivationCode::RELAY_CONFIGURATION_INVALID.as_str(),
             ),
             Err(error) => relay_live_failure_diagnostic(&error),
         });
@@ -892,47 +904,12 @@ pub(crate) async fn live_diagnostics(config: &StandaloneRegistryNotaryConfig) ->
 }
 
 fn relay_live_failure_diagnostic(error: &StandaloneServerError) -> Diagnostic {
-    match error {
-        StandaloneServerError::RelayCredentialUnavailable => Diagnostic::fail_with_code(
-            "Relay workload credential is unavailable",
-            "mount a current readable workload JWT at evidence.relay.token_file",
-            "notary.relay.credential_unavailable",
-        ),
-        StandaloneServerError::RelayCredentialsRejected => Diagnostic::fail_with_code(
-            "Relay rejected the configured workload credential",
-            "rotate the workload JWT and verify that Relay recognizes its workload binding, required scope, and validity window",
-            "notary.relay.credentials_rejected",
-        ),
-        StandaloneServerError::RelayProfileNotFound => Diagnostic::fail_with_code(
-            "Relay consultation profile was not found",
-            "deploy the configured Relay profile id, then retry the live check",
-            "notary.relay.profile_not_found",
-        ),
-        StandaloneServerError::RelayProfileMismatch => Diagnostic::fail_with_code(
-            "Relay consultation profile does not match the configured contract pin",
-            "reconcile the Notary profile id and contract hash with the reviewed Relay consultation contract",
-            "notary.relay.profile_mismatch",
-        ),
-        StandaloneServerError::RelayUnavailable => Diagnostic::fail_with_code(
-            "Relay consultation service is unavailable",
-            "check Relay reachability, TLS, destination policy, and service health",
-            "notary.relay.unavailable",
-        ),
-        StandaloneServerError::InvalidRelayDestination
-        | StandaloneServerError::InvalidRelayActivationPlan
-        | StandaloneServerError::RelayActivation
-        | StandaloneServerError::RelayAlreadyActivated
-        | StandaloneServerError::RelayNotActivated => Diagnostic::fail_with_code(
-            "Relay consultation configuration is invalid",
-            "check the evidence.relay connection and Registry-backed consultation configuration",
-            "notary.relay.configuration_invalid",
-        ),
-        _ => Diagnostic::fail_with_code(
-            "Relay consultation activation failed",
-            "check the Notary configuration and startup environment",
-            "notary.relay.activation_failed",
-        ),
-    }
+    let definition = error.activation_code().definition();
+    Diagnostic::fail_with_code(
+        definition.meaning,
+        definition.remediation,
+        definition.code.as_str(),
+    )
 }
 
 #[cfg(test)]

@@ -72,12 +72,198 @@ pub struct ProjectCheckOptions {
     pub anchor: Option<PathBuf>,
 }
 
+/// The result of an explicitly requested trusted-local check.
+///
+/// This type deliberately does not implement `Serialize` or `Debug`.
+/// `authored_values` may contain project-sensitive metadata and is only for
+/// direct, human-readable terminal review. It must not enter portable reports,
+/// logs, generated artifacts, comparison output, or promotion evidence.
+pub struct ProjectTrustedLocalCheck {
+    pub report: ProjectCommandReport,
+    pub authored_values: Vec<ProjectTrustedLocalAuthoredValue>,
+}
+
+/// One directly authored, non-secret scalar for trusted-local human review.
+///
+/// Values classified as secret references, secret values, or redacted fixture
+/// data are never constructible through this surface. Runtime secret-file
+/// locators, raw parser text, and derived and defaulted values are also
+/// excluded.
+pub struct ProjectTrustedLocalAuthoredValue {
+    address: ProjectFieldAddress,
+    source: FieldSourceKind,
+    sensitivity: FieldSensitivity,
+    value: Value,
+}
+
+impl ProjectTrustedLocalAuthoredValue {
+    /// Render one bounded, single-line terminal entry.
+    ///
+    /// No raw value accessor is exposed because this surface is not a
+    /// machine-report or export contract.
+    pub fn terminal_line(&self) -> Result<String> {
+        if !matches!(
+            self.source,
+            FieldSourceKind::Authored | FieldSourceKind::EnvironmentBound
+        ) {
+            bail!("only authored values can enter trusted-local authored output");
+        }
+        if !matches!(
+            self.sensitivity,
+            FieldSensitivity::Public
+                | FieldSensitivity::Internal
+                | FieldSensitivity::Structural
+                | FieldSensitivity::Sensitive
+        ) {
+            bail!("secret or fixture data cannot enter trusted-local authored output");
+        }
+        if matches!(&self.address, ProjectFieldAddress::Fixture { .. }) {
+            bail!("fixture data cannot enter trusted-local authored output");
+        }
+        if trusted_local_value_path_is_prohibited(&self.address) {
+            bail!("secret locator or parser input cannot enter trusted-local authored output");
+        }
+        let address = match &self.address {
+            ProjectFieldAddress::Project { path } => {
+                format!("project:{}", trusted_local_terminal_escape(path.as_str()))
+            }
+            ProjectFieldAddress::Integration { integration, path } => format!(
+                "integration {}:{}",
+                trusted_local_terminal_escape(integration),
+                trusted_local_terminal_escape(path.as_str())
+            ),
+            ProjectFieldAddress::Entity { entity, path } => format!(
+                "entity {}:{}",
+                trusted_local_terminal_escape(entity),
+                trusted_local_terminal_escape(path.as_str())
+            ),
+            ProjectFieldAddress::Environment { environment, path } => format!(
+                "environment {}:{}",
+                trusted_local_terminal_escape(environment),
+                trusted_local_terminal_escape(path.as_str())
+            ),
+            // Constructors exclude fixtures. Fail closed if a future internal
+            // change violates that invariant.
+            ProjectFieldAddress::Fixture { .. } => {
+                bail!("fixture data cannot enter trusted-local authored output")
+            }
+        };
+        let value = serde_json::to_string(&self.value)
+            .context("trusted-local authored scalar could not be rendered")?;
+        Ok(format!(
+            "{address} = {} ({}, {})",
+            trusted_local_terminal_escape(&value),
+            match self.source {
+                FieldSourceKind::Authored => "authored",
+                FieldSourceKind::EnvironmentBound => "environment-bound",
+                FieldSourceKind::Defaulted => "defaulted",
+                FieldSourceKind::Detected => "detected",
+                FieldSourceKind::Derived => "derived",
+                FieldSourceKind::Generated => "generated",
+                FieldSourceKind::Runtime => "runtime",
+                FieldSourceKind::Absent => "absent",
+            },
+            match self.sensitivity {
+                FieldSensitivity::Public => "public",
+                FieldSensitivity::Internal => "internal",
+                FieldSensitivity::Sensitive => "sensitive",
+                FieldSensitivity::SecretReference => "secret-reference",
+                FieldSensitivity::SecretValue => "secret-value",
+                FieldSensitivity::RedactedFixture => "redacted-fixture",
+                FieldSensitivity::Structural => "structural",
+            }
+        ))
+    }
+}
+
+fn trusted_local_terminal_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() => {
+                use std::fmt::Write as _;
+                write!(escaped, "\\u{:04x}", character as u32)
+                    .expect("writing to a String cannot fail");
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn trusted_local_value_path_is_prohibited(address: &ProjectFieldAddress) -> bool {
+    let path = match address {
+        ProjectFieldAddress::Project { path }
+        | ProjectFieldAddress::Integration { path, .. }
+        | ProjectFieldAddress::Entity { path, .. }
+        | ProjectFieldAddress::Environment { path, .. }
+        | ProjectFieldAddress::Fixture { path, .. } => path.as_str(),
+    };
+    let field_name = path.rsplit('/').next().unwrap_or_default();
+    matches!(
+        field_name,
+        "token_file"
+            | "workload_token_file"
+            | "secret_file"
+            | "private_key_file"
+            | "cel"
+            | "x-registry-source"
+    ) || path == "/starter/content_digest"
+}
+
 #[derive(Debug, Clone)]
 pub struct ProjectBuildOptions {
     pub project_directory: PathBuf,
     pub environment: String,
     pub against: Option<PathBuf>,
     pub anchor: Option<PathBuf>,
+}
+
+/// Product-labelled approved baselines for a project build.
+///
+/// Relay and Notary remain independently signed product inputs. A combined
+/// project comparison therefore supplies both pairs, while a single-product
+/// project supplies only its product pair. The legacy `against` and `anchor`
+/// fields on [`ProjectBuildOptions`] remain available for single-product
+/// callers.
+#[derive(Debug, Clone, Default)]
+pub struct ProjectBuildBaselineSetOptions {
+    pub relay_against: Option<PathBuf>,
+    pub relay_anchor: Option<PathBuf>,
+    pub notary_against: Option<PathBuf>,
+    pub notary_anchor: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectPreflightOptions {
+    pub project_directory: PathBuf,
+    pub environment: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectCapabilityOptions {
+    pub project_directory: PathBuf,
+    pub environment: String,
+}
+
+/// Options for an offline promotion decision. The comparison baseline must be
+/// a verified product bundle so the decision never treats an unauthenticated
+/// local artifact as reviewed authority.
+#[derive(Debug, Clone)]
+pub struct ProjectPromotionOptions {
+    pub project_directory: PathBuf,
+    pub environment: String,
+    /// One verified product baseline for Relay-only or Notary-only projects.
+    /// Combined projects should use the product-specific pairs below.
+    pub against: Option<PathBuf>,
+    pub anchor: Option<PathBuf>,
+    pub relay_against: Option<PathBuf>,
+    pub relay_anchor: Option<PathBuf>,
+    pub notary_against: Option<PathBuf>,
+    pub notary_anchor: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,7 +280,13 @@ pub struct ProjectCommandReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub explanation: Option<Value>,
+    pub semantic_impact: Option<ProjectSemanticImpactReportV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_manifest: Option<ProjectArtifactManifestRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixture_coverage: Option<ProjectFixtureCoverageReportV1>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<ProjectExplanationReportV1>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -120,8 +312,30 @@ pub struct ProjectAuthoringDiagnostic {
     pub schema_hint: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestion: Option<&'static str>,
+    /// Machine-readable project-relative locations. `file` and `field` stay
+    /// available as the stable compatibility projection used by existing CLI
+    /// renderers and integrations.
+    pub addresses: Vec<ProjectAuthoringDiagnosticAddress>,
+    pub phase: &'static str,
+    pub rule: &'static str,
+    pub accepted: &'static str,
+    pub safe_summary_policy: &'static str,
+    pub received_summary: &'static str,
+    pub documentation: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changed_behavior: Option<&'static str>,
     pub cause: &'static str,
     pub remediation: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectAuthoringDiagnosticAddress {
+    pub file: String,
+    /// An RFC 6901 JSON Pointer. The empty pointer identifies the document.
+    pub pointer: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -150,6 +364,7 @@ pub struct SemanticChange {
     pub dimension: &'static str,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RegistryProject {
@@ -164,6 +379,7 @@ struct RegistryProject {
     services: BTreeMap<String, ServiceDeclaration>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct StarterProvenance {
@@ -172,24 +388,28 @@ struct StarterProvenance {
     content_digest: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RegistryDeclaration {
     id: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct IntegrationReference {
     file: PathBuf,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EntityReference {
     file: PathBuf,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ServiceDeclaration {
@@ -232,6 +452,7 @@ struct ServiceDeclaration {
     api: Option<RecordsApiDeclaration>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum ServiceKind {
@@ -243,6 +464,7 @@ fn default_consent() -> ConsentDeclaration {
     ConsentDeclaration::NotRequired
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum ConsentDeclaration {
@@ -250,6 +472,7 @@ enum ConsentDeclaration {
     Required,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AccessDeclaration {
@@ -257,6 +480,7 @@ struct AccessDeclaration {
     scopes: Vec<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EntityDefinition {
@@ -268,6 +492,7 @@ struct EntityDefinition {
     materialization: EntityMaterialization,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EntityObjectSchema {
@@ -279,12 +504,14 @@ struct EntityObjectSchema {
     properties: BTreeMap<String, EntityFieldSchema>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum EntityObjectType {
     Object,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EntityFieldSchema {
@@ -308,6 +535,7 @@ struct EntityFieldSchema {
     maximum: Option<i64>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EntityMaterialization {
@@ -317,6 +545,7 @@ struct EntityMaterialization {
     retain_generations: u8,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum RecordSensitivity {
@@ -327,6 +556,7 @@ enum RecordSensitivity {
     Secret,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum RecordAccessRights {
@@ -335,6 +565,7 @@ enum RecordAccessRights {
     NonPublic,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum RecordUpdateFrequency {
@@ -350,6 +581,7 @@ enum RecordUpdateFrequency {
     Unknown,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordField {
@@ -369,6 +601,7 @@ struct RecordField {
     language: Option<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum RecordFieldType {
@@ -380,6 +613,7 @@ enum RecordFieldType {
     Timestamp,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordsApiDeclaration {
@@ -405,6 +639,7 @@ struct RecordsApiDeclaration {
 /// deliberately exposes only the minimizing subset used by Registry Relay:
 /// exact-one subject resolution, purpose binding, and typed claim selection.
 /// Source metadata disclosure and response caching are not authoring options.
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordAttributeReleaseProfile {
@@ -420,6 +655,7 @@ struct RecordAttributeReleaseProfile {
     claims: BTreeMap<String, RecordAttributeReleaseClaim>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordAttributeReleaseSubject {
@@ -427,18 +663,21 @@ struct RecordAttributeReleaseSubject {
     id_type: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordAttributeReleaseConditions {
     expression: RecordAttributeReleaseExpression,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordAttributeReleaseExpression {
     cel: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordAttributeReleaseClaim {
@@ -450,6 +689,7 @@ struct RecordAttributeReleaseClaim {
     sensitivity: RecordAttributeReleaseSensitivity,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum RecordAttributeReleaseSensitivity {
@@ -459,6 +699,7 @@ enum RecordAttributeReleaseSensitivity {
     Pseudonymous,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordScopes {
@@ -470,6 +711,7 @@ struct RecordScopes {
     evidence_verification: Option<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordPagination {
@@ -477,6 +719,7 @@ struct RecordPagination {
     max_limit: u32,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 enum RecordFilterOperator {
@@ -487,6 +730,7 @@ enum RecordFilterOperator {
     Between,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordRelationship {
@@ -497,6 +741,7 @@ struct RecordRelationship {
     concept_uri: Option<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum RecordRelationshipKind {
@@ -505,6 +750,7 @@ enum RecordRelationshipKind {
     HasOne,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordAggregate {
@@ -536,6 +782,7 @@ struct RecordAggregate {
     disclosure_control: RecordDisclosureControl,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordAggregateDimension {
@@ -546,6 +793,7 @@ struct RecordAggregateDimension {
     codelist: Option<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordAggregateIndicator {
@@ -564,6 +812,7 @@ struct RecordAggregateIndicator {
     definition_uri: Option<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordAggregateAccess {
@@ -575,6 +824,7 @@ struct RecordAggregateAccess {
     aggregate_only_execution: bool,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 enum RecordAggregateSpatial {
@@ -592,6 +842,7 @@ enum RecordAggregateSpatial {
     },
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordAggregateMeasure {
@@ -600,6 +851,7 @@ struct RecordAggregateMeasure {
     column: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum RecordAggregateFunction {
@@ -613,6 +865,7 @@ enum RecordAggregateFunction {
     Stddev,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordDisclosureControl {
@@ -626,6 +879,7 @@ fn default_record_min_group_size() -> u32 {
     5
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Default, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum RecordSuppression {
@@ -635,6 +889,7 @@ enum RecordSuppression {
     Null,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordStandards {
@@ -642,6 +897,7 @@ struct RecordStandards {
     sp_dci: RecordStandard<RecordSpdci>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum RecordStandard<T> {
@@ -649,6 +905,7 @@ enum RecordStandard<T> {
     Disabled(bool),
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordSpatial {
@@ -677,6 +934,7 @@ fn default_record_max_geometry_vertices() -> u32 {
     10_000
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum RecordSpatialGeometry {
@@ -699,6 +957,7 @@ enum RecordSpatialGeometry {
     },
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordSpatialBbox {
@@ -708,6 +967,7 @@ struct RecordSpatialBbox {
     max_y: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RecordSpdci {
@@ -720,6 +980,7 @@ struct RecordSpdci {
     response_fields: BTreeMap<String, String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RequestVariable {
@@ -728,6 +989,7 @@ struct RequestVariable {
     value_type: OutputType,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ConsultationDeclaration {
@@ -735,6 +997,7 @@ struct ConsultationDeclaration {
     input: BTreeMap<String, String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ClaimDeclaration {
@@ -747,6 +1010,7 @@ struct ClaimDeclaration {
     disclosure: DisclosureDeclaration,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum ClaimEvidence {
@@ -754,6 +1018,7 @@ enum ClaimEvidence {
     SelfAttested,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ClaimValueDeclaration {
@@ -765,6 +1030,7 @@ struct ClaimValueDeclaration {
     max_bytes: Option<u32>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum DisclosureDeclaration {
@@ -775,6 +1041,7 @@ enum DisclosureDeclaration {
     },
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 enum DisclosureMode {
@@ -783,6 +1050,7 @@ enum DisclosureMode {
     Redacted,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CredentialProfileDeclaration {
@@ -793,6 +1061,7 @@ struct CredentialProfileDeclaration {
     claims: Vec<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct IntegrationDocument {
@@ -810,6 +1079,7 @@ struct IntegrationDocument {
     fixtures: PathBuf,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct NotApplicableDeclaration {
@@ -819,6 +1089,7 @@ struct NotApplicableDeclaration {
     subject_mismatch: Option<NotApplicableReason>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct NotApplicableReason {
@@ -830,6 +1101,7 @@ fn default_integration_revision() -> u32 {
     1
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SourceDeclaration {
@@ -837,6 +1109,7 @@ struct SourceDeclaration {
     versions: SourceVersions,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SourceVersions {
@@ -846,6 +1119,7 @@ struct SourceVersions {
     unverified: Vec<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct InputDeclaration {
@@ -871,6 +1145,7 @@ struct InputDeclaration {
     maximum: Option<i64>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum InputType {
@@ -880,6 +1155,7 @@ enum InputType {
     Integer,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Canonicalization {
@@ -887,6 +1163,7 @@ enum Canonicalization {
     AsciiLowercase,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum CredentialType {
@@ -898,6 +1175,7 @@ enum CredentialType {
     ApiKeyQuery,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CredentialInterface {
@@ -919,6 +1197,7 @@ struct CredentialInterface {
     refresh_skew: Option<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum OAuthRequestFormat {
@@ -926,12 +1205,14 @@ enum OAuthRequestFormat {
     Json,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum OAuthResponseProfile {
     Oauth2Bearer,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum CapabilityDeclaration {
@@ -940,6 +1221,7 @@ enum CapabilityDeclaration {
     Script { script: Box<ScriptDeclaration> },
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct HttpDeclaration {
@@ -949,6 +1231,7 @@ struct HttpDeclaration {
     response_max_bytes_authored: bool,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ScriptDeclaration {
@@ -964,6 +1247,7 @@ struct ScriptDeclaration {
     modules: Vec<PathBuf>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ScriptAllowRule {
@@ -973,6 +1257,7 @@ struct ScriptAllowRule {
     semantics: Option<AuthoredRequestSemantics>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ScriptResponseDeclaration {
@@ -982,12 +1267,14 @@ struct ScriptResponseDeclaration {
     max_bytes_authored: bool,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum ScriptRuntime {
     RhaiV1,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotDeclaration {
@@ -998,6 +1285,7 @@ struct SnapshotDeclaration {
     materialization: SnapshotFootprint,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SnapshotFootprint {
@@ -1005,6 +1293,7 @@ struct SnapshotFootprint {
     max_source_bytes: u64,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct OperationDeclaration {
@@ -1022,6 +1311,7 @@ struct OperationDeclaration {
     when: Option<ConditionDeclaration>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct VerificationDeclaration {
@@ -1029,6 +1319,7 @@ struct VerificationDeclaration {
     jwks: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum OperationRole {
@@ -1038,6 +1329,7 @@ enum OperationRole {
     Verification,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RequestDeclaration {
@@ -1060,6 +1352,7 @@ struct RequestDeclaration {
     authorization: Option<ValueSource>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
 enum ReadMethod {
@@ -1067,6 +1360,7 @@ enum ReadMethod {
     Post,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged, deny_unknown_fields)]
 enum ValueSource {
@@ -1075,6 +1369,7 @@ enum ValueSource {
     Prior { prior: String },
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ConditionDeclaration {
@@ -1082,6 +1377,7 @@ struct ConditionDeclaration {
     equals: Value,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ResponseDeclaration {
@@ -1096,6 +1392,7 @@ struct ResponseDeclaration {
     status_semantics: Option<StatusSemanticsDeclaration>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct StatusSemanticsDeclaration {
@@ -1105,6 +1402,7 @@ struct StatusSemanticsDeclaration {
     ambiguous: Vec<u16>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CardinalityDeclaration {
@@ -1113,6 +1411,7 @@ struct CardinalityDeclaration {
     mode: CardinalityMode,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum CardinalityMode {
@@ -1120,6 +1419,7 @@ enum CardinalityMode {
     ProbeTwo,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum SchemaNode {
@@ -1147,6 +1447,7 @@ fn reject_additional() -> AdditionalFields {
     AdditionalFields::Reject
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AdditionalFields {
@@ -1158,6 +1459,65 @@ enum AdditionalFields {
 struct SchemaField {
     required: bool,
     schema: SchemaNode,
+}
+
+// `SchemaField` has a deliberate hand-written deserializer because `required`
+// is flattened into each tagged `SchemaNode` object. Keep its mechanically
+// derived structural schema tied to that exact wire shape instead of allowing
+// schemars to infer the private storage shape above.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "schema-only wire variants describe a custom deserializer and are never constructed"
+)]
+#[derive(schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum SchemaFieldWireShape {
+    Object {
+        #[serde(default)]
+        required: bool,
+        #[serde(default = "reject_additional")]
+        additional_fields: AdditionalFields,
+        fields: BTreeMap<String, SchemaFieldWireShape>,
+    },
+    Array {
+        #[serde(default)]
+        required: bool,
+        max_items: u16,
+        items: Box<SchemaNode>,
+    },
+    String {
+        #[serde(default)]
+        required: bool,
+        max_bytes: u32,
+    },
+    Integer {
+        #[serde(default)]
+        required: bool,
+        min: i64,
+        max: i64,
+    },
+    Boolean {
+        #[serde(default)]
+        required: bool,
+    },
+    Date {
+        #[serde(default)]
+        required: bool,
+    },
+}
+
+#[cfg(test)]
+impl schemars::JsonSchema for SchemaField {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SchemaField".into()
+    }
+
+    fn json_schema(
+        generator: &mut schemars::SchemaGenerator,
+    ) -> schemars::Schema {
+        <SchemaFieldWireShape as schemars::JsonSchema>::json_schema(generator)
+    }
 }
 
 impl<'de> Deserialize<'de> for SchemaField {
@@ -1197,6 +1557,7 @@ impl Serialize for SchemaField {
     }
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum OutputType {
@@ -1207,6 +1568,7 @@ enum OutputType {
     Presence,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct OutputDeclaration {
@@ -1226,6 +1588,7 @@ struct OutputDeclaration {
     source_pointer: Option<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct BoundsDeclaration {
@@ -1244,6 +1607,7 @@ struct BoundsDeclaration {
     concurrency: u16,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EnvironmentDocument {
@@ -1271,12 +1635,14 @@ struct EnvironmentDocument {
     deployment: DeploymentBinding,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EnvironmentIntegration {
     source: EnvironmentSourceBinding,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EnvironmentSourceBinding {
@@ -1301,6 +1667,7 @@ struct EnvironmentSourceBinding {
     timeout: Option<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CertificateAuthorityBinding {
@@ -1308,6 +1675,7 @@ struct CertificateAuthorityBinding {
     generation: u64,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct MutualTlsBinding {
@@ -1316,6 +1684,7 @@ struct MutualTlsBinding {
     generation: u64,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PrivateEndpointBinding {
@@ -1330,6 +1699,7 @@ struct PrivateEndpointBinding {
     generation: u64,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SourceRateBinding {
@@ -1337,6 +1707,7 @@ struct SourceRateBinding {
     burst: u16,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EnvironmentCredential {
@@ -1355,12 +1726,14 @@ struct EnvironmentCredential {
     generation: u64,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SecretReference {
     secret: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EnvironmentEntityBinding {
@@ -1370,6 +1743,7 @@ struct EnvironmentEntityBinding {
     generation: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum RecordProvider {
@@ -1400,6 +1774,7 @@ enum RecordProvider {
     },
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct IssuanceBinding {
@@ -1411,6 +1786,7 @@ struct IssuanceBinding {
     generation: u64,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 enum IssuanceSigningAlgorithm {
     #[default]
@@ -1429,6 +1805,7 @@ impl IssuanceSigningAlgorithm {
     }
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CallerBinding {
@@ -1436,6 +1813,7 @@ struct CallerBinding {
     scopes: Vec<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RelayBinding {
@@ -1446,6 +1824,7 @@ struct RelayBinding {
     allowed_clients: Vec<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct NotaryRelayBinding {
@@ -1454,36 +1833,42 @@ struct NotaryRelayBinding {
     token_file: PathBuf,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RelayStateBinding {
     postgresql: RelayPostgresqlBinding,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RelayPostgresqlBinding {
     root_certificate_path: PathBuf,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct NotaryStateBinding {
     postgresql: NotaryPostgresqlBinding,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct NotaryPostgresqlBinding {
     root_certificate_path: PathBuf,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct NotaryCelBinding {
     worker_memory_bytes: u64,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Oid4vciBinding {
@@ -1500,6 +1885,7 @@ struct Oid4vciBinding {
     tx_code: Oid4vciTxCodeBinding,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Oid4vciTxCodeBinding {
@@ -1519,6 +1905,7 @@ const fn default_oid4vci_tx_code_required() -> bool {
     true
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Oid4vciCredentialBinding {
@@ -1526,6 +1913,7 @@ struct Oid4vciCredentialBinding {
     profile: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Oid4vciAuthorizationServerBinding {
@@ -1536,6 +1924,7 @@ struct Oid4vciAuthorizationServerBinding {
     token_url: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Oid4vciClientBinding {
@@ -1544,6 +1933,7 @@ struct Oid4vciClientBinding {
     signing_kid: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Oid4vciSigningKeyBinding {
@@ -1551,6 +1941,7 @@ struct Oid4vciSigningKeyBinding {
     signing_kid: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Oid4vciSubjectBinding {
@@ -1558,6 +1949,7 @@ struct Oid4vciSubjectBinding {
     id_type: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct DeploymentBinding {
@@ -1568,6 +1960,7 @@ struct DeploymentBinding {
     notary: Option<ServiceBinding>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum DeploymentProfile {
@@ -1588,6 +1981,7 @@ impl DeploymentProfile {
     }
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ServiceBinding {
@@ -1598,11 +1992,92 @@ struct ServiceBinding {
 struct FixtureDocument {
     name: String,
     classification: AuthoredFixtureClassification,
+    #[serde(default)]
+    request: Option<GovernedLiveRequest>,
     input: BTreeMap<String, Value>,
     #[serde(default)]
     variables: BTreeMap<String, Value>,
     interactions: Vec<FixtureInteraction>,
     expect: FixtureExpectation,
+}
+
+/// The closed governed request accepted by both `project test --live` and an
+/// independently authored synthetic fixture witness.
+///
+/// Keeping one internal request type prevents fixture authoring from drifting
+/// into a looser contract than the live Notary boundary.
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GovernedLiveRequest {
+    target: GovernedLiveTarget,
+    #[cfg_attr(test, schemars(with = "BTreeMap<String, String>"))]
+    #[serde(
+        default,
+        skip_serializing_if = "registry_notary_core::RequestVariables::is_empty"
+    )]
+    variables: registry_notary_core::RequestVariables,
+    claims: Vec<registry_notary_core::ClaimRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    disclosure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format: Option<String>,
+    purpose: String,
+}
+
+impl GovernedLiveRequest {
+    fn to_evaluate_request(&self) -> registry_notary_core::EvaluateRequest {
+        registry_notary_core::EvaluateRequest {
+            requester: None,
+            target: Some(registry_notary_core::EvidenceEntity {
+                entity_type: self.target.entity_type.clone(),
+                id: self.target.id.clone(),
+                identifiers: self
+                    .target
+                    .identifiers
+                    .iter()
+                    .map(|identifier| registry_notary_core::EvidenceIdentifier {
+                        scheme: identifier.scheme.clone(),
+                        value: identifier.value.clone(),
+                        issuer: None,
+                        country: None,
+                    })
+                    .collect(),
+                attributes: self.target.attributes.clone(),
+                assurance: None,
+                profile: None,
+            }),
+            relationship: None,
+            on_behalf_of: None,
+            variables: self.variables.clone(),
+            claims: self.claims.clone(),
+            disclosure: self.disclosure.clone(),
+            format: self.format.clone(),
+            purpose: Some(self.purpose.clone()),
+        }
+    }
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GovernedLiveTarget {
+    #[serde(rename = "type")]
+    entity_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    identifiers: Vec<GovernedLiveIdentifier>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    attributes: BTreeMap<String, Value>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GovernedLiveIdentifier {
+    scheme: String,
+    value: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1632,6 +2107,7 @@ enum FixtureSourceResponse {
     },
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct FixtureExpectation {
@@ -1653,6 +2129,7 @@ struct LoadedRegistryProject {
     integrations: BTreeMap<String, LoadedIntegration>,
     entities: BTreeMap<String, LoadedEntityDefinition>,
     authored_hash: String,
+    artifact_inputs: Vec<ArtifactInputDigest>,
     project_content_digest: String,
     semantic_digests: SemanticDigests,
 }
@@ -1674,22 +2151,33 @@ struct CompiledProject {
     notary_private: BTreeMap<PathBuf, Box<[u8]>>,
     review: Value,
     approval_state: Value,
-    explanation: Value,
+    explanation: ProjectExplanationReportV1,
     fixture_profiles: Vec<FixtureProfile>,
     semantic_changes: Vec<SemanticChange>,
+    semantic_impact: ProjectSemanticImpactReportV1,
 }
 
 struct FixtureProfile {
     service_id: String,
+    consultation_id: String,
     integration_alias: String,
     id: String,
     version: String,
     contract_hash: String,
 }
 
+#[derive(Clone)]
 struct VerifiedBaseline {
     approval_state: Value,
+    approval_state_digest: String,
     verified_manifest: Value,
+    review_digest: String,
+}
+
+#[derive(Default)]
+struct VerifiedBaselineSet {
+    relay: Option<VerifiedBaseline>,
+    notary: Option<VerifiedBaseline>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1701,6 +2189,7 @@ struct SemanticDigests {
     operator_security: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct DisclosureReviewProfile {

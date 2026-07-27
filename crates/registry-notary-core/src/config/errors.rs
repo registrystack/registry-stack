@@ -52,6 +52,8 @@ pub enum EvidenceConfigError {
     DuplicateClaimId { claim: String },
     #[error("claim '{claim}' has invalid semantics config: {reason}")]
     InvalidClaimSemantics { claim: String, reason: String },
+    #[error("claim '{claim}' has invalid value config: {reason}")]
+    InvalidClaimValueConfig { claim: String, reason: String },
     #[error("claim '{claim}' has invalid evidence_mode: {reason}")]
     InvalidClaimEvidenceMode { claim: String, reason: String },
     #[error("claim '{claim}' dependency closure exceeds v1 bounds ({nodes} nodes, {edges} edges)")]

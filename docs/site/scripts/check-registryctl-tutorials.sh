@@ -304,7 +304,7 @@ run_relay_tutorial() {
 	mkdir -p "$tutorial_root"
 
 	node "$HELPER" assert-layout "$RELAY_TUTORIAL" \
-		'["Install registryctl","Create the sample project","Start the local stack","Run the smoke check","Load local demo keys","Make one denied request","Make one allowed request","Read one protected record","Read one protected record","Read restricted identity fields","Read restricted identity fields","Inspect the generated contract","Inspect the generated contract","Run an aggregate","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Stop the stack"]'
+		'["Install registryctl","Create the sample project","Start the local stack","Run the smoke check","Load local demo keys","Make one denied request","Make one allowed request","Read one protected record","Read one protected record","Read restricted identity fields","Read restricted identity fields","Inspect the editable local scaffold","Inspect the editable local scaffold","Run an aggregate","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Stop the stack"]'
 	node "$HELPER" extract-shell "$RELAY_TUTORIAL" "$blocks"
 
 	expected_install=$'curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.13.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.13.0 bash\nregistryctl --version'
@@ -354,9 +354,9 @@ run_relay_tutorial() {
 	assert_http "$LAST_OUTPUT" 200
 	assert_contains "$LAST_OUTPUT" Fae Elm FAKE-856648 '595 River Rd, Southvale'
 	assert_json_fence_subset "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Read restricted identity fields' 2
-	run_block 'Relay 12: Inspect the generated contract' "$blocks/12.sh" success
+	run_block 'Relay 12: Inspect the editable local scaffold' "$blocks/12.sh" success
 	run_block 'Relay 13: Open the runtime API reference' "$blocks/13.sh" success
-	assert_fence_lines "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Inspect the generated contract' text 1
+	assert_fence_lines "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Inspect the editable local scaffold' text 1
 	run_block 'Relay 14: Run an aggregate' "$blocks/14.sh" success
 	assert_http "$LAST_OUTPUT" 200
 	assert_json_fence_subset "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Run an aggregate' 1
@@ -371,7 +371,8 @@ run_relay_tutorial() {
 	run_block 'Relay 17: Reject a disclosure floor below the invariant' "$blocks/17.sh" failure
 	assert_contains "$LAST_OUTPUT" 'Relay did not become healthy and ready before timeout'
 	run_block 'Relay 18: Explain the rejected configuration' "$blocks/18.sh" success
-	assert_contains "$LAST_OUTPUT" config.validation_error 'min_cell_size >= 2'
+	assert_contains "$LAST_OUTPUT" relay.startup.config_validation_rejected
+	assert_not_contains "$LAST_OUTPUT" config.validation_error 'min_cell_size >= 2'
 
 	node "$HELPER" set-relay-min-group-size relay/config.yaml benefits_casework by_district 2
 	run_block 'Relay 19: Restore the valid disclosure floor' "$blocks/19.sh" success
@@ -388,10 +389,10 @@ run_notary_tutorial() {
 	local tutorial_root="$WORK_ROOT/relay-reader"
 	local project_dir="$tutorial_root/my-first-api"
 	local project_name="registryctl-notary-$RUN_ID"
-	local edited_claim="$WORK_ROOT/registry-stack-accept-pending.yaml"
+	local edited_claim="$WORK_ROOT/registry-stack-active-or-pending-exists.yaml"
 
 	node "$HELPER" assert-layout "$NOTARY_TUTORIAL" \
-		'["Add Notary to the project","Inspect the claim","Start Relay and Notary","Load the evaluator key","Evaluate an accepted active registration","Reject a pending registration","Try a non-matching date of birth","Edit the claim rule","Evaluate the edited rule","Stop the stack"]'
+		'["Add Notary to the project","Inspect the claim","Start Relay and Notary","Load the evaluator key","Evaluate an active registration","Evaluate a pending registration","Try a non-matching date of birth","Edit the claim rule","Evaluate the edited rule","Stop the stack"]'
 	node "$HELPER" extract-shell "$NOTARY_TUTORIAL" "$blocks"
 
 	export COMPOSE_PROJECT_NAME="$project_name"
@@ -405,7 +406,8 @@ run_notary_tutorial() {
 	assert_contains "$LAST_OUTPUT" http://127.0.0.1:4255 notary/project/registry-stack.yaml
 	run_block 'Notary 2: Inspect the claim' "$blocks/02.sh" success
 	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Inspect the claim' yaml 1
-	assert_contains "$LAST_OUTPUT" request.target.attributes.given_name request.target.attributes.date_of_birth person-registration-accepted
+	assert_contains "$LAST_OUTPUT" request.target.attributes.given_name request.target.attributes.date_of_birth active-registration-exists
+	assert_not_contains "$LAST_OUTPUT" person-registration-accepted
 	run_block 'Notary 3: Start Relay and Notary' "$blocks/03.sh" success
 	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Start Relay and Notary' text 1
 	run_block 'Notary 4: Load the evaluator key' "$blocks/04.sh" success
@@ -413,13 +415,13 @@ run_notary_tutorial() {
 		printf 'Notary tutorial evaluator credential was not loaded\n' >&2
 		exit 1
 	}
-	run_block 'Notary 5: Evaluate an accepted active registration' "$blocks/05.sh" success
+	run_block 'Notary 5: Evaluate an active registration' "$blocks/05.sh" success
 	assert_http "$LAST_OUTPUT" 200
-	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Evaluate an accepted active registration' 1
+	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Evaluate an active registration' 1
 	assert_not_contains "$LAST_OUTPUT" Jo Elm 2019-02-03 '"active"'
-	run_block 'Notary 6: Reject a pending registration' "$blocks/06.sh" success
+	run_block 'Notary 6: Evaluate a pending registration' "$blocks/06.sh" success
 	assert_http "$LAST_OUTPUT" 200
-	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Reject a pending registration' 1
+	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Evaluate a pending registration' 1
 	assert_not_contains "$LAST_OUTPUT" Nia Stone 1998-03-05 '"pending"'
 	run_block 'Notary 7: Try a non-matching date of birth' "$blocks/07.sh" success
 	assert_http "$LAST_OUTPUT" 200
@@ -428,16 +430,40 @@ run_notary_tutorial() {
 
 	node "$HELPER" replace-once \
 		notary/project/registry-stack.yaml \
+		'active-registration-exists' \
+		'active-or-pending-registration-exists' \
+		"$edited_claim"
+	mv "$edited_claim" notary/project/registry-stack.yaml
+	node "$HELPER" replace-once \
+		notary/project/registry-stack.yaml \
 		'enrollment.registration_status == "active"' \
 		'(enrollment.registration_status == "active" || enrollment.registration_status == "pending")' \
 		"$edited_claim"
 	mv "$edited_claim" notary/project/registry-stack.yaml
 	node "$HELPER" replace-once \
+		notary/project/integrations/person-demographics/fixtures/match.yaml \
+		'claims: { active-registration-exists: true }' \
+		'claims: { active-or-pending-registration-exists: true }' \
+		"$edited_claim"
+	mv "$edited_claim" notary/project/integrations/person-demographics/fixtures/match.yaml
+	node "$HELPER" replace-once \
 		notary/project/integrations/person-demographics/fixtures/pending.yaml \
-		'claims: { person-registration-accepted: false }' \
-		'claims: { person-registration-accepted: true }' \
+		'claims: { active-registration-exists: false }' \
+		'claims: { active-or-pending-registration-exists: true }' \
 		"$edited_claim"
 	mv "$edited_claim" notary/project/integrations/person-demographics/fixtures/pending.yaml
+	node "$HELPER" replace-once \
+		notary/project/integrations/person-demographics/fixtures/no-match.yaml \
+		'claims: { active-registration-exists: false }' \
+		'claims: { active-or-pending-registration-exists: false }' \
+		"$edited_claim"
+	mv "$edited_claim" notary/project/integrations/person-demographics/fixtures/no-match.yaml
+	node "$HELPER" replace-once \
+		notary/pending-registration-request.json \
+		'"claims": ["active-registration-exists"]' \
+		'"claims": ["active-or-pending-registration-exists"]' \
+		"$edited_claim"
+	mv "$edited_claim" notary/pending-registration-request.json
 	run_block 'Notary 8: Restart with the edited claim rule' "$blocks/08.sh" success
 	assert_contains "$LAST_OUTPUT" 'Relay API:' 'Notary API:'
 	run_block 'Notary 9: Evaluate the edited rule' "$blocks/09.sh" success

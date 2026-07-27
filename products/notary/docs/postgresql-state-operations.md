@@ -509,14 +509,18 @@ or credentials in smoke-test logs.
 
 ## Failure diagnostics
 
-| Symptom or component code | Operator action |
+Startup and `state doctor` publish the same closed, value-free diagnostic
+contract. Each code carries a static safe meaning and next action. Runtime
+paths, URLs, credentials, identifiers, SQL, and role names remain private.
+
+| Public code or symptom | Operator action |
 | --- | --- |
-| `database_unavailable` | Check primary availability, network policy, TLS handshake, connection limits, and the configured connect timeout. Do not print the URL. |
-| `schema_incompatible` | Stop all replicas. Use the matching released binary to run `state install`, or restore the matching application and database backup together. |
-| `role_incompatible` | Compare role provisioning with the role-separation contract and rerun install and doctor. Do not grant runtime table access. |
-| Unsupported database version | Move the database to PostgreSQL 16, 17, or 18, then run install and doctor before admission. |
-| Database is read-only or in recovery | Promote the intended recovery target to a writable primary or correct routing. Never serve correctness state from a read-only replica. |
-| TLS or root-certificate failure | Verify the mounted certificate, trust chain, permissions, and configured TLS policy without logging its path or contents. |
+| `notary.state.postgresql.database_unavailable` | Check primary availability, network policy, TLS trust, connection limits, and the configured connect timeout. Do not print the URL or certificate path. |
+| `notary.state.postgresql.database_read_only` | Promote the intended recovery target to a writable primary or correct routing. Never serve correctness state from a read-only replica. |
+| `notary.state.postgresql.database_unsupported` | Move the database to PostgreSQL 16, 17, or 18, then run install and doctor before admission. |
+| `notary.state.postgresql.durability_unsafe` | Restore the documented durability settings, then rerun doctor before admission. |
+| `notary.state.postgresql.schema_incompatible` | Stop all replicas. Use the matching released binary to run `state install`, or restore the matching application and database backup together. |
+| `notary.state.postgresql.role_incompatible` | Compare provisioning with the role-separation contract and rerun install and doctor. Do not grant runtime table access. |
 | Missing URL environment variable | Correct secret injection for the variable name in config. Do not substitute a URL on the command line. |
 | Missing or wrong sensitive-state key | Stop preauthorization, restore the backup-matched secret version, or follow the 600-second key-loss drain. |
 | Fingerprint or role-identity mismatch after restore | Keep the database isolated, run the matching `state install`, then rerun doctor and stale-restore checks. |
@@ -524,7 +528,7 @@ or credentials in smoke-test logs.
 | Readiness remains unavailable after recovery | Confirm the database accepts a new TLS connection and has the expected role and schema. The pool evicts failed sessions automatically; if the platform still presents the old endpoint or secret generation, correct that injection and restart the canary before requiring doctor and readiness. |
 
 Diagnostics are intentionally value-free. Use redacted database-platform logs
-and the stable component code to investigate. Do not add SQL, row values,
+and the stable public code to investigate. Do not add SQL, row values,
 identifiers, secrets, paths, URLs, or role names to application diagnostics.
 
 ## Supported PostgreSQL versions

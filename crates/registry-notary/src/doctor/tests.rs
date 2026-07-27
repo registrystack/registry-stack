@@ -211,6 +211,10 @@ fn relay_live_failures_have_stable_safe_categories() {
             StandaloneServerError::InvalidRelayActivationPlan,
             "notary.relay.configuration_invalid",
         ),
+        (
+            StandaloneServerError::RelayActivation,
+            "notary.relay.activation_failed",
+        ),
     ];
 
     for (error, expected_code) in cases {

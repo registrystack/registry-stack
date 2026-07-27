@@ -3,6 +3,7 @@
 /// The pre-1.0 project authoring contract. Runtime artifacts may still lower
 /// this concise model into product-owned structures, but authored files never
 /// expose those structures.
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredIntegrationDocument {
@@ -20,6 +21,7 @@ struct AuthoredIntegrationDocument {
     not_applicable: AuthoredNotApplicableDeclaration,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredNotApplicableDeclaration {
@@ -29,6 +31,7 @@ struct AuthoredNotApplicableDeclaration {
     subject_mismatch: Option<AuthoredNotApplicableReason>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredNotApplicableReason {
@@ -36,6 +39,7 @@ struct AuthoredNotApplicableReason {
     request_fixture: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSourceDeclaration {
@@ -56,6 +60,7 @@ struct AuthoredSourceDeclaration {
     protocol: Option<AuthoredProtocolDeclaration>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSourceVersions {
@@ -65,6 +70,7 @@ struct AuthoredSourceVersions {
     unverified: Vec<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredProtocolDeclaration {
@@ -72,6 +78,7 @@ struct AuthoredProtocolDeclaration {
     signed_dci: Option<AuthoredSignedDciDeclaration>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSignedDciDeclaration {
@@ -86,6 +93,7 @@ struct AuthoredSignedDciDeclaration {
     selectors: BTreeMap<String, AuthoredDciSelectorBinding>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredDciSelectorBinding {
@@ -93,6 +101,7 @@ struct AuthoredDciSelectorBinding {
     response_pointer: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSourceAllowRule {
@@ -102,12 +111,14 @@ struct AuthoredSourceAllowRule {
     semantics: Option<AuthoredRequestSemantics>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredRequestSemantics {
     ReadOnly,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSourceResponse {
@@ -117,6 +128,7 @@ struct AuthoredSourceResponse {
     max_bytes: Option<AuthoredByteSize>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredResponseFormat {
@@ -128,6 +140,7 @@ fn default_authored_response_format() -> AuthoredResponseFormat {
     AuthoredResponseFormat::Json
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredInputDeclaration {
@@ -154,6 +167,7 @@ struct AuthoredInputDeclaration {
     canonicalization: Option<Canonicalization>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredInputRole {
@@ -161,6 +175,7 @@ enum AuthoredInputRole {
     Parameter,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
 enum AuthoredSchemaType {
@@ -168,6 +183,7 @@ enum AuthoredSchemaType {
     Union(Vec<AuthoredScalarType>),
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredScalarType {
@@ -177,26 +193,47 @@ enum AuthoredScalarType {
     Null,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredStringFormat {
     Date,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum AuthoredCapabilityDeclaration {
-    Http {
-        http: AuthoredHttpDeclaration,
-    },
-    Script {
-        script: AuthoredScriptDeclaration,
-    },
-    Snapshot {
-        snapshot: AuthoredSnapshotDeclaration,
-    },
+    Http(AuthoredHttpCapability),
+    Script(AuthoredScriptCapability),
+    Snapshot(AuthoredSnapshotCapability),
 }
 
+// Each untagged union arm needs its own closed object. Putting
+// `deny_unknown_fields` only on the enum still lets serde select the first arm
+// when an author supplies keys from multiple capability variants.
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredHttpCapability {
+    http: AuthoredHttpDeclaration,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredScriptCapability {
+    script: AuthoredScriptDeclaration,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredSnapshotCapability {
+    snapshot: AuthoredSnapshotDeclaration,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredHttpDeclaration {
@@ -205,6 +242,7 @@ struct AuthoredHttpDeclaration {
     response: AuthoredHttpResponse,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredHttpRequest {
@@ -220,6 +258,7 @@ struct AuthoredHttpRequest {
     body: Option<Value>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredHttpResponse {
@@ -231,6 +270,7 @@ struct AuthoredHttpResponse {
     shape: Option<AuthoredHttpShape>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum AuthoredHttpShape {
@@ -241,12 +281,14 @@ enum AuthoredHttpShape {
     },
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredSingletonShape {
     Singleton,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredScriptDeclaration {
@@ -255,6 +297,7 @@ struct AuthoredScriptDeclaration {
     modules: Vec<PathBuf>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSnapshotDeclaration {
@@ -263,12 +306,14 @@ struct AuthoredSnapshotDeclaration {
     freshness: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredInputReference {
     input: String,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum AuthoredOutputsDeclaration {
@@ -276,6 +321,7 @@ enum AuthoredOutputsDeclaration {
     EntityFields(Vec<String>),
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredOutputDeclaration {
@@ -293,6 +339,7 @@ struct AuthoredOutputDeclaration {
     source: Option<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredLimitsDeclaration {
@@ -306,6 +353,7 @@ struct AuthoredLimitsDeclaration {
     deadline: Option<String>,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 enum AuthoredByteSize {
@@ -313,37 +361,14 @@ enum AuthoredByteSize {
     Human(String),
 }
 
-impl AuthoredByteSize {
-    fn bytes(&self, field: &str) -> Result<u64> {
-        match self {
-            Self::Bytes(bytes) => Ok(*bytes),
-            Self::Human(value) => {
-                let (digits, multiplier) = if let Some(digits) = value.strip_suffix("KiB") {
-                    (digits, 1024_u64)
-                } else if let Some(digits) = value.strip_suffix("MiB") {
-                    (digits, 1024_u64 * 1024)
-                } else {
-                    bail!("{field} must be bytes or a positive KiB/MiB value");
-                };
-                let amount = digits
-                    .parse::<u64>()
-                    .with_context(|| format!("{field} has an invalid byte quantity"))?;
-                if amount == 0 {
-                    bail!("{field} must be positive");
-                }
-                amount
-                    .checked_mul(multiplier)
-                    .ok_or_else(|| anyhow!("{field} exceeds the platform integer range"))
-            }
-        }
-    }
-}
-
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredFixtureDocument {
     name: String,
     classification: AuthoredFixtureClassification,
+    #[serde(default)]
+    request: Option<GovernedLiveRequest>,
     input: BTreeMap<String, Value>,
     #[serde(default)]
     variables: BTreeMap<String, Value>,
@@ -352,12 +377,14 @@ struct AuthoredFixtureDocument {
     expect: FixtureExpectation,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum AuthoredFixtureClassification {
     Synthetic,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredFixtureInteraction {
@@ -365,6 +392,7 @@ struct AuthoredFixtureInteraction {
     respond: AuthoredFixtureResponse,
 }
 
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredFixtureRequest {
@@ -378,32 +406,125 @@ struct AuthoredFixtureRequest {
     body: Option<AuthoredFixtureBody>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum AuthoredFixtureResponse {
-    Http {
-        status: u16,
-        #[serde(default)]
-        headers: BTreeMap<String, String>,
-        #[serde(default)]
-        body: Option<AuthoredFixtureBody>,
-    },
-    Timeout {
-        timeout: String,
-    },
+    Http(AuthoredFixtureHttpResponse),
+    Timeout(AuthoredFixtureTimeoutResponse),
 }
 
+impl<'de> Deserialize<'de> for AuthoredFixtureResponse {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let object = value.as_object().ok_or_else(|| {
+            serde::de::Error::custom(
+                "fixture response must be an HTTP status object or a timeout object",
+            )
+        })?;
+        match (
+            object.contains_key("status"),
+            object.contains_key("timeout"),
+        ) {
+            (true, false) => serde_json::from_value(value)
+                .map(Self::Http)
+                .map_err(serde::de::Error::custom),
+            (false, true) => serde_json::from_value(value)
+                .map(Self::Timeout)
+                .map_err(serde::de::Error::custom),
+            _ => Err(serde::de::Error::custom(
+                "fixture response must contain exactly one of `status` or `timeout`",
+            )),
+        }
+    }
+}
+
+// Response modes are exclusive in the published oneOf schema. Closed wrapper
+// objects keep the production decoder from silently choosing the HTTP arm for
+// a response that also declares `timeout`.
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredFixtureHttpResponse {
+    status: u16,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    body: Option<AuthoredFixtureBody>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredFixtureTimeoutResponse {
+    timeout: String,
+}
+
+const FIXTURE_BODY_FILE_REFERENCE_REMEDIATION: &str = "Use exactly `body: { file: bodies/<name>.json }` for a file reference. For inline JSON, rename the reserved top-level `file` field.";
+
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 enum AuthoredFixtureBody {
-    File { file: PathBuf },
+    File(AuthoredFixtureBodyFile),
     Inline(Value),
 }
 
-const DEFAULT_SOURCE_RESPONSE_BYTES: u64 = 512 * 1024;
-const MAX_DECLARATIVE_HTTP_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
-const DEFAULT_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
-const DEFAULT_REQUEST_BYTES: u64 = 64 * 1024;
+#[cfg(test)]
+impl schemars::JsonSchema for AuthoredFixtureBody {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "AuthoredFixtureBody".into()
+    }
+
+    fn json_schema(
+        generator: &mut schemars::SchemaGenerator,
+    ) -> schemars::Schema {
+        let file_reference =
+            generator.subschema_for::<AuthoredFixtureBodyFile>();
+        schemars::json_schema!({
+            "oneOf": [
+                file_reference,
+                {
+                    "not": {
+                        "type": "object",
+                        "required": ["file"]
+                    }
+                }
+            ]
+        })
+    }
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredFixtureBodyFile {
+    file: PathBuf,
+}
+
+impl<'de> Deserialize<'de> for AuthoredFixtureBody {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        if value
+            .as_object()
+            .is_some_and(|object| object.contains_key("file"))
+        {
+            let reference = serde_json::from_value::<AuthoredFixtureBodyFile>(value)
+                .map_err(|_| serde::de::Error::custom(FIXTURE_BODY_FILE_REFERENCE_REMEDIATION))?;
+            return Ok(Self::File(reference));
+        }
+        Ok(Self::Inline(value))
+    }
+}
+
+const DEFAULT_SOURCE_RESPONSE_BYTES: u64 = DEFAULT_INTEGRATION_RESPONSE_BYTES;
+const DEFAULT_SOURCE_BYTES: u64 = DEFAULT_INTEGRATION_SOURCE_BYTES;
+const DEFAULT_REQUEST_BYTES: u64 = DEFAULT_INTEGRATION_REQUEST_BYTES;
 const DEFAULT_SCRIPT_CALLS: u8 = 5;
 const DEFAULT_DEADLINE: &str = "15s";
 
@@ -456,14 +577,14 @@ fn lower_authored_integration(
         calls_authored: limits.is_some_and(|limits| limits.calls.is_some()),
         source_bytes: limits
             .and_then(|limits| limits.source_bytes.as_ref())
-            .map(|size| size.bytes("limits.source_bytes"))
+            .map(parse_integration_source_bytes)
             .transpose()?
             .unwrap_or(DEFAULT_SOURCE_BYTES),
         source_bytes_authored: limits.is_some_and(|limits| limits.source_bytes.is_some()),
         request_bytes: u32::try_from(
             limits
                 .and_then(|limits| limits.request_bytes.as_ref())
-                .map(|size| size.bytes("limits.request_bytes"))
+                .map(parse_integration_request_bytes)
                 .transpose()?
                 .unwrap_or(DEFAULT_REQUEST_BYTES),
         )
@@ -477,18 +598,18 @@ fn lower_authored_integration(
     };
     let (capability, outputs) = match (&authored.capability, &authored.outputs) {
         (
-            AuthoredCapabilityDeclaration::Http { http },
+            AuthoredCapabilityDeclaration::Http(AuthoredHttpCapability { http }),
             AuthoredOutputsDeclaration::Schemas(outputs),
         ) => lower_http_capability(source, http, outputs)?,
         (
-            AuthoredCapabilityDeclaration::Script { script },
+            AuthoredCapabilityDeclaration::Script(AuthoredScriptCapability { script }),
             AuthoredOutputsDeclaration::Schemas(outputs),
         ) => lower_script_capability(source, script, outputs)?,
         (
-            AuthoredCapabilityDeclaration::Snapshot { .. },
+            AuthoredCapabilityDeclaration::Snapshot(_),
             AuthoredOutputsDeclaration::EntityFields(_),
         ) => bail!("snapshot entity output lowering requires the loaded entity contract"),
-        (AuthoredCapabilityDeclaration::Snapshot { .. }, _) => {
+        (AuthoredCapabilityDeclaration::Snapshot(_), _) => {
             bail!("snapshot outputs must be a non-empty list of entity fields")
         }
         (_, AuthoredOutputsDeclaration::EntityFields(_)) => {
@@ -520,7 +641,7 @@ fn lower_authored_integration(
         bounds: BoundsDeclaration {
             calls: if matches!(
                 &authored.capability,
-                AuthoredCapabilityDeclaration::Http { .. }
+                AuthoredCapabilityDeclaration::Http(_)
             ) || authored
                 .source
                 .as_ref()
@@ -634,31 +755,24 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
         }
     }
     if let Some(limits) = &authored.limits {
-        if limits.calls.is_some_and(|calls| !(1..=16).contains(&calls))
-            || limits
-                .request_bytes
-                .as_ref()
-                .map(|bytes| bytes.bytes("limits.request_bytes"))
-                .transpose()?
-                .is_some_and(|bytes| bytes == 0 || bytes > 1024 * 1024)
-            || limits
-                .source_bytes
-                .as_ref()
-                .map(|bytes| bytes.bytes("limits.source_bytes"))
-                .transpose()?
-                .is_some_and(|bytes| bytes == 0 || bytes > 16 * 1024 * 1024)
+        if limits
+            .calls
+            .is_some_and(|calls| !(1..=16).contains(&calls))
         {
             bail!("authored limits exceed the v1 hard ceilings");
         }
+        if let Some(request_bytes) = &limits.request_bytes {
+            parse_integration_request_bytes(request_bytes)?;
+        }
+        if let Some(source_bytes) = &limits.source_bytes {
+            parse_integration_source_bytes(source_bytes)?;
+        }
         if let Some(deadline) = &limits.deadline {
-            let milliseconds = parse_duration_ms(deadline)?;
-            if milliseconds == 0 || milliseconds > 60_000 {
-                bail!("limits.deadline must be between 1ms and 60s");
-            }
+            parse_integration_deadline_ms(deadline)?;
         }
     }
     match &authored.capability {
-        AuthoredCapabilityDeclaration::Http { .. } => {
+        AuthoredCapabilityDeclaration::Http(_) => {
             if authored
                 .limits
                 .as_ref()
@@ -668,7 +782,7 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
                 bail!("http performs exactly one call and does not accept limits.calls");
             }
         }
-        AuthoredCapabilityDeclaration::Script { .. } => {
+        AuthoredCapabilityDeclaration::Script(_) => {
             let source = authored
                 .source
                 .as_ref()
@@ -677,7 +791,7 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
                 bail!("script source.allow must contain between one and sixteen rules");
             }
         }
-        AuthoredCapabilityDeclaration::Snapshot { .. } => {
+        AuthoredCapabilityDeclaration::Snapshot(_) => {
             if authored.source.is_some() || authored.limits.is_some() {
                 bail!("snapshot does not declare remote source or HTTP execution limits");
             }
@@ -693,15 +807,12 @@ fn validate_authored_source(source: &AuthoredSourceDeclaration) -> Result<()> {
     {
         bail!("source.versions must classify at least one product version label");
     }
-    if source
+    if let Some(max_bytes) = source
         .response
         .as_ref()
         .and_then(|response| response.max_bytes.as_ref())
-        .map(|size| size.bytes("source.response.max_bytes"))
-        .transpose()?
-        .is_some_and(|bytes| bytes == 0 || bytes > 8 * 1024 * 1024)
     {
-        bail!("source.response.max_bytes exceeds the 8MiB v1 hard ceiling");
+        parse_integration_response_bytes(max_bytes)?;
     }
     if source.request_headers.len() > 32 || source.response_headers.len() > 32 {
         bail!("source request and response header allow-lists contain at most 32 names");
@@ -801,14 +912,8 @@ fn validate_authored_credential_interface(interface: &CredentialInterface) -> Re
             if let Some(audience) = &interface.audience {
                 validate_token(audience, "source.auth.audience", 2048)?;
             }
-            if interface
-                .refresh_skew
-                .as_deref()
-                .map(parse_duration_ms)
-                .transpose()?
-                .is_some_and(|skew| skew == 0 || skew >= 3_600_000)
-            {
-                bail!("source.auth.refresh_skew must be positive and below one hour");
+            if let Some(refresh_skew) = interface.refresh_skew.as_deref() {
+                parse_oauth_refresh_skew_ms(refresh_skew)?;
             }
         }
         CredentialType::ApiKeyHeader | CredentialType::ApiKeyQuery => {
@@ -1173,12 +1278,9 @@ fn lower_http_capability(
         .response
         .as_ref()
         .and_then(|response| response.max_bytes.as_ref())
-        .map(|size| size.bytes("source.response.max_bytes"))
+        .map(parse_integration_response_bytes)
         .transpose()?
         .unwrap_or(DEFAULT_SOURCE_RESPONSE_BYTES);
-    if response_bytes > MAX_DECLARATIVE_HTTP_RESPONSE_BYTES {
-        bail!("http source.response.max_bytes exceeds the 8MiB platform ceiling");
-    }
     let operation = OperationDeclaration {
         depends_on: credential
             .as_ref()
@@ -1302,7 +1404,7 @@ fn lower_script_capability(
     let max_bytes = u32::try_from(
         response
             .and_then(|response| response.max_bytes.as_ref())
-            .map(|size| size.bytes("source.response.max_bytes"))
+            .map(parse_integration_response_bytes)
             .transpose()?
             .unwrap_or(DEFAULT_SOURCE_RESPONSE_BYTES),
     )

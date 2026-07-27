@@ -1,0 +1,874 @@
+schema_version: registry.standard-journeys.v1
+journeys:
+  - id: spreadsheet-protected-api
+    slug: journeys/spreadsheet-protected-api
+    title: Publish a spreadsheet through a protected API
+    description: Generate the maintained local spreadsheet scaffold, verify its protected Relay surface, and identify which files become human-owned after generation.
+    outcome: A synthetic spreadsheet is available through a purpose-limited Relay API, with anonymous and under-scoped requests denied.
+    level: Beginner, local runtime
+    prerequisites:
+      - A Main-source registryctl binary and image lock built from one recorded commit
+      - A Docker Compose provider
+      - curl
+    expected_time: 15 to 25 minutes
+    evidence_class: source_and_generated_contract
+    evidence_lifecycle: main_unreleased
+    availability: { status: current_unreleased, proof: source_tree, release: null }
+    canonical_sources:
+      - crates/registryctl/src/lib.rs
+      - crates/registryctl/src/sample.rs
+      - crates/registryctl/src/templates/relay_config.yaml.tmpl
+      - crates/registryctl/src/templates/compose.yaml
+      - crates/registryctl/tests/init_output.rs
+    canonical_workspace:
+      id: registry-relay
+      path: crates/registryctl
+    catalog_references:
+      - { catalog: projects, id: registry-relay }
+    minimal_configuration:
+      files:
+        - source: crates/registryctl/src/templates/relay_config.yaml.tmpl
+          destination: my-first-api/relay/config.yaml
+          format: scaffolded
+          public_boundary: generated_template
+      note: The exact init step emits the complete disposable sample. The template is linked as its canonical source but is not rendered with unresolved generation tokens; review the emitted relay/config.yaml before runtime use.
+    artifacts:
+      - path: my-first-api/registryctl.yaml
+        classification: scaffolded_human_owned
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Registryctl creates this project manifest, but later edits are human-authored intent. It is not registryctl build output.
+      - path: my-first-api/relay/config.yaml
+        classification: scaffolded_human_owned
+        owner: operator
+        human_edit: true
+        version_control: true
+        note: Registryctl creates the first Relay runtime configuration. The operator owns subsequent policy, caller, and data-binding review.
+      - path: my-first-api/data/benefits_casework.xlsx
+        classification: synthetic_fixture
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: The generated workbook contains synthetic tutorial records only.
+      - path: my-first-api/secrets/local.env
+        classification: environment_binding
+        owner: operator
+        human_edit: true
+        version_control: false
+        note: Registryctl generates local-only credentials. This file must not be reused or committed.
+      - path: my-first-api/output/smoke-results.json
+        classification: runtime_observed
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: The report records one local runtime observation and is not authored configuration.
+    fixture:
+      source: crates/registryctl/src/sample.rs
+      format: generated_sample
+      expected_trace:
+        - Registryctl generates the synthetic benefits workbook and local-only credentials.
+        - Relay starts only after strict configuration and deployment gates pass.
+        - Anonymous access is denied, purpose and scope are enforced, and the row reader receives only allowed fields.
+        - The smoke report records local statuses without exposing credential values.
+    contract:
+      proves:
+        - The source-under-test scaffold can start one local Relay over synthetic tabular data.
+        - Protected metadata and record operations enforce configured caller, scope, purpose, and field-release boundaries.
+        - Scaffolded runtime files and runtime-observed reports have distinct ownership.
+      does_not_prove:
+        - Compatibility with a country spreadsheet, database, identity provider, or network.
+        - Production key custody, policy approval, legal approval, or operational resilience.
+        - That generated local credentials are suitable outside this disposable journey.
+    command_recipe: { kind: spreadsheet_runtime }
+    review:
+      - Inspect registryctl.yaml and relay/config.yaml before first start; treat both as human-owned after scaffolding.
+      - Confirm secrets/local.env is excluded from version control and contains no real credential.
+      - Inspect output/smoke-results.json as runtime evidence, not as configuration or production acceptance.
+    gates:
+      - name: Registryctl doctor
+        proves: The local scaffold, runtime files, and selected local posture pass the product checks reached by doctor.
+        does_not_prove: Source accuracy, production readiness, or approval of generated credentials.
+      - name: Relay startup validation
+        proves: Relay accepted the strict configuration and reached the configured local listener.
+        does_not_prove: The configuration is authorized for a production environment.
+      - name: Registryctl smoke
+        proves: Maintained synthetic allowed and denied requests behaved as expected against the local runtime.
+        does_not_prove: Live-source interoperability, load behavior, disaster recovery, or external acceptance.
+    production_delta: &runtime_delta
+      environment: Bind the reviewed candidate to the intended production environment and product instance.
+      secrets: Provision credentials and trust material through operator-managed references.
+      approval: Record country-author, product-owner, and operator approval for the reviewed candidate.
+      signing: Sign each immutable product input with the authorized product-specific identity.
+      activation: Verify, activate, observe, and retain rollback evidence independently for each product.
+    troubleshooting:
+      - relay.startup.config_document_invalid
+      - relay.startup.config_validation_rejected
+      - relay.startup.data_listener_unavailable
+      - relay.startup.doctor_failed
+    next_task:
+      label: Inspect the instance OpenAPI
+      href: /journeys/instance-openapi/
+    evidence:
+      extraction: &standard_extraction_evidence
+        status: verified
+        source_path: docs/site/scripts/generate-standard-journeys.test.mjs
+        test_id: extracts every declared complete configuration file from its canonical source
+        command: node --test scripts/generate-standard-journeys.test.mjs
+        workflow: .github/workflows/ci.yml#docs
+        revision: main
+        lifecycle: current_unreleased
+      execution: &relay_tutorial_evidence
+        status: verified
+        source_path: docs/site/scripts/check-registryctl-tutorials.sh
+        test_id: run_relay_tutorial()
+        command: npm run check:tutorial:registryctl
+        workflow: .github/workflows/ci.yml#registryctl-tutorials
+        revision: main
+        lifecycle: current_unreleased
+      runtime: *relay_tutorial_evidence
+
+  - id: instance-openapi
+    slug: journeys/instance-openapi
+    title: Inspect one running instance OpenAPI contract
+    description: Compare the reviewed Relay API source contract with the document exposed by one configured instance.
+    outcome: An operator verifies the exact API contract selected by one Relay instance.
+    level: Beginner
+    prerequisites:
+      - A Main-source registryctl binary and image lock built from one recorded commit
+      - A Docker Compose provider for the optional local runtime step
+      - An HTTP client that can preserve response bytes at an exact output path
+    expected_time: 10 minutes
+    evidence_class: source_and_generated_contract
+    evidence_lifecycle: main_unreleased
+    availability: { status: current_unreleased, proof: source_tree, release: null }
+    canonical_sources:
+      - crates/registry-relay/openapi/registry-relay.openapi.json
+      - crates/registry-relay/tests/api_docs.rs
+      - crates/registryctl/src/templates/relay_config.yaml.tmpl
+    canonical_workspace:
+      id: registry-relay
+      path: crates/registry-relay
+    catalog_references:
+      - { catalog: projects, id: registry-relay }
+      - { catalog: contracts, id: registry-relay.openapi }
+    minimal_configuration:
+      files:
+        - source: crates/registryctl/src/templates/relay_config.yaml.tmpl
+          destination: openapi-inspection/relay/config.yaml
+          format: scaffolded
+          public_boundary: generated_template
+      note: The exact init step emits the complete disposable local configuration. That sample explicitly sets server.openapi_requires_auth to false; the product default remains true.
+    artifacts:
+      - path: openapi-inspection/relay/config.yaml
+        classification: scaffolded_human_owned
+        owner: operator
+        human_edit: true
+        version_control: true
+        note: Exact configuration emitted by the disposable init step. It explicitly selects the local public OpenAPI opt-out and becomes operator-owned after scaffolding.
+      - path: crates/registry-relay/openapi/registry-relay.openapi.json
+        classification: generated_unsigned
+        owner: registry_relay
+        human_edit: false
+        version_control: true
+        note: Committed product-owned source contract used for drift and consumer review.
+      - path: openapi-inspection/output/instance.openapi.json
+        classification: runtime_observed
+        owner: operator
+        human_edit: false
+        version_control: false
+        note: Exact user-selected capture path for the typed runtime GET interface.
+    fixture:
+      source: crates/registry-relay/tests/api_docs.rs
+      format: source_reference
+      expected_trace:
+        - Registryctl creates a disposable local scaffold whose generated config explicitly sets server.openapi_requires_auth to false.
+        - The separately started local instance exposes an unauthenticated GET /openapi.json only because that explicit opt-out is selected.
+        - The captured OpenAPI document declares version 3.1.0 and is written to openapi-inspection/output/instance.openapi.json.
+    contract:
+      proves:
+        - The cited product source test proves that the explicit local opt-out exposes an OpenAPI 3.1.0 document without authentication.
+        - Performing the separate runtime interface captures the generated contract selected by that disposable instance.
+      does_not_prove:
+        - Downstream consumers remain compatible with every changed operation.
+        - OpenAPI-assisted upstream source authoring; that compiler contract remains deferred.
+        - That the product default is public, or that any operation described by the captured document is authorized without its configured credentials.
+    command_recipe: { kind: instance_openapi }
+    review:
+      - Review the server and catalog configuration selecting the API surface.
+      - Confirm the generated disposable config is the intended local-only openapi_requires_auth false opt-out before starting it.
+      - Inspect the exact instance document returned through the unauthenticated local route.
+      - Record the source revision, instance binding, capture time, and document digest; no credential is required or recorded for this explicit local opt-out.
+    gates:
+      - name: source test
+        proves: The explicit local public opt-out returns an OpenAPI 3.1.0 document in the product source test.
+        does_not_prove: A particular deployed instance is reachable.
+      - name: instance inspection
+        proves: When the operator performs the separate runtime step, the selected disposable instance exposes one concrete generated contract at the exact capture path.
+        does_not_prove: Every client accepts the selected contract.
+      - name: consumer comparison
+        proves: Reviewed consumers accept the candidate contract.
+        does_not_prove: Runtime health or production data correctness.
+    production_delta: *runtime_delta
+    troubleshooting:
+      - relay.startup.data_listener_unavailable
+      - relay.startup.config_validation_rejected
+      - rejected_binding
+    next_task:
+      label: Author a bounded HTTP integration
+      href: /journeys/bounded-http/
+    evidence:
+      extraction: *standard_extraction_evidence
+      execution: &openapi_contract_evidence
+        status: verified
+        source_path: crates/registry-relay/tests/api_docs.rs
+        test_id: openapi_json_can_be_moved_to_public_router_for_local_testing
+        command: cargo test --locked -p registry-relay --test api_docs openapi_json_can_be_moved_to_public_router_for_local_testing -- --exact
+        workflow: .github/workflows/ci.yml#relay-contracts
+        revision: main
+        lifecycle: current_unreleased
+      runtime: &runtime_not_claimed_evidence
+        status: not_claimed
+        source_path: docs/site/scripts/generate-standard-journeys.test.mjs
+        test_id: keeps runtime and product activation claims bounded to traceable evidence
+        command: node --test scripts/generate-standard-journeys.test.mjs
+        workflow: .github/workflows/ci.yml#docs
+        revision: main
+        lifecycle: current_unreleased
+
+  - id: bounded-http
+    slug: journeys/bounded-http
+    title: Author and test a bounded HTTP integration
+    description: Normalize one fixed HTTP request into a closed evidence projection with offline fixture proof.
+    outcome: A bounded HTTP request produces reviewed evidence through deterministic offline fixtures.
+    level: Intermediate
+    prerequisites:
+      - registryctl built from the current source revision
+      - A bounded source API contract
+      - Synthetic match and non-match examples
+    expected_time: 30 minutes
+    evidence_class: maintained_offline_fixture
+    evidence_lifecycle: main_unreleased
+    availability: { status: current_unreleased, proof: source_tree, release: null }
+    canonical_sources:
+      - crates/registryctl/assets/project-starters/bounded-http/registry-stack.yaml
+      - crates/registryctl/assets/project-starters/bounded-http/environments/local.yaml
+      - crates/registryctl/assets/project-starters/bounded-http/integrations/person-record/integration.yaml
+      - crates/registryctl/assets/project-starters/bounded-http/integrations/person-record/fixtures/active.yaml
+    canonical_workspace:
+      id: http
+      path: crates/registryctl/assets/project-starters/bounded-http
+    catalog_references:
+      - { catalog: project_authoring, id: http }
+      - { catalog: projects, id: registry-relay }
+      - { catalog: projects, id: registry-notary }
+    minimal_configuration:
+      files:
+        - source: crates/registryctl/assets/project-starters/bounded-http/registry-stack.yaml
+          destination: registry-project/registry-stack.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+        - source: crates/registryctl/assets/project-starters/bounded-http/environments/local.yaml
+          destination: registry-project/environments/local.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+        - source: crates/registryctl/assets/project-starters/bounded-http/integrations/person-record/integration.yaml
+          destination: registry-project/integrations/person-record/integration.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+      note: These complete maintained starter files define project topology, synthetic local bindings, and the bounded HTTP integration. No field-range excerpt is presented as a complete configuration.
+    artifacts:
+      - path: registry-project/registry-stack.yaml
+        classification: authored
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Human-owned registry intent, service policy, consultation, claims, and disclosure.
+      - path: registry-project/integrations/person-record/integration.yaml
+        classification: authored
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Human-owned source and projection contract.
+      - path: registry-project/integrations/person-record/fixtures/active.yaml
+        classification: synthetic_fixture
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Maintained offline match evidence.
+      - path: registry-project/.registry-stack/build/local/reviewable
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted human-review directory within the local build output.
+      - path: registry-project/.registry-stack/build/local/private/relay
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted unsigned Relay product input.
+      - path: registry-project/.registry-stack/build/local/private/notary
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted unsigned Notary product input.
+    fixture:
+      source: crates/registryctl/assets/project-starters/bounded-http/integrations/person-record/fixtures/active.yaml
+      format: yaml
+      expected_trace:
+        - The harness expects one GET request at the templated person path.
+        - The synthetic response projects only the declared active output.
+        - Expected claims are evaluated without contacting a live source.
+    contract:
+      proves:
+        - The bounded request and response projection produce the expected offline result.
+        - Authored configuration can pass static check and deterministic build.
+        - Service policy, Relay consultation, Notary claims, and separate product inputs remain visible through the canonical workspace and generated reports.
+      does_not_prove:
+        - Live authentication, source availability, or production response compatibility.
+    command_recipe: { kind: matrix, matrix_id: http }
+    review:
+      - Review paths, statuses, output types, and every fixture interaction.
+      - Keep credentials as references and out of fixtures.
+      - Review explanations and product inputs without editing generated files.
+    gates:
+      - name: fixture
+        proves: The bounded request and projection produce the maintained offline result.
+        does_not_prove: Live source compatibility or authentication.
+      - name: check
+        proves: Authored configuration satisfies current static contracts.
+        does_not_prove: Runtime files and references are available.
+      - name: build
+        proves: Deterministic per-product inputs can be generated.
+        does_not_prove: Inputs are signed, trusted, or active.
+    production_delta: *runtime_delta
+    troubleshooting:
+      - registryctl.authoring.yaml.unknown_field
+      - fixture.request_mismatch
+      - source.status_rejected
+      - authorization.denied
+    next_task:
+      label: Extend the adapter with bounded FHIR scripting
+      href: /journeys/bounded-multi-call-script/
+    evidence:
+      extraction: *standard_extraction_evidence
+      execution: &project_authoring_execution_evidence
+        status: verified
+        source_path: crates/registryctl/tests/project_authoring.rs
+        test_id: every_cataloged_supported_project_authoring_command_is_automated
+        command: cargo build --locked -p registryctl --bin registryctl && cargo test --locked -p registryctl --test project_authoring every_cataloged_supported_project_authoring_command_is_automated -- --exact
+        workflow: .github/workflows/ci.yml#project-authoring-determinism
+        revision: main
+        lifecycle: current_unreleased
+      runtime: *runtime_not_claimed_evidence
+
+  - id: bounded-multi-call-script
+    slug: journeys/bounded-multi-call-script
+    title: Author and test a bounded FHIR R4 multi-call script
+    description: Review the complete Rhai adapter that bounds Patient, Coverage, and Organization requests.
+    outcome: A bounded Rhai adapter produces normalized FHIR evidence with maintained offline fixtures.
+    level: Advanced
+    prerequisites:
+      - Familiarity with FHIR R4 search bundles
+      - registryctl built from the current source revision
+      - Synthetic Patient, Coverage, and Organization examples
+    expected_time: 45 minutes
+    evidence_class: maintained_offline_fixture
+    evidence_lifecycle: main_unreleased
+    availability: { status: current_unreleased, proof: source_tree, release: null }
+    canonical_sources:
+      - crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/registry-stack.yaml
+      - crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/environments/local.yaml
+      - crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/integrations/coverage/integration.yaml
+      - crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/integrations/coverage/adapter.rhai
+      - crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/integrations/coverage/fixtures/match.yaml
+    canonical_workspace:
+      id: fhir-r4-coverage-active
+      path: crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active
+    catalog_references:
+      - { catalog: project_authoring, id: fhir-r4-coverage-active }
+      - { catalog: projects, id: registry-relay }
+      - { catalog: projects, id: registry-notary }
+    minimal_configuration:
+      files:
+        - source: crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/registry-stack.yaml
+          destination: fhir-project/registry-stack.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+        - source: crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/environments/local.yaml
+          destination: fhir-project/environments/local.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+        - source: crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/integrations/coverage/integration.yaml
+          destination: fhir-project/integrations/coverage/integration.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+        - source: crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/integrations/coverage/adapter.rhai
+          destination: fhir-project/integrations/coverage/adapter.rhai
+          format: rhai
+          public_boundary: maintained_synthetic
+      note: The complete maintained set includes project topology, synthetic local bindings, the canonical request limits, and the entire reviewed Rhai adapter without line-range extraction.
+    artifacts:
+      - path: fhir-project/integrations/coverage/integration.yaml
+        classification: authored
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Human-owned request bounds, selectors, outputs, and limits.
+      - path: fhir-project/integrations/coverage/adapter.rhai
+        classification: authored
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Hash-covered reviewed country implementation code.
+      - path: fhir-project/integrations/coverage/fixtures/match.yaml
+        classification: synthetic_fixture
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Maintained offline FHIR conversation.
+      - path: fhir-project/.registry-stack/build/local/reviewable
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted human-review directory containing the reviewed integration closure.
+      - path: fhir-project/.registry-stack/build/local/private/relay
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted unsigned Relay input containing the complete Rhai adapter.
+      - path: fhir-project/.registry-stack/build/local/private/notary
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted unsigned Notary input for the combined project.
+    fixture:
+      source: crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/integrations/coverage/fixtures/match.yaml
+      format: yaml
+      expected_trace:
+        - The adapter performs bounded Patient and Coverage searches.
+        - The matched payor selects one Organization request.
+        - Coverage status and insurer name produce the expected claims.
+    contract:
+      proves:
+        - The complete Rhai file parses and satisfies the maintained synthetic FHIR conversation.
+        - Host-declared four-call, 512KiB source-byte, 8KiB request-byte, and 12-second deadline limits bound adapter execution.
+      does_not_prove:
+        - A live FHIR server conforms to the tested profile.
+    command_recipe: { kind: matrix, matrix_id: fhir-r4-coverage-active }
+    review:
+      - Review every allowed request, selector, ambiguity branch, and output projection.
+      - Confirm fixture ordering and bounded pagination.
+      - Confirm the generated closure includes the full reviewed Rhai file.
+    gates:
+      - name: script syntax
+        proves: The complete Rhai file parses under the current authoring contract.
+        does_not_prove: Every source response yields intended evidence.
+      - name: fixture
+        proves: The synthetic FHIR conversation produces expected normalized evidence.
+        does_not_prove: A live FHIR server conforms to the tested profile.
+      - name: build
+        proves: The reviewed script enters deterministic product inputs.
+        does_not_prove: Product bundles are trusted or active.
+    production_delta: *runtime_delta
+    troubleshooting:
+      - registryctl.authoring.script.syntax_error
+      - registryctl.authoring.script.unknown_function
+      - source.call_budget_exceeded
+      - source.deadline_exceeded
+      - source.response_malformed
+    next_task:
+      label: Compare with an exact snapshot
+      href: /journeys/exact-snapshot/
+    evidence:
+      extraction: *standard_extraction_evidence
+      execution: *project_authoring_execution_evidence
+      runtime: *runtime_not_claimed_evidence
+
+  - id: exact-snapshot
+    slug: journeys/exact-snapshot
+    title: Build an exact immutable snapshot lookup
+    description: Select at most one materialized record by unique key and project only declared evidence.
+    outcome: An exact selector reads one snapshot record and emits closed evidence.
+    level: Intermediate
+    prerequisites:
+      - registryctl built from the current source revision
+      - An immutable snapshot schema with a unique primary key
+      - Synthetic match and non-match records
+    expected_time: 30 minutes
+    evidence_class: maintained_offline_fixture
+    evidence_lifecycle: main_unreleased
+    availability: { status: current_unreleased, proof: source_tree, release: null }
+    canonical_sources:
+      - crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/registry-stack.yaml
+      - crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/environments/local.yaml
+      - crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/entities/people.yaml
+      - crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/integrations/person-snapshot/integration.yaml
+      - crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/integrations/person-snapshot/fixtures/match.yaml
+    canonical_workspace:
+      id: snapshot
+      path: crates/registryctl/tests/fixtures/project-authoring/snapshot-exact
+    catalog_references:
+      - { catalog: project_authoring, id: snapshot }
+      - { catalog: projects, id: registry-relay }
+      - { catalog: projects, id: registry-notary }
+    minimal_configuration:
+      files:
+        - source: crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/registry-stack.yaml
+          destination: snapshot-project/registry-stack.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+        - source: crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/environments/local.yaml
+          destination: snapshot-project/environments/local.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+        - source: crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/entities/people.yaml
+          destination: snapshot-project/entities/people.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+        - source: crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/integrations/person-snapshot/integration.yaml
+          destination: snapshot-project/integrations/person-snapshot/integration.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+      note: The complete maintained set includes the entity and unique-key materialization contract as well as the exact lookup. Ambiguity is structurally not applicable only while that primary-key invariant holds.
+    artifacts:
+      - path: snapshot-project/entities/people.yaml
+        classification: authored
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Human-owned entity schema and materialization bounds.
+      - path: snapshot-project/integrations/person-snapshot/integration.yaml
+        classification: authored
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Exact selector and evidence projection.
+      - path: snapshot-project/integrations/person-snapshot/fixtures/match.yaml
+        classification: synthetic_fixture
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Maintained offline match evidence.
+      - path: snapshot-project/.registry-stack/build/local/reviewable
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted human-review directory for snapshot semantics.
+      - path: snapshot-project/.registry-stack/build/local/private/relay
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted unsigned Relay input containing snapshot materialization requirements.
+      - path: snapshot-project/.registry-stack/build/local/private/notary
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted unsigned Notary input for the combined project.
+    fixture:
+      source: crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/integrations/person-snapshot/fixtures/match.yaml
+      format: yaml
+      expected_trace:
+        - The unique selector addresses at most one record.
+        - The selected record projects only declared outputs.
+        - Expected claims are evaluated from normalized snapshot evidence.
+    contract:
+      proves:
+        - Exact selection and projection match the maintained synthetic fixture.
+        - Authored snapshot and evidence contracts are statically coherent.
+        - Ambiguity is not applicable because the exact selector is the materialized unique primary key.
+      does_not_prove:
+        - Production snapshot freshness, completeness, or unique-key enforcement.
+    command_recipe: { kind: matrix, matrix_id: snapshot }
+    review:
+      - Review primary key, materialization bounds, freshness, and output projection.
+      - Confirm fixtures contain synthetic data only.
+      - Keep ambiguity not applicable only while the unique-key constraint remains enforced.
+      - Keep runtime snapshot generations outside version control.
+    gates:
+      - name: fixture
+        proves: Exact selection and projection match the synthetic conversation.
+        does_not_prove: Production freshness or completeness.
+      - name: check
+        proves: Static snapshot and evidence contracts are coherent.
+        does_not_prove: Runtime snapshot files are available.
+      - name: build
+        proves: Unsigned Relay input contains the reviewed snapshot materialization requirements.
+        does_not_prove: A runtime loaded a concrete snapshot generation or the upstream collection is complete.
+    production_delta: *runtime_delta
+    troubleshooting:
+      - registryctl.authoring.project.invalid
+      - fixture.request_mismatch
+      - registryctl.preflight.runtime_file_missing
+    next_task:
+      label: Consume registry-backed evidence in Notary
+      href: /journeys/registry-backed-notary-claim/
+    evidence:
+      extraction: *standard_extraction_evidence
+      execution: *project_authoring_execution_evidence
+      runtime: *runtime_not_claimed_evidence
+
+  - id: registry-backed-notary-claim
+    slug: journeys/registry-backed-notary-claim
+    title: Evaluate a registry-backed Notary predicate
+    description: Evaluate one disclosure-minimizing Notary claim from normalized Relay evidence.
+    outcome: Notary returns the explicit active-registration-exists predicate from registry-backed evidence.
+    level: Intermediate
+    prerequisites:
+      - A Relay person-demographics integration
+      - registryctl and images built from one exact source revision
+      - Synthetic match, pending, non-match, and ambiguity fixtures
+    expected_time: 25 minutes
+    evidence_class: source_and_generated_contract
+    evidence_lifecycle: main_unreleased
+    availability: { status: current_unreleased, proof: source_tree, release: null }
+    canonical_sources:
+      - crates/registryctl/src/templates/notary_addon/registry-stack.yaml
+      - crates/registryctl/src/templates/notary_addon/environments/local.yaml
+      - crates/registryctl/src/templates/notary_addon/integrations/person-demographics/integration.yaml
+      - crates/registryctl/src/templates/notary_addon/integrations/person-demographics/fixtures/match.yaml
+    canonical_workspace:
+      id: registry-notary
+      path: crates/registryctl/src/templates/notary_addon
+    catalog_references:
+      - { catalog: projects, id: registry-relay }
+      - { catalog: projects, id: registry-notary }
+      - { catalog: contracts, id: registry-notary.openapi }
+    minimal_configuration:
+      files:
+        - source: crates/registryctl/src/templates/notary_addon/registry-stack.yaml
+          destination: my-first-api/notary/project/registry-stack.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+        - source: crates/registryctl/src/templates/notary_addon/environments/local.yaml
+          destination: my-first-api/notary/project/environments/local.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+        - source: crates/registryctl/src/templates/notary_addon/integrations/person-demographics/integration.yaml
+          destination: my-first-api/notary/project/integrations/person-demographics/integration.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+      note: The add-on step emits this complete authored Notary project set. The explicit active-registration-exists predicate remains in the full project file and is checked against the maintained fixture.
+    artifacts:
+      - path: my-first-api/notary/project/registry-stack.yaml
+        classification: authored
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Human-owned consultation and claim rule.
+      - path: my-first-api/notary/project/integrations/person-demographics/fixtures/match.yaml
+        classification: synthetic_fixture
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Maintained predicate expectation.
+      - path: my-first-api/notary/project/.registry-stack/build/local/reviewable
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted human-review directory for the Notary project build.
+      - path: my-first-api/notary/project/.registry-stack/build/local/private/relay
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted unsigned Relay consultation input.
+      - path: my-first-api/notary/project/.registry-stack/build/local/private/notary
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted unsigned Notary product input.
+    fixture:
+      source: crates/registryctl/src/templates/notary_addon/integrations/person-demographics/fixtures/match.yaml
+      format: yaml
+      expected_trace:
+        - Relay-backed enrollment evidence matches with active status.
+        - Notary evaluates active-registration-exists.
+        - The response discloses the predicate rather than the source record.
+    contract:
+      proves:
+        - The maintained fixture expects active-registration-exists to be true.
+        - Relay evidence and the Notary predicate agree in current source.
+        - True means the bounded selected source returned exactly one matching active registration.
+      does_not_prove:
+        - Live registry data, workload identity, or production policy approval.
+        - False does not prove global nonexistence, identity fraud, ineligibility, or a legal negative.
+        - The result does not prove that the caller is the matched person.
+    command_recipe: { kind: notary_claim }
+    review:
+      - Review the consultation mapping, claim identifier, CEL rule, and all fixture claim keys.
+      - Confirm the rule discloses no unnecessary attributes.
+      - Keep false bounded to no active matching record found by this consultation in the selected source.
+      - Review Relay and Notary generated inputs independently.
+    gates:
+      - name: fixture
+        proves: The maintained match produces the explicit predicate.
+        does_not_prove: Live registry data produces the same result.
+      - name: cross-product check
+        proves: Relay outputs and Notary dependencies are statically compatible.
+        does_not_prove: Runtime trust and network configuration are valid.
+      - name: smoke
+        proves: The local combined runtime satisfies its packaged smoke contract.
+        does_not_prove: Production legal, disclosure, or availability requirements.
+    production_delta: *runtime_delta
+    troubleshooting:
+      - registryctl.authoring.project.invalid
+      - fixture.request_mismatch
+      - notary.relay.profile_mismatch
+    next_task:
+      label: Promote generated product inputs
+      href: /journeys/product-input-lifecycle/
+    evidence:
+      extraction: *standard_extraction_evidence
+      execution: &notary_tutorial_evidence
+        status: verified
+        source_path: docs/site/scripts/check-registryctl-tutorials.sh
+        test_id: run_notary_tutorial()
+        command: npm run check:tutorial:registryctl
+        workflow: .github/workflows/ci.yml#registryctl-tutorials
+        revision: main
+        lifecycle: current_unreleased
+      runtime: *notary_tutorial_evidence
+
+  - id: product-input-lifecycle
+    slug: journeys/product-input-lifecycle
+    title: Review and promote generated product inputs
+    description: Keep authoring, generation, signing, verification, and activation as separate trust-boundary steps.
+    outcome: Reviewed authored configuration becomes independently activatable Relay and Notary product inputs.
+    level: Advanced
+    prerequisites:
+      - A fixture-complete project that passes registryctl check
+      - Operator-managed signing identities and product trust anchors
+      - Separate Relay and Notary activation authority
+    expected_time: 40 minutes
+    evidence_class: generated_contract
+    evidence_lifecycle: main_unreleased
+    availability: { status: current_unreleased, proof: source_tree, release: null }
+    canonical_sources:
+      - docs/site/src/content/docs/reference/registryctl.mdx
+      - crates/registryctl/assets/project-starters/bounded-http/registry-stack.yaml
+      - crates/registryctl/assets/project-starters/bounded-http/environments/local.yaml
+      - crates/registryctl/assets/project-starters/bounded-http/integrations/person-record/integration.yaml
+      - crates/registryctl/assets/project-starters/bounded-http/integrations/person-record/fixtures/active.yaml
+    canonical_workspace:
+      id: http
+      path: crates/registryctl/assets/project-starters/bounded-http
+    catalog_references:
+      - { catalog: project_authoring, id: http }
+      - { catalog: projects, id: registry-relay }
+      - { catalog: projects, id: registry-notary }
+    minimal_configuration:
+      files:
+        - source: crates/registryctl/assets/project-starters/bounded-http/registry-stack.yaml
+          destination: registry-project/registry-stack.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+        - source: crates/registryctl/assets/project-starters/bounded-http/environments/local.yaml
+          destination: registry-project/environments/local.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+        - source: crates/registryctl/assets/project-starters/bounded-http/integrations/person-record/integration.yaml
+          destination: registry-project/integrations/person-record/integration.yaml
+          format: yaml
+          public_boundary: maintained_synthetic
+      note: The complete maintained source set contains authored intent and synthetic local bindings only. Unsigned product inputs, user-selected bundle outputs, trust anchors, and activation state remain separate.
+    artifacts:
+      - path: registry-project/registry-stack.yaml
+        classification: authored
+        owner: country_author
+        human_edit: true
+        version_control: true
+        note: Reviewed authored source of truth.
+      - path: registry-project/.registry-stack/build/local/reviewable
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted reviewable directory from the deterministic build.
+      - path: registry-project/.registry-stack/build/local/private/relay
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted unsigned Relay product input.
+      - path: registry-project/.registry-stack/build/local/private/notary
+        classification: generated_unsigned
+        owner: registryctl
+        human_edit: false
+        version_control: false
+        note: Exact emitted unsigned Notary product input.
+      - path: journey-output/registry-relay-bundle
+        classification: generated_signed
+        owner: operator
+        human_edit: false
+        version_control: false
+        note: Exact user-selected --out path for the independently signed and verified Relay bundle.
+      - path: journey-output/registry-notary-bundle
+        classification: generated_signed
+        owner: operator
+        human_edit: false
+        version_control: false
+        note: Exact user-selected --out path for the independently signed and verified Notary bundle.
+    fixture:
+      source: crates/registryctl/assets/project-starters/bounded-http/integrations/person-record/fixtures/active.yaml
+      format: yaml
+      expected_trace:
+        - Fixtures establish authored behavior before build.
+        - Check and preflight emit separate value-free reports.
+        - Product inputs remain independent through signing, verification, and the product-owned activation handoff.
+    contract:
+      proves:
+        - Deterministic unsigned product inputs can be generated from reviewed source.
+        - Independently signed Relay and Notary bundles can be verified and made eligible for separate product-owned activation.
+        - Relay and Notary inputs, signatures, trust anchors, and anti-rollback sequences remain product-owned and separate.
+      does_not_prove:
+        - An unsigned build is trusted, active, healthy, or release-proven.
+        - Separate valid product signatures create an atomic project-root activation.
+    command_recipe: { kind: product_input_lifecycle, matrix_id: http }
+    review:
+      - Review authored semantics and the candidate source commit.
+      - Use the build report to locate each product closure.
+      - Sign and verify Relay and Notary inputs independently before handing either bundle to its product-owned activation procedure.
+    gates:
+      - name: fixture and check
+        proves: Maintained behavior and static contracts are coherent.
+        does_not_prove: Runtime readiness or live source compatibility.
+      - name: preflight diagnostic
+        proves: A clean workspace reports missing operator files and secret references through the value-free offline contract.
+        does_not_prove: Operator inputs are provisioned, preflight passes, or the runtime is healthy.
+      - name: bundle verification
+        proves: One immutable product closure has accepted signature and target binding.
+        does_not_prove: The other product is valid or activation succeeds.
+      - name: activation handoff
+        proves: Each verified bundle and trust decision is separately identifiable for its product-owned activation procedure.
+        does_not_prove: Either product activated the bundle, reached readiness, or exercised rollback.
+    production_delta:
+      environment: Bind each reviewed product candidate to the intended environment and instance.
+      secrets: Keep signing keys and trust anchors in operator-managed systems.
+      approval: Preserve separate author, product-owner, signer, and activator approvals.
+      signing: Apply product-specific identity, stream, sequence, and bundle bindings.
+      activation: Exercise readiness, activation, rollback, and last-known-good behavior per product. Relay and Notary activate independently; Registry Stack does not claim atomic project-root activation.
+    troubleshooting:
+      - registryctl.authoring.project.invalid
+      - registryctl.preflight.secret_missing
+      - rejected_signature
+      - rejected_binding
+      - rejected_rollback
+      - notary.runtime.activation_required
+    next_task:
+      label: Review operator diagnostics
+      href: /reference/diagnostics/operator/
+    evidence:
+      extraction: *standard_extraction_evidence
+      execution: *project_authoring_execution_evidence
+      runtime: *runtime_not_claimed_evidence

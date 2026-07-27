@@ -1,5 +1,13 @@
 name: social-registry-match
 classification: synthetic
+request:
+  target:
+    type: Person
+    identifiers: [{ scheme: openspp_individual_id, value: IND-AB12CD34 }]
+  claims: [social-registry-record-exists]
+  disclosure: predicate
+  format: application/vnd.registry-notary.claim-result+json
+  purpose: social-programme-verification
 input: { individual_id: IND-AB12CD34 }
 interactions:
   - expect:

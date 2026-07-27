@@ -6,6 +6,8 @@
 //! workload-visible profile, then acquire and parse the bounded subject body.
 //! No raw HTTP request reaches a source backend.
 
+use std::future::Future;
+
 use axum::body::Body;
 use axum::extract::OriginalUri;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -113,7 +115,44 @@ async fn execute(
         Ok(context) => context,
         Err(error) => return service_error_response(error),
     };
+    execute_after_resolution(
+        context,
+        headers,
+        body,
+        move |context, envelope| async move { service.execute(context, envelope).await },
+    )
+    .await
+}
 
+trait ExecuteGateContext {
+    fn resolved_profile(&self) -> &ResolvedConsultationProfile;
+    fn authorized_workload(&self) -> &AuthenticatedConsultationWorkload;
+}
+
+impl ExecuteGateContext for crate::consultation::ResolvedConsultationContext {
+    fn resolved_profile(&self) -> &ResolvedConsultationProfile {
+        self.resolved_profile()
+    }
+
+    fn authorized_workload(&self) -> &AuthenticatedConsultationWorkload {
+        self.authorized_workload()
+    }
+}
+
+/// Keep request parsing and the only execution continuation in one ordered
+/// boundary. A rejected contract identity therefore cannot invoke service or
+/// source dispatch.
+async fn execute_after_resolution<C, F, Fut>(
+    context: C,
+    headers: HeaderMap,
+    body: Body,
+    dispatch: F,
+) -> Response
+where
+    C: ExecuteGateContext,
+    F: FnOnce(C, ParsedConsultationEnvelope) -> Fut,
+    Fut: Future<Output = Result<Vec<u8>, ConsultationExecutionError>>,
+{
     // Do not poll the subject-bearing body until authentication and exact
     // workload-visible profile resolution have both produced their proofs.
     let authorized_workload = context.authorized_workload();
@@ -144,7 +183,7 @@ async fn execute(
         Ok(envelope) => envelope,
         Err(error) => return wire_error_response(error),
     };
-    match service.execute(context, envelope).await {
+    match dispatch(context, envelope).await {
         Ok(bytes) => json_response(bytes),
         Err(error) => execution_error_response(error),
     }
@@ -832,7 +871,7 @@ fn optional_header<'a>(
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use axum::body::to_bytes;
@@ -842,6 +881,8 @@ mod tests {
     use futures::stream;
     use proptest::prelude::*;
     use serde_json::{json, Value};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
     use tower::ServiceExt;
 
     use super::*;
@@ -877,6 +918,21 @@ mod tests {
 
     fn authorized_workload() -> AuthenticatedConsultationWorkload {
         AuthenticatedConsultationWorkload::for_runtime_vector_test(i64::MAX)
+    }
+
+    struct ExecuteGateTestContext {
+        resolved_profile: ResolvedConsultationProfile,
+        authorized_workload: AuthenticatedConsultationWorkload,
+    }
+
+    impl ExecuteGateContext for ExecuteGateTestContext {
+        fn resolved_profile(&self) -> &ResolvedConsultationProfile {
+            &self.resolved_profile
+        }
+
+        fn authorized_workload(&self) -> &AuthenticatedConsultationWorkload {
+            &self.authorized_workload
+        }
     }
 
     fn route_app() -> Router {
@@ -998,6 +1054,94 @@ mod tests {
                 .err(),
             Some(ConsultationWireError::InvalidBody)
         );
+    }
+
+    #[tokio::test]
+    async fn execute_time_contract_mismatch_fails_before_any_http_source_access() {
+        let source_calls = Arc::new(AtomicUsize::new(0));
+        let source_counter = Arc::clone(&source_calls);
+        let source_app = Router::new().route(
+            "/source",
+            get(move || {
+                let source_counter = Arc::clone(&source_counter);
+                async move {
+                    source_counter.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("instrumented source binds");
+        let source_url = format!("http://{}/source", listener.local_addr().unwrap());
+        let (shutdown, shutdown_requested) = oneshot::channel();
+        let source_task = tokio::spawn(async move {
+            axum::serve(listener, source_app)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_requested.await;
+                })
+                .await
+                .expect("instrumented source serves");
+        });
+
+        let resolved = resolved_profile();
+        let active_contract = resolved.contract_hash().as_str().to_owned();
+        let control_context = ExecuteGateTestContext {
+            resolved_profile: resolved,
+            authorized_workload: authorized_workload(),
+        };
+        let active_request =
+            format!(r#"{{"contract_hash":"{active_contract}","inputs":{{"subject_id":"12345"}}}}"#);
+        let control_response =
+            execute_after_resolution(control_context, headers(), Body::from(active_request), {
+                let source_url = source_url.clone();
+                move |_context, _envelope| async move {
+                    let response = reqwest::get(source_url)
+                        .await
+                        .expect("accepted execution reaches the HTTP source");
+                    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+                    Ok(Vec::new())
+                }
+            })
+            .await;
+        assert_eq!(control_response.status(), StatusCode::OK);
+        assert_eq!(source_calls.load(Ordering::SeqCst), 1);
+        source_calls.store(0, Ordering::SeqCst);
+
+        let stale_context = ExecuteGateTestContext {
+            resolved_profile: resolved_profile(),
+            authorized_workload: authorized_workload(),
+        };
+        let stale_contract = br#"{"contract_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","inputs":{"subject_id":"12345"}}"#;
+        let response = execute_after_resolution(
+            stale_context,
+            headers(),
+            Body::from(stale_contract.as_slice()),
+            {
+                move |_context, _envelope| async move {
+                    let response = reqwest::get(source_url)
+                        .await
+                        .expect("accepted execution reaches the HTTP source");
+                    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+                    Ok(Vec::new())
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response_code(response).await,
+            "consultation.contract_mismatch"
+        );
+        assert_eq!(
+            source_calls.load(Ordering::SeqCst),
+            0,
+            "a profile contract mismatch must fail before source access"
+        );
+
+        let _ = shutdown.send(());
+        source_task.await.expect("instrumented source stops");
     }
 
     #[tokio::test]

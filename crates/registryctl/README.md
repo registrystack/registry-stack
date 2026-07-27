@@ -44,6 +44,16 @@ For the full walkthroughs, use the Registry Docs tutorials:
 
 ## Registry Stack project authoring
 
+The project-authoring workflow in this section documents the current
+unreleased source revision. The `v0.13.0` installer shown earlier does not
+contain the complete workflow. Build `registryctl` from the same reviewed
+Registry Stack source revision as these instructions until a later release
+publishes this surface.
+The public
+[current-source test procedure](https://docs.registrystack.org/start/test-current-source-revision/)
+pins one commit, builds its CLI, runs the matching local product gate, and records the boundary
+between source-test and release evidence.
+
 Start from a built-in Registry Stack project starter, run its closed offline
 fixtures, inspect the redacted generated plan, and build deterministic Relay
 and Notary inputs. Available starters are `http`, `dhis2-tracker`,
@@ -86,6 +96,11 @@ inspected stop later inspection. The same boundary check covers every
 environment YAML file included in the project digest, even when that
 environment is not selected. Any diagnostic prevents compilation, generated
 product validation, fixture execution, and build output.
+
+Treat generated Relay and Notary configuration as build output, not as another
+authoring surface. `registryctl` diagnostics apply to the project sources that
+produced that output. Hand-editing compiled configuration is unsupported and
+has no project-level diagnostic path; change the project and regenerate it.
 
 `script` uses the release-gated Rhai v1 authoring ABI. Its offline conformance
 fixtures use the isolated implementation-owned worker harness, and deployment

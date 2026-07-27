@@ -81,6 +81,8 @@ deployment:
   multi_instance: false
 state:
   storage: in_memory
+cel:
+  eval_timeout_ms: 5000
 server:
   bind: 127.0.0.1:0
 auth:

@@ -171,10 +171,11 @@ Render a single evidence offering by ID (substitute the offering ID defined in y
 `evidence_offerings` list):
 
 ```sh
+: "${OFFERING_ID:?set OFFERING_ID to one ID from evidence_offerings}"
 cargo run --bin registry-manifest -- render \
   profiles/example-civil-registration/fixtures/metadata.yaml \
   --format evidence-offering \
-  --offering <offering-id>
+  --offering "$OFFERING_ID"
 ```
 
 All `render` output goes to stdout.

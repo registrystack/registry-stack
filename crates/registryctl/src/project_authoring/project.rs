@@ -8,6 +8,8 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
     validate_project_shape(&project)?;
 
     let mut hasher = Sha256::new();
+    let mut artifact_inputs = BTreeMap::new();
+    record_artifact_input(&mut artifact_inputs, PROJECT_FILE, &project_bytes)?;
     hash_authored_file(
         &mut hasher,
         PROJECT_FILE,
@@ -18,14 +20,12 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
         let relative = &reference.file;
         let path = resolve_authored_path(&root, relative)?;
         let bytes = read_authored_file(&root, &path)?;
-        hash_authored_file(
-            &mut hasher,
-            relative
-                .to_str()
-                .ok_or_else(|| anyhow!("entity definition path is not Unicode"))?,
-            &bytes,
-        );
-        let document: EntityDefinition = parse_yaml(&bytes, &relative.display().to_string())?;
+        let relative = relative
+            .to_str()
+            .ok_or_else(|| anyhow!("entity definition path is not Unicode"))?;
+        record_artifact_input(&mut artifact_inputs, relative, &bytes)?;
+        hash_authored_file(&mut hasher, relative, &bytes);
+        let document: EntityDefinition = parse_yaml(&bytes, relative)?;
         validate_entity_definition(&document)?;
         if alias != &document.id {
             bail!("entity alias must match the referenced entity id");
@@ -41,12 +41,14 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
     for (alias, reference) in &project.integrations {
         let path = resolve_authored_path(&root, &reference.file)?;
         let bytes = read_authored_file(&root, &path)?;
+        let integration_relative = reference
+            .file
+            .to_str()
+            .ok_or_else(|| anyhow!("integration path is not Unicode"))?;
+        record_artifact_input(&mut artifact_inputs, integration_relative, &bytes)?;
         hash_authored_file(
             &mut hasher,
-            reference
-                .file
-                .to_str()
-                .ok_or_else(|| anyhow!("integration path is not Unicode"))?,
+            integration_relative,
             &bytes,
         );
         let authored: AuthoredIntegrationDocument =
@@ -59,7 +61,12 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
             .parent()
             .ok_or_else(|| anyhow!("integration file has no parent"))?
             .join(&document.fixtures);
-        let fixtures = load_fixtures(&root, &fixture_dir, &mut hasher)?;
+        let fixtures = load_fixtures(
+            &root,
+            &fixture_dir,
+            &mut hasher,
+            &mut artifact_inputs,
+        )?;
         validate_fixture_inputs(alias, &document, &fixtures)?;
         let script = integration_script(&document)
             .map(|script| {
@@ -68,11 +75,13 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
                 let relative = script_path
                     .strip_prefix(&root)
                     .map_err(|_| anyhow!("script path escapes project root"))?;
+                let relative = relative
+                    .to_str()
+                    .ok_or_else(|| anyhow!("script path is not Unicode"))?;
+                record_artifact_input(&mut artifact_inputs, relative, &script_bytes)?;
                 hash_authored_file(
                     &mut hasher,
-                    relative
-                        .to_str()
-                        .ok_or_else(|| anyhow!("script path is not Unicode"))?,
+                    relative,
                     &script_bytes,
                 );
                 Ok::<(PathBuf, Box<[u8]>), anyhow::Error>((
@@ -96,11 +105,13 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
                 let relative = module_path
                     .strip_prefix(&root)
                     .map_err(|_| anyhow!("script module path escapes project root"))?;
+                let relative = relative
+                    .to_str()
+                    .ok_or_else(|| anyhow!("script module path is not Unicode"))?;
+                record_artifact_input(&mut artifact_inputs, relative, &module_bytes)?;
                 hash_authored_file(
                     &mut hasher,
-                    relative
-                        .to_str()
-                        .ok_or_else(|| anyhow!("script module path is not Unicode"))?,
+                    relative,
                     &module_bytes,
                 );
                 script_modules.push((module_path, module_bytes.into_boxed_slice()));
@@ -135,11 +146,13 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
             let relative = PathBuf::from("environments").join(format!("{name}.yaml"));
             let path = resolve_authored_path(&root, &relative)?;
             let bytes = read_authored_file(&root, &path)?;
+            let environment_relative = relative
+                .to_str()
+                .ok_or_else(|| anyhow!("environment path is not Unicode"))?;
+            record_artifact_input(&mut artifact_inputs, environment_relative, &bytes)?;
             hash_authored_file(
                 &mut hasher,
-                relative
-                    .to_str()
-                    .ok_or_else(|| anyhow!("environment path is not Unicode"))?,
+                environment_relative,
                 &bytes,
             );
             let document: EnvironmentDocument =
@@ -159,9 +172,31 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
         integrations,
         entities,
         authored_hash: format!("sha256:{}", hex::encode(hasher.finalize())),
+        artifact_inputs: artifact_inputs.into_values().collect(),
         project_content_digest,
         semantic_digests,
     })
+}
+
+fn record_artifact_input(
+    artifact_inputs: &mut BTreeMap<String, ArtifactInputDigest>,
+    relative: &str,
+    bytes: &[u8],
+) -> Result<()> {
+    let path = ProjectRelativePath::new(relative.to_owned())
+        .map_err(|error| anyhow!("authored input path is invalid: {error}"))?;
+    let digest = Sha256Digest::new(sha256_uri(bytes))
+        .map_err(|error| anyhow!("authored input digest is invalid: {error}"))?;
+    if artifact_inputs
+        .insert(
+            relative.to_owned(),
+            ArtifactInputDigest { path, digest },
+        )
+        .is_some()
+    {
+        bail!("one authored input cannot be loaded more than once");
+    }
+    Ok(())
 }
 
 fn project_content_digest(root: &Path, authored_hasher: &Sha256) -> Result<String> {
@@ -216,7 +251,9 @@ fn lower_project_integration(
     authored: &AuthoredIntegrationDocument,
     entities: &BTreeMap<String, LoadedEntityDefinition>,
 ) -> Result<IntegrationDocument> {
-    let AuthoredCapabilityDeclaration::Snapshot { snapshot } = &authored.capability else {
+    let AuthoredCapabilityDeclaration::Snapshot(AuthoredSnapshotCapability { snapshot }) =
+        &authored.capability
+    else {
         return lower_authored_integration(authored);
     };
     validate_authored_integration_contract(authored)?;
@@ -290,11 +327,7 @@ fn lower_project_integration(
     if exact.values().collect::<BTreeSet<_>>() != authored.input.keys().collect::<BTreeSet<_>>() {
         bail!("snapshot exact must bind every integration input exactly once");
     }
-    parse_duration_ms_with_max(
-        &snapshot.freshness,
-        31 * 24 * 60 * 60 * 1_000,
-        "snapshot freshness",
-    )?;
+    parse_snapshot_freshness_ms(&snapshot.freshness)?;
     let input = authored
         .input
         .iter()
@@ -339,10 +372,9 @@ fn lower_project_integration(
                 freshness: snapshot.freshness.clone(),
                 materialization: SnapshotFootprint {
                     max_source_records: entity.materialization.max_records,
-                    max_source_bytes: entity
-                        .materialization
-                        .max_bytes
-                        .bytes("entity.materialization.max_bytes")?,
+                    max_source_bytes: parse_entity_generation_bytes(
+                        &entity.materialization.max_bytes,
+                    )?,
                 },
             },
         },
@@ -864,6 +896,741 @@ fn semantic_digests(
     })
 }
 
+// This reviewed revision binds every currently published field-knowledge path,
+// its ownership/classification metadata, and its explicit promotion mapping.
+// A schema or knowledge change must therefore be reviewed for promotion
+// semantics before a new projection can be emitted.
+const PROMOTION_FIELD_KNOWLEDGE_REVISION: &str =
+    "sha256:0a095899dc4354edeaf517adacbbeec1aae74eceb80690f654a650ed58361e21";
+
+fn project_promotion_projection(
+    loaded: &LoadedRegistryProject,
+    environment: &EnvironmentDocument,
+) -> Result<ProjectPromotionProjectionV1> {
+    let field_knowledge_revision = validate_promotion_field_knowledge_mapping()?;
+
+    let products = project_promotion_products(environment);
+    let capabilities = project_promotion_capabilities(loaded, environment);
+    let origins = environment
+        .integrations
+        .iter()
+        .map(|(alias, binding)| {
+            (
+                alias,
+                json!({
+                    "source": binding.source.origin,
+                    "oauth": binding.source.oauth.as_ref().map(|endpoint| &endpoint.origin),
+                    "jwks": binding.source.jwks.as_ref().map(|endpoint| &endpoint.origin),
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let origin_state = json!({ "integrations": origins });
+
+    let integration_credentials = environment
+        .integrations
+        .iter()
+        .map(|(alias, binding)| {
+            (
+                alias,
+                json!({
+                    "credential": binding.source.credential,
+                    "source_mtls_private_key": binding.source.mtls.as_ref().map(|mtls| &mtls.private_key),
+                    "oauth_mtls_private_key": binding.source.oauth.as_ref()
+                        .and_then(|endpoint| endpoint.mtls.as_ref())
+                        .map(|mtls| &mtls.private_key),
+                    "jwks_mtls_private_key": binding.source.jwks.as_ref()
+                        .and_then(|endpoint| endpoint.mtls.as_ref())
+                        .map(|mtls| &mtls.private_key),
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let credential_state = json!({ "integrations": integration_credentials });
+
+    let integration_trust = environment
+        .integrations
+        .iter()
+        .map(|(alias, binding)| {
+            (
+                alias,
+                json!({
+                    "allowed_private_cidrs": binding.source.allowed_private_cidrs,
+                    "ca": binding.source.ca,
+                    "mtls": binding.source.mtls.as_ref().map(|mtls| json!({
+                        "certificate_file": mtls.certificate_file,
+                        "generation": mtls.generation,
+                    })),
+                    "oauth": binding.source.oauth.as_ref().map(promotion_private_endpoint_trust),
+                    "jwks": binding.source.jwks.as_ref().map(promotion_private_endpoint_trust),
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let trust_state = json!({
+        "integrations": integration_trust,
+        "relay": environment.relay,
+        "oid4vci_authorization_server": environment.oid4vci.as_ref().map(|binding| json!({
+            "issuer": binding.authorization_server.issuer,
+        })),
+    });
+    let trust_members = environment
+        .integrations
+        .iter()
+        .flat_map(|(alias, binding)| {
+            let mut values = binding
+                .source
+                .allowed_private_cidrs
+                .iter()
+                .map(|cidr| json!(["source", alias, cidr]))
+                .collect::<Vec<_>>();
+            for (label, endpoint) in [
+                ("oauth", binding.source.oauth.as_ref()),
+                ("jwks", binding.source.jwks.as_ref()),
+            ] {
+                if let Some(endpoint) = endpoint {
+                    values.extend(
+                        endpoint
+                            .allowed_private_cidrs
+                            .iter()
+                            .map(|cidr| json!([label, alias, cidr])),
+                    );
+                }
+            }
+            values
+        })
+        .chain(
+            environment
+                .relay
+                .iter()
+                .flat_map(|relay| relay.allowed_clients.iter())
+                .map(|client| json!(["relay_client", client])),
+        )
+        .collect::<Vec<_>>();
+
+    let caller_state = environment
+        .callers
+        .iter()
+        .collect::<BTreeMap<_, _>>();
+    let caller_members = environment
+        .callers
+        .iter()
+        .flat_map(|(id, caller)| {
+            std::iter::once(json!(["caller", id])).chain(
+                caller
+                    .scopes
+                    .iter()
+                    .map(move |scope| json!(["caller_scope", id, scope])),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let operational_integrations = environment
+        .integrations
+        .iter()
+        .map(|(alias, binding)| {
+            (
+                alias,
+                json!({
+                    "rate": binding.source.rate,
+                    "concurrency": binding.source.concurrency,
+                    "timeout": binding.source.timeout,
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let operational_state = json!({
+        "integrations": operational_integrations,
+        "entities": environment.entities,
+        "relay_state": environment.relay_state,
+        "notary_state": environment.notary_state,
+        "notary_cel": environment.notary_cel,
+        "issuance": environment.issuance,
+        "notary_relay": environment.notary_relay,
+        "oid4vci": environment.oid4vci,
+        "deployment_profile": environment.deployment.profile,
+        "deployment_relay_service": environment.deployment.relay.as_ref().map(|binding| &binding.service),
+        "deployment_notary_service": environment.deployment.notary.as_ref().map(|binding| &binding.service),
+        "oid4vci_subject": environment.oid4vci.as_ref().map(|binding| &binding.subject),
+        "oid4vci_tx_code": environment.oid4vci.as_ref().map(|binding| &binding.tx_code),
+    });
+
+    let purpose_state = loaded
+        .project
+        .services
+        .iter()
+        .map(|(id, service)| (id, &service.purpose))
+        .collect::<BTreeMap<_, _>>();
+    let service_policy_state = loaded
+        .project
+        .services
+        .iter()
+        .map(|(id, service)| {
+            (
+                id,
+                json!({
+                    "legal_basis": service.legal_basis,
+                    "consent": service.consent,
+                    "access": service.access,
+                    "variables": service.variables,
+                    "records": {
+                        "entity": service.entity,
+                        "title": service.title,
+                        "description": service.description,
+                        "owner": service.owner,
+                        "sensitivity": service.sensitivity,
+                        "access_rights": service.access_rights,
+                        "update_frequency": service.update_frequency,
+                        "conforms_to": service.conforms_to,
+                        "api": service.api,
+                    },
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let service_policy_members = loaded
+        .project
+        .services
+        .iter()
+        .flat_map(|(id, service)| {
+            let consent = (service.consent == ConsentDeclaration::NotRequired)
+                .then(|| json!(["consent_not_required", id]));
+            service
+                .access
+                .scopes
+                .iter()
+                .map(|scope| json!(["service_scope", id, scope]))
+                .chain(consent)
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let claim_state = loaded
+        .project
+        .services
+        .iter()
+        .map(|(service_id, service)| {
+            let claims = service
+                .claims
+                .iter()
+                .map(|(claim_id, claim)| {
+                    (
+                        claim_id,
+                        json!({
+                            "output": claim.output,
+                            "cel": claim.cel,
+                            "value": claim.value,
+                        }),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            (
+                service_id,
+                json!({
+                    "claims": claims,
+                    "credential_profiles": service.credential_profiles,
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let claim_members = loaded
+        .project
+        .services
+        .iter()
+        .flat_map(|(service_id, service)| {
+            service
+                .claims
+                .keys()
+                .map(|claim_id| json!(["claim", service_id, claim_id]))
+                .chain(
+                    service
+                        .credential_profiles
+                        .keys()
+                        .map(|profile| json!(["credential_profile", service_id, profile])),
+                )
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let disclosure_state = disclosure_review_profiles(&loaded.project);
+    let disclosure_members = disclosure_state
+        .iter()
+        .flat_map(|(service_id, claims)| {
+            claims.iter().flat_map(move |(claim_id, profile)| {
+                profile
+                    .allowed
+                    .iter()
+                    .map(move |mode| json!(["disclosure", service_id, claim_id, mode]))
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let product_state = json!({ "products": products });
+    let product_members = products
+        .iter()
+        .map(|product| json!(["product", product]))
+        .collect::<Vec<_>>();
+
+    let capability_state = loaded
+        .integrations
+        .iter()
+        .map(|(alias, integration)| {
+            let enabled = project_promotion_capability_enabled(
+                alias,
+                &integration.document.capability,
+                environment,
+            );
+            (
+                alias,
+                json!({
+                    "capability": promotion_capability_kind(&integration.document.capability),
+                    "enabled": enabled,
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let capability_members = capabilities
+        .iter()
+        .map(|capability| json!(["capability", capability]))
+        .collect::<Vec<_>>();
+
+    let ceiling_integrations = loaded
+        .integrations
+        .iter()
+        .map(|(alias, integration)| {
+            let capability_contract = match &integration.document.capability {
+                CapabilityDeclaration::Http { http } => json!({
+                    "operations": http.operations,
+                }),
+                CapabilityDeclaration::Script { script } => json!({
+                    "allow": script.allow,
+                    "request_headers": script.request_headers,
+                    "response_headers": script.response_headers,
+                    "response": script.response,
+                    "signed_dci": script.signed_dci,
+                    "script_digest": integration.script.as_ref().map(|(_, bytes)| sha256_uri(bytes)),
+                    "module_digests": integration.script_modules.iter()
+                        .map(|(_, bytes)| sha256_uri(bytes))
+                        .collect::<Vec<_>>(),
+                }),
+                CapabilityDeclaration::Snapshot { snapshot } => json!({
+                    "snapshot": snapshot,
+                }),
+            };
+            (
+                alias,
+                json!({
+                    "version": integration.document.version,
+                    "revision": integration.document.revision,
+                    "source": integration.document.source,
+                    "input": integration.document.input,
+                    "contract": capability_contract,
+                    "outputs": integration.document.outputs,
+                    "not_applicable": integration.document.not_applicable,
+                    "bounds": integration.document.bounds,
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let consultations = loaded
+        .project
+        .services
+        .iter()
+        .map(|(service, declaration)| (service, &declaration.consultations))
+        .collect::<BTreeMap<_, _>>();
+    let entity_state = loaded
+        .entities
+        .iter()
+        .map(|(id, entity)| (id, &entity.document))
+        .collect::<BTreeMap<_, _>>();
+    let ceiling_state = json!({
+        "integrations": ceiling_integrations,
+        "consultations": consultations,
+        "entities": entity_state,
+    });
+    let ceiling_members = loaded
+        .integrations
+        .iter()
+        .flat_map(|(alias, integration)| {
+            let mut members = vec![json!(["integration", alias])];
+            members.extend(
+                integration
+                    .document
+                    .input
+                    .keys()
+                    .map(|id| json!(["integration_input", alias, id])),
+            );
+            members.extend(
+                integration
+                    .document
+                    .outputs
+                    .keys()
+                    .map(|id| json!(["integration_output", alias, id])),
+            );
+            if let CapabilityDeclaration::Http { http } = &integration.document.capability {
+                members.extend(
+                    http.operations
+                        .keys()
+                        .map(|id| json!(["integration_operation", alias, id])),
+                );
+            }
+            members
+        })
+        .chain(loaded.entities.keys().map(|id| json!(["entity", id])))
+        .chain(
+            loaded
+                .project
+                .services
+                .iter()
+                .flat_map(|(service, declaration)| {
+                    declaration
+                        .consultations
+                        .keys()
+                        .map(move |consultation| json!(["consultation", service, consultation]))
+                }),
+        )
+        .collect::<Vec<_>>();
+
+    let field_inputs = [
+        (
+            PromotionChangeKind::Origin,
+            PromotionFieldClassification::Sensitive,
+            origin_state,
+            Vec::new(),
+        ),
+        (
+            PromotionChangeKind::CredentialBinding,
+            PromotionFieldClassification::SecretReference,
+            credential_state,
+            Vec::new(),
+        ),
+        (
+            PromotionChangeKind::Trust,
+            PromotionFieldClassification::Sensitive,
+            trust_state,
+            trust_members,
+        ),
+        (
+            PromotionChangeKind::Caller,
+            PromotionFieldClassification::Sensitive,
+            json!(caller_state),
+            caller_members,
+        ),
+        (
+            PromotionChangeKind::Operational,
+            PromotionFieldClassification::Internal,
+            operational_state,
+            Vec::new(),
+        ),
+        (
+            PromotionChangeKind::Purpose,
+            PromotionFieldClassification::Internal,
+            json!(purpose_state),
+            Vec::new(),
+        ),
+        (
+            PromotionChangeKind::ServicePolicy,
+            PromotionFieldClassification::Internal,
+            json!(service_policy_state),
+            service_policy_members,
+        ),
+        (
+            PromotionChangeKind::Claim,
+            PromotionFieldClassification::Internal,
+            json!(claim_state),
+            claim_members,
+        ),
+        (
+            PromotionChangeKind::Disclosure,
+            PromotionFieldClassification::Internal,
+            json!(disclosure_state),
+            disclosure_members,
+        ),
+        (
+            PromotionChangeKind::ProductEnablement,
+            PromotionFieldClassification::Structural,
+            product_state,
+            product_members,
+        ),
+        (
+            PromotionChangeKind::CapabilityEnablement,
+            PromotionFieldClassification::Structural,
+            json!(capability_state),
+            capability_members,
+        ),
+        (
+            PromotionChangeKind::IntegrationCeiling,
+            PromotionFieldClassification::Structural,
+            ceiling_state,
+            ceiling_members,
+        ),
+    ];
+    let fields = field_inputs
+        .into_iter()
+        .map(|(kind, classification, state, authority_members)| {
+            promotion_projected_field(kind, classification, &state, authority_members)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let projection = ProjectPromotionProjectionV1 {
+        schema_version: ProjectPromotionProjectionSchemaVersion::V1,
+        field_knowledge_revision,
+        authoring_schemas: project_promotion_authoring_schemas(loaded, environment),
+        products,
+        capabilities,
+        fields,
+    };
+    validate_project_promotion_projection(&projection, PROMOTION_FIELD_KNOWLEDGE_REVISION)
+        .map_err(|error| anyhow!(error))?;
+    Ok(projection)
+}
+
+fn project_promotion_authoring_schemas(
+    loaded: &LoadedRegistryProject,
+    environment: &EnvironmentDocument,
+) -> PromotionAuthoringSchemaVersions {
+    PromotionAuthoringSchemaVersions {
+        project: loaded.project.version,
+        environment: environment.version,
+        integrations: loaded
+            .integrations
+            .values()
+            .map(|integration| integration.document.version)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        entities: loaded
+            .entities
+            .values()
+            .map(|entity| entity.document.version)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+    }
+}
+
+fn promotion_private_endpoint_trust(binding: &PrivateEndpointBinding) -> Value {
+    json!({
+        "allowed_private_cidrs": binding.allowed_private_cidrs,
+        "ca": binding.ca,
+        "mtls": binding.mtls.as_ref().map(|mtls| json!({
+            "certificate_file": mtls.certificate_file,
+            "generation": mtls.generation,
+        })),
+        "generation": binding.generation,
+    })
+}
+
+fn project_promotion_products(environment: &EnvironmentDocument) -> Vec<PromotionProjectedProduct> {
+    let mut products = Vec::new();
+    if environment.deployment.relay.is_some() {
+        products.push(PromotionProjectedProduct::Relay);
+    }
+    if environment.deployment.notary.is_some() {
+        products.push(PromotionProjectedProduct::Notary);
+    }
+    products
+}
+
+fn project_promotion_capabilities(
+    loaded: &LoadedRegistryProject,
+    environment: &EnvironmentDocument,
+) -> Vec<PromotionProjectedCapability> {
+    loaded
+        .integrations
+        .iter()
+        .filter(|(alias, integration)| {
+            project_promotion_capability_enabled(
+                alias,
+                &integration.document.capability,
+                environment,
+            )
+        })
+        .map(|(_, integration)| promotion_capability_kind(&integration.document.capability))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn project_promotion_capability_enabled(
+    alias: &str,
+    capability: &CapabilityDeclaration,
+    environment: &EnvironmentDocument,
+) -> bool {
+    match capability {
+        CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. } => {
+            environment.integrations.contains_key(alias)
+        }
+        CapabilityDeclaration::Snapshot { snapshot } => {
+            environment.entities.contains_key(&snapshot.entity)
+        }
+    }
+}
+
+const fn promotion_capability_kind(
+    capability: &CapabilityDeclaration,
+) -> PromotionProjectedCapability {
+    match capability {
+        CapabilityDeclaration::Http { .. } => PromotionProjectedCapability::Http,
+        CapabilityDeclaration::Script { .. } => PromotionProjectedCapability::Script,
+        CapabilityDeclaration::Snapshot { .. } => PromotionProjectedCapability::Snapshot,
+    }
+}
+
+fn promotion_projected_field(
+    kind: PromotionChangeKind,
+    classification: PromotionFieldClassification,
+    state: &Value,
+    authority_members: Vec<Value>,
+) -> Result<PromotionProjectedField> {
+    let mut authority_members = authority_members
+        .iter()
+        .map(digest_json)
+        .collect::<Result<Vec<_>>>()?;
+    authority_members.sort();
+    authority_members.dedup();
+    Ok(PromotionProjectedField {
+        address: kind.address(),
+        kind,
+        classification,
+        ownership: kind.expected_ownership(),
+        digest: digest_json(state)?,
+        authority_members,
+    })
+}
+
+fn validate_promotion_field_knowledge_mapping() -> Result<String> {
+    let index = knowledge::published_field_knowledge_index()
+        .map_err(|error| anyhow!("published field knowledge is invalid: {error}"))?;
+    let mut mapped_kinds = BTreeSet::new();
+    let records = index
+        .by_path()
+        .iter()
+        .map(|(path, field)| {
+            let kind = promotion_kind_for_field_path(path);
+            if let Some(kind) = kind {
+                mapped_kinds.insert(kind);
+                if kind.expected_ownership() != promotion_ownership_for_schema(path.schema) {
+                    bail!("published field knowledge has an invalid promotion owner");
+                }
+            } else if path.schema != knowledge::SchemaKind::Fixture {
+                bail!("published runtime field lacks a closed promotion mapping");
+            }
+            Ok(json!({
+                "schema": path.schema,
+                "pointer": path.pointer,
+                "path_kind": field.path_kind,
+                "semantic_owner": field.semantic_owner,
+                "human_owner": field.human_owner,
+                "sensitivity": field.sensitivity,
+                "products": field.products,
+                "introduced_in": field.introduced_in,
+                "availability": field.availability,
+                "stability": field.stability,
+                "migration": field.migration,
+                "consumers": field.consumers,
+                "generated_artifacts": field.generated_artifacts,
+                "review_classes": field.review_classes,
+                "semantic_rules": field.semantic_rules,
+                "promotion_kind": kind,
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if mapped_kinds != PromotionChangeKind::ALL.into_iter().collect() {
+        bail!("published field knowledge does not exercise every closed promotion mapping");
+    }
+    let revision = digest_json(&Value::Array(records))?;
+    if revision != PROMOTION_FIELD_KNOWLEDGE_REVISION {
+        bail!(
+            "promotion field-knowledge mapping revision requires review: expected {}, observed {}",
+            PROMOTION_FIELD_KNOWLEDGE_REVISION,
+            revision
+        );
+    }
+    Ok(revision)
+}
+
+fn promotion_ownership_for_schema(schema: knowledge::SchemaKind) -> PromotionFieldOwnership {
+    match schema {
+        knowledge::SchemaKind::Environment => PromotionFieldOwnership::EnvironmentOwned,
+        knowledge::SchemaKind::Project
+        | knowledge::SchemaKind::Integration
+        | knowledge::SchemaKind::Entity => PromotionFieldOwnership::ReviewedProjectOwned,
+        knowledge::SchemaKind::Fixture => PromotionFieldOwnership::Unclassified,
+    }
+}
+
+fn promotion_kind_for_field_path(path: &knowledge::FieldPath) -> Option<PromotionChangeKind> {
+    use knowledge::SchemaKind;
+    use PromotionChangeKind as Kind;
+
+    let pointer = path.pointer.as_str();
+    match path.schema {
+        SchemaKind::Fixture => None,
+        SchemaKind::Entity => Some(Kind::ServicePolicy),
+        SchemaKind::Integration => Some(Kind::IntegrationCeiling),
+        SchemaKind::Environment => {
+            let integration_field = pointer.contains("/integrations")
+                || pointer.contains("/$defs/integration")
+                || pointer.contains("/$defs/source")
+                || pointer.contains("/$defs/credential")
+                || pointer.contains("/$defs/endpoint")
+                || pointer.contains("/$defs/ca")
+                || pointer.contains("/$defs/mtls")
+                || pointer.contains("/$defs/privateCidrs")
+                || pointer.contains("/$defs/origin");
+            if pointer.contains("/callers") {
+                Some(Kind::Caller)
+            } else if integration_field
+                && (pointer.contains("/$defs/credential")
+                    || pointer.contains("credential")
+                    || pointer.contains("private_key"))
+            {
+                Some(Kind::CredentialBinding)
+            } else if integration_field
+                && (pointer.contains("origin")
+                    || pointer.contains("_url")
+                    || pointer.contains("base_url"))
+            {
+                Some(Kind::Origin)
+            } else if pointer.contains("allowed_private_cidrs")
+                || pointer.contains("/$defs/privateCidrs")
+                || pointer.contains("/ca")
+                || pointer.contains("/mtls")
+                || pointer.contains("audience")
+                || pointer.contains("allowed_clients")
+                || pointer.contains("/issuer")
+            {
+                Some(Kind::Trust)
+            } else if pointer.ends_with("/properties/relay")
+                || pointer.ends_with("/properties/notary")
+            {
+                Some(Kind::ProductEnablement)
+            } else if integration_field {
+                Some(Kind::CapabilityEnablement)
+            } else {
+                Some(Kind::Operational)
+            }
+        }
+        SchemaKind::Project => {
+            if pointer.contains("/purpose") {
+                Some(Kind::Purpose)
+            } else if pointer.contains("/disclosure") {
+                Some(Kind::Disclosure)
+            } else if pointer.contains("/claims") || pointer.contains("/credential_profiles") {
+                Some(Kind::Claim)
+            } else if pointer.contains("/integrations")
+                || pointer.contains("/entities")
+                || pointer.contains("/consultations")
+            {
+                Some(Kind::IntegrationCeiling)
+            } else {
+                Some(Kind::ServicePolicy)
+            }
+        }
+    }
+}
+
 fn digest_json(value: &Value) -> Result<String> {
     Ok(sha256_uri(
         &canonicalize_json(value).context("failed to canonicalize semantic review input")?,
@@ -1049,8 +1816,18 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                 }
             }
             if let Some(value) = &claim.value {
-                if value.value_type == OutputType::String && value.max_bytes.is_none() {
-                    bail!("string claim value contracts require max_bytes");
+                if value.value_type == OutputType::String {
+                    let Some(max_bytes) = value.max_bytes else {
+                        bail!("string claim value contracts require max_bytes");
+                    };
+                    if !(1..=registry_notary_core::MAX_CLAIM_VALUE_STRING_BYTES_V1)
+                        .contains(&max_bytes)
+                    {
+                        bail!(
+                            "string claim value max_bytes must be between 1 and {}",
+                            registry_notary_core::MAX_CLAIM_VALUE_STRING_BYTES_V1
+                        );
+                    }
                 }
                 if value.value_type != OutputType::String && value.max_bytes.is_some() {
                     bail!("only string claim value contracts may declare max_bytes");
@@ -1137,13 +1914,10 @@ fn validate_entity_definition(entity: &EntityDefinition) -> Result<()> {
             bail!("entity primary_key must be non-nullable");
         }
     }
+    parse_entity_generation_bytes(&entity.materialization.max_bytes)
+        .context("entity materialization exceeds the v1 bounds")?;
     if entity.materialization.max_records == 0
         || entity.materialization.max_records > 100_000_000
-        || entity
-            .materialization
-            .max_bytes
-            .bytes("entity.materialization.max_bytes")?
-            > 1024 * 1024 * 1024
         || !(1..=16).contains(&entity.materialization.retain_generations)
     {
         bail!("entity materialization exceeds the v1 bounds");
@@ -1841,9 +2615,7 @@ fn validate_fixture_inputs(
                     }
                 }
                 FixtureSourceResponse::Timeout { timeout } => {
-                    if parse_duration_ms(timeout)? == 0 {
-                        bail!("fixture timeout must be positive");
-                    }
+                    parse_fixture_timeout_ms(timeout)?;
                 }
             }
         }
@@ -2129,7 +2901,7 @@ fn validate_integration(alias: &str, integration: &IntegrationDocument) -> Resul
     {
         bail!("integration bounds are inconsistent with its compiled source plan");
     }
-    parse_duration_ms(&integration.bounds.deadline)?;
+    parse_integration_deadline_ms(&integration.bounds.deadline)?;
     let ordered = ordered_operations(operations)?;
     let mut prior = BTreeSet::new();
     for (operation_id, operation) in ordered {
@@ -2647,14 +3419,8 @@ fn validate_credential_interface(integration: &IntegrationDocument) -> Result<()
             if let Some(audience) = &interface.audience {
                 validate_token(audience, "OAuth audience", 2048)?;
             }
-            if interface
-                .refresh_skew
-                .as_deref()
-                .map(parse_duration_ms)
-                .transpose()?
-                .is_some_and(|skew| skew == 0 || skew >= 3_600_000)
-            {
-                bail!("OAuth refresh_skew must be positive and below one hour");
+            if let Some(refresh_skew) = interface.refresh_skew.as_deref() {
+                parse_oauth_refresh_skew_ms(refresh_skew)?;
             }
         }
         CredentialType::None | CredentialType::Basic | CredentialType::StaticBearer => {
@@ -2697,14 +3463,8 @@ fn validate_source_binding(
     {
         bail!("integrations.{alias}.source.concurrency must be between 1 and 64");
     }
-    if source
-        .timeout
-        .as_deref()
-        .map(parse_duration_ms)
-        .transpose()?
-        .is_some_and(|value| value == 0 || value > 60_000)
-    {
-        bail!("integrations.{alias}.source.timeout must be between 1ms and 60s");
+    if let Some(timeout) = source.timeout.as_deref() {
+        parse_environment_source_timeout_ms(timeout)?;
     }
     if let Some(rate) = &source.rate {
         if rate.per_minute == 0

@@ -53,6 +53,52 @@ a public nonce route. `oid4vci.nonce_endpoint` must be omitted, and
 single-use bearer credential material until redemption and must remain covered
 by rate limits and disclosure controls.
 
+## CEL worker lifecycle
+
+Registry Notary starts a CEL worker pool only when at least one configured
+claim uses CEL. Before listener binding, every initial worker must answer one
+fixed, value-free CEL protocol probe and remain live through activation. One
+10-second wall-clock deadline covers the complete concurrent spawn-and-probe
+batch; it is not a separate allowance for each worker. The bound is
+product-owned and is not a configuration field. A missing, non-executable,
+sleeping, resource-constrained, exited, or wrong-protocol worker fails
+activation with `notary.cel.worker_unavailable`. Timed-out or rejected worker
+process groups are terminated before they can be admitted.
+
+Only workers that pass the probe count toward readiness. A replacement starts
+in the background and does not receive work until the same probe passes. A
+healthy replacement is installed even when another worker in its concurrent
+replacement batch fails; initial activation still requires the complete
+configured capacity. Readiness remains false while required capacity is
+missing or warming. The failed evaluation is not retried and does not wait for
+replacement startup.
+
+`cel.eval_timeout_ms` applies only after a proven worker receives an
+evaluation. Its default is 2,000 ms and its accepted range is 1 through
+30,000 ms. The startup wall-clock deadline and evaluation deadline are
+independent; neither consumes or multiplies the other.
+
+The remaining CEL controls have these defaults and accepted bounds:
+
+| Field | Default | Accepted values |
+| --- | ---: | --- |
+| `cel.worker_count` | 2 | 1 through 16 |
+| `cel.allow_regex` | `false` | Boolean |
+| `cel.max_expression_bytes` | 8,192 | 1 through 262,144 |
+| `cel.max_binding_json_bytes` | 65,536 | 1 through 1,048,576 |
+| `cel.max_result_json_bytes` | 16,384 | 1 through 1,048,576 |
+| `cel.max_string_bytes` | 16,384 | 1 through 262,144 |
+| `cel.max_list_items` | 1,024 | 1 through 100,000 |
+| `cel.max_object_depth` | 16 | 1 through 64 |
+| `cel.max_object_keys` | 256 | 1 through 2,048 |
+| `cel.worker_memory_bytes` | 134,217,728 | 33,554,432 through 1,073,741,824 |
+| `cel.worker_stderr_bytes` | 1,024 | 1 through 65,536 |
+
+The worker subprocess receives a cleared environment plus the platform's
+minimal process environment. Registry Notary does not expose probe requests,
+responses, CEL expressions, bindings, stderr, paths, or environment values
+through readiness or the public activation failure.
+
 {/* registry-notary-config-key-paths:start */}
 ```text
 audit
@@ -295,6 +341,7 @@ evidence.claims[].semantics.vocabulary
 evidence.claims[].subject_type
 evidence.claims[].title
 evidence.claims[].value
+evidence.claims[].value.max_bytes
 evidence.claims[].value.nullable
 evidence.claims[].value.type
 evidence.claims[].value.unit
@@ -660,6 +707,15 @@ claims become null on `no_match` in the evaluation view and are not issuable
 as null credential claims. Ambiguity or failure evaluates no claims from that
 consultation.
 
+`value.max_bytes` is an optional UTF-8 byte ceiling for a string claim result.
+When present, it must be between 1 and 65536 and `value.type` must be `string`.
+Notary accepts a result exactly at the bound, rejects an over-bound result as a
+value-free rule-evaluation failure, and preserves null for nullable claims.
+Omitting the field preserves the absence of a per-claim ceiling in older direct
+Notary configurations; the global CEL and response safety limits still apply.
+Registry Stack project authoring requires and emits the field for source-free
+string claims.
+
 Disclosure remains a Notary decision. Credential profiles own ordered claim
 membership, issuance format, holder binding, validity, and allowed disclosure.
 Relay outputs are never credentials or public claims by themselves.
@@ -777,10 +833,18 @@ mounted secret files and out of command lines and retained logs.
 
 ## Rollout
 
-Activate Relay and Notary as one compatible project generation. For blue-green
-rollout, stage a complete generation without traffic, verify readiness, then
-switch. For a smaller deployment, drain traffic, restart both products,
-verify readiness, and resume. Never serve a mixed semantic contract.
+Relay and Notary use separately built, signed, verified, anti-rollback-tracked,
+and boot-activated product bundles. A combined rollout is compatible staged
+activation, not atomic project activation; current source has no signed
+project-root bundle or activation coordinator.
+
+Verify both product bundles first. Start or stage Relay without admitting
+caller traffic and require its health, readiness, audit, and deployment-posture
+checks to pass. Then start or stage Notary, require startup and readiness to
+validate its Relay contract, and require Notary health, audit, and posture
+checks to pass. Admit caller traffic only when both products are ready and the
+contract check succeeds. An execute-time contract mismatch fails at Relay
+before source access.
 
 The complete generated schema, runtime diagnostics, and OpenAPI are
 authoritative for exact field syntax.

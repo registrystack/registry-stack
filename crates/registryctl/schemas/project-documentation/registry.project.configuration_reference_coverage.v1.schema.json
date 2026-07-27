@@ -1,0 +1,323 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://id.registrystack.org/schemas/registryctl/project-documentation/registry.project.configuration_reference_coverage.v1.schema.json",
+  "title": "Registry Stack configuration reference coverage v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id",
+    "format_version",
+    "status",
+    "reference_baseline",
+    "source_contract",
+    "coverage",
+    "reviewed_intent_assignment_required_count",
+    "reviewed_intent_assignment_covered_count",
+    "distinct_reviewed_intent_count",
+    "distinct_reviewed_intents_reused_count",
+    "reviewed_intent_assignments_using_reused_intent_count",
+    "missing_intent"
+  ],
+  "properties": {
+    "schema_id": {
+      "const": "https://id.registrystack.org/schemas/registryctl/project-documentation/registry.project.configuration_reference_coverage.v1.schema.json"
+    },
+    "format_version": {
+      "const": "1.0"
+    },
+    "status": {
+      "enum": [
+        "complete",
+        "incomplete"
+      ]
+    },
+    "reference_baseline": {
+      "$ref": "#/$defs/referenceBaseline"
+    },
+    "source_contract": {
+      "$ref": "#/$defs/sourceContract"
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "reviewed_intent_assignment_required_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "reviewed_intent_assignment_covered_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "distinct_reviewed_intent_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "distinct_reviewed_intents_reused_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "reviewed_intent_assignments_using_reused_intent_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "missing_intent": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/address"
+      }
+    }
+  },
+  "$defs": {
+    "schemaKind": {
+      "enum": [
+        "project",
+        "environment",
+        "integration",
+        "fixture",
+        "entity",
+        "relay",
+        "notary"
+      ]
+    },
+    "pathKind": {
+      "enum": [
+        "root",
+        "property",
+        "map_key",
+        "map_value",
+        "array_item",
+        "branch"
+      ]
+    },
+    "referenceBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generator_lifecycle",
+        "published_release",
+        "field_history_status",
+        "history_verification_method",
+        "compared_releases"
+      ],
+      "properties": {
+        "generator_lifecycle": {
+          "const": "unreleased"
+        },
+        "published_release": {
+          "type": "null"
+        },
+        "field_history_status": {
+          "const": "not_verified"
+        },
+        "history_verification_method": {
+          "type": "null"
+        },
+        "compared_releases": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
+    },
+    "sourceContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemas",
+        "schema_sources",
+        "field_knowledge",
+        "human_intent",
+        "runtime_intent",
+        "reads_country_workspaces",
+        "reads_runtime_configuration"
+      ],
+      "properties": {
+        "schemas": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/schemaKind"
+          }
+        },
+        "schema_sources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9.-]+\\.schema\\.json$"
+          }
+        },
+        "field_knowledge": {
+          "const": "schemas/project-authoring/parity-coverage.json#field_knowledge"
+        },
+        "human_intent": {
+          "const": "schemas/project-authoring/documentation-intent.json"
+        },
+        "runtime_intent": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "crates/registry-relay/config/documentation-intent.json",
+              "crates/registry-notary-core/config/documentation-intent.json"
+            ]
+          }
+        },
+        "reads_country_workspaces": {
+          "const": false
+        },
+        "reads_runtime_configuration": {
+          "const": false
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_count",
+        "path_count",
+        "reference_count",
+        "by_schema",
+        "by_path_kind",
+        "by_sensitivity"
+        ,"by_intent_source"
+        ,"by_intent_profile"
+      ],
+      "properties": {
+        "schema_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "path_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reference_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "by_schema": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/schemaKind"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "by_path_kind": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/pathKind"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "by_sensitivity": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "public",
+              "internal",
+              "sensitive",
+              "secret_reference",
+              "secret_value",
+              "redacted_fixture",
+              "structural"
+            ]
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "by_intent_source": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "schema_description",
+              "reviewed_override",
+              "structural_taxonomy",
+              "reviewed_profile"
+            ]
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "by_intent_profile": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "address": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "pointer",
+        "path_kind"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/schemaKind"
+        },
+        "pointer": {
+          "type": "string"
+        },
+        "key_path": {
+          "type": "string"
+        },
+        "path_kind": {
+          "$ref": "#/$defs/pathKind"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "schema": {
+                "enum": [
+                  "relay",
+                  "notary"
+                ]
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "key_path": {}
+            },
+            "required": [
+              "key_path"
+            ]
+          },
+          "else": {
+            "not": {
+              "type": "object",
+              "properties": {
+                "key_path": {}
+              },
+              "required": [
+                "key_path"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

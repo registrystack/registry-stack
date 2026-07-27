@@ -20,6 +20,16 @@ You will copy the built-in starter, prove its synthetic journey offline, inspect
 acquisition and disclosure plan, and build separate unsigned inputs for Registry Relay and
 Registry Notary.
 
+This tutorial documents Main source (unreleased).
+The source has not been designated as a release candidate.
+The `v0.13.0` `registryctl` command-tree source does not define the `preflight`, `capabilities`,
+`compare`, `promote`, `migrate`, `authoring reference`, or `project diagnostics` steps required
+by this tutorial.
+The `Registry Stack 0.13.0` value printed by `init` is bundled starter provenance, not evidence
+that every command in this tutorial shipped in `v0.13.0`.
+Follow [Test one current source revision](../../start/test-current-source-revision/) to pin the
+checkout and build the exact `registryctl` used for this journey.
+
 One project defines one registry trust domain. A deployment can use Relay only for governed
 materialization and records APIs, Notary only for source-free or self-attested evidence, or both
 products for registry-backed consultations and claims derived from Relay outputs. Independent
@@ -43,7 +53,10 @@ Do not add source credentials, production endpoints, or real subject records.
 Use this compact sequence as the workflow checklist. The sections that follow explain each command
 and the trust boundary it verifies.
 
-<ProjectStarterSequence starter="http" />
+<ProjectStarterSequence
+  starter="http"
+  adaptationStep="After the first watch report, complete this page's authored-contract adaptation before running the final test, check, and build commands. The expected review output later on this page assumes those substitutions."
+/>
 
 ## Copy the HTTP starter
 
@@ -70,8 +83,18 @@ Next:
 Add `--format json` when another program needs the versioned initialization report.
 
 The copied `registry-stack.yaml` keeps the complete starter provenance,
-including its authored-content digest. Later, `check --explain` reports whether
-the workspace still matches that starter or has intentionally diverged.
+including its authored-content digest. Compare normalized effective state with
+the exact starter embedded in the current source build:
+
+```sh
+registryctl compare \
+  --project-dir registry-project \
+  --environment local \
+  --from-starter
+```
+
+The value-free result distinguishes an equivalent starter from an intentionally
+adapted project. It does not observe runtime behavior or grant approval.
 
 The command creates this authored layout:
 
@@ -126,22 +149,60 @@ registryctl test \
 ```
 
 The human-readable report identifies the selected fixture, typed input, source call, minimized
-output, claim results, and derived security cases. The report starts with:
+output, claim results, and derived security cases. The complete report is:
 
 ```text
-PASS: 7/7 fixtures passed
+PASS: 9/9 fixtures passed
   PASS person-record.active-person
     inputs: person_id
     calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
     outputs: active
     claims: person-active, person-record-exists
     outcome: match
+  PASS person-record.active-person::derived/request_to_consultation_binding
+    inputs: person_id
+    calls: notary-relay-consultation
+    claims: person-record-exists
+    source access: true
+  PASS person-record.active-person::derived/request_authority
+    inputs: person_id
+    expected error: fixture.request_mismatch
+    source access: false
+  PASS person-record.active-person::derived/status_rejection
+    inputs: person_id
+    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
+    expected error: source.status_rejected
+    source access: true
+  PASS person-record.active-person::derived/malformed_decode
+    inputs: person_id
+    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
+    expected error: source.response_malformed
+    source access: true
+  PASS person-record.active-person::derived/byte_ceiling
+    inputs: person_id
+    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
+    expected error: source.response_too_large
+    source access: true
+  PASS person-record.active-person::derived/timeout
+    inputs: person_id
+    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
+    expected error: source.deadline_exceeded
+    source access: true
+  PASS person-record.active-person::derived/authorization_before_source
+    inputs: person_id
+    expected error: authorization.denied
+    source access: false
+  PASS person-record.active-person::derived/output_minimization
+    inputs: person_id
+    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
+    outputs: active
+    claims: person-active, person-record-exists
+    outcome: match
+    source access: true
 ```
 
-The same report includes derived malformed-decoding, byte-ceiling, timeout,
-authorization-before-source, and output-minimization cases. The command does not contact Registry
-Relay, Registry Notary, or a source registry. Add `--format json` when another program needs the
-versioned fixture report.
+The command does not contact Registry Relay, Registry Notary, or a source registry.
+Add `--format json` when another program needs the versioned fixture report.
 
 ## Watch the selected fixture
 
@@ -155,7 +216,7 @@ registryctl test \
   --watch
 ```
 
-The command prints `PASS: 1/1 fixtures passed`, waits for an authored file to change, then reruns
+The command prints `PASS: 9/9 fixtures passed`, waits for an authored file to change, then reruns
 the selected fixture. Use the preceding non-watch command for the full trace. Press `Ctrl+C` after
 you confirm the initial pass. The watcher ignores generated `.registry-stack` output and never
 enables live source access.
@@ -309,7 +370,7 @@ registryctl check \
 The human-readable review report starts with:
 
 ```text
-Registry Stack project: fictional-citizen-registry (valid)
+Registry Stack project: fictional-civic-support-registry (valid)
 Environment: local
 Baseline: initial_without_baseline
 ```
@@ -317,6 +378,31 @@ Baseline: initial_without_baseline
 Review the fixed request authority, input mappings, caller scopes, purpose, outputs, claims,
 disclosure modes, and credential membership. Use `--format json` only when another tool needs the
 machine-readable report.
+
+When a human reviewer needs to inspect directly authored non-secret scalar metadata in this local
+workspace, opt in to the trusted-local terminal view:
+
+```sh
+registryctl check \
+  --project-dir registry-project \
+  --environment local \
+  --explain \
+  --show-authored-values
+```
+
+The extra section starts with both safety notices:
+
+```text
+WARNING: trusted-local authored values follow. This output includes project-sensitive metadata and must not be shared.
+Secret values, secret references and runtime secret-file locators, fixture data, raw parser text, defaulted values, and derived values remain hidden.
+```
+
+This view can show directly authored or environment-bound public, internal, structural, and
+sensitive metadata, including its source and sensitivity. It is human output only, requires
+`--explain`, and is not a report, evidence, or export mode. Treat the terminal output as
+project-sensitive, and do not share it. Default human output and `--format json` remain redacted;
+combining `--show-authored-values` with JSON output is rejected.
+
 An initial project without an approved baseline requires the `claim`, `integration`,
 `service_policy`, `operator_security`, and `disclosure` review classes.
 A valid report is not legal approval, source interoperability evidence, or deployment authority.
@@ -334,29 +420,22 @@ registryctl build \
 The human-readable report starts with the built project and output directory:
 
 ```text
-Built Registry Stack project "fictional-citizen-registry".
+Built Registry Stack project "fictional-civic-support-registry".
   Environment: local
-  Output: registry-project/.registry-stack/build/local
+  Output: .registry-stack/build/local
 ```
 
 Add `--format json` when another program needs the versioned build report.
 
-The output root contains:
-
-```text
-registry-project/.registry-stack/build/local/
-  reviewable/
-    integration-packs/
-    consultation-contracts/
-    review.json
-  private/
-    relay/
-      config/relay.yaml
-      approval/review.json
-    notary/
-      config/notary.yaml
-      approval/review.json
-```
+The build report identifies `.registry-stack/build/local/artifact-manifest.json`, relative to the
+project directory. Treat that strict `registry.project.artifact_manifest.v1` document as the
+complete tree and classification source.
+It records every reviewable, private, operations, secret-consumer, approval-state, Relay, and
+Notary artifact plus its digest, edit policy, publication boundary, consumers, and permitted
+lifecycle actions. The top-level `generator` records which `registryctl` version produced the tree.
+An artifact action of `regenerate` is lifecycle metadata, not a per-artifact command. Rerun the
+top-level `registryctl build` command above to regenerate the complete environment output. Do not
+maintain or automate against a copied directory listing.
 
 The product input directories remain separate and contain secret references, not secret values.
 They are inputs to each product's Config Bundle workflow, not a signed project root or a deployable

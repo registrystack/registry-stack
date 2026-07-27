@@ -41,8 +41,12 @@ preauthorization state survives in PostgreSQL.
   and `state/`.
 - Know whether Relay consultations or Registry Notary are enabled, which PostgreSQL database each
   product uses, and which role-provisioning record belongs to each database.
-- Stop write traffic or use a filesystem snapshot if you need an exact point-in-time copy of
-  audit files.
+- For a deployment with audited SnapshotExact materializations, remove dependent traffic, stop
+  the Relay fence holder and every Notary caller, and prevent replacement processes from starting.
+  Keep that topology quiesced while capturing source inputs, the Relay ingest cache, and the Relay
+  consultation database at one coordinated recovery point.
+- For a deployment without audited SnapshotExact, stop write traffic or use a filesystem snapshot
+  if you need an exact point-in-time copy of audit files.
 - Keep backups encrypted and access-controlled. `secrets/local.env`, audit files,
   config-trust state, PostgreSQL correctness state, and sensitive-state key versions are
   security-sensitive.
@@ -83,6 +87,11 @@ Those paths are where generated Compose projects mount Relay cache, optional fil
 directories, and config-trust anti-rollback state if you enable it with
 `antirollback_state_path`.
 
+When audited SnapshotExact is configured, run this archive command only after the topology is
+quiesced. Keep Relay and its Notary callers stopped until the matching Relay database backup
+finishes. A source archive, ingest-cache archive, and Relay database taken at independent live
+times do not form a recoverable materialization set.
+
 If your hand-written config uses different paths, include them in the archive:
 
 - Relay or Notary file-audit directories, such as `/var/log/registry-relay/` or
@@ -105,10 +114,11 @@ and audit-pseudonym keyring metadata. They are separate from Notary's
 products.
 
 Remove traffic from Notary callers first, then stop the Relay fence holder and prevent another
-Relay process from starting. If Relay and Notary form one service, keep both products quiesced
-while their backups are taken or use a platform snapshot that gives both product databases one
-coordinated recovery point. A transactionally consistent dump of one live database does not make
-two independently backed-up product databases share a recovery point.
+Relay process from starting. Keep the source inputs and Relay ingest cache unchanged while the
+database backup is captured. If Relay and Notary form one service, keep both products quiesced
+while their source, cache, and database backups are taken or use a platform snapshot that gives
+all stores one coordinated recovery point. A transactionally consistent dump of one live database
+does not make independently backed-up source, cache, or product databases share a recovery point.
 
 For a database dedicated to Relay and an empty-database restore in the same PostgreSQL cluster,
 where the pre-created roles keep their object identifiers, back up the complete Relay database
@@ -134,6 +144,20 @@ Expected output is one checksum line. Store the Relay release, config and signed
 PostgreSQL major, all five role names, the four bound role object identifiers, bootstrap inputs,
 keyring lifecycle settings, PostgreSQL trust root, and retained audit-pseudonym key material with
 the encrypted recovery record. Keep secret values outside the database dump.
+
+For every audited SnapshotExact binding, the access-controlled recovery record must bind:
+
+- The source-input archive SHA-256 and the exact source revision.
+- The Relay ingest-cache archive SHA-256.
+- The complete Relay database backup SHA-256, including materialization active-pointer and history
+  tables.
+- The exact active binding, publication sequence, generation, and restricted content digest.
+- The time or write-ahead-log position shared by the quiesced recovery set.
+
+Hash and sign or independently attest that closed recovery record. Do not put restricted content
+digests, source paths, rows, credentials, or key material in general logs or a public release
+record. A list of unrelated artifact hashes is not evidence that the stores belong to one
+generation.
 
 For recovery into another PostgreSQL cluster, use a physical backup or cluster-level managed
 snapshot that preserves the PostgreSQL role catalog and its object identifiers. Recreating the
@@ -222,6 +246,11 @@ if [ -n "$runtime_uid" ] && [ -n "$runtime_gid" ] && [ -d state ]; then
 fi
 ```
 
+For audited SnapshotExact, do not start Relay after restoring the files. First verify that the
+source-input archive, ingest-cache archive, and Relay database dump match the same attested
+recovery record. The record's active generation and restricted content digest must agree with the
+database active pointer and history and with the retained cache generation.
+
 ## Restore Relay consultation PostgreSQL state
 
 Skip this section when no Relay consultation dump or snapshot is present. Keep Relay and every
@@ -254,6 +283,13 @@ chain-key epoch, lock keys, active key, deadline, and retention inputs recorded 
 The command must report `installed_or_attested` and `identical`. A drift response means the
 recovery set does not match; do not drop the Relay schemas or change bootstrap inputs to make it
 pass.
+
+For audited SnapshotExact, startup reconciles the database-authoritative active generation and
+digest with the restored cache before opening a newer source generation. A missing, mismatched, or
+unreadable retained cache generation keeps the dependent SnapshotExact publication unavailable.
+Do not replace the database pointer, edit the cache, or open live source fallback to clear the
+failure. Restore the matching coordinated set or republish a reviewed source input as a new
+generation.
 
 Relay startup and `/ready` attest the restored catalog, role grants, keyring, audit, quota,
 materialization, and current serving fence. They do not prove that the recovery point includes
@@ -316,8 +352,10 @@ authenticated claim or credential journey appropriate to that deployment. `regis
 provide a product-scoped Notary smoke subcommand. When OID4VCI preauthorization is enabled,
 complete an offer-to-credential journey before admitting traffic.
 For a consultation-enabled Relay, require `/ready` to return `200`, then run one authenticated
-consultation canary while downstream Notary traffic remains blocked. Admit Notary traffic only
-after both product recovery points and the canary have been reconciled.
+consultation canary while downstream Notary traffic remains blocked. Global readiness can remain
+`200` while an individual SnapshotExact execution rejects a stale snapshot, so the canary must
+exercise every recovered materialization relied on by the deployment. Admit Notary traffic only
+after both product recovery points and the canaries have been reconciled.
 
 For a deployment that uses `config_trust`, verify that the restored anti-rollback state still
 matches the configured trust anchor and signed bundle before the service is allowed to serve.
@@ -343,6 +381,7 @@ than the bundle you are trying to boot.
 | Audit records cannot be correlated across the restore | The audit HMAC secret changed | Restore the prior `secrets/local.env`; if the old file is gone, document the break as a key-rotation event |
 | Relay consultation bootstrap reports capability or keyring drift | The restore has different role object identifiers, schema ownership, bootstrap identity, or keyring lifecycle state | Keep traffic blocked and restore the matching complete recovery set; do not drop schemas or reinitialize the keyring |
 | Relay is ready but the recovery point might be stale | Readiness attests the restored state plane but cannot infer missing acknowledged writes | Keep Relay and Notary traffic blocked and recover forward to the last acknowledged write and audit watermark |
+| Relay is ready but one SnapshotExact canary is unavailable | The execution-time freshness bound failed, or the restored source, cache generation, content digest, and database publication pointer do not agree | Keep dependent traffic blocked and restore the coordinated recovery set or publish a reviewed new generation |
 | Notary state doctor rejects the restore | The schema, runtime role, server major, write authority, durability settings, or configured sensitive-state key is invalid | Keep traffic blocked, restore the matching recovery set, and rerun `state install` and `state doctor` |
 | Config bundle startup fails with a rollback code | The anti-rollback state records a newer accepted sequence | Boot a signed bundle with a higher sequence, or follow the break-glass process documented for config trust |
 

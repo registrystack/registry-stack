@@ -13,9 +13,29 @@ use registry_notary_server::cel_worker::{
 use serde_json::Value;
 
 fn main() {
+    let startup_mode = env::var("REGISTRY_NOTARY_CEL_WORKER_FIXTURE_STARTUP_MODE").ok();
+    match startup_mode.as_deref() {
+        Some("sleep") => loop {
+            thread::sleep(Duration::from_secs(60));
+        },
+        Some("wrong_protocol") => {
+            let mut stdout = io::stdout();
+            serde_json::to_writer(&mut stdout, &serde_json::json!({ "ready": true }))
+                .expect("write wrong-protocol startup response");
+            stdout
+                .write_all(b"\n")
+                .expect("write wrong-protocol startup newline");
+            stdout
+                .flush()
+                .expect("flush wrong-protocol startup response");
+        }
+        Some("crash") => process::exit(7),
+        _ => {}
+    }
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
+    let mut startup_probe_count = 0_u64;
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -40,6 +60,20 @@ fn main() {
         }
 
         match request.expression.as_str() {
+            "true" => {
+                startup_probe_count = startup_probe_count.saturating_add(1);
+                let probe_value = startup_mode.as_deref() != Some("reject_repeated_probe")
+                    || startup_probe_count == 1;
+                write_response(
+                    &mut stdout,
+                    request.policy_hash.as_deref(),
+                    Some(Value::Bool(probe_value)),
+                    None,
+                );
+                if startup_mode.as_deref() == Some("reply_then_exit") {
+                    process::exit(0);
+                }
+            }
             "fixture.hang" => loop {
                 thread::sleep(Duration::from_secs(60));
             },

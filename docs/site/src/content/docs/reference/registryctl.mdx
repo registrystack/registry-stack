@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-19"
+last_reviewed: "2026-07-26"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -16,7 +16,13 @@ import ProjectWorkspaceJourneys from '../../../components/ProjectWorkspaceJourne
 
 `registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
 
-This page lists commands in the current `registryctl` source.
+This page lists commands in Main source (unreleased).
+The source has not been designated as a release candidate.
+The last released `registryctl` is `v0.13.0`.
+That artifact does not contain `preflight`, `capabilities`, `compare`, `promote`, `migrate`,
+`authoring reference`, or `project diagnostics`; use a current source build for those commands.
+The [current-source test procedure](../../start/test-current-source-revision/) pins the checkout,
+builds the CLI, and distinguishes the temporary source-test artifacts from release evidence.
 Run `registryctl <command> --help` for the built-in usage text.
 Most human-facing commands also perform a once-per-day update check; see
 [Update check](#update-check).
@@ -46,24 +52,53 @@ complete workflow and generated trust boundary.
 | `test --environment <name> --live` | After offline fixtures pass, send one governed evaluation through a deployed Notary. The environment must be explicitly non-production. |
 | `check --project-dir <dir> --environment <name>` | Validate fixtures and the generated configuration for the project's Relay-only, Notary-only, or combined topology without writing build output. |
 | `check --explain` | Include the redacted acquisition, authorization, output, claim, and disclosure plan. |
+| `check --explain --show-authored-values` | Show directly authored non-secret scalar metadata for explicit trusted-local human review. Human output only; never a report, evidence, or export mode. |
 | `check --format json` | Emit the machine-readable success report or typed invalid-project diagnostics instead of the default human-readable report. |
 | `check --against <bundle> --anchor <anchor>` | Verify a signed product baseline and compare against its signed human review plus internal approval state. Both flags are required together. |
+| `preflight --project-dir <dir> --environment <name>` | Verify required secret-reference availability, runtime-file posture, environment binding, product compatibility, and non-widening offline. It performs no DNS, HTTP, token, or source contact. |
+| `preflight --format json` | Emit the strict value-free `registryctl.project_preflight.v1` readiness report. A not-ready result exits nonzero. |
+| `capabilities --project-dir <dir> --environment <name>` | Inspect which closed capabilities are compiled, declared, enabled, used, available, missing, or inactive without claiming runtime activation. |
+| `capabilities --format json` | Emit the strict value-free `registry.project.capability_inventory.v1` report. |
+| `compare --project-dir <dir> --environment <name> --from-starter` | Compare normalized effective project state with the exact starter embedded in this registryctl release. Recorded starter provenance must match exactly. |
+| `compare --from-environment <name>` | Compare two explicit environment bindings of the same local project. |
+| `compare --from-project-dir <dir> --from-environment <name>` | Compare with another explicitly environment-bound local project. Local project inputs are not treated as reviewed or signed authority. |
+| `compare --format json` | Emit the strict value-free `registry.project.semantic_comparison.v1` report. The comparison does not read runtime state or evaluate external approval. |
+| `promote --project-dir <dir> --environment <name> --against <bundle> --anchor <anchor>` | Compare a single-product project with one verified signed baseline. The command analyzes promotion only; it does not sign, activate, deploy, or mutate either environment. |
+| `promote --relay-against <bundle> --relay-anchor <anchor> --notary-against <bundle> --notary-anchor <anchor>` | Compare a combined project with separate verified Relay and Notary product baselines. All four flags are required as pairs; no project-root or atomic activation is implied. |
+| `promote --format json` | Emit the strict value-free `registry.project.promotion.v1` report. A blocked disposition exits nonzero. |
+| `migrate --project-dir <dir> --target-version 1` | Check the reviewed same-v1 compatibility catalog without changing the source project. |
+| `migrate --output <absent-dir> --write-candidate` | Emit an atomic, separate review candidate. Both flags are required, and the destination must not exist. |
+| `migrate --format json` | Emit the strict `registry.project.migration.v1` report. |
 | `authoring xw --format reference` | Print the generated `xw.v1` function reference for Script authors. |
 | `authoring xw --format editor` | Print generated editor metadata for the `xw.v1` function surface. |
 | `authoring schema --kind <kind>` | Print a strict project, environment, integration, fixture, or entity JSON Schema. |
+| `authoring reference` | Print the deterministic configuration reference for the five authored schemas and generated Relay and Notary runtime schemas after reviewed-intent coverage is complete. |
+| `authoring reference --coverage` | Print the seven-domain field-reference coverage audit and exit nonzero when any reachable path lacks reviewed human intent. |
 | `authoring editor --project-dir <dir>` | Create or verify version-matched VS Code and Zed schema configuration. Defaults to the current directory. |
 | `authoring editor --format json` | Emit the versioned machine-readable editor setup report. |
 | `authoring language-server` | Run Registry Stack navigation and reference diagnostics over the Language Server Protocol on standard input and output. |
+| `project diagnostics --catalog <catalog>` | Print the pure static `authoring`, `fixture`, or `operator` diagnostic reference without reading a project, environment, secret, or runtime service. |
+| `project diagnostics --catalog <catalog> --format json` | Emit only the selected versioned machine-readable catalog. Valid catalogs exit zero; invalid CLI arguments use the standard usage exit, and a failed catalog invariant exits nonzero. |
 | `build --project-dir <dir> --environment <name>` | Emit deterministic unsigned Config Bundle input directories for the products in the selected topology. |
 | `build --against <bundle> --anchor <anchor>` | Build against an explicitly verified signed baseline. Both flags are required together. |
 | `build --format json` | Emit the versioned machine-readable build report instead of the default human-readable result. |
 
 Interactive report commands print concise human-readable results by default. Add `--format json`
-when another program needs a report containing only versioned JSON on standard output. This policy
-covers `init`, `add notary`, non-watch `test`, `check`, `authoring editor`, `build`, `doctor`,
-`bundle`, and `anchor`. Watch mode prints one concise pass/fail summary per run and rejects JSON
+when another program needs a report containing only versioned JSON on standard output.
+This policy covers `init`, `add notary`, non-watch `test`, `check`, `preflight`, `capabilities`,
+`compare`, `promote`, `migrate`, `authoring editor`, `project diagnostics`, `build`, `doctor`, `bundle`, and
+`anchor`. Watch mode prints one concise
+pass/fail summary per run and rejects JSON
 formatting. Artifact and protocol streams retain their native formats, including `authoring xw`,
-`authoring schema`, `authoring language-server`, and `logs`.
+`authoring schema`, `authoring reference`, `authoring language-server`, and `logs`.
+
+`authoring reference` reads only the five committed authoring schemas, the Relay and Notary schemas
+generated from their Rust configuration types, typed field knowledge, and reviewed product-owned
+human-intent metadata.
+It does not accept a project directory or read country configuration, runtime configuration,
+environment values, or secrets.
+Registry Docs runs the coverage command before the reference command and publishes neither output
+when coverage is incomplete.
 
 | JSON command result | Schema version |
 | --- | --- |
@@ -71,17 +106,42 @@ formatting. Artifact and protocol streams retain their native formats, including
 | `add notary` | `registryctl.add_notary.v1` |
 | Successful `test`, `check`, or `build` | `registryctl.project_command.v1` |
 | Invalid-project `check` | `registryctl.project_diagnostics.v1` |
+| `preflight` | `registryctl.project_preflight.v1` |
+| `capabilities` | `registry.project.capability_inventory.v1` |
+| `compare` | `registry.project.semantic_comparison.v1` |
+| `promote` | `registry.project.promotion.v1` |
+| `migrate` | `registry.project.migration.v1` |
 | `authoring editor` | `registryctl.project_editor.v1` |
+| `project diagnostics --catalog authoring` | `registryctl.authoring_error_reference.v1` |
+| `project diagnostics --catalog fixture` | `registryctl.fixture_error_reference.v1` |
+| `project diagnostics --catalog operator` | `registryctl.operator_error_reference.v1` |
 | `doctor` | `registryctl.validation.report.v1` |
 | `smoke` | `registryctl.smoke.v1` |
 | `bundle` or `anchor` | The operation-specific `schema_version` in the report |
 
 An initialized starter records its starter ID, Registry Stack release, and
-authored-content digest in `registry-stack.yaml`. `init` verifies that digest,
-and `check --explain` reports `matches` or `diverged` together with the current
-platform-defaults release, script runtime, and `xw.v1` ABI. Divergence is
-informational: it identifies intentional project changes without blocking a
-valid adapted workspace.
+authored-content digest in `registry-stack.yaml`. `init` verifies that digest.
+`compare --from-starter` fails closed unless the recorded ID, release, and
+content digest identify the exact starter embedded in the current binary. It
+then compares normalized effective fields and generated review projections,
+so formatting changes and explicit defaults with the same meaning remain
+equivalent while intentional configuration changes produce a value-free review
+plan. The result is offline evidence, not runtime observation, signed approval,
+or country governance acceptance.
+
+`check --explain` reports the current redacted acquisition, authorization,
+output, claim, and disclosure plan. It does not compare the project with its
+starter.
+For an explicit trusted-local terminal review, add `--show-authored-values`.
+This human-only view can show directly authored or environment-bound scalar metadata classified
+as public, internal, structural, or sensitive. It prints each source and sensitivity so a reviewer
+can inspect their local project without weakening the portable report boundary. Treat the output
+as project-sensitive and do not copy it into logs, tickets, or shared artifacts. It is not a
+report, evidence, or export mode.
+Secret values, secret references and runtime secret-file locators, fixture data, raw parser text,
+defaulted values, and derived values remain hidden.
+The flag requires `--explain`; combining it with `--format json` is rejected. Default human output,
+JSON output, generated artifacts, and comparison and promotion reports remain redacted.
 Without `--against`, `check` and `build` label the baseline
 `initial_without_baseline`.
 Their `semantic_changes` entries identify changed `claim`, `integration`, `service_policy`,
@@ -90,6 +150,55 @@ Registry Stack does not create a separate reviewer workflow.
 The `registryctl.project_command.v1` build report identifies the complete generated build root in
 its `output` field. Automation must use that field instead of constructing a path from registryctl's
 private generated directory layout.
+Treat the Relay and Notary configuration below that root as build output, not another authoring
+surface. `registryctl` diagnostics apply to the project sources that produced it. Hand-editing
+compiled configuration is unsupported and has no project-level diagnostic path; change the project
+and regenerate the output.
+
+### Same-v1 migration checks
+
+`migrate` implements one reviewed compatibility adapter, not a new authoring contract version.
+The adapter recognizes the three project-authoring paths retired when attribute release became a
+default Registry Relay capability:
+
+- `/services/*/api/attribute_release_profiles/*/subject/input`, an unused hint whose removal
+  preserves behavior.
+- `/services/*/api/attribute_release_profiles/*/response/max_age_seconds`, whose removal changes
+  a previously cacheable response to
+  `private, no-store` and requires semantic review.
+- `/services/*/api/attribute_release_profiles/*/response`, the empty wrapper left after the
+  reviewed field removal.
+
+The command preserves original bytes for every unaffected authored file.
+A current starter returns `no_migration_required` and does not emit a formatting-only candidate.
+An eligible historical project returns `review_required` because the cache policy changed.
+That disposition exits zero because the check or candidate emission succeeded, but it is not
+approval or migration completion.
+Automation must inspect `disposition`, every `reviews[].status`, `blocking_reasons`, and
+`rerun_gates` before applying a separate candidate.
+
+Source version failures that can be safely inspected return a value-free JSON report with a closed
+diagnostic code, phase, and remediation.
+An unsupported target request records `target_version: null` and `direction: unsupported_target`
+for every contract because no supported target contract exists.
+Its gates are `not_applicable`, and a request with an otherwise supported source reports only the
+`target_version_unsupported` blocker, without implying contract removal, downgrade, missing
+catalog work, or an unrun gate.
+Failed schema, fixture, check, build, and generated-reference gates retain the same closed evidence
+without embedding the underlying error, authored values, or paths.
+The JSON Schema closes every diagnostic field and value.
+The Rust data-transfer object additionally enforces diagnostic-to-version-support and
+diagnostic-to-gate-status relationships that JSON Schema cannot correlate across arrays.
+
+Command-line syntax errors, an unsafe or unreadable project root, and a symlink encountered before
+safe inspection of the root YAML occur before report construction.
+Those boundary failures exit nonzero without a migration report.
+Candidate staging rejects every symlink and has bounded file-count, per-file, and total-size limits;
+the published candidate contains only the strict loader's authored-input closure.
+
+{/* Evidence: crates/registryctl/src/project_authoring/migration.rs,
+    crates/registryctl/tests/project_migration_command.rs, and
+    crates/registryctl/tests/project_migration_contract.rs. */}
 
 For invalid authoring, `check` exits nonzero and reports a nonempty typed diagnostic list.
 The default human output and `--format json` use the same diagnostics, stable codes, normalized
@@ -133,7 +242,7 @@ OpenSPP release.
 earlier `registryctl`, create or verify the same files with:
 
 ```sh
-registryctl authoring editor --project-dir <project>
+registryctl authoring editor --project-dir registry-project
 ```
 
 The command copies the five JSON Schema Draft 2020-12 documents embedded in the running
@@ -391,6 +500,9 @@ Related environment variables are listed in the [environment variable reference]
 
 ## Source
 
-The released command tree comes from the registryctl source at `v0.13.0`.
-For its canonical definitions, read the
-[registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.13.0/crates/registryctl/src/main.rs).
+The command tables on this page come from Main source (unreleased).
+They do not establish a release candidate and do not describe the `v0.13.0` artifact.
+Use [Test one current source revision](../../start/test-current-source-revision/) to build and
+identify the exact source used for a review.
+For the last released command tree, read the
+[registryctl `v0.13.0` command tree](https://github.com/registrystack/registry-stack/blob/v0.13.0/crates/registryctl/src/main.rs).

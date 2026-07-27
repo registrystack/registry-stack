@@ -19,10 +19,10 @@
 //!
 //! ## Error handling
 //!
-//! `main` propagates failures as [`crate::error::Error`]. The error
-//! taxonomy already covers config parsing and binding failures; the
-//! process exit code is non-zero on any error and the failing line is
-//! also emitted via `tracing::error!` so operators can correlate.
+//! `main` returns a non-zero process exit on failure. Before a failure crosses
+//! the default stderr/tracing boundary, it is reduced to a product-owned
+//! [`registry_relay::process_startup`] code with static meaning and
+//! remediation. Inner errors and runtime values are never rendered there.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -44,12 +44,12 @@ use registry_config_report::{
 };
 use registry_platform_audit::AuditChainProfile;
 use registry_platform_authcommon::{fingerprint_api_key, CredentialFingerprintProvider};
-use registry_platform_config::{expand_config_env_vars, verify_config_bundle};
+use registry_platform_config::{expand_config_env_vars, sha256_uri, verify_config_bundle};
 use registry_platform_ops::{
-    antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_result,
+    antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_code,
     internal_config_hash, persist_bundle_acceptance as persist_config_bundle_acceptance,
-    verify_bundle_state_read_only, AuditSinkKind, ConfigOverrideMode, ConfigSource,
-    DeploymentProfile,
+    verify_bundle_state_read_only, ApplyReportResult, AuditSinkKind, BundleVerificationCode,
+    ConfigOverrideMode, ConfigSource, DeploymentProfile,
 };
 use registry_relay::audit::{
     AuditPipeline, ConfigAuditExt, FileSink, OperationalAuditEvent, StdoutSink, SyslogSink,
@@ -60,12 +60,17 @@ use registry_relay::config::{self, AuditSinkConfig, Config, SourceConfig};
 use registry_relay::consultation::operator::{
     bootstrap_state, BootstrapStateRequest, BootstrapStateResult,
 };
-use registry_relay::consultation::ConsultationService;
+use registry_relay::consultation::{
+    ConsultationService, ConsultationServiceActivationError, ConsultationServiceActivationFailure,
+};
 use registry_relay::entity::EntityRegistry;
 use registry_relay::error::{ConfigError, Error};
 use registry_relay::format::FormatRegistry;
 use registry_relay::ingest::{IngestRegistry, ReadinessSnapshot};
 use registry_relay::observability::RequestMetrics;
+use registry_relay::process_startup::{
+    emit_process_startup_failure, ProcessStartupCode, ProcessStartupFailure,
+};
 use registry_relay::query::{AggregateQueryEngine, EntityQueryEngine};
 use registry_relay::runtime_config::{RelayRuntimeHandle, RelayRuntimeSnapshot};
 use registry_relay::serve::{serve_listener, ServeLimits};
@@ -76,6 +81,7 @@ use serde_json::{json, Value};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
+use tracing::instrument::WithSubscriber;
 use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use ulid::Ulid;
@@ -150,6 +156,7 @@ const ANCHOR_PATH_FLAG: &str = "--anchor-path";
 const STATE_PATH_FLAG: &str = "--state-path";
 const FORMAT_FLAG: &str = "--format";
 const PROFILE_FLAG: &str = "--profile";
+const EXPECTED_CONFIG_DIGEST_FLAG: &str = "--expected-config-digest";
 const INITIALIZE_STATE_FLAG: &str = "--initialize-state";
 const RELAY_CONFIG_SCHEMA_VERSION: &str = "registry.relay.config.v1";
 
@@ -176,6 +183,7 @@ enum CliCommand {
         env_file: Option<PathBuf>,
         format: OutputFormat,
         profile_override: Option<DeploymentProfile>,
+        expected_config_digest: Option<ExpectedConfigDigest>,
     },
     ExplainConfig {
         config_path: PathBuf,
@@ -203,6 +211,39 @@ enum OutputFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GenerateApiKeyCommand {
     id: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ExpectedConfigDigest(String);
+
+impl ExpectedConfigDigest {
+    fn parse(value: &str) -> Result<Self, CliError> {
+        let Some(digest) = value.strip_prefix("sha256:") else {
+            return Err(CliError(format!(
+                "{EXPECTED_CONFIG_DIGEST_FLAG} requires a sha256 digest"
+            )));
+        };
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(CliError(format!(
+                "{EXPECTED_CONFIG_DIGEST_FLAG} requires a sha256 digest"
+            )));
+        }
+        Ok(Self(value.to_string()))
+    }
+
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std_fmt::Debug for ExpectedConfigDigest {
+    fn fmt(&self, formatter: &mut std_fmt::Formatter<'_>) -> std_fmt::Result {
+        formatter.write_str("ExpectedConfigDigest(<configured>)")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,6 +290,28 @@ impl std_fmt::Display for CliError {
 
 impl StdError for CliError {}
 
+/// Marker for a configuration-loader error whose stable process diagnostic was
+/// emitted by the loader before it returned.
+///
+/// The loader owns the detailed classification because it can distinguish
+/// source, document, validation, bundle, metadata, and consultation failures.
+/// Keeping this marker value-free prevents `main` from adding a second,
+/// generic startup code or exposing the source error.
+#[derive(Debug)]
+struct ReportedConfigLoadFailure;
+
+impl std_fmt::Display for ReportedConfigLoadFailure {
+    fn fmt(&self, formatter: &mut std_fmt::Formatter<'_>) -> std_fmt::Result {
+        formatter.write_str("configuration load failure was already reported")
+    }
+}
+
+impl StdError for ReportedConfigLoadFailure {}
+
+fn reported_config_load<T>(result: Result<T, Error>) -> Result<T, ReportedConfigLoadFailure> {
+    result.map_err(|_| ReportedConfigLoadFailure)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperationalLogFormat {
     Text,
@@ -284,11 +347,19 @@ async fn async_main() -> ExitCode {
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            // The error itself has already been logged at the failing
-            // site (config loader logs operator context; bind/serve
-            // failures are logged here). The exit code is the only
-            // surface left.
-            error!(error = %err, "registry-relay exiting with failure");
+            if let Some(failure) = err.downcast_ref::<OperatorSafeConsultationActivationFailure>() {
+                failure.emit();
+            } else if err.downcast_ref::<ReportedConfigLoadFailure>().is_none() {
+                let failure = err
+                    .downcast_ref::<ProcessStartupFailure>()
+                    .copied()
+                    .unwrap_or_else(|| {
+                        ProcessStartupFailure::new(
+                            ProcessStartupCode::RUNTIME_INITIALIZATION_FAILED,
+                        )
+                    });
+                emit_process_startup_failure(failure.code());
+            }
             ExitCode::FAILURE
         }
     }
@@ -324,7 +395,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             env_file,
             format,
             profile_override,
-        } => run_doctor(config_path, env_file, format, profile_override).await,
+            expected_config_digest,
+        } => {
+            run_doctor(
+                config_path,
+                env_file,
+                format,
+                profile_override,
+                expected_config_digest,
+            )
+            .await
+        }
         CliCommand::ExplainConfig {
             config_path,
             env_file,
@@ -362,11 +443,21 @@ async fn run_server(
     let runtime = handle.load_full();
     let app = build_relay_app_from_runtime(Arc::clone(&handle))?;
 
-    let listener = TcpListener::bind(runtime.bind).await.map_err(|err| {
-        error!(error = %err, bind = %runtime.bind, "failed to bind listener");
-        err
+    let listener = TcpListener::bind(runtime.bind).await.map_err(|error| {
+        ProcessStartupFailure::new(ProcessStartupCode::from_data_listener_bind(error.kind()))
     })?;
 
+    let admin_listener = match runtime.admin_bind {
+        Some(addr) => Some(TcpListener::bind(addr).await.map_err(|error| {
+            ProcessStartupFailure::new(ProcessStartupCode::from_admin_listener_bind(error.kind()))
+        })?),
+        None => None,
+    };
+
+    // Do not render either configured binding before both requested listeners
+    // have opened successfully. A bind failure crosses the value-free process
+    // diagnostic boundary and must not inherit the other listener's address
+    // from a preceding informational event.
     info!(
         bind = %runtime.bind,
         admin_bind = ?runtime.admin_bind,
@@ -376,14 +467,6 @@ async fn run_server(
         consultation_enabled = runtime.consultation.is_some(),
         "registry-relay listening"
     );
-
-    let admin_listener = match runtime.admin_bind {
-        Some(addr) => Some(TcpListener::bind(addr).await.map_err(|err| {
-            error!(error = %err, bind = %addr, "failed to bind admin listener");
-            err
-        })?),
-        None => None,
-    };
 
     let serve_limits = ServeLimits::from_config(&runtime.config.server);
     let admin_app = if admin_listener.is_some() {
@@ -480,7 +563,7 @@ async fn run_openapi(
     env_file: Option<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     load_env_file_arg(env_file.as_deref())?;
-    let config = config::load(&config_path)?;
+    let config = reported_config_load(config::load(&config_path))?;
     let registry = EntityRegistry::from_config(&config)?;
     let document = registry_relay::api::openapi::release_artifact_document(&config, &registry);
     println!("{}", serde_json::to_string_pretty(&document)?);
@@ -492,15 +575,21 @@ async fn run_doctor(
     env_file: Option<PathBuf>,
     format: OutputFormat,
     profile_override: Option<DeploymentProfile>,
+    expected_config_digest: Option<ExpectedConfigDigest>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match format {
         OutputFormat::Json => {
-            let report = build_doctor_report(&config_path, env_file.as_deref(), profile_override);
+            let report = build_doctor_report(
+                &config_path,
+                env_file.as_deref(),
+                profile_override,
+                expected_config_digest.as_ref(),
+            );
             println!("{}", serde_json::to_string_pretty(&report.output)?);
             if report.exit_success {
                 Ok(())
             } else {
-                Err(io::Error::other("registry-relay doctor failed").into())
+                Err(ProcessStartupFailure::new(ProcessStartupCode::DOCTOR_FAILED).into())
             }
         }
     }
@@ -514,10 +603,10 @@ async fn run_explain_config(
     match format {
         OutputFormat::Json => {
             load_env_file_arg(env_file.as_deref())?;
+            let config = reported_config_load(config::load(&config_path))?;
             let raw = fs::read_to_string(&config_path)?;
             let expanded = expand_config_env_vars(&raw)?;
             let resolved_config = redacted_resolved_config(&expanded)?;
-            let config = config::load(&config_path)?;
             let report = json!({
                 "schema_version": "registry.config.explanation.v1",
                 "product": "registry-relay",
@@ -556,9 +645,10 @@ fn build_doctor_report(
     config_path: &std::path::Path,
     env_file: Option<&std::path::Path>,
     profile_override: Option<DeploymentProfile>,
+    expected_config_digest: Option<&ExpectedConfigDigest>,
 ) -> DoctorReport {
-    let raw_config = fs::read_to_string(config_path).ok();
     let mut checks = Vec::new();
+    let mut report_source = ConfigSource::LocalFile;
     if let Some(env_file) = env_file {
         match load_env_file_arg(Some(env_file)) {
             Ok(()) => checks.push(DoctorCheck::passed(
@@ -577,24 +667,31 @@ fn build_doctor_report(
     }
 
     if checks.iter().any(|check| check.status == "failed") {
-        return DoctorReport::new(
-            checks,
-            None,
-            profile_override,
+        return DoctorReport::new(checks, None, profile_override, report_source);
+    }
+
+    if let Some(expected_config_digest) = expected_config_digest {
+        checks.push(expected_config_generation_check(
             config_path,
-            raw_config.as_deref(),
-        );
+            expected_config_digest,
+        ));
+        if checks.iter().any(|check| check.status == "failed") {
+            return DoctorReport::new(checks, None, profile_override, report_source);
+        }
     }
 
     let loaded_config = match config::load_with_metadata(config_path) {
         Ok(mut loaded) => {
+            report_source = loaded.provenance.source;
             checks.push(DoctorCheck::passed(
                 "config",
                 "relay.config.loaded",
                 "config parsed and validated",
                 None,
             ));
-            match EntityRegistry::from_config(&loaded.runtime) {
+            match suppress_runtime_source_diagnostics(|| {
+                EntityRegistry::from_config(&loaded.runtime)
+            }) {
                 Ok(_) => checks.push(DoctorCheck::passed(
                     "entity_registry",
                     "relay.entity_registry.verified",
@@ -635,22 +732,16 @@ fn build_doctor_report(
                 loaded.runtime.consultation.is_some(),
                 loaded.consultation_artifacts.take(),
             ) {
-                (true, Some(artifacts)) => match ConsultationService::validate_configuration(
-                    &loaded.runtime,
-                    artifacts,
-                ) {
+                (true, Some(artifacts)) => match suppress_runtime_source_diagnostics(|| {
+                    ConsultationService::validate_configuration(&loaded.runtime, artifacts)
+                }) {
                     Ok(()) => checks.push(DoctorCheck::passed(
                         "consultation_artifacts",
                         "relay.consultation_artifacts.verified",
                         "consultation artifact closure compiled with closed runtime capabilities",
                         None,
                     )),
-                    Err(_) => checks.push(DoctorCheck::failed(
-                        "consultation_artifacts",
-                        "relay.consultation_artifacts.failed",
-                        "consultation artifact compilation failed",
-                        Some("check the hash-pinned contracts, packs, bindings, and environment references"),
-                    )),
+                    Err(error) => checks.push(consultation_activation_doctor_check(error)),
                 },
                 (false, None) => checks.push(DoctorCheck::passed(
                     "consultation_artifacts",
@@ -658,11 +749,11 @@ fn build_doctor_report(
                     "consultation artifacts are not configured",
                     None,
                 )),
-                _ => checks.push(DoctorCheck::failed(
-                    "consultation_artifacts",
-                    "relay.consultation_artifacts.failed",
-                    "consultation configuration and artifact closure disagree",
-                    Some("check the consultation artifact manifest and runtime configuration"),
+                (true, None) => checks.push(consultation_activation_doctor_check(
+                    ConsultationServiceActivationError::RegistryActivation,
+                )),
+                (false, Some(_)) => checks.push(consultation_activation_doctor_check(
+                    ConsultationServiceActivationError::MissingConfiguration,
                 )),
             }
             Some(loaded.runtime.clone())
@@ -682,15 +773,45 @@ fn build_doctor_report(
         checks,
         loaded_config.as_ref(),
         profile_override,
-        config_path,
-        raw_config.as_deref(),
+        report_source,
     )
+}
+
+fn expected_config_generation_check(
+    config_path: &std::path::Path,
+    expected_config_digest: &ExpectedConfigDigest,
+) -> DoctorCheck {
+    match fs::read(config_path) {
+        Ok(bytes) if sha256_uri(&bytes) == expected_config_digest.as_str() => DoctorCheck::passed(
+            "config_generation",
+            "relay.config.generation_verified",
+            "the mounted configuration is the expected generated revision",
+            None,
+        ),
+        Ok(_) => DoctorCheck::failed(
+            "config_generation",
+            "relay.config.generation_mismatch",
+            "the mounted configuration is not the expected generated revision",
+            Some("wait for the container filesystem view to refresh, then retry"),
+        ),
+        Err(_) => DoctorCheck::failed(
+            "config_generation",
+            "relay.config.generation_unavailable",
+            "the expected generated configuration is not readable",
+            Some("check the generated configuration mount, then retry"),
+        ),
+    }
 }
 
 fn parse_doctor_config_without_validation(config_path: &std::path::Path) -> Option<Config> {
     let raw = fs::read_to_string(config_path).ok()?;
     let expanded = expand_config_env_vars(&raw).ok()?;
     serde_saphyr::from_str(&expanded).ok()
+}
+
+fn suppress_runtime_source_diagnostics<T>(action: impl FnOnce() -> T) -> T {
+    let dispatch = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+    tracing::dispatcher::with_default(&dispatch, action)
 }
 
 struct DoctorReport {
@@ -703,8 +824,7 @@ impl DoctorReport {
         checks: Vec<DoctorCheck>,
         config: Option<&Config>,
         profile_override: Option<DeploymentProfile>,
-        config_path: &std::path::Path,
-        raw_config: Option<&str>,
+        source: ConfigSource,
     ) -> Self {
         let deployment_profile = resolve_deployment_profile(config, profile_override);
         let findings = deployment_findings(config, &deployment_profile);
@@ -730,8 +850,7 @@ impl DoctorReport {
             "product": "registry-relay",
             "config_schema_version": RELAY_CONFIG_SCHEMA_VERSION,
             "source": {
-                "kind": "local_file",
-                "path": path_for_json(config_path),
+                "kind": source.as_posture_str(),
             },
             "status": if error_count > 0 {
                 ReportStatus::Error.as_str()
@@ -751,11 +870,6 @@ impl DoctorReport {
         });
         if let Some(config) = config {
             output["audit_shipping"] = audit_shipping_report(config);
-        }
-        if let Some(raw) = raw_config {
-            output["hashes"] = json!({
-                "internal_config_hash": internal_config_hash(raw.as_bytes()),
-            });
         }
         Self {
             output,
@@ -887,6 +1001,48 @@ impl DoctorCheck {
             message,
             action,
         }
+    }
+}
+
+fn consultation_activation_doctor_check(error: ConsultationServiceActivationError) -> DoctorCheck {
+    let projection = error.safe_projection();
+    DoctorCheck::failed(
+        "consultation_artifacts",
+        projection.code.as_str(),
+        projection.meaning,
+        Some(projection.remediation),
+    )
+}
+
+#[derive(Debug)]
+struct OperatorSafeConsultationActivationFailure(ConsultationServiceActivationFailure);
+
+impl From<ConsultationServiceActivationError> for OperatorSafeConsultationActivationFailure {
+    fn from(error: ConsultationServiceActivationError) -> Self {
+        Self(error.safe_projection())
+    }
+}
+
+impl std_fmt::Display for OperatorSafeConsultationActivationFailure {
+    fn fmt(&self, formatter: &mut std_fmt::Formatter<'_>) -> std_fmt::Result {
+        write!(
+            formatter,
+            "{}: {} Next action: {}",
+            self.0.code, self.0.meaning, self.0.remediation
+        )
+    }
+}
+
+impl StdError for OperatorSafeConsultationActivationFailure {}
+
+impl OperatorSafeConsultationActivationFailure {
+    fn emit(&self) {
+        error!(
+            code = self.0.code.as_str(),
+            meaning = self.0.meaning,
+            remediation = self.0.remediation,
+            "registry-relay consultation activation rejected startup"
+        );
     }
 }
 
@@ -1128,7 +1284,7 @@ async fn run_consultation_bootstrap_state(
     command: ConsultationBootstrapStateCommand,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     load_env_file_arg(command.env_file.as_deref())?;
-    let config = config::load(&command.config_path)?;
+    let config = reported_config_load(config::load(&command.config_path))?;
     let result: BootstrapStateResult = bootstrap_state(BootstrapStateRequest {
         config: &config,
         migration_database_url_env: &command.migration_database_url_env,
@@ -1150,17 +1306,20 @@ async fn run_config_verify_bundle(
     let verified = match verify_config_bundle(&command.bundle_dir, &command.anchor_path) {
         Ok(verified) => verified,
         Err(error) => {
-            let result = bundle_verify_rejection_result(&error);
+            let code = bundle_verify_rejection_code(&error);
             print_json_report(config_verify_bundle_report(
-                result,
-                "unknown",
+                ApplyReportResult::from(code),
                 None,
                 None,
                 None,
                 None,
-                Some((result, error.to_string())),
+                None,
+                Some(code),
             ))?;
-            return Err(Box::new(error));
+            return Err(
+                ProcessStartupFailure::new(ProcessStartupCode::from_bundle_verification(code))
+                    .into(),
+            );
         }
     };
     let key = antirollback_key_from_verified_bundle(&verified);
@@ -1171,33 +1330,39 @@ async fn run_config_verify_bundle(
         &verified.manifest.config_hash,
         &verified.manifest_hash,
     ) {
+        let code = error.bundle_rejection_code();
         print_json_report(config_verify_bundle_report(
-            "rejected_rollback",
-            &verified.manifest.stream_id,
-            Some(verified.manifest.bundle_id.clone()),
-            Some(verified.manifest.sequence),
-            verified.manifest.previous_config_hash.clone(),
-            Some(verified.manifest.config_hash.clone()),
-            Some(("rejected_rollback", error.to_string())),
+            ApplyReportResult::from(code),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(code),
         ))?;
-        return Err(Box::new(error));
+        return Err(
+            ProcessStartupFailure::new(ProcessStartupCode::from_bundle_verification(code)).into(),
+        );
     }
-    if let Err(error) = config::validate_verified_bundle_runtime(&verified) {
+    if config::validate_verified_bundle_runtime(&verified).is_err() {
+        let code = BundleVerificationCode::REJECTED_VALIDATION;
         print_json_report(config_verify_bundle_report(
-            "rejected_validation",
-            &verified.manifest.stream_id,
-            Some(verified.manifest.bundle_id.clone()),
-            Some(verified.manifest.sequence),
-            verified.manifest.previous_config_hash.clone(),
-            Some(verified.manifest.config_hash.clone()),
-            Some(("rejected_validation", error.to_string())),
+            ApplyReportResult::from(code),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(code),
         ))?;
-        return Err(io::Error::new(io::ErrorKind::InvalidData, error.to_string()).into());
+        return Err(
+            ProcessStartupFailure::new(ProcessStartupCode::BUNDLE_VALIDATION_REJECTED).into(),
+        );
     }
 
     print_json_report(config_verify_bundle_report(
-        "verified",
-        &verified.manifest.stream_id,
+        ApplyReportResult::Verified,
+        Some(verified.manifest.stream_id),
         Some(verified.manifest.bundle_id),
         Some(verified.manifest.sequence),
         verified.manifest.previous_config_hash,
@@ -1213,16 +1378,37 @@ fn print_json_report(value: Value) -> Result<(), Box<dyn std::error::Error + Sen
 }
 
 fn config_verify_bundle_report(
-    result: &'static str,
-    stream_id: &str,
+    result: ApplyReportResult,
+    stream_id: Option<String>,
     bundle_id: Option<String>,
     bundle_sequence: Option<u64>,
     previous_config_hash: Option<String>,
     config_hash: Option<String>,
-    error: Option<(&'static str, String)>,
+    error: Option<BundleVerificationCode>,
 ) -> Value {
+    // Rejection inputs are untrusted. Even when authenticity succeeded before
+    // a later anti-rollback or product-validation failure, do not publish
+    // bundle, stream, sequence, or hash identity through this report.
+    let (stream_id, bundle_id, bundle_sequence, previous_config_hash, config_hash) =
+        if error.is_some() {
+            (None, None, None, None, None)
+        } else {
+            (
+                stream_id,
+                bundle_id,
+                bundle_sequence,
+                previous_config_hash,
+                config_hash,
+            )
+        };
     let errors = error
-        .map(|(code, message)| vec![json!({ "code": code, "message": message })])
+        .map(|code| {
+            let definition = code.definition();
+            vec![json!({
+                "code": code.as_str(),
+                "message": definition.safe_report_message,
+            })]
+        })
         .unwrap_or_default();
     json!({
         "schema": "registry.platform.config_apply_report.v1",
@@ -1234,7 +1420,7 @@ fn config_verify_bundle_report(
         "bundle_sequence": bundle_sequence,
         "previous_config_hash": previous_config_hash,
         "config_hash": config_hash,
-        "result": result,
+        "result": result.as_str(),
         "restart_required": false,
         "change_classes": [],
         "affected_components": [],
@@ -1310,9 +1496,12 @@ async fn compile_relay_runtime_with_options(
     bind_override: Option<SocketAddr>,
     load_options: config::LoadOptions,
 ) -> Result<RelayRuntimeSnapshot, Box<dyn std::error::Error + Send + Sync>> {
-    info!(path = %config_path.display(), "loading registry-relay config");
+    info!("loading registry-relay config");
 
-    let loaded = config::load_with_metadata_options(&config_path, load_options)?;
+    let loaded = reported_config_load(config::load_with_metadata_options(
+        &config_path,
+        load_options,
+    ))?;
     let config_provenance = loaded.provenance.clone();
     let pending_bundle_acceptance = loaded.pending_bundle_acceptance.clone();
     let compiled_metadata = loaded.metadata.map(Arc::new);
@@ -1320,18 +1509,21 @@ async fn compile_relay_runtime_with_options(
     let consultation_artifacts = loaded.consultation_artifacts;
     let config = Arc::new(loaded.runtime);
 
-    let auth = build_auth(&config).await?;
-    let audit_chain_profile = build_audit_chain_profile(&config)?;
+    let auth = build_auth(&config)
+        .with_subscriber(tracing::subscriber::NoSubscriber::default())
+        .await
+        .map_err(|_| ProcessStartupFailure::new(ProcessStartupCode::CONFIG_VALIDATION_REJECTED))?;
+    let audit_chain_profile = build_audit_chain_profile(&config)
+        .map_err(|_| ProcessStartupFailure::new(ProcessStartupCode::CONFIG_VALIDATION_REJECTED))?;
     let audit_sink = build_audit_sink(&config, audit_chain_profile.clone())?;
     // Eagerly verify the retained audit chain so a chain bricked by an earlier
     // fork surfaces as an actionable /ready signal instead of a per-request 503
     // behind a green healthcheck (#196). Startup is not aborted: readiness
     // reports not-ready until the operator recovers with `registry-relay audit
     // quarantine`.
-    if let Err(err) = audit_sink.verify_chain_eager().await {
+    if audit_sink.verify_chain_eager().await.is_err() {
         error!(
             code = registry_relay::audit::AUDIT_CHAIN_INCONSISTENT_CODE,
-            error = %err,
             "audit chain failed startup verification; /ready will report not-ready until it is recovered"
         );
     }
@@ -1349,13 +1541,19 @@ async fn compile_relay_runtime_with_options(
     let df_ctx = Arc::new(SessionContext::new());
     let formats = Arc::new(FormatRegistry::with_v1_defaults());
     let cache_root = Arc::from(config.server.cache_dir.as_path());
-    let ingest = Arc::new(IngestRegistry::from_config(
-        &config,
-        formats,
-        cache_root,
-        Arc::clone(&df_ctx),
-    )?);
-    let entity_registry = Arc::new(EntityRegistry::from_config(&config)?);
+    let ingest = Arc::new(
+        suppress_runtime_source_diagnostics(|| {
+            IngestRegistry::from_config(&config, formats, cache_root, Arc::clone(&df_ctx))
+        })
+        .map_err(|_| {
+            ProcessStartupFailure::new(ProcessStartupCode::RUNTIME_INITIALIZATION_FAILED)
+        })?,
+    );
+    let entity_registry = Arc::new(
+        suppress_runtime_source_diagnostics(|| EntityRegistry::from_config(&config)).map_err(
+            |_| ProcessStartupFailure::new(ProcessStartupCode::CONFIG_VALIDATION_REJECTED),
+        )?,
+    );
     let query = Arc::new(EntityQueryEngine::new(
         Arc::clone(&df_ctx),
         Arc::clone(&entity_registry),
@@ -1381,17 +1579,15 @@ async fn compile_relay_runtime_with_options(
                 audit_chain_profile.hasher(),
                 Arc::clone(&df_ctx),
             )
-            .await?,
+            .with_subscriber(tracing::subscriber::NoSubscriber::default())
+            .await
+            .map_err(OperatorSafeConsultationActivationFailure::from)?,
         ),
-        (configured, artifacts) => {
-            error!(
-                code = "config.validation_error",
-                field = "consultation.artifacts",
-                consultation_configured = configured,
-                verified_artifacts_present = artifacts.is_some(),
-                "consultation configuration and verified artifact closure disagree"
-            );
-            return Err(Error::from(ConfigError::ValidationError).into());
+        _ => {
+            return Err(ProcessStartupFailure::new(
+                ProcessStartupCode::CONSULTATION_ARTIFACTS_REJECTED,
+            )
+            .into());
         }
     };
     if let Some(service) = consultation.as_ref() {
@@ -1442,6 +1638,10 @@ async fn write_bundle_acceptance_audit(
     audit_sink: &AuditPipeline,
     acceptance: &config::PendingBundleAcceptance,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Accepted bundle identity and signer evidence is intentionally retained
+    // here. The audit sink, including the stdout sink, is a governed protected
+    // evidence boundary. This must not be weakened to match the untrusted
+    // rejection-report boundary.
     let audit = ConfigAuditExt {
         action: "boot",
         source: acceptance.source.as_posture_str(),
@@ -1851,6 +2051,7 @@ fn parse_doctor_command(args: &[String]) -> Result<CliCommand, CliError> {
     let mut env_file: Option<PathBuf> = None;
     let mut format = OutputFormat::Json;
     let mut profile_override: Option<DeploymentProfile> = None;
+    let mut expected_config_digest: Option<ExpectedConfigDigest> = None;
     let mut index = 0;
     while index < args.len() {
         let arg = &args[index];
@@ -1881,6 +2082,18 @@ fn parse_doctor_command(args: &[String]) -> Result<CliCommand, CliError> {
                 index,
                 PROFILE_FLAG,
             )?)?);
+        } else if let Some(value) = flag_value(arg, EXPECTED_CONFIG_DIGEST_FLAG) {
+            expected_config_digest = Some(ExpectedConfigDigest::parse(&required_string_value(
+                EXPECTED_CONFIG_DIGEST_FLAG,
+                value,
+            )?)?);
+        } else if arg == EXPECTED_CONFIG_DIGEST_FLAG {
+            index += 1;
+            expected_config_digest = Some(ExpectedConfigDigest::parse(&required_string_arg(
+                args,
+                index,
+                EXPECTED_CONFIG_DIGEST_FLAG,
+            )?)?);
         } else {
             return Err(CliError(format!(
                 "unknown {DOCTOR_COMMAND} argument: {arg}"
@@ -1896,6 +2109,7 @@ fn parse_doctor_command(args: &[String]) -> Result<CliCommand, CliError> {
         env_file,
         format,
         profile_override,
+        expected_config_digest,
     })
 }
 
@@ -2441,10 +2655,8 @@ fn build_audit_chain_profile(config: &Config) -> Result<AuditChainProfile, Error
         .hash_secret_env
         .as_deref()
         .ok_or(ConfigError::ValidationError)?;
-    AuditChainProfile::registry_relay_from_env(hash_secret_env).map_err(|err| {
-        error!(error = %err, "audit chain secret failed validation");
-        Error::from(ConfigError::ValidationError)
-    })
+    AuditChainProfile::registry_relay_from_env(hash_secret_env)
+        .map_err(|_| Error::from(ConfigError::ValidationError))
 }
 
 /// Instantiate the configured audit sink with the already-loaded chain
@@ -2452,27 +2664,24 @@ fn build_audit_chain_profile(config: &Config) -> Result<AuditChainProfile, Error
 fn build_audit_sink(
     config: &Config,
     profile: AuditChainProfile,
-) -> Result<Arc<AuditPipeline>, Error> {
+) -> Result<Arc<AuditPipeline>, ProcessStartupFailure> {
     let sink: Arc<dyn registry_platform_audit::AuditSink> = match &config.audit.sink {
         AuditSinkConfig::Stdout {} => Arc::new(StdoutSink::new()),
         AuditSinkConfig::File { path, rotate } => {
             match FileSink::new(path, rotate.max_size_mb, rotate.max_files) {
                 Ok(sink) => Arc::new(sink),
-                Err(err) => {
-                    error!(
-                        error = %err,
-                        requested = "file",
-                        path = %path.display(),
-                        "configured audit file sink is unavailable"
-                    );
-                    return Err(Error::from(ConfigError::ValidationError));
+                Err(_) => {
+                    return Err(ProcessStartupFailure::new(
+                        ProcessStartupCode::RUNTIME_INITIALIZATION_FAILED,
+                    ));
                 }
             }
         }
         AuditSinkConfig::Syslog {} => Arc::new(SyslogSink::new()),
         _ => {
-            error!("unknown audit sink variant");
-            return Err(Error::from(ConfigError::ValidationError));
+            return Err(ProcessStartupFailure::new(
+                ProcessStartupCode::CONFIG_VALIDATION_REJECTED,
+            ));
         }
     };
     if !config.audit.chain {
@@ -2589,13 +2798,16 @@ fn install_sigterm_listener() -> io::Result<tokio::signal::unix::Signal> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_audit_chain_profile, build_audit_sink, compile_relay_runtime, load_env_file_arg,
+        build_audit_chain_profile, build_audit_sink, build_doctor_report, compile_relay_runtime,
+        consultation_activation_doctor_check, doctor_check_diagnostic, load_env_file_arg,
         parse_cli_command_from, parse_env_file_value, redacted_resolved_config,
         relay_config_value_classification, relay_live_apply_classes, render_generated_api_key,
-        required_env_report, run_audit_quarantine, run_healthcheck, url_contains_userinfo,
-        CliCommand, ConfigValueClassification, ConsultationBootstrapStateCommand,
-        GenerateApiKeyCommand, OperationalLogFormat, OutputFormat, DEFAULT_HEALTHCHECK_TIMEOUT_MS,
-        DEFAULT_HEALTHCHECK_URL, MAX_EXACT_JSON_INTEGER,
+        required_env_report, run_audit_quarantine, run_consultation_bootstrap_state,
+        run_healthcheck, url_contains_userinfo, CliCommand, ConfigValueClassification,
+        ConsultationBootstrapStateCommand, ConsultationServiceActivationError,
+        ExpectedConfigDigest, GenerateApiKeyCommand, OperationalLogFormat,
+        OperatorSafeConsultationActivationFailure, OutputFormat, ReportedConfigLoadFailure,
+        DEFAULT_HEALTHCHECK_TIMEOUT_MS, DEFAULT_HEALTHCHECK_URL, MAX_EXACT_JSON_INTEGER,
     };
     use axum::routing::get;
     use axum::Router;
@@ -2622,6 +2834,81 @@ mod tests {
     use tokio::net::TcpListener;
 
     const CONFIG_BUNDLE_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+
+    #[test]
+    fn consultation_activation_boundary_doctor_preserves_exact_distinct_codes() {
+        let errors = [
+            ConsultationServiceActivationError::MissingConfiguration,
+            ConsultationServiceActivationError::UnsupportedPlan,
+        ];
+        let checks = errors.map(consultation_activation_doctor_check);
+
+        assert_ne!(checks[0].code, checks[1].code);
+        assert_ne!(checks[0].message, checks[1].message);
+        for (error, check) in errors.into_iter().zip(checks) {
+            let projection = error.safe_projection();
+            assert_eq!(check.code, projection.code.as_str());
+            assert_eq!(check.message, projection.meaning);
+            assert_eq!(check.action, Some(projection.remediation));
+            assert_ne!(check.code, "relay.consultation_artifacts.failed");
+
+            let diagnostic = doctor_check_diagnostic(&check);
+            assert_eq!(diagnostic["code"], projection.code.as_str());
+            assert_eq!(
+                diagnostic["message"],
+                format!(
+                    "{} Next action: {}",
+                    projection.meaning, projection.remediation
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn consultation_activation_boundary_startup_uses_only_static_safe_projection() {
+        let errors = [
+            ConsultationServiceActivationError::MissingConfiguration,
+            ConsultationServiceActivationError::InvalidWorkloadBinding,
+            ConsultationServiceActivationError::RegistryActivation,
+            ConsultationServiceActivationError::UnsupportedPlan,
+            ConsultationServiceActivationError::InvalidQuotaLimits,
+            ConsultationServiceActivationError::InvalidMetadata,
+            ConsultationServiceActivationError::SourceCredentials,
+            ConsultationServiceActivationError::PseudonymMaterial,
+            ConsultationServiceActivationError::StatePlane,
+        ];
+        let sentinels = [
+            "/tmp/COUNTRY/private/source.yaml",
+            "sha256:COUNTRY_HASH",
+            "COUNTRY_PARSER_ERROR",
+            "redaction-user@example.test",
+            "COUNTRY_SECRET_VALUE",
+            "COUNTRY_VALUE",
+        ];
+
+        for error in errors {
+            let old_display = error.to_string();
+            let projection = error.safe_projection();
+            let rendered = OperatorSafeConsultationActivationFailure::from(error).to_string();
+            assert_eq!(
+                rendered,
+                format!(
+                    "{}: {} Next action: {}",
+                    projection.code, projection.meaning, projection.remediation
+                )
+            );
+            assert_ne!(
+                rendered, old_display,
+                "startup must not propagate the legacy activation Display"
+            );
+            for sentinel in sentinels {
+                assert!(
+                    !rendered.contains(sentinel),
+                    "operator-safe startup failure leaked sentinel {sentinel:?}"
+                );
+            }
+        }
+    }
 
     #[cfg(unix)]
     #[tokio::test]
@@ -2918,11 +3205,26 @@ config_trust:
             .await
             .expect("signed recovery audit writes");
 
-        let signed_events = audit_event_names(&signed_sink.snapshot());
+        let signed_lines = signed_sink.snapshot();
+        let signed_events = audit_event_names(&signed_lines);
         assert_eq!(signed_events, vec!["config.bundle_accepted"]);
         assert!(!signed_events
             .iter()
             .any(|event| event == "config.break_glass_used"));
+        let accepted_envelope: Value =
+            serde_json::from_str(&signed_lines[0]).expect("accepted audit envelope json");
+        assert_eq!(
+            accepted_envelope["record"]["config"]["bundle_id"],
+            "relay-loader-bundle"
+        );
+        assert_eq!(
+            accepted_envelope["record"]["config"]["signer_kids"],
+            json!(["kid-1"])
+        );
+        assert_eq!(
+            accepted_envelope["record"]["config"]["config_hash"],
+            signed_acceptance.config_hash
+        );
 
         let unsigned_hash = test_hash('c');
         let mut unsigned_pin =
@@ -3056,7 +3358,9 @@ config_trust:
             .expect_err("occupied listener rejects startup");
 
         assert!(
-            error.to_string().contains("Address already in use"),
+            error
+                .to_string()
+                .contains("relay.startup.data_listener_address_in_use"),
             "unexpected error: {error}"
         );
         let key = AntiRollbackKey {
@@ -3274,6 +3578,7 @@ audit:
             env_file,
             format,
             profile_override,
+            expected_config_digest,
         } = command
         else {
             panic!("expected doctor command");
@@ -3288,6 +3593,103 @@ audit:
         );
         assert_eq!(format, OutputFormat::Json);
         assert!(profile_override.is_none());
+        assert!(expected_config_digest.is_none());
+    }
+
+    #[test]
+    fn doctor_cli_accepts_a_redacted_expected_config_digest() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "doctor",
+            "--expected-config-digest",
+            &digest,
+        ]))
+        .expect("doctor expected digest parses");
+
+        let CliCommand::Doctor {
+            expected_config_digest: Some(expected_config_digest),
+            ..
+        } = command
+        else {
+            panic!("expected doctor command with config digest");
+        };
+        assert_eq!(expected_config_digest.as_str(), digest);
+        assert_eq!(
+            format!("{expected_config_digest:?}"),
+            "ExpectedConfigDigest(<configured>)"
+        );
+        assert!(!format!("{expected_config_digest:?}").contains(&digest));
+    }
+
+    #[test]
+    fn doctor_cli_rejects_an_invalid_expected_digest_without_echoing_it() {
+        let sentinel = "sha256:sentinel-private-config-identity";
+        let error = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "doctor",
+            "--expected-config-digest",
+            sentinel,
+        ]))
+        .expect_err("invalid expected digest is rejected");
+
+        assert_eq!(
+            error.to_string(),
+            "--expected-config-digest requires a sha256 digest"
+        );
+        assert!(!error.to_string().contains(sentinel));
+    }
+
+    #[test]
+    fn doctor_rejects_a_stale_but_valid_config_generation() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("relay.yaml");
+        let config = runtime_config_yaml("REGISTRY_RELAY_TEST_GENERATION_AUDIT_HASH");
+        std::fs::write(&config_path, &config).expect("config writes");
+        let next_generation = ExpectedConfigDigest::parse(&sha256_uri(b"distinct next generation"))
+            .expect("test digest parses");
+
+        let report = build_doctor_report(
+            &config_path,
+            None,
+            Some(DeploymentProfile::Local),
+            Some(&next_generation),
+        );
+
+        assert!(!report.exit_success);
+        assert!(report.output["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "relay.config.generation_mismatch"));
+        assert!(!report.output["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "relay.config.loaded"));
+    }
+
+    #[test]
+    fn doctor_verifies_the_expected_config_generation_before_loading() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("relay.yaml");
+        let config = runtime_config_yaml("REGISTRY_RELAY_TEST_GENERATION_MATCH_AUDIT_HASH");
+        std::fs::write(&config_path, &config).expect("config writes");
+        let expected = ExpectedConfigDigest::parse(&sha256_uri(config.as_bytes()))
+            .expect("test digest parses");
+
+        let report = build_doctor_report(&config_path, None, None, Some(&expected));
+
+        assert!(report.output["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "relay.config.generation_verified"));
+        assert!(report.output["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["code"] == "relay.config.loaded"));
     }
 
     #[test]
@@ -3503,6 +3905,37 @@ audit:
         assert!(!rendered.contains("sentinel"));
         assert!(!rendered.contains("1900000000000"));
         assert!(!rendered.contains("31536000000"));
+    }
+
+    #[tokio::test]
+    async fn consultation_bootstrap_state_preserves_loader_owned_failure_category() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("relay.yaml");
+        std::fs::write(&config_path, "{}\n").expect("invalid config writes");
+        let command = ConsultationBootstrapStateCommand {
+            config_path,
+            env_file: None,
+            migration_database_url_env: "SENTINEL_MIGRATION".to_string(),
+            owner_role: "sentinel_owner".to_string(),
+            keyring_maintenance_database_url_env: "SENTINEL_MAINTENANCE".to_string(),
+            keyring_reader_database_url_env: "SENTINEL_READER".to_string(),
+            active_key_id: "sentinel-key".to_string(),
+            active_write_deadline_unix_ms: 1_900_000_000_000,
+            audit_event_retention_ms: 31_536_000_000,
+        };
+
+        let error = run_consultation_bootstrap_state(command)
+            .await
+            .expect_err("invalid config must fail before bootstrap");
+
+        assert!(
+            error.downcast_ref::<ReportedConfigLoadFailure>().is_some(),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            error.to_string(),
+            "configuration load failure was already reported"
+        );
     }
 
     #[test]
@@ -4089,10 +4522,24 @@ consultation:
         };
 
         assert!(
-            err.to_string()
-                .contains("set deployment.profile: local for development"),
+            err.downcast_ref::<ReportedConfigLoadFailure>().is_some(),
             "unexpected error: {err}"
         );
+        let rendered = err.to_string();
+        assert_eq!(
+            rendered, "configuration load failure was already reported",
+            "loader boundary must remain value-free"
+        );
+        for forbidden in [
+            "deployment.profile_undeclared",
+            "set deployment.profile: local for development",
+            "production/evidence_grade",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "loader boundary leaked profile-local detail {forbidden:?}: {rendered}"
+            );
+        }
     }
 
     #[test]

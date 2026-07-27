@@ -64,14 +64,16 @@ You need:
 Run the offline fixture and semantic gates before deployment:
 
 ```sh
-registryctl test --project-dir <project>
+PROJECT_DIR=registry-project
+ENVIRONMENT=staging
+registryctl test --project-dir "$PROJECT_DIR"
 registryctl check \
-  --project-dir <project> \
-  --environment <environment> \
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT" \
   --explain
 registryctl build \
-  --project-dir <project> \
-  --environment <environment>
+  --project-dir "$PROJECT_DIR" \
+  --environment "$ENVIRONMENT"
 ```
 
 The human-readable test report starts with `PASS`, the check report marks the project `valid`, and
@@ -83,18 +85,22 @@ project-level root.
 Package and sign each generated product input, then verify it against the product trust anchor:
 
 ```sh
+PRODUCT_INPUT=registry-project/.registry-stack/build/staging/private/relay
+SIGNING_KEY=operator-inputs/approved-signing-key.jwk
+SIGNED_BUNDLE=operator-inputs/signed-relay-bundle
+TRUST_ANCHOR=operator-inputs/relay-trust-anchor.json
 registryctl bundle sign \
-  --input <product-input> \
-  --key <approved-signing-key> \
-  --product <product-id> \
-  --environment <environment> \
-  --stream-id <stream-id> \
-  --sequence <sequence> \
-  --bundle-id <bundle-id> \
-  --out <signed-bundle>
+  --input "$PRODUCT_INPUT" \
+  --key "$SIGNING_KEY" \
+  --product registry-relay \
+  --environment staging \
+  --stream-id configuration \
+  --sequence 42 \
+  --bundle-id staging-relay-42 \
+  --out "$SIGNED_BUNDLE"
 registryctl bundle verify \
-  --bundle-dir <signed-bundle> \
-  --anchor-path <product-trust-anchor>
+  --bundle-dir "$SIGNED_BUNDLE" \
+  --anchor-path "$TRUST_ANCHOR"
 ```
 
 Activation remains product-specific. Keep each verified bundle, trust anchor, anti-rollback state,
