@@ -23,6 +23,7 @@ EXACT_ARTIFACT_INVENTORY = (
     "registry-relay-rhai-worker",
     "registryctl",
     "registryctl-image-lock",
+    "registryctl-installer",
 )
 
 
