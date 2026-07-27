@@ -1,6 +1,6 @@
 ---
-title: Registry Stack docs
-description: "Documentation for Registry Stack: protected registry APIs, governed evidence exchange, Registry Relay, and Registry Notary."
+title: Registry Stack documentation
+description: Run a protected registry API, connect reviewed data, and evaluate bounded claims with Registry Stack.
 status: current
 owner: registry-docs
 source_repos:
@@ -12,47 +12,54 @@ locale: en
 standards_referenced: []
 ---
 
-Registry Stack adds registry-facing services, protected reads,
-[governed evidence](reference/glossary/), and audit
-records, over data an institution already holds.
-The source remains authoritative; only an authorized, minimized result crosses
-the reviewed boundary.
+Registry Stack helps an institution provide controlled access to data it
+already manages. You can expose a protected, read-only API or return a bounded
+claim without giving callers direct access to the source system.
 
-Start with [your first registry API](tutorials/publish-spreadsheet-secured-registry-api/),
-then [use your own spreadsheet](tutorials/use-your-spreadsheet/) or
-[evaluate a claim](tutorials/verify-claim-registry-api/) from a canonical
-offline fixture.
+## Start locally
 
-## Two products
+### 1. Run your first registry API
 
-Registry Relay protects what an institution already holds. Registry Notary certifies answers drawn
-from that data.
-Use the local tutorials below for the current first-run path.
+Install `registryctl`, create the maintained sample project, start Registry
+Relay, and make one denied request and one allowed request.
 
-### Registry Relay
+[Run your first registry API](tutorials/publish-spreadsheet-secured-registry-api/)
+takes about 20 minutes and does not require a repository checkout.
 
-Registry Relay exposes protected, scoped, read-only APIs over existing sources: files, extracts,
-databases, and legacy registry systems.
+### 2. Verify a live claim
 
-[Your first registry API](tutorials/publish-spreadsheet-secured-registry-api/): run a protected
-API locally over a sample spreadsheet.
+Continue with Registry Notary after the first API works. The claim tutorial
+uses maintained synthetic data to make match, no-match, and denied requests
+through a running local service.
 
-### Registry Notary
+[Verify a live registry-backed claim](tutorials/verify-claim-registry-api/)
+completes the local beginner path.
 
-Registry Notary evaluates and attests governed evidence: bounded claim results,
-credential issuance, disclosure policy, and audit provenance.
+## Connect your data
 
-[Your first claim check](tutorials/verify-claim-registry-api/): evaluate
-synthetic match and no-match claim fixtures, then build validated unsigned
-Relay and Notary inputs.
+After the local sample works, replace it with one reviewed non-personal
+workbook. You will describe the sheet explicitly, choose which fields callers
+can receive, validate every row, and run the same protected checks.
 
-## Security
+[Use your own spreadsheet](tutorials/use-your-spreadsheet/) is the shortest
+path from the sample to institution-owned data. The
+[Connect your data overview](configure/) points to the published explanation
+and reference material for more advanced source patterns.
 
-Registry Stack authorization is scope-based and deny-by-default.
-Every request writes to a hash-chained audit envelope. Health and readiness probes are excluded
-by default.
-These docs are evidence-anchored: every claim points to code, a fixture, a test, or a
-specification requirement ID.
+## Choose the product by the result
 
-Read the [security overview](security/) for the threat model and the public evidence a reviewer can
-check.
+- Use **Registry Relay** when an authorized caller needs selected records or
+  fields from a source you operate.
+- Use **Registry Notary** when the caller needs a bounded answer, status, or
+  credential instead of the source record.
+
+Registry Stack keeps source access, caller permissions, disclosure, generated
+service configuration, and runtime operation as separate review boundaries.
+The [architecture overview](explanation/architecture/) explains how the
+products fit together after you complete a first task.
+
+## Move beyond the first run
+
+- [Decide when Registry Stack fits](start/when-to-use/)
+- [Review security boundaries](security/)
+- [Operate Registry Stack](operate/)

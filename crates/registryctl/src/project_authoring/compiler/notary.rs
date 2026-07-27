@@ -1,10 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Registry project compilation currently authors one evidence subject contract.
-// Governed live validation consumes the same constant to reject result
-// substitution across subject types.
-const AUTHORED_CLAIM_SUBJECT_TYPE: &str = "person";
-
 fn generated_notary_config(
     loaded: &LoadedRegistryProject,
     environment_name: &str,
@@ -151,9 +146,10 @@ fn generated_notary_config(
                         )
                     }
                     ClaimEvidence::SelfAttested => {
-                        let value = claim.value.as_ref().ok_or_else(|| {
-                            anyhow!("source-free claim value contract is absent")
-                        })?;
+                        let value = claim
+                            .value
+                            .as_ref()
+                            .ok_or_else(|| anyhow!("source-free claim value contract is absent"))?;
                         let expression = claim
                             .cel
                             .as_ref()
@@ -175,7 +171,7 @@ fn generated_notary_config(
                 "id": claim_id,
                 "title": claim_id.replace('-', " "),
                 "version": service.version.to_string(),
-                "subject_type": AUTHORED_CLAIM_SUBJECT_TYPE,
+                "subject_type": service.effective_subject_type().as_str(),
                 "evidence_mode": evidence_mode,
                 "value": claim_value,
                 "purpose": service.purpose,
@@ -262,17 +258,21 @@ fn generated_notary_config(
             "max_in_flight": 8,
         });
     }
-    let state_defaults = StatePostgresqlConfig::default();
-    let mut state = json!({
-        "storage": "postgresql",
-        "postgresql": {
-            // Keep the environment-backed database secret discoverable in the
-            // generated consumer descriptor. Runtime policy uses Notary's
-            // authoritative defaults unless the project gains an explicit
-            // operator-facing override.
-            "url_env": state_defaults.url_env,
-        },
-    });
+    let mut state = if environment.notary_state.is_some() {
+        let state_defaults = StatePostgresqlConfig::default();
+        json!({
+            "storage": "postgresql",
+            "postgresql": {
+                // Keep the environment-backed database secret discoverable in the
+                // generated consumer descriptor. Runtime policy uses Notary's
+                // authoritative defaults unless the project gains an explicit
+                // operator-facing override.
+                "url_env": state_defaults.url_env,
+            },
+        })
+    } else {
+        json!({ "storage": "in_memory" })
+    };
     if let Some(binding) = &environment.notary_state {
         state["postgresql"]["root_certificate_path"] = Value::String(
             binding
@@ -282,9 +282,11 @@ fn generated_notary_config(
                 .into_owned(),
         );
     }
-    if let Some(binding) = &environment.oid4vci {
-        state["postgresql"]["sensitive_state_key_env"] =
-            Value::String(binding.sensitive_state_key.secret.clone());
+    if state["postgresql"].is_object() {
+        if let Some(binding) = &environment.oid4vci {
+            state["postgresql"]["sensitive_state_key_env"] =
+                Value::String(binding.sensitive_state_key.secret.clone());
+        }
     }
 
     let mut instance = json!({

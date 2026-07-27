@@ -11,8 +11,6 @@ const docsRoot = resolve(scriptDirectory, "..");
 const defaultRepoRoot = resolve(docsRoot, "../..");
 const manifestRelative = "docs/site/src/data/standard-journeys.yaml";
 const generatedRelative = "docs/site/src/data/generated/standard-journeys.json";
-const publicGeneratedRelative =
-  "docs/site/public/generated/standard-journeys.json";
 const diagnosticCatalogs = [
   "docs/site/src/data/generated/diagnostics/authoring.json",
   "docs/site/src/data/generated/diagnostics/fixture.json",
@@ -1324,7 +1322,7 @@ export async function buildStandardJourneys(
 
 export async function generateStandardJourneys(
   repoRoot = defaultRepoRoot,
-  outputPaths = [generatedRelative, publicGeneratedRelative],
+  outputPaths = [generatedRelative],
   { check = false } = {},
 ) {
   const journeys = await buildStandardJourneys(repoRoot);

@@ -34,7 +34,7 @@ test('v0.14 release-form docs stay distinct from published v0.13 and current-sou
 
   const current = docsets.docsets.find((docset) => docset.id === docsets.current);
   const lastRelease = docsets.docsets.find((docset) => docset.id === 'v0.13.0');
-  assert.equal(current.label, 'Main source (unreleased)');
+  assert.equal(current.label, 'Documentation preview');
   assert.equal(current.availability, 'unreleased');
   assert.equal(lastRelease.availability, 'released');
 

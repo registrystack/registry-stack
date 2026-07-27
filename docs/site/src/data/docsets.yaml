@@ -2,13 +2,13 @@ current: latest
 released: v0.13.0
 docsets:
   - id: latest
-    label: Main source (unreleased)
+    label: Documentation preview
     path: /
     status: current
     availability: unreleased
     source: registry-stack-main
     published_at: 2026-06-24
-    description: Current unreleased RegistryStack source documentation from main; this is not v0.13.0 release proof.
+    description: Draft Registry Stack documentation for content and navigation review.
     products:
       registry-stack:
         version: main source (unreleased)

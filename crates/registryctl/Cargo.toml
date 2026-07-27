@@ -34,6 +34,7 @@ registry-platform-config = { workspace = true }
 registry-platform-crypto = { workspace = true }
 registry-platform-ops = { workspace = true }
 registry-relay = { workspace = true, features = ["attribute-release", "ogcapi-features", "spdci-api-standards"] }
+rcgen.workspace = true
 regex = "1"
 rustix.workspace = true
 serde = { version = "1", features = ["derive"] }

@@ -19,6 +19,7 @@ from unittest import TestCase, main, mock
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release" / "scripts" / "integration-e2-runner.py"
 sys.path.insert(0, str(SCRIPT.parent))
+import registryctl_image_lock as image_lock  # noqa: E402
 
 
 def load_module():
@@ -35,7 +36,7 @@ class IntegrationE2RunnerTest(TestCase):
         self.module = load_module()
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.tag = "v1.0.0"
+        self.tag = "v0.13.0"
         self.commit = "1" * 40
         self.relay = "ghcr.io/registrystack/registry-relay@sha256:" + "2" * 64
         self.notary = "ghcr.io/registrystack/registry-notary@sha256:" + "3" * 64
@@ -47,26 +48,39 @@ class IntegrationE2RunnerTest(TestCase):
     def write_json(path: Path, value: object) -> None:
         path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
 
-    def make_candidate(self) -> Path:
-        candidate = self.root / "candidate"
+    def make_candidate(
+        self,
+        *,
+        candidate_name: str = "candidate",
+        include_postgresql: bool = True,
+        postgresql_ref: str | None = None,
+    ) -> Path:
+        candidate = self.root / candidate_name
         candidate.mkdir()
+        version = self.tag.removeprefix("v")
         binary_name = f"registryctl-{self.tag}-linux-amd64"
         lock_name = f"registryctl-{self.tag}-image-lock.json"
         capsule_name = f"registry-stack-{self.tag}-release-capsule.json"
         (candidate / binary_name).write_text(
-            "#!/bin/sh\nprintf 'registryctl 1.0.0\\n'\n",
+            f"#!/bin/sh\nprintf 'registryctl {version}\\n'\n",
             encoding="utf-8",
         )
+        schema_version = self.module.schema_for_release_version(version)
+        images = {
+            "registry-relay": self.relay,
+            "registry-notary": self.notary,
+        }
+        if schema_version == image_lock.SCHEMA_V2 and include_postgresql:
+            images["postgresql"] = (
+                postgresql_ref or image_lock.reviewed_postgresql_image_ref()
+            )
         lock = {
-            "schema_version": "registryctl.release_image_lock.v1",
+            "schema_version": schema_version,
             "release_tag": self.tag,
             "manifest_source_ref": "4" * 40,
             "tag_target": self.commit,
             "platform": "linux/amd64",
-            "images": {
-                "registry-relay": self.relay,
-                "registry-notary": self.notary,
-            },
+            "images": images,
         }
         self.write_json(candidate / lock_name, lock)
         lock_sha = hashlib.sha256((candidate / lock_name).read_bytes()).hexdigest()
@@ -96,7 +110,7 @@ class IntegrationE2RunnerTest(TestCase):
         )
         capsule = {
             "release_tag": self.tag,
-            "version": "1.0.0",
+            "version": version,
             "repository": self.module.CAPSULE_REPOSITORY,
             "source": {
                 "source_tag": self.tag,
@@ -160,9 +174,13 @@ class IntegrationE2RunnerTest(TestCase):
         )
         return candidate
 
-    @staticmethod
-    def binary_result(*_args, **_kwargs):
-        return subprocess.CompletedProcess([], 0, "registryctl 1.0.0\n", "")
+    def binary_result(self, *_args, **_kwargs):
+        return subprocess.CompletedProcess(
+            [],
+            0,
+            f"registryctl {self.tag.removeprefix('v')}\n",
+            "",
+        )
 
     def candidate_metadata(self, candidate: Path) -> dict[str, str]:
         return self.module.verify_candidate_assets(
@@ -385,6 +403,31 @@ class IntegrationE2RunnerTest(TestCase):
         self.assertEqual(self.relay, metadata["relay_image"])
         self.assertEqual(self.commit, metadata["source_commit"])
 
+    def test_candidate_assets_accept_v2_with_reviewed_postgresql(self) -> None:
+        self.tag = "v0.14.0"
+        candidate = self.make_candidate()
+
+        metadata = self.candidate_metadata(candidate)
+
+        self.assertEqual(self.relay, metadata["relay_image"])
+        self.assertEqual("0.14.0", metadata["version"])
+
+    def test_candidate_assets_reject_v2_without_reviewed_postgresql(self) -> None:
+        self.tag = "v0.14.0"
+        missing = self.make_candidate(include_postgresql=False)
+        with self.assertRaisesRegex(self.module.RunnerError, "must contain exactly"):
+            self.candidate_metadata(missing)
+
+        drifted = self.make_candidate(
+            candidate_name="drifted-candidate",
+            postgresql_ref="docker.io/library/postgres@sha256:" + "9" * 64,
+        )
+        with self.assertRaisesRegex(
+            self.module.RunnerError,
+            "reviewed release-tooling pin",
+        ):
+            self.candidate_metadata(drifted)
+
     def test_authenticity_precedes_candidate_binary_execution(self) -> None:
         candidate = self.make_candidate()
         events = []
@@ -472,7 +515,7 @@ class IntegrationE2RunnerTest(TestCase):
             original_binary.write_text(
                 "#!/bin/sh\n"
                 f": > {shlex.quote(str(replacement_marker))}\n"
-                "printf 'registryctl 1.0.0\\n'\n",
+                f"printf 'registryctl {self.tag.removeprefix('v')}\\n'\n",
                 encoding="utf-8",
             )
             original_binary.chmod(0o700)

@@ -22,7 +22,7 @@ const currentActivationPages = [
   'products/notary/docs/deployment-hardening-runbook.md',
 ];
 
-test('current docs are explicit unreleased main source while v0.13.0 stays pinned release evidence', async () => {
+test('current docs use an adopter-facing preview label while v0.13.0 stays pinned release evidence', async () => {
   const [docsets, repoDocs, generatedDocsets] = await Promise.all([
     readYaml('docs/site/src/data/docsets.yaml'),
     readYaml('docs/site/src/data/repo-docs.yaml'),
@@ -35,11 +35,14 @@ test('current docs are explicit unreleased main source while v0.13.0 stays pinne
   assert.equal(current.id, 'latest');
   assert.equal(docsets.released, 'v0.13.0');
   assert.notEqual(docsets.current, docsets.released);
-  assert.equal(current.label, 'Main source (unreleased)');
+  assert.equal(current.label, 'Documentation preview');
   assert.equal(current.status, 'current');
   assert.equal(current.availability, 'unreleased');
   assert.equal(current.source, 'registry-stack-main');
-  assert.match(current.description, /\bunreleased\b.*\bmain\b.*not v0\.13\.0 release proof/i);
+  assert.equal(
+    current.description,
+    'Draft Registry Stack documentation for content and navigation review.',
+  );
   for (const product of Object.values(current.products)) {
     assert.equal(product.ref, 'HEAD');
     assert.equal(product.version, 'main source (unreleased)');

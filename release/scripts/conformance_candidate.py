@@ -18,6 +18,13 @@ from typing import Any, Callable, Iterator
 
 import yaml
 
+from registryctl_image_lock import (
+    PLATFORM as IMAGE_LOCK_PLATFORM,
+    PRODUCT_IMAGE_REPOSITORIES,
+    schema_for_release_version,
+    validate_images,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_DIR = REPO_ROOT / "release" / "manifests"
@@ -26,10 +33,7 @@ RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 IMAGE_LOCK_FILE = re.compile(
     r"^registryctl-(v[A-Za-z0-9][A-Za-z0-9._+-]*)-image-lock\.json$"
 )
-IMAGE_REPOSITORIES = {
-    "registry-notary": "ghcr.io/registrystack/registry-notary",
-    "registry-relay": "ghcr.io/registrystack/registry-relay",
-}
+IMAGE_REPOSITORIES = PRODUCT_IMAGE_REPOSITORIES
 CAPSULE_REPOSITORY = "registrystack/registry-stack"
 SLSA_SOURCE_URI = "github.com/registrystack/registry-stack"
 RELEASE_WORKFLOW = (
@@ -591,6 +595,10 @@ def _load_candidate_snapshot(
             "release manifest product artifacts do not match its version"
         )
 
+    try:
+        expected_image_lock_schema = schema_for_release_version(version)
+    except ValueError as exc:
+        raise CandidateError(str(exc)) from None
     if (
         not isinstance(lock, dict)
         or image_lock_path.name != f"registryctl-v{version}-image-lock.json"
@@ -603,25 +611,19 @@ def _load_candidate_snapshot(
             "platform",
             "images",
         }
-        or lock.get("schema_version") != "registryctl.release_image_lock.v1"
+        or lock.get("schema_version") != expected_image_lock_schema
         or lock.get("release_tag") != stack["source_tag"]
         or lock.get("manifest_source_ref") != source_ref
         or not isinstance(lock.get("tag_target"), str)
         or COMMIT.fullmatch(lock["tag_target"]) is None
-        or lock.get("platform") != "linux/amd64"
+        or lock.get("platform") != IMAGE_LOCK_PLATFORM
     ):
         raise CandidateError("release image lock does not match the manifest")
     images = lock.get("images")
-    if not isinstance(images, dict) or set(images) != set(IMAGE_REPOSITORIES):
-        raise CandidateError("release image lock must contain only Notary and Relay")
-    for component, repository in IMAGE_REPOSITORIES.items():
-        value = images[component]
-        if (
-            not isinstance(value, str)
-            or re.fullmatch(rf"{re.escape(repository)}@sha256:[0-9a-f]{{64}}", value)
-            is None
-        ):
-            raise CandidateError(f"{component} is not pinned to its exact digest")
+    try:
+        validate_images(expected_image_lock_schema, images)
+    except ValueError as exc:
+        raise CandidateError(str(exc)) from None
     verify_git_binding(stack, lock, manifest_path, manifest_bytes)
     image_lock_sha256 = hashlib.sha256(image_lock_bytes).hexdigest()
     capsule_sha256 = verify_release_asset_binding(

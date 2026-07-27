@@ -33,7 +33,6 @@ config:
       - ProjectWorkspaceJourneys
       - AuthoringConfigurationReference
       - DiagnosticReference
-      - StandardJourney
       - Steps
 globs:
   - "**/*.{md,mdx}"

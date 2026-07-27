@@ -854,7 +854,7 @@ fn validate_live_response(
         {
             bail!("governed Notary result claim version does not match the authored project");
         }
-        if result_view.subject_type != AUTHORED_CLAIM_SUBJECT_TYPE {
+        if result_view.subject_type != request.subject_type {
             bail!("governed Notary result subject type does not match the authored project");
         }
         let expected_result = expected[claim_id]
@@ -1193,6 +1193,7 @@ struct ValidatedLiveRequest {
     claims: Vec<String>,
     claim_versions: BTreeMap<String, String>,
     notary_service_id: String,
+    subject_type: String,
 }
 
 struct PreparedGovernedLiveRequest {
@@ -1340,17 +1341,36 @@ fn validate_governed_request(
             bail!("live request variable is not declared by a selected project service");
         }
     }
+    let subject_type = selected_claim_subject_type(&selected_claims)?;
     validate_governed_live_target(
         loaded,
         &selected_claims,
         &outbound.target,
         &outbound.variables,
+        subject_type,
     )?;
     Ok(ValidatedLiveRequest {
         claims: ids,
         claim_versions,
         notary_service_id,
+        subject_type: subject_type.to_string(),
     })
+}
+
+fn selected_claim_subject_type(
+    selected_claims: &[(&ServiceDeclaration, &ClaimDeclaration)],
+) -> Result<&'static str> {
+    let mut subject_types = selected_claims
+        .iter()
+        .map(|(service, _)| service.effective_subject_type())
+        .collect::<BTreeSet<_>>();
+    if subject_types.len() != 1 {
+        bail!("live request cannot combine evidence services with different subject types");
+    }
+    Ok(subject_types
+        .pop_first()
+        .ok_or_else(|| anyhow!("live request selected no evidence service"))?
+        .as_str())
 }
 
 fn validate_governed_live_target(
@@ -1358,11 +1378,9 @@ fn validate_governed_live_target(
     selected_claims: &[(&ServiceDeclaration, &ClaimDeclaration)],
     target: &GovernedLiveTarget,
     variables: &registry_notary_core::RequestVariables,
+    subject_type: &str,
 ) -> Result<()> {
-    if !target
-        .entity_type
-        .eq_ignore_ascii_case(AUTHORED_CLAIM_SUBJECT_TYPE)
-    {
+    if !target.entity_type.eq_ignore_ascii_case(subject_type) {
         bail!("live request target type does not match the authored project");
     }
 
@@ -2395,7 +2413,7 @@ mod promotion_adapter_tests {
         // intentional review pins. Adding or changing a published path without
         // updating its closed mapping and reviewed revision fails this test and
         // `project_promotion_projection`.
-        assert_eq!(index.by_path().len(), 656);
+        assert_eq!(index.by_path().len(), 657);
         let mapped = index
             .by_path()
             .keys()

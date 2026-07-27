@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read, Write};
@@ -11,11 +11,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
 use clap::ValueEnum;
+use ed25519_dalek::{Signer as _, SigningKey};
 use registry_config_report::{
     ConfigDiagnostic, ConfigDiagnosticReport, ConfigSourceKind, ConfigSourceRef,
     DiagnosticSeverity, DiagnosticSummary, RegistryctlProductReport, RegistryctlProjectRef,
     RegistryctlValidationReport, ReportStatus, REGISTRYCTL_VALIDATION_REPORT_SCHEMA_VERSION_V1,
 };
+use registry_notary_core::StandaloneRegistryNotaryConfig;
 use registry_platform_authcommon::{fingerprint_api_key, validate_api_key_entropy};
 use registry_platform_config::{
     sha256_uri, verify_config_bundle, ConfigBundleFile, ConfigBundleManifest,
@@ -170,18 +172,26 @@ pub use crate::sample::Sample;
 mod sample;
 mod stored_zip;
 
-const IMAGE_LOCK_SCHEMA_VERSION: &str = "registryctl.release_image_lock.v1";
+const IMAGE_LOCK_SCHEMA_VERSION: &str = "registryctl.release_image_lock.v2";
 const IMAGE_LOCK_MAX_BYTES: u64 = 16 * 1024;
 const IMAGE_LOCK_PATH_ENV: &str = "REGISTRYCTL_IMAGE_LOCK";
 const RELAY_IMAGE_REPOSITORY: &str = "ghcr.io/registrystack/registry-relay";
 const NOTARY_IMAGE_REPOSITORY: &str = "ghcr.io/registrystack/registry-notary";
+const RELAY_STAGING_IMAGE_REPOSITORY: &str = "ghcr.io/registrystack/registry-relay-candidate";
+const NOTARY_STAGING_IMAGE_REPOSITORY: &str = "ghcr.io/registrystack/registry-notary-candidate";
+const POSTGRES_IMAGE_REPOSITORY: &str = "docker.io/library/postgres";
 const LINUX_AMD64_PLATFORM: &str = "linux/amd64";
 const RELAY_BASE_URL: &str = "http://127.0.0.1:4242";
+const NOTARY_BASE_URL: &str = "http://127.0.0.1:4255";
 const CANONICAL_PROJECT_FILE: &str = "registry-stack.yaml";
 const CANONICAL_LOCAL_ENVIRONMENT_FILE: &str = "environments/local.yaml";
 const CANONICAL_LOCAL_ENVIRONMENT: &str = "local";
 const CANONICAL_BUILD_ROOT: &str = ".registry-stack/build/local";
 const CANONICAL_RELAY_CONFIG: &str = ".registry-stack/build/local/private/relay/config/relay.yaml";
+const CANONICAL_CONSULTATION_RELAY_CONFIG: &str =
+    ".registry-stack/build/local/private/relay/config/relay-consultation.yaml";
+const CANONICAL_COMPILED_NOTARY_CONFIG: &str =
+    ".registry-stack/build/local/private/notary/config/notary.yaml";
 const CANONICAL_ARTIFACT_MANIFEST: &str = ".registry-stack/build/local/artifact-manifest.json";
 const CANONICAL_RUNTIME_ROOT: &str = ".registry-stack/runtime/local";
 const CANONICAL_RUNTIME_COMPOSE: &str = ".registry-stack/runtime/local/compose.yaml";
@@ -189,17 +199,88 @@ const CANONICAL_RUNTIME_MANIFEST: &str = ".registry-stack/runtime/local/manifest
 const CANONICAL_RUNTIME_SECRETS: &str = ".registry-stack/runtime/local/secrets";
 const CANONICAL_RUNTIME_ENV: &str = ".registry-stack/runtime/local/secrets/local.env";
 const CANONICAL_RUNTIME_RELAY_ENV: &str = ".registry-stack/runtime/local/secrets/relay.env";
+const CANONICAL_RUNTIME_CONSULTATION_RELAY_ENV: &str =
+    ".registry-stack/runtime/local/secrets/relay-consultation.env";
+const CANONICAL_RUNTIME_RELAY_BOOTSTRAP_ENV: &str =
+    ".registry-stack/runtime/local/secrets/relay-bootstrap.env";
+const CANONICAL_RUNTIME_NOTARY_ENV: &str = ".registry-stack/runtime/local/secrets/notary.env";
+const CANONICAL_RUNTIME_POSTGRES_ENV: &str = ".registry-stack/runtime/local/secrets/postgres.env";
+const CANONICAL_RUNTIME_WORKLOAD_TOKEN: &str =
+    ".registry-stack/runtime/local/secrets/relay-workload-token";
+const CANONICAL_RUNTIME_NOTARY_CONFIG: &str =
+    ".registry-stack/runtime/local/private/notary/config/notary.yaml";
+const CANONICAL_RUNTIME_CONSULTATION_RELAY_CONFIG: &str =
+    ".registry-stack/runtime/local/private/relay/config/relay-consultation.yaml";
+const CANONICAL_RUNTIME_POSTGRES_CA: &str =
+    ".registry-stack/runtime/local/private/relay/config/state-plane-ca.pem";
+const CANONICAL_RUNTIME_DB_INIT: &str = ".registry-stack/runtime/local/private/db/init.sh";
+const CANONICAL_RUNTIME_WORKLOAD_JWKS: &str =
+    ".registry-stack/runtime/local/private/workload/jwks.json";
+const CANONICAL_RUNTIME_WORKLOAD_PRIVATE_JWK: &str =
+    ".registry-stack/runtime/local/secrets/workload-private.jwk";
 const CANONICAL_RUNTIME_MANIFEST_SCHEMA: &str = "registryctl.local_runtime.v1";
 const CANONICAL_RUNTIME_AUDIT_SECRET_ENV: &str = "REGISTRY_RELAY_AUDIT_HASH_SECRET";
+const CANONICAL_RUNTIME_NOTARY_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_AUDIT_HASH_SECRET";
+const CANONICAL_RUNTIME_CONSULTATION_AUDIT_SECRET_ENV: &str = "REGISTRY_RELAY_AUDIT_HASH_SECRET";
+const CANONICAL_RUNTIME_PSEUDONYM_ENV: &str = "REGISTRY_RELAY_AUDIT_PSEUDONYM_EPOCH_1";
+const CANONICAL_RUNTIME_RELAY_DATABASE_URL_ENV: &str = "REGISTRY_RELAY_CONSULTATION_DATABASE_URL";
+const CANONICAL_RUNTIME_RELAY_MIGRATION_DATABASE_URL_ENV: &str =
+    "REGISTRYCTL_LOCAL_RELAY_MIGRATION_DATABASE_URL";
+const CANONICAL_RUNTIME_RELAY_MAINTENANCE_DATABASE_URL_ENV: &str =
+    "REGISTRYCTL_LOCAL_RELAY_MAINTENANCE_DATABASE_URL";
+const CANONICAL_RUNTIME_RELAY_READER_DATABASE_URL_ENV: &str =
+    "REGISTRYCTL_LOCAL_RELAY_READER_DATABASE_URL";
+const CANONICAL_RUNTIME_WORKLOAD_JWK_ENV: &str = "REGISTRYCTL_LOCAL_WORKLOAD_PUBLIC_JWK";
+const CANONICAL_RUNTIME_NOTARY_SIGNING_JWK_ENV: &str =
+    "REGISTRYCTL_LOCAL_NOTARY_EVIDENCE_SIGNING_JWK";
+const CANONICAL_RUNTIME_RELAY_DB_PASSWORD_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_DATABASE_PASSWORD";
+const CANONICAL_RUNTIME_RELAY_MAINTENANCE_DB_PASSWORD_ENV: &str =
+    "REGISTRYCTL_LOCAL_RELAY_MAINTENANCE_DATABASE_PASSWORD";
+const CANONICAL_RUNTIME_RELAY_READER_DB_PASSWORD_ENV: &str =
+    "REGISTRYCTL_LOCAL_RELAY_READER_DATABASE_PASSWORD";
+const CANONICAL_RUNTIME_NOTARY_CALLER_RAW_ENV: &str = "REGISTRYCTL_LOCAL_NOTARY_CALLER_TOKEN_RAW";
+const CANONICAL_RUNTIME_NOTARY_UNDER_SCOPED_RAW_ENV: &str =
+    "REGISTRYCTL_LOCAL_NOTARY_UNDER_SCOPED_TOKEN_RAW";
+const CANONICAL_RUNTIME_NOTARY_CALLER_HASH_ENV: &str = "REGISTRYCTL_LOCAL_NOTARY_CALLER_TOKEN_HASH";
+const CANONICAL_RUNTIME_NOTARY_UNDER_SCOPED_HASH_ENV: &str =
+    "REGISTRYCTL_LOCAL_NOTARY_UNDER_SCOPED_TOKEN_HASH";
+const CANONICAL_RUNTIME_POSTGRES_PASSWORD_ENV: &str = "POSTGRES_PASSWORD";
+const CANONICAL_RUNTIME_POSTGRES_USER_ENV: &str = "POSTGRES_USER";
+const CANONICAL_RUNTIME_POSTGRES_TLS_CERTIFICATE_ENV: &str =
+    "REGISTRYCTL_LOCAL_POSTGRES_TLS_CERTIFICATE_B64";
+const CANONICAL_RUNTIME_POSTGRES_TLS_PRIVATE_KEY_ENV: &str =
+    "REGISTRYCTL_LOCAL_POSTGRES_TLS_PRIVATE_KEY_B64";
+const CANONICAL_RUNTIME_POSTGRES_USER: &str = "registryctl_bootstrap";
+const CANONICAL_RUNTIME_RELAY_DB_USER: &str = "registryctl_relay";
+const CANONICAL_RUNTIME_RELAY_DB_OWNER: &str = "registryctl_relay_owner";
+const CANONICAL_RUNTIME_RELAY_DB_MAINTENANCE_USER: &str = "registryctl_relay_keyring_maintenance";
+const CANONICAL_RUNTIME_RELAY_DB_READER_USER: &str = "registryctl_relay_keyring_reader";
+const CANONICAL_RUNTIME_RELAY_DB: &str = "registryctl_relay";
+const CANONICAL_RUNTIME_RELAY_KEY_WRITE_DEADLINE_MS: &str = "4102444800000";
+const CANONICAL_RUNTIME_RELAY_AUDIT_RETENTION_MS: &str = "2592000000";
+const CANONICAL_RUNTIME_WORKLOAD_CLIENT: &str = "registryctl-local-notary";
+const CANONICAL_RUNTIME_WORKLOAD_ISSUER: &str = "http://127.0.0.1:4255";
+const CANONICAL_RUNTIME_WORKLOAD_AUDIENCE: &str = "registry-relay";
+const CANONICAL_RUNTIME_WORKLOAD_SCOPE: &str = "registry:consult:public-works-verification";
+const CANONICAL_RUNTIME_WORKLOAD_TTL_SECONDS: u64 = 3600;
+const CANONICAL_RUNTIME_WORKLOAD_KID: &str = "registryctl-local-workload";
+const CANONICAL_RUNTIME_NOTARY_SIGNING_KID: &str = "registryctl-local-notary-evidence";
 const CANONICAL_RUNTIME_MATCH_RAW_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_RAW";
 const CANONICAL_RUNTIME_NO_MATCH_RAW_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_RAW";
 const CANONICAL_RUNTIME_MATCH_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH";
 const CANONICAL_RUNTIME_NO_MATCH_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_HASH";
 const CANONICAL_RUNTIME_NO_MATCH_PRINCIPAL: &str = "registryctl_local_no_match";
 const REGISTRYCTL_RELAY_STAGING_IMAGE_ENV: &str = "REGISTRYCTL_RELAY_STAGING_IMAGE";
+const REGISTRYCTL_NOTARY_STAGING_IMAGE_ENV: &str = "REGISTRYCTL_NOTARY_STAGING_IMAGE";
 const CANONICAL_RELAY_CONFIG_MOUNT: &str = "/etc/registry-relay/config.yaml";
+const CANONICAL_CONSULTATION_RELAY_CONFIG_MOUNT: &str =
+    "/etc/registry-relay/config/relay-consultation.yaml";
+const CANONICAL_POSTGRES_CA_MOUNT: &str = "/etc/registry-relay/config/state-plane-ca.pem";
+const CANONICAL_NOTARY_CONFIG_MOUNT: &str = "/etc/registry-notary/config.yaml";
 const CANONICAL_RELAY_CONTAINER_PORT: &str = "0.0.0.0:8080";
 const CANONICAL_RELAY_HOST_PORT: &str = "127.0.0.1:4242:8080";
+const CANONICAL_NOTARY_CONTAINER_PORT: &str = "0.0.0.0:8081";
+const CANONICAL_NOTARY_HOST_PORT: &str = "127.0.0.1:4255:8081";
 const RELAY_DOCS_PATH: &str = "/docs";
 const TUTORIAL_PURPOSE: &str = "https://example.local/purpose/tutorial";
 const TUTORIAL_IDENTITY_PURPOSE: &str = "https://example.local/purpose/identity-verification";
@@ -221,6 +302,13 @@ const PROJECT_SCHEMA_VERSION: &str = "registryctl/v1";
 const CONFIG_BUNDLE_SIGNATURE_SCHEMA: &str = "registry.platform.config_bundle_signatures.v1";
 const CONFIG_TRUST_ANCHOR_SCHEMA: &str = "registry.platform.config_trust_anchor.v1";
 const INIT_REPORT_SCHEMA_VERSION: &str = "registryctl.init.v1";
+const ADD_NOTARY_REPORT_SCHEMA_VERSION: &str = "registryctl.add_notary.v1";
+
+#[cfg(test)]
+thread_local! {
+    static ADD_NOTARY_FAIL_AFTER_PUBLISH_COUNT: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
 pub const SMOKE_REPORT_SCHEMA_V1: &str =
     include_str!("../schemas/registryctl.smoke.v1.schema.json");
 
@@ -265,6 +353,14 @@ pub struct InitReport {
     pub artifacts: InitArtifacts,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct AddNotaryReport {
+    pub schema_version: &'static str,
+    pub status: &'static str,
+    pub project: PathBuf,
+    pub files: Vec<PathBuf>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RegistryctlImageLock {
@@ -283,11 +379,22 @@ struct RegistryctlLockedImages {
     registry_relay: String,
     #[serde(rename = "registry-notary")]
     registry_notary: String,
+    postgresql: String,
 }
 
 impl RegistryctlImageLock {
     fn relay_image(&self) -> &str {
         &self.images.registry_relay
+    }
+
+    #[allow(dead_code)]
+    fn notary_image(&self) -> &str {
+        &self.images.registry_notary
+    }
+
+    #[allow(dead_code)]
+    fn postgresql_image(&self) -> &str {
+        &self.images.postgresql
     }
 }
 
@@ -419,6 +526,11 @@ fn validate_registryctl_image_lock(image_lock: &RegistryctlImageLock) -> Result<
         &image_lock.images.registry_notary,
         NOTARY_IMAGE_REPOSITORY,
     )?;
+    validate_locked_image_ref(
+        "images.postgresql",
+        &image_lock.images.postgresql,
+        POSTGRES_IMAGE_REPOSITORY,
+    )?;
     Ok(())
 }
 
@@ -465,8 +577,11 @@ fn select_canonical_relay_image(
         .to_str()
         .map(str::to_string)
         .ok_or_else(|| anyhow!("internal Relay staging image must be valid UTF-8"))?;
-    const STAGING_REPOSITORY: &str = "ghcr.io/registrystack/registry-relay-candidate";
-    validate_locked_image_ref("internal Relay staging image", &staging, STAGING_REPOSITORY)?;
+    validate_locked_image_ref(
+        "internal Relay staging image",
+        &staging,
+        RELAY_STAGING_IMAGE_REPOSITORY,
+    )?;
     let locked_digest = locked
         .rsplit_once("@sha256:")
         .map(|(_, digest)| digest)
@@ -481,14 +596,63 @@ fn select_canonical_relay_image(
     Ok(staging)
 }
 
+fn selected_canonical_notary_image(image_lock: &RegistryctlImageLock) -> Result<String> {
+    let staging = std::env::var_os(REGISTRYCTL_NOTARY_STAGING_IMAGE_ENV);
+    select_canonical_notary_image(image_lock, staging.as_deref())
+}
+
+fn select_canonical_notary_image(
+    image_lock: &RegistryctlImageLock,
+    staging: Option<&OsStr>,
+) -> Result<String> {
+    let locked = image_lock.notary_image();
+    let Some(staging) = staging else {
+        return Ok(locked.to_string());
+    };
+    let staging = staging
+        .to_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("internal Notary staging image must be valid UTF-8"))?;
+    validate_locked_image_ref(
+        "internal Notary staging image",
+        &staging,
+        NOTARY_STAGING_IMAGE_REPOSITORY,
+    )?;
+    let locked_digest = locked
+        .rsplit_once("@sha256:")
+        .map(|(_, digest)| digest)
+        .ok_or_else(|| anyhow!("release-locked Notary image is malformed"))?;
+    let staging_digest = staging
+        .rsplit_once("@sha256:")
+        .map(|(_, digest)| digest)
+        .ok_or_else(|| anyhow!("internal Notary staging image is malformed"))?;
+    if staging_digest != locked_digest {
+        bail!("internal Notary staging image digest must exactly match the release image lock");
+    }
+    Ok(staging)
+}
+
 fn validate_canonical_runtime_image_ref(image: &str) -> Result<()> {
-    const STAGING_REPOSITORY: &str = "ghcr.io/registrystack/registry-relay-candidate";
     if image.starts_with(&format!("{RELAY_IMAGE_REPOSITORY}@sha256:")) {
         validate_locked_image_ref("runtime relay image", image, RELAY_IMAGE_REPOSITORY)
-    } else if image.starts_with(&format!("{STAGING_REPOSITORY}@sha256:")) {
-        validate_locked_image_ref("runtime relay image", image, STAGING_REPOSITORY)
+    } else if image.starts_with(&format!("{RELAY_STAGING_IMAGE_REPOSITORY}@sha256:")) {
+        validate_locked_image_ref("runtime relay image", image, RELAY_STAGING_IMAGE_REPOSITORY)
     } else {
         bail!("runtime relay image must use the closed release or staging repository")
+    }
+}
+
+fn validate_canonical_runtime_notary_image_ref(image: &str) -> Result<()> {
+    if image.starts_with(&format!("{NOTARY_IMAGE_REPOSITORY}@sha256:")) {
+        validate_locked_image_ref("runtime Notary image", image, NOTARY_IMAGE_REPOSITORY)
+    } else if image.starts_with(&format!("{NOTARY_STAGING_IMAGE_REPOSITORY}@sha256:")) {
+        validate_locked_image_ref(
+            "runtime Notary image",
+            image,
+            NOTARY_STAGING_IMAGE_REPOSITORY,
+        )
+    } else {
+        bail!("runtime Notary image must use the closed release or staging repository")
     }
 }
 
@@ -1416,6 +1580,7 @@ struct CanonicalRuntime {
     relay_config: PathBuf,
     secrets_env: PathBuf,
     image: String,
+    topology: CanonicalRuntimeTopology,
 }
 
 #[derive(Clone, Debug)]
@@ -1423,6 +1588,51 @@ struct CanonicalSpreadsheetBinding {
     project_file_text: String,
     runtime_path: String,
     match_principal: String,
+    topology: CanonicalRuntimeTopology,
+    runtime_user: String,
+    runtime_uid: String,
+    runtime_gid: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CanonicalRuntimeTopology {
+    #[default]
+    RelayOnly,
+    CombinedNotary,
+}
+
+impl CanonicalRuntimeTopology {
+    const fn has_notary(self) -> bool {
+        matches!(self, Self::CombinedNotary)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CanonicalRuntimeImages {
+    relay: String,
+    notary: Option<String>,
+    postgresql: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CanonicalNotaryRuntimeManifest {
+    notary_image: String,
+    postgresql_image: String,
+    consultation_relay_config_digest: String,
+    runtime_consultation_relay_config_digest: String,
+    compiled_notary_config_digest: String,
+    runtime_notary_config_digest: String,
+    postgres_ca_digest: String,
+    database_init_digest: String,
+    workload_jwks_digest: String,
+    consultation_relay_env_digest: String,
+    relay_bootstrap_env_digest: String,
+    notary_env_digest: String,
+    postgres_env_digest: String,
+    workload_token_digest: String,
+    workload_private_jwk_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1438,6 +1648,10 @@ struct CanonicalRuntimeManifest {
     workbook_classification: ArtifactInputClassification,
     workbook_project_file: String,
     workbook_runtime_path: String,
+    #[serde(default)]
+    topology: CanonicalRuntimeTopology,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notary: Option<CanonicalNotaryRuntimeManifest>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1473,6 +1687,332 @@ fn require_canonical_project(project_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn add_notary_to_canonical_project(project_dir: &Path) -> Result<AddNotaryReport> {
+    require_canonical_project(project_dir)?;
+    let _ = canonical_spreadsheet_binding(project_dir)?;
+    let project_file = project_dir.join(CANONICAL_PROJECT_FILE);
+    let environment_file = project_dir.join(CANONICAL_LOCAL_ENVIRONMENT_FILE);
+    let integration_file =
+        project_dir.join("integrations/project-record-snapshot/integration.yaml");
+    let match_fixture =
+        project_dir.join("integrations/project-record-snapshot/fixtures/match.yaml");
+    let planned_fixture =
+        project_dir.join("integrations/project-record-snapshot/fixtures/planned.yaml");
+    let no_match_fixture =
+        project_dir.join("integrations/project-record-snapshot/fixtures/no-match.yaml");
+
+    for path in [
+        &project_file,
+        &environment_file,
+        &integration_file,
+        &match_fixture,
+        &planned_fixture,
+        &no_match_fixture,
+    ] {
+        ensure_no_symlink_components(project_dir, path)?;
+    }
+
+    let current_project = fs::read_to_string(&project_file)
+        .context("failed to read canonical registry-stack.yaml")?;
+    let current_environment = fs::read_to_string(&environment_file)
+        .context("failed to read canonical local environment")?;
+    let desired_project = canonical_notary_project_yaml(&current_project)?;
+    let desired_environment = canonical_notary_environment_yaml(&current_environment)?;
+    let desired_integration = canonical_notary_integration_yaml();
+    let desired_match = canonical_notary_match_fixture_yaml();
+    let desired_planned = canonical_notary_planned_fixture_yaml();
+    let desired_no_match = canonical_notary_no_match_fixture_yaml();
+
+    let desired_files = [
+        (&project_file, desired_project.as_str()),
+        (&environment_file, desired_environment.as_str()),
+        (&integration_file, desired_integration),
+        (&match_fixture, desired_match),
+        (&planned_fixture, desired_planned),
+        (&no_match_fixture, desired_no_match),
+    ];
+
+    let already_exact = desired_files.iter().all(|(path, expected)| {
+        fs::read_to_string(path)
+            .map(|actual| actual == *expected)
+            .unwrap_or(false)
+    });
+    if already_exact {
+        return Ok(AddNotaryReport {
+            schema_version: ADD_NOTARY_REPORT_SCHEMA_VERSION,
+            status: "unchanged",
+            project: project_dir.to_path_buf(),
+            files: desired_files
+                .iter()
+                .map(|(path, _)| path.strip_prefix(project_dir).unwrap_or(path).to_path_buf())
+                .collect(),
+        });
+    }
+
+    if project_dir
+        .join("integrations/project-record-snapshot")
+        .exists()
+        || current_project.contains("project-record-snapshot")
+        || current_project.contains("public-works-verification")
+        || current_environment.contains("notary_relay:")
+        || current_environment.contains("notary:")
+    {
+        bail!(
+            "`registryctl add notary` found an unsupported or conflicting Notary add-on shape; no files were changed"
+        );
+    }
+
+    commit_canonical_notary_add_on(project_dir, &desired_files)?;
+
+    Ok(AddNotaryReport {
+        schema_version: ADD_NOTARY_REPORT_SCHEMA_VERSION,
+        status: "updated",
+        project: project_dir.to_path_buf(),
+        files: desired_files
+            .iter()
+            .map(|(path, _)| path.strip_prefix(project_dir).unwrap_or(path).to_path_buf())
+            .collect(),
+    })
+}
+
+fn commit_canonical_notary_add_on(project_dir: &Path, files: &[(&PathBuf, &str)]) -> Result<()> {
+    let transaction_root = project_dir.join(".registry-stack");
+    ensure_no_symlink_components(project_dir, &transaction_root)?;
+    create_private_dir_all(&transaction_root)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".add-notary-stage-")
+        .tempdir_in(&transaction_root)
+        .context("failed to stage the Notary add-on")?;
+    let backup = tempfile::Builder::new()
+        .prefix(".add-notary-backup-")
+        .tempdir_in(&transaction_root)
+        .context("failed to stage Notary add-on rollback data")?;
+    for (target, contents) in files {
+        let relative = target
+            .strip_prefix(project_dir)
+            .context("Notary add-on target escaped the project root")?;
+        let staged = staging.path().join(relative);
+        if let Some(parent) = staged.parent() {
+            fs::create_dir_all(parent).context("failed to stage Notary add-on parent")?;
+        }
+        fs::write(&staged, contents).context("failed to stage Notary add-on file")?;
+    }
+
+    let mut moved = Vec::<(PathBuf, PathBuf)>::new();
+    let mut published_targets = Vec::<PathBuf>::new();
+    let mut created_dirs = Vec::<PathBuf>::new();
+    let commit = (|| -> Result<()> {
+        for (target, _) in files {
+            ensure_no_symlink_components(project_dir, target)?;
+            let relative = target
+                .strip_prefix(project_dir)
+                .context("Notary add-on target escaped the project root")?;
+            if let Some(parent) = target.parent() {
+                ensure_no_symlink_components(project_dir, parent)?;
+                if !parent.exists() {
+                    fs::create_dir_all(parent).context("failed to create Notary add-on parent")?;
+                    created_dirs.push(parent.to_path_buf());
+                }
+            }
+            if target.exists() {
+                let backup_target = backup.path().join(relative);
+                if let Some(parent) = backup_target.parent() {
+                    fs::create_dir_all(parent)
+                        .context("failed to stage Notary add-on rollback parent")?;
+                }
+                fs::rename(target, &backup_target)
+                    .context("failed to stage existing Notary add-on file for rollback")?;
+                moved.push((target.to_path_buf(), backup_target));
+            }
+            fs::rename(staging.path().join(relative), target)
+                .context("failed to publish staged Notary add-on file")?;
+            published_targets.push(target.to_path_buf());
+            #[cfg(test)]
+            if ADD_NOTARY_FAIL_AFTER_PUBLISH_COUNT
+                .with(|count| count.get() == published_targets.len())
+            {
+                bail!("injected Notary add-on publication failure");
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = commit {
+        for target in published_targets.into_iter().rev() {
+            let _ = fs::remove_file(&target);
+        }
+        for (target, backup_target) in moved.into_iter().rev() {
+            let _ = fs::rename(&backup_target, &target);
+        }
+        for directory in created_dirs.into_iter().rev() {
+            let _ = fs::remove_dir(&directory);
+        }
+        return Err(error.context("Notary add-on publication was rolled back"));
+    }
+    Ok(())
+}
+
+fn canonical_notary_project_yaml(current: &str) -> Result<String> {
+    if current.contains("project-record-snapshot") || current.contains("public-works-verification")
+    {
+        return Ok(current.to_string());
+    }
+    let with_integration = current.replacen(
+        "registry:\n  id: fictional-public-works-registry\n\nentities:\n",
+        "registry:\n  id: fictional-public-works-registry\n\nintegrations:\n  project-record-snapshot: { file: integrations/project-record-snapshot/integration.yaml }\n\nentities:\n",
+        1,
+    );
+    if with_integration == current {
+        bail!("`registryctl add notary` supports only the canonical spreadsheet starter shape");
+    }
+    let service_block = r#"
+  public-works-verification:
+    kind: evidence
+    version: 1
+    subject_type: project
+    purpose: public-works-case-management
+    legal_basis: public-service-delivery
+    consent: not_required
+    access: { scopes: ["evidence:projects:read"] }
+    consultations:
+      project:
+        integration: project-record-snapshot
+        input: { project_id: request.target.identifiers.project_id }
+    claims:
+      project-record-exists: { cel: project.matched, disclosure: predicate }
+      project-status-accepted: { cel: 'project.matched && project.status == "active"', disclosure: predicate }
+"#;
+    if !with_integration.contains("      standards: { ogc_features: false, sp_dci: false }\n") {
+        bail!("`registryctl add notary` supports only the canonical spreadsheet starter service shape");
+    }
+    Ok(with_integration.replacen(
+        "      standards: { ogc_features: false, sp_dci: false }\n",
+        &format!("      standards: {{ ogc_features: false, sp_dci: false }}\n{service_block}"),
+        1,
+    ))
+}
+
+fn canonical_notary_environment_yaml(current: &str) -> Result<String> {
+    if current.contains("notary_relay:") || current.contains("callers:") {
+        return Ok(current.to_string());
+    }
+    if !current.contains("relay:\n")
+        || !current.contains("  local_api_keys:\n")
+        || !current.contains("  allowed_clients: [public-works-casework]\n")
+    {
+        bail!(
+            "`registryctl add notary` supports only the canonical spreadsheet starter environment"
+        );
+    }
+    let with_oidc = current.to_string();
+    let callers = r#"callers:
+  public-works-service:
+    api_key_fingerprint: { secret: REGISTRYCTL_LOCAL_NOTARY_CALLER_TOKEN_HASH }
+    scopes: ["evidence:projects:read"]
+  public-works-under-scoped:
+    api_key_fingerprint: { secret: REGISTRYCTL_LOCAL_NOTARY_UNDER_SCOPED_TOKEN_HASH }
+    scopes: ["evidence:projects:metadata"]
+
+"#;
+    let with_callers = with_oidc.replacen("relay:\n", &format!("{callers}relay:\n"), 1);
+    if with_callers == with_oidc {
+        bail!("canonical Relay environment binding is absent");
+    }
+    let notary = r#"
+notary_relay:
+  base_url: http://127.0.0.1:8080
+  workload_client_id: registryctl-local-notary
+  token_file: /run/secrets/relay-workload-token
+
+"#;
+    let with_notary = with_callers.replacen("deployment:\n", &format!("{notary}deployment:\n"), 1);
+    if with_notary == with_callers {
+        bail!("canonical deployment environment binding is absent");
+    }
+    let with_deployment = with_notary.replacen(
+        "  relay: { service: records-relay }\n",
+        "  relay: { service: records-relay }\n  notary: { service: registryctl-local-notary }\n",
+        1,
+    );
+    if with_deployment == with_notary {
+        bail!("canonical Relay deployment binding is absent");
+    }
+    Ok(with_deployment)
+}
+
+fn canonical_notary_integration_yaml() -> &'static str {
+    r#"version: 1
+id: public-works-project-snapshot
+revision: 1
+input:
+  project_id:
+    role: selector
+    type: string
+    maxLength: 64
+capability:
+  snapshot:
+    entity: projects
+    exact:
+      project_id: { input: project_id }
+    freshness: 24h
+outputs: [status]
+not_applicable:
+  ambiguity:
+    rationale: The exact project selector is the entity primary key, whose materialized unique-key constraint permits at most one record.
+    request_fixture: match
+  subject_mismatch:
+    rationale: The selected snapshot output projection omits the primary key, so it contains no identifier comparable with the requested project identifier.
+    request_fixture: match
+"#
+}
+
+fn canonical_notary_match_fixture_yaml() -> &'static str {
+    r#"name: match
+classification: synthetic
+input: { project_id: pw_001 }
+interactions:
+  - expect: { method: GET, path: /snapshot }
+    respond: { status: 200, body: { status: active } }
+expect:
+  outcome: match
+  outputs: { status: active }
+  claims:
+    project-record-exists: true
+    project-status-accepted: true
+"#
+}
+
+fn canonical_notary_planned_fixture_yaml() -> &'static str {
+    r#"name: planned
+classification: synthetic
+input: { project_id: PW-002 }
+interactions:
+  - expect: { method: GET, path: /snapshot }
+    respond: { status: 200, body: { status: planned } }
+expect:
+  outcome: match
+  outputs: { status: planned }
+  claims:
+    project-record-exists: true
+    project-status-accepted: false
+"#
+}
+
+fn canonical_notary_no_match_fixture_yaml() -> &'static str {
+    r#"name: no-match
+classification: synthetic
+input: { project_id: pw_999 }
+interactions:
+  - expect: { method: GET, path: /snapshot }
+    respond: { status: 200, body: [] }
+expect:
+  outcome: no_match
+  outputs: {}
+  claims:
+    project-record-exists: false
+    project-status-accepted: false
+"#
+}
+
 fn canonical_spreadsheet_binding(project_dir: &Path) -> Result<CanonicalSpreadsheetBinding> {
     let environment_path = project_dir.join(CANONICAL_LOCAL_ENVIRONMENT_FILE);
     ensure_no_symlink_components(project_dir, &environment_path)?;
@@ -1493,6 +2033,54 @@ fn canonical_spreadsheet_binding(project_dir: &Path) -> Result<CanonicalSpreadsh
     if local_api_keys["no_match_principal"].as_str() != Some(CANONICAL_RUNTIME_NO_MATCH_PRINCIPAL) {
         bail!("the local spreadsheet maintained no-match principal is invalid");
     }
+    let relay_audience = document["relay"]["audience"]
+        .as_str()
+        .ok_or_else(|| anyhow!("the local spreadsheet Relay audience is absent"))?
+        .to_string();
+    let has_notary_shape = !document["notary_relay"].is_null()
+        || !document["deployment"]["notary"].is_null()
+        || !document["callers"].is_null();
+    let topology = if has_notary_shape {
+        if relay_audience != CANONICAL_RUNTIME_WORKLOAD_AUDIENCE {
+            bail!("the canonical local consultation Relay audience is unsupported");
+        }
+        if document["notary_relay"]["base_url"].as_str() != Some("http://127.0.0.1:8080")
+            || document["notary_relay"]["workload_client_id"].as_str()
+                != Some(CANONICAL_RUNTIME_WORKLOAD_CLIENT)
+            || document["notary_relay"]["token_file"].as_str()
+                != Some("/run/secrets/relay-workload-token")
+            || document["deployment"]["notary"]["service"].as_str()
+                != Some("registryctl-local-notary")
+        {
+            bail!("the canonical local Notary topology binding is incomplete or unsupported");
+        }
+        let callers = document["callers"]
+            .as_mapping()
+            .ok_or_else(|| anyhow!("the canonical local Notary callers are absent"))?;
+        if callers.len() != 2 {
+            bail!("the canonical local Notary must declare exactly two tutorial callers");
+        }
+        let full = &document["callers"]["public-works-service"];
+        let under = &document["callers"]["public-works-under-scoped"];
+        if full["api_key_fingerprint"]["secret"].as_str()
+            != Some(CANONICAL_RUNTIME_NOTARY_CALLER_HASH_ENV)
+            || under["api_key_fingerprint"]["secret"].as_str()
+                != Some(CANONICAL_RUNTIME_NOTARY_UNDER_SCOPED_HASH_ENV)
+            || full["scopes"]
+                .as_sequence()
+                .and_then(|values| (values.len() == 1).then(|| values[0].as_str()).flatten())
+                != Some("evidence:projects:read")
+            || under["scopes"]
+                .as_sequence()
+                .and_then(|values| (values.len() == 1).then(|| values[0].as_str()).flatten())
+                != Some("evidence:projects:metadata")
+        {
+            bail!("the canonical local Notary caller bindings are incomplete or unsupported");
+        }
+        CanonicalRuntimeTopology::CombinedNotary
+    } else {
+        CanonicalRuntimeTopology::RelayOnly
+    };
     let entities = document["entities"]
         .as_mapping()
         .ok_or_else(|| anyhow!("the canonical local environment must declare entities"))?;
@@ -1537,23 +2125,29 @@ fn canonical_spreadsheet_binding(project_dir: &Path) -> Result<CanonicalSpreadsh
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         bail!("the declared XLSX project workbook must be a regular non-symlink file");
     }
+    let (runtime_uid, runtime_gid) = compose_runtime_identity(project_dir)?;
     Ok(CanonicalSpreadsheetBinding {
         project_file_text,
         runtime_path,
         match_principal,
+        topology,
+        runtime_user: format!("{runtime_uid}:{runtime_gid}"),
+        runtime_uid,
+        runtime_gid,
     })
 }
 
 fn canonical_compose_document(
-    image: &str,
+    images: &CanonicalRuntimeImages,
     binding: &CanonicalSpreadsheetBinding,
-) -> serde_json::Value {
-    serde_json::json!({
-        "services": {
-            "registry-relay": {
-                "image": image,
+) -> Result<serde_json::Value> {
+    let mut services = serde_json::Map::new();
+    services.insert(
+        "registry-relay".to_string(),
+        serde_json::json!({
+                "image": images.relay,
+                "user": binding.runtime_user,
                 "command": [
-                    "serve",
                     "--config",
                     CANONICAL_RELAY_CONFIG_MOUNT,
                     "--bind",
@@ -1561,6 +2155,7 @@ fn canonical_compose_document(
                 ],
                 "env_file": ["secrets/relay.env"],
                 "ports": [CANONICAL_RELAY_HOST_PORT],
+                "networks": ["public"],
                 "volumes": [
                     format!("../../build/local/private/relay/config/relay.yaml:{CANONICAL_RELAY_CONFIG_MOUNT}:ro"),
                     format!("../../../{}:{}:ro", binding.project_file_text, binding.runtime_path),
@@ -1569,28 +2164,235 @@ fn canonical_compose_document(
                 "init": true,
                 "cap_drop": ["ALL"],
                 "security_opt": ["no-new-privileges:true"],
-                "tmpfs": ["/tmp:rw,noexec,nosuid,size=64m"],
-            }
-        }
-    })
+                "tmpfs": [
+                    "/tmp:rw,noexec,nosuid,mode=1777,size=64m",
+                    format!("/var/lib/registry-relay/cache:rw,noexec,nosuid,uid={},gid={},mode=0700,size=64m", binding.runtime_uid, binding.runtime_gid),
+                ],
+                "healthcheck": {
+                    "test": ["CMD", "registry-relay", "healthcheck", "--url", "http://127.0.0.1:8080/ready"],
+                    "interval": "2s",
+                    "timeout": "5s",
+                    "retries": 30,
+                    "start_period": "2s",
+                },
+            }),
+    );
+    if binding.topology.has_notary() {
+        let notary_image = images
+            .notary
+            .as_deref()
+            .ok_or_else(|| anyhow!("the combined runtime is missing its locked Notary image"))?;
+        let postgresql_image = images.postgresql.as_deref().ok_or_else(|| {
+            anyhow!("the combined runtime is missing its locked PostgreSQL image")
+        })?;
+        services.insert(
+            "notary-network".to_string(),
+            serde_json::json!({
+                "image": postgresql_image,
+                "user": "70:70",
+                "command": ["sleep", "infinity"],
+                "ports": [CANONICAL_NOTARY_HOST_PORT],
+                "networks": ["notary-internal", "notary-host"],
+                "read_only": true,
+                "init": true,
+                "cap_drop": ["ALL"],
+                "security_opt": ["no-new-privileges:true"],
+                "healthcheck": {
+                    "test": ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", CANONICAL_RUNTIME_POSTGRES_USER, "-d", "postgres"],
+                    "interval": "2s",
+                    "timeout": "5s",
+                    "retries": 30,
+                    "start_period": "2s",
+                },
+            }),
+        );
+        services.insert(
+            "postgresql".to_string(),
+            serde_json::json!({
+                "image": postgresql_image,
+                "user": "70:70",
+                "command": [
+                    "sh",
+                    "-eu",
+                    "-c",
+                    "umask 077\nprintf '%s' \"$$REGISTRYCTL_LOCAL_POSTGRES_TLS_CERTIFICATE_B64\" | base64 -d > /run/postgresql/server.crt\nprintf '%s' \"$$REGISTRYCTL_LOCAL_POSTGRES_TLS_PRIVATE_KEY_B64\" | base64 -d > /run/postgresql/server.key\nexec docker-entrypoint.sh postgres -c listen_addresses=127.0.0.1 -c ssl=on -c ssl_cert_file=/run/postgresql/server.crt -c ssl_key_file=/run/postgresql/server.key",
+                ],
+                "env_file": ["secrets/postgres.env"],
+                "network_mode": "service:notary-network",
+                "volumes": ["./private/db/init.sh:/docker-entrypoint-initdb.d/00-registryctl.sh:ro"],
+                "read_only": true,
+                "cap_drop": ["ALL"],
+                "security_opt": ["no-new-privileges:true"],
+                "tmpfs": [
+                    "/var/lib/postgresql/data:rw,noexec,nosuid,uid=70,gid=70,mode=0700,size=256m",
+                    "/run/postgresql:rw,noexec,nosuid,uid=70,gid=70,mode=0700,size=16m",
+                    "/tmp:rw,noexec,nosuid,uid=70,gid=70,mode=0700,size=32m",
+                ],
+                "healthcheck": {
+                    "test": ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", CANONICAL_RUNTIME_POSTGRES_USER, "-d", "postgres"],
+                    "interval": "2s",
+                    "timeout": "5s",
+                    "retries": 30,
+                    "start_period": "2s",
+                },
+            }),
+        );
+        services.insert(
+            "registry-relay-bootstrap".to_string(),
+            serde_json::json!({
+                "image": images.relay,
+                "user": binding.runtime_user,
+                "network_mode": "service:notary-network",
+                "command": [
+                    "consultation",
+                    "bootstrap-state",
+                    "--config",
+                    CANONICAL_CONSULTATION_RELAY_CONFIG_MOUNT,
+                    "--migration-database-url-env",
+                    CANONICAL_RUNTIME_RELAY_MIGRATION_DATABASE_URL_ENV,
+                    "--owner-role",
+                    CANONICAL_RUNTIME_RELAY_DB_OWNER,
+                    "--keyring-maintenance-database-url-env",
+                    CANONICAL_RUNTIME_RELAY_MAINTENANCE_DATABASE_URL_ENV,
+                    "--keyring-reader-database-url-env",
+                    CANONICAL_RUNTIME_RELAY_READER_DATABASE_URL_ENV,
+                    "--active-key-id",
+                    "epoch-1",
+                    "--active-write-deadline-unix-ms",
+                    CANONICAL_RUNTIME_RELAY_KEY_WRITE_DEADLINE_MS,
+                    "--audit-event-retention-ms",
+                    CANONICAL_RUNTIME_RELAY_AUDIT_RETENTION_MS,
+                ],
+                "env_file": ["secrets/relay-bootstrap.env"],
+                "volumes": [
+                    "../../build/local/private/relay:/etc/registry-relay:ro",
+                    "./private/relay/config:/etc/registry-relay/config:ro",
+                    "../../build/local/private/relay/config/artifacts:/etc/registry-relay/config/artifacts:ro",
+                ],
+                "depends_on": {
+                    "postgresql": {"condition": "service_healthy"},
+                },
+                "restart": "no",
+                "read_only": true,
+                "init": true,
+                "cap_drop": ["ALL"],
+                "security_opt": ["no-new-privileges:true"],
+                "tmpfs": ["/tmp:rw,noexec,nosuid,mode=1777,size=64m"],
+            }),
+        );
+        services.insert(
+            "registry-notary".to_string(),
+            serde_json::json!({
+                "image": notary_image,
+                "user": binding.runtime_user,
+                "network_mode": "service:notary-network",
+                "command": [
+                    "--config",
+                    CANONICAL_NOTARY_CONFIG_MOUNT,
+                    "--bind",
+                    CANONICAL_NOTARY_CONTAINER_PORT,
+                ],
+                "env_file": ["secrets/notary.env"],
+                "volumes": [
+                    format!("./private/notary/config/notary.yaml:{CANONICAL_NOTARY_CONFIG_MOUNT}:ro"),
+                    format!("./secrets/relay-workload-token:/run/secrets/relay-workload-token:ro"),
+                ],
+                "depends_on": {
+                    "postgresql": {"condition": "service_healthy"},
+                    "registry-relay-bootstrap": {"condition": "service_completed_successfully"},
+                    "registry-relay-consultation": {"condition": "service_healthy"},
+                },
+                "read_only": true,
+                "init": true,
+                "cap_drop": ["ALL"],
+                "security_opt": ["no-new-privileges:true"],
+                "tmpfs": ["/tmp:rw,noexec,nosuid,mode=1777,size=64m"],
+                "healthcheck": {
+                    "test": ["CMD", "registry-notary", "healthcheck", "--url", "http://127.0.0.1:8081/ready"],
+                    "interval": "2s",
+                    "timeout": "5s",
+                    "retries": 30,
+                    "start_period": "2s",
+                },
+            }),
+        );
+        services.insert(
+            "registry-relay-consultation".to_string(),
+            serde_json::json!({
+                "image": images.relay,
+                "user": binding.runtime_user,
+                "command": [
+                    "--config",
+                    CANONICAL_CONSULTATION_RELAY_CONFIG_MOUNT,
+                    "--bind",
+                    "127.0.0.1:8080",
+                ],
+                "env_file": ["secrets/relay-consultation.env"],
+                "network_mode": "service:notary-network",
+                "volumes": [
+                    format!("../../build/local/private/relay:/etc/registry-relay:ro"),
+                    format!("../../../{}:{}:ro", binding.project_file_text, binding.runtime_path),
+                    "./private/relay/config:/etc/registry-relay/config:ro",
+                    "../../build/local/private/relay/config/artifacts:/etc/registry-relay/config/artifacts:ro",
+                ],
+                "depends_on": {
+                    "postgresql": {"condition": "service_healthy"},
+                    "registry-relay-bootstrap": {"condition": "service_completed_successfully"},
+                },
+                "read_only": true,
+                "init": true,
+                "cap_drop": ["ALL"],
+                "security_opt": ["no-new-privileges:true"],
+                "tmpfs": [
+                    "/tmp:rw,noexec,nosuid,mode=1777,size=64m",
+                    format!("/var/lib/registry-relay/cache:rw,noexec,nosuid,uid={},gid={},mode=0700,size=64m", binding.runtime_uid, binding.runtime_gid),
+                ],
+                "healthcheck": {
+                    "test": ["CMD", "registry-relay", "healthcheck", "--url", "http://127.0.0.1:8080/ready"],
+                    "interval": "2s",
+                    "timeout": "5s",
+                    "retries": 30,
+                    "start_period": "2s",
+                },
+            }),
+        );
+    } else if images.notary.is_some() || images.postgresql.is_some() {
+        bail!("Relay-only runtime received unused product images");
+    }
+    let mut networks = serde_json::Map::new();
+    networks.insert("public".to_string(), serde_json::json!({}));
+    if binding.topology.has_notary() {
+        networks.insert(
+            "notary-internal".to_string(),
+            serde_json::json!({"internal": true}),
+        );
+        networks.insert("notary-host".to_string(), serde_json::json!({}));
+    }
+    Ok(serde_json::json!({
+        "services": services,
+        "networks": networks,
+    }))
 }
 
-fn render_canonical_compose(image: &str, binding: &CanonicalSpreadsheetBinding) -> Result<String> {
-    let document = canonical_compose_document(image, binding);
+fn render_canonical_compose(
+    images: &CanonicalRuntimeImages,
+    binding: &CanonicalSpreadsheetBinding,
+) -> Result<String> {
+    let document = canonical_compose_document(images, binding)?;
     let rendered =
         serde_norway::to_string(&document).context("failed to render the local Compose file")?;
-    validate_canonical_compose(&rendered, image, binding)?;
+    validate_canonical_compose(&rendered, images, binding)?;
     Ok(rendered)
 }
 
 fn validate_canonical_compose(
     contents: &str,
-    image: &str,
+    images: &CanonicalRuntimeImages,
     binding: &CanonicalSpreadsheetBinding,
 ) -> Result<()> {
     let actual: serde_json::Value =
         serde_norway::from_str(contents).context("generated local Compose did not parse")?;
-    if actual != canonical_compose_document(image, binding) {
+    if actual != canonical_compose_document(images, binding)? {
         bail!("generated local Compose does not match the closed runtime contract");
     }
     Ok(())
@@ -1612,6 +2414,22 @@ fn validate_private_file_mode(path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt as _;
         if metadata.permissions().mode() & 0o777 != 0o600 {
             bail!("private runtime input must use Unix mode 0600");
+        }
+    }
+    Ok(())
+}
+
+fn validate_runtime_nonsecret_file_mode(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("runtime input must be a regular non-symlink file");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if metadata.permissions().mode() & 0o777 != 0o644 {
+            bail!("non-secret container runtime input must use Unix mode 0644");
         }
     }
     Ok(())
@@ -1770,6 +2588,100 @@ fn validate_compiled_local_relay_auth(
     Ok(())
 }
 
+fn render_runtime_notary_config(compiled_path: &Path) -> Result<String> {
+    let contents =
+        fs::read_to_string(compiled_path).context("failed to read the compiled Notary config")?;
+    let mut config: serde_json::Value =
+        serde_norway::from_str(&contents).context("failed to parse the compiled Notary config")?;
+    if config["state"]["storage"].as_str() != Some("in_memory")
+        || config["evidence"]["relay"]["base_url"].as_str() != Some("http://127.0.0.1:8080")
+        || config["evidence"]["relay"]["workload_client_id"].as_str()
+            != Some(CANONICAL_RUNTIME_WORKLOAD_CLIENT)
+        || config["evidence"]["relay"]["token_file"].as_str()
+            != Some("/run/secrets/relay-workload-token")
+    {
+        bail!("compiled Notary config does not match the local evaluation-only topology");
+    }
+    let api_keys = config["auth"]["api_keys"]
+        .as_array()
+        .ok_or_else(|| anyhow!("compiled Notary API-key callers are absent"))?;
+    if api_keys.len() != 2 {
+        bail!("compiled Notary must contain exactly two tutorial callers");
+    }
+    let exact_caller = |id: &str, fingerprint_env: &str, scope: &str| {
+        api_keys.iter().any(|entry| {
+            entry["id"].as_str() == Some(id)
+                && entry["fingerprint"]["provider"].as_str() == Some("env")
+                && entry["fingerprint"]["name"].as_str() == Some(fingerprint_env)
+                && entry["scopes"]
+                    .as_array()
+                    .is_some_and(|scopes| scopes.len() == 1 && scopes[0].as_str() == Some(scope))
+        })
+    };
+    if !exact_caller(
+        "public-works-service",
+        CANONICAL_RUNTIME_NOTARY_CALLER_HASH_ENV,
+        "evidence:projects:read",
+    ) || !exact_caller(
+        "public-works-under-scoped",
+        CANONICAL_RUNTIME_NOTARY_UNDER_SCOPED_HASH_ENV,
+        "evidence:projects:metadata",
+    ) {
+        bail!("compiled Notary caller scope contract is not exact");
+    }
+    // The local runtime may execute the amd64 release image under Docker's
+    // architecture emulation. Keep one bounded worker and the product's
+    // maximum permitted address-space ceiling so startup remains reliable
+    // without widening evaluation concurrency.
+    config["cel"]["worker_count"] = serde_json::json!(1);
+    config["cel"]["worker_memory_bytes"] = serde_json::json!(1024 * 1024 * 1024_u64);
+    config["evidence"]["signing_keys"][CANONICAL_RUNTIME_NOTARY_SIGNING_KID] = serde_json::json!({
+        "provider": "local_jwk_env",
+        "private_jwk_env": CANONICAL_RUNTIME_NOTARY_SIGNING_JWK_ENV,
+        "alg": "EdDSA",
+        "kid": CANONICAL_RUNTIME_NOTARY_SIGNING_KID,
+        "status": "active",
+    });
+    config["evidence"]["signing_keys"][CANONICAL_RUNTIME_WORKLOAD_KID] = serde_json::json!({
+        "provider": "local_jwk_env",
+        "public_jwk_env": CANONICAL_RUNTIME_WORKLOAD_JWK_ENV,
+        "alg": "EdDSA",
+        "kid": CANONICAL_RUNTIME_WORKLOAD_KID,
+        "status": "publish_only",
+    });
+    let rendered =
+        serde_norway::to_string(&config).context("failed to render the runtime Notary config")?;
+    let parsed: StandaloneRegistryNotaryConfig = serde_norway::from_str(&rendered)
+        .context("runtime Notary config failed product parsing")?;
+    parsed
+        .validate()
+        .context("runtime Notary config failed product validation")?;
+    Ok(rendered)
+}
+
+fn render_runtime_consultation_relay_config(compiled_path: &Path) -> Result<String> {
+    let contents = fs::read_to_string(compiled_path)
+        .context("failed to read the compiled consultation Relay config")?;
+    let mut config: serde_json::Value = serde_norway::from_str(&contents)
+        .context("failed to parse the compiled consultation Relay config")?;
+    if config["auth"]["mode"].as_str() != Some("oidc")
+        || config["auth"]["oidc"]["issuer"].as_str() != Some(CANONICAL_RUNTIME_WORKLOAD_ISSUER)
+        || config["consultation"]["state_plane"]["database_url_env"].as_str()
+            != Some(CANONICAL_RUNTIME_RELAY_DATABASE_URL_ENV)
+    {
+        bail!("compiled consultation Relay config does not match the exact local topology");
+    }
+    config["server"]["cache_dir"] =
+        serde_json::Value::String("/var/lib/registry-relay/cache".to_string());
+    config["consultation"]["state_plane"]["root_certificate_path"] =
+        serde_json::Value::String(CANONICAL_POSTGRES_CA_MOUNT.to_string());
+    let rendered = serde_norway::to_string(&config)
+        .context("failed to render the runtime consultation Relay config")?;
+    let _: registry_relay::config::Config = serde_norway::from_str(&rendered)
+        .context("runtime consultation Relay config failed product parsing")?;
+    Ok(rendered)
+}
+
 #[derive(Clone, Debug)]
 struct CanonicalRuntimeCredentials {
     audit_secret: String,
@@ -1777,6 +2689,28 @@ struct CanonicalRuntimeCredentials {
     match_hash: String,
     no_match_raw: String,
     no_match_hash: String,
+    notary: Option<CanonicalNotaryRuntimeCredentials>,
+}
+
+#[derive(Clone, Debug)]
+struct CanonicalNotaryRuntimeCredentials {
+    audit_secret: String,
+    consultation_audit_secret: String,
+    pseudonym_key: String,
+    caller_raw: String,
+    caller_hash: String,
+    under_scoped_raw: String,
+    under_scoped_hash: String,
+    postgres_admin_password: String,
+    relay_database_password: String,
+    relay_maintenance_database_password: String,
+    relay_reader_database_password: String,
+    postgres_tls_certificate: String,
+    postgres_tls_private_key: String,
+    workload_private_jwk: String,
+    workload_public_jwk: String,
+    workload_jwks: String,
+    notary_signing_private_jwk: String,
 }
 
 impl CanonicalRuntimeCredentials {
@@ -1791,7 +2725,43 @@ impl CanonicalRuntimeCredentials {
             match_raw,
             no_match_hash: fingerprint_api_key(&no_match_raw),
             no_match_raw,
+            notary: None,
         })
+    }
+
+    fn enable_notary(mut self) -> Result<Self> {
+        let caller_raw = random_token(32)?;
+        let under_scoped_raw = random_token(32)?;
+        validate_api_key_entropy(&caller_raw)?;
+        validate_api_key_entropy(&under_scoped_raw)?;
+        let (workload_private_jwk, workload_public_jwk) =
+            generate_ed25519_jwk(CANONICAL_RUNTIME_WORKLOAD_KID)?;
+        let workload_jwks = workload_jwks_from_private(&workload_private_jwk)?;
+        let (notary_signing_private_jwk, _) =
+            generate_ed25519_jwk(CANONICAL_RUNTIME_NOTARY_SIGNING_KID)?;
+        let (postgres_tls_certificate, postgres_tls_private_key) =
+            generate_loopback_postgres_tls_identity()?;
+        self.notary = Some(CanonicalNotaryRuntimeCredentials {
+            audit_secret: random_token(48)?,
+            consultation_audit_secret: random_token(48)?,
+            pseudonym_key: random_token(48)?,
+            caller_hash: fingerprint_api_key(&caller_raw),
+            caller_raw,
+            under_scoped_hash: fingerprint_api_key(&under_scoped_raw),
+            under_scoped_raw,
+            postgres_admin_password: random_token(32)?,
+            relay_database_password: random_token(32)?,
+            relay_maintenance_database_password: random_token(32)?,
+            relay_reader_database_password: random_token(32)?,
+            postgres_tls_certificate,
+            postgres_tls_private_key,
+            workload_private_jwk,
+            workload_public_jwk,
+            workload_jwks,
+            notary_signing_private_jwk,
+        });
+        validate_distinct_runtime_credentials(&self)?;
+        Ok(self)
     }
 
     fn relay_env_file(&self) -> String {
@@ -1808,12 +2778,243 @@ impl CanonicalRuntimeCredentials {
     }
 
     fn client_env_file(&self) -> String {
-        format!(
+        let mut rendered = format!(
             "{CANONICAL_RUNTIME_MATCH_RAW_ENV}={}\n\
              {CANONICAL_RUNTIME_NO_MATCH_RAW_ENV}={}\n",
             self.match_raw, self.no_match_raw,
+        );
+        if let Some(notary) = &self.notary {
+            rendered.push_str(&format!(
+                "{CANONICAL_RUNTIME_NOTARY_CALLER_RAW_ENV}={}\n\
+                 {CANONICAL_RUNTIME_NOTARY_UNDER_SCOPED_RAW_ENV}={}\n",
+                notary.caller_raw, notary.under_scoped_raw,
+            ));
+        }
+        rendered
+    }
+}
+
+impl CanonicalNotaryRuntimeCredentials {
+    fn notary_env_file(&self) -> String {
+        format!(
+            "{CANONICAL_RUNTIME_NOTARY_AUDIT_SECRET_ENV}={}\n\
+             {CANONICAL_RUNTIME_NOTARY_CALLER_HASH_ENV}={}\n\
+             {CANONICAL_RUNTIME_NOTARY_UNDER_SCOPED_HASH_ENV}={}\n\
+             {CANONICAL_RUNTIME_NOTARY_SIGNING_JWK_ENV}={}\n\
+             {CANONICAL_RUNTIME_WORKLOAD_JWK_ENV}={}\n",
+            self.audit_secret,
+            self.caller_hash,
+            self.under_scoped_hash,
+            self.notary_signing_private_jwk,
+            self.workload_public_jwk,
         )
     }
+
+    fn consultation_relay_env_file(&self) -> String {
+        format!(
+            "{CANONICAL_RUNTIME_CONSULTATION_AUDIT_SECRET_ENV}={}\n\
+             {CANONICAL_RUNTIME_RELAY_DATABASE_URL_ENV}=postgresql://{}:{}@127.0.0.1:5432/{}?sslmode=require\n\
+             {CANONICAL_RUNTIME_PSEUDONYM_ENV}={}\n",
+            self.consultation_audit_secret,
+            CANONICAL_RUNTIME_RELAY_DB_USER,
+            self.relay_database_password,
+            CANONICAL_RUNTIME_RELAY_DB,
+            self.pseudonym_key,
+        )
+    }
+
+    fn relay_bootstrap_env_file(&self) -> String {
+        format!(
+            "{CANONICAL_RUNTIME_CONSULTATION_AUDIT_SECRET_ENV}={}\n\
+             {CANONICAL_RUNTIME_PSEUDONYM_ENV}={}\n\
+             {CANONICAL_RUNTIME_RELAY_DATABASE_URL_ENV}=postgresql://{}:{}@127.0.0.1:5432/{}?sslmode=require\n\
+             {CANONICAL_RUNTIME_RELAY_MIGRATION_DATABASE_URL_ENV}=postgresql://{}:{}@127.0.0.1:5432/{}?sslmode=require\n\
+             {CANONICAL_RUNTIME_RELAY_MAINTENANCE_DATABASE_URL_ENV}=postgresql://{}:{}@127.0.0.1:5432/{}?sslmode=require\n\
+             {CANONICAL_RUNTIME_RELAY_READER_DATABASE_URL_ENV}=postgresql://{}:{}@127.0.0.1:5432/{}?sslmode=require\n",
+            self.consultation_audit_secret,
+            self.pseudonym_key,
+            CANONICAL_RUNTIME_RELAY_DB_USER,
+            self.relay_database_password,
+            CANONICAL_RUNTIME_RELAY_DB,
+            CANONICAL_RUNTIME_POSTGRES_USER,
+            self.postgres_admin_password,
+            CANONICAL_RUNTIME_RELAY_DB,
+            CANONICAL_RUNTIME_RELAY_DB_MAINTENANCE_USER,
+            self.relay_maintenance_database_password,
+            CANONICAL_RUNTIME_RELAY_DB,
+            CANONICAL_RUNTIME_RELAY_DB_READER_USER,
+            self.relay_reader_database_password,
+            CANONICAL_RUNTIME_RELAY_DB,
+        )
+    }
+
+    fn postgres_env_file(&self) -> String {
+        format!(
+            "{CANONICAL_RUNTIME_POSTGRES_USER_ENV}={CANONICAL_RUNTIME_POSTGRES_USER}\n\
+             {CANONICAL_RUNTIME_POSTGRES_PASSWORD_ENV}={}\n\
+             {CANONICAL_RUNTIME_RELAY_DB_PASSWORD_ENV}={}\n\
+             {CANONICAL_RUNTIME_RELAY_MAINTENANCE_DB_PASSWORD_ENV}={}\n\
+             {CANONICAL_RUNTIME_RELAY_READER_DB_PASSWORD_ENV}={}\n\
+             {CANONICAL_RUNTIME_POSTGRES_TLS_CERTIFICATE_ENV}={}\n\
+             {CANONICAL_RUNTIME_POSTGRES_TLS_PRIVATE_KEY_ENV}={}\n\
+             PGDATA=/var/lib/postgresql/data/pgdata\n",
+            self.postgres_admin_password,
+            self.relay_database_password,
+            self.relay_maintenance_database_password,
+            self.relay_reader_database_password,
+            base64::engine::general_purpose::STANDARD
+                .encode(self.postgres_tls_certificate.as_bytes()),
+            base64::engine::general_purpose::STANDARD
+                .encode(self.postgres_tls_private_key.as_bytes()),
+        )
+    }
+
+    fn database_init_sql(&self) -> String {
+        format!(
+            "#!/bin/sh\n\
+             set -eu\n\
+             psql --set=ON_ERROR_STOP=1 --username \"$POSTGRES_USER\" --dbname postgres \\\n\
+               --set=relay_password=\"$REGISTRYCTL_LOCAL_RELAY_DATABASE_PASSWORD\" \\\n\
+               --set=maintenance_password=\"${CANONICAL_RUNTIME_RELAY_MAINTENANCE_DB_PASSWORD_ENV}\" \\\n\
+               --set=reader_password=\"${CANONICAL_RUNTIME_RELAY_READER_DB_PASSWORD_ENV}\" <<'SQL'\n\
+             CREATE ROLE {CANONICAL_RUNTIME_RELAY_DB_OWNER} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;\n\
+             CREATE ROLE {CANONICAL_RUNTIME_RELAY_DB_USER} LOGIN PASSWORD :'relay_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;\n\
+             CREATE ROLE {CANONICAL_RUNTIME_RELAY_DB_MAINTENANCE_USER} LOGIN PASSWORD :'maintenance_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;\n\
+             CREATE ROLE {CANONICAL_RUNTIME_RELAY_DB_READER_USER} LOGIN PASSWORD :'reader_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;\n\
+             CREATE DATABASE {CANONICAL_RUNTIME_RELAY_DB};\n\
+             REVOKE ALL ON DATABASE {CANONICAL_RUNTIME_RELAY_DB} FROM PUBLIC;\n\
+             GRANT CREATE ON DATABASE {CANONICAL_RUNTIME_RELAY_DB} TO {CANONICAL_RUNTIME_RELAY_DB_OWNER};\n\
+             GRANT CONNECT ON DATABASE {CANONICAL_RUNTIME_RELAY_DB} TO {CANONICAL_RUNTIME_RELAY_DB_USER}, {CANONICAL_RUNTIME_RELAY_DB_MAINTENANCE_USER}, {CANONICAL_RUNTIME_RELAY_DB_READER_USER};\n\
+             SQL\n"
+        )
+    }
+
+    fn workload_token(&self) -> Result<String> {
+        sign_workload_jwt(&self.workload_private_jwk)
+    }
+}
+
+fn generate_loopback_postgres_tls_identity() -> Result<(String, String)> {
+    let rcgen::CertifiedKey { cert, key_pair } =
+        rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()])
+            .context("failed to generate the local PostgreSQL TLS identity")?;
+    Ok((
+        pem_block("CERTIFICATE", cert.der().as_ref()),
+        pem_block("PRIVATE KEY", &key_pair.serialize_der()),
+    ))
+}
+
+fn pem_block(label: &str, der: &[u8]) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(der);
+    let body = encoded
+        .as_bytes()
+        .chunks(64)
+        .map(|chunk| std::str::from_utf8(chunk).expect("base64 is ASCII"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
+}
+
+fn generate_ed25519_jwk(kid: &str) -> Result<(String, String)> {
+    let mut secret = [0_u8; 32];
+    getrandom::fill(&mut secret).map_err(|error| anyhow!("random generation failed: {error}"))?;
+    let signing_key = SigningKey::from_bytes(&secret);
+    let x = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(signing_key.verifying_key().as_bytes());
+    let d = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
+    let private = serde_json::json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "d": d,
+        "x": x.clone(),
+        "alg": "EdDSA",
+        "kid": kid,
+    });
+    let public = serde_json::json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": x,
+        "alg": "EdDSA",
+        "kid": kid,
+        "use": "sig",
+    });
+    Ok((
+        serde_json::to_string(&private).context("failed to render workload private JWK")?,
+        serde_json::to_string(&public).context("failed to render workload public JWK")?,
+    ))
+}
+
+fn sign_workload_jwt(private_jwk: &str) -> Result<String> {
+    let jwk: serde_json::Value =
+        serde_json::from_str(private_jwk).context("failed to parse workload private JWK")?;
+    let encoded_secret = jwk["d"]
+        .as_str()
+        .ok_or_else(|| anyhow!("workload private JWK is missing its private member"))?;
+    let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded_secret)
+        .context("workload private JWK contains an invalid private member")?;
+    let secret: [u8; 32] = secret
+        .try_into()
+        .map_err(|_| anyhow!("workload private JWK has the wrong private member length"))?;
+    let signing_key = SigningKey::from_bytes(&secret);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_secs();
+    let header = serde_json::json!({
+        "alg": "EdDSA",
+        "kid": CANONICAL_RUNTIME_WORKLOAD_KID,
+        "typ": "at+jwt",
+    });
+    let claims = serde_json::json!({
+        "iss": CANONICAL_RUNTIME_WORKLOAD_ISSUER,
+        "sub": CANONICAL_RUNTIME_WORKLOAD_CLIENT,
+        "aud": CANONICAL_RUNTIME_WORKLOAD_AUDIENCE,
+        "client_id": CANONICAL_RUNTIME_WORKLOAD_CLIENT,
+        "azp": CANONICAL_RUNTIME_WORKLOAD_CLIENT,
+        "scope": CANONICAL_RUNTIME_WORKLOAD_SCOPE,
+        "iat": now,
+        "nbf": now.saturating_sub(1),
+        "exp": now + CANONICAL_RUNTIME_WORKLOAD_TTL_SECONDS,
+        "jti": random_token(16)?,
+    });
+    let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&header).context("failed to render workload JWT header")?);
+    let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&claims).context("failed to render workload JWT claims")?);
+    let signing_input = format!("{header}.{claims}");
+    let signature = signing_key.sign(signing_input.as_bytes());
+    Ok(format!(
+        "{signing_input}.{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    ))
+}
+
+fn validate_distinct_runtime_credentials(credentials: &CanonicalRuntimeCredentials) -> Result<()> {
+    let Some(notary) = &credentials.notary else {
+        return Ok(());
+    };
+    let values = [
+        credentials.audit_secret.as_str(),
+        credentials.match_raw.as_str(),
+        credentials.no_match_raw.as_str(),
+        notary.audit_secret.as_str(),
+        notary.consultation_audit_secret.as_str(),
+        notary.pseudonym_key.as_str(),
+        notary.caller_raw.as_str(),
+        notary.under_scoped_raw.as_str(),
+        notary.postgres_admin_password.as_str(),
+        notary.relay_database_password.as_str(),
+        notary.relay_maintenance_database_password.as_str(),
+        notary.relay_reader_database_password.as_str(),
+        notary.postgres_tls_private_key.as_str(),
+        notary.workload_private_jwk.as_str(),
+        notary.notary_signing_private_jwk.as_str(),
+    ];
+    if values.iter().copied().collect::<BTreeSet<_>>().len() != values.len() {
+        bail!("local runtime credentials were reused across trust boundaries");
+    }
+    Ok(())
 }
 
 fn strict_runtime_credentials(
@@ -1841,7 +3042,7 @@ fn strict_runtime_credentials(
         || relay_expected
             .iter()
             .any(|name| !relay_values.contains_key(*name))
-        || client_values.len() != client_expected.len()
+        || !matches!(client_values.len(), 2 | 4)
         || client_expected
             .iter()
             .any(|name| !client_values.contains_key(*name))
@@ -1866,6 +3067,7 @@ fn strict_runtime_credentials(
         match_hash: relay_required(CANONICAL_RUNTIME_MATCH_HASH_ENV)?,
         no_match_raw: client_required(CANONICAL_RUNTIME_NO_MATCH_RAW_ENV)?,
         no_match_hash: relay_required(CANONICAL_RUNTIME_NO_MATCH_HASH_ENV)?,
+        notary: None,
     };
     if credentials.audit_secret.len() < 32 {
         bail!("local runtime credentials do not meet the minimum entropy shape");
@@ -1882,21 +3084,363 @@ fn strict_runtime_credentials(
     Ok(credentials)
 }
 
+fn strict_canonical_runtime_credentials(
+    project_dir: &Path,
+    topology: CanonicalRuntimeTopology,
+) -> Result<CanonicalRuntimeCredentials> {
+    let mut credentials = strict_runtime_credentials(
+        &project_dir.join(CANONICAL_RUNTIME_RELAY_ENV),
+        &project_dir.join(CANONICAL_RUNTIME_ENV),
+    )?;
+    if !topology.has_notary() {
+        let client = parse_local_env(
+            &fs::read_to_string(project_dir.join(CANONICAL_RUNTIME_ENV))
+                .context("failed to read local client credentials")?,
+        );
+        if client.len() != 2 {
+            bail!("Relay-only runtime credentials contain unexpected entries");
+        }
+        return Ok(credentials);
+    }
+    let notary_env_path = project_dir.join(CANONICAL_RUNTIME_NOTARY_ENV);
+    let consultation_env_path = project_dir.join(CANONICAL_RUNTIME_CONSULTATION_RELAY_ENV);
+    let relay_bootstrap_env_path = project_dir.join(CANONICAL_RUNTIME_RELAY_BOOTSTRAP_ENV);
+    let postgres_env_path = project_dir.join(CANONICAL_RUNTIME_POSTGRES_ENV);
+    let workload_token_path = project_dir.join(CANONICAL_RUNTIME_WORKLOAD_TOKEN);
+    let workload_private_jwk_path = project_dir.join(CANONICAL_RUNTIME_WORKLOAD_PRIVATE_JWK);
+    let database_init_path = project_dir.join(CANONICAL_RUNTIME_DB_INIT);
+    let workload_jwks_path = project_dir.join(CANONICAL_RUNTIME_WORKLOAD_JWKS);
+    let postgres_ca_path = project_dir.join(CANONICAL_RUNTIME_POSTGRES_CA);
+    for path in [
+        &notary_env_path,
+        &consultation_env_path,
+        &relay_bootstrap_env_path,
+        &postgres_env_path,
+        &workload_token_path,
+        &workload_private_jwk_path,
+        &workload_jwks_path,
+    ] {
+        validate_private_file_mode(path)?;
+    }
+    validate_runtime_nonsecret_file_mode(&database_init_path)?;
+    validate_runtime_nonsecret_file_mode(&postgres_ca_path)?;
+    let notary_values = parse_local_env(
+        &fs::read_to_string(&notary_env_path)
+            .context("failed to read Notary runtime credentials")?,
+    );
+    let consultation_values = parse_local_env(
+        &fs::read_to_string(&consultation_env_path)
+            .context("failed to read consultation Relay runtime credentials")?,
+    );
+    let postgres_values = parse_local_env(
+        &fs::read_to_string(&postgres_env_path)
+            .context("failed to read PostgreSQL runtime credentials")?,
+    );
+    let client_values = parse_local_env(
+        &fs::read_to_string(project_dir.join(CANONICAL_RUNTIME_ENV))
+            .context("failed to read local client credentials")?,
+    );
+    let required = |values: &BTreeMap<String, String>, name: &str| {
+        values
+            .get(name)
+            .cloned()
+            .ok_or_else(|| anyhow!("combined runtime credentials have an unexpected shape"))
+    };
+    if notary_values.len() != 5
+        || consultation_values.len() != 3
+        || postgres_values.len() != 8
+        || client_values.len() != 4
+        || postgres_values
+            .get(CANONICAL_RUNTIME_POSTGRES_USER_ENV)
+            .map(String::as_str)
+            != Some(CANONICAL_RUNTIME_POSTGRES_USER)
+        || postgres_values.get("PGDATA").map(String::as_str)
+            != Some("/var/lib/postgresql/data/pgdata")
+    {
+        bail!("combined runtime credentials contain unexpected entries");
+    }
+    let caller_raw = required(&client_values, CANONICAL_RUNTIME_NOTARY_CALLER_RAW_ENV)?;
+    let under_scoped_raw = required(
+        &client_values,
+        CANONICAL_RUNTIME_NOTARY_UNDER_SCOPED_RAW_ENV,
+    )?;
+    validate_api_key_entropy(&caller_raw).map_err(|_| {
+        anyhow!("combined runtime credentials do not meet the minimum entropy shape")
+    })?;
+    validate_api_key_entropy(&under_scoped_raw).map_err(|_| {
+        anyhow!("combined runtime credentials do not meet the minimum entropy shape")
+    })?;
+    let notary = CanonicalNotaryRuntimeCredentials {
+        audit_secret: required(&notary_values, CANONICAL_RUNTIME_NOTARY_AUDIT_SECRET_ENV)?,
+        consultation_audit_secret: required(
+            &consultation_values,
+            CANONICAL_RUNTIME_CONSULTATION_AUDIT_SECRET_ENV,
+        )?,
+        pseudonym_key: required(&consultation_values, CANONICAL_RUNTIME_PSEUDONYM_ENV)?,
+        caller_hash: required(&notary_values, CANONICAL_RUNTIME_NOTARY_CALLER_HASH_ENV)?,
+        caller_raw,
+        under_scoped_hash: required(
+            &notary_values,
+            CANONICAL_RUNTIME_NOTARY_UNDER_SCOPED_HASH_ENV,
+        )?,
+        under_scoped_raw,
+        postgres_admin_password: required(
+            &postgres_values,
+            CANONICAL_RUNTIME_POSTGRES_PASSWORD_ENV,
+        )?,
+        relay_database_password: database_password_from_url(&required(
+            &consultation_values,
+            CANONICAL_RUNTIME_RELAY_DATABASE_URL_ENV,
+        )?)?,
+        relay_maintenance_database_password: required(
+            &postgres_values,
+            CANONICAL_RUNTIME_RELAY_MAINTENANCE_DB_PASSWORD_ENV,
+        )?,
+        relay_reader_database_password: required(
+            &postgres_values,
+            CANONICAL_RUNTIME_RELAY_READER_DB_PASSWORD_ENV,
+        )?,
+        postgres_tls_certificate: decode_runtime_pem(&required(
+            &postgres_values,
+            CANONICAL_RUNTIME_POSTGRES_TLS_CERTIFICATE_ENV,
+        )?)?,
+        postgres_tls_private_key: decode_runtime_pem(&required(
+            &postgres_values,
+            CANONICAL_RUNTIME_POSTGRES_TLS_PRIVATE_KEY_ENV,
+        )?)?,
+        workload_private_jwk: fs::read_to_string(&workload_private_jwk_path)
+            .context("failed to read workload private JWK")?,
+        workload_public_jwk: required(&notary_values, CANONICAL_RUNTIME_WORKLOAD_JWK_ENV)?,
+        workload_jwks: fs::read_to_string(&workload_jwks_path)
+            .context("failed to read workload JWKS")?,
+        notary_signing_private_jwk: required(
+            &notary_values,
+            CANONICAL_RUNTIME_NOTARY_SIGNING_JWK_ENV,
+        )?,
+    };
+    if fingerprint_api_key(&notary.caller_raw) != notary.caller_hash
+        || fingerprint_api_key(&notary.under_scoped_raw) != notary.under_scoped_hash
+        || notary.audit_secret.len() < 32
+        || notary.consultation_audit_secret.len() < 32
+        || notary.pseudonym_key.len() < 32
+        || notary.postgres_admin_password.len() < 32
+        || notary.relay_database_password.len() < 32
+        || notary.relay_maintenance_database_password.len() < 32
+        || notary.relay_reader_database_password.len() < 32
+        || !notary
+            .postgres_tls_certificate
+            .starts_with("-----BEGIN CERTIFICATE-----")
+        || !notary
+            .postgres_tls_private_key
+            .starts_with("-----BEGIN PRIVATE KEY-----")
+        || postgres_values
+            .get(CANONICAL_RUNTIME_RELAY_DB_PASSWORD_ENV)
+            .map(String::as_str)
+            != Some(notary.relay_database_password.as_str())
+    {
+        bail!("combined runtime credentials do not meet the closed credential contract");
+    }
+    credentials.notary = Some(notary);
+    validate_distinct_runtime_credentials(&credentials)?;
+    let notary = credentials.notary.as_ref().expect("Notary credentials set");
+    if fs::read_to_string(&database_init_path).context("failed to read database initialization")?
+        != notary.database_init_sql()
+        || fs::read_to_string(&notary_env_path)
+            .context("failed to read Notary runtime credentials")?
+            != notary.notary_env_file()
+        || fs::read_to_string(&consultation_env_path)
+            .context("failed to read consultation Relay runtime credentials")?
+            != notary.consultation_relay_env_file()
+        || fs::read_to_string(&relay_bootstrap_env_path)
+            .context("failed to read consultation Relay bootstrap credentials")?
+            != notary.relay_bootstrap_env_file()
+        || fs::read_to_string(&postgres_env_path)
+            .context("failed to read PostgreSQL runtime credentials")?
+            != notary.postgres_env_file()
+        || fs::read_to_string(&postgres_ca_path).context("failed to read PostgreSQL trust root")?
+            != notary.postgres_tls_certificate
+        || notary.workload_jwks != workload_jwks_from_private(&notary.workload_private_jwk)?
+        || notary.workload_public_jwk != public_jwk_from_private(&notary.workload_private_jwk)?
+    {
+        bail!("combined runtime private files do not match the closed credential contract");
+    }
+    validate_workload_jwt(
+        &fs::read_to_string(&workload_token_path).context("failed to read workload token")?,
+        &notary.workload_private_jwk,
+    )?;
+    Ok(credentials)
+}
+
+fn public_jwk_from_private(private_jwk: &str) -> Result<String> {
+    let jwk: serde_json::Value =
+        serde_json::from_str(private_jwk).context("failed to parse private JWK")?;
+    serde_json::to_string(&serde_json::json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": jwk["x"]
+            .as_str()
+            .ok_or_else(|| anyhow!("private JWK is missing its public member"))?,
+        "alg": "EdDSA",
+        "kid": jwk["kid"]
+            .as_str()
+            .ok_or_else(|| anyhow!("private JWK is missing its kid"))?,
+        "use": "sig",
+    }))
+    .context("failed to render public JWK")
+}
+
+fn database_password_from_url(url: &str) -> Result<String> {
+    let prefix = format!("postgresql://{CANONICAL_RUNTIME_RELAY_DB_USER}:");
+    let suffix = format!("@127.0.0.1:5432/{CANONICAL_RUNTIME_RELAY_DB}?sslmode=require");
+    url.strip_prefix(&prefix)
+        .and_then(|value| value.strip_suffix(&suffix))
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("consultation Relay database binding is not closed"))
+}
+
+fn decode_runtime_pem(encoded: &str) -> Result<String> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .context("combined runtime TLS material is not valid base64")?;
+    String::from_utf8(bytes).context("combined runtime TLS material is not UTF-8 PEM")
+}
+
+fn workload_jwks_from_private(private_jwk: &str) -> Result<String> {
+    let jwk: serde_json::Value =
+        serde_json::from_str(private_jwk).context("failed to parse workload private JWK")?;
+    let x = jwk["x"]
+        .as_str()
+        .ok_or_else(|| anyhow!("workload private JWK is missing its public member"))?;
+    serde_json::to_string_pretty(&serde_json::json!({
+        "keys": [{
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": x,
+            "alg": "EdDSA",
+            "kid": CANONICAL_RUNTIME_WORKLOAD_KID,
+            "use": "sig",
+        }]
+    }))
+    .context("failed to render workload JWKS")
+}
+
+fn validate_workload_jwt(token: &str, private_jwk: &str) -> Result<()> {
+    use ed25519_dalek::{Signature, Verifier as _};
+
+    let token = token.trim();
+    let segments = token.split('.').collect::<Vec<_>>();
+    if segments.len() != 3 {
+        bail!("workload token is not a compact JWT");
+    }
+    let decode_json = |segment: &str| -> Result<serde_json::Value> {
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(segment)
+            .context("workload JWT segment is not base64url")?;
+        serde_json::from_slice(&bytes).context("workload JWT segment is not JSON")
+    };
+    let header = decode_json(segments[0])?;
+    let claims = decode_json(segments[1])?;
+    if header
+        != serde_json::json!({
+            "alg": "EdDSA",
+            "kid": CANONICAL_RUNTIME_WORKLOAD_KID,
+            "typ": "at+jwt",
+        })
+        || claims["iss"].as_str() != Some(CANONICAL_RUNTIME_WORKLOAD_ISSUER)
+        || claims["sub"].as_str() != Some(CANONICAL_RUNTIME_WORKLOAD_CLIENT)
+        || claims["aud"].as_str() != Some(CANONICAL_RUNTIME_WORKLOAD_AUDIENCE)
+        || claims["client_id"].as_str() != Some(CANONICAL_RUNTIME_WORKLOAD_CLIENT)
+        || claims["azp"].as_str() != Some(CANONICAL_RUNTIME_WORKLOAD_CLIENT)
+        || claims["scope"].as_str() != Some(CANONICAL_RUNTIME_WORKLOAD_SCOPE)
+    {
+        bail!("workload JWT claims do not match the exact local trust binding");
+    }
+    let iat = claims["iat"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("workload JWT is missing iat"))?;
+    let nbf = claims["nbf"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("workload JWT is missing nbf"))?;
+    let exp = claims["exp"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("workload JWT is missing exp"))?;
+    if nbf > iat
+        || exp <= iat
+        || exp - iat > CANONICAL_RUNTIME_WORKLOAD_TTL_SECONDS
+        || claims["jti"].as_str().is_none()
+    {
+        bail!("workload JWT lifetime or identifier is invalid");
+    }
+    let jwk: serde_json::Value =
+        serde_json::from_str(private_jwk).context("failed to parse workload private JWK")?;
+    let secret = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(
+            jwk["d"]
+                .as_str()
+                .ok_or_else(|| anyhow!("workload private JWK is missing its private member"))?,
+        )
+        .context("workload private JWK contains an invalid private member")?;
+    let secret: [u8; 32] = secret
+        .try_into()
+        .map_err(|_| anyhow!("workload private JWK has the wrong private member length"))?;
+    let signature = Signature::from_slice(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(segments[2])
+            .context("workload JWT signature is not base64url")?,
+    )
+    .context("workload JWT signature has the wrong length")?;
+    SigningKey::from_bytes(&secret)
+        .verifying_key()
+        .verify(
+            format!("{}.{}", segments[0], segments[1]).as_bytes(),
+            &signature,
+        )
+        .context("workload JWT signature is invalid")
+}
+
 fn prepare_canonical_runtime(
     project_dir: &Path,
     image_lock: &RegistryctlImageLock,
 ) -> Result<CanonicalRuntime> {
     require_canonical_project(project_dir)?;
-    let relay_image = selected_canonical_relay_image(image_lock)?;
-    prepare_canonical_runtime_with_image(project_dir, &relay_image)
+    let binding = canonical_spreadsheet_binding(project_dir)?;
+    let images = CanonicalRuntimeImages {
+        relay: selected_canonical_relay_image(image_lock)?,
+        notary: binding
+            .topology
+            .has_notary()
+            .then(|| selected_canonical_notary_image(image_lock))
+            .transpose()?,
+        postgresql: binding
+            .topology
+            .has_notary()
+            .then(|| image_lock.postgresql_image().to_string()),
+    };
+    prepare_canonical_runtime_with_images(project_dir, &images)
 }
 
+#[cfg(test)]
 fn prepare_canonical_runtime_with_image(
     project_dir: &Path,
     relay_image: &str,
 ) -> Result<CanonicalRuntime> {
+    prepare_canonical_runtime_with_images(
+        project_dir,
+        &CanonicalRuntimeImages {
+            relay: relay_image.to_string(),
+            notary: None,
+            postgresql: None,
+        },
+    )
+}
+
+fn prepare_canonical_runtime_with_images(
+    project_dir: &Path,
+    images: &CanonicalRuntimeImages,
+) -> Result<CanonicalRuntime> {
     require_canonical_project(project_dir)?;
-    validate_canonical_runtime_image_ref(relay_image)?;
+    validate_canonical_runtime_image_ref(&images.relay)?;
     if project_dir.join(CANONICAL_RUNTIME_ROOT).exists() {
         let _ = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::GeneratedClosure)?;
     }
@@ -1904,6 +3448,24 @@ fn prepare_canonical_runtime_with_image(
         validate_compiled_artifact_manifest(project_dir, false)?;
     }
     let binding = canonical_spreadsheet_binding(project_dir)?;
+    if binding.topology.has_notary() {
+        validate_canonical_runtime_notary_image_ref(
+            images
+                .notary
+                .as_deref()
+                .ok_or_else(|| anyhow!("locked Notary image is absent"))?,
+        )?;
+        validate_locked_image_ref(
+            "images.postgresql",
+            images
+                .postgresql
+                .as_deref()
+                .ok_or_else(|| anyhow!("locked PostgreSQL image is absent"))?,
+            POSTGRES_IMAGE_REPOSITORY,
+        )?;
+    } else if images.notary.is_some() || images.postgresql.is_some() {
+        bail!("Relay-only runtime received unused product images");
+    }
     let report = build_registry_project(&ProjectBuildOptions {
         project_directory: project_dir.to_path_buf(),
         environment: CANONICAL_LOCAL_ENVIRONMENT.to_string(),
@@ -1918,38 +3480,59 @@ fn prepare_canonical_runtime_with_image(
     }
     validate_compiled_artifact_manifest(project_dir, true)?;
     validate_compiled_local_relay_auth(&project_dir.join(CANONICAL_RELAY_CONFIG), &binding)?;
-    publish_canonical_runtime(project_dir, relay_image, &binding)?;
+    if binding.topology.has_notary() {
+        for path in [
+            project_dir.join(CANONICAL_CONSULTATION_RELAY_CONFIG),
+            project_dir.join(CANONICAL_COMPILED_NOTARY_CONFIG),
+        ] {
+            ensure_no_symlink_components(project_dir, &path)?;
+            validate_private_file_mode(&path)?;
+        }
+        let _ = render_runtime_notary_config(&project_dir.join(CANONICAL_COMPILED_NOTARY_CONFIG))?;
+    }
+    publish_canonical_runtime(project_dir, images, &binding)?;
     load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Full)
 }
 
 fn publish_canonical_runtime(
     project_dir: &Path,
-    image: &str,
+    images: &CanonicalRuntimeImages,
     binding: &CanonicalSpreadsheetBinding,
 ) -> Result<()> {
-    validate_canonical_runtime_image_ref(image)?;
+    validate_canonical_runtime_image_ref(&images.relay)?;
     let runtime_parent = project_dir.join(".registry-stack/runtime");
     ensure_no_symlink_components(project_dir, &runtime_parent)?;
     create_private_dir_all(&runtime_parent)?;
     let runtime_dir = project_dir.join(CANONICAL_RUNTIME_ROOT);
     let prior_credentials = if runtime_dir.exists() {
-        Some(strict_runtime_credentials(
-            &project_dir.join(CANONICAL_RUNTIME_RELAY_ENV),
-            &project_dir.join(CANONICAL_RUNTIME_ENV),
+        let prior_manifest: CanonicalRuntimeManifest = serde_json::from_slice(
+            &fs::read(project_dir.join(CANONICAL_RUNTIME_MANIFEST))
+                .context("failed to read the prior local runtime manifest")?,
+        )
+        .context("failed to parse the prior local runtime manifest")?;
+        Some(strict_canonical_runtime_credentials(
+            project_dir,
+            prior_manifest.topology,
         )?)
     } else {
         None
     };
-    let credentials = prior_credentials
+    let mut credentials = prior_credentials
         .map(Ok)
         .unwrap_or_else(CanonicalRuntimeCredentials::generate)?;
+    if binding.topology.has_notary() && credentials.notary.is_none() {
+        credentials = credentials.enable_notary()?;
+    } else if !binding.topology.has_notary() {
+        credentials.notary = None;
+    }
+    validate_distinct_runtime_credentials(&credentials)?;
     let staging = tempfile::Builder::new()
         .prefix(".local.runtime-")
         .tempdir_in(&runtime_parent)
         .context("failed to stage the local runtime")?;
     create_private_dir_all(staging.path())?;
     create_private_dir_all(&staging.path().join("secrets"))?;
-    let compose = render_canonical_compose(image, binding)?;
+    let compose = render_canonical_compose(images, binding)?;
     let workbook_input = compiled_workbook_input(project_dir, binding)?;
     write_private_text(&staging.path().join("compose.yaml"), &compose)?;
     write_private_text(
@@ -1960,10 +3543,107 @@ fn publish_canonical_runtime(
         &staging.path().join("secrets/local.env"),
         &credentials.client_env_file(),
     )?;
+    let notary_manifest = if let Some(notary) = credentials.notary.as_ref() {
+        for relative in [
+            "private",
+            "private/db",
+            "private/notary",
+            "private/notary/config",
+            "private/relay",
+            "private/relay/config",
+            "private/relay/config/artifacts",
+            "private/workload",
+        ] {
+            create_private_dir_all(&staging.path().join(relative))?;
+        }
+        let runtime_notary_config =
+            render_runtime_notary_config(&project_dir.join(CANONICAL_COMPILED_NOTARY_CONFIG))?;
+        let runtime_consultation_relay_config = render_runtime_consultation_relay_config(
+            &project_dir.join(CANONICAL_CONSULTATION_RELAY_CONFIG),
+        )?;
+        let workload_token = format!("{}\n", notary.workload_token()?);
+        let consultation_env = notary.consultation_relay_env_file();
+        let relay_bootstrap_env = notary.relay_bootstrap_env_file();
+        let notary_env = notary.notary_env_file();
+        let postgres_env = notary.postgres_env_file();
+        let database_init = notary.database_init_sql();
+        write_private_text(
+            &staging.path().join("secrets/relay-consultation.env"),
+            &consultation_env,
+        )?;
+        write_private_text(
+            &staging.path().join("secrets/relay-bootstrap.env"),
+            &relay_bootstrap_env,
+        )?;
+        write_private_text(&staging.path().join("secrets/notary.env"), &notary_env)?;
+        write_private_text(&staging.path().join("secrets/postgres.env"), &postgres_env)?;
+        write_private_text(
+            &staging.path().join("secrets/relay-workload-token"),
+            &workload_token,
+        )?;
+        write_private_text(
+            &staging.path().join("secrets/workload-private.jwk"),
+            &notary.workload_private_jwk,
+        )?;
+        write_runtime_nonsecret_text(&staging.path().join("private/db/init.sh"), &database_init)?;
+        write_runtime_nonsecret_text(
+            &staging.path().join("private/notary/config/notary.yaml"),
+            &runtime_notary_config,
+        )?;
+        write_runtime_nonsecret_text(
+            &staging
+                .path()
+                .join("private/relay/config/relay-consultation.yaml"),
+            &runtime_consultation_relay_config,
+        )?;
+        write_runtime_nonsecret_text(
+            &staging
+                .path()
+                .join("private/relay/config/state-plane-ca.pem"),
+            &notary.postgres_tls_certificate,
+        )?;
+        write_private_text(
+            &staging.path().join("private/workload/jwks.json"),
+            &notary.workload_jwks,
+        )?;
+        Some(CanonicalNotaryRuntimeManifest {
+            notary_image: images
+                .notary
+                .clone()
+                .ok_or_else(|| anyhow!("locked Notary image is absent"))?,
+            postgresql_image: images
+                .postgresql
+                .clone()
+                .ok_or_else(|| anyhow!("locked PostgreSQL image is absent"))?,
+            consultation_relay_config_digest: digest_path(
+                &project_dir.join(CANONICAL_CONSULTATION_RELAY_CONFIG),
+                "compiled consultation Relay config",
+            )?,
+            runtime_consultation_relay_config_digest: sha256_uri(
+                runtime_consultation_relay_config.as_bytes(),
+            ),
+            compiled_notary_config_digest: digest_path(
+                &project_dir.join(CANONICAL_COMPILED_NOTARY_CONFIG),
+                "compiled Notary config",
+            )?,
+            runtime_notary_config_digest: sha256_uri(runtime_notary_config.as_bytes()),
+            postgres_ca_digest: sha256_uri(notary.postgres_tls_certificate.as_bytes()),
+            database_init_digest: sha256_uri(database_init.as_bytes()),
+            workload_jwks_digest: sha256_uri(notary.workload_jwks.as_bytes()),
+            consultation_relay_env_digest: sha256_uri(consultation_env.as_bytes()),
+            relay_bootstrap_env_digest: sha256_uri(relay_bootstrap_env.as_bytes()),
+            notary_env_digest: sha256_uri(notary_env.as_bytes()),
+            postgres_env_digest: sha256_uri(postgres_env.as_bytes()),
+            workload_token_digest: sha256_uri(workload_token.as_bytes()),
+            workload_private_jwk_digest: sha256_uri(notary.workload_private_jwk.as_bytes()),
+        })
+    } else {
+        None
+    };
     let manifest = CanonicalRuntimeManifest {
         schema_version: CANONICAL_RUNTIME_MANIFEST_SCHEMA.to_string(),
         environment: CANONICAL_LOCAL_ENVIRONMENT.to_string(),
-        relay_image: image.to_string(),
+        relay_image: images.relay.clone(),
         compose_digest: sha256_uri(compose.as_bytes()),
         artifact_manifest_digest: digest_path(
             &project_dir.join(CANONICAL_ARTIFACT_MANIFEST),
@@ -1977,6 +3657,8 @@ fn publish_canonical_runtime(
         workbook_classification: workbook_input.classification,
         workbook_project_file: binding.project_file_text.clone(),
         workbook_runtime_path: binding.runtime_path.clone(),
+        topology: binding.topology,
+        notary: notary_manifest,
     };
     write_private_text(
         &staging.path().join("manifest.json"),
@@ -2029,7 +3711,6 @@ fn load_canonical_runtime(
     validate_private_dir_mode(&secrets_dir)?;
     validate_private_file_mode(&compose_file)?;
     validate_private_file_mode(&manifest_file)?;
-    let _ = strict_runtime_credentials(&relay_env, &secrets_env)?;
     let manifest: CanonicalRuntimeManifest = serde_json::from_slice(
         &fs::read(&manifest_file).context("failed to read the local runtime manifest")?,
     )
@@ -2040,7 +3721,19 @@ fn load_canonical_runtime(
         bail!("local runtime manifest has an unsupported contract");
     }
     validate_canonical_runtime_image_ref(&manifest.relay_image)?;
-    let binding = canonical_spreadsheet_binding(project_dir)?;
+    if manifest.topology.has_notary() != manifest.notary.is_some() {
+        bail!("local runtime manifest topology is incomplete");
+    }
+    let _ = strict_canonical_runtime_credentials(project_dir, manifest.topology)?;
+    validate_runtime_file_closure(project_dir, manifest.topology)?;
+    let authored_binding = canonical_spreadsheet_binding(project_dir)?;
+    if validation == CanonicalRuntimeValidation::Full
+        && authored_binding.topology != manifest.topology
+    {
+        bail!("the authored topology changed; rerun `registryctl start` to regenerate the runtime");
+    }
+    let mut binding = authored_binding;
+    binding.topology = manifest.topology;
     let workbook_input = compiled_workbook_input(project_dir, &binding)?;
     if binding.project_file_text != manifest.workbook_project_file
         || binding.runtime_path != manifest.workbook_runtime_path
@@ -2057,13 +3750,109 @@ fn load_canonical_runtime(
     if sha256_uri(compose.as_bytes()) != manifest.compose_digest {
         bail!("generated local Compose integrity check failed");
     }
-    validate_canonical_compose(&compose, &manifest.relay_image, &binding)?;
+    let images = CanonicalRuntimeImages {
+        relay: manifest.relay_image.clone(),
+        notary: manifest
+            .notary
+            .as_ref()
+            .map(|notary| notary.notary_image.clone()),
+        postgresql: manifest
+            .notary
+            .as_ref()
+            .map(|notary| notary.postgresql_image.clone()),
+    };
+    validate_canonical_compose(&compose, &images, &binding)?;
     let relay_config = project_dir.join(CANONICAL_RELAY_CONFIG);
     ensure_no_symlink_components(project_dir, &relay_config)?;
     if digest_path(&relay_config, "compiled Relay config")? != manifest.relay_config_digest {
         bail!("compiled Relay config integrity check failed");
     }
     validate_compiled_local_relay_auth(&relay_config, &binding)?;
+    if let Some(notary) = &manifest.notary {
+        validate_canonical_runtime_notary_image_ref(&notary.notary_image)?;
+        validate_locked_image_ref(
+            "manifest.postgresql_image",
+            &notary.postgresql_image,
+            POSTGRES_IMAGE_REPOSITORY,
+        )?;
+        let consultation_config = project_dir.join(CANONICAL_CONSULTATION_RELAY_CONFIG);
+        let compiled_notary_config = project_dir.join(CANONICAL_COMPILED_NOTARY_CONFIG);
+        let runtime_notary_config = project_dir.join(CANONICAL_RUNTIME_NOTARY_CONFIG);
+        let runtime_consultation_config =
+            project_dir.join(CANONICAL_RUNTIME_CONSULTATION_RELAY_CONFIG);
+        let postgres_ca = project_dir.join(CANONICAL_RUNTIME_POSTGRES_CA);
+        for path in [&consultation_config, &compiled_notary_config] {
+            ensure_no_symlink_components(project_dir, path)?;
+            validate_private_file_mode(path)?;
+        }
+        ensure_no_symlink_components(project_dir, &runtime_notary_config)?;
+        ensure_no_symlink_components(project_dir, &runtime_consultation_config)?;
+        ensure_no_symlink_components(project_dir, &postgres_ca)?;
+        validate_runtime_nonsecret_file_mode(&runtime_notary_config)?;
+        validate_runtime_nonsecret_file_mode(&runtime_consultation_config)?;
+        validate_runtime_nonsecret_file_mode(&postgres_ca)?;
+        if digest_path(&consultation_config, "compiled consultation Relay config")?
+            != notary.consultation_relay_config_digest
+            || digest_path(
+                &runtime_consultation_config,
+                "runtime consultation Relay config",
+            )? != notary.runtime_consultation_relay_config_digest
+            || digest_path(&compiled_notary_config, "compiled Notary config")?
+                != notary.compiled_notary_config_digest
+            || digest_path(&runtime_notary_config, "runtime Notary config")?
+                != notary.runtime_notary_config_digest
+            || digest_path(&postgres_ca, "PostgreSQL trust root")? != notary.postgres_ca_digest
+            || digest_path(
+                &project_dir.join(CANONICAL_RUNTIME_DB_INIT),
+                "database initialization",
+            )? != notary.database_init_digest
+            || digest_path(
+                &project_dir.join(CANONICAL_RUNTIME_WORKLOAD_JWKS),
+                "workload JWKS",
+            )? != notary.workload_jwks_digest
+            || digest_path(
+                &project_dir.join(CANONICAL_RUNTIME_CONSULTATION_RELAY_ENV),
+                "consultation Relay credentials",
+            )? != notary.consultation_relay_env_digest
+            || digest_path(
+                &project_dir.join(CANONICAL_RUNTIME_RELAY_BOOTSTRAP_ENV),
+                "consultation Relay bootstrap credentials",
+            )? != notary.relay_bootstrap_env_digest
+            || digest_path(
+                &project_dir.join(CANONICAL_RUNTIME_NOTARY_ENV),
+                "Notary credentials",
+            )? != notary.notary_env_digest
+            || digest_path(
+                &project_dir.join(CANONICAL_RUNTIME_POSTGRES_ENV),
+                "PostgreSQL credentials",
+            )? != notary.postgres_env_digest
+            || digest_path(
+                &project_dir.join(CANONICAL_RUNTIME_WORKLOAD_TOKEN),
+                "workload token",
+            )? != notary.workload_token_digest
+            || digest_path(
+                &project_dir.join(CANONICAL_RUNTIME_WORKLOAD_PRIVATE_JWK),
+                "workload private JWK",
+            )? != notary.workload_private_jwk_digest
+        {
+            bail!("combined runtime generated-input integrity check failed");
+        }
+        let expected_notary_config = render_runtime_notary_config(&compiled_notary_config)?;
+        if fs::read_to_string(&runtime_notary_config)
+            .context("failed to read runtime Notary config")?
+            != expected_notary_config
+        {
+            bail!("runtime Notary config does not match its compiled source");
+        }
+        let expected_consultation_config =
+            render_runtime_consultation_relay_config(&consultation_config)?;
+        if fs::read_to_string(&runtime_consultation_config)
+            .context("failed to read runtime consultation Relay config")?
+            != expected_consultation_config
+        {
+            bail!("runtime consultation Relay config does not match its compiled source");
+        }
+    }
     if digest_path(
         &project_dir.join(CANONICAL_ARTIFACT_MANIFEST),
         "generated project artifact manifest",
@@ -2080,7 +3869,83 @@ fn load_canonical_runtime(
         relay_config,
         secrets_env,
         image: manifest.relay_image,
+        topology: manifest.topology,
     })
+}
+
+fn validate_runtime_file_closure(
+    project_dir: &Path,
+    topology: CanonicalRuntimeTopology,
+) -> Result<()> {
+    let mut expected = BTreeSet::from([
+        "compose.yaml".to_string(),
+        "manifest.json".to_string(),
+        "secrets/local.env".to_string(),
+        "secrets/relay.env".to_string(),
+    ]);
+    if topology.has_notary() {
+        expected.extend(
+            [
+                "secrets/relay-consultation.env",
+                "secrets/relay-bootstrap.env",
+                "secrets/notary.env",
+                "secrets/postgres.env",
+                "secrets/relay-workload-token",
+                "secrets/workload-private.jwk",
+                "private/db/init.sh",
+                "private/notary/config/notary.yaml",
+                "private/relay/config/relay-consultation.yaml",
+                "private/relay/config/state-plane-ca.pem",
+                "private/workload/jwks.json",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        );
+    }
+    let root = project_dir.join(CANONICAL_RUNTIME_ROOT);
+    let mut actual = BTreeSet::new();
+    let mut pending = vec![root.clone()];
+    while let Some(directory) = pending.pop() {
+        validate_private_dir_mode(&directory)?;
+        for entry in fs::read_dir(&directory).context("failed to inspect local runtime closure")? {
+            let entry = entry.context("failed to inspect local runtime entry")?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)
+                .context("failed to inspect local runtime entry metadata")?;
+            if metadata.file_type().is_symlink() {
+                bail!("local runtime closure contains a symlink");
+            }
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file() {
+                let relative = path
+                    .strip_prefix(&root)
+                    .context("local runtime entry escaped its root")?
+                    .to_string_lossy()
+                    .into_owned();
+                if matches!(
+                    relative.as_str(),
+                    "private/db/init.sh"
+                        | "private/notary/config/notary.yaml"
+                        | "private/relay/config/relay-consultation.yaml"
+                        | "private/relay/config/state-plane-ca.pem"
+                ) {
+                    validate_runtime_nonsecret_file_mode(&path)?;
+                } else {
+                    validate_private_file_mode(&path)?;
+                }
+                if relative != "smoke-results.json" {
+                    actual.insert(relative);
+                }
+            } else {
+                bail!("local runtime closure contains a non-regular entry");
+            }
+        }
+    }
+    if actual != expected {
+        bail!("local runtime generated-input closure is incomplete or contains unexpected files");
+    }
+    Ok(())
 }
 
 pub fn start_project(project_dir: &Path) -> Result<()> {
@@ -2090,7 +3955,22 @@ pub fn start_project(project_dir: &Path) -> Result<()> {
 fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<()> {
     let image_lock = load_registryctl_image_lock()?;
     let runtime = prepare_canonical_runtime(project_dir, &image_lock)?;
-    run_compose_for_canonical_runtime(project_dir, &runtime, &["up", "-d"])?;
+    if runtime.topology.has_notary() {
+        let wait_timeout = timeout.as_secs().max(1).to_string();
+        run_compose_for_canonical_runtime(
+            project_dir,
+            &runtime,
+            &[
+                "up",
+                "-d",
+                "--wait",
+                "--wait-timeout",
+                wait_timeout.as_str(),
+            ],
+        )?;
+    } else {
+        run_compose_for_canonical_runtime(project_dir, &runtime, &["up", "-d"])?;
+    }
     wait_for_ready("Relay", RELAY_BASE_URL, timeout).map_err(|_| {
         anyhow!(
             "local Relay did not become ready; the compiled configuration or declared workbook \
@@ -2099,8 +3979,22 @@ fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<(
         )
     })?;
     println!("PASS readiness: compiled workbook source is ready");
-    println!("Relay API:  {RELAY_BASE_URL}");
-    println!("API docs:   {RELAY_BASE_URL}{RELAY_DOCS_PATH}");
+    if runtime.topology.has_notary() {
+        wait_for_ready("Registry Notary", NOTARY_BASE_URL, timeout).map_err(|_| {
+            anyhow!(
+                "local Registry Notary did not become ready; inspect `registryctl logs`; no \
+                 credentials or workbook values were included in this diagnostic."
+            )
+        })?;
+        println!("PASS readiness: Registry Notary is ready");
+        println!("Relay API:   {RELAY_BASE_URL}");
+        println!("Relay docs:  {RELAY_BASE_URL}{RELAY_DOCS_PATH}");
+        println!("Notary API:  {NOTARY_BASE_URL}");
+        println!("Notary docs: {NOTARY_BASE_URL}{RELAY_DOCS_PATH}");
+    } else {
+        println!("Relay API:  {RELAY_BASE_URL}");
+        println!("API docs:   {RELAY_BASE_URL}{RELAY_DOCS_PATH}");
+    }
     Ok(())
 }
 
@@ -2125,6 +4019,12 @@ pub fn status_project(project_dir: &Path) -> Result<()> {
     print_probe_status("ready", &format!("{RELAY_BASE_URL}/ready"));
     println!("Relay API:  {RELAY_BASE_URL}");
     println!("API docs:   {RELAY_BASE_URL}{RELAY_DOCS_PATH}");
+    if runtime.topology.has_notary() {
+        print_probe_status("notary healthz", &format!("{NOTARY_BASE_URL}/healthz"));
+        print_probe_status("notary ready", &format!("{NOTARY_BASE_URL}/ready"));
+        println!("Notary API:  {NOTARY_BASE_URL}");
+        println!("Notary docs: {NOTARY_BASE_URL}{RELAY_DOCS_PATH}");
+    }
     Ok(())
 }
 
@@ -2153,11 +4053,8 @@ pub fn logs_project(project_dir: &Path) -> Result<()> {
 
 pub fn smoke_project(project_dir: &Path) -> Result<()> {
     let runtime = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Full)?;
-    let credentials = strict_runtime_credentials(
-        &project_dir.join(CANONICAL_RUNTIME_RELAY_ENV),
-        &runtime.secrets_env,
-    )?;
-    let report = run_canonical_smoke_checks(RELAY_BASE_URL, &credentials);
+    let credentials = strict_canonical_runtime_credentials(project_dir, runtime.topology)?;
+    let report = run_canonical_smoke_checks(RELAY_BASE_URL, NOTARY_BASE_URL, &credentials);
     let output_path = project_dir
         .join(CANONICAL_RUNTIME_ROOT)
         .join("smoke-results.json");
@@ -2805,6 +4702,33 @@ fn write_private_text(path: &Path, contents: &str) -> Result<()> {
 
 #[cfg(not(unix))]
 fn write_private_text(path: &Path, contents: &str) -> Result<()> {
+    reject_private_path_symlinks(path)?;
+    write_text(path.to_path_buf(), contents)
+}
+
+#[cfg(unix)]
+fn write_runtime_nonsecret_text(path: &Path, contents: &str) -> Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    reject_private_path_symlinks(path)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o644)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(path)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    let mut permissions = file.metadata()?.permissions();
+    permissions.set_mode(0o644);
+    file.set_permissions(permissions)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_runtime_nonsecret_text(path: &Path, contents: &str) -> Result<()> {
     reject_private_path_symlinks(path)?;
     write_text(path.to_path_buf(), contents)
 }
@@ -4196,6 +6120,7 @@ struct SmokeCheck {
 
 fn run_canonical_smoke_checks(
     base_url: &str,
+    notary_base_url: &str,
     credentials: &CanonicalRuntimeCredentials,
 ) -> SmokeReport {
     const RECORDS_PATH: &str = "/v1/datasets/projects/entities/projects/records";
@@ -4259,12 +6184,184 @@ fn run_canonical_smoke_checks(
         ],
         0,
     );
+    if let Some(notary) = &credentials.notary {
+        record_notary_smoke_check(
+            &mut checks,
+            notary_base_url,
+            "denied anonymous Notary evaluation",
+            None,
+            NotarySmokeExpectation {
+                project_id: "pw_001",
+                claim_id: "project-status-accepted",
+                status: 401,
+                value: None,
+            },
+        );
+        record_notary_smoke_check(
+            &mut checks,
+            notary_base_url,
+            "denied wrong Notary API key",
+            Some("registryctl-intentionally-wrong-notary-key"),
+            NotarySmokeExpectation {
+                project_id: "pw_001",
+                claim_id: "project-status-accepted",
+                status: 401,
+                value: None,
+            },
+        );
+        record_notary_smoke_check(
+            &mut checks,
+            notary_base_url,
+            "denied under-scoped Notary caller",
+            Some(&notary.under_scoped_raw),
+            NotarySmokeExpectation {
+                project_id: "pw_001",
+                claim_id: "project-status-accepted",
+                status: 403,
+                value: None,
+            },
+        );
+        record_notary_smoke_check(
+            &mut checks,
+            notary_base_url,
+            "matching evaluation returns the accepted predicate",
+            Some(&notary.caller_raw),
+            NotarySmokeExpectation {
+                project_id: "pw_001",
+                claim_id: "project-status-accepted",
+                status: 200,
+                value: Some(true),
+            },
+        );
+        record_notary_smoke_check(
+            &mut checks,
+            notary_base_url,
+            "second matching evaluation returns the non-accepted predicate",
+            Some(&notary.caller_raw),
+            NotarySmokeExpectation {
+                project_id: "PW-002",
+                claim_id: "project-status-accepted",
+                status: 200,
+                value: Some(false),
+            },
+        );
+        record_notary_smoke_check(
+            &mut checks,
+            notary_base_url,
+            "absent evaluation returns the bounded no-match predicate",
+            Some(&notary.caller_raw),
+            NotarySmokeExpectation {
+                project_id: "pw_999",
+                claim_id: "project-record-exists",
+                status: 200,
+                value: Some(false),
+            },
+        );
+    }
     SmokeReport {
         schema_version: SmokeReportSchema::V1,
         base_url: base_url.to_string(),
         passed: checks.iter().all(|check| check.passed),
         checks,
     }
+}
+
+struct NotarySmokeExpectation<'a> {
+    project_id: &'a str,
+    claim_id: &'a str,
+    status: u16,
+    value: Option<bool>,
+}
+
+fn record_notary_smoke_check(
+    checks: &mut Vec<SmokeCheck>,
+    base_url: &str,
+    name: &'static str,
+    api_key: Option<&str>,
+    expected: NotarySmokeExpectation<'_>,
+) {
+    const PATH: &str = "/v1/evaluations";
+    let mut headers = vec![
+        (
+            "Data-Purpose".to_string(),
+            "public-works-case-management".to_string(),
+        ),
+        ("Content-Type".to_string(), "application/json".to_string()),
+        (
+            "Accept".to_string(),
+            "application/vnd.registry-notary.claim-result+json".to_string(),
+        ),
+    ];
+    if let Some(api_key) = api_key {
+        headers.push(("x-api-key".to_string(), api_key.to_string()));
+    }
+    let body = serde_json::json!({
+        "target": {
+            "type": "Project",
+            "identifiers": [{"scheme": "project_id", "value": expected.project_id}],
+        },
+        "claims": [expected.claim_id],
+        "format": "application/vnd.registry-notary.claim-result+json",
+        "purpose": "public-works-case-management",
+    })
+    .to_string();
+    match http_request("POST", &format!("{base_url}{PATH}"), &headers, &body) {
+        Ok(response) => {
+            let passed = response.status == expected.status
+                && expected.value.is_none_or(|expected_value| {
+                    validate_notary_smoke_response(
+                        &response.body,
+                        expected.claim_id,
+                        expected_value,
+                    )
+                    .is_ok()
+                });
+            checks.push(SmokeCheck {
+                name: name.to_string(),
+                method: "POST".to_string(),
+                path: PATH.to_string(),
+                expected_status: expected.status,
+                actual_status: Some(response.status),
+                passed,
+                error: (!passed).then(|| {
+                    "Notary response did not match the expected bounded shape".to_string()
+                }),
+            });
+        }
+        Err(error) => checks.push(SmokeCheck {
+            name: name.to_string(),
+            method: "POST".to_string(),
+            path: PATH.to_string(),
+            expected_status: expected.status,
+            actual_status: None,
+            passed: false,
+            error: Some(redact_error(&error.to_string())),
+        }),
+    }
+}
+
+fn validate_notary_smoke_response(
+    contents: &str,
+    claim_id: &str,
+    expected_value: bool,
+) -> Result<()> {
+    let document: serde_json::Value =
+        serde_json::from_str(contents).context("Notary response was not valid JSON")?;
+    let results = document["results"]
+        .as_array()
+        .ok_or_else(|| anyhow!("Notary response results were absent"))?;
+    if results.len() != 1 {
+        bail!("Notary response did not contain the exact claim set");
+    }
+    let result = &results[0];
+    if result["claim_id"].as_str() != Some(claim_id)
+        || result["value"].as_bool() != Some(expected_value)
+        || result["satisfied"].as_bool() != Some(expected_value)
+        || result["disclosure"].as_str() != Some("predicate")
+    {
+        bail!("Notary response claim values did not match the expected bounded outcome");
+    }
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -4631,6 +6728,7 @@ mod tests {
     const TEST_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
     const TEST_RELAY_IMAGE: &str = "ghcr.io/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const TEST_NOTARY_IMAGE: &str = "ghcr.io/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const TEST_POSTGRESQL_IMAGE: &str = "docker.io/library/postgres@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
     fn test_image_lock() -> RegistryctlImageLock {
         RegistryctlImageLock {
@@ -4642,6 +6740,7 @@ mod tests {
             images: RegistryctlLockedImages {
                 registry_relay: TEST_RELAY_IMAGE.to_string(),
                 registry_notary: TEST_NOTARY_IMAGE.to_string(),
+                postgresql: TEST_POSTGRESQL_IMAGE.to_string(),
             },
         }
     }
@@ -4656,6 +6755,7 @@ mod tests {
             "images": {
                 "registry-relay": TEST_RELAY_IMAGE,
                 "registry-notary": TEST_NOTARY_IMAGE,
+                "postgresql": TEST_POSTGRESQL_IMAGE,
             }
         })
     }
@@ -4747,6 +6847,10 @@ mod tests {
                 format!("ghcr.io/example/registry-notary@sha256:{}", "b".repeat(64)),
             ),
             (
+                "postgresql",
+                format!("docker.io/example/postgres@sha256:{}", "c".repeat(64)),
+            ),
+            (
                 "registry-relay",
                 format!(
                     "ghcr.io/registrystack/registry-relay@sha256:{}",
@@ -4801,6 +6905,42 @@ mod tests {
         assert_eq!(
             select_canonical_relay_image(&image_lock, None).unwrap(),
             TEST_RELAY_IMAGE
+        );
+    }
+
+    #[test]
+    fn canonical_notary_staging_image_allows_only_the_candidate_repository_at_locked_digest() {
+        let image_lock = test_image_lock();
+        let candidate = format!(
+            "ghcr.io/registrystack/registry-notary-candidate@sha256:{}",
+            "b".repeat(64)
+        );
+        assert_eq!(
+            select_canonical_notary_image(&image_lock, Some(OsStr::new(&candidate))).unwrap(),
+            candidate
+        );
+        for invalid in [
+            format!(
+                "ghcr.io/registrystack/registry-notary-candidate@sha256:{}",
+                "a".repeat(64)
+            ),
+            "ghcr.io/registrystack/registry-notary-candidate:v0.13.0".to_string(),
+            format!(
+                "ghcr.io/example/registry-notary-candidate@sha256:{}",
+                "b".repeat(64)
+            ),
+            TEST_NOTARY_IMAGE.to_string(),
+        ] {
+            let error =
+                select_canonical_notary_image(&image_lock, Some(OsStr::new(&invalid))).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("staging"),
+                "unexpected error for {invalid}: {error:#}"
+            );
+        }
+        assert_eq!(
+            select_canonical_notary_image(&image_lock, None).unwrap(),
+            TEST_NOTARY_IMAGE
         );
     }
 
@@ -6524,6 +8664,508 @@ mod tests {
         .unwrap();
     }
 
+    fn combined_runtime_images() -> CanonicalRuntimeImages {
+        CanonicalRuntimeImages {
+            relay: TEST_RELAY_IMAGE.to_string(),
+            notary: Some(TEST_NOTARY_IMAGE.to_string()),
+            postgresql: Some(TEST_POSTGRESQL_IMAGE.to_string()),
+        }
+    }
+
+    fn prepare_combined_runtime(project: &Path) -> CanonicalRuntime {
+        init_canonical_spreadsheet(project);
+        add_notary_to_canonical_project(project).unwrap();
+        // These unit tests exercise generated runtime topology and private-file
+        // closure. Fixture evaluation is covered through the real registryctl
+        // binary because only that binary owns the internal CEL worker mode.
+        let project_file = project.join(CANONICAL_PROJECT_FILE);
+        let project_contents = fs::read_to_string(&project_file).unwrap();
+        fs::write(
+            &project_file,
+            project_contents
+                .replace(
+                    "      project-record-exists: { cel: project.matched, disclosure: predicate }\n",
+                    "      project-status: { output: project.status, disclosure: value }\n",
+                )
+                .replace(
+                    "      project-status-accepted: { cel: 'project.matched && project.status == \"active\"', disclosure: predicate }\n",
+                    "",
+                ),
+        )
+        .unwrap();
+        for fixture in ["match.yaml", "planned.yaml", "no-match.yaml"] {
+            let status = match fixture {
+                "match.yaml" => "active",
+                "planned.yaml" => "planned",
+                "no-match.yaml" => "null",
+                _ => unreachable!(),
+            };
+            let path = project
+                .join("integrations/project-record-snapshot/fixtures")
+                .join(fixture);
+            let contents = fs::read_to_string(&path).unwrap();
+            let without_cel_expectations = contents
+                .lines()
+                .filter(|line| {
+                    !line.contains("project-record-exists:")
+                        && !line.contains("project-status-accepted:")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            fs::write(
+                &path,
+                without_cel_expectations.replacen(
+                    "  claims:\n",
+                    &format!("  claims:\n    project-status: {status}\n"),
+                    1,
+                ),
+            )
+            .unwrap();
+        }
+        prepare_canonical_runtime_with_images(project, &combined_runtime_images()).unwrap()
+    }
+
+    #[test]
+    fn add_notary_is_idempotent_and_records_project_subject_type() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+
+        let first = add_notary_to_canonical_project(&project).unwrap();
+        let second = add_notary_to_canonical_project(&project).unwrap();
+
+        assert_eq!(first.status, "updated");
+        assert_eq!(second.status, "unchanged");
+        assert_eq!(first.files, second.files);
+        assert!(fs::read_to_string(project.join(CANONICAL_PROJECT_FILE))
+            .unwrap()
+            .contains(
+                "  public-works-verification:\n    kind: evidence\n    version: 1\n    subject_type: project\n"
+            ));
+        assert_eq!(
+            canonical_spreadsheet_binding(&project).unwrap().topology,
+            CanonicalRuntimeTopology::CombinedNotary
+        );
+    }
+
+    #[test]
+    fn combined_runtime_has_exact_private_topology_and_distinct_credentials() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        let runtime = prepare_combined_runtime(&project);
+        let compose = fs::read_to_string(&runtime.compose_file).unwrap();
+        let document: JsonValue = serde_norway::from_str(&compose).unwrap();
+        let services = document["services"].as_object().unwrap();
+
+        assert_eq!(services.len(), 6);
+        assert_eq!(
+            services["registry-relay"]["ports"],
+            serde_json::json!([CANONICAL_RELAY_HOST_PORT])
+        );
+        assert_eq!(
+            services["notary-network"]["ports"],
+            serde_json::json!([CANONICAL_NOTARY_HOST_PORT])
+        );
+        assert!(services["postgresql"]["ports"].is_null());
+        assert!(services["registry-notary"]["ports"].is_null());
+        assert!(services["registry-relay-consultation"]["ports"].is_null());
+        assert_eq!(
+            services["registry-relay-consultation"]["network_mode"],
+            "service:notary-network"
+        );
+        assert_eq!(
+            services["registry-notary"]["network_mode"],
+            "service:notary-network"
+        );
+        assert_eq!(
+            services["registry-relay-bootstrap"]["network_mode"],
+            "service:notary-network"
+        );
+        assert_eq!(
+            services["postgresql"]["network_mode"],
+            "service:notary-network"
+        );
+        assert_eq!(document["networks"]["notary-internal"]["internal"], true);
+        assert_eq!(
+            services["notary-network"]["networks"],
+            serde_json::json!(["notary-internal", "notary-host"])
+        );
+        assert!(services["postgresql"]["command"][3]
+            .as_str()
+            .unwrap()
+            .contains("listen_addresses=127.0.0.1"));
+        assert_eq!(
+            services["registry-relay"]["networks"],
+            serde_json::json!(["public"])
+        );
+        assert_eq!(
+            services["registry-relay-consultation"]["volumes"][0],
+            "../../build/local/private/relay:/etc/registry-relay:ro"
+        );
+        assert_eq!(
+            services["registry-relay-consultation"]["command"][1],
+            CANONICAL_CONSULTATION_RELAY_CONFIG_MOUNT
+        );
+        assert_eq!(services["registry-notary"]["image"], TEST_NOTARY_IMAGE);
+        assert_eq!(services["postgresql"]["image"], TEST_POSTGRESQL_IMAGE);
+        assert_eq!(services["notary-network"]["image"], TEST_POSTGRESQL_IMAGE);
+        assert_eq!(
+            services["notary-network"]["healthcheck"]["test"],
+            serde_json::json!([
+                "CMD",
+                "pg_isready",
+                "-h",
+                "127.0.0.1",
+                "-U",
+                CANONICAL_RUNTIME_POSTGRES_USER,
+                "-d",
+                "postgres"
+            ])
+        );
+        let notary_config: JsonValue = serde_norway::from_str(
+            &fs::read_to_string(project.join(CANONICAL_RUNTIME_NOTARY_CONFIG)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(notary_config["cel"]["worker_count"], 1);
+        assert_eq!(
+            notary_config["cel"]["worker_memory_bytes"],
+            1024 * 1024 * 1024_u64
+        );
+        let (runtime_uid, runtime_gid) = compose_runtime_identity(&project).unwrap();
+        let runtime_user = format!("{runtime_uid}:{runtime_gid}");
+        for name in [
+            "registry-relay",
+            "registry-relay-consultation",
+            "registry-relay-bootstrap",
+            "registry-notary",
+        ] {
+            assert_eq!(services[name]["user"], runtime_user);
+        }
+        for name in [
+            "registry-relay",
+            "registry-relay-consultation",
+            "registry-relay-bootstrap",
+            "registry-notary",
+            "postgresql",
+            "notary-network",
+        ] {
+            assert_eq!(services[name]["read_only"], true);
+            assert_eq!(services[name]["cap_drop"], serde_json::json!(["ALL"]));
+            assert_eq!(
+                services[name]["security_opt"],
+                serde_json::json!(["no-new-privileges:true"])
+            );
+            if name != "registry-relay-bootstrap" {
+                assert!(services[name]["healthcheck"].is_object());
+            }
+        }
+
+        let credentials = strict_canonical_runtime_credentials(
+            &project,
+            CanonicalRuntimeTopology::CombinedNotary,
+        )
+        .unwrap();
+        let notary = credentials.notary.as_ref().unwrap();
+        validate_distinct_runtime_credentials(&credentials).unwrap();
+        assert_ne!(
+            notary.workload_private_jwk,
+            notary.notary_signing_private_jwk
+        );
+        assert_eq!(
+            notary.workload_public_jwk,
+            public_jwk_from_private(&notary.workload_private_jwk).unwrap()
+        );
+        assert!(
+            !fs::read_to_string(project.join(CANONICAL_RUNTIME_NOTARY_ENV))
+                .unwrap()
+                .contains(&notary.workload_private_jwk)
+        );
+        let init = fs::read_to_string(project.join(CANONICAL_RUNTIME_DB_INIT)).unwrap();
+        assert!(!init.contains(&notary.relay_database_password));
+        assert!(init.contains(CANONICAL_RUNTIME_RELAY_DB_PASSWORD_ENV));
+
+        let token = fs::read_to_string(project.join(CANONICAL_RUNTIME_WORKLOAD_TOKEN)).unwrap();
+        validate_workload_jwt(&token, &notary.workload_private_jwk).unwrap();
+        let claims: JsonValue = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(token.trim().split('.').nth(1).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claims["iss"], CANONICAL_RUNTIME_WORKLOAD_ISSUER);
+        assert_eq!(claims["aud"], CANONICAL_RUNTIME_WORKLOAD_AUDIENCE);
+        assert_eq!(claims["client_id"], CANONICAL_RUNTIME_WORKLOAD_CLIENT);
+        assert_eq!(claims["azp"], CANONICAL_RUNTIME_WORKLOAD_CLIENT);
+        assert_eq!(claims["scope"], CANONICAL_RUNTIME_WORKLOAD_SCOPE);
+        assert_eq!(
+            claims["exp"].as_u64().unwrap() - claims["iat"].as_u64().unwrap(),
+            CANONICAL_RUNTIME_WORKLOAD_TTL_SECONDS
+        );
+
+        let compose_file = runtime.compose_file.strip_prefix(&project).unwrap();
+        assert_eq!(
+            compose_command_args(
+                compose_file,
+                &["up", "-d", "--wait", "--wait-timeout", "60"]
+            ),
+            vec![
+                "compose",
+                "-f",
+                CANONICAL_RUNTIME_COMPOSE,
+                "up",
+                "-d",
+                "--wait",
+                "--wait-timeout",
+                "60",
+            ]
+        );
+        assert_eq!(
+            compose_command_args(compose_file, &["down"]),
+            vec!["compose", "-f", CANONICAL_RUNTIME_COMPOSE, "down"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn combined_runtime_enforces_modes_symlinks_manifest_closure_and_tamper_detection() {
+        use std::os::unix::fs::{symlink, PermissionsExt as _};
+
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        prepare_combined_runtime(&project);
+        let manifest: CanonicalRuntimeManifest =
+            serde_json::from_slice(&fs::read(project.join(CANONICAL_RUNTIME_MANIFEST)).unwrap())
+                .unwrap();
+        assert_eq!(manifest.topology, CanonicalRuntimeTopology::CombinedNotary);
+        assert_eq!(
+            manifest.notary.as_ref().unwrap().notary_image,
+            TEST_NOTARY_IMAGE
+        );
+        assert_eq!(
+            manifest.notary.as_ref().unwrap().postgresql_image,
+            TEST_POSTGRESQL_IMAGE
+        );
+        validate_runtime_file_closure(&project, CanonicalRuntimeTopology::CombinedNotary).unwrap();
+        for relative in [
+            CANONICAL_RUNTIME_ROOT,
+            CANONICAL_RUNTIME_SECRETS,
+            ".registry-stack/runtime/local/private",
+            ".registry-stack/runtime/local/private/db",
+            ".registry-stack/runtime/local/private/notary",
+            ".registry-stack/runtime/local/private/notary/config",
+            ".registry-stack/runtime/local/private/relay",
+            ".registry-stack/runtime/local/private/relay/config",
+            ".registry-stack/runtime/local/private/relay/config/artifacts",
+            ".registry-stack/runtime/local/private/workload",
+        ] {
+            assert_eq!(
+                fs::metadata(project.join(relative))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700,
+                "{relative}"
+            );
+        }
+        for relative in [
+            CANONICAL_RUNTIME_ENV,
+            CANONICAL_RUNTIME_RELAY_ENV,
+            CANONICAL_RUNTIME_CONSULTATION_RELAY_ENV,
+            CANONICAL_RUNTIME_RELAY_BOOTSTRAP_ENV,
+            CANONICAL_RUNTIME_NOTARY_ENV,
+            CANONICAL_RUNTIME_POSTGRES_ENV,
+            CANONICAL_RUNTIME_WORKLOAD_TOKEN,
+            CANONICAL_RUNTIME_WORKLOAD_PRIVATE_JWK,
+            CANONICAL_RUNTIME_WORKLOAD_JWKS,
+        ] {
+            assert_eq!(
+                fs::metadata(project.join(relative))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600,
+                "{relative}"
+            );
+        }
+        for relative in [
+            CANONICAL_RUNTIME_DB_INIT,
+            CANONICAL_RUNTIME_NOTARY_CONFIG,
+            CANONICAL_RUNTIME_CONSULTATION_RELAY_CONFIG,
+            CANONICAL_RUNTIME_POSTGRES_CA,
+        ] {
+            assert_eq!(
+                fs::metadata(project.join(relative))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o644,
+                "{relative}"
+            );
+        }
+
+        let jwks = project.join(CANONICAL_RUNTIME_WORKLOAD_JWKS);
+        let original = fs::read_to_string(&jwks).unwrap();
+        write_private_text(&jwks, &(original.clone() + "\n")).unwrap();
+        let error = load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("credential contract")
+                || format!("{error:#}").contains("integrity")
+        );
+        write_private_text(&jwks, &original).unwrap();
+
+        let unexpected = project
+            .join(CANONICAL_RUNTIME_ROOT)
+            .join("private/unexpected");
+        write_private_text(&unexpected, "planted\n").unwrap();
+        let error = load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap_err();
+        assert!(format!("{error:#}").contains("closure"));
+        fs::remove_file(&unexpected).unwrap();
+
+        let notary_env = project.join(CANONICAL_RUNTIME_NOTARY_ENV);
+        let external = temp.path().join("external.env");
+        fs::write(&external, fs::read(&notary_env).unwrap()).unwrap();
+        fs::remove_file(&notary_env).unwrap();
+        symlink(&external, &notary_env).unwrap();
+        let error = load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap_err();
+        assert!(format!("{error:#}").contains("symlink"));
+    }
+
+    #[test]
+    fn combined_smoke_plan_is_value_free_and_covers_denials_and_three_outcomes() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        prepare_combined_runtime(&project);
+        let credentials = strict_canonical_runtime_credentials(
+            &project,
+            CanonicalRuntimeTopology::CombinedNotary,
+        )
+        .unwrap();
+
+        let report =
+            run_canonical_smoke_checks("http://127.0.0.1:1", "http://127.0.0.1:2", &credentials);
+        let notary_checks = report
+            .checks
+            .iter()
+            .filter(|check| check.method == "POST")
+            .collect::<Vec<_>>();
+        assert_eq!(notary_checks.len(), 6);
+        assert_eq!(
+            notary_checks
+                .iter()
+                .map(|check| check.expected_status)
+                .collect::<Vec<_>>(),
+            vec![401, 401, 403, 200, 200, 200]
+        );
+        assert!(notary_checks
+            .iter()
+            .all(|check| check.path == "/v1/evaluations"));
+        let json = serde_json::to_string(&report).unwrap();
+        for value in [
+            "pw_001",
+            "PW-002",
+            "pw_999",
+            credentials.notary.as_ref().unwrap().caller_raw.as_str(),
+            credentials
+                .notary
+                .as_ref()
+                .unwrap()
+                .under_scoped_raw
+                .as_str(),
+        ] {
+            assert!(!json.contains(value));
+        }
+    }
+
+    #[test]
+    fn notary_smoke_accepts_one_exact_predicate_result_and_rejects_mixed_disclosure_shapes() {
+        let accepted = serde_json::json!({
+            "results": [{
+                "claim_id": "project-status-accepted",
+                "value": true,
+                "satisfied": true,
+                "disclosure": "predicate",
+            }],
+        })
+        .to_string();
+        validate_notary_smoke_response(&accepted, "project-status-accepted", true).unwrap();
+
+        let mixed = serde_json::json!({
+            "results": [
+                {
+                    "claim_id": "project-status-accepted",
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+                {
+                    "claim_id": "project-status",
+                    "value": "active",
+                    "satisfied": true,
+                    "disclosure": "value",
+                },
+            ],
+        })
+        .to_string();
+        assert!(
+            validate_notary_smoke_response(&mixed, "project-status-accepted", true)
+                .unwrap_err()
+                .to_string()
+                .contains("exact claim set")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn add_notary_transaction_rolls_back_new_files_and_restores_existing_modes() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        let project_file = project.join(CANONICAL_PROJECT_FILE);
+        let environment_file = project.join(CANONICAL_LOCAL_ENVIRONMENT_FILE);
+        let project_before = fs::read_to_string(&project_file).unwrap();
+        let environment_before = fs::read_to_string(&environment_file).unwrap();
+        let project_mode = fs::metadata(&project_file).unwrap().permissions().mode() & 0o777;
+        let environment_mode = fs::metadata(&environment_file)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+
+        ADD_NOTARY_FAIL_AFTER_PUBLISH_COUNT.with(|count| count.set(3));
+        let error = add_notary_to_canonical_project(&project).unwrap_err();
+        ADD_NOTARY_FAIL_AFTER_PUBLISH_COUNT.with(|count| count.set(0));
+        assert!(
+            format!("{error:#}").contains("rolled back"),
+            "unexpected error: {error:#}"
+        );
+        assert_eq!(fs::read_to_string(&project_file).unwrap(), project_before);
+        assert_eq!(
+            fs::read_to_string(&environment_file).unwrap(),
+            environment_before
+        );
+        assert_eq!(
+            fs::metadata(&project_file).unwrap().permissions().mode() & 0o777,
+            project_mode
+        );
+        assert_eq!(
+            fs::metadata(&environment_file)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            environment_mode
+        );
+        assert!(!project
+            .join("integrations/project-record-snapshot")
+            .exists());
+    }
+
     #[test]
     fn canonical_runtime_is_closed_private_and_secret_free_outside_credentials() {
         let temp = TempDir::new().unwrap();
@@ -6533,7 +9175,16 @@ mod tests {
         let runtime = prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap();
         let binding = canonical_spreadsheet_binding(&project).unwrap();
         let compose = fs::read_to_string(&runtime.compose_file).unwrap();
-        validate_canonical_compose(&compose, TEST_RELAY_IMAGE, &binding).unwrap();
+        validate_canonical_compose(
+            &compose,
+            &CanonicalRuntimeImages {
+                relay: TEST_RELAY_IMAGE.to_string(),
+                notary: None,
+                postgresql: None,
+            },
+            &binding,
+        )
+        .unwrap();
         validate_compiled_local_relay_auth(&runtime.relay_config, &binding).unwrap();
 
         let credentials = strict_runtime_credentials(

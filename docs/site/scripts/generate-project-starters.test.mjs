@@ -301,7 +301,7 @@ test('rejects a catalog with fewer than five starter entries', async () => {
   });
 });
 
-test('publishes the authoring tutorial with the catalog-backed HTTP command sequence', async () => {
+test('keeps the advanced authoring tutorial complete but out of the adopter navigation', async () => {
   const [starters, tutorial, astroConfig] = await Promise.all([
     buildProjectStarterMatrix(repoRoot),
     readFile(
@@ -314,7 +314,7 @@ test('publishes the authoring tutorial with the catalog-backed HTTP command sequ
   const http = starters.find((starter) => starter.starter === 'http');
 
   assert.match(tutorial, /^status: current$/m);
-  assert.doesNotMatch(tutorial, /^draft: true$/m);
+  assert.match(tutorial, /^draft: true$/m);
   for (const command of http.commands) {
     assert.equal(
       normalizedTutorial.includes(command),
@@ -322,14 +322,5 @@ test('publishes the authoring tutorial with the catalog-backed HTTP command sequ
       `authoring tutorial must document catalog command: ${command}`,
     );
   }
-  assert.equal(
-    astroConfig.match(/slug: 'tutorials\/author-registry-project'/g)?.length,
-    1,
-    'authoring tutorial has one author-path placement',
-  );
-  const configure = astroConfig.slice(
-    astroConfig.indexOf("label: 'Configure'"),
-    astroConfig.indexOf("label: 'Verify'"),
-  );
-  assert.match(configure, /slug: 'tutorials\/author-registry-project'/);
+  assert.doesNotMatch(astroConfig, /slug: 'tutorials\/author-registry-project'/);
 });

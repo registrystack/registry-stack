@@ -26,7 +26,6 @@ export const currentSourceGeneratedArtifacts = Object.freeze([
   'docs/site/public/generated/diagnostics/fixture.v1.json',
   'docs/site/public/generated/diagnostics/operator.v1.json',
   'docs/site/src/data/generated/standard-journeys.json',
-  'docs/site/public/generated/standard-journeys.json',
 ]);
 
 async function run(command, args, env) {

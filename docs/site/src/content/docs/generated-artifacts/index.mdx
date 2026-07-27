@@ -1,52 +1,65 @@
 ---
-title: Generated artifacts
-description: Review the generated Registry Stack artifacts without confusing author intent, product inputs, signed bundles, or runtime state.
+title: Understand generated files
+description: Know which Registry Stack files you own, which files Registryctl generates, and what to hand to an operator.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-26"
+last_reviewed: "2026-07-27"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Treat each generated artifact as a projection with one owner and lifecycle.
-Do not edit generated files to change project intent.
+Registryctl creates `.registry-stack/` inside your project. These files show
+what Registry Stack derived from your authored configuration. They are not
+another place to configure the project.
 
-## Artifact classes
+## The rule
 
-- Editor schemas mirror the five authored contracts for completion and local syntax validation.
-- Explanation and semantic-impact reports describe reviewed author intent without secret values.
-- Fixture and preflight reports record offline evidence for their separate validation boundaries.
-- The artifact manifest hashes every consumed authored input and every generated output.
-- Relay and Notary build directories contain separate unsigned, non-deployable product inputs.
-- Signed product Config Bundles bind one exact product input to approval, compatibility, and
-  anti-rollback evidence.
-- Runtime configuration and state belong to the active Relay or Notary instance, not to project
-  authoring.
+Edit the project files you created or copied, then rerun `registryctl build`.
+Never edit files under `.registry-stack/`. Registryctl may replace them.
 
-`registryctl build` writes `.registry-stack/build/<environment>` and generates the artifact
-manifest last.
-The generated files carry do-not-edit and publication classifications.
-An unsigned build tree is review material, not a production deployment artifact.
+## What you will find
 
-## Generated references
+| Path | Purpose | What to do with it |
+| --- | --- | --- |
+| `.registry-stack/build/<environment>/artifact-manifest.json` | Lists and hashes the authored inputs and generated outputs used by the build. | Review it and retain it with the handoff evidence. |
+| `.registry-stack/build/<environment>/private/relay/` | Generated Registry Relay configuration, when the project uses Relay. | Inspect it for the expected source, fields, filters, and credential references. Do not edit or publish it. |
+| `.registry-stack/build/<environment>/private/notary/` | Generated Registry Notary configuration, when the project uses Notary. | Inspect the expected claim and source configuration. Do not edit or publish it. |
+| `.registry-stack/runtime/<environment>/` | Local credentials, Compose input, and runtime results. | Keep it private. It is disposable local state, not project source. |
 
-- [Configuration reference](../reference/project-configuration/)
-- [Instance API references](../reference/apis/)
-- [Contracts](../reference/contracts/)
+Your build may contain only Relay or only Notary. That is normal.
 
-## Review boundary
+For the local spreadsheet path, inspect the manifest and Relay input:
 
-Compare authored intent with generated review artifacts before signing.
-Verify a signed product bundle before promotion or activation.
-Inspect runtime posture separately after activation.
+```sh
+sed -n '1,240p' .registry-stack/build/local/artifact-manifest.json
+sed -n '1,260p' .registry-stack/build/local/private/relay/config/relay.yaml
+```
+
+Confirm that the source path, sheet, field mappings, projection, filters, and
+credential references match your intent. Raw credentials and source records
+must not appear.
+
+## Hand off the project
+
+Give the operator:
+
+- the reviewed authored project;
+- the exact environment name and intended runtime products;
+- the generated artifact manifest;
+- the validation results; and
+- the decisions still required for production data, credentials, networking,
+  monitoring, recovery, approval, and activation.
+
+The local build directory is unsigned review material. It is not, by itself, a
+production deployment package.
 
 ## Next
 
-- [Verify a project](../verify/)
-- [Upgrade and roll back](../operate/upgrade-and-rollback/)
-- [API stability and versioning](../reference/api-stability/)
+- [Validate the project](../verify/)
+- [Prepare the operator handoff](../operate/)
+- [Look up project configuration](../reference/project-configuration/)

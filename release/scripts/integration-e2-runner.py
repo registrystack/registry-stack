@@ -28,6 +28,11 @@ from closed_json_schema import (
     SchemaValidationError,
     validate_against_schema as validate_closed_schema,
 )
+from registryctl_image_lock import (
+    PLATFORM as IMAGE_LOCK_PLATFORM,
+    schema_for_release_version,
+    validate_images,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -807,23 +812,28 @@ def verify_candidate_snapshot(
             "images",
         },
     )
+    try:
+        expected_image_lock_schema = schema_for_release_version(tag_match.group(1))
+    except ValueError as exc:
+        raise RunnerError(str(exc)) from None
     if (
-        lock["schema_version"] != "registryctl.release_image_lock.v1"
+        lock["schema_version"] != expected_image_lock_schema
         or lock["release_tag"] != tag
     ):
         raise RunnerError("candidate image lock has the wrong schema or release tag")
-    if lock["platform"] != "linux/amd64":
+    if lock["platform"] != IMAGE_LOCK_PLATFORM:
         raise RunnerError("candidate image lock must target linux/amd64")
     if not COMMIT.fullmatch(str(lock["manifest_source_ref"])) or not COMMIT.fullmatch(
         str(lock["tag_target"])
     ):
         raise RunnerError("candidate image lock source refs must be full commits")
-    images = require_object(
-        lock["images"], "image lock images", {"registry-relay", "registry-notary"}
-    )
+    try:
+        images = validate_images(expected_image_lock_schema, lock["images"])
+    except ValueError as exc:
+        raise RunnerError(str(exc)) from None
     relay = exact_digest_file(asset_dir / "registry-relay.digest", "registry-relay")
     notary = exact_digest_file(asset_dir / "registry-notary.digest", "registry-notary")
-    if images != {"registry-relay": relay, "registry-notary": notary}:
+    if images["registry-relay"] != relay or images["registry-notary"] != notary:
         raise RunnerError("candidate digest files do not match the image lock")
 
     capsule = load_json(asset_dir / capsule_name, max_bytes=8 * 1024 * 1024)

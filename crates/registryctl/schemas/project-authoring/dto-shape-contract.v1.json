@@ -184,6 +184,13 @@
             ],
             "type": "object"
           },
+          "EvidenceSubjectType": {
+            "enum": [
+              "person",
+              "project"
+            ],
+            "type": "string"
+          },
           "IntegrationReference": {
             "additionalProperties": false,
             "properties": {
@@ -1262,6 +1269,17 @@
                   }
                 ],
                 "default": null
+              },
+              "subject_type": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EvidenceSubjectType"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Subject category evaluated by an evidence service. Omission is\nnormalized to `person` without erasing whether the field was authored,\nso records services cannot silently accept it."
               },
               "title": {
                 "default": null,

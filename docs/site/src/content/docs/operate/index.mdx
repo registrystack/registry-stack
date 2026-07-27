@@ -1,45 +1,55 @@
 ---
-title: Operate
-description: Operate Registry Relay and Registry Notary with explicit trust, state, retention, upgrade, recovery, and security boundaries.
+title: Prepare the operator handoff
+description: Move a validated Registry Stack project from local evaluation to an operator-owned deployment.
 status: current
 owner: registry-docs
 source_repos:
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-26"
+last_reviewed: "2026-07-27"
 doc_type: reference
 locale: en
 standards_referenced: []
 ---
 
-Operate Registry Relay and Registry Notary as separate runtime products with explicit state,
-secrets, trust anchors, health, audit, promotion, and rollback responsibilities.
+The beginner tutorials stop at a loopback-only local runtime. Use this
+checklist to decide whether an operator can take ownership. Registry Stack
+does not yet provide a verified production deployment or operations runbook.
 
-## Deployment and state
+## Handoff checklist
 
-- [Run single-node Compose behind a proxy](single-node-compose-behind-proxy/)
-- [Back up and restore state](backup-and-restore/)
-- [Manage retention and persistent state](retention-and-persistent-state/)
-- [Upgrade and roll back](upgrade-and-rollback/)
+Before activation, the implementer and operator must record:
 
-## Security operations
+- The reviewed authored project, intended environment, generated artifact
+  manifest, and validation results
+- Named owners for source data, configuration, secret distribution, signing
+  keys, runtime state, audit output, and monitoring
+- The exact fields, filters, purposes, scopes, and callers exposed by each
+  service
+- Production identity, Transport Layer Security (TLS), network, and outbound
+  connection boundaries
+- Institution-owned procedures for backup, retention, recovery, credential
+  rotation, upgrades, rollback, and incident response
+- The approval evidence and named authority required before activation
 
-- [Harden a deployment](../security/hardening-checklist/)
-- [Review the security support window](../security/support-window/)
-- [Report a vulnerability](../security/report-a-vulnerability/)
+Files under `.registry-stack/runtime/<environment>/` contain local
+credentials, Compose input, and runtime results. Keep them private and do not
+treat them as a production deployment package.
 
-## Advanced operations
+## Current documentation boundary
 
-Use the [advanced operations guides](advanced/) for credential and trust
-rotation, reviewed source changes, materialization recovery, product upgrades
-and rollback, runtime diagnosis, and bounded Script workers.
+Registry Stack does not yet release adopter runbooks for reverse proxies,
+production hardening, backup and restore, retention, upgrades, rollback, or
+advanced operations. Define and exercise those procedures in the target
+environment before exposing either service to production traffic.
 
-Generated build output remains unsigned review material until the owning product's signing and
-verification lifecycle binds the exact bytes.
-Runtime readiness does not establish country legal approval or source interoperability.
+This checklist records ownership and unresolved work. It does not establish
+production readiness, legal approval, data fitness, or country acceptance.
 
 ## Next
 
-- [Verify Registry Stack](../verify/)
-- [Generated artifacts](../generated-artifacts/)
-- [Reference](../reference/)
+- [Validate the project](../verify/)
+- [Understand generated files](../generated-artifacts/)
+- [Review the security guidance](../security/)
+- [Review the security support window](../security/support-window/)
+- [Report a vulnerability](../security/report-a-vulnerability/)

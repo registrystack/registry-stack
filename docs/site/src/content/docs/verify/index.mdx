@@ -1,53 +1,85 @@
 ---
-title: Verify
-description: Verify Registry Stack authoring, fixtures, environment bindings, generated inputs, security posture, and runtime contracts.
+title: Validate your project
+description: Check your Registry Stack project before you start it or hand it to an operator.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-26"
+last_reviewed: "2026-07-27"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Run each verification gate for the artifact and authority boundary the gate owns.
-No single command establishes source compatibility, deployment approval, and runtime readiness.
+Run these checks after you change a project file, environment, workbook, or
+fixture. They find configuration and source problems before Registry Stack
+starts.
 
-## Authoring and fixtures
+Run the commands from your project directory.
 
-1. Run `registryctl test --project-dir <project>` for offline synthetic fixtures.
-2. Run `registryctl check --project-dir <project> --environment <name> --explain`.
-3. Review the redacted effective intent and semantic impact.
+## Run the project checks
 
-These commands validate authored configuration, cross-file semantics, fixtures, and generated
-product inputs without contacting a source.
-Offline success does not prove live source behavior.
+```sh
+registryctl test --project-dir .
+registryctl check --project-dir . --environment local --explain
+registryctl build --project-dir . --environment local
+```
 
-## Environment and generated inputs
+| Command | What it tells you |
+| --- | --- |
+| `test` | The maintained offline fixtures produce their expected results. A project with no fixtures reports `0/0 passed`; that is not a source-data test. |
+| `check --explain` | The authored files agree with one another, and the effective plan matches what you intended. The explanation omits secret values and source records. |
+| `build` | Registryctl can produce the product configuration and artifact inventory under `.registry-stack/build/local/`. |
 
-Run the operator-authorized offline preflight for declared secret references, files, trust,
-availability, and environment narrowing.
-Then build the project and validate the separate Relay and Notary inputs with their owning product
-validators.
+Stop at the first failure. Correct an authored project file or the reviewed
+source, then rerun the checks. Do not correct a failure by editing anything
+under `.registry-stack/`.
 
-Preflight does not read or print secret values, perform Domain Name System resolution, request a
-token, or contact a source.
+## Check runtime prerequisites
 
-## Runtime and release evidence
+If this environment is intended to run locally, check its files, secret
+references, and source prerequisites:
 
-- [Security self-assessment](../security/self-assessment/)
-- [OpenSSF evidence](../security/openssf-evidence/)
-- [Relay API reference](../reference/apis/registry-relay/)
-- [Notary API reference](../reference/apis/registry-notary/)
+```sh
+registryctl preflight --project-dir . --environment local
+```
 
-Live source checks, signing, promotion, activation, migration, and rollback require separate
-authorization and evidence.
+For a spreadsheet project, `preflight` reads and validates the complete
+selected sheet. An offline-only project may deliberately omit runtime
+bindings. You can test and build that project, but you cannot start it until an
+operator supplies the missing environment values.
+
+## Check the local API
+
+For the supported local profile:
+
+```sh
+registryctl doctor --profile local
+registryctl start
+registryctl smoke
+```
+
+`doctor` checks the local Registryctl installation, matching release assets,
+container provider, and project. `start` prepares the loopback-only runtime.
+`smoke` checks readiness and the maintained allowed and denied requests.
+
+Stop it when you finish:
+
+```sh
+registryctl stop
+```
+
+## What these checks do not prove
+
+Local success does not approve a production deployment, prove that a live
+country source is interoperable, or replace data, security, and operational
+review. Production credentials, networking, signing, activation, migration,
+and rollback belong to the operator handoff.
 
 ## Next
 
-- [Errors and status codes](../reference/errors/)
-- [Generated artifacts](../generated-artifacts/)
-- [Operate Registry Stack](../operate/)
+- [Understand the generated files](../generated-artifacts/)
+- [Prepare the operator handoff](../operate/)
+- [Look up an error or status code](../reference/errors/)

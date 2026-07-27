@@ -4,18 +4,19 @@ use anyhow::{Context, Result};
 use clap::{error::ErrorKind, CommandFactory, Parser, Subcommand, ValueEnum};
 
 use registryctl::{
-    AnchorReport, BundleInspectReport, BundleSignOptions, BundleSignReport, BundleVerifyReport,
-    ClassifierSafeReportedValue, DeploymentProfile, DoctorFormat, FieldSourceKind,
-    FixtureRequestBindingState, InitProjectKind, InitReport, InitSource, MigrationDisposition,
-    ProjectBuildBaselineSetOptions, ProjectBuildOptions, ProjectCapabilityInventoryReportV1,
-    ProjectCapabilityOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
-    ProjectEditorSetupReport, ProjectEnvironmentSemanticComparisonOptions, ProjectExecutionContext,
-    ProjectFieldAddress, ProjectFieldExplanation, ProjectInitOptions, ProjectMigrationOptions,
-    ProjectMigrationReportV1, ProjectPreflightOptions, ProjectPreflightReportV1,
-    ProjectPromotionOptions, ProjectPromotionReportV1, ProjectSchemaKind,
-    ProjectSemanticComparisonOptions, ProjectSemanticComparisonReportV1, ProjectStarter,
-    ProjectStarterSemanticComparisonOptions, ProjectTestOptions, ProjectTestSelection,
-    ProjectTrustedLocalAuthoredValue, PromotionDisposition, RedactionReason, Sample,
+    AddNotaryReport, AnchorReport, BundleInspectReport, BundleSignOptions, BundleSignReport,
+    BundleVerifyReport, ClassifierSafeReportedValue, DeploymentProfile, DoctorFormat,
+    FieldSourceKind, FixtureRequestBindingState, InitProjectKind, InitReport, InitSource,
+    MigrationDisposition, ProjectBuildBaselineSetOptions, ProjectBuildOptions,
+    ProjectCapabilityInventoryReportV1, ProjectCapabilityOptions, ProjectCheckOptions,
+    ProjectCommandReport, ProjectEditorSetupOptions, ProjectEditorSetupReport,
+    ProjectEnvironmentSemanticComparisonOptions, ProjectExecutionContext, ProjectFieldAddress,
+    ProjectFieldExplanation, ProjectInitOptions, ProjectMigrationOptions, ProjectMigrationReportV1,
+    ProjectPreflightOptions, ProjectPreflightReportV1, ProjectPromotionOptions,
+    ProjectPromotionReportV1, ProjectSchemaKind, ProjectSemanticComparisonOptions,
+    ProjectSemanticComparisonReportV1, ProjectStarter, ProjectStarterSemanticComparisonOptions,
+    ProjectTestOptions, ProjectTestSelection, ProjectTrustedLocalAuthoredValue,
+    PromotionDisposition, RedactionReason, Sample,
 };
 
 fn main() -> Result<()> {
@@ -84,13 +85,15 @@ fn main() -> Result<()> {
                 OutputFormat::Json => print_json(&report)?,
             }
         }
-        Commands::Add { format: _, command } => match command {
-            AddCommand::Notary => anyhow::bail!(
-                "`registryctl add notary` was retired before 1.0. Initialize a canonical project \
-                 with `registryctl init --from spreadsheet`, then author and test a Notary \
-                 evidence service in registry-stack.yaml; registryctl does not automatically \
-                 migrate the legacy add-on project."
-            ),
+        Commands::Add { format, command } => match command {
+            AddCommand::Notary => {
+                let report =
+                    registryctl::add_notary_to_canonical_project(&std::env::current_dir()?)?;
+                match format {
+                    OutputFormat::Human => println!("{}", render_add_notary_report(&report)?),
+                    OutputFormat::Json => print_json(&report)?,
+                }
+            }
         },
         Commands::Test {
             project_dir,
@@ -1153,6 +1156,10 @@ fn render_anchor_report(report: &AnchorReport, action: &str) -> Result<String> {
 fn render_init_report(report: &InitReport) -> Result<String> {
     use std::fmt::Write as _;
 
+    let is_spreadsheet_starter = matches!(
+        &report.source,
+        InitSource::Starter { id, .. } if id == "spreadsheet"
+    );
     let project_kind = match report.project_kind {
         InitProjectKind::RegistryProject => "Registry Stack project",
         InitProjectKind::RelaySpreadsheetApi => "Relay spreadsheet API",
@@ -1187,15 +1194,41 @@ fn render_init_report(report: &InitReport) -> Result<String> {
     if report.output != std::path::Path::new(".") {
         writeln!(output, "  cd {}", human_path(&report.output))?;
     }
-    match report.project_kind {
-        InitProjectKind::RegistryProject => {
+    match (report.project_kind, is_spreadsheet_starter) {
+        (InitProjectKind::RegistryProject, true) => {
+            writeln!(output, "  registryctl doctor --profile local")?;
+            writeln!(output, "  registryctl start")?;
+        }
+        (InitProjectKind::RegistryProject, false) => {
             writeln!(output, "  registryctl test --project-dir .")?;
         }
-        InitProjectKind::RelaySpreadsheetApi => {
+        (InitProjectKind::RelaySpreadsheetApi, _) => {
             writeln!(output, "  registryctl doctor --profile local")?;
             writeln!(output, "  registryctl start")?;
         }
     }
+    Ok(output.trim_end().to_string())
+}
+
+fn render_add_notary_report(report: &AddNotaryReport) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let action = match report.status {
+        "updated" => "Added",
+        "unchanged" => "Verified",
+        other => other,
+    };
+    let mut output = String::new();
+    writeln!(output, "{action} local Notary add-on.")?;
+    writeln!(output, "  Project: {}", human_path(&report.project))?;
+    writeln!(output, "  Files:")?;
+    for file in &report.files {
+        writeln!(output, "    {}", human_path(file))?;
+    }
+    writeln!(output, "\nNext:")?;
+    writeln!(output, "  registryctl test --environment local")?;
+    writeln!(output, "  registryctl restart")?;
+    writeln!(output, "  registryctl smoke")?;
     Ok(output.trim_end().to_string())
 }
 
@@ -2219,7 +2252,7 @@ enum Commands {
 
 #[derive(Debug, Subcommand)]
 enum AddCommand {
-    /// Add a local Notary and private consultation Relay over the benefits workbook.
+    /// Add a local Notary and private consultation Relay to the spreadsheet starter.
     Notary,
 }
 

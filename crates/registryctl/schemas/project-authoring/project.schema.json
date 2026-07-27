@@ -460,6 +460,11 @@
       "properties": {
         "kind": {"x-registry-field": "property", "const": "evidence" },
         "version": {"x-registry-field": "property", "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "subject_type": {
+          "x-registry-field": "property",
+          "description": "Subject category evaluated by this evidence service. Omission is normalized to person.",
+          "enum": ["person", "project"]
+        },
         "purpose": {"x-registry-field": "property", "$ref": "#/$defs/token" },
         "legal_basis": {"x-registry-field": "property", "$ref": "#/$defs/token" },
         "consent": {"x-registry-field": "property", "enum": ["not_required", "required"] },

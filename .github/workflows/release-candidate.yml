@@ -931,6 +931,7 @@ jobs:
             "${{ needs.validate.outputs.manifest }}" \
             --relay-digest "${RUNNER_TEMP}/registry-relay.release.digest" \
             --notary-digest "${RUNNER_TEMP}/registry-notary.release.digest" \
+            --postgresql-ref-file release/registryctl-postgresql-image.ref \
             --tag-target "${{ needs.validate.outputs.source_sha }}" \
             --output \
               "dist/candidate/dist/bin/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json"
@@ -966,10 +967,12 @@ jobs:
         run: |
           set -euo pipefail
           relay_staging="$(cat dist/candidate/dist/images/registry-relay.digest)"
+          notary_staging="$(cat dist/candidate/dist/images/registry-notary.digest)"
           python3 release/scripts/first-country-release-form.py run \
             --asset-dir dist/candidate/dist/bin \
             --tag "${{ needs.validate.outputs.tag }}" \
             --relay-image-override "${relay_staging}" \
+            --notary-image-override "${notary_staging}" \
             --evidence-dir dist/candidate/evidence/first-country-release-form
           python3 release/scripts/first-country-release-form.py verify \
             --asset-dir dist/candidate/dist/bin \

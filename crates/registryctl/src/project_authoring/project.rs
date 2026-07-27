@@ -726,6 +726,7 @@ fn semantic_digests(
             Ok((
                 id,
                 json!({
+                    "subject_type": service.effective_subject_type(),
                     "variables": service.variables,
                     "claims": service_claims,
                 }),
@@ -885,7 +886,7 @@ fn semantic_digests(
 // A schema or knowledge change must therefore be reviewed for promotion
 // semantics before a new projection can be emitted.
 const PROMOTION_FIELD_KNOWLEDGE_REVISION: &str =
-    "sha256:eed43229766dec0e03f9a415b625781630236231c8802ae8d78f10e81b876c1d";
+    "sha256:a8f00b404cb86e06f8c2f63ed0df9f27bf1df92636568a265d9338416dea0332";
 
 fn project_promotion_projection(
     loaded: &LoadedRegistryProject,
@@ -1667,7 +1668,8 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
         validate_stable_id(service_id, "service id")?;
         match service.kind {
             ServiceKind::RecordsApi => {
-                if service.version != 0
+                if service.subject_type.is_some()
+                    || service.version != 0
                     || !service.purpose.is_empty()
                     || !service.legal_basis.is_empty()
                     || !service.access.scopes.is_empty()

@@ -853,6 +853,7 @@ jobs:
             "${{ needs.verify.outputs.manifest }}" \
             --relay-digest dist/image-evidence/registry-relay.digest \
             --notary-digest dist/image-evidence/registry-notary.digest \
+            --postgresql-ref-file release/registryctl-postgresql-image.ref \
             --tag-target "${{ needs.verify.outputs.tag_target }}" \
             --output \
               "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-image-lock.json"

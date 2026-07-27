@@ -2,6 +2,7 @@
 title: First run with Solmara Lab
 description: Bring up the Solmara Lab compose demo on a laptop, verify it with the smoke suite, and call a Notary evaluation route directly.
 status: current
+draft: true
 owner: registry-docs
 source_repos:
   - solmara-lab
@@ -37,7 +38,7 @@ Do not use the generated local keys in production.
 
 For a standalone local project generated from your own data, use the `registryctl` tutorials:
 [run a protected registry API](../publish-spreadsheet-secured-registry-api/) or
-[evaluate a claim with Registry Notary](/journeys/registry-backed-notary-claim/). Clone Solmara Lab when you
+[evaluate a claim with Registry Notary](/tutorials/verify-claim-registry-api/). Clone Solmara Lab when you
 want the full multi-service country demo.
 
 ## Prerequisites
@@ -137,7 +138,7 @@ directly. The topology figure shows the full port map.
 Each instance publishes its rendered API reference at `/docs`, a route that is always public, and
 its raw `/openapi.json`, public here because every Relay and Notary configuration in this lab sets
 `openapi_requires_auth: false`. This is the same route pattern documented in
-[Evaluate a claim with Registry Notary](/journeys/registry-backed-notary-claim/).
+[Evaluate a claim with Registry Notary](/tutorials/verify-claim-registry-api/).
 
 ## See it: the citizen portal and the Visitor's Center
 
@@ -240,7 +241,7 @@ so you can confirm what you ran by hand against what the lab publishes.
 
 - [Run a protected registry API locally](../publish-spreadsheet-secured-registry-api/): generate a
   smaller local Relay project from a sample workbook.
-- [Evaluate a claim with Registry Notary](/journeys/registry-backed-notary-claim/): add Notary to that local
+- [Evaluate a claim with Registry Notary](/tutorials/verify-claim-registry-api/): add Notary to that local
   project.
 - [When to use Registry Stack](../../start/when-to-use/): decide whether Relay, Notary, or both fit
   your integration.

@@ -139,14 +139,39 @@ fn compile_project_for_environment(
     }
 
     if let Some(relay_service) = &environment.deployment.relay {
-        let relay_config =
-            generated_relay_config(loaded, environment_name, environment, &packs, &profiles)?;
+        let relay_config = generated_relay_config(
+            loaded,
+            environment_name,
+            environment,
+            &packs,
+            &profiles,
+            GeneratedRelayConfigKind::Public,
+        )?;
         relay_private.insert(
             PathBuf::from("config/relay.yaml"),
             serde_norway::to_string(&relay_config)?
                 .into_bytes()
                 .into_boxed_slice(),
         );
+        let consultation_relay_config = if profiles.is_empty() {
+            None
+        } else {
+            let consultation_relay_config = generated_relay_config(
+                loaded,
+                environment_name,
+                environment,
+                &packs,
+                &profiles,
+                GeneratedRelayConfigKind::Consultation,
+            )?;
+            relay_private.insert(
+                PathBuf::from("config/relay-consultation.yaml"),
+                serde_norway::to_string(&consultation_relay_config)?
+                    .into_bytes()
+                    .into_boxed_slice(),
+            );
+            Some(consultation_relay_config)
+        };
         relay_private.insert(
             PathBuf::from("descriptors/operations.json"),
             canonical_json_line(&operational_descriptor(
@@ -157,10 +182,15 @@ fn compile_project_for_environment(
             ))?
             .into_boxed_slice(),
         );
+        let mut relay_secret_configs = vec![&relay_config];
+        relay_secret_configs.extend(consultation_relay_config.as_ref());
         relay_private.insert(
             PathBuf::from("descriptors/secret-consumers.json"),
-            canonical_json_line(&secret_consumer_descriptor("registry-relay", &relay_config))?
-                .into_boxed_slice(),
+            canonical_json_line(&secret_consumer_descriptor_from_configs(
+                "registry-relay",
+                relay_secret_configs,
+            ))?
+            .into_boxed_slice(),
         );
     }
     let mut notary_private = BTreeMap::new();
@@ -302,8 +332,17 @@ fn operational_descriptor(
 }
 
 fn secret_consumer_descriptor(product: &str, config: &Value) -> Value {
+    secret_consumer_descriptor_from_configs(product, [config])
+}
+
+fn secret_consumer_descriptor_from_configs<'a>(
+    product: &str,
+    configs: impl IntoIterator<Item = &'a Value>,
+) -> Value {
     let mut consumers = Vec::new();
-    collect_secret_consumers(config, "", &mut consumers);
+    for config in configs {
+        collect_secret_consumers(config, "", &mut consumers);
+    }
     consumers.sort_by(|left, right| {
         left.get("config_pointer")
             .and_then(Value::as_str)
@@ -313,7 +352,13 @@ fn secret_consumer_descriptor(product: &str, config: &Value) -> Value {
                     .and_then(Value::as_str)
                     .cmp(&right.get("kind").and_then(Value::as_str))
             })
+            .then_with(|| {
+                left.get("locator")
+                    .and_then(Value::as_str)
+                    .cmp(&right.get("locator").and_then(Value::as_str))
+            })
     });
+    consumers.dedup();
     json!({
         "schema": "registry.project.secret-consumers.v1",
         "product": product,

@@ -236,7 +236,9 @@ fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClass
                 ArtifactConsumer::ProjectDocumentation,
             ],
         )
-    } else if path == "private/relay/config/relay.yaml" {
+    } else if path == "private/relay/config/relay.yaml"
+        || path == "private/relay/config/relay-consultation.yaml"
+    {
         artifact_classification(
             "registry.relay.config.v1",
             &[ArtifactClass::RuntimeConfig, ArtifactClass::DeploymentInput],

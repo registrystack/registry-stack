@@ -213,7 +213,7 @@ test('redacts generated env values and credential headers before output is print
   assert.match(redacted, /REDACTED:ROW_READER_RAW/);
 });
 
-test('canonical first API tutorial keeps pre-start rejection value-free', () => {
+test('canonical first API tutorial keeps doctor and smoke evidence value-free', () => {
   const tutorial = readFileSync(
     new URL(
       '../src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx',
@@ -223,9 +223,10 @@ test('canonical first API tutorial keeps pre-start rejection value-free', () => 
   );
   const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
 
-  assert.match(tutorial, /changed generated artifact/);
-  assert.match(tutorial, /unsafe listener/);
-  assert.match(tutorial, /invalid[\s\S]*workbook before the API starts/);
+  assert.match(tutorial, /authored project can be compiled/);
+  assert.match(tutorial, /workbook passes[\s\S]*strict validation/);
+  assert.match(tutorial, /generated result matches the authored inputs/);
+  assert.match(tutorial, /listener is loopback-only/);
   assert.match(tutorial, /It does not contain raw keys or[\s\S]*workbook rows/);
   assert.doesNotMatch(tutorial, /relay\.startup\.config_validation_rejected|min_cell_size/);
   assert.doesNotMatch(script, /set-relay-min-group-size|min_cell_size/);
@@ -355,21 +356,20 @@ test('HTTP authoring tutorial output stays synchronized with the current starter
   }
 });
 
-test('release-form claim tutorial keeps the snapshot no-match result bounded', () => {
+test('release-form claim tutorial keeps the live no-match result bounded', () => {
   const tutorial = readFileSync(
     new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
     'utf8',
   );
   const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
 
-  assert.match(tutorial, /population-record-exists/);
-  assert.match(
-    tutorial,
-    /`false` means this bounded source observation produced no match/,
-  );
+  assert.match(tutorial, /project-record-exists/);
+  assert.match(tutorial, /"claim_id": "project-record-exists"[\s\S]*?"value": false/);
+  assert.match(tutorial, /bounded[\s\S]*no\s+match/);
+  assert.match(tutorial, /"value": "pw_999"/);
   for (const broaderNegative of [
     'global nonexistence',
-    'identity fraud',
+    'fraud',
     'ineligibility',
     'legal negative',
   ]) {
@@ -377,25 +377,62 @@ test('release-form claim tutorial keeps the snapshot no-match result bounded', (
   }
   assert.doesNotMatch(
     tutorial,
-    /person-registration-accepted|active-registration-exists|active-or-pending-registration-exists/,
+    /population-record-exists|person-registration-accepted|active-registration-exists|active-or-pending-registration-exists/,
   );
-  assert.doesNotMatch(script, /population-record-exists/);
+  assert.doesNotMatch(script, /project-record-exists/);
 });
 
-test('release-form claim tutorial uses the canonical v0.14.0 offline starter', () => {
+test('release-form claim tutorial continues the canonical v0.14.0 project live', () => {
   const tutorial = readFileSync(
     new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
     'utf8',
   );
 
   assert.match(tutorial, /^status: current$/m);
-  assert.match(tutorial, /registryctl 0\.14\.0 and its matching image lock/);
-  assert.match(tutorial, /registryctl init --from snapshot --project-dir my-first-claim/);
-  assert.match(tutorial, /entirely offline/);
+  assert.match(tutorial, /registryctl 0\.14\.0 with its matching image lock/i);
+  assert.match(tutorial, /Continue from[\s\S]*`my-first-api`/);
+  assert.match(tutorial, /registryctl add notary/);
+  assert.match(tutorial, /\.registry-stack\/runtime\/local\/secrets\/local\.env/);
+  assert.match(tutorial, /http:\/\/127\.0\.0\.1:4255\/v1\/evaluations/);
+  assert.match(tutorial, /HTTP 403/);
+  assert.match(tutorial, /REGISTRYCTL_LOCAL_NOTARY_UNDER_SCOPED_TOKEN_RAW/);
+  assert.match(tutorial, /REGISTRYCTL_LOCAL_NOTARY_CALLER_TOKEN_RAW/);
+  assert.match(tutorial, /evidence:projects:read/);
+  assert.match(tutorial, /public-works-case-management/);
+  assert.match(tutorial, /project-status-accepted/);
+  assert.match(tutorial, /PASS: 6\/6 fixtures passed/);
+  assert.match(tutorial, /"value": "pw_001"/);
+  assert.match(tutorial, /"value": "PW-002"/);
+  assert.match(tutorial, /"value": "pw_999"/);
+  assert.match(tutorial, /registryctl restart/);
+  assert.match(tutorial, /registryctl stop/);
+  assert.match(tutorial, /You\s+do not edit `?\.registry-stack\//);
   assert.doesNotMatch(
     tutorial,
-    /Main checkout|git rev-parse|manifest_source_ref|tag_target|registryctl add notary/,
+    /registryctl init --from snapshot|Main checkout|git clone|git switch|git rev-parse|cargo build|registryctl build|manifest_source_ref|tag_target/,
   );
+});
+
+test('live claim tutorial restarts after an authored status-policy change', () => {
+  const tutorial = readFileSync(
+    new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
+    'utf8',
+  );
+  const plannedHeading = tutorial.indexOf('## Evaluate the planned project');
+  const initialResult = tutorial.indexOf('"value": false', plannedHeading);
+  const authoredEdit = tutorial.indexOf(
+    'project.matched && (project.status == "active" || project.status == "planned")',
+    initialResult,
+  );
+  const restart = tutorial.indexOf('registryctl restart', authoredEdit);
+  const changedResult = tutorial.indexOf('"value": true', restart);
+  const cleanup = tutorial.indexOf('registryctl stop', changedResult);
+
+  assert.ok(initialResult > plannedHeading, 'initial planned-project result is missing');
+  assert.ok(authoredEdit > initialResult, 'authored policy edit must follow the initial result');
+  assert.ok(restart > authoredEdit, 'restart must follow the authored policy edit');
+  assert.ok(changedResult > restart, 'changed live result must follow restart');
+  assert.ok(cleanup > changedResult, 'cleanup must follow the changed live result');
 });
 
 test('current-source bootstrap stays executable and outside adopter release-form pages', () => {

@@ -422,6 +422,11 @@ struct ServiceDeclaration {
     kind: ServiceKind,
     #[serde(default)]
     version: u32,
+    /// Subject category evaluated by an evidence service. Omission is
+    /// normalized to `person` without erasing whether the field was authored,
+    /// so records services cannot silently accept it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subject_type: Option<EvidenceSubjectType>,
     #[serde(default)]
     purpose: String,
     #[serde(default)]
@@ -456,6 +461,33 @@ struct ServiceDeclaration {
     conforms_to: Vec<String>,
     #[serde(default)]
     api: Option<RecordsApiDeclaration>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, Eq, PartialEq, Ord, PartialOrd)]
+#[serde(rename_all = "snake_case")]
+enum EvidenceSubjectType {
+    #[default]
+    Person,
+    Project,
+}
+
+impl EvidenceSubjectType {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Person => "person",
+            Self::Project => "project",
+        }
+    }
+}
+
+impl ServiceDeclaration {
+    const fn effective_subject_type(&self) -> EvidenceSubjectType {
+        match self.subject_type {
+            Some(subject_type) => subject_type,
+            None => EvidenceSubjectType::Person,
+        }
+    }
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
