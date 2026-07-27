@@ -429,7 +429,7 @@ fn generated_records_datasets(
                         "name": binding.columns[logical],
                         "type": record_field.field_type,
                         "nullable": record_field.nullable,
-                        "sensitive": matches!(&binding.provider, RecordProvider::Xlsx { .. }),
+                        "sensitive": record_field.sensitive,
                     }))
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -444,7 +444,7 @@ fn generated_records_datasets(
                     json!({
                         "name": logical,
                         "from": binding.columns[logical],
-                        "sensitive": matches!(&binding.provider, RecordProvider::Xlsx { .. }),
+                        "sensitive": true,
                     })
                 })
                 .collect::<Vec<_>>();
@@ -717,7 +717,10 @@ fn entity_record_field(name: &str, field: &EntityFieldSchema) -> Result<RecordFi
     Ok(RecordField {
         field_type,
         nullable,
-        sensitive: false,
+        // Project-authored record fields remain sensitive regardless of the
+        // physical provider. Changing a workbook binding to CSV, Parquet, or
+        // PostgreSQL must not silently widen logs, diagnostics, or API output.
+        sensitive: true,
         concept_uri: None,
         codelist: None,
         unit: None,

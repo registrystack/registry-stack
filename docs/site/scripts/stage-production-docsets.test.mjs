@@ -43,6 +43,8 @@ async function createFixture(t, {
     await mkdir(resolve(path, '..'), { recursive: true });
     await writeFile(path, `<p>Released ${page}</p>\n`);
   }
+  await writeFile(resolve(archiveRoot, 'index.md'), '# Released index\n');
+  await writeFile(resolve(archiveRoot, 'guide.md'), '# Released guide\n');
 
   const manifest = {
     current: 'latest',
@@ -96,7 +98,11 @@ test('stages root routes as redirects without copying or changing immutable arch
 
   const result = await stageProductionDocsets({ docsRoot: fixture.docsRoot });
 
-  assert.deepEqual(result, { released: 'v1.0.0', redirects: 2 });
+  assert.deepEqual(result, {
+    released: 'v1.0.0',
+    redirects: 2,
+    markdownRoutes: 2,
+  });
   assert.equal(await treeDigest(fixture.archiveRoot), fixture.lockedDigest);
   assert.equal(
     await readFile(resolve(fixture.previewRoot, 'index.html'), 'utf8'),
@@ -120,6 +126,14 @@ test('stages root routes as redirects without copying or changing immutable arch
   assert.match(root, /url=\/v\/1\.0\.0\//);
   assert.match(guide, /url=\/v\/1\.0\.0\/guide\//);
   assert.doesNotMatch(root, /Released index\.html/);
+  assert.equal(
+    await readFile(resolve(fixture.docsRoot, 'dist/index.md'), 'utf8'),
+    '# Released index\n',
+  );
+  assert.equal(
+    await readFile(resolve(fixture.docsRoot, 'dist/guide.md'), 'utf8'),
+    '# Released guide\n',
+  );
 });
 
 test('rejects a candidate docset selected as released', async (t) => {

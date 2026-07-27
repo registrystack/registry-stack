@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::fs;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -67,6 +67,25 @@ fn installer_help_describes_version_aware_release_assets() {
         stdout.contains("higher-assurance installation mode"),
         "{stdout}"
     );
+}
+
+#[test]
+fn installer_can_be_read_from_standard_input() {
+    let installer = Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh");
+    let output = Command::new("bash")
+        .arg("-s")
+        .arg("--")
+        .arg("--help")
+        .stdin(Stdio::from(File::open(installer).unwrap()))
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdin installer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Install registryctl."));
 }
 
 #[cfg(unix)]

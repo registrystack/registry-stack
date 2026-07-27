@@ -854,6 +854,15 @@ jobs:
             dist/candidate/dist/grype/grype-db-status.json >/dev/null
           grype_binary_sha256="$(sha256sum "$(command -v grype)" | awk '{print $1}')"
           printf '%s\n' "${grype_binary_sha256}" > dist/candidate/dist/grype/grype-binary.sha256
+          postgresql_ref="$(tr -d '\n' < release/registryctl-postgresql-image.ref)"
+          postgresql_digest="${postgresql_ref##*@}"
+          if [[ ! "${postgresql_ref}" =~ ^docker\.io/library/postgres@sha256:[0-9a-f]{64}$ ]] ||
+             [[ "$(crane digest "${postgresql_ref}")" != "${postgresql_digest}" ]]; then
+            echo "Reviewed PostgreSQL runtime image is not available at its locked digest" >&2
+            exit 1
+          fi
+          printf '%s\n' "${postgresql_ref}" \
+            > dist/candidate/dist/images/postgresql.digest
           for name in registry-notary registry-relay; do
             digest_ref="$(cat "inputs/build-a/dist/images/${name}.digest")"
             expected_label_args=()
@@ -898,6 +907,27 @@ jobs:
             printf '%s\n' "${db_built}" > "dist/candidate/dist/grype/${name}.db-built"
             printf '%s\n' "${db_checksum}" > "dist/candidate/dist/grype/${name}.db-checksum"
           done
+          syft "${postgresql_ref}" \
+            -o "spdx-json=dist/candidate/dist/sbom/postgresql.spdx.json" \
+            -o "syft-json=dist/candidate/dist/sbom/postgresql.syft.json"
+          release/scripts/registry-release bind-spdx-subject \
+            dist/candidate/dist/sbom/postgresql.spdx.json \
+            --image-name postgresql \
+            --digest-ref "${postgresql_ref}"
+          grype "${postgresql_ref}" -o json \
+            > dist/candidate/dist/grype/postgresql.grype.json
+          db_built="$(jq -er '.descriptor.db.built' dist/candidate/dist/grype/postgresql.grype.json)"
+          db_checksum="$(jq -er '.descriptor.db.checksum' dist/candidate/dist/grype/postgresql.grype.json)"
+          db_built_epoch="$(date -u -d "${db_built}" +%s)"
+          now_epoch="$(date -u +%s)"
+          if (( db_built_epoch > now_epoch || now_epoch - db_built_epoch > 259200 )); then
+            echo "Grype database for postgresql is future-dated or older than three days" >&2
+            exit 1
+          fi
+          printf '%s\n' "${db_built}" \
+            > dist/candidate/dist/grype/postgresql.db-built
+          printf '%s\n' "${db_checksum}" \
+            > dist/candidate/dist/grype/postgresql.db-checksum
 
       - name: Enforce advisory policy
         shell: bash

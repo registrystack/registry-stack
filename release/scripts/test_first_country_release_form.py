@@ -647,6 +647,45 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertIn(b"[REDACTED]", retained)
         self.assertIn(b"[PRIVATE_PATH]", retained)
 
+    def test_env_redaction_collects_credentials_not_public_runtime_values(self) -> None:
+        env_file = self.root / "postgres.env"
+        env_file.write_bytes(
+            b"POSTGRES_USER=registryctl_bootstrap\n"
+            b"PGDATA=/var/lib/postgresql/data/pgdata\n"
+            b"REGISTRYCTL_LOCAL_WORKLOAD_PUBLIC_JWK=public-jwk\n"
+            b"REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH=public-fingerprint\n"
+            b"POSTGRES_PASSWORD=private-password\n"
+            b"REGISTRY_RELAY_AUDIT_HASH_SECRET=private-audit-secret\n"
+        )
+
+        values = self.module.credential_env_values(env_file)
+
+        self.assertIn(b"private-password", values)
+        self.assertIn(b"private-audit-secret", values)
+        self.assertNotIn(b"registryctl_bootstrap", values)
+        self.assertNotIn(b"/var/lib/postgresql/data/pgdata", values)
+        self.assertNotIn(b"public-jwk", values)
+        self.assertNotIn(b"public-fingerprint", values)
+
+    def test_partial_secret_directory_still_yields_failure_redaction_values(
+        self,
+    ) -> None:
+        secrets = self.root / "secrets"
+        secrets.mkdir()
+        (secrets / "local.env").write_text(
+            "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_RAW=private-key\n",
+            encoding="utf-8",
+        )
+        (secrets / "relay-workload-token").write_text(
+            "private-token\n",
+            encoding="utf-8",
+        )
+
+        values = self.module.available_secret_values(secrets)
+
+        self.assertIn(b"private-key", values)
+        self.assertIn(b"private-token", values)
+
     def test_local_evidence_credentials_must_be_distinct(self) -> None:
         local_env = self.root / "local.env"
         local_env.write_text(

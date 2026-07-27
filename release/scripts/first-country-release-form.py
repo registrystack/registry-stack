@@ -149,6 +149,16 @@ SECRET_FILES = {
     "relay_workload_token": "relay-workload-token",
     "workload_private_jwk": "workload-private.jwk",
 }
+NON_CREDENTIAL_ENV_NAMES = {
+    b"PGDATA",
+    b"POSTGRES_USER",
+    b"REGISTRYCTL_LOCAL_NOTARY_CALLER_TOKEN_HASH",
+    b"REGISTRYCTL_LOCAL_NOTARY_UNDER_SCOPED_TOKEN_HASH",
+    b"REGISTRYCTL_LOCAL_POSTGRES_TLS_CERTIFICATE_B64",
+    b"REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH",
+    b"REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_HASH",
+    b"REGISTRYCTL_LOCAL_WORKLOAD_PUBLIC_JWK",
+}
 
 
 class ReleaseFormError(RuntimeError):
@@ -367,14 +377,43 @@ def run_command(
     }
 
 
-def local_env_values(path: Path) -> list[bytes]:
+def credential_env_values(path: Path) -> list[bytes]:
     values: list[bytes] = []
     for line in path.read_bytes().splitlines():
         if b"=" not in line or line.startswith(b"#"):
             continue
-        value = line.split(b"=", 1)[1]
+        name, value = line.split(b"=", 1)
+        if name in NON_CREDENTIAL_ENV_NAMES:
+            continue
         if value:
             values.append(value)
+    return sorted(set(values), key=len, reverse=True)
+
+
+def available_secret_values(secrets_dir: Path) -> list[bytes]:
+    """Collect redaction values without trusting a partial runtime directory."""
+    try:
+        paths = sorted(secrets_dir.iterdir())
+    except OSError:
+        return []
+    values: list[bytes] = []
+    for path in paths:
+        try:
+            metadata = path.lstat()
+            if (
+                stat.S_ISLNK(metadata.st_mode)
+                or not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_size <= 0
+                or metadata.st_size > MAX_FILE_BYTES
+            ):
+                continue
+            if path.suffix == ".env":
+                values.extend(credential_env_values(path))
+            else:
+                data = path.read_bytes()
+                values.extend(value for value in (data, data.strip()) if value)
+        except OSError:
+            continue
     return sorted(set(values), key=len, reverse=True)
 
 
@@ -998,10 +1037,10 @@ def run_release_form(args: argparse.Namespace) -> Path:
             )
             secrets = sorted(
                 set(
-                    local_env_values(
+                    credential_env_values(
                         project / ".registry-stack/runtime/local/secrets/local.env"
                     )
-                    + local_env_values(
+                    + credential_env_values(
                         project / ".registry-stack/runtime/local/secrets/relay.env"
                     )
                 ),
@@ -1056,29 +1095,42 @@ def run_release_form(args: argparse.Namespace) -> Path:
                 }
             )
         finally:
-            if project.exists():
-                stopped = subprocess.run(
-                    [str(registryctl), "stop"] if registryctl.exists() else ["true"],
-                    cwd=project,
-                    env=environment,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    timeout=60,
-                    check=False,
-                )
-                (logs / "stop.log").write_text(
-                    stopped.stdout[-MAX_LOG_BYTES:], encoding="utf-8"
-                )
-                if stopped.returncode == 0:
-                    commands.append(
-                        {
-                            "name": "stop",
-                            "status": "passed",
-                            "exit_code": 0,
-                            "log_sha256": sha256(logs / "stop.log"),
-                        }
+            try:
+                if project.exists():
+                    stopped = subprocess.run(
+                        [str(registryctl), "stop"] if registryctl.exists() else ["true"],
+                        cwd=project,
+                        env=environment,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        timeout=60,
+                        check=False,
                     )
+                    (logs / "stop.log").write_text(
+                        stopped.stdout[-MAX_LOG_BYTES:], encoding="utf-8"
+                    )
+                    if stopped.returncode == 0:
+                        commands.append(
+                            {
+                                "name": "stop",
+                                "status": "passed",
+                                "exit_code": 0,
+                                "log_sha256": sha256(logs / "stop.log"),
+                            }
+                        )
+            finally:
+                secrets.extend(
+                    available_secret_values(
+                        project / ".registry-stack/runtime/local/secrets"
+                    )
+                )
+                secrets = sorted(set(secrets), key=len, reverse=True)
+                redact_logs(
+                    logs,
+                    secrets,
+                    private_paths=(root, install_dir, project, asset_dir, evidence_dir),
+                )
         if tuple(command["name"] for command in commands) != COMMAND_ORDER:
             raise ReleaseFormError(
                 "release-form command sequence did not complete in exact order"
@@ -1087,7 +1139,7 @@ def run_release_form(args: argparse.Namespace) -> Path:
         for secret_path in sorted(secrets_dir.iterdir()):
             require_regular(secret_path)
             if secret_path.suffix == ".env":
-                secrets.extend(local_env_values(secret_path))
+                secrets.extend(credential_env_values(secret_path))
             else:
                 data = secret_path.read_bytes()
                 secrets.extend(value for value in (data, data.strip()) if value)

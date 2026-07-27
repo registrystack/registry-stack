@@ -19,6 +19,7 @@ import {
   currentSourceGeneratedArtifacts,
   readOptionalRegularFile,
 } from './build-archives.mjs';
+import { applyArchiveSeo } from './apply-archive-seo.mjs';
 
 const execFileAsync = promisify(execFile);
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -85,11 +86,32 @@ test('archive generation excludes current-source generators', async () => {
   }
 });
 
+test('selected released archive stays indexable and keeps its sitemap', async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-released-seo-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(
+    resolve(root, 'index.html'),
+    '<html><head><meta name="robots" content="noindex,follow"><link rel="sitemap" href="sitemap-index.xml"></head></html>',
+  );
+  await writeFile(resolve(root, 'sitemap-index.xml'), '<sitemapindex/>\n');
+
+  await applyArchiveSeo(root, { indexable: true });
+
+  const html = await readFile(resolve(root, 'index.html'), 'utf8');
+  assert.doesNotMatch(html, /noindex,follow/);
+  assert.match(html, /rel="sitemap"/);
+  assert.equal(
+    await readFile(resolve(root, 'sitemap-index.xml'), 'utf8'),
+    '<sitemapindex/>\n',
+  );
+});
+
 test('archived docset builds use isolated generation with release-bound environment', async (t) => {
   const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-build-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const calls = [];
   let seoPath;
+  let seoOptions;
 
   await buildDocsetArchive(archivedDocset, {
     docsRoot: root,
@@ -97,8 +119,9 @@ test('archived docset builds use isolated generation with release-bound environm
     runCommand: async (command, args, env) => {
       calls.push({ command, args, env });
     },
-    applySeo: async (path) => {
+    applySeo: async (path, options) => {
       seoPath = path;
+      seoOptions = options;
     },
   });
 
@@ -119,6 +142,7 @@ test('archived docset builds use isolated generation with release-bound environm
     assert.equal(env.PUBLIC_UMAMI_DOMAINS, '');
   }
   assert.equal(seoPath, resolve(root, 'dist/v/1.2.3'));
+  assert.deepEqual(seoOptions, { indexable: false });
 });
 
 test('archive output uses pinned generated artifacts and restores current files', async (t) => {

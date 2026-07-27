@@ -262,7 +262,13 @@ const CANONICAL_RUNTIME_WORKLOAD_CLIENT: &str = "registryctl-local-notary";
 const CANONICAL_RUNTIME_WORKLOAD_ISSUER: &str = "http://127.0.0.1:4255";
 const CANONICAL_RUNTIME_WORKLOAD_AUDIENCE: &str = "registry-relay";
 const CANONICAL_RUNTIME_WORKLOAD_SCOPE: &str = "registry:consult:public-works-verification";
-const CANONICAL_RUNTIME_WORKLOAD_TTL_SECONDS: u64 = 3600;
+// The canonical local runtime has no background credential-renewal process.
+// Bind this purpose-limited, loopback-only workload credential to the same
+// long-lived local lifecycle as the generated API keys instead of silently
+// breaking a running tutorial after one hour. `registryctl start` and
+// `restart` still issue a fresh JWT, and deleting the disposable runtime
+// rotates the signing key and every local credential.
+const CANONICAL_RUNTIME_WORKLOAD_LIFETIME_SECONDS: u64 = 10 * 365 * 24 * 60 * 60;
 const CANONICAL_RUNTIME_WORKLOAD_KID: &str = "registryctl-local-workload";
 const CANONICAL_RUNTIME_NOTARY_SIGNING_KID: &str = "registryctl-local-notary-evidence";
 const CANONICAL_RUNTIME_MATCH_RAW_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_RAW";
@@ -2975,7 +2981,7 @@ fn sign_workload_jwt(private_jwk: &str) -> Result<String> {
         "scope": CANONICAL_RUNTIME_WORKLOAD_SCOPE,
         "iat": now,
         "nbf": now.saturating_sub(1),
-        "exp": now + CANONICAL_RUNTIME_WORKLOAD_TTL_SECONDS,
+        "exp": now + CANONICAL_RUNTIME_WORKLOAD_LIFETIME_SECONDS,
         "jti": random_token(16)?,
     });
     let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -3367,7 +3373,7 @@ fn validate_workload_jwt(token: &str, private_jwk: &str) -> Result<()> {
         .ok_or_else(|| anyhow!("workload JWT is missing exp"))?;
     if nbf > iat
         || exp <= iat
-        || exp - iat > CANONICAL_RUNTIME_WORKLOAD_TTL_SECONDS
+        || exp - iat > CANONICAL_RUNTIME_WORKLOAD_LIFETIME_SECONDS
         || claims["jti"].as_str().is_none()
     {
         bail!("workload JWT lifetime or identifier is invalid");
@@ -8900,7 +8906,11 @@ mod tests {
         assert_eq!(claims["scope"], CANONICAL_RUNTIME_WORKLOAD_SCOPE);
         assert_eq!(
             claims["exp"].as_u64().unwrap() - claims["iat"].as_u64().unwrap(),
-            CANONICAL_RUNTIME_WORKLOAD_TTL_SECONDS
+            CANONICAL_RUNTIME_WORKLOAD_LIFETIME_SECONDS
+        );
+        assert!(
+            claims["exp"].as_u64().unwrap() - claims["iat"].as_u64().unwrap() > 3600,
+            "the supported local claim path must not expire after one hour"
         );
 
         let compose_file = runtime.compose_file.strip_prefix(&project).unwrap();

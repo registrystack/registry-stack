@@ -395,6 +395,14 @@ jobs:
             if length == 1 then .[0] else error("expected one payload") end
           ' "${receipt}")"
           payload="promotion/artifacts/${payload_name}"
+          reviewed_postgresql="$(tr -d '\n' < release/registryctl-postgresql-image.ref)"
+          candidate_postgresql="$(
+            tr -d '\n' < "${payload}/dist/images/postgresql.digest"
+          )"
+          test "${candidate_postgresql}" = "${reviewed_postgresql}"
+          test "$(crane digest "${candidate_postgresql}")" = "${candidate_postgresql##*@}"
+          test -s "${payload}/dist/sbom/postgresql.spdx.json"
+          test -s "${payload}/dist/grype/postgresql.grype.json"
           python3 release/scripts/first-country-release-form.py verify \
             --asset-dir "${payload}/dist/bin" \
             --tag "${{ needs.verify.outputs.tag }}" \

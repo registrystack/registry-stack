@@ -673,6 +673,10 @@ class RegistryReleaseTest(unittest.TestCase):
             "grype dist/candidate/dist/grype/registry-relay.grype.json",
             images_job,
         )
+        self.assertIn("dist/candidate/dist/images/postgresql.digest", images_job)
+        self.assertIn("dist/candidate/dist/sbom/postgresql.spdx.json", images_job)
+        self.assertIn("dist/candidate/dist/grype/postgresql.grype.json", images_job)
+        self.assertIn('crane digest "${postgresql_ref}"', images_job)
         self.assertIn("--syft-report", images_job)
         self.assertIn("--rootfs", images_job)
         self.assertIn("retention-days: 7", images_job[upload_step:])
@@ -1150,6 +1154,14 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn(
             "--postgresql-ref-file release/registryctl-postgresql-image.ref",
             candidate,
+        )
+        self.assertIn(
+            '"${payload}/dist/images/postgresql.digest"',
+            workflow,
+        )
+        self.assertIn(
+            'crane digest "${candidate_postgresql}"',
+            workflow,
         )
         self.assertIn("verify-registryctl-binary-version", candidate)
         self.assertLess(
@@ -1843,6 +1855,76 @@ class RegistryReleaseTest(unittest.TestCase):
         )
         self.assertNotIn("signing `", capsule_markdown)
         self.assertNotIn("attestation `", capsule_markdown)
+
+    def test_render_capsule_records_postgresql_as_digest_bound_supporting_image(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_ref = init_release_repo(root)
+            manifest = write_manifest(root, source_ref=source_ref)
+            binary_dir = write_binary_fixture(root)
+            image_dir = write_image_fixture(root)
+            postgresql_ref = f"docker.io/library/postgres@{IMAGE_DIGEST}"
+            (image_dir / "postgresql.digest").write_text(
+                f"{postgresql_ref}\n",
+                encoding="utf-8",
+            )
+            (image_dir / "postgresql.spdx.json").write_text(
+                json.dumps(
+                    {
+                        "spdxVersion": "SPDX-2.3",
+                        "name": "postgresql",
+                        "documentDescribes": ["SPDXRef-postgresql-image"],
+                        "packages": [
+                            {
+                                "SPDXID": "SPDXRef-postgresql-image",
+                                "name": "docker.io/library/postgres",
+                                "externalRefs": [
+                                    {
+                                        "referenceType": "purl",
+                                        "referenceLocator": f"pkg:oci/postgres@{IMAGE_DIGEST}",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (image_dir / "postgresql.grype.json").write_text(
+                json.dumps(
+                    {
+                        "descriptor": {
+                            "version": "0.114.0",
+                            "db": {"built": "2026-06-24T00:00:00Z"},
+                        },
+                        "source": {"target": {"userInput": postgresql_ref}},
+                        "matches": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output_json = root / "capsule.json"
+
+            result = render_capsule(
+                manifest,
+                binary_dir,
+                image_dir,
+                output_json,
+                root / "capsule.md",
+                root,
+            )
+            evidence = json.loads(output_json.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        postgresql = next(
+            image for image in evidence["images"] if image["name"] == "postgresql"
+        )
+        self.assertEqual("supporting-runtime-image", postgresql["role"])
+        self.assertIsNone(postgresql["tag"])
+        self.assertIsNone(postgresql["tag_ref"])
+        self.assertEqual(postgresql_ref, postgresql["digest_ref"])
 
     def test_render_capsule_classifies_required_image_lock_as_release_file(
         self,

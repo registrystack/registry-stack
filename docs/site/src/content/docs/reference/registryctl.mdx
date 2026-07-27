@@ -477,8 +477,9 @@ Inspect commands report on a running or generated project.
 ## Testing
 
 Smoke commands run built-in local checks and write a versioned JSON result file. The
-`registryctl.smoke.v1` report is saved as `smoke-results.json` under the authored
-`local.output_dir`. Smoke-check ordering and human-readable names are not compatibility contracts.
+`registryctl.smoke.v1` report is saved at
+`.registry-stack/runtime/local/smoke-results.json`. Smoke-check ordering and
+human-readable names are not compatibility contracts.
 
 | Subcommand | Purpose |
 | --- | --- |

@@ -14,7 +14,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use registry_relay::config::{DatasetId, FieldType, ResourceId};
 use registry_relay::error::IngestError;
 use registry_relay::ingest::declared_schema::{DeclaredField, DeclaredSchema};
-use registry_relay::ingest::validation::{validate, ProjectionPlan};
+use registry_relay::ingest::validation::{validate, validate_batches, ProjectionPlan};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -361,6 +361,95 @@ fn primary_key_unique_in_materialized_rows_accepts() {
     )
     .unwrap();
     run(&decl, &obs, Some("id"), Some(&batch)).expect("unique pk");
+}
+
+#[test]
+fn primary_key_duplicate_across_batches_fails() {
+    let decl = declared(false, vec![field("id", FieldType::Integer, false)]);
+    let obs = arrow_schema(vec![("id", DataType::Int64, false)]);
+    let batches = [
+        RecordBatch::try_new(
+            Arc::new(obs.clone()),
+            vec![Arc::new(Int64Array::from(vec![1, 2]))],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(obs.clone()),
+            vec![Arc::new(Int64Array::from(vec![2, 3]))],
+        )
+        .unwrap(),
+    ];
+    let err =
+        validate_batches(&dsid(), &rsid(), &decl, &obs, Some("id"), Some(&batches)).unwrap_err();
+    assert!(matches!(err, IngestError::SchemaMismatch));
+}
+
+#[test]
+fn later_batch_value_and_null_checks_are_not_skipped() {
+    let date_decl = declared(false, vec![field("date", FieldType::Date, true)]);
+    let date_obs = arrow_schema(vec![("date", DataType::Utf8, true)]);
+    let date_batches = [
+        RecordBatch::try_new(
+            Arc::new(date_obs.clone()),
+            vec![Arc::new(StringArray::from(vec!["2026-07-27"]))],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(date_obs.clone()),
+            vec![Arc::new(StringArray::from(vec!["invalid"]))],
+        )
+        .unwrap(),
+    ];
+    assert!(matches!(
+        validate_batches(
+            &dsid(),
+            &rsid(),
+            &date_decl,
+            &date_obs,
+            None,
+            Some(&date_batches),
+        ),
+        Err(IngestError::SchemaMismatch)
+    ));
+
+    let id_decl = declared(false, vec![field("id", FieldType::Integer, false)]);
+    let id_obs = arrow_schema(vec![("id", DataType::Int64, true)]);
+    let id_batches = [
+        RecordBatch::try_new(
+            Arc::new(id_obs.clone()),
+            vec![Arc::new(Int64Array::from(vec![Some(1)]))],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(id_obs.clone()),
+            vec![Arc::new(Int64Array::from(vec![None]))],
+        )
+        .unwrap(),
+    ];
+    assert!(matches!(
+        validate_batches(&dsid(), &rsid(), &id_decl, &id_obs, None, Some(&id_batches),),
+        Err(IngestError::SchemaMismatch)
+    ));
+}
+
+#[test]
+fn valid_multiple_batches_accept() {
+    let decl = declared(false, vec![field("id", FieldType::Integer, false)]);
+    let obs = arrow_schema(vec![("id", DataType::Int64, false)]);
+    let batches = [
+        RecordBatch::try_new(
+            Arc::new(obs.clone()),
+            vec![Arc::new(Int64Array::from(vec![1, 2]))],
+        )
+        .unwrap(),
+        RecordBatch::try_new(
+            Arc::new(obs.clone()),
+            vec![Arc::new(Int64Array::from(vec![3, 4]))],
+        )
+        .unwrap(),
+    ];
+    validate_batches(&dsid(), &rsid(), &decl, &obs, Some("id"), Some(&batches))
+        .expect("multiple valid batches accept");
 }
 
 #[test]

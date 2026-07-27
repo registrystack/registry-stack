@@ -1078,12 +1078,22 @@ def render_capsule(
             if subject not in {digest_ref, digest}:
                 raise ValueError(f"{name} Grype subject {subject} does not match digest ref {digest_ref}")
             summary = severity_summary(grype_report)
+            is_supporting_runtime = name == "postgresql"
             image = {
                 "name": name,
+                "role": (
+                    "supporting-runtime-image"
+                    if is_supporting_runtime
+                    else "released-product-image"
+                ),
                 "digest_ref": digest_ref,
                 "digest": digest,
-                "tag": tag,
-                "tag_ref": f"{digest_ref.rsplit('@', 1)[0]}:{tag}",
+                "tag": None if is_supporting_runtime else tag,
+                "tag_ref": (
+                    None
+                    if is_supporting_runtime
+                    else f"{digest_ref.rsplit('@', 1)[0]}:{tag}"
+                ),
                 "sbom": {
                     "asset_name": sbom.name,
                     "subject": digest_ref,
@@ -1186,7 +1196,14 @@ def capsule_markdown(evidence: dict) -> str:
     lines.extend(["", "## Images", ""])
     for image in evidence["images"]:
         scan = image["vulnerability_scan"]
-        lines.append(f"- `{image['name']}` tag `{image['tag_ref']}` digest `{image['digest_ref']}`; SBOM `{image['sbom']['asset_name']}`; Grype `{scan['asset_name']}`")
+        if image["role"] == "supporting-runtime-image":
+            identity = f"supporting runtime digest `{image['digest_ref']}`"
+        else:
+            identity = f"tag `{image['tag_ref']}` digest `{image['digest_ref']}`"
+        lines.append(
+            f"- `{image['name']}` {identity}; SBOM "
+            f"`{image['sbom']['asset_name']}`; Grype `{scan['asset_name']}`"
+        )
     lines.extend(["", "## Caveats", ""])
     warnings = evidence.get("warnings") or []
     if warnings:

@@ -302,9 +302,10 @@ Later sections report one records API service, the effective scopes and
 disclosure plan, and redaction counts. This proves that Registryctl validated
 the human-authored project and derived a reviewable effective plan.
 
-Spreadsheet fields compile as sensitive. A field is not externally readable
-merely because it exists in the workbook or entity schema. It must also appear
-in the reviewed service projection.
+Project fields compile as sensitive regardless of whether their physical
+provider is XLSX, CSV, Parquet, or PostgreSQL. A field is not externally
+readable merely because it exists in the source or entity schema. It must also
+appear in the reviewed service projection.
 
 ## Stop and clean up
 
@@ -312,10 +313,12 @@ Stop the local runtime:
 
 ```sh
 registryctl stop
+cd ..
 ```
 
 Docker may print container shutdown progress. Registryctl prints no additional
-success line after Compose exits successfully.
+success line after Compose exits successfully. `cd ..` returns you to the
+directory that contains `my-first-api`, ready for the next tutorial.
 
 This stops and removes the local containers and network. It keeps the authored
 project and workbook. The generated build and runtime directories are

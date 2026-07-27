@@ -14,7 +14,8 @@ standards_referenced: []
 
 The beginner tutorials stop at a loopback-only local runtime. Use this
 checklist to decide whether an operator can take ownership. Registry Stack
-does not yet provide a verified production deployment or operations runbook.
+provides bounded runbooks for product operations, but it does not provide a
+verified production deployment for your institution.
 
 ## Handoff checklist
 
@@ -32,19 +33,26 @@ Before activation, the implementer and operator must record:
   rotation, upgrades, rollback, and incident response
 - The approval evidence and named authority required before activation
 
-Files under `.registry-stack/runtime/<environment>/` contain local
+Files under `.registry-stack/runtime/local/` contain local
 credentials, Compose input, and runtime results. Keep them private and do not
 treat them as a production deployment package.
 
-## Current documentation boundary
+## Use the operations guidance
 
-Registry Stack does not yet release adopter runbooks for reverse proxies,
-production hardening, backup and restore, retention, upgrades, rollback, or
-advanced operations. Define and exercise those procedures in the target
-environment before exposing either service to production traffic.
+The available guidance defines product procedures and the evidence to retain.
+You still need to adapt, review, and exercise each procedure in the target
+environment:
 
-This checklist records ownership and unresolved work. It does not establish
-production readiness, legal approval, data fitness, or country acceptance.
+- [Compare, rotate, recover, and diagnose generated product inputs](advanced/)
+- [Registry Notary deployment hardening](../products/registry-notary/deployment-hardening-runbook/)
+- [Registry Notary PostgreSQL operations](../products/registry-notary/postgresql-state-operations/)
+
+Draft procedures for reverse proxies, backup and restore, retention, upgrades,
+and rollback are not released as supported runbooks yet. Institution-owned
+procedures remain required before production exposure.
+
+This checklist and the linked runbooks do not establish production readiness,
+legal approval, data fitness, or country acceptance.
 
 ## Next
 

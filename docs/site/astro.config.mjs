@@ -43,7 +43,7 @@ function loadDocsetsManifest() {
 }
 
 /**
- * @param {{ current: string, docsets: Array<{ id: string, status: string }> }} docsets
+ * @param {{ current: string, released: string, docsets: Array<{ id: string, status: string }> }} docsets
  * @param {NodeJS.ProcessEnv} env
  */
 export function resolveDocsetBuildContext(docsets, env = process.env) {
@@ -54,6 +54,8 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const base = env.DOCS_BASE || undefined;
   const basePath = base?.replace(/\/$/, '');
   const isArchivedBuild = selectedDocset.status === 'archived';
+  const isHistoricalArchiveBuild =
+    isArchivedBuild && selectedDocset.id !== docsets.released;
   /** @param {string} path */
   const internalRedirect = (path) => basePath ? `${basePath}${path}` : path;
   /** @param {string} path */
@@ -64,6 +66,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     base,
     basePath,
     isArchivedBuild,
+    isHistoricalArchiveBuild,
     internalRedirect,
     currentDocsetRedirect,
   };
@@ -73,6 +76,7 @@ const docsetsManifest = loadDocsetsManifest();
 const {
   base,
   isArchivedBuild,
+  isHistoricalArchiveBuild,
   internalRedirect,
   currentDocsetRedirect,
 } = resolveDocsetBuildContext(docsetsManifest);
@@ -407,6 +411,6 @@ export default defineConfig({
         },
       ],
     }),
-    ...(isArchivedBuild ? [disabledSitemap] : [sitemap()]),
+    ...(isHistoricalArchiveBuild ? [disabledSitemap] : [sitemap()]),
   ],
 });

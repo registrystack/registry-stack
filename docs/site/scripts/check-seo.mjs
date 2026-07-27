@@ -38,12 +38,14 @@ function archiveRootForFile(file, archivedDocsets) {
 }
 
 const manifest = await loadDocsets();
-const archivedDocsets = manifest.docsets.filter((docset) => docset.status === 'archived');
 const releasedDocset = manifest.docsets.find((docset) => docset.id === manifest.released);
+const archivedDocsets = manifest.docsets.filter((docset) => docset.status === 'archived');
+const historicalDocsets = archivedDocsets.filter((docset) => docset.id !== manifest.released);
 const scope = scopeFromArgs(process.argv.slice(2));
 const errors = [];
 let currentChecked = 0;
 let archivedChecked = 0;
+let releasedChecked = 0;
 let redirectsChecked = 0;
 const previewDir = join(distDir, 'preview');
 const productionLayout = await exists(join(previewDir, 'index.html'));
@@ -54,7 +56,7 @@ if (!await exists(join(currentOutput, 'sitemap-index.xml'))) {
 }
 
 if (scope === 'all') {
-  for (const docset of archivedDocsets) {
+  for (const docset of historicalDocsets) {
     const archiveDir = join(distDir, docset.path);
     const archiveSitemap = join(archiveDir, 'sitemap-index.xml');
     const archiveSitemapPage = join(archiveDir, 'sitemap-0.xml');
@@ -69,7 +71,9 @@ if (scope === 'all') {
 
 for (const file of await htmlFiles(distDir)) {
   const html = await readFile(file, 'utf8');
-  const isArchived = Boolean(archiveRootForFile(file, archivedDocsets));
+  const archiveDocset = archiveRootForFile(file, archivedDocsets);
+  const isArchived = Boolean(archiveDocset);
+  const isReleasedArchive = archiveDocset?.id === manifest.released;
   const isProductionRedirect =
     /<meta\s+name=["']registry-docset-redirect["']\s+content=["'][^"']+["']\s*\/?>/.test(html);
   if (scope === 'current' && (isArchived || isProductionRedirect)) continue;
@@ -92,6 +96,11 @@ for (const file of await htmlFiles(distDir)) {
         `${relative('.', file)} must canonically redirect into released docset ${manifest.released}`,
       );
     }
+  } else if (isReleasedArchive) {
+    releasedChecked += 1;
+    if (hasNoindex) {
+      errors.push(`${relative('.', file)} is the released docset but has robots noindex,follow`);
+    }
   } else if (isArchived) {
     archivedChecked += 1;
     if (!hasNoindex) {
@@ -109,7 +118,10 @@ for (const file of await htmlFiles(distDir)) {
 }
 
 if (scope === 'all' && archivedDocsets.length > 0 && archivedChecked === 0) {
-  errors.push('No archived HTML files were checked.');
+  if (historicalDocsets.length > 0) errors.push('No historical archive HTML files were checked.');
+}
+if (scope === 'all' && releasedDocset && releasedChecked === 0) {
+  errors.push('No released-docset HTML files were checked.');
 }
 if (scope === 'all' && productionLayout && redirectsChecked === 0) {
   errors.push('No released-root redirect HTML files were checked.');
@@ -121,5 +133,5 @@ if (errors.length) {
 }
 
 console.log(
-  `SEO check passed: ${currentChecked} Main HTML files, ${archivedChecked} archived HTML files, and ${redirectsChecked} released-root redirects checked.`,
+  `SEO check passed: ${currentChecked} Main HTML files, ${releasedChecked} released HTML files, ${archivedChecked} historical archive HTML files, and ${redirectsChecked} released-root redirects checked.`,
 );

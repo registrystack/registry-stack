@@ -46,10 +46,14 @@ references, and source prerequisites:
 registryctl preflight --project-dir . --environment local
 ```
 
-For a spreadsheet project, `preflight` reads and validates the complete
-selected sheet. An offline-only project may deliberately omit runtime
-bindings. You can test and build that project, but you cannot start it until an
-operator supplies the missing environment values.
+`preflight` validates secret-reference availability, runtime-file posture,
+environment bindings, and product compatibility without contacting a source.
+An offline-only project may deliberately omit runtime bindings. You can test
+and build that project, but you cannot start it until an operator supplies the
+missing environment values.
+
+For the supported local spreadsheet runtime, use `registryctl doctor --profile
+local` to validate the complete selected worksheet and the host prerequisites.
 
 ## Check the local API
 
