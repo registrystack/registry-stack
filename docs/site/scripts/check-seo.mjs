@@ -3,6 +3,10 @@ import { join, relative, resolve } from 'node:path';
 import { loadDocsets } from './docsets.mjs';
 
 const distDir = resolve(process.env.DOCS_DIST_DIR || 'dist');
+// v0.13.0 was sealed before selected releases became indexable. Its immutable
+// bundle cannot be rewritten. The exception disappears automatically when the
+// released selector advances, and no later release is allowed to inherit it.
+const immutableLegacyNoindexReleasedDocsets = new Set(['v0.13.0']);
 
 function scopeFromArgs(args) {
   if (args.length === 0) return 'all';
@@ -41,6 +45,11 @@ const manifest = await loadDocsets();
 const releasedDocset = manifest.docsets.find((docset) => docset.id === manifest.released);
 const archivedDocsets = manifest.docsets.filter((docset) => docset.status === 'archived');
 const historicalDocsets = archivedDocsets.filter((docset) => docset.id !== manifest.released);
+const releasedHasLegacyNoindex =
+  immutableLegacyNoindexReleasedDocsets.has(manifest.released);
+const searchExcludedDocsets = archivedDocsets.filter(
+  (docset) => docset.id !== manifest.released || releasedHasLegacyNoindex,
+);
 const scope = scopeFromArgs(process.argv.slice(2));
 const errors = [];
 let currentChecked = 0;
@@ -56,7 +65,7 @@ if (!await exists(join(currentOutput, 'sitemap-index.xml'))) {
 }
 
 if (scope === 'all') {
-  for (const docset of historicalDocsets) {
+  for (const docset of searchExcludedDocsets) {
     const archiveDir = join(distDir, docset.path);
     const archiveSitemap = join(archiveDir, 'sitemap-index.xml');
     const archiveSitemapPage = join(archiveDir, 'sitemap-0.xml');
@@ -98,8 +107,17 @@ for (const file of await htmlFiles(distDir)) {
     }
   } else if (isReleasedArchive) {
     releasedChecked += 1;
-    if (hasNoindex) {
+    if (releasedHasLegacyNoindex && !hasNoindex) {
+      errors.push(
+        `${relative('.', file)} is immutable legacy release ${manifest.released} but is missing robots noindex,follow`,
+      );
+    } else if (!releasedHasLegacyNoindex && hasNoindex) {
       errors.push(`${relative('.', file)} is the released docset but has robots noindex,follow`);
+    }
+    if (releasedHasLegacyNoindex && hasSitemapLink) {
+      errors.push(
+        `${relative('.', file)} is immutable legacy release ${manifest.released} but links a sitemap`,
+      );
     }
   } else if (isArchived) {
     archivedChecked += 1;
