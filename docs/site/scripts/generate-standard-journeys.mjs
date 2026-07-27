@@ -910,11 +910,23 @@ function buildSteps(journey, matrixById) {
         "Run the focused no-match claim fixture offline",
         "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-no-match --trace",
       ),
-      commandStep(
-        "snapshot-first-claim-preflight",
-        "Validate the embedded snapshot project inputs",
-        "registryctl preflight --project-dir snapshot-project --environment local",
-      ),
+      {
+        id: "snapshot-first-claim-preflight",
+        kind: "readiness_gate",
+        label: "Inspect missing local runtime requirements",
+        cwd: ".",
+        argv: [
+          "registryctl",
+          "preflight",
+          "--project-dir",
+          "snapshot-project",
+          "--environment",
+          "local",
+          "--format",
+          "json",
+        ],
+        note: "This clean-workspace step is expected to exit 1 with a value-free not_ready report because operator-provisioned runtime files and secret references are absent. Provision those inputs and require a passing preflight before starting a local runtime.",
+      },
       commandStep(
         "snapshot-first-claim-check",
         "Check and explain the embedded snapshot project",

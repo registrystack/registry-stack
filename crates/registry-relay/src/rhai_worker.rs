@@ -44,8 +44,8 @@ const WORKER_MODE: &str = "__registry-relay-rhai-worker-v1";
 const PROTOCOL_VERSION: u8 = 1;
 // One frame must carry the 8 MiB source-response ceiling plus the fixed JSON
 // protocol envelope and selected response headers. Frames remain one-at-a-time,
-// output is independently capped at 64 KiB, and the worker process retains its
-// 128 MiB address-space ceiling.
+// output is independently capped at 64 KiB, and Linux caps the worker's data
+// and anonymous allocations at 128 MiB.
 const MAX_IPC_FRAME_BYTES: usize = 9 * 1024 * 1024;
 const MAX_SCRIPT_BYTES: usize = 128 * 1024;
 const MAX_NAMES: usize = 64;
@@ -2616,8 +2616,12 @@ fn apply_process_sandbox(limits: &WorkerLimits) -> Result<(), WorkerError> {
     set(Resource::RLIMIT_CORE, 0)?;
     #[cfg(target_os = "linux")]
     {
+        // RLIMIT_AS includes the trusted worker executable and its shared
+        // libraries, so setting it to the authored script budget can prevent
+        // a larger release binary from starting before Rhai executes. Linux
+        // accounts anonymous mmap allocations against RLIMIT_DATA; keep that
+        // limit as the script-process memory ceiling.
         set(Resource::RLIMIT_DATA, limits.max_memory_bytes)?;
-        set(Resource::RLIMIT_AS, limits.max_memory_bytes)?;
         set(Resource::RLIMIT_NPROC, 1)?;
         nix::sys::prctl::set_no_new_privs().map_err(|_| WorkerError::SandboxUnavailable)?;
     }

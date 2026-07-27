@@ -131,10 +131,10 @@
   worker receives only typed inputs and the reviewed source authority, can use
   only the bounded `source` and `protocol` host facilities compiled for that
   integration, and returns a closed typed output map under fixed resource
-  limits. Production activation is Linux-only and caps the worker address space
-  at 128 MiB so the configured memory and process isolation are enforced by the
-  operating system; non-Linux hosts retain only offline, authority-free
-  conformance checks. Release images install the dedicated
+  limits. Production activation is Linux-only and caps the worker's data and
+  anonymous allocations at 128 MiB so the configured memory and process
+  isolation are enforced by the operating system; non-Linux hosts retain only
+  offline, authority-free conformance checks. Release images install the dedicated
   `registry-relay-rhai-worker` beside `registry-relay`. Standalone deployments
   must install both release assets in the same directory under those canonical
   executable names.

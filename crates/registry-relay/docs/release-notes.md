@@ -141,10 +141,10 @@
   Linux process memory, process-count, and no-new-privileges sandbox in addition
   to engine and IPC limits. Offline script compilation and fixture conformance
   remain available on other platforms without source or credential authority.
-  The worker address-space hard maximum is 128 MiB. Release images install the
-  dedicated `registry-relay-rhai-worker` beside `registry-relay`; standalone
-  deployments must install both release assets in the same directory under
-  those canonical executable names.
+  Linux caps the worker's data and anonymous allocations at 128 MiB. Release
+  images install the dedicated `registry-relay-rhai-worker` beside
+  `registry-relay`; standalone deployments must install both release assets in
+  the same directory under those canonical executable names.
 - Project fixture runs now compile and execute through Relay-owned closed
   decoders for HTTP, script, and exact snapshot integrations.
   Fixtures cannot supply a destination, credential, callback, or worker

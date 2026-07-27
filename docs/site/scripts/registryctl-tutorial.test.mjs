@@ -235,7 +235,8 @@ test('canonical first API tutorial keeps doctor and smoke evidence value-free', 
 test('source tutorial gate validates canonical authoring without rewriting release images', () => {
   const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
 
-  assert.match(script, /source "\$BLOCKS\/02\.sh"/);
+  assert.match(script, /cat "\$BLOCKS\/02\.sh"/);
+  assert.match(script, /source "\$BLOCKS\/03\.sh"/);
   assert.match(script, /registryctl preflight --project-dir \. --environment local/);
   assert.match(script, /registryctl build --project-dir \. --environment local/);
   assert.match(script, /exact runtime sequence is release-gated from the sealed candidate payload/);

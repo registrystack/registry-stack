@@ -220,12 +220,14 @@ test("preserves the canonical snapshot starter as generated offline assurance", 
     /person-registration-accepted|active-registration-exists/u,
   );
   assert.deepEqual(
-    commandSteps(journey).map((step) => step.argv),
+    journey.steps
+      .filter((step) => ["command", "readiness_gate"].includes(step.kind))
+      .map((step) => step.argv),
     [
       ["registryctl", "init", "--from", "snapshot", "--project-dir", "snapshot-project"],
       ["registryctl", "test", "--project-dir", "snapshot-project", "--integration", "person-snapshot", "--fixture", "snapshot-match", "--trace"],
       ["registryctl", "test", "--project-dir", "snapshot-project", "--integration", "person-snapshot", "--fixture", "snapshot-no-match", "--trace"],
-      ["registryctl", "preflight", "--project-dir", "snapshot-project", "--environment", "local"],
+      ["registryctl", "preflight", "--project-dir", "snapshot-project", "--environment", "local", "--format", "json"],
       ["registryctl", "check", "--project-dir", "snapshot-project", "--environment", "local", "--explain"],
       ["registryctl", "compare", "--project-dir", "snapshot-project", "--environment", "local", "--from-starter"],
       ["registryctl", "build", "--project-dir", "snapshot-project", "--environment", "local"],
