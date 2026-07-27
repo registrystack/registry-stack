@@ -626,23 +626,23 @@ class FirstCountryReleaseFormTest(TestCase):
         logs = self.root / "logs"
         logs.mkdir()
         private_root = self.root / "private-work"
-        secret = b"credential-sentinel"
+        redaction_marker = b"redaction-marker"
         (logs / "install.log").write_bytes(
             b"installed "
             + os.fsencode(str(private_root / "install" / "registryctl"))
             + b" with "
-            + secret
+            + redaction_marker
             + b"\n"
         )
 
         self.module.redact_logs(
             logs,
-            [secret],
+            [redaction_marker],
             private_paths=[private_root],
         )
 
         retained = (logs / "install.log").read_bytes()
-        self.assertNotIn(secret, retained)
+        self.assertNotIn(redaction_marker, retained)
         self.assertNotIn(os.fsencode(str(private_root)), retained)
         self.assertIn(b"[REDACTED]", retained)
         self.assertIn(b"[PRIVATE_PATH]", retained)
