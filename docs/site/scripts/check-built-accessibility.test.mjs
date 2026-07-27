@@ -15,8 +15,9 @@ const criticalPaths = [
   'tutorials/publish-spreadsheet-secured-registry-api/index.html',
   'tutorials/use-your-spreadsheet/index.html',
   'tutorials/verify-claim-registry-api/index.html',
-  'journeys/spreadsheet-protected-api/index.html',
-  'journeys/registry-backed-notary-claim/index.html',
+  'verify/index.html',
+  'generated-artifacts/index.html',
+  'operate/index.html',
 ];
 
 function page(overrides = '') {

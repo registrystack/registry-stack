@@ -20,6 +20,14 @@ from typing import Any
 import yaml
 
 import release_candidate
+from registryctl_image_lock import (
+    PLATFORM as RELEASE_IMAGE_LOCK_PLATFORM,
+    PRODUCT_IMAGE_REPOSITORIES,
+    SCHEMA_V2 as RELEASE_IMAGE_LOCK_SCHEMA_V2,
+    read_reviewed_postgresql_image_ref,
+    schema_for_release_version,
+    validate_images,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,8 +38,6 @@ HEX40 = re.compile(r"^[0-9a-f]{40}$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
-RELEASE_IMAGE_LOCK_SCHEMA = "registryctl.release_image_lock.v1"
-RELEASE_IMAGE_LOCK_PLATFORM = "linux/amd64"
 RELEASE_IMAGE_LOCK_MINIMUM_VERSION = (0, 9, 0)
 EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION = (0, 10, 0)
 EXACT_ARTIFACT_INVENTORY = {
@@ -46,10 +52,6 @@ EXACT_ARTIFACT_INVENTORY = {
 }
 OPTIONAL_EXACT_ARTIFACTS = {
     "registryctl-installer",
-}
-RELEASE_IMAGE_LOCK_REPOSITORIES = {
-    "registry-relay": "ghcr.io/registrystack/registry-relay",
-    "registry-notary": "ghcr.io/registrystack/registry-notary",
 }
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
 RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -174,7 +176,7 @@ def read_release_image_digest(path: Path, image_name: str) -> str:
     match = IMAGE_DIGEST_REF.fullmatch(digest_ref)
     if match is None:
         raise ValueError(f"{image_name} digest ref must match image@sha256:<64 lowercase hex>")
-    expected_repository = RELEASE_IMAGE_LOCK_REPOSITORIES[image_name]
+    expected_repository = PRODUCT_IMAGE_REPOSITORIES[image_name]
     if match.group(1) != expected_repository:
         raise ValueError(
             f"{image_name} digest ref repository must be {expected_repository}, got {match.group(1)}"
@@ -186,6 +188,7 @@ def render_registryctl_image_lock(
     manifest_path: Path,
     relay_digest_path: Path,
     notary_digest_path: Path,
+    postgresql_ref_path: Path | None,
     tag_target: str,
     output: Path,
 ) -> int:
@@ -212,17 +215,36 @@ def render_registryctl_image_lock(
 
         relay_digest = read_release_image_digest(relay_digest_path, "registry-relay")
         notary_digest = read_release_image_digest(notary_digest_path, "registry-notary")
+        schema_version = schema_for_release_version(version)
+        images = {
+            "registry-relay": relay_digest,
+            "registry-notary": notary_digest,
+        }
+        if schema_version == RELEASE_IMAGE_LOCK_SCHEMA_V2:
+            if postgresql_ref_path is None:
+                raise ValueError(
+                    "registryctl release image lock v2 requires --postgresql-ref-file"
+                )
+            images["postgresql"] = read_reviewed_postgresql_image_ref(
+                postgresql_ref_path
+            )
+        elif postgresql_ref_path is not None:
+            read_reviewed_postgresql_image_ref(postgresql_ref_path)
         image_lock = {
-            "schema_version": RELEASE_IMAGE_LOCK_SCHEMA,
+            "schema_version": schema_version,
             "release_tag": release_tag,
             "manifest_source_ref": manifest_source_ref,
             "tag_target": tag_target,
             "platform": RELEASE_IMAGE_LOCK_PLATFORM,
-            "images": {
-                "registry-relay": relay_digest,
-                "registry-notary": notary_digest,
-            },
+            "images": images,
         }
+        validate_registryctl_image_lock_document(
+            image_lock,
+            version=version,
+            release_tag=release_tag,
+            manifest_source_ref=manifest_source_ref,
+            tag_target=tag_target,
+        )
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(image_lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except (KeyError, OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
@@ -254,7 +276,7 @@ def validate_registryctl_image_lock_document(
     if set(data) != expected_keys:
         raise ValueError("registryctl release image lock has missing or unknown top-level fields")
     expected_values = {
-        "schema_version": RELEASE_IMAGE_LOCK_SCHEMA,
+        "schema_version": schema_for_release_version(version),
         "release_tag": release_tag,
         "manifest_source_ref": manifest_source_ref,
         "tag_target": tag_target,
@@ -263,16 +285,7 @@ def validate_registryctl_image_lock_document(
     for field, expected in expected_values.items():
         if data.get(field) != expected:
             raise ValueError(f"registryctl release image lock {field} must be {expected!r}")
-    images = data.get("images")
-    if not isinstance(images, dict) or set(images) != set(RELEASE_IMAGE_LOCK_REPOSITORIES):
-        raise ValueError("registryctl release image lock images has missing or unknown fields")
-    for image_name, repository in RELEASE_IMAGE_LOCK_REPOSITORIES.items():
-        digest_ref = images.get(image_name)
-        match = IMAGE_DIGEST_REF.fullmatch(digest_ref) if isinstance(digest_ref, str) else None
-        if match is None or match.group(1) != repository:
-            raise ValueError(
-                f"registryctl release image lock {image_name} must be {repository}@sha256:<64 lowercase hex>"
-            )
+    validate_images(str(data.get("schema_version", "")), data.get("images"))
     if data["release_tag"] != f"v{version}":
         raise ValueError(f"registryctl release image lock release_tag must match v{version}")
 
@@ -2847,6 +2860,7 @@ def main() -> int:
     image_lock_parser.add_argument("manifest", type=Path)
     image_lock_parser.add_argument("--relay-digest", type=Path, required=True)
     image_lock_parser.add_argument("--notary-digest", type=Path, required=True)
+    image_lock_parser.add_argument("--postgresql-ref-file", type=Path)
     image_lock_parser.add_argument("--tag-target", required=True)
     image_lock_parser.add_argument("--output", type=Path, required=True)
     image_lock_version_parser = subparsers.add_parser(
@@ -2928,6 +2942,7 @@ def main() -> int:
             args.manifest,
             args.relay_digest,
             args.notary_digest,
+            args.postgresql_ref_file,
             args.tag_target,
             args.output,
         )

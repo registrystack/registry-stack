@@ -30,14 +30,16 @@ One project defines one registry trust domain. Its deployment topology can be Re
 only, or Relay and Notary together; independent registries use separate projects. Notary-only
 source-free claims are evaluation-only. Credential issuance requires the combined topology and
 exact Relay-backed evaluation provenance.
-The [Registry Stack project authoring guide](../../tutorials/author-registry-project/) covers the
-complete workflow and generated trust boundary.
+The [connect your data guide](../../configure/) covers the supported adopter path from the
+maintained spreadsheet sample to a reviewed local source.
 
 | Subcommand or flag | Purpose |
 | --- | --- |
 | `init --from <starter>` | Copy `spreadsheet`, `http`, `dhis2-tracker`, `opencrvs-dci`, `fhir-r4`, or `snapshot` into a local workspace. |
 | `init --project-dir <dir>` | Destination for `init --from`. Defaults to the current directory. |
 | `init --format json` | Emit the versioned machine-readable initialization report instead of the default human-readable result. |
+| `add notary` | Extend the canonical spreadsheet project in the current directory with the supported local Notary add-on and private consultation Relay. Repeating the command against the unchanged add-on reports `unchanged` without rewriting files. |
+| `add notary --format json` | Emit the versioned machine-readable add-on report instead of the default human-readable result. |
 | `test --project-dir <dir>` | Compile and run every integration fixture through the Relay decoder and configured claim evaluator offline. Defaults to the current directory. |
 | `test --integration <id> --fixture <name>` | Select one integration fixture. `--fixture` requires `--integration`. |
 | `test --trace` | Include the safe synthetic interaction trace in the human or JSON report. |
@@ -80,7 +82,7 @@ complete workflow and generated trust boundary.
 
 Interactive report commands print concise human-readable results by default. Add `--format json`
 when another program needs a report containing only versioned JSON on standard output.
-This policy covers `init`, non-watch `test`, `check`, `preflight`, `capabilities`,
+This policy covers `init`, `add notary`, non-watch `test`, `check`, `preflight`, `capabilities`,
 `compare`, `promote`, `migrate`, `authoring editor`, `project diagnostics`, `build`, `doctor`, `bundle`, and
 `anchor`. Watch mode prints one concise
 pass/fail summary per run and rejects JSON
@@ -98,6 +100,7 @@ when coverage is incomplete.
 | JSON command result | Schema version |
 | --- | --- |
 | `init` | `registryctl.init.v1` |
+| `add notary` | `registryctl.add_notary.v1` |
 | Successful `test`, `check`, or `build` | `registryctl.project_command.v1` |
 | Invalid-project `check` | `registryctl.project_diagnostics.v1` |
 | `preflight` | `registryctl.project_preflight.v1` |
@@ -392,17 +395,31 @@ default and accept `--format json` for automation.
 ## Project setup
 
 `registryctl init --from spreadsheet --project-dir <dir>` creates the
-canonical protected spreadsheet project. `registryctl init --from snapshot`
-creates the canonical offline Relay-and-Notary claim project. Both use
-`registry-stack.yaml`, explicit entity and environment files, and generated
-product inputs under `.registry-stack/`.
+canonical protected spreadsheet project. From that project root,
+`registryctl add notary` adds the supported local Notary and private
+consultation Relay over the maintained workbook. The resulting combined
+project is the live local continuation of the spreadsheet first run.
+
+`registryctl init --from snapshot` serves a different purpose. It creates a
+standalone Relay-and-Notary authoring project whose synthetic snapshot
+fixtures run offline. The snapshot starter does not add Notary to a
+spreadsheet project or establish that either service is running.
+
+Both project forms use `registry-stack.yaml`, explicit entity and environment
+files, and generated product inputs under `.registry-stack/`.
+
+The first successful `add notary` report has status `updated`. Repeating the
+command when every managed add-on file is unchanged has status `unchanged`
+and does not rewrite the files. A conflicting or partially customized add-on
+is rejected instead of being overwritten.
 
 The human-readable result identifies the authored project and next validation
-command. The JSON result contains no progress text, so another program can
-parse standard output directly. Automation must read the project root from
-`output` and supported authored entry points from `artifacts` in the
-`registryctl.init.v1` report. Generated layout remains a private implementation
-detail.
+command. The JSON results contain no progress text, so another program can
+parse standard output directly. For `init`, automation must read the project
+root from `output` and supported authored entry points from `artifacts` in the
+`registryctl.init.v1` report. For `add notary`, automation must inspect
+`status`, `project`, and `files` in the `registryctl.add_notary.v1` report.
+Generated layout remains a private implementation detail.
 
 Local runtime commands require the strict
 `registryctl-vX.Y.Z-image-lock.json` from the same release beside the running
@@ -419,10 +436,14 @@ Notary-only project contains source-free or self-attested evaluation-only claims
 
 ### Retired direct projects
 
-Registryctl 0.14.0 retires the pre-1.0 `init relay` scaffold and
-`add notary` mutation. Either command returns a precise reinitialization path
-and does not modify the target directory. Registryctl does not silently
-translate a direct project or preserve two public project models.
+Registryctl 0.14.0 keeps the pre-1.0 `init relay` scaffold retired. The
+command returns a precise reinitialization path and does not modify the target
+directory.
+
+The supported `add notary` command applies only to the canonical spreadsheet
+project. It does not reopen the legacy direct-project model, migrate a legacy
+direct project, or preserve two public project models. A legacy direct project
+is rejected without conversion.
 
 Reinitialize with `init --from spreadsheet` for a protected records API or
 `init --from snapshot` for the offline claim tutorial, then re-express the

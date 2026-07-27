@@ -1,113 +1,43 @@
 ---
-title: Quickstart
-description: Clone Solmara Lab, generate its synthetic country configuration, start the local Registry Stack topology, and verify it with the smoke suite.
-status: draft
+title: Choose the v0.14 local first run
+description: Choose the supported local Registry Stack beginner path for a protected API or live claim.
+status: current
 owner: registry-docs
 source_repos:
-  - solmara-lab
+  - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-16"
-doc_type: tutorial
+last_reviewed: "2026-07-27"
+doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-import QuickstartMeta from '../../../components/QuickstartMeta.astro';
-import { Steps } from '@astrojs/starlight/components';
+Use the two local tutorials for the Registry Stack v0.14 beginner path. Start
+with Registry Relay, then continue to a live Registry Notary claim.
 
-Solmara Lab is the standalone Registry Stack adopter demo. This quickstart
-clones its repository, generates synthetic country configuration and local demo
-secrets, starts the digest-pinned services, and runs the repository-owned smoke
-suite. It does not use the retired monorepo Lab or its hosted endpoints.
+## Run your first registry API
 
-<QuickstartMeta
-  outcome="A local Solmara Lab topology verified by its smoke suite."
-  time="About 20 minutes, mostly first-run dependency installation and image pulls"
-  level="Local multi-service demo"
-  prerequisites={['Docker Compose v2', 'just', 'uv', 'Python 3 and OpenSSL', 'pnpm 11.3.0 via corepack', 'git']}
-/>
+[Run your first registry API](../../tutorials/publish-spreadsheet-secured-registry-api/)
+installs Registryctl from release assets, starts Registry Relay over maintained
+synthetic data, and checks denied and allowed requests.
 
-:::note[Separate adopter repository]
-Solmara Lab demonstrates Registry Stack but is not a fifth Registry Stack
-product. Its configuration and orchestration live in
-[`registrystack/solmara-lab`](https://github.com/registrystack/solmara-lab).
-:::
+## Verify a live claim
 
-This tutorial uses generated synthetic records and local demo credentials. Do
-not reuse its keys, tokens, or passwords in another environment.
+[Verify a live registry-backed claim](../../tutorials/verify-claim-registry-api/)
+continues from the first API to a running Registry Notary service and checks
+match, no-match, and denied requests.
 
-## Get the repository
+## Connect your data
 
-Clone Solmara Lab and install its pinned Python and Node dependencies:
+[Use your own spreadsheet](../../tutorials/use-your-spreadsheet/) replaces the
+sample workbook with one reviewed non-personal workbook after the local first
+run works.
 
-```sh
-git clone https://github.com/registrystack/solmara-lab
-cd solmara-lab
-just setup
-```
+## About older quickstart links
 
-`just setup` installs the generator environments with `uv` and the portal
-dependencies with the repository's pinned `pnpm` version.
-
-## Start and verify the topology
-
-Run these commands from the Solmara Lab checkout:
-
-<Steps>
-
-1. Generate deterministic fixtures, local demo secrets, and TLS material:
-
-    ```sh
-    just generate
-    ```
-
-2. Build the adopter-owned wrapper images and start the topology:
-
-    ```sh
-    just up
-    ```
-
-3. Run the authoritative smoke suite:
-
-    ```sh
-    just smoke
-    ```
-
-</Steps>
-
-The smoke command exits successfully only after the generated configuration,
-service health, and protected Relay and Notary journeys selected by that
-Solmara revision pass. A failure stays visible in the command output.
-
-## Stop the topology
-
-When you are finished:
-
-```sh
-just down
-```
-
-## What you completed
-
-You generated an adopter-owned country topology, started the Registry Stack
-services from immutable image references, and verified the running system with
-the same smoke command Solmara maintains in CI. No deprecated hosted Lab token,
-URL, or monorepo path is part of the journey.
-
-## Next
-
-- [First run with Solmara Lab](../../tutorials/first-run-with-solmara-lab/):
-  inspect the topology and call a Notary evaluation route directly.
-- [Run a protected registry API locally](../../tutorials/publish-spreadsheet-secured-registry-api/):
-  generate a smaller Relay project from a sample workbook.
-- [Evaluate a claim with Registry Notary](../../tutorials/verify-claim-registry-api/):
-  extend the generated project with Notary.
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| `just generate` reports a missing command | A prerequisite is not installed or not on `PATH` | Install the named tool, then rerun `just setup` and `just generate` |
-| Compose cannot pull a pinned image | Docker cannot reach GHCR or the host architecture is unsupported by that release | Confirm registry access and use the platform documented by the pinned Solmara revision |
-| `just smoke` fails after services start | One or more services are not ready, or generated files do not match the checkout | Read the first failing smoke check, run `just down`, then regenerate and retry without hand-editing generated files |
+The former hosted quickstart and Solmara Lab tutorials used different
+deployment topologies. They are not the supported v0.14 beginner path, and the
+local tutorials are not equivalent replacements for those retired flows. Old
+links land on this chooser so you can select a current local task without
+mistaking it for hosted onboarding.

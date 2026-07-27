@@ -105,24 +105,46 @@ export default defineConfig({
   // to their new homes so old links and search results keep resolving.
   redirects: {
     '/start/': internalRedirect('/'),
-    '/start/see-it-live/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
+    '/start/see-it-live/': internalRedirect('/start/quickstart/'),
     '/explanation/trust-posture-and-security-guarantees/': internalRedirect('/security/'),
     '/reference/security-self-assessment/': internalRedirect('/security/self-assessment/'),
     '/reference/openssf-evidence/': internalRedirect('/security/openssf-evidence/'),
-    // quickstart's "Choose by question" router merged into the homepage (2026-06).
-    '/start/your-first-call/': internalRedirect('/tutorials/first-run-with-solmara-lab/'),
-    // The monorepo lab tutorial was replaced by the standalone Solmara Lab (2026-07).
-    '/tutorials/first-run-with-registry-lab/': internalRedirect('/tutorials/first-run-with-solmara-lab/'),
+    // Retired pages keep old links useful by sending readers to a supported
+    // task or reference page.
+    '/journeys/': internalRedirect('/'),
+    '/journeys/spreadsheet-protected-api/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
+    '/journeys/instance-openapi/': internalRedirect('/reference/apis/'),
+    '/journeys/bounded-http/': internalRedirect('/configure/'),
+    '/journeys/bounded-multi-call-script/': internalRedirect('/configure/'),
+    '/journeys/exact-snapshot/': internalRedirect('/configure/'),
+    '/journeys/registry-backed-notary-claim/': internalRedirect('/tutorials/verify-claim-registry-api/'),
+    '/journeys/product-input-lifecycle/': internalRedirect('/generated-artifacts/'),
+    // Retired first-call and source-review routes enter the supported local path.
+    '/start/your-first-call/': internalRedirect('/tutorials/publish-spreadsheet-secured-registry-api/'),
+    '/start/test-current-source-revision/': internalRedirect('/start/quickstart/'),
+    // Retired hosted and Solmara Lab tutorials now land on a chooser that
+    // distinguishes those flows from the supported local beginner path.
+    '/tutorials/first-run-with-registry-lab/': internalRedirect('/start/quickstart/'),
+    '/tutorials/first-run-with-solmara-lab/': internalRedirect('/start/quickstart/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
     '/tutorials/configure-dhis2-claim-checks/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/getting-started-fhir-evidence/': internalRedirect('/explanation/integration-patterns/'),
-    // Direct-source Notary authoring was replaced by Registry Stack project authoring (2026-07).
-    '/tutorials/run-notary-standalone-for-api/': internalRedirect('/tutorials/author-registry-project/'),
-    '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/author-registry-project/'),
-    '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
-    '/products/registry-notary/fhir-source-adapter-guide/': internalRedirect('/tutorials/configure-project-fhir-r4/'),
-    '/products/registry-notary/opencrvs-onboarding/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
-    '/products/registry-notary/opencrvs-dci-standalone-tutorial/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
+    // Retired advanced tutorials land on current task, explanation, or
+    // reference entry points.
+    '/tutorials/run-notary-standalone-for-api/': internalRedirect('/tutorials/verify-claim-registry-api/'),
+    '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/verify-claim-registry-api/'),
+    '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/explanation/integration-patterns/'),
+    '/tutorials/author-registry-project/': internalRedirect('/configure/'),
+    '/tutorials/configure-project-api-key-authentication/': internalRedirect('/configure/'),
+    '/tutorials/configure-project-fhir-r4/': internalRedirect('/explanation/integration-patterns/'),
+    '/tutorials/configure-project-script-adapter/': internalRedirect('/explanation/integration-patterns/'),
+    '/tutorials/configure-project-snapshot-materialization/': internalRedirect('/configure/'),
+    '/tutorials/deploy-standalone-with-own-data/': internalRedirect('/operate/'),
+    '/tutorials/move-notary-to-production-signing/': internalRedirect('/operate/'),
+    '/tutorials/verify-opencrvs-claims/': internalRedirect('/explanation/integration-patterns/'),
+    '/products/registry-notary/fhir-source-adapter-guide/': internalRedirect('/explanation/integration-patterns/'),
+    '/products/registry-notary/opencrvs-onboarding/': internalRedirect('/explanation/integration-patterns/'),
+    '/products/registry-notary/opencrvs-dci-standalone-tutorial/': internalRedirect('/explanation/integration-patterns/'),
     '/products/registry-notary/sidecar-trust-and-secrets/': internalRedirect('/explanation/threat-model/'),
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
@@ -161,10 +183,10 @@ export default defineConfig({
     '/projects/registry-notary/configure-a-claim/': internalRedirect('/products/registry-notary/source-claim-modeling-guide/'),
     '/projects/registry-notary/reference/': internalRedirect('/products/registry-notary/operator-config-reference/'),
     // The target exists only in the current docset; archives redirect to the latest page.
-    '/products/registry-notary/opencrvs-dci-onboarding/': currentDocsetRedirect('/tutorials/verify-opencrvs-claims/'),
+    '/products/registry-notary/opencrvs-dci-onboarding/': currentDocsetRedirect('/explanation/integration-patterns/'),
     // Retired project routes redirect only when a current replacement exists.
     // Solmara Lab is an external adopter, not a Registry Stack product.
-    '/projects/registry-lab/demo-flow/': internalRedirect('/tutorials/first-run-with-solmara-lab/'),
+    '/projects/registry-lab/demo-flow/': internalRedirect('/start/quickstart/'),
     // The API reference moved from static Redoc HTML to native, theme-aware,
     // searchable pages. Keep the old shareable links working.
     '/api/registry-relay.html': internalRedirect('/reference/apis/relay/'),
@@ -251,107 +273,43 @@ export default defineConfig({
           href: 'https://github.com/registrystack/registry-stack/tree/main/docs/site',
         },
       ],
-      // Task-oriented IA: Start, Journeys, Configure, Verify, Generated
-      // artifacts, Operate, Reference, and Specifications. The product
-      // groups remain generated from src/data/repo-docs.yaml, so Relay and
-      // Notary retain their complete product navigation while project
-      // authoring is a first-class stack surface rather than an integration
-      // sub-section. Product pages keep their established URLs; the sidebar
-      // changes discovery, not the public route contract.
+      // Keep the first screen focused on adopter outcomes. Detailed product,
+      // generated-file, and contract material remains available under
+      // collapsed reference sections.
       sidebar: [
         {
           label: 'Start',
           items: [
             { label: 'Overview', link: '/' },
-            { label: 'Your first registry API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
-            { label: 'Use your spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
-            { label: 'Your first claim check', slug: 'tutorials/verify-claim-registry-api' },
-            { label: 'When to use', slug: 'start/when-to-use' },
-            { label: 'Architecture', slug: 'explanation/architecture' },
-            { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
+            { label: 'Run your first registry API', slug: 'tutorials/publish-spreadsheet-secured-registry-api' },
+            { label: 'Verify a live claim', slug: 'tutorials/verify-claim-registry-api' },
+            { label: 'When Registry Stack fits', slug: 'start/when-to-use' },
           ],
         },
         {
-          label: 'Journeys',
-          items: [
-            { label: 'Overview', slug: 'journeys' },
-            { label: 'Spreadsheet protected API assurance (Main source)', slug: 'journeys/spreadsheet-protected-api' },
-            { label: 'Instance OpenAPI assurance (Main source)', slug: 'journeys/instance-openapi' },
-            { label: 'Bounded HTTP assurance (Main source)', slug: 'journeys/bounded-http' },
-            { label: 'Bounded multi-call script assurance (Main source)', slug: 'journeys/bounded-multi-call-script' },
-            { label: 'Exact snapshot assurance (Main source)', slug: 'journeys/exact-snapshot' },
-            { label: 'Registry-backed Notary claim assurance (Main source)', slug: 'journeys/registry-backed-notary-claim' },
-            { label: 'Product-input lifecycle assurance (Main source)', slug: 'journeys/product-input-lifecycle' },
-          ],
-        },
-        {
-          label: 'Configure',
+          label: 'Connect your data',
           items: [
             { label: 'Overview', slug: 'configure' },
-            { label: 'Author a Registry Stack project', slug: 'tutorials/author-registry-project' },
-            { label: 'API-key source authentication', slug: 'tutorials/configure-project-api-key-authentication' },
-            { label: 'FHIR R4 integration', slug: 'tutorials/configure-project-fhir-r4' },
-            { label: 'Snapshot materialization', slug: 'tutorials/configure-project-snapshot-materialization' },
-            { label: 'Script source adapter', slug: 'tutorials/configure-project-script-adapter' },
-            {
-              label: 'Registry Relay',
-              collapsed: true,
-              items: [
-                ...generatedProduct('Relay').items,
-                { label: 'Deploy with own data', slug: 'tutorials/deploy-standalone-with-own-data' },
-              ],
-            },
-            {
-              label: 'Registry Notary',
-              collapsed: true,
-              items: [
-                ...generatedProduct('Notary').items,
-                { label: 'Production signing', slug: 'tutorials/move-notary-to-production-signing' },
-              ],
-            },
+            { label: 'Use your own spreadsheet', slug: 'tutorials/use-your-spreadsheet' },
+            { label: 'Advanced source patterns', slug: 'explanation/integration-patterns' },
+            { label: 'Configuration fields', slug: 'reference/project-configuration' },
           ],
         },
         {
-          label: 'Verify',
-          items: [
-            { label: 'Overview', slug: 'verify' },
-            { label: 'Evaluate a registry-backed claim', slug: 'tutorials/verify-claim-registry-api' },
-            { label: 'Configure OpenCRVS claims', slug: 'tutorials/verify-opencrvs-claims' },
-            { label: 'Security self-assessment', slug: 'security/self-assessment' },
-            { label: 'OpenSSF and release trust', slug: 'security/openssf-evidence' },
-          ],
-        },
-        {
-          label: 'Generated artifacts',
-          collapsed: true,
-          items: [
-            { label: 'Overview', slug: 'generated-artifacts' },
-            { label: 'Project configuration', slug: 'reference/project-configuration' },
-            {
-              label: 'Registry Manifest',
-              collapsed: true,
-              items: generatedProduct('Manifest').items,
-            },
-            { label: 'Contracts', slug: 'reference/contracts' },
-            { label: 'API references', slug: 'reference/apis' },
-          ],
-        },
-        {
-          // Stack-wide operator procedures span the runtime products. The
-          // product-specific procedures remain in their Relay and Notary
-          // product navigation under Configure.
           label: 'Operate',
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'operate' },
-            { label: 'Single-node Compose', slug: 'operate/single-node-compose-behind-proxy' },
-            { label: 'Backup and restore', slug: 'operate/backup-and-restore' },
-            { label: 'Retention and state', slug: 'operate/retention-and-persistent-state' },
-            { label: 'Upgrade and roll back', slug: 'operate/upgrade-and-rollback' },
-            { label: 'Advanced operations', slug: 'operate/advanced' },
-            { label: 'Harden a deployment', slug: 'security/hardening-checklist' },
+          ],
+        },
+        {
+          label: 'Security',
+          collapsed: true,
+          items: [
+            { label: 'Overview', slug: 'security' },
             { label: 'Report a vulnerability', slug: 'security/report-a-vulnerability' },
             { label: 'Security support window', slug: 'security/support-window' },
+            { label: 'Release trust', slug: 'security/openssf-evidence' },
           ],
         },
         {
@@ -359,6 +317,10 @@ export default defineConfig({
           collapsed: true,
           items: [
             { label: 'Overview', slug: 'reference' },
+            { label: 'Validate a project', slug: 'verify' },
+            { label: 'Generated files and ownership', slug: 'generated-artifacts' },
+            { label: 'Project configuration', slug: 'reference/project-configuration' },
+            { label: 'registryctl CLI', slug: 'reference/registryctl' },
             {
               label: 'API reference',
               collapsed: true,
@@ -370,7 +332,6 @@ export default defineConfig({
                 ...openAPISidebarGroups,
               ],
             },
-            { label: 'registryctl CLI', slug: 'reference/registryctl' },
             { label: 'Errors and status codes', slug: 'reference/errors' },
             {
               label: 'Diagnostic catalogs',
@@ -382,6 +343,28 @@ export default defineConfig({
               ],
             },
             { label: 'Environment variables', slug: 'reference/environment-variables' },
+            {
+              label: 'Product documentation',
+              collapsed: true,
+              items: [
+                {
+                  label: 'Registry Relay',
+                  collapsed: true,
+                  items: generatedProduct('Relay').items,
+                },
+                {
+                  label: 'Registry Notary',
+                  collapsed: true,
+                  items: generatedProduct('Notary').items,
+                },
+                {
+                  label: 'Registry Manifest',
+                  collapsed: true,
+                  items: generatedProduct('Manifest').items,
+                },
+              ],
+            },
+            { label: 'Contracts', slug: 'reference/contracts' },
             { label: 'API stability and versioning', slug: 'reference/api-stability' },
             { label: 'Deprecation policy', slug: 'reference/deprecation-policy' },
             { label: 'Standards', slug: 'reference/standards' },
@@ -391,6 +374,8 @@ export default defineConfig({
               label: 'Concepts',
               collapsed: true,
               items: [
+                { label: 'Architecture', slug: 'explanation/architecture' },
+                { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
                 { label: 'Records stay home', slug: 'explanation/records-stay-home' },
                 { label: 'Relay protected read flow', slug: 'explanation/consultation-flow' },
                 { label: 'Evidence issuance', slug: 'explanation/evidence-issuance' },
@@ -399,32 +384,25 @@ export default defineConfig({
                 { label: 'Trusted context', slug: 'explanation/trusted-context-constraints' },
                 { label: 'Integration patterns', slug: 'explanation/integration-patterns' },
                 { label: 'DPI safeguards', slug: 'explanation/dpi-safeguards-alignment' },
-                { label: 'Security overview', slug: 'security' },
-                { label: 'Threat model', slug: 'explanation/threat-model' },
-                { label: 'Known limitations', slug: 'explanation/known-limitations' },
+              ],
+            },
+            {
+              label: 'Specifications',
+              collapsed: true,
+              items: [
+                { label: 'Register', slug: 'spec' },
+                { label: 'RS-DOC · Documentation framework', slug: 'spec/rs-doc' },
+                { label: 'RS-TERMS · Terms', slug: 'spec/rs-terms' },
+                { label: 'RS-ARC-G · Architecture', slug: 'spec/rs-arc-g' },
+                { label: 'RS-PR-NOTARY · Notary protocol', slug: 'spec/rs-pr-notary' },
+                { label: 'RS-PR-REGISTRYCTL · registryctl contract', slug: 'spec/rs-pr-registryctl' },
+                { label: 'RS-PR-RELAY · Relay protocol', slug: 'spec/rs-pr-relay' },
+                { label: 'RS-SEC-G · Security model', slug: 'spec/rs-sec-g' },
+                { label: 'RS-DM-CLAIM · Claim definition model', slug: 'spec/rs-dm-claim' },
+                { label: 'RS-DM-MANIFEST · Portable metadata model', slug: 'spec/rs-dm-manifest' },
               ],
             },
             { label: 'Changelog', slug: 'changelog' },
-          ],
-        },
-        {
-          // The formal layer: independently identified, versioned, normative
-          // specifications. Hand-authored (not generated from repo-docs.yaml)
-          // because these are distilled public contracts, not pulled product
-          // docs. The register page lists every spec from its own frontmatter.
-          label: 'Specifications',
-          collapsed: true,
-          items: [
-            { label: 'Register', slug: 'spec' },
-            { label: 'RS-DOC · Documentation framework', slug: 'spec/rs-doc' },
-            { label: 'RS-TERMS · Terms', slug: 'spec/rs-terms' },
-            { label: 'RS-ARC-G · Architecture', slug: 'spec/rs-arc-g' },
-            { label: 'RS-PR-NOTARY · Notary protocol', slug: 'spec/rs-pr-notary' },
-            { label: 'RS-PR-REGISTRYCTL · registryctl contract', slug: 'spec/rs-pr-registryctl' },
-            { label: 'RS-PR-RELAY · Relay protocol', slug: 'spec/rs-pr-relay' },
-            { label: 'RS-SEC-G · Security model', slug: 'spec/rs-sec-g' },
-            { label: 'RS-DM-CLAIM · Claim definition model', slug: 'spec/rs-dm-claim' },
-            { label: 'RS-DM-MANIFEST · Portable metadata model', slug: 'spec/rs-dm-manifest' },
           ],
         },
       ],

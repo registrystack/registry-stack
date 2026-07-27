@@ -121,8 +121,8 @@ tenant isolation, transport termination and certificate management, edge rate li
 configuration, and incident response are operator responsibilities (RS-SEC-G Section 9).
 The software keeps secrets out of distributable artifacts (REQ-SEC-G-013) and provides the
 primitives; the operator provisions, configures, and operates them.
-[Harden a production deployment](hardening-checklist/) turns this boundary into an actionable
-checklist.
+Record those responsibilities in the
+[operator handoff checklist](../operate/) before activation.
 
 ## Evidence for reviewers
 
@@ -130,18 +130,16 @@ Public, checkable evidence, from most to least formal:
 
 - [RS-SEC-G](../spec/rs-sec-g/) is the normative security model; [RS-PR-RELAY](../spec/rs-pr-relay/)
   and [RS-PR-NOTARY](../spec/rs-pr-notary/) carry its wire-level form per service.
-- [Security self-assessment](self-assessment/) is a CNCF TAG Security-style maintainer
-  self-assessment, including known gaps.
 - [OpenSSF and release trust](openssf-evidence/) records which release-integrity checks are
   verifiable today (signatures, provenance, Scorecard) and which are still incomplete.
+- The [security support window](support-window/) states which release lines receive fixes.
 - The [standards register](../reference/standards/) records the adoption mode and evidence for each
   cited standard.
 - [DPI safeguards alignment](../explanation/dpi-safeguards-alignment/) maps the stack to safeguards
   language for review programs.
 
-These documents state known gaps alongside implemented controls.
-None of them is a certification, and the hosted lab is a synthetic-data demo, not a production
-assurance claim.
+These pages are review material, not a certification.
+The hosted lab is a synthetic-data demo, not a production assurance claim.
 
 ## Report a vulnerability
 
@@ -151,8 +149,8 @@ See [Report a vulnerability](report-a-vulnerability/).
 
 ## Next
 
-- [Harden a production deployment](hardening-checklist/)
-- [Threat model](../explanation/threat-model/): the boundaries, assets, and threats behind this posture, with a one-figure map of the trust boundaries
-- [Known limitations and non-guarantees](../explanation/known-limitations/): the full list of edges
 - [RS-SEC-G: Registry family security model](../spec/rs-sec-g/)
-- [Security self-assessment](self-assessment/)
+- [Prepare the operator handoff](../operate/)
+- [Review the security support window](support-window/)
+- [Review release trust](openssf-evidence/)
+- [Report a vulnerability](report-a-vulnerability/)

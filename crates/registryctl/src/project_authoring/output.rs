@@ -114,7 +114,17 @@ fn validate_generated_product_configs(compiled: &CompiledProject) -> Result<()> 
             .relay_private
             .get(Path::new("config/relay.yaml"))
             .ok_or_else(|| anyhow!("generated Relay config is absent"))?;
-        validate_generated_relay(relay_config, &compiled.relay_private)?;
+        validate_generated_relay(relay_config, &compiled.relay_private, "config/relay.yaml")?;
+        if let Some(consultation_config) = compiled
+            .relay_private
+            .get(Path::new("config/relay-consultation.yaml"))
+        {
+            validate_generated_relay(
+                consultation_config,
+                &compiled.relay_private,
+                "config/relay-consultation.yaml",
+            )?;
+        }
     }
     if !compiled.notary_private.is_empty() {
         validate_generated_notary(compiled)?;
@@ -195,9 +205,7 @@ fn validate_project_workbook_inputs(
                 .block_on(registry_relay::ingest::validate_xlsx_source_bytes(
                     &relay, &resource, &bytes,
                 ))
-                .map_err(|error| {
-                    anyhow!("workbook validation failed ({})", error.code())
-                })?;
+                .map_err(|error| anyhow!("workbook validation failed ({})", error.code()))?;
         }
         let input = ArtifactInputDigest {
             path: ProjectRelativePath::new(relative.clone())
@@ -213,11 +221,7 @@ fn validate_project_workbook_inputs(
     Ok(inputs.into_values().collect())
 }
 
-fn read_project_workbook(
-    root: &Path,
-    relative: &Path,
-    byte_limit: u64,
-) -> Result<Vec<u8>> {
+fn read_project_workbook(root: &Path, relative: &Path, byte_limit: u64) -> Result<Vec<u8>> {
     let path = root.join(relative);
     reject_symlink_components(root, &path)
         .map_err(|_| anyhow!("workbook source input is not a contained regular file"))?;
@@ -263,8 +267,9 @@ fn validate_generated_notary(compiled: &CompiledProject) -> Result<()> {
 fn validate_generated_relay(
     relay_config: &[u8],
     files: &BTreeMap<PathBuf, Box<[u8]>>,
+    config_relative_path: &str,
 ) -> Result<()> {
-    validate_generated_relay_activation(relay_config, files)?;
+    validate_generated_relay_activation(relay_config, files, config_relative_path)?;
     let config: Value = serde_norway::from_slice(relay_config)
         .context("generated Relay config did not parse as strict YAML")?;
     if config
@@ -280,10 +285,11 @@ fn validate_generated_relay(
 fn validate_generated_relay_activation(
     relay_config: &[u8],
     files: &BTreeMap<PathBuf, Box<[u8]>>,
+    config_relative_path: &str,
 ) -> Result<()> {
     let validation_root = GeneratedValidationDirectory::create()?;
     write_file_map(&validation_root.path, files)?;
-    let config_path = validation_root.path.join("config/relay.yaml");
+    let config_path = validation_root.path.join(config_relative_path);
     let mut local_config: Value = serde_norway::from_slice(relay_config)
         .context("generated Relay config did not parse for activation validation")?;
     local_config["deployment"]["profile"] = Value::String("local".to_string());
@@ -295,13 +301,15 @@ fn validate_generated_relay_activation(
         serde_norway::to_string(&local_config)?.as_bytes(),
     )?;
     let mut loaded = registry_relay::config::load_with_metadata(&config_path)
-        .map_err(|error| anyhow!("generated Relay config failed production loading: {error:?}"))?;
+        .map_err(|_| anyhow!("generated Relay config failed production loading"))?;
     if let Some(artifacts) = loaded.consultation_artifacts.take() {
         registry_relay::consultation::ConsultationService::validate_configuration(
             &loaded.runtime,
             artifacts,
         )
-        .context("generated Relay config failed production consultation activation validation")?;
+        .map_err(|_| {
+            anyhow!("generated Relay config failed production consultation activation validation")
+        })?;
     }
     Ok(())
 }
@@ -406,9 +414,8 @@ fn compile_generated_relay_fixture(
 ) -> Result<registry_relay::offline_fixture::OfflineRelayFixture> {
     let runtime: registry_relay::config::Config = serde_norway::from_slice(relay_config)
         .context("generated Relay config did not parse with the production model")?;
-    registry_relay::config::validate::run(&runtime).map_err(|error| {
-        anyhow!("generated Relay config failed the production startup validator: {error:?}")
-    })?;
+    registry_relay::config::validate::run(&runtime)
+        .map_err(|_| anyhow!("generated Relay config failed the production startup validator"))?;
     let config: Value = serde_norway::from_slice(relay_config)
         .context("generated Relay config did not parse as strict YAML")?;
     let artifacts = config

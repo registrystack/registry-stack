@@ -38,10 +38,10 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1770,
+    "path_count": 1771,
     "reference_count": 485,
     "by_schema": {
-      "project": 219,
+      "project": 220,
       "environment": 198,
       "integration": 142,
       "fixture": 62,
@@ -51,7 +51,7 @@
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1412,
+      "property": 1413,
       "map_key": 25,
       "map_value": 47,
       "array_item": 178,
@@ -59,14 +59,14 @@
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1144,
+      "internal": 1145,
       "sensitive": 399,
       "secret_reference": 41,
       "redacted_fixture": 50,
       "structural": 120
     },
     "by_intent_source": {
-      "schema_description": 503,
+      "schema_description": 504,
       "reviewed_override": 248,
       "structural_taxonomy": 127,
       "reviewed_profile": 892
@@ -3904,6 +3904,93 @@
         "schema": "project",
         "pointer": "/$defs/token"
       }
+    },
+    {
+      "address": {
+        "schema": "project",
+        "pointer": "/$defs/evidenceService/properties/subject_type",
+        "path_kind": "property"
+      },
+      "purpose": "Subject category evaluated by this evidence service. Omission is normalized to person.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "authoring_contract",
+      "human_owner": "registry_maintainers",
+      "scope": "The product-neutral project graph and the Relay or Notary services that consume its authored contracts.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.project.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and values from a maintained golden workspace; never copy a private country contract into reference data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "rebuild_project",
+      "migration_note": "Revalidate and rebuild the project after changing this field; coordinate a deployment when generated product inputs change.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "enum",
+          "value": [
+            "person",
+            "project"
+          ]
+        }
+      ]
     },
     {
       "address": {

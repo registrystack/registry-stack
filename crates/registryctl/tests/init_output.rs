@@ -29,7 +29,8 @@ fn run_registryctl_in(
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),
-        "registryctl failed: {}",
+        "registryctl failed.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 }
@@ -349,32 +350,115 @@ fn json_init_paths_preserve_control_characters() {
 }
 
 #[test]
-fn add_notary_is_retired_without_loading_image_lock_or_mutating_the_directory() {
+fn add_notary_updates_canonical_spreadsheet_idempotently_and_rejects_legacy_projects() {
     let temporary = TempDir::new().expect("temporary directory");
-    let missing_image_lock = temporary.path().join("missing-image-lock.json");
-    let sentinel = temporary.path().join("sentinel");
-    fs::write(&sentinel, "unchanged").expect("sentinel writes");
-    let output = run_registryctl_in(
-        Some(temporary.path()),
-        &["add", "notary", "--format", "json"],
-        Some(&missing_image_lock),
+    let project = temporary.path().join("spreadsheet-project");
+    let init_human = run_registryctl(
+        &[
+            "init",
+            "--from",
+            "spreadsheet",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+        ],
+        None,
     );
+    assert_success(&init_human);
+    let init_human = String::from_utf8(init_human.stdout).expect("human output is UTF-8");
+    assert!(init_human.ends_with(&format!(
+        "\nNext:\n  cd {}\n  registryctl doctor --profile local\n  registryctl start\n",
+        project.display()
+    )));
+    fs::remove_dir_all(&project).expect("first initialized project removes");
+
+    let init = run_registryctl(
+        &[
+            "init",
+            "--from",
+            "spreadsheet",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert_success(&init);
+
+    let output = run_registryctl_in(Some(&project), &["add", "notary", "--format", "json"], None);
+    assert_success(&output);
+    let report: Value = serde_json::from_slice(&output.stdout).expect("add notary emits JSON");
+    assert_eq!(report["schema_version"], "registryctl.add_notary.v1");
+    assert_eq!(report["status"], "updated");
+    assert!(project
+        .join("integrations/project-record-snapshot/integration.yaml")
+        .is_file());
+    assert!(fs::read_to_string(project.join("registry-stack.yaml"))
+        .expect("project reads")
+        .contains("subject_type: project"));
+
+    let fixtures = run_registryctl_in(Some(&project), &["test", "--environment", "local"], None);
+    assert_success(&fixtures);
+    assert!(String::from_utf8_lossy(&fixtures.stdout).contains("PASS: 6/6 fixtures passed"));
+    let build = run_registryctl_in(
+        Some(&project),
+        &["build", "--environment", "local", "--format", "json"],
+        None,
+    );
+    assert_success(&build);
+    serde_json::from_slice::<Value>(&build.stdout).expect("build emits JSON");
+    let compiled_notary: Value = serde_norway::from_slice(
+        &fs::read(project.join(".registry-stack/build/local/private/notary/config/notary.yaml"))
+            .expect("compiled Notary config reads"),
+    )
+    .expect("compiled Notary config parses");
+    assert!(compiled_notary["evidence"]["claims"]
+        .as_array()
+        .expect("compiled claims are an array")
+        .iter()
+        .all(|claim| claim["subject_type"] == "project"));
+
+    let project_before = fs::read_to_string(project.join("registry-stack.yaml")).unwrap();
+    let environment_before = fs::read_to_string(project.join("environments/local.yaml")).unwrap();
+    let repeat = run_registryctl_in(Some(&project), &["add", "notary", "--format", "json"], None);
+    assert_success(&repeat);
+    let repeat_report: Value =
+        serde_json::from_slice(&repeat.stdout).expect("repeat add notary emits JSON");
+    assert_eq!(repeat_report["status"], "unchanged");
+    assert_eq!(
+        fs::read_to_string(project.join("registry-stack.yaml")).unwrap(),
+        project_before
+    );
+    assert_eq!(
+        fs::read_to_string(project.join("environments/local.yaml")).unwrap(),
+        environment_before
+    );
+
+    let human = run_registryctl_in(Some(&project), &["add", "notary"], None);
+    assert_success(&human);
+    let human_stdout = String::from_utf8(human.stdout).expect("human output is UTF-8");
+    assert!(human_stdout.starts_with("Verified local Notary add-on.\n"));
+    assert!(human_stdout.ends_with(
+        "\nNext:\n  registryctl test --environment local\n  registryctl restart\n  registryctl smoke\n"
+    ));
+
+    let legacy = temporary.path().join("legacy");
+    fs::create_dir(&legacy).expect("legacy dir creates");
+    fs::write(
+        legacy.join("registryctl.yaml"),
+        "schema_version: registryctl/v1\n",
+    )
+    .expect("legacy marker writes");
+    let output = run_registryctl_in(Some(&legacy), &["add", "notary", "--format", "json"], None);
 
     assert!(
         !output.status.success(),
-        "retired command unexpectedly succeeded"
+        "legacy command unexpectedly succeeded"
     );
-    assert!(output.stdout.is_empty(), "retired command emitted stdout");
-    assert_eq!(
-        String::from_utf8(output.stderr).expect("UTF-8 stderr"),
-        "Error: `registryctl add notary` was retired before 1.0. Initialize a canonical project \
-with `registryctl init --from spreadsheet`, then author and test a Notary evidence service in \
-registry-stack.yaml; registryctl does not automatically migrate the legacy add-on project.\n"
-    );
-    assert_eq!(
-        fs::read_to_string(sentinel).expect("sentinel reads"),
-        "unchanged"
-    );
+    assert!(output.stdout.is_empty(), "legacy command emitted stdout");
+    assert!(String::from_utf8(output.stderr)
+        .expect("UTF-8 stderr")
+        .contains("legacy pre-1.0 direct projects are retired"));
 }
 
 #[test]

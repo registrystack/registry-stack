@@ -49,9 +49,15 @@ or self-attested claims, but those claims are not issuable. In a combined projec
 reviewed typed consultation outputs for Notary to turn into configured claims. Consuming systems
 such as a social-protection management information system do not become raw-record readers.
 
+The supported local first-run combined path extends the canonical spreadsheet sample in place with
+Notary and a private consultation Relay, then runs them as one local project. The snapshot starter
+is a separate offline authoring path. Its synthetic fixture results do not establish that Relay or
+Notary is running.
+
 {/* Evidence: crates/registryctl/tests/project_authoring.rs,
     project_authoring_schemas_reject_incoherent_product_topologies and
-    relay_only_and_notary_only_projects_emit_only_selected_products. */}
+    relay_only_and_notary_only_projects_emit_only_selected_products; and
+    crates/registryctl/src/lib.rs, add_notary_to_canonical_project. */}
 
 {/* SVG diagram. Essential labels are restated in the paragraph before the figure. */}
 <figure>
@@ -101,9 +107,8 @@ These platforms own storage, business rules, correction workflows, user interfac
 API for their domain.
 Registry Stack adds standardized metadata description, scoped read-only routes over source data,
 configured evidence responses, and hash-chained audit records.
-The [Registry Stack project authoring guide](../../tutorials/author-registry-project/) shows how
-to define a bounded source recipe and the authorized Notary claims without adding product-specific
-runtime dispatch.
+The [connect your data guide](../../configure/) starts from the supported public sample and points
+to the configuration reference for advanced source patterns.
 
 One integration in a Registry Stack project can serve two different governed needs without
 creating two source definitions.

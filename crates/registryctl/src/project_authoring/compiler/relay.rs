@@ -2,12 +2,20 @@
 
 const LOCAL_RELAY_MATCH_KEY_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH";
 const LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_HASH";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeneratedRelayConfigKind {
+    Public,
+    Consultation,
+}
+
 fn generated_relay_config(
     loaded: &LoadedRegistryProject,
     environment_name: &str,
     environment: &EnvironmentDocument,
     packs: &BTreeMap<String, GeneratedPack>,
     profiles: &[GeneratedProfile],
+    kind: GeneratedRelayConfigKind,
 ) -> Result<Value> {
     let relay = environment
         .relay
@@ -135,69 +143,113 @@ fn generated_relay_config(
     let datasets = generated_records_datasets(loaded, environment)?;
     let standards = generated_records_standards(loaded)?;
     let mut allowed_clients = relay.allowed_clients.clone();
-    if let Some(connection) = &environment.notary_relay {
-        allowed_clients.push(connection.workload_client_id.clone());
-    }
     allowed_clients.sort();
     allowed_clients.dedup();
     let relay_origin = normalize_url_scheme(&relay.origin)?;
-    let relay_issuer = normalize_url_scheme(&relay.issuer)?;
-    let relay_jwks_url = normalize_url_scheme(&relay.jwks_url)?;
-    let auth = if let Some(local) = &relay.local_api_keys {
-        if !matches!(environment.deployment.profile, DeploymentProfile::Local) {
-            bail!("Relay local_api_keys are supported only by the local deployment profile");
-        }
-        validate_token(
-            &local.match_principal,
-            "Relay local API-key match principal",
-            256,
-        )?;
-        validate_token(
-            &local.no_match_principal,
-            "Relay local API-key no-match principal",
-            256,
-        )?;
-        if local.match_principal == local.no_match_principal {
-            bail!("Relay local API-key principals must be distinct");
-        }
-        validate_scopes(&local.scopes)?;
-        json!({
-            "mode": "api_key",
-            "api_keys": [
-                {
-                    "id": local.match_principal,
-                    "fingerprint": {
-                        "provider": "env",
-                        "name": LOCAL_RELAY_MATCH_KEY_HASH_ENV,
-                    },
-                    "scopes": local.scopes,
-                },
-                {
-                    "id": local.no_match_principal,
-                    "fingerprint": {
-                        "provider": "env",
-                        "name": LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV,
-                    },
-                    "scopes": local.scopes,
-                },
-            ],
-        })
+    let local_notary_add_on = kind == GeneratedRelayConfigKind::Consultation
+        && matches!(environment.deployment.profile, DeploymentProfile::Local)
+        && relay.local_api_keys.is_some()
+        && environment
+            .deployment
+            .notary
+            .as_ref()
+            .is_some_and(|service| service.service == "registryctl-local-notary")
+        && environment.notary_relay.as_ref().is_some_and(|binding| {
+            binding.base_url == "http://127.0.0.1:8080"
+                && binding.workload_client_id == "registryctl-local-notary"
+                && binding.token_file == Path::new("/run/secrets/relay-workload-token")
+        });
+    let relay_issuer = if local_notary_add_on {
+        "http://127.0.0.1:4255".to_string()
     } else {
+        normalize_url_scheme(&relay.issuer)?
+    };
+    let relay_jwks_url = if local_notary_add_on {
+        // The consultation Relay shares the Notary container's network
+        // namespace, so it fetches the workload JWKS from Notary's container
+        // port while still validating the host-facing issuer exactly.
+        "http://127.0.0.1:8081/.well-known/evidence/jwks.json".to_string()
+    } else {
+        normalize_url_scheme(&relay.jwks_url)?
+    };
+    let allow_dev_insecure_fetch_urls =
+        local_notary_add_on || url_uses_http(&relay.issuer) || url_uses_http(&relay.jwks_url);
+    let auth = if kind == GeneratedRelayConfigKind::Public {
+        if let Some(local) = &relay.local_api_keys {
+            if !matches!(environment.deployment.profile, DeploymentProfile::Local) {
+                bail!("Relay local_api_keys are supported only by the local deployment profile");
+            }
+            validate_token(
+                &local.match_principal,
+                "Relay local API-key match principal",
+                256,
+            )?;
+            validate_token(
+                &local.no_match_principal,
+                "Relay local API-key no-match principal",
+                256,
+            )?;
+            if local.match_principal == local.no_match_principal {
+                bail!("Relay local API-key principals must be distinct");
+            }
+            validate_scopes(&local.scopes)?;
+            json!({
+                "mode": "api_key",
+                "api_keys": [
+                    {
+                        "id": local.match_principal,
+                        "fingerprint": {
+                            "provider": "env",
+                            "name": LOCAL_RELAY_MATCH_KEY_HASH_ENV,
+                        },
+                        "scopes": local.scopes,
+                    },
+                    {
+                        "id": local.no_match_principal,
+                        "fingerprint": {
+                            "provider": "env",
+                            "name": LOCAL_RELAY_NO_MATCH_KEY_HASH_ENV,
+                        },
+                        "scopes": local.scopes,
+                    },
+                ],
+            })
+        } else {
+            json!({
+                "mode": "oidc",
+                "oidc": {
+                    "issuer": relay_issuer,
+                    "audiences": [relay.audience.as_str()],
+                    "jwks_url": relay_jwks_url,
+                    "allow_dev_insecure_fetch_urls": allow_dev_insecure_fetch_urls,
+                    "allowed_clients": allowed_clients,
+                },
+            })
+        }
+    } else {
+        let Some(workload) = &environment.notary_relay else {
+            bail!("consultation Relay requires a Notary-to-Relay workload binding");
+        };
+        let allowed_clients = vec![workload.workload_client_id.clone()];
         json!({
             "mode": "oidc",
             "oidc": {
                 "issuer": relay_issuer,
                 "audiences": [relay.audience.as_str()],
                 "jwks_url": relay_jwks_url,
-                "allow_dev_insecure_fetch_urls": url_uses_http(&relay.issuer)
-                    || url_uses_http(&relay.jwks_url),
+                "allow_dev_insecure_fetch_urls": allow_dev_insecure_fetch_urls,
                 "allowed_clients": allowed_clients,
             },
         })
     };
+    let instance_id = if kind == GeneratedRelayConfigKind::Consultation {
+        format!("{}-consultation", relay_service.service)
+    } else {
+        relay_service.service.clone()
+    };
     let mut config = json!({
         "instance": {
-            "id": relay_service.service,
+            "id": instance_id,
             "environment": environment_name,
         },
         "server": { "bind": "127.0.0.1:8080" },
@@ -215,7 +267,7 @@ fn generated_relay_config(
         "standards": standards,
         "deployment": { "profile": environment.deployment.profile.as_str() },
     });
-    if !profiles.is_empty() && !packs.is_empty() {
+    if kind == GeneratedRelayConfigKind::Consultation && !profiles.is_empty() && !packs.is_empty() {
         let workload = environment
             .notary_relay
             .as_ref()

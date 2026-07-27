@@ -15,6 +15,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "release/scripts/registry-release"
+POSTGRESQL_REF_PATH = ROOT / "release/registryctl-postgresql-image.ref"
 IMAGE_DIGEST = "sha256:" + "a" * 64
 IMAGE_DIGEST_REF = f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}"
 NATIVE_CLI_AUTHORING_COMMANDS = (
@@ -57,7 +58,88 @@ def load_debian13_image_check():
     return module
 
 
+def load_registryctl_image_lock():
+    path = ROOT / "release/scripts/registryctl_image_lock.py"
+    spec = importlib.util.spec_from_file_location("registryctl_image_lock", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load module spec from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class RegistryReleaseTest(unittest.TestCase):
+    def test_registryctl_image_lock_schema_boundary_preserves_historical_v1(
+        self,
+    ) -> None:
+        image_lock = load_registryctl_image_lock()
+
+        self.assertEqual(
+            image_lock.SCHEMA_V1,
+            image_lock.schema_for_release_version("0.13.0"),
+        )
+        self.assertEqual(
+            image_lock.SCHEMA_V2,
+            image_lock.schema_for_release_version("0.14.0"),
+        )
+
+    def test_registryctl_image_lock_validates_v1_and_reviewed_v2_images(
+        self,
+    ) -> None:
+        image_lock = load_registryctl_image_lock()
+        product_images = {
+            "registry-relay": (
+                "ghcr.io/registrystack/registry-relay@sha256:" + "a" * 64
+            ),
+            "registry-notary": (
+                "ghcr.io/registrystack/registry-notary@sha256:" + "b" * 64
+            ),
+        }
+
+        self.assertEqual(
+            product_images,
+            image_lock.validate_images(image_lock.SCHEMA_V1, product_images),
+        )
+
+        v2_images = {
+            **product_images,
+            "postgresql": image_lock.reviewed_postgresql_image_ref(),
+        }
+        self.assertEqual(
+            v2_images,
+            image_lock.validate_images(image_lock.SCHEMA_V2, v2_images),
+        )
+
+        without_postgresql = dict(v2_images)
+        del without_postgresql["postgresql"]
+        with self.assertRaisesRegex(ValueError, "must contain exactly"):
+            image_lock.validate_images(
+                image_lock.SCHEMA_V2,
+                without_postgresql,
+            )
+
+        drifted_postgresql = dict(v2_images)
+        drifted_postgresql["postgresql"] = (
+            "docker.io/library/postgres@sha256:" + "c" * 64
+        )
+        with self.assertRaisesRegex(ValueError, "reviewed release-tooling pin"):
+            image_lock.validate_images(
+                image_lock.SCHEMA_V2,
+                drifted_postgresql,
+            )
+
+    def test_registryctl_image_lock_rejects_another_postgresql_input(self) -> None:
+        image_lock = load_registryctl_image_lock()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "postgresql.ref"
+            path.write_text(
+                "docker.io/library/postgres@sha256:" + "c" * 64 + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "reviewed release-tooling pin"):
+                image_lock.read_reviewed_postgresql_image_ref(path)
+
     def test_required_ci_contexts_wrap_path_gated_jobs(self) -> None:
         workflow = yaml.safe_load(
             (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -1061,6 +1143,14 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("bind-spdx-file-subject", candidate)
         self.assertIn("render-registryctl-image-lock", workflow)
         self.assertIn("verify-registryctl-image-lock-release-version", workflow)
+        self.assertIn(
+            "--postgresql-ref-file release/registryctl-postgresql-image.ref",
+            workflow,
+        )
+        self.assertIn(
+            "--postgresql-ref-file release/registryctl-postgresql-image.ref",
+            candidate,
+        )
         self.assertIn("verify-registryctl-binary-version", candidate)
         self.assertLess(
             candidate.index("Verify built registryctl binary version"),
@@ -1431,6 +1521,83 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn(
             "verified registryctl image lock release version 0.9.0", accepted.stdout
         )
+
+    def test_render_registryctl_image_lock_v2_includes_reviewed_postgresql(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = write_manifest(root, version="0.14.0")
+            relay_digest = root / "registry-relay.digest"
+            notary_digest = root / "registry-notary.digest"
+            relay_ref = f"ghcr.io/registrystack/registry-relay@{IMAGE_DIGEST}"
+            notary_ref = f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}"
+            relay_digest.write_text(f"{relay_ref}\n", encoding="utf-8")
+            notary_digest.write_text(f"{notary_ref}\n", encoding="utf-8")
+            output = root / "registryctl-v0.14.0-image-lock.json"
+
+            result = run_tool(
+                "render-registryctl-image-lock",
+                str(manifest),
+                "--relay-digest",
+                str(relay_digest),
+                "--notary-digest",
+                str(notary_digest),
+                "--postgresql-ref-file",
+                str(POSTGRESQL_REF_PATH),
+                "--tag-target",
+                "b" * 40,
+                "--output",
+                str(output),
+            )
+            document = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            "registryctl.release_image_lock.v2",
+            document["schema_version"],
+        )
+        self.assertEqual(
+            {
+                "registry-relay": relay_ref,
+                "registry-notary": notary_ref,
+                "postgresql": POSTGRESQL_REF_PATH.read_text(encoding="utf-8").strip(),
+            },
+            document["images"],
+        )
+
+    def test_render_registryctl_image_lock_v2_requires_postgresql_ref(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = write_manifest(root, version="0.14.0")
+            relay_digest = root / "registry-relay.digest"
+            notary_digest = root / "registry-notary.digest"
+            relay_digest.write_text(
+                f"ghcr.io/registrystack/registry-relay@{IMAGE_DIGEST}\n",
+                encoding="utf-8",
+            )
+            notary_digest.write_text(
+                f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}\n",
+                encoding="utf-8",
+            )
+
+            result = run_tool(
+                "render-registryctl-image-lock",
+                str(manifest),
+                "--relay-digest",
+                str(relay_digest),
+                "--notary-digest",
+                str(notary_digest),
+                "--tag-target",
+                "b" * 40,
+                "--output",
+                str(root / "registryctl-v0.14.0-image-lock.json"),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("v2 requires --postgresql-ref-file", result.stderr)
 
     def test_render_registryctl_image_lock_rejects_pre_0_9_release(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

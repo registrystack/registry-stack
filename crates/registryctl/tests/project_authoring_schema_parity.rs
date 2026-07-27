@@ -247,7 +247,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     assert_eq!(
         index.coverage_by_schema(),
         [
-            (SchemaKind::Project, 219),
+            (SchemaKind::Project, 220),
             (SchemaKind::Environment, 198),
             (SchemaKind::Integration, 142),
             (SchemaKind::Fixture, 62),
@@ -261,7 +261,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_path_kind(),
         [
             (FieldPathKind::Root, 5),
-            (FieldPathKind::Property, 460),
+            (FieldPathKind::Property, 461),
             (FieldPathKind::MapKey, 25),
             (FieldPathKind::MapValue, 32),
             (FieldPathKind::ArrayItem, 33),
@@ -275,7 +275,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_sensitivity(),
         [
             (Sensitivity::Public, 6),
-            (Sensitivity::Internal, 413),
+            (Sensitivity::Internal, 414),
             (Sensitivity::Sensitive, 67),
             (Sensitivity::SecretReference, 14),
             (Sensitivity::RedactedFixture, 50),
@@ -287,7 +287,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     );
     assert_eq!(
         index.by_path().len(),
-        656,
+        657,
         "the field-knowledge gate covers every published schema path"
     );
     assert_eq!(
@@ -759,7 +759,7 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
             (
                 "project",
                 PublishedStructuralInventory {
-                    nodes: 252,
+                    nodes: 253,
                     local_refs: 123,
                     union_nodes: 9,
                     union_branches: 19,
@@ -779,7 +779,7 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
                     unique_arrays: 8,
                     object_size_bounds: 17,
                     property_name_constraints: 14,
-                    enums: 12,
+                    enums: 13,
                     consts: 8,
                     defaults: 0,
                     deprecations: 0,

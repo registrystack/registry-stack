@@ -110,7 +110,8 @@ fn execute_all_fixtures_with_coverage_observations(
     }
     let relay_config = compiled
         .relay_private
-        .get(Path::new("config/relay.yaml"))
+        .get(Path::new("config/relay-consultation.yaml"))
+        .or_else(|| compiled.relay_private.get(Path::new("config/relay.yaml")))
         .ok_or_else(|| anyhow!("generated Relay config is absent"))?;
     let relay_fixture = compile_generated_relay_fixture(
         relay_config,
@@ -298,49 +299,51 @@ fn execute_all_fixtures_with_coverage_observations(
                 failure,
             });
             if let Some(request) = fixture.request.as_ref() {
-                let binding = result.as_ref().map_err(|code| code.clone()).and_then(
-                    |(outputs, outcome)| {
-                        evaluate_authored_governed_request(
-                            loaded,
-                            compiled,
-                            fixture,
-                            request,
-                            outputs,
-                            outcome,
-                            execution_context.worker_program(),
-                        )
-                        .map_err(|_| "request.binding_evaluation_failed".to_owned())
-                    },
-                );
+                let binding =
+                    result
+                        .as_ref()
+                        .map_err(|code| code.clone())
+                        .and_then(|(outputs, outcome)| {
+                            evaluate_authored_governed_request(
+                                loaded,
+                                compiled,
+                                fixture,
+                                request,
+                                outputs,
+                                outcome,
+                                execution_context.worker_program(),
+                            )
+                            .map_err(|_| "request.binding_evaluation_failed".to_owned())
+                        });
                 let (pass_state, consultations, actual_safe_code, actual_relay_consultations) =
                     match binding {
-                    Ok(evaluation)
-                        if evaluation.result.is_ok() && evaluation.relay_calls > 0 =>
-                    {
-                        (
-                            FixturePassState::Passed,
-                            evaluation.consultations,
-                            None,
+                        Ok(evaluation)
+                            if evaluation.result.is_ok() && evaluation.relay_calls > 0 =>
+                        {
+                            (
+                                FixturePassState::Passed,
+                                evaluation.consultations,
+                                None,
+                                Some(u32::try_from(evaluation.relay_calls).unwrap_or(u32::MAX)),
+                            )
+                        }
+                        Ok(evaluation) => (
+                            FixturePassState::Failed,
+                            Vec::new(),
+                            evaluation
+                                .result
+                                .as_ref()
+                                .err()
+                                .map(|code| FixtureSafeCode::from_runtime_code(code)),
                             Some(u32::try_from(evaluation.relay_calls).unwrap_or(u32::MAX)),
-                        )
-                    }
-                    Ok(evaluation) => (
-                        FixturePassState::Failed,
-                        Vec::new(),
-                        evaluation
-                            .result
-                            .as_ref()
-                            .err()
-                            .map(|code| FixtureSafeCode::from_runtime_code(code)),
-                        Some(u32::try_from(evaluation.relay_calls).unwrap_or(u32::MAX)),
-                    ),
-                    Err(_) => (
-                        FixturePassState::Failed,
-                        Vec::new(),
-                        Some(FixtureSafeCode::RedactedUnclassifiedError),
-                        Some(0),
-                    ),
-                };
+                        ),
+                        Err(_) => (
+                            FixturePassState::Failed,
+                            Vec::new(),
+                            Some(FixtureSafeCode::RedactedUnclassifiedError),
+                            Some(0),
+                        ),
+                    };
                 request_observations.push(AuthoredRequestBindingObservation {
                     integration: alias.clone(),
                     source_fixture_id: fixture.name.clone(),
@@ -351,10 +354,7 @@ fn execute_all_fixtures_with_coverage_observations(
                 });
                 reports.push(FixtureReport {
                     integration: alias.clone(),
-                    fixture: format!(
-                        "{}::derived/request_to_consultation_binding",
-                        fixture.name
-                    ),
+                    fixture: format!("{}::derived/request_to_consultation_binding", fixture.name),
                     inputs: fixture.input.keys().cloned().collect(),
                     calls: if actual_relay_consultations.unwrap_or_default() > 0 {
                         vec!["notary-relay-consultation".to_owned()]
@@ -797,6 +797,41 @@ fn integration_has_product_claims(loaded: &LoadedRegistryProject, integration_al
     })
 }
 
+fn fixture_subject_type(
+    loaded: &LoadedRegistryProject,
+    integration_alias: &str,
+) -> Result<EvidenceSubjectType> {
+    let mut subject_types = BTreeSet::new();
+    for service in loaded
+        .project
+        .services
+        .values()
+        .filter(|service| service.kind == ServiceKind::Evidence)
+    {
+        let selects_integration =
+            service
+                .claims
+                .values()
+                .try_fold(false, |selected, claim| -> Result<bool> {
+                    if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
+                        return Ok(selected);
+                    }
+                    let consultation = claim_consultation_name(service, claim)?;
+                    Ok(selected
+                        || service.consultations[consultation].integration == integration_alias)
+                })?;
+        if selects_integration {
+            subject_types.insert(service.effective_subject_type());
+        }
+    }
+    if subject_types.len() != 1 {
+        bail!("offline fixture cannot combine evidence services with different subject types");
+    }
+    subject_types
+        .pop_first()
+        .ok_or_else(|| anyhow!("offline fixture selected no evidence service"))
+}
+
 fn contains_generated_fixture_matcher(value: &Value) -> bool {
     match value {
         Value::Array(values) => values.iter().any(contains_generated_fixture_matcher),
@@ -1091,8 +1126,7 @@ fn generate_fixture_coverage_report_with_comparison(
             integration: integration_alias.clone(),
             capability: fixture_coverage_capability(&integration.document.capability),
         };
-        let contract =
-            fixture_coverage_target_contract(loaded, integration_alias, integration)?;
+        let contract = fixture_coverage_target_contract(loaded, integration_alias, integration)?;
         let compiled_contract = target_compiled_contract_evidence(&identity, &contract, &declared)
             .map_err(|error| anyhow!(error))?;
         let mut target = FixtureCoverageTarget {
@@ -1806,7 +1840,8 @@ fn evaluate_authored_governed_request(
         .fixture_profiles
         .iter()
         .map(|profile| {
-            let is_selected = loaded.project.services[&profile.service_id].purpose == request.purpose;
+            let is_selected =
+                loaded.project.services[&profile.service_id].purpose == request.purpose;
             OfflineRelayConsultation::decoded_inputs(
                 profile.id.clone(),
                 profile.contract_hash.clone(),
@@ -1844,10 +1879,12 @@ fn evaluate_authored_governed_request(
         .enable_all()
         .build()
         .context("failed to build the offline governed request runtime")?;
-    let evidence = runtime.block_on(harness.evaluate(
-        OfflineNotaryRequest::new(OfflineAuthentication::Valid, request.to_evaluate_request())
-            .with_header_purpose(request.purpose.as_str()),
-    ));
+    let evidence = runtime.block_on(
+        harness.evaluate(
+            OfflineNotaryRequest::new(OfflineAuthentication::Valid, request.to_evaluate_request())
+                .with_header_purpose(request.purpose.as_str()),
+        ),
+    );
     let relay_calls = evidence.relay_calls();
     if let Some(error) = evidence.error_class() {
         return Ok(ProductClaimsFixtureEvaluation {
@@ -1979,6 +2016,7 @@ fn evaluate_product_claims(
     };
 
     let empty_outputs = BTreeMap::new();
+    let subject_type = fixture_subject_type(loaded, integration_alias)?;
     let (outputs, outcome) = relay_result.unwrap_or((&empty_outputs, "no_match"));
     let relay_outcome = match outcome {
         "match" => OfflineRelayOutcome::Match,
@@ -2071,7 +2109,7 @@ fn evaluate_product_claims(
             continue;
         }
         evaluated_any = true;
-        let mut target = EvidenceEntity::new("person");
+        let mut target = EvidenceEntity::new(subject_type.as_str());
         let mut identifiers = BTreeMap::new();
         let mut attributes = BTreeMap::new();
         for consultation in service

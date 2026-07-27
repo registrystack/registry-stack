@@ -49,6 +49,68 @@ mod tests {
     }
 
     #[test]
+    fn evidence_subject_type_is_closed_and_omission_normalizes_to_person() {
+        let bytes = PROJECT_STARTERS
+            .get_file("bounded-http/registry-stack.yaml")
+            .expect("bounded HTTP project is embedded")
+            .contents();
+        let omitted =
+            parse_current_authoring_document::<RegistryProject>(bytes).expect("project parses");
+        let service = &omitted.services["person-verification"];
+        assert_eq!(service.subject_type, None);
+        assert_eq!(
+            service.effective_subject_type(),
+            EvidenceSubjectType::Person
+        );
+        assert!(
+            serde_json::to_value(&omitted)
+                .expect("project serializes")
+                .pointer("/services/person-verification/subject_type")
+                .is_none(),
+            "normalized omission must preserve authored-content serialization"
+        );
+
+        let mut invalid: Value = serde_norway::from_slice(bytes).expect("project YAML parses");
+        invalid["services"]["person-verification"]["subject_type"] = json!("organisation");
+        let invalid_bytes =
+            serde_norway::to_string(&invalid).expect("invalid subject project serializes");
+        parse_current_authoring_document::<RegistryProject>(invalid_bytes.as_bytes())
+            .expect_err("unknown evidence subject type must fail closed");
+
+        invalid["services"]["person-verification"]["subject_type"] = json!("project");
+        let project_bytes =
+            serde_norway::to_string(&invalid).expect("project subject project serializes");
+        let explicit =
+            parse_current_authoring_document::<RegistryProject>(project_bytes.as_bytes())
+                .expect("project is an allowed subject type");
+        assert_eq!(
+            explicit.services["person-verification"].subject_type,
+            Some(EvidenceSubjectType::Project)
+        );
+    }
+
+    #[test]
+    fn records_service_rejects_an_explicit_evidence_subject_type() {
+        let bytes = PROJECT_STARTERS
+            .get_file("spreadsheet/registry-stack.yaml")
+            .expect("spreadsheet project is embedded")
+            .contents();
+        let mut value: Value = serde_norway::from_slice(bytes).expect("project YAML parses");
+        value["services"]["projects-records"]["subject_type"] = json!("person");
+        let invalid = serde_norway::to_string(&value).expect("records subject project serializes");
+        parse_current_authoring_document::<RegistryProject>(invalid.as_bytes())
+            .expect_err("public schema rejects evidence fields on records services");
+
+        let typed: RegistryProject =
+            serde_norway::from_str(&invalid).expect("presence-aware typed model retains the field");
+        let error = validate_project_shape(&typed)
+            .expect_err("typed validation also rejects evidence fields on records services");
+        assert!(error
+            .to_string()
+            .contains("records_api service cannot declare evidence-service fields"));
+    }
+
+    #[test]
     fn corrected_http_authoring_lowers_to_one_product_neutral_request() {
         let authored: AuthoredIntegrationDocument = serde_norway::from_str(
             r#"
@@ -544,6 +606,68 @@ outputs:
     }
 
     #[test]
+    fn normalized_subject_type_changes_claim_semantics_and_notary_compilation() {
+        let mut loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
+            .expect("golden project loads");
+        let baseline = loaded.semantic_digests.claim.clone();
+        let service = loaded
+            .project
+            .services
+            .get_mut("household-eligibility")
+            .expect("evidence service exists");
+        assert_eq!(service.subject_type, None);
+        service.subject_type = Some(EvidenceSubjectType::Person);
+        let explicit_person = semantic_digests(
+            &loaded.project,
+            &loaded.integrations,
+            &loaded.entities,
+            loaded.environment.as_ref(),
+        )
+        .expect("explicit person digest compiles");
+        assert_eq!(
+            explicit_person.claim, baseline,
+            "omitted and explicit person must share normalized Claim semantics"
+        );
+
+        loaded
+            .project
+            .services
+            .get_mut("household-eligibility")
+            .expect("evidence service exists")
+            .subject_type = Some(EvidenceSubjectType::Project);
+        let project_subject = semantic_digests(
+            &loaded.project,
+            &loaded.integrations,
+            &loaded.entities,
+            loaded.environment.as_ref(),
+        )
+        .expect("project subject digest compiles");
+        assert_ne!(
+            project_subject.claim, baseline,
+            "subject category changes must alter the Claim semantic digest"
+        );
+
+        let compiled = compile_project(&loaded, None).expect("project subject compiles");
+        let notary: Value = serde_norway::from_slice(
+            compiled
+                .notary_private
+                .get(Path::new("config/notary.yaml"))
+                .expect("Notary config exists"),
+        )
+        .expect("Notary config parses");
+        assert!(notary["evidence"]["claims"]
+            .as_array()
+            .expect("generated claims are an array")
+            .iter()
+            .all(|claim| claim["subject_type"] == "project"));
+        assert_eq!(
+            fixture_subject_type(&loaded, "eligibility")
+                .expect("offline fixture derives the project subject"),
+            EvidenceSubjectType::Project
+        );
+    }
+
+    #[test]
     fn attribute_release_purpose_must_be_header_safe_during_authoring() {
         let mut loaded =
             load_registry_project(&project_golden("nia-attribute-release"), Some("local"))
@@ -804,8 +928,8 @@ outputs:
         let compiled = compile_project(&loaded, None).expect("golden project compiles");
         let relay = compiled
             .relay_private
-            .get(Path::new("config/relay.yaml"))
-            .expect("Relay config exists");
+            .get(Path::new("config/relay-consultation.yaml"))
+            .expect("consultation Relay config exists");
         let original: Value = serde_norway::from_slice(relay).expect("Relay config parses");
 
         for field in ["sha256", "hash"] {
@@ -813,8 +937,12 @@ outputs:
             tampered["consultation"]["artifacts"]["private_bindings"][0][field] =
                 Value::String(format!("sha256:{}", "0".repeat(64)));
             let bytes = serde_norway::to_string(&tampered).expect("tampered config serializes");
-            let error = validate_generated_relay(bytes.as_bytes(), &compiled.relay_private)
-                .expect_err("tampered binding pin must fail closed");
+            let error = validate_generated_relay(
+                bytes.as_bytes(),
+                &compiled.relay_private,
+                "config/relay-consultation.yaml",
+            )
+            .expect_err("tampered binding pin must fail closed");
             let diagnostic = format!("{error:#}");
             assert!(
                 diagnostic.contains("binding")
@@ -822,6 +950,142 @@ outputs:
                 "unexpected {field} diagnostic: {diagnostic}"
             );
         }
+    }
+
+    #[test]
+    fn generated_public_and_consultation_relays_are_separate_and_production_validated() {
+        let loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
+            .expect("golden project loads");
+        let compiled = compile_project(&loaded, None).expect("golden project compiles");
+        let public_path = Path::new("config/relay.yaml");
+        let consultation_path = Path::new("config/relay-consultation.yaml");
+        let public_bytes = compiled
+            .relay_private
+            .get(public_path)
+            .expect("public Relay config exists");
+        let consultation_bytes = compiled
+            .relay_private
+            .get(consultation_path)
+            .expect("consultation Relay config exists");
+        let public: Value =
+            serde_norway::from_slice(public_bytes).expect("public Relay config parses");
+        let consultation: Value =
+            serde_norway::from_slice(consultation_bytes).expect("consultation Relay config parses");
+
+        assert!(public.get("consultation").is_none());
+        assert!(consultation.get("consultation").is_some());
+        assert_eq!(public["instance"]["id"], "household-relay");
+        assert_eq!(
+            consultation["instance"]["id"],
+            "household-relay-consultation"
+        );
+        assert_eq!(
+            public["auth"]["oidc"]["allowed_clients"],
+            json!(["household-relay-client"])
+        );
+        assert_eq!(
+            consultation["auth"]["oidc"]["allowed_clients"],
+            json!(["household-notary"])
+        );
+        assert_eq!(
+            consultation["auth"]["oidc"]["allow_dev_insecure_fetch_urls"],
+            false
+        );
+        validate_generated_relay(public_bytes, &compiled.relay_private, "config/relay.yaml")
+            .expect("public Relay passes production loading");
+        validate_generated_relay(
+            consultation_bytes,
+            &compiled.relay_private,
+            "config/relay-consultation.yaml",
+        )
+        .expect("consultation Relay passes production loading and activation");
+    }
+
+    #[test]
+    fn local_notary_add_on_uses_exact_private_consultation_issuer_and_jwks_endpoint() {
+        let mut loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
+            .expect("golden project loads");
+        let environment = loaded.environment.as_mut().expect("environment exists");
+        environment
+            .relay
+            .as_mut()
+            .expect("Relay binding exists")
+            .local_api_keys = Some(RelayLocalApiKeyBinding {
+            match_principal: "local_match".to_string(),
+            no_match_principal: "local_no_match".to_string(),
+            scopes: vec!["registry_relay:ops_read".to_string()],
+        });
+        environment
+            .deployment
+            .notary
+            .as_mut()
+            .expect("Notary deployment exists")
+            .service = "registryctl-local-notary".to_string();
+
+        let unrelated =
+            compile_project(&loaded, None).expect("non-canonical local project compiles");
+        let unrelated_consultation: Value = serde_norway::from_slice(
+            unrelated
+                .relay_private
+                .get(Path::new("config/relay-consultation.yaml"))
+                .expect("consultation Relay config exists"),
+        )
+        .expect("consultation Relay config parses");
+        assert_eq!(
+            unrelated_consultation["auth"]["oidc"]["issuer"],
+            "https://workload-issuer.internal.invalid"
+        );
+        assert_eq!(
+            unrelated_consultation["auth"]["oidc"]["jwks_url"],
+            "https://workload-issuer.internal.invalid/.well-known/jwks.json"
+        );
+        assert_eq!(
+            unrelated_consultation["auth"]["oidc"]["allow_dev_insecure_fetch_urls"],
+            false
+        );
+
+        let binding = loaded
+            .environment
+            .as_mut()
+            .expect("environment exists")
+            .notary_relay
+            .as_mut()
+            .expect("Notary-to-Relay binding exists");
+        binding.base_url = "http://127.0.0.1:8080".to_string();
+        binding.workload_client_id = "registryctl-local-notary".to_string();
+        binding.token_file = PathBuf::from("/run/secrets/relay-workload-token");
+
+        let compiled = compile_project(&loaded, None).expect("local add-on project compiles");
+        let public: Value = serde_norway::from_slice(
+            compiled
+                .relay_private
+                .get(Path::new("config/relay.yaml"))
+                .expect("public Relay config exists"),
+        )
+        .expect("public Relay config parses");
+        let consultation_bytes = compiled
+            .relay_private
+            .get(Path::new("config/relay-consultation.yaml"))
+            .expect("consultation Relay config exists");
+        let consultation: Value =
+            serde_norway::from_slice(consultation_bytes).expect("consultation Relay config parses");
+
+        assert_eq!(public["auth"]["mode"], "api_key");
+        assert_eq!(consultation["auth"]["mode"], "oidc");
+        assert_eq!(
+            consultation["auth"]["oidc"]["issuer"],
+            "http://127.0.0.1:4255"
+        );
+        assert_eq!(
+            consultation["auth"]["oidc"]["jwks_url"],
+            "http://127.0.0.1:8081/.well-known/evidence/jwks.json"
+        );
+        assert_eq!(
+            consultation["auth"]["oidc"]["allow_dev_insecure_fetch_urls"],
+            true
+        );
+        validate_generated_product_configs(&compiled)
+            .expect("both local add-on Relay configs pass production validation");
     }
 
     #[test]
@@ -837,7 +1101,7 @@ outputs:
             .expect("Relay config exists");
         let original: Value = serde_norway::from_slice(relay).expect("Relay config parses");
 
-        validate_generated_relay(relay, &compiled.relay_private)
+        validate_generated_relay(relay, &compiled.relay_private, "config/relay.yaml")
             .expect("temporary validation credentials satisfy production loading");
         let after: Value = serde_norway::from_slice(relay).expect("Relay config still parses");
         assert_eq!(after, original, "validation must not mutate emitted config");
@@ -863,8 +1127,12 @@ outputs:
         duplicate["auth"]["api_keys"][1]["fingerprint"] = first_fingerprint;
         for (label, invalid) in [("malformed", malformed), ("duplicate", duplicate)] {
             let bytes = serde_norway::to_string(&invalid).expect("invalid config serializes");
-            let error = validate_generated_relay(bytes.as_bytes(), &compiled.relay_private)
-                .expect_err("invalid API-key config must fail production validation");
+            let error = validate_generated_relay(
+                bytes.as_bytes(),
+                &compiled.relay_private,
+                "config/relay.yaml",
+            )
+            .expect_err("invalid API-key config must fail production validation");
             let diagnostic = format!("{error:#}");
             assert!(
                 diagnostic.contains("failed production loading"),
@@ -949,7 +1217,7 @@ outputs:
             evaluation_id: "eval-live-1".to_string(),
             claim_id: claim_id.to_string(),
             claim_version: "1.0.0".to_string(),
-            subject_type: AUTHORED_CLAIM_SUBJECT_TYPE.to_string(),
+            subject_type: EvidenceSubjectType::Person.as_str().to_string(),
             requester_ref: Some(registry_notary_core::EvidenceEntityRef {
                 entity_type: "Organisation".to_string(),
                 handle: format!("rnref:v1:hmac-sha256:{}", "1".repeat(64)),
@@ -990,6 +1258,7 @@ outputs:
                 .map(|claim| ((*claim).to_string(), "1.0.0".to_string()))
                 .collect(),
             notary_service_id: "registry-notary".to_string(),
+            subject_type: EvidenceSubjectType::Person.as_str().to_string(),
         }
     }
 
@@ -1836,6 +2105,69 @@ outputs:
     }
 
     #[test]
+    fn governed_live_target_and_result_use_the_selected_project_subject_type() {
+        let mut loaded = load_registry_project(&project_golden("openspp-exact"), Some("local"))
+            .expect("OpenSPP golden project loads");
+        loaded
+            .project
+            .services
+            .get_mut("social-registry-verification")
+            .expect("evidence service exists")
+            .subject_type = Some(EvidenceSubjectType::Project);
+        let request_document = |subject_type| {
+            json!({
+                "target": {
+                    "type": subject_type,
+                    "identifiers": [{
+                        "scheme": "openspp_individual_id",
+                        "value": "IND-AB12CD34",
+                    }],
+                },
+                "purpose": "social-programme-verification",
+                "claims": ["social-registry-record-exists"],
+                "disclosure": "predicate",
+            })
+        };
+        assert!(validate_live_request(&loaded, &request_document("Person"))
+            .expect_err("person target must not select a project-subject service")
+            .to_string()
+            .contains("target type does not match the authored project"));
+        let request = validate_live_request(&loaded, &request_document("Project"))
+            .expect("project target matches the selected evidence service");
+        assert_eq!(request.subject_type, "project");
+
+        let expected = json!({
+            "claims": {
+                "social-registry-record-exists": {
+                    "value": true,
+                    "satisfied": true,
+                    "disclosure": "predicate",
+                },
+            },
+        });
+        let mut response = json!({
+            "results": [governed_live_claim_result(
+                "social-registry-record-exists",
+                json!(true),
+                Some(true),
+                "predicate",
+            )],
+        });
+        response["results"][0]["claim_version"] = json!("1");
+        response["results"][0]["subject_type"] = json!("project");
+        response["results"][0]["provenance"]["generated_by"]["claim_version"] = json!("1");
+        response["results"][0]["provenance"]["generated_by"]["service_id"] =
+            json!("social-registry-notary");
+        validate_live_response(&response, &request, &expected)
+            .expect("project-subject result matches the selected service");
+        response["results"][0]["subject_type"] = json!("person");
+        assert!(validate_live_response(&response, &request, &expected)
+            .expect_err("person result must not satisfy a project-subject request")
+            .to_string()
+            .contains("subject type does not match the authored project"));
+    }
+
+    #[test]
     fn governed_live_result_service_matches_selected_environment() {
         let loaded = load_registry_project(&project_golden("openspp-exact"), Some("local"))
             .expect("OpenSPP golden project and environment load");
@@ -2484,6 +2816,33 @@ outputs:
                 ),
             ])
         );
+
+        loaded
+            .project
+            .services
+            .get_mut("zz-secondary-service")
+            .expect("secondary service exists")
+            .subject_type = Some(EvidenceSubjectType::Project);
+        let mixed_request = json!({
+            "target": {
+                "type": "Person",
+                "identifiers": [{
+                    "scheme": "household_reference",
+                    "value": "HH-AB12CD34",
+                }],
+            },
+            "purpose": "household-support-screening",
+            "claims": ["household-category", "source-household-approval-decision"],
+            "disclosure": "redacted",
+        });
+        assert!(validate_live_request(&loaded, &mixed_request)
+            .expect_err("live selection must reject mixed subject types")
+            .to_string()
+            .contains("different subject types"));
+        assert!(fixture_subject_type(&loaded, "eligibility")
+            .expect_err("offline selection must reject mixed subject types")
+            .to_string()
+            .contains("different subject types"));
     }
 
     #[test]

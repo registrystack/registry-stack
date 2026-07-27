@@ -5737,6 +5737,7 @@ dependencies = [
  "include_dir",
  "ipnet",
  "jsonschema 0.18.3",
+ "rcgen",
  "regex",
  "registry-config-report",
  "registry-language-server",

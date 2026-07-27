@@ -358,6 +358,88 @@ class RelayOidcSmokeTest(TestCase):
             with self.assertRaisesRegex(candidate_module.CandidateError, "Git binding"):
                 self.runner.candidate_from_args(args)
 
+    def test_candidate_binding_accepts_v2_and_rejects_missing_postgresql(
+        self,
+    ) -> None:
+        candidate_module = sys.modules["conformance_candidate"]
+        version = "0.14.0"
+        source_ref = "a" * 40
+        tag_target = "b" * 40
+        manifest_path = (
+            candidate_module.REPO_ROOT / "release/manifests/registry-stack-beta-19.yaml"
+        )
+        manifest_bytes = json.dumps(
+            {
+                "stack": {
+                    "release": "beta-19",
+                    "version": version,
+                    "source_repo": "registrystack/registry-stack",
+                    "source_ref": source_ref,
+                    "source_tag": f"v{version}",
+                    "status": "release-candidate",
+                },
+                "artifacts": {
+                    "registry-relay": version,
+                    "registry-notary": version,
+                },
+            }
+        ).encode("utf-8")
+        lock = {
+            "schema_version": "registryctl.release_image_lock.v2",
+            "release_tag": f"v{version}",
+            "manifest_source_ref": source_ref,
+            "tag_target": tag_target,
+            "platform": "linux/amd64",
+            "images": {
+                "registry-relay": (
+                    "ghcr.io/registrystack/registry-relay@sha256:" + "c" * 64
+                ),
+                "registry-notary": (
+                    "ghcr.io/registrystack/registry-notary@sha256:" + "d" * 64
+                ),
+                "postgresql": (
+                    candidate_module.REPO_ROOT
+                    / "release/registryctl-postgresql-image.ref"
+                )
+                .read_text(encoding="utf-8")
+                .strip(),
+            },
+        }
+        image_lock_path = (
+            Path(tempfile.gettempdir()) / f"registryctl-v{version}-image-lock.json"
+        )
+
+        with (
+            patch.object(
+                candidate_module,
+                "verify_git_binding",
+            ),
+            patch.object(
+                candidate_module,
+                "verify_release_asset_binding",
+                return_value="e" * 64,
+            ),
+        ):
+            candidate = candidate_module._load_candidate_snapshot(
+                manifest_path,
+                image_lock_path,
+                manifest_bytes,
+                json.dumps(lock).encode("utf-8"),
+            )
+            self.assertEqual(version, candidate["version"])
+
+            del lock["images"]["postgresql"]
+            with self.assertRaisesRegex(
+                candidate_module.CandidateError,
+                "must contain exactly",
+            ):
+                candidate_module._load_candidate_snapshot(
+                    manifest_path,
+                    image_lock_path,
+                    manifest_bytes,
+                    json.dumps(lock).encode("utf-8"),
+                )
+
     def test_candidate_binding_rejects_locally_replaced_release_assets(self) -> None:
         candidate_module = sys.modules["conformance_candidate"]
         with tempfile.TemporaryDirectory() as tmp:

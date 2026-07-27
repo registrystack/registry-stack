@@ -193,7 +193,7 @@ test("preserves exact scaffold ownership and emitted build paths", async () => {
   );
 });
 
-test("uses the canonical snapshot starter for offline first-claim assurance", async () => {
+test("preserves the canonical snapshot starter as generated offline assurance", async () => {
   const journey = byId(await buildStandardJourneys(repoRoot))[
     "registry-backed-notary-claim"
   ];
@@ -205,6 +205,15 @@ test("uses the canonical snapshot starter for offline first-claim assurance", as
     project.content,
     /id: snapshot/u,
   );
+  assert.equal(journey.evidence_class, "maintained_offline_fixture");
+  assert.deepEqual(journey.availability, {
+    status: "current_unreleased",
+    proof: "source_tree",
+    release: null,
+  });
+  assert.equal(journey.source_label, "Main source (unreleased)");
+  assert.match(journey.title, /offline/u);
+  assert.match(journey.contract.does_not_prove.join(" "), /live Notary claim/u);
   assert.match(journey.fixture_excerpt.content, /population-record-exists: true/u);
   assert.doesNotMatch(
     project.content + journey.fixture_excerpt.content,
@@ -487,7 +496,7 @@ test("rejects incomplete, partial, and non-allowlisted configuration sources", a
   );
 });
 
-test("does not reintroduce retired relay initialization or Notary add-on commands", async () => {
+test("does not reintroduce retired relay initialization", async () => {
   const journeys = await buildStandardJourneys(repoRoot);
   const commands = journeys
     .flatMap((journey) => journey.steps)
@@ -495,7 +504,6 @@ test("does not reintroduce retired relay initialization or Notary add-on command
     .map((step) => renderStandardJourneyCommand(step))
     .join("\n");
   assert.doesNotMatch(commands, /registryctl init relay/u);
-  assert.doesNotMatch(commands, /registryctl add notary/u);
   assert.match(
     commands,
     /registryctl init --from spreadsheet --project-dir my-first-api/u,
@@ -749,38 +757,7 @@ test(
   },
 );
 
-test("renders the same ten-section component through exactly seven wrapper pages", async () => {
-  const component = await readFile(
-    resolve(docsRoot, "src/components/StandardJourney.astro"),
-    "utf8",
-  );
-  for (let index = 0; index < standardJourneyHeadings.length; index += 1) {
-    assert.match(
-      component,
-      new RegExp(`journey\\.section_headings\\[${index}\\]`, "u"),
-    );
-  }
-  assert.match(component, /Required readiness gates/u);
-
-  const manifest = await readManifest();
-  for (const journey of manifest.journeys) {
-    const page = await readFile(
-      resolve(docsRoot, "src/content/docs", `${journey.slug}.mdx`),
-      "utf8",
-    );
-    assert.match(page, /import StandardJourney/u);
-    assert.match(
-      page,
-      new RegExp(`<StandardJourney journeyId="${journey.id}" \\/>`, "u"),
-    );
-    if (journey.id === "product-input-lifecycle") {
-      assert.match(page, /activation handoff/u);
-      assert.doesNotMatch(page, /from authoring to activation/u);
-    }
-  }
-});
-
-test("wires generation and exposes the seven journeys in navigation", async () => {
+test("keeps source-assurance generation internal to repository checks", async () => {
   const packageJson = JSON.parse(
     await readFile(resolve(docsRoot, "package.json"), "utf8"),
   );
@@ -797,9 +774,12 @@ test("wires generation and exposes the seven journeys in navigation", async () =
   );
 
   const astro = await readFile(resolve(docsRoot, "astro.config.mjs"), "utf8");
-  for (const id of standardJourneyIds) {
-    assert.match(astro, new RegExp(`slug: 'journeys/${id}'`, "u"));
-  }
+  assert.doesNotMatch(astro, /label: 'Journeys'|label: 'Source assurance'/u);
+  assert.doesNotMatch(astro, /slug: 'journeys\//u);
+  await assert.rejects(
+    readFile(resolve(docsRoot, "public/generated/standard-journeys.json"), "utf8"),
+    /ENOENT/u,
+  );
 });
 
 test("generation is byte-stable and check mode fails closed on drift", async () => {
@@ -825,20 +805,17 @@ test("generation is byte-stable and check mode fails closed on drift", async () 
   });
 });
 
-test("the exact workflow command validates both committed generated outputs", async () => {
+test("the exact workflow command validates the committed internal output", async () => {
   await execFile(
     process.execPath,
     ["scripts/generate-standard-journeys.mjs", "--check"],
     { cwd: docsRoot },
   );
-  assert.equal(
+  const generated = JSON.parse(
     await readFile(
       resolve(docsRoot, "src/data/generated/standard-journeys.json"),
       "utf8",
     ),
-    await readFile(
-      resolve(docsRoot, "public/generated/standard-journeys.json"),
-      "utf8",
-    ),
   );
+  assert.equal(generated.length, standardJourneyIds.length);
 });

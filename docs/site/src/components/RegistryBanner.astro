@@ -12,18 +12,18 @@ const isArchived = activeDocset?.status === 'archived';
 <aside class="registry-preview-banner" role="note" aria-label="Site status">
   {isArchived ? (
     <p>
-      <strong>Archived docs.</strong>
-      You are viewing {activeDocset.label}. For current guidance, use
-      <a href="/">Latest</a>. Report archive issues on
+      <strong>Archived docs.</strong>{' '}
+      You are viewing {activeDocset.label}. For current guidance, use{' '}
+      <a href="/">Latest</a>. Report archive issues on{' '}
       <a href={repoUrl}>GitHub</a>.
     </p>
   ) : (
     <p>
-      <strong>Preview release.</strong>
-      These docs are a work in progress. Pages are still being written, links
-      may break, and structure may shift without notice. Treat everything here as
-      a draft and report issues on
-      <a href={repoUrl}>GitHub</a>.
+      <strong>Documentation preview.</strong>{' '}
+      These pages target Registryctl v0.14.0, which is not published yet.
+      Public download commands will not work until that release exists. For{' '}
+      runnable released instructions, use{' '}
+      <a href="https://docs.registrystack.org/v/0.13.0/">v0.13.0</a>.
     </p>
   )}
 </aside>

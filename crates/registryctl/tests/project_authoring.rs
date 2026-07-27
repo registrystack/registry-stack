@@ -1350,7 +1350,7 @@ fn every_cataloged_supported_project_authoring_command_is_automated() {
                 let notary_config = read_yaml(&notary.join("config/notary.yaml"));
                 assert_eq!(
                     notary_config["state"]["storage"].as_str(),
-                    Some("postgresql"),
+                    Some("in_memory"),
                     "{} Notary correctness state",
                     journey.id
                 );
@@ -5770,7 +5770,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "1322a99c8aa31ba8031fc7d66e10c987d2b5b6e6fa216ee61fb9537b7d40de76",
+        "d5d0d3349302b8b90534871ab8ef136e8b60ec1b9536dd47fc4f36f7871c9a92",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }
@@ -6432,25 +6432,37 @@ fn relay_oidc_clients_are_separate_from_the_notary_consultation_workload() {
     .expect("combined project builds with separate Relay identities");
     let output = resolve_build_output(&project, build.output.expect("build output"));
     let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
+    let consultation_relay =
+        read_yaml(&output.join("private/relay/config/relay-consultation.yaml"));
     let allowed_clients = relay["auth"]["oidc"]["allowed_clients"]
         .as_sequence()
         .expect("Relay OIDC allowed clients");
     assert!(allowed_clients
         .iter()
         .any(|client| client.as_str() == Some("household-relay-client")));
-    assert!(allowed_clients
+    assert!(!allowed_clients
         .iter()
         .any(|client| client.as_str() == Some("household-notary")));
+    let consultation_allowed_clients = consultation_relay["auth"]["oidc"]["allowed_clients"]
+        .as_sequence()
+        .expect("consultation Relay OIDC allowed clients");
     assert_eq!(
-        relay["consultation"]["authorized_workload"]["client_value"].as_str(),
+        consultation_allowed_clients
+            .iter()
+            .filter_map(serde_norway::Value::as_str)
+            .collect::<Vec<_>>(),
+        vec!["household-notary"]
+    );
+    assert_eq!(
+        consultation_relay["consultation"]["authorized_workload"]["client_value"].as_str(),
         Some("household-notary")
     );
     assert_eq!(
-        relay["consultation"]["authorized_workload"]["principal_id"].as_str(),
+        consultation_relay["consultation"]["authorized_workload"]["principal_id"].as_str(),
         Some("household-notary")
     );
     assert_ne!(
-        relay["consultation"]["authorized_workload"]["client_value"].as_str(),
+        consultation_relay["consultation"]["authorized_workload"]["client_value"].as_str(),
         Some("household-relay-client")
     );
 }
@@ -6494,8 +6506,10 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
         relay["auth"]["oidc"]["allow_dev_insecure_fetch_urls"].as_bool(),
         Some(true)
     );
+    let consultation_relay =
+        read_yaml(&output.join("private/relay/config/relay-consultation.yaml"));
     assert_eq!(
-        relay["consultation"]["state_plane"]["root_certificate_path"].as_str(),
+        consultation_relay["consultation"]["state_plane"]["root_certificate_path"].as_str(),
         Some("/run/secrets/relay-postgres-ca.pem")
     );
     let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
@@ -6579,6 +6593,10 @@ fn hosted_notary_can_use_an_explicit_loopback_relay_connection() {
     environment["deployment"]["profile"] = serde_norway::Value::String("hosted_lab".to_string());
     environment["notary_relay"]["base_url"] =
         serde_norway::Value::String("http://127.0.0.1:18080".to_string());
+    environment["notary_state"] = serde_norway::from_str(
+        "postgresql:\n  root_certificate_path: /run/secrets/notary-postgres-ca.pem\n",
+    )
+    .expect("hosted Notary state binding parses");
     write_yaml(&environment_path, &environment);
 
     let build = build_registry_project(&ProjectBuildOptions {
@@ -7127,7 +7145,7 @@ fn source_free_evaluation_without_credential_profiles_omits_issuance_and_signing
     .expect("evaluation-only Notary project builds without issuance");
     let output = resolve_build_output(&project, build.output.expect("build output"));
     let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
-    assert_eq!(notary["state"]["storage"].as_str(), Some("postgresql"));
+    assert_eq!(notary["state"]["storage"].as_str(), Some("in_memory"));
     assert!(notary["evidence"].get("relay").is_none());
     assert!(notary["evidence"].get("signing_keys").is_none());
     assert!(notary["evidence"]["credential_profiles"]
@@ -7603,10 +7621,9 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
         assert!(notary_descriptor["consumers"]
             .as_array()
             .is_some_and(|consumers| {
-                consumers.iter().any(|consumer| {
-                    consumer["locator"] == "REGISTRY_NOTARY_POSTGRES_URL"
-                        && consumer["config_pointer"] == "/state/postgresql/url_env"
-                })
+                consumers
+                    .iter()
+                    .all(|consumer| consumer["locator"] != "REGISTRY_NOTARY_POSTGRES_URL")
             }));
     }
 }

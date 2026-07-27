@@ -23,27 +23,44 @@ TAG = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 RELAY_IMAGE = re.compile(
     r"^ghcr\.io/registrystack/registry-relay@sha256:([0-9a-f]{64})$"
 )
+NOTARY_IMAGE = re.compile(
+    r"^ghcr\.io/registrystack/registry-notary@sha256:([0-9a-f]{64})$"
+)
+POSTGRESQL_IMAGE = re.compile(
+    r"^docker\.io/library/postgres@sha256:([0-9a-f]{64})$"
+)
 STAGING_RELAY_IMAGE = re.compile(
     r"^ghcr\.io/registrystack/registry-relay-candidate@sha256:([0-9a-f]{64})$"
+)
+STAGING_NOTARY_IMAGE = re.compile(
+    r"^ghcr\.io/registrystack/registry-notary-candidate@sha256:([0-9a-f]{64})$"
 )
 COMMAND_ORDER = (
     "install",
     "version",
     "init",
     "preflight",
-    "start",
-    "smoke",
+    "relay_start",
+    "relay_smoke",
+    "add_notary",
+    "combined_test",
+    "combined_restart",
+    "combined_smoke",
     "denied",
     "allowed",
     "inspect",
-    "listener",
+    "listeners",
     "stop",
 )
 MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_LOG_BYTES = 1024 * 1024
 MAX_AUTHENTICATED_RESPONSE_BYTES = 1024 * 1024
 RECORDS_URL = "http://127.0.0.1:4242/v1/datasets/projects/entities/projects/records"
+RELAY_LISTENER = "127.0.0.1:4242"
+NOTARY_LISTENER = "127.0.0.1:4255"
 RECORDS_PURPOSE = "public-works-case-management"
+CANONICAL_WORKBOOK_PROJECT_FILE = "data/public_works_projects.xlsx"
+CANONICAL_WORKBOOK_RUNTIME_PATH = "/data/public_works_projects.xlsx"
 MATCH_KEY_ENV = "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_RAW"
 NO_MATCH_KEY_ENV = "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_RAW"
 MATCH_FIELDS = {"project_id", "district_code", "sector", "status"}
@@ -61,6 +78,77 @@ ALLOWED_EVIDENCE = [
         "row_count": 0,
     },
 ]
+RELAY_SMOKE_OUTCOMES = {
+    "allowed public health check": 200,
+    "allowed match source is ready": 200,
+    "denied anonymous records request": 401,
+    "denied wrong local API key": 401,
+    "allowed matching principal returns one record": 200,
+    "wrong principal safely returns no match": 200,
+}
+NOTARY_SMOKE_OUTCOMES = {
+    "denied anonymous Notary evaluation": 401,
+    "denied wrong Notary API key": 401,
+    "denied under-scoped Notary caller": 403,
+    "matching evaluation returns the accepted predicate": 200,
+    "second matching evaluation returns the non-accepted predicate": 200,
+    "absent evaluation returns the bounded no-match predicate": 200,
+}
+SMOKE_EVIDENCE = {
+    "relay_only": [
+        {"name": name, "http_status": status}
+        for name, status in RELAY_SMOKE_OUTCOMES.items()
+    ],
+    "combined_notary": [
+        {"name": name, "http_status": status}
+        for name, status in {**RELAY_SMOKE_OUTCOMES, **NOTARY_SMOKE_OUTCOMES}.items()
+    ],
+}
+NOTARY_MANIFEST_DIGEST_PATHS = {
+    "consultation_relay_config_digest": (
+        ".registry-stack/build/local/private/relay/config/relay-consultation.yaml"
+    ),
+    "runtime_consultation_relay_config_digest": (
+        ".registry-stack/runtime/local/private/relay/config/relay-consultation.yaml"
+    ),
+    "compiled_notary_config_digest": (
+        ".registry-stack/build/local/private/notary/config/notary.yaml"
+    ),
+    "runtime_notary_config_digest": (
+        ".registry-stack/runtime/local/private/notary/config/notary.yaml"
+    ),
+    "postgres_ca_digest": (
+        ".registry-stack/runtime/local/private/relay/config/state-plane-ca.pem"
+    ),
+    "database_init_digest": ".registry-stack/runtime/local/private/db/init.sh",
+    "workload_jwks_digest": (
+        ".registry-stack/runtime/local/private/workload/jwks.json"
+    ),
+    "consultation_relay_env_digest": (
+        ".registry-stack/runtime/local/secrets/relay-consultation.env"
+    ),
+    "relay_bootstrap_env_digest": (
+        ".registry-stack/runtime/local/secrets/relay-bootstrap.env"
+    ),
+    "notary_env_digest": ".registry-stack/runtime/local/secrets/notary.env",
+    "postgres_env_digest": ".registry-stack/runtime/local/secrets/postgres.env",
+    "workload_token_digest": (
+        ".registry-stack/runtime/local/secrets/relay-workload-token"
+    ),
+    "workload_private_jwk_digest": (
+        ".registry-stack/runtime/local/secrets/workload-private.jwk"
+    ),
+}
+SECRET_FILES = {
+    "local_env": "local.env",
+    "relay_env": "relay.env",
+    "consultation_relay_env": "relay-consultation.env",
+    "relay_bootstrap_env": "relay-bootstrap.env",
+    "notary_env": "notary.env",
+    "postgres_env": "postgres.env",
+    "relay_workload_token": "relay-workload-token",
+    "workload_private_jwk": "workload-private.jwk",
+}
 
 
 class ReleaseFormError(RuntimeError):
@@ -156,15 +244,51 @@ def verify_asset_set(asset_dir: Path, tag: str) -> dict[str, Any]:
         lock = json.loads((asset_dir / lock_name).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ReleaseFormError("release image lock is not valid JSON") from error
-    if not isinstance(lock, dict) or lock.get("release_tag") != tag:
+    expected_lock_keys = {
+        "schema_version",
+        "release_tag",
+        "manifest_source_ref",
+        "tag_target",
+        "platform",
+        "images",
+    }
+    if (
+        not isinstance(lock, dict)
+        or set(lock) != expected_lock_keys
+        or lock.get("schema_version") != "registryctl.release_image_lock.v2"
+        or lock.get("release_tag") != tag
+        or lock.get("platform") != "linux/amd64"
+    ):
         raise ReleaseFormError(
-            "release image lock does not match the selected release tag"
+            "release image lock does not match the current Linux amd64 runtime contract"
         )
     images = lock.get("images")
     relay_image = images.get("registry-relay") if isinstance(images, dict) else None
+    notary_image = images.get("registry-notary") if isinstance(images, dict) else None
+    postgresql_image = images.get("postgresql") if isinstance(images, dict) else None
+    if not isinstance(images, dict) or set(images) != {
+        "registry-relay",
+        "registry-notary",
+        "postgresql",
+    }:
+        raise ReleaseFormError("release image lock image set is not closed")
     if not isinstance(relay_image, str) or RELAY_IMAGE.fullmatch(relay_image) is None:
         raise ReleaseFormError(
             "release image lock has no canonical Relay digest reference"
+        )
+    if (
+        not isinstance(notary_image, str)
+        or NOTARY_IMAGE.fullmatch(notary_image) is None
+    ):
+        raise ReleaseFormError(
+            "release image lock has no canonical Notary digest reference"
+        )
+    if (
+        not isinstance(postgresql_image, str)
+        or POSTGRESQL_IMAGE.fullmatch(postgresql_image) is None
+    ):
+        raise ReleaseFormError(
+            "release image lock has no canonical PostgreSQL digest reference"
         )
     return {
         "installer_name": installer_name,
@@ -173,6 +297,8 @@ def verify_asset_set(asset_dir: Path, tag: str) -> dict[str, Any]:
         "assets": assets,
         "lock": lock,
         "relay_image": relay_image,
+        "notary_image": notary_image,
+        "postgresql_image": postgresql_image,
     }
 
 
@@ -188,6 +314,22 @@ def validate_relay_override(expected: str, override: str | None) -> str | None:
     if expected_match.group(1) != override_match.group(1):
         raise ReleaseFormError(
             "Relay staging transport does not match the release image digest"
+        )
+    return override
+
+
+def validate_notary_override(expected: str, override: str | None) -> str | None:
+    if override is None:
+        return None
+    expected_match = NOTARY_IMAGE.fullmatch(expected)
+    override_match = STAGING_NOTARY_IMAGE.fullmatch(override)
+    if expected_match is None or override_match is None:
+        raise ReleaseFormError(
+            "Notary staging transport must use the private candidate repository and an immutable digest"
+        )
+    if expected_match.group(1) != override_match.group(1):
+        raise ReleaseFormError(
+            "Notary staging transport does not match the release image digest"
         )
     return override
 
@@ -384,16 +526,13 @@ def run_authenticated_records_evidence(
 
 
 def assert_no_secret_leak(project: Path, secrets: Iterable[bytes]) -> int:
-    allowed = {
-        Path(".registry-stack/runtime/local/secrets/local.env"),
-        Path(".registry-stack/runtime/local/secrets/relay.env"),
-    }
+    secrets_root = Path(".registry-stack/runtime/local/secrets")
     scanned = 0
     for path in sorted(project.rglob("*")):
         if not path.is_file() or path.is_symlink():
             continue
         relative = path.relative_to(project)
-        if relative in allowed or "state" in relative.parts:
+        if secrets_root in relative.parents or "state" in relative.parts:
             continue
         data = path.read_bytes()
         scanned += 1
@@ -439,7 +578,29 @@ def require_private_directory(path: Path) -> None:
         raise ReleaseFormError(f"required directory must be real: {path.name}")
 
 
-def read_runtime_inspection(project: Path, expected_image: str) -> dict[str, str]:
+def digest_uri(path: Path) -> str:
+    require_regular(path)
+    return f"sha256:{sha256(path)}"
+
+
+def require_manifest_digest(
+    manifest: dict[str, Any],
+    field: str,
+    path: Path,
+) -> None:
+    if manifest.get(field) != digest_uri(path):
+        raise ReleaseFormError(
+            f"canonical runtime manifest does not bind {field}"
+        )
+
+
+def read_runtime_inspection(
+    project: Path,
+    *,
+    expected_relay_image: str,
+    expected_notary_image: str | None,
+    expected_postgresql_image: str | None,
+) -> dict[str, str]:
     relay_config = (
         project / ".registry-stack/build/local/private/relay/config/relay.yaml"
     )
@@ -456,6 +617,9 @@ def read_runtime_inspection(project: Path, expected_image: str) -> dict[str, str
         raise ReleaseFormError(
             "canonical runtime manifest is not valid JSON"
         ) from error
+    expected_topology = (
+        "combined_notary" if expected_notary_image is not None else "relay_only"
+    )
     expected_keys = {
         "schema_version",
         "environment",
@@ -464,31 +628,86 @@ def read_runtime_inspection(project: Path, expected_image: str) -> dict[str, str
         "artifact_manifest_digest",
         "relay_config_digest",
         "workbook_digest",
+        "workbook_classification",
         "workbook_project_file",
         "workbook_runtime_path",
+        "topology",
     }
+    if expected_notary_image is not None:
+        expected_keys.add("notary")
     if not isinstance(runtime_manifest, dict) or set(runtime_manifest) != expected_keys:
         raise ReleaseFormError("canonical runtime manifest fields are not closed")
-    relay_digest = f"sha256:{sha256(relay_config)}"
-    compose_digest = f"sha256:{sha256(compose)}"
     if (
         runtime_manifest.get("schema_version") != "registryctl.local_runtime.v1"
         or runtime_manifest.get("environment") != "local"
-        or runtime_manifest.get("relay_image") != expected_image
-        or runtime_manifest.get("relay_config_digest") != relay_digest
-        or runtime_manifest.get("compose_digest") != compose_digest
+        or runtime_manifest.get("relay_image") != expected_relay_image
+        or runtime_manifest.get("workbook_classification")
+        != "operator_owned_source_data"
+        or runtime_manifest.get("topology") != expected_topology
     ):
         raise ReleaseFormError(
-            "canonical runtime does not bind the compiled Relay artifact and Compose"
+            "canonical runtime identity, topology, or workbook classification is invalid"
         )
+    require_manifest_digest(runtime_manifest, "relay_config_digest", relay_config)
+    require_manifest_digest(runtime_manifest, "compose_digest", compose)
+    artifact_manifest = project / ".registry-stack/build/local/artifact-manifest.json"
+    require_manifest_digest(
+        runtime_manifest, "artifact_manifest_digest", artifact_manifest
+    )
+    workbook_project_file = runtime_manifest.get("workbook_project_file")
+    workbook_runtime_path = runtime_manifest.get("workbook_runtime_path")
+    if (
+        workbook_project_file != CANONICAL_WORKBOOK_PROJECT_FILE
+        or workbook_runtime_path != CANONICAL_WORKBOOK_RUNTIME_PATH
+    ):
+        raise ReleaseFormError(
+            "canonical runtime does not bind the maintained spreadsheet starter"
+        )
+    require_manifest_digest(
+        runtime_manifest,
+        "workbook_digest",
+        project / workbook_project_file,
+    )
+    notary = runtime_manifest.get("notary")
+    if expected_notary_image is None:
+        if notary is not None or expected_postgresql_image is not None:
+            raise ReleaseFormError("Relay-only canonical runtime contains Notary state")
+    else:
+        expected_notary_keys = {
+            "notary_image",
+            "postgresql_image",
+            *NOTARY_MANIFEST_DIGEST_PATHS,
+        }
+        if (
+            expected_postgresql_image is None
+            or not isinstance(notary, dict)
+            or set(notary) != expected_notary_keys
+            or notary.get("notary_image") != expected_notary_image
+            or notary.get("postgresql_image") != expected_postgresql_image
+        ):
+            raise ReleaseFormError(
+                "combined canonical runtime Notary manifest is incomplete"
+            )
+        for field, relative in NOTARY_MANIFEST_DIGEST_PATHS.items():
+            require_manifest_digest(notary, field, project / relative)
     return {
         "relay_config_sha256": sha256(relay_config),
         "runtime_manifest_sha256": sha256(manifest),
         "compose_sha256": sha256(compose),
+        "notary_config_sha256": (
+            sha256(
+                project
+                / ".registry-stack/build/local/private/notary/config/notary.yaml"
+            )
+            if expected_notary_image is not None
+            else ""
+        ),
+        "topology": expected_topology,
+        "workbook_classification": "operator_owned_source_data",
     }
 
 
-def smoke_outcomes(project: Path) -> None:
+def smoke_outcomes(project: Path, topology: str) -> list[dict[str, Any]]:
     report_path = project / ".registry-stack/runtime/local/smoke-results.json"
     require_regular(report_path)
     try:
@@ -496,24 +715,94 @@ def smoke_outcomes(project: Path) -> None:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ReleaseFormError("canonical smoke report is not valid JSON") from error
     checks = report.get("checks") if isinstance(report, dict) else None
-    expected = {
-        "denied anonymous records request",
-        "allowed matching principal returns one record",
-        "wrong principal safely returns no match",
-    }
-    observed = (
-        {
-            check.get("name")
-            for check in checks
-            if isinstance(check, dict) and check.get("passed") is True
-        }
-        if isinstance(checks, list)
-        else set()
+    expected = (
+        RELAY_SMOKE_OUTCOMES
+        if topology == "relay_only"
+        else {**RELAY_SMOKE_OUTCOMES, **NOTARY_SMOKE_OUTCOMES}
     )
-    if not expected.issubset(observed):
+    observed: dict[str, int] = {}
+    if isinstance(checks, list):
+        for check in checks:
+            if (
+                not isinstance(check, dict)
+                or set(check)
+                != {
+                    "name",
+                    "method",
+                    "path",
+                    "expected_status",
+                    "actual_status",
+                    "passed",
+                    "error",
+                }
+                or not isinstance(check.get("name"), str)
+                or type(check.get("expected_status")) is not int
+                or type(check.get("actual_status")) is not int
+                or check.get("passed") is not True
+                or check.get("error") is not None
+                or check["expected_status"] != check["actual_status"]
+                or check["name"] in observed
+            ):
+                raise ReleaseFormError("canonical smoke report check is invalid")
+            observed[check["name"]] = check["actual_status"]
+    if (
+        not isinstance(report, dict)
+        or set(report) != {"schema_version", "base_url", "passed", "checks"}
+        or report.get("schema_version") != "registryctl.smoke.v1"
+        or report.get("base_url") != "http://127.0.0.1:4242"
+        or report.get("passed") is not True
+        or observed != expected
+    ):
         raise ReleaseFormError(
-            "canonical smoke did not prove anonymous denial and minimized match/no-match"
+            f"canonical {topology} smoke did not prove its exact required outcomes"
         )
+    return [
+        {"name": name, "http_status": status}
+        for name, status in observed.items()
+    ]
+
+
+def verify_loopback_listeners(
+    project: Path,
+    env: dict[str, str],
+    logs: Path,
+) -> dict[str, str]:
+    compose = project / ".registry-stack/runtime/local/compose.yaml"
+    expected = {
+        "relay": ("registry-relay", "8080", RELAY_LISTENER),
+        "notary": ("notary-network", "8081", NOTARY_LISTENER),
+    }
+    listeners: dict[str, str] = {}
+    for name, (service, container_port, expected_listener) in expected.items():
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(compose),
+                "port",
+                service,
+                container_port,
+            ],
+            cwd=project,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=30,
+            check=False,
+        )
+        listener = result.stdout.strip()
+        if result.returncode != 0 or listener != expected_listener:
+            raise ReleaseFormError(
+                f"{name.title()} is not published on the exact IPv4 loopback listener"
+            )
+        listeners[name] = listener
+    (logs / "listeners.log").write_text(
+        json.dumps(listeners, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return listeners
 
 
 def run_release_form(args: argparse.Namespace) -> Path:
@@ -528,6 +817,9 @@ def run_release_form(args: argparse.Namespace) -> Path:
     verified = verify_asset_set(asset_dir, args.tag)
     staging_transport = validate_relay_override(
         verified["relay_image"], args.relay_image_override
+    )
+    notary_staging_transport = validate_notary_override(
+        verified["notary_image"], args.notary_image_override
     )
     if shutil.which("registry-relay") or shutil.which("registry-notary"):
         raise ReleaseFormError("ambient Registry product binaries must not be on PATH")
@@ -552,6 +844,8 @@ def run_release_form(args: argparse.Namespace) -> Path:
         )
         if staging_transport is not None:
             environment["REGISTRYCTL_RELAY_STAGING_IMAGE"] = staging_transport
+        if notary_staging_transport is not None:
+            environment["REGISTRYCTL_NOTARY_STAGING_IMAGE"] = notary_staging_transport
         commands: list[dict[str, Any]] = []
         registryctl = install_dir / "registryctl"
         installer = asset_dir / verified["installer_name"]
@@ -609,7 +903,7 @@ def run_release_form(args: argparse.Namespace) -> Path:
             )
             commands.append(
                 run_command(
-                    "start",
+                    "relay_start",
                     [str(registryctl), "start"],
                     cwd=project,
                     env=environment,
@@ -618,14 +912,57 @@ def run_release_form(args: argparse.Namespace) -> Path:
             )
             commands.append(
                 run_command(
-                    "smoke",
+                    "relay_smoke",
                     [str(registryctl), "smoke"],
                     cwd=project,
                     env=environment,
                     logs=logs,
                 )
             )
-            smoke_outcomes(project)
+            relay_smoke = smoke_outcomes(project, "relay_only")
+            read_runtime_inspection(
+                project,
+                expected_relay_image=staging_transport or verified["relay_image"],
+                expected_notary_image=None,
+                expected_postgresql_image=None,
+            )
+            commands.append(
+                run_command(
+                    "add_notary",
+                    [str(registryctl), "add", "notary"],
+                    cwd=project,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_command(
+                    "combined_test",
+                    [str(registryctl), "test", "--environment", "local"],
+                    cwd=project,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_command(
+                    "combined_restart",
+                    [str(registryctl), "restart"],
+                    cwd=project,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            commands.append(
+                run_command(
+                    "combined_smoke",
+                    [str(registryctl), "smoke"],
+                    cwd=project,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            combined_smoke = smoke_outcomes(project, "combined_notary")
             denied = subprocess.run(
                 [
                     "curl",
@@ -690,7 +1027,12 @@ def run_release_form(args: argparse.Namespace) -> Path:
                 }
             )
             runtime = read_runtime_inspection(
-                project, staging_transport or verified["relay_image"]
+                project,
+                expected_relay_image=staging_transport or verified["relay_image"],
+                expected_notary_image=(
+                    notary_staging_transport or verified["notary_image"]
+                ),
+                expected_postgresql_image=verified["postgresql_image"],
             )
             (logs / "inspect.log").write_text(
                 "".join(f"{name}={value}\n" for name, value in runtime.items()),
@@ -704,38 +1046,13 @@ def run_release_form(args: argparse.Namespace) -> Path:
                     "log_sha256": sha256(logs / "inspect.log"),
                 }
             )
-            listener = subprocess.run(
-                [
-                    "docker",
-                    "compose",
-                    "-f",
-                    str(project / ".registry-stack/runtime/local/compose.yaml"),
-                    "port",
-                    "registry-relay",
-                    "8080",
-                ],
-                cwd=project,
-                env=environment,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=30,
-                check=False,
-            )
-            (logs / "listener.log").write_text(
-                listener.stdout[-MAX_LOG_BYTES:], encoding="utf-8"
-            )
-            listener_value = listener.stdout.strip()
-            if listener.returncode != 0 or listener_value != "127.0.0.1:4242":
-                raise ReleaseFormError(
-                    "Relay is not published on the exact IPv4 loopback listener"
-                )
+            listeners = verify_loopback_listeners(project, environment, logs)
             commands.append(
                 {
-                    "name": "listener",
+                    "name": "listeners",
                     "status": "passed",
                     "exit_code": 0,
-                    "log_sha256": sha256(logs / "listener.log"),
+                    "log_sha256": sha256(logs / "listeners.log"),
                 }
             )
         finally:
@@ -766,6 +1083,15 @@ def run_release_form(args: argparse.Namespace) -> Path:
             raise ReleaseFormError(
                 "release-form command sequence did not complete in exact order"
             )
+        secrets_dir = project / ".registry-stack/runtime/local/secrets"
+        for secret_path in sorted(secrets_dir.iterdir()):
+            require_regular(secret_path)
+            if secret_path.suffix == ".env":
+                secrets.extend(local_env_values(secret_path))
+            else:
+                data = secret_path.read_bytes()
+                secrets.extend(value for value in (data, data.strip()) if value)
+        secrets = sorted(set(secrets), key=len, reverse=True)
         scanned_files = assert_no_secret_leak(project, secrets)
         redact_logs(
             logs,
@@ -774,22 +1100,18 @@ def run_release_form(args: argparse.Namespace) -> Path:
         )
         for command in commands:
             command["log_sha256"] = sha256(logs / f"{command['name']}.log")
-        permissions = {
-            "runtime_secrets_directory": mode(
-                project / ".registry-stack/runtime/local/secrets"
-            ),
-            "relay_env": mode(
-                project / ".registry-stack/runtime/local/secrets/relay.env"
-            ),
-            "local_env": mode(
-                project / ".registry-stack/runtime/local/secrets/local.env"
-            ),
-        }
-        if os.name == "posix" and permissions != {
+        permissions = {"runtime_secrets_directory": mode(secrets_dir)}
+        permissions.update(
+            {
+                name: mode(secrets_dir / filename)
+                for name, filename in SECRET_FILES.items()
+            }
+        )
+        expected_permissions = {
             "runtime_secrets_directory": "0700",
-            "relay_env": "0600",
-            "local_env": "0600",
-        }:
+            **{name: "0600" for name in SECRET_FILES},
+        }
+        if os.name == "posix" and permissions != expected_permissions:
             raise ReleaseFormError(
                 "generated credential permissions are not owner-only"
             )
@@ -803,11 +1125,18 @@ def run_release_form(args: argparse.Namespace) -> Path:
             "asset_sha256": verified["assets"],
             "release_image_lock_sha256": verified["assets"][verified["lock_name"]],
             "relay_image": verified["relay_image"],
+            "notary_image": verified["notary_image"],
+            "postgresql_image": verified["postgresql_image"],
             "staging_transport": staging_transport,
+            "notary_staging_transport": notary_staging_transport,
             "commands": commands,
-            "listener": "127.0.0.1:4242",
+            "listeners": listeners,
             "permissions": permissions,
             "runtime": runtime,
+            "smoke": {
+                "relay_only": relay_smoke,
+                "combined_notary": combined_smoke,
+            },
             "redaction": {
                 "status": "passed",
                 "generated_files_scanned": scanned_files,
@@ -907,11 +1236,15 @@ def verify_report(path: Path, asset_dir: Path, tag: str) -> None:
         "asset_sha256",
         "release_image_lock_sha256",
         "relay_image",
+        "notary_image",
+        "postgresql_image",
         "staging_transport",
+        "notary_staging_transport",
         "commands",
-        "listener",
+        "listeners",
         "permissions",
         "runtime",
+        "smoke",
         "redaction",
     }
     if not isinstance(report, dict) or set(report) != expected_keys:
@@ -929,6 +1262,7 @@ def verify_report(path: Path, asset_dir: Path, tag: str) -> None:
     )
     permissions = report.get("permissions")
     runtime = report.get("runtime")
+    smoke = report.get("smoke")
     redaction = report.get("redaction")
     if (
         report["schema_version"] != SCHEMA
@@ -943,22 +1277,35 @@ def verify_report(path: Path, asset_dir: Path, tag: str) -> None:
         or report["release_image_lock_sha256"]
         != verified["assets"][verified["lock_name"]]
         or report["relay_image"] != verified["relay_image"]
-        or report["listener"] != "127.0.0.1:4242"
+        or report["notary_image"] != verified["notary_image"]
+        or report["postgresql_image"] != verified["postgresql_image"]
+        or report["listeners"]
+        != {"relay": RELAY_LISTENER, "notary": NOTARY_LISTENER}
         or not command_shape_valid
         or tuple(command["name"] for command in commands) != COMMAND_ORDER
         or permissions
         != {
             "runtime_secrets_directory": "0700",
-            "relay_env": "0600",
-            "local_env": "0600",
+            **{name: "0600" for name in SECRET_FILES},
         }
         or not isinstance(runtime, dict)
         or set(runtime)
-        != {"relay_config_sha256", "runtime_manifest_sha256", "compose_sha256"}
+        != {
+            "relay_config_sha256",
+            "runtime_manifest_sha256",
+            "compose_sha256",
+            "notary_config_sha256",
+            "topology",
+            "workbook_classification",
+        }
         or any(
             not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
-            for value in runtime.values()
+            for name, value in runtime.items()
+            if name.endswith("_sha256")
         )
+        or runtime.get("topology") != "combined_notary"
+        or runtime.get("workbook_classification") != "operator_owned_source_data"
+        or smoke != SMOKE_EVIDENCE
         or not isinstance(redaction, dict)
         or set(redaction) != {"status", "generated_files_scanned"}
         or redaction.get("status") != "passed"
@@ -969,6 +1316,9 @@ def verify_report(path: Path, asset_dir: Path, tag: str) -> None:
             "release-form report does not prove the required journey"
         )
     validate_relay_override(report["relay_image"], report["staging_transport"])
+    validate_notary_override(
+        report["notary_image"], report["notary_staging_transport"]
+    )
     verify_evidence_logs(path, commands)
 
 
@@ -980,6 +1330,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--tag", required=True)
     run.add_argument("--evidence-dir", type=Path, required=True)
     run.add_argument("--relay-image-override")
+    run.add_argument("--notary-image-override")
     verify = subcommands.add_parser("verify")
     verify.add_argument("--asset-dir", type=Path, required=True)
     verify.add_argument("--tag", required=True)

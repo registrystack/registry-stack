@@ -1,112 +1,70 @@
 ---
-title: When to use Registry Stack
-description: What Registry Stack is, when it fits a registry integration problem, and the non-goals it deliberately leaves to other systems.
+title: When Registry Stack fits
+description: Decide whether Registry Stack matches the access problem your institution needs to solve.
 status: current
 owner: registry-docs
 source_repos:
   - registry-relay
   - registry-notary
-  - registry-manifest
-  - registry-platform
-  - solmara-lab
 last_reviewed: "2026-06-20"
 doc_type: explanation
 locale: en
-standards_referenced:
-  - oid4vci
-  - sd-jwt-vc
+standards_referenced: []
 ---
 
-Registry Stack is a registry-facing layer for institutions that already hold authoritative data.
-It does not store records or run a domain registry. It adds controlled service surfaces over data
-you already operate: a published metadata contract, protected registry APIs, governed evidence
-responses, and hash-chained audit records.
+Use Registry Stack when an institution already manages authoritative data and
+needs a controlled way for another system to read selected records or receive
+a bounded answer. Registry Stack adds an access layer. It does not replace the
+system that owns the data.
 
-For broader problem framing, who benefits, and where
-the stack fits in a wider ecosystem, see [registrystack.org](https://registrystack.org/).
+## Registry Stack is a good fit when
 
-## What it is
+- The source must remain authoritative and under the institution's control.
+- Callers need a reviewed interface instead of direct database or file access.
+- Each caller must have an explicit purpose, permission, and limited result.
+- The institution needs to test source behavior with synthetic fixtures before
+  connecting a runtime environment.
+- Operators need separate control over endpoints, credentials, trust, and
+  deployment.
 
-Registry Stack supports two runtime patterns:
+## Choose the result you need
 
-- Protected Registry APIs expose files, extracts, databases, and legacy registry systems through
-  scoped, read-only routes.
-- Evidence Gateway evaluates the request, source context, policy, freshness, redaction, and audit
-  requirements before returning a protected read, minimized fact, selected value, signed claim
-  result, credential, redacted result, or denial.
+| Caller needs | Use | Result |
+| --- | --- | --- |
+| Selected records or fields | Registry Relay | A protected, read-only API response |
+| A bounded answer or status | Registry Notary | A claim result without the source record |
 
-These docs cover the two products you build against directly:
+The two products can work together. Registry Relay obtains a limited source
+result, and Registry Notary evaluates a reviewed claim over that result.
 
-- Registry Relay exposes existing source data (a file, extract, database, or legacy system) through
-  protected, scoped, read-only HTTP routes, without giving callers database access.
-- Registry Notary evaluates configured evidence claims and returns a status, predicate, selected
-  value, or signed credential, instead of the full source record. An evidence consumer uses that
-  evidence, while the decision owner remains accountable for any resulting requirements,
-  decisions, or actions.
+## Registry Stack is not the right tool when
 
-{/* SVG diagram. Essential labels are restated in the bullets above and the sentence below. */}
-<figure>
-  <img src="../../images/registry-relay-or-notary.svg"
-       alt="Decision strip. A caller that needs the records themselves uses Registry Relay:
-            protected, scoped, read-only HTTP routes over existing source data, without giving
-            callers database access. A caller that needs an answer, evidence, or a credential
-            uses Registry Notary: a status, predicate, selected value, or signed credential
-            (SD-JWT VC), instead of the full source record. In a combined project, Registry
-            Notary consumes compiler-pinned consultation results from Registry Relay." />
-</figure>
+- You need a new system of record.
+- A caller must create, update, or delete source records.
+- You need a workflow, eligibility, ranking, or case-management engine.
+- You need Registry Stack to decide legal authority, data ownership, or
+  institutional approval.
+- You want to publish unrestricted open data.
 
-The two patterns also compose. A combined Registry Stack project compiles source access and
-adaptation into Registry Relay, then binds Registry Notary claims to the resulting typed,
-contract-hashed consultation profiles. Registry Notary does not treat Relay as an arbitrary HTTP
-source.
+Registry Stack makes these boundaries visible, but the responsible
+institutions still make and approve the underlying decisions.
 
-The other two formal products are Registry Manifest for portable metadata and Registry Platform
-for shared primitives. The external
-[Solmara Lab](https://github.com/registrystack/solmara-lab/tree/00cd51a2be4a405ef75d337ddcede0f9de134b1f)
-adopter project demonstrates the four formal products in local and hosted topologies.
-For how the pieces connect at runtime, see the [architecture overview](../../explanation/architecture/).
+## What you need to adopt it
 
-## When to use it
+Before moving beyond a local sample, identify:
 
-Reach for Registry Stack when a registry that already exists needs a governed read path, and one or
-more of the following is true:
+- The source owner and update process.
+- The fields and operations the integration is allowed to use.
+- The callers, purposes, and fields each service may disclose.
+- The operator responsible for endpoints, credentials, trust, deployment,
+  monitoring, recovery, and audit retention.
 
-- Data exists in files, extracts, databases, or legacy systems, but other services cannot depend on
-  a clear, approved interface over it.
-- Callers need a status or evidence response, but the available record APIs move more data than the
-  purpose requires.
-- A data-sharing agreement describes intended access on paper, but the API itself has no scopes, no
-  purpose field, no disclosure limits, and no audit record.
-- Other teams need to inspect a registry's fields, schemas, policies, services, and evidence
-  offerings before they integrate.
-- A registry-backed issuer needs to produce SD-JWT VC credentials or run an OID4VCI issuance flow.
-
-For how the stack wires in behind exchange layers, workflow engines, wallets, and domain platforms,
-see the [architecture overview](../../explanation/architecture/).
-
-## Non-goals
-
-Registry Stack deliberately leaves these to other systems:
-
-- It does not replace a domain registry platform (such as OpenCRVS, OpenSPP, DHIS2, or OpenIMIS), a
-  workflow engine, an exchange layer, a wallet, or a public-service portal. It provides the
-  registry-facing controls those systems call.
-- It does not solve foundational identity, deduplication, legal authority, semantic governance, or
-  institutional approval by itself. It makes those boundaries explicit so they can be reviewed
-  before data moves.
-- Registry Notary is not an eligibility, prioritization, workflow, or action engine. It evaluates
-  atomic, reusable evidence statements under evidence authorization and disclosure policy. The
-  evidence consumer determines how the evidence is used, and the decision owner retains
-  accountability for its rules and outcomes. Notary can attest a decision already made by an
-  authoritative source only when the claim identifies the decision as source-owned.
-- Registry Relay does not mutate source registry data: provisioning, inserts, updates, and write-back
-  are out of scope for its consultation API.
-- Registry Relay is not an open-data portal: it publishes restricted consultation APIs for
-  authorized systems only.
+Start with non-personal data. A successful local tutorial is not production
+approval.
 
 ## Next
 
-- [Run a protected registry API locally](../../tutorials/publish-spreadsheet-secured-registry-api/)
-- [Evaluate a claim with Registry Notary](../../tutorials/verify-claim-registry-api/)
-- [Choose by question (homepage router)](../../)
-- [Architecture overview](../../explanation/architecture/)
+- [Run your first registry API](../../tutorials/publish-spreadsheet-secured-registry-api/)
+- [Connect your own spreadsheet](../../tutorials/use-your-spreadsheet/)
+- [Read the architecture overview](../../explanation/architecture/)
+- [Review the security boundaries](../../security/)

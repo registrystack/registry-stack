@@ -26,10 +26,10 @@ test('committed internal and public reference artifacts are exact and complete',
   validateAuthoringReference(reference, coverage);
   assert.deepEqual(publicReference, reference);
   assert.deepEqual(publicCoverage, coverage);
-  assert.equal(reference.fields.length, 1770);
-  assert.equal(coverage.reviewed_intent_assignment_required_count, 1770);
-  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1770);
-  assert.equal(coverage.distinct_reviewed_intent_count, 595);
+  assert.equal(reference.fields.length, 1771);
+  assert.equal(coverage.reviewed_intent_assignment_required_count, 1771);
+  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1771);
+  assert.equal(coverage.distinct_reviewed_intent_count, 596);
   assert.equal(coverage.distinct_reviewed_intents_reused_count, 82);
   assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1257);
   assert.deepEqual(reference.reference_baseline, {
@@ -50,7 +50,7 @@ test('committed internal and public reference artifacts are exact and complete',
     'unverified release history must remain explicit and cannot contain a fabricated version',
   );
   assert.deepEqual(reference.coverage.by_schema, {
-    project: 219,
+    project: 220,
     environment: 198,
     integration: 142,
     fixture: 62,
@@ -60,7 +60,7 @@ test('committed internal and public reference artifacts are exact and complete',
   });
   assert.deepEqual(reference.coverage.by_path_kind, {
     root: 7,
-    property: 1412,
+    property: 1413,
     map_key: 25,
     map_value: 47,
     array_item: 178,
@@ -77,7 +77,7 @@ test('committed internal and public reference artifacts are exact and complete',
   assert.equal(reference.fields.filter((field) => field.empty_behavior === 'rejected').length, 307);
   assert.equal(
     reference.fields.filter((field) => field.empty_behavior === 'not_applicable').length,
-    940,
+    941,
   );
 });
 

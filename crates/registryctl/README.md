@@ -10,7 +10,7 @@ complete runtime. Intel macOS and Windows are unsupported.
 Install a pinned release without cloning this repo:
 
 ```sh
-tag=v0.14.0
+tag=vX.Y.Z
 curl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/registryctl-${tag}-install.sh"
 bash "./registryctl-${tag}-install.sh"
 ```
@@ -48,9 +48,9 @@ closed runtime, and required provider while redacting local secret values. Add
 
 For the full walkthroughs, use the Registry Docs tutorials:
 
-- [Run a protected registry API locally](https://docs.registrystack.org/v/0.14.0/tutorials/publish-spreadsheet-secured-registry-api/)
-- [Use your own spreadsheet](https://docs.registrystack.org/v/0.14.0/tutorials/use-your-spreadsheet/)
-- [Evaluate your first registry-backed claim](https://docs.registrystack.org/v/0.14.0/tutorials/verify-claim-registry-api/)
+- [Run a protected registry API locally](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/)
+- [Use your own spreadsheet](https://docs.registrystack.org/tutorials/use-your-spreadsheet/)
+- [Evaluate your first registry-backed claim](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
 
 ## Registry Stack project authoring
 
@@ -128,13 +128,13 @@ The versioned filename selects the same release by default. An explicit
 `REGISTRYCTL_VERSION` must match that release unless a release operator is
 performing a separately verified compatibility check.
 
-Prebuilt Registryctl binaries are published for the `v0.14.0` stack release on
-Linux x86_64, Linux arm64, and macOS arm64. The complete local beginner
-runtime is supported and release-gated on Linux x86_64 only because the
-release image lock currently binds Linux amd64 images. The Linux arm64 and
-macOS arm64 binaries support CLI authoring, validation, and build tasks, but
-are not advertised for the complete local runtime. Intel macOS and Windows
-have no prebuilt `v0.14.0` binary. Use Linux x86_64 for the beginner runtime
+Prebuilt Registryctl binaries are published with each stack release for Linux
+x86_64, Linux arm64, and macOS arm64 when that release is cut. The complete
+local beginner runtime is supported and release-gated on Linux x86_64 only
+because the release image lock currently binds Linux amd64 images. The Linux
+arm64 and macOS arm64 binaries support CLI authoring, validation, and build
+tasks, but are not advertised for the complete local runtime. Intel macOS and
+Windows have no prebuilt binary. Use Linux x86_64 for the beginner runtime
 instead of building the tool from source.
 
 ## Release image lock (`v0.9.0` and later)

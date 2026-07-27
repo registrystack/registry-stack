@@ -1,52 +1,62 @@
 ---
-title: Configure
-description: Configure Registry Stack projects, environments, integrations, fixtures, entities, Relay, and Notary.
+title: Connect your data
+description: Move from the working Registry Stack sample to one reviewed workbook your institution owns.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-26"
-doc_type: reference
+last_reviewed: "2026-07-27"
+doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Configure human intent in project files, bind operator-owned deployment values in an environment,
-then generate product inputs with `registryctl`.
+Start from a working local sample, then replace its synthetic workbook with
+one reviewed non-personal workbook. Registry Stack does not infer access
+policy or safe fields from source data. You make those decisions in small
+reviewed project files.
 
-## Project configuration
+## Start from the protected sample
 
-Start with [project authoring](../tutorials/author-registry-project/).
-Use the [generated configuration reference](../reference/project-configuration/) for exact
-field purpose, ownership, defaults, environment behavior, sensitivity, validation, and migration
-metadata.
+Complete [Run your first registry API](../tutorials/publish-spreadsheet-secured-registry-api/)
+before adapting a source. The sample gives you a known-good project, a
+loopback-only runtime, and maintained denied and allowed checks.
 
-The five authored file classes are:
+## Use a spreadsheet
 
-- `registry-stack.yaml` for the project graph and services
-- `integrations/*/integration.yaml` for source contracts and bounded adaptation
-- `integrations/*/fixtures/*.yaml` for offline synthetic interactions
-- `entities/*.yaml` for materialized entity contracts
-- `environments/*.yaml` for operator-owned trust, secrets, network, callers, state, and deployment
+Choose this path when the source is one reviewed `.xlsx` workbook with a
+stable key, one selected worksheet, and a fixed set of columns.
 
-## Adapt a source
+[Use your own spreadsheet](../tutorials/use-your-spreadsheet/) walks from the
+working sample to a strictly described workbook and protected API.
 
-- [Configure API-key source authentication](../tutorials/configure-project-api-key-authentication/)
-- [Configure a bounded script adapter](../tutorials/configure-project-script-adapter/)
-- [Configure exact snapshot materialization](../tutorials/configure-project-snapshot-materialization/)
-- [Configure a FHIR R4 integration](../tutorials/configure-project-fhir-r4/)
+## Explore advanced source patterns
 
-## Product configuration
+Registry Stack also documents bounded HTTP, reviewed script, exact snapshot,
+and Fast Healthcare Interoperability Resources (FHIR) source patterns. No
+end-to-end tutorial is published for these advanced options.
 
-Registry Relay owns protected source access and minimized records APIs.
-Registry Notary owns claim evaluation, disclosure, issuance, and evidence provenance.
-Use each product's configuration pages for runtime contracts after `registryctl build` produces
-separate product inputs.
+Use [integration patterns](../explanation/integration-patterns/) to compare
+their boundaries. Use the [configuration reference](../reference/project-configuration/)
+to inspect the exact authored fields and validation metadata.
+
+## Know what you own
+
+| Surface | What it controls | Who changes it |
+| --- | --- | --- |
+| Workbook copy | The source rows and columns used by this project | Source owner |
+| Entity file | The stable key, fields, types, and row limits | Project reviewer |
+| Project file | The service purpose, caller scopes, filters, and returned fields | Project reviewer |
+| Environment file | The workbook location, worksheet, callers, and local runtime | Environment operator |
+| Generated build and runtime directories | Product configuration and local runtime state | `registryctl`; do not edit |
+
+Keep real credentials and personal data out of tutorials and fixtures. Use a
+reviewed non-personal derivative when you test institution-owned data.
 
 ## Next
 
-- [Verify authored configuration](../verify/)
-- [Inspect generated artifacts](../generated-artifacts/)
+- [Validate a project](../verify/)
+- [Understand generated files and ownership](../generated-artifacts/)
 - [registryctl CLI reference](../reference/registryctl/)

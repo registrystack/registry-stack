@@ -1,4 +1,4 @@
-// Guards the Phase 2 task-oriented documentation IA. The site keeps the
+// Guards the adopter-first documentation IA. The site keeps the
 // existing public page URLs, so this test checks both the sidebar discovery
 // path and the redirects that preserve older entry points.
 
@@ -18,14 +18,6 @@ const firstApiSource = readFileSync(
 );
 const firstClaimSource = readFileSync(
   resolve(siteRoot, 'src/content/docs/tutorials/verify-claim-registry-api.mdx'),
-  'utf8',
-);
-const spreadsheetAssuranceSource = readFileSync(
-  resolve(siteRoot, 'src/content/docs/journeys/spreadsheet-protected-api.mdx'),
-  'utf8',
-);
-const claimAssuranceSource = readFileSync(
-  resolve(siteRoot, 'src/content/docs/journeys/registry-backed-notary-claim.mdx'),
   'utf8',
 );
 const sidebarSource = configSource.match(/sidebar: \[([\s\S]*?)\n      \],\n    \}\),/)?.[1];
@@ -56,12 +48,50 @@ function assertReleasedTaskRoute(source) {
   assert.doesNotMatch(source, /\]\([^)]*start\/test-current-source-revision/);
 }
 
-function assertReleaseFormClaimTutorial(source) {
-  assert.match(source, /population-record-exists/);
-  assert.match(source, /registryctl init --from snapshot --project-dir my-first-claim/);
+function assertOrdered(source, expectations, label) {
+  let position = -1;
+  for (const expectation of expectations) {
+    const next = source.indexOf(expectation, position + 1);
+    assert.ok(next > position, `missing or misplaced ${label}: ${expectation}`);
+    position = next;
+  }
+}
+
+function assertLiveClaimTutorial(source) {
+  assertOrdered(
+    source,
+    [
+      'my-first-api',
+      'registryctl add notary',
+      '## Start Relay and Notary',
+      'registryctl start',
+      'HTTP 403',
+      '## Evaluate the active project',
+      '## Evaluate the planned project',
+      '## Check an absent record',
+      '## Change the status policy',
+      'registryctl restart',
+      '"value": true',
+      'registryctl stop',
+    ],
+    'live first-claim step',
+  );
+  for (const expected of [
+    /project-record-exists/,
+    /project-status-accepted/,
+    /"value": "pw_001"/,
+    /"value": "PW-002"/,
+    /"value": "pw_999"/,
+    /public-works-case-management/,
+    /evidence:projects:read/,
+    /http:\/\/127\.0\.0\.1:4255\/v1\/evaluations/,
+    /You\s+do not edit `?\.registry-stack\//,
+  ]) {
+    assert.match(source, expected);
+  }
   assert.doesNotMatch(
     source,
-    /person-registration-accepted|active-registration-exists|active-or-pending-registration-exists/,
+    /registryctl init --from snapshot|git clone|git switch|cargo build|registryctl build/,
   );
   assert.doesNotMatch(source, /Unreleased Main-source tutorial|current-source test procedure/);
 }
@@ -69,13 +99,13 @@ function assertReleaseFormClaimTutorial(source) {
 function assertReleaseFormFirstApiSequence(source) {
   const headings = [
     '## Install Registryctl',
-    '## Create the canonical project',
-    '## Run the required preflight',
+    '## Create the sample project',
+    '## Check your computer and project',
     '## Start the API',
-    '## Run the maintained checks',
+    '## Check the API',
     '## Make one denied request',
     '## Make one allowed request',
-    '## Inspect the human-owned boundary',
+    '## See what you can edit',
     '## Stop and clean up',
   ];
   let position = -1;
@@ -92,29 +122,23 @@ function assertReleaseFormFirstApiSequence(source) {
   assert.match(source, /Docker Engine with Compose v2/);
 }
 
-test('uses the Phase 2 top-level task flow in its published order', () => {
+test('uses the adopter-first top-level flow in its published order', () => {
   assert.deepEqual(topLevelLabels(sidebarSource), [
     'Start',
-    'Journeys',
-    'Configure',
-    'Verify',
-    'Generated artifacts',
+    'Connect your data',
     'Operate',
+    'Security',
     'Reference',
-    'Specifications',
   ]);
 });
 
 test('publishes one stable overview route for every task-flow section', () => {
   for (const [label, route] of [
     ['Start', "link: '/'"],
-    ['Journeys', "slug: 'journeys'"],
-    ['Configure', "slug: 'configure'"],
-    ['Verify', "slug: 'verify'"],
-    ['Generated artifacts', "slug: 'generated-artifacts'"],
+    ['Connect your data', "slug: 'configure'"],
     ['Operate', "slug: 'operate'"],
+    ['Security', "slug: 'security'"],
     ['Reference', "slug: 'reference'"],
-    ['Specifications', "slug: 'spec'"],
   ]) {
     const section = topLevelSection(sidebarSource, label);
     assert.ok(section, `could not isolate ${label}`);
@@ -127,42 +151,34 @@ test('puts released first-result tasks directly in Start', () => {
   assert.ok(start, 'could not isolate Start');
   assert.match(
     start,
-    /label: 'Your first registry API', slug: 'tutorials\/publish-spreadsheet-secured-registry-api'/,
+    /label: 'Run your first registry API', slug: 'tutorials\/publish-spreadsheet-secured-registry-api'/,
   );
   assert.match(
     start,
-    /label: 'Your first claim check', slug: 'tutorials\/verify-claim-registry-api'/,
+    /label: 'Verify a live claim', slug: 'tutorials\/verify-claim-registry-api'/,
   );
   assert.doesNotMatch(start, /start\/test-current-source-revision/);
 });
 
-test('keeps generated Main-source journeys on the assurance rail', () => {
-  const journeys = topLevelSection(sidebarSource, 'Journeys');
-  assert.ok(journeys, 'could not isolate Journeys');
-  assert.match(journeys, /Spreadsheet protected API assurance \(Main source\)/);
-  assert.match(journeys, /Registry-backed Notary claim assurance \(Main source\)/);
-  assert.doesNotMatch(journeys, /label: 'Your first registry API'/);
-  assert.doesNotMatch(journeys, /label: 'Your first claim check'/);
+test('does not expose source-assurance material as an adopter journey', () => {
+  assert.doesNotMatch(sidebarSource, /label: 'Journeys'|label: 'Source assurance'/);
+  assert.doesNotMatch(sidebarSource, /slug: 'journeys/);
+  assert.match(configSource, /'\/journeys\/': internalRedirect\('\/'\)/);
 });
 
-test('keeps the Relay and Notary generated product navigation under Configure', () => {
-  const configureSource = sidebarSource.match(
-    /label: 'Configure',[\s\S]*?(?=\n        \{\n          label: 'Verify',)/,
-  )?.[0];
-
-  assert.ok(configureSource, 'could not isolate the Configure sidebar section');
-  assert.match(configureSource, /label: 'Registry Relay',[\s\S]*?generatedProduct\('Relay'\)\.items/);
-  assert.match(configureSource, /label: 'Registry Notary',[\s\S]*?generatedProduct\('Notary'\)\.items/);
+test('keeps detailed product navigation under collapsed Reference', () => {
+  const reference = topLevelSection(sidebarSource, 'Reference');
+  assert.ok(reference, 'could not isolate Reference');
+  assert.match(reference, /label: 'Registry Relay',[\s\S]*?generatedProduct\('Relay'\)\.items/);
+  assert.match(reference, /label: 'Registry Notary',[\s\S]*?generatedProduct\('Notary'\)\.items/);
+  assert.match(reference, /label: 'Registry Manifest',[\s\S]*?generatedProduct\('Manifest'\)\.items/);
+  assert.match(reference, /label: 'Specifications',[\s\S]*?slug: 'spec'/);
 });
 
-test('keeps generated-artifact navigation tied to the Manifest product group', () => {
-  const artifactsSource = sidebarSource.match(
-    /label: 'Generated artifacts',[\s\S]*?(?=\n        \{\n          \/\/ Stack-wide operator)/,
-  )?.[0];
-
-  assert.ok(artifactsSource, 'could not isolate the Generated artifacts sidebar section');
-  assert.match(artifactsSource, /label: 'Registry Manifest',[\s\S]*?generatedProduct\('Manifest'\)\.items/);
-  assert.match(artifactsSource, /slug: 'reference\/contracts'/);
+test('keeps validation and generated-file help available without making new rails', () => {
+  const reference = topLevelSection(sidebarSource, 'Reference');
+  assert.match(reference, /label: 'Validate a project', slug: 'verify'/);
+  assert.match(reference, /label: 'Generated files and ownership', slug: 'generated-artifacts'/);
 });
 
 test('every hand-authored sidebar slug resolves to a published documentation page', () => {
@@ -176,15 +192,15 @@ test('legacy entry points redirect to released task pages', () => {
   assert.match(configSource, /'\/start\/': internalRedirect\('\/'\)/);
   assert.match(
     configSource,
-    /'\/start\/see-it-live\/': internalRedirect\('\/tutorials\/publish-spreadsheet-secured-registry-api\/'\)/,
+    /'\/start\/see-it-live\/': internalRedirect\('\/start\/quickstart\/'\)/,
   );
   assert.match(
     configSource,
-    /'\/start\/your-first-call\/': internalRedirect\('\/tutorials\/first-run-with-solmara-lab\/'\)/,
+    /'\/start\/your-first-call\/': internalRedirect\('\/tutorials\/publish-spreadsheet-secured-registry-api\/'\)/,
   );
   assert.match(
     configSource,
-    /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/tutorials\/first-run-with-solmara-lab\/'\)/,
+    /'\/tutorials\/first-run-with-registry-lab\/': internalRedirect\('\/start\/quickstart\/'\)/,
   );
 });
 
@@ -195,18 +211,16 @@ test('homepage and first-result tasks stay on the release-form beginner rail', (
   assertReleasedTaskRoute(firstApiSource);
   assertReleasedTaskRoute(firstClaimSource);
   assertReleaseFormFirstApiSequence(firstApiSource);
-  assertReleaseFormClaimTutorial(firstClaimSource);
+  assertLiveClaimTutorial(firstClaimSource);
   assert.ok(hasDocForSlug('tutorials/publish-spreadsheet-secured-registry-api'));
   assert.ok(hasDocForSlug('tutorials/verify-claim-registry-api'));
 });
 
-test('tasks and Main-source assurance pages link to each other by reader purpose', () => {
-  assert.match(firstApiSource, /\]\(\.\.\/\.\.\/journeys\/spreadsheet-protected-api\/\)/);
-  assert.match(firstClaimSource, /\]\(\.\.\/\.\.\/journeys\/registry-backed-notary-claim\/\)/);
-  assert.match(spreadsheetAssuranceSource, /^doc_type: reference$/m);
-  assert.match(claimAssuranceSource, /^doc_type: reference$/m);
-  assert.match(spreadsheetAssuranceSource, /\]\(\.\.\/\.\.\/tutorials\/publish-spreadsheet-secured-registry-api\/\)/);
-  assert.match(claimAssuranceSource, /\]\(\.\.\/\.\.\/tutorials\/verify-claim-registry-api\/\)/);
+test('beginner tasks link to useful next tasks, not assurance pages', () => {
+  assert.doesNotMatch(firstApiSource, /journeys\//);
+  assert.doesNotMatch(firstClaimSource, /journeys\//);
+  assert.match(firstApiSource, /\]\(\.\.\/use-your-spreadsheet\/\)/);
+  assert.match(firstClaimSource, /\]\(\.\.\/\.\.\/configure\/\)/);
 });
 
 test('beginner-rail control rejects a planted Main-source route', () => {
@@ -215,11 +229,11 @@ test('beginner-rail control rejects a planted Main-source route', () => {
     /test-current-source-revision/,
   );
   assert.throws(
-    () => assertReleaseFormClaimTutorial('active-registration-exists'),
-    /population-record-exists/,
+    () => assertLiveClaimTutorial('registryctl add notary'),
+    /my-first-api/,
   );
   assert.throws(
     () => assertReleaseFormFirstApiSequence('## Install Registryctl\n## Start the API'),
-    /Create the canonical project/,
+    /Create the sample project/,
   );
 });
