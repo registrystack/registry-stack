@@ -1473,6 +1473,25 @@ class RegistryReleaseTest(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_validate_requires_registryctl_installer_for_v0_14_and_later(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            missing = write_manifest(
+                root,
+                version="0.14.0",
+                include_registryctl_installer=False,
+            )
+            rejected = run_tool("validate", str(missing))
+            included = write_manifest(root, version="0.14.0")
+            accepted = run_tool("validate", str(included))
+
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn(
+            "artifact registryctl-installer is required for version 0.14.0 or later",
+            rejected.stderr,
+        )
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+
     def test_render_registryctl_image_lock_from_exact_release_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2825,7 +2844,7 @@ def write_manifest(
     status: str = "release-candidate",
     version: str = "0.8.0",
     include_registryctl_image_lock: bool | None = None,
-    include_registryctl_installer: bool = False,
+    include_registryctl_installer: bool | None = None,
 ) -> Path:
     if source_tag is None:
         source_tag = f"v{version}"
@@ -2852,6 +2871,8 @@ def write_manifest(
         artifacts["registryctl-image-lock"] = version
     else:
         artifacts.pop("registryctl-image-lock", None)
+    if include_registryctl_installer is None:
+        include_registryctl_installer = version_tuple >= (0, 14, 0)
     if include_registryctl_installer:
         artifacts["registryctl-installer"] = version
     manifest = {

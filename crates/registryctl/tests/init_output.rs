@@ -350,6 +350,62 @@ fn json_init_paths_preserve_control_characters() {
 }
 
 #[test]
+fn spreadsheet_starter_excludes_generated_runtime_and_private_state_from_git() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let project = temporary.path().join("spreadsheet-project");
+    let output = run_registryctl(
+        &[
+            "init",
+            "--from",
+            "spreadsheet",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+        ],
+        None,
+    );
+    assert_success(&output);
+
+    let gitignore =
+        fs::read_to_string(project.join(".gitignore")).expect("starter .gitignore reads");
+    assert_eq!(gitignore, ".registry-stack/\n");
+    assert!(project.join("registry-stack.yaml").is_file());
+    assert!(project.join("data/public_works_projects.xlsx").is_file());
+}
+
+#[test]
+fn first_runtime_start_requires_image_lock_before_writing_generated_state() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let project = temporary.path().join("spreadsheet-project");
+    let init = run_registryctl(
+        &[
+            "init",
+            "--from",
+            "spreadsheet",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+        ],
+        None,
+    );
+    assert_success(&init);
+
+    let missing_image_lock = temporary.path().join("missing-image-lock.json");
+    let start = run_registryctl_in(Some(&project), &["start"], Some(&missing_image_lock));
+
+    assert!(!start.status.success(), "start unexpectedly succeeded");
+    assert!(start.stdout.is_empty(), "failed start emitted stdout");
+    assert!(
+        String::from_utf8(start.stderr)
+            .expect("UTF-8 stderr")
+            .contains("registryctl image lock is missing"),
+        "failed start did not explain the missing image lock"
+    );
+    assert!(
+        !project.join(".registry-stack/runtime").exists(),
+        "failed start wrote generated runtime state"
+    );
+}
+
+#[test]
 fn add_notary_updates_canonical_spreadsheet_idempotently_and_rejects_legacy_projects() {
     let temporary = TempDir::new().expect("temporary directory");
     let project = temporary.path().join("spreadsheet-project");

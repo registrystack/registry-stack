@@ -4048,8 +4048,19 @@ pub fn restart_project(project_dir: &Path) -> Result<()> {
     start_project(project_dir)
 }
 
+/// Load only an existing, integrity-validated generated runtime for recovery
+/// inspection. This deliberately ignores current authored-input digests so an
+/// edit cannot hide status or logs, but it never regenerates, starts, or trusts
+/// the edited project.
+fn load_canonical_runtime_for_recovery(project_dir: &Path) -> Result<CanonicalRuntime> {
+    load_canonical_runtime(project_dir, CanonicalRuntimeValidation::GeneratedClosure).context(
+        "local runtime recovery inspection is unavailable; correct the generated-runtime \
+         integrity failure, then rerun `registryctl start`",
+    )
+}
+
 pub fn status_project(project_dir: &Path) -> Result<()> {
-    let runtime = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Full)?;
+    let runtime = load_canonical_runtime_for_recovery(project_dir)?;
     run_compose_for_canonical_runtime(project_dir, &runtime, &["ps"])?;
     print_probe_status("healthz", &format!("{RELAY_BASE_URL}/healthz"));
     print_probe_status("ready", &format!("{RELAY_BASE_URL}/ready"));
@@ -4065,7 +4076,7 @@ pub fn status_project(project_dir: &Path) -> Result<()> {
 }
 
 pub fn open_project(project_dir: &Path) -> Result<()> {
-    let _ = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Full)?;
+    let _ = load_canonical_runtime_for_recovery(project_dir)?;
     let docs_url = format!("{RELAY_BASE_URL}{RELAY_DOCS_PATH}");
     // Always surface the URL: `open` reports success even in headless macOS
     // sessions where nothing actually launches, so a conditional fallback would
@@ -4082,7 +4093,7 @@ fn relay_open_lines(docs_url: &str) -> Vec<String> {
 }
 
 pub fn logs_project(project_dir: &Path) -> Result<()> {
-    let runtime = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Full)?;
+    let runtime = load_canonical_runtime_for_recovery(project_dir)?;
     run_compose_for_canonical_runtime(project_dir, &runtime, &["logs"])?;
     Ok(())
 }
@@ -6654,11 +6665,17 @@ fn bearer_header(raw_key: &str) -> (String, String) {
 }
 
 fn redact_error(error: &str) -> String {
-    if error.len() > 240 {
-        format!("{}...", &error[..240])
-    } else {
-        error.to_string()
+    const MAX_ERROR_BYTES: usize = 240;
+
+    if error.len() <= MAX_ERROR_BYTES {
+        return error.to_string();
     }
+
+    let mut end = MAX_ERROR_BYTES;
+    while !error.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &error[..end])
 }
 
 #[derive(Debug)]
@@ -8198,6 +8215,18 @@ mod tests {
     }
 
     #[test]
+    fn error_truncation_is_utf8_safe_and_byte_bounded() {
+        let ascii = "a".repeat(241);
+        assert_eq!(redact_error(&ascii), format!("{}...", "a".repeat(240)));
+
+        let unicode = format!("{}é{}", "a".repeat(239), "b".repeat(10));
+        let truncated = redact_error(&unicode);
+        assert_eq!(truncated, format!("{}...", "a".repeat(239)));
+        assert!(truncated.is_char_boundary(truncated.len()));
+        assert!(truncated.len() <= 243);
+    }
+
+    #[test]
     fn exact_row_count_smoke_rejects_duplicate_match_rows() {
         let response = serde_json::json!({
             "data": [
@@ -8773,6 +8802,38 @@ mod tests {
         assert_eq!(images.relay, TEST_RELAY_IMAGE);
         assert_eq!(images.notary.as_deref(), Some(TEST_NOTARY_IMAGE));
         assert_eq!(images.postgresql.as_deref(), Some(TEST_POSTGRESQL_IMAGE));
+    }
+
+    #[test]
+    fn recovery_runtime_remains_inspectable_after_authored_inputs_change() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap();
+
+        load_canonical_runtime_for_recovery(&project)
+            .expect("a healthy generated runtime is inspectable");
+
+        fs::write(
+            project.join("data/public_works_projects.xlsx"),
+            b"changed operator workbook",
+        )
+        .unwrap();
+        assert!(load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).is_err());
+        load_canonical_runtime_for_recovery(&project)
+            .expect("a workbook edit does not hide recovery diagnostics");
+
+        let entity_path = project.join("entities/projects.yaml");
+        let mut entity = fs::read_to_string(&entity_path).unwrap();
+        entity.push_str("\n# changed authored description\n");
+        fs::write(&entity_path, entity).unwrap();
+        load_canonical_runtime_for_recovery(&project)
+            .expect("an authored YAML edit does not hide recovery diagnostics");
+
+        fs::remove_file(project.join(CANONICAL_RELAY_CONFIG)).unwrap();
+        let error = load_canonical_runtime_for_recovery(&project)
+            .expect_err("missing generated output remains an integrity failure");
+        assert!(format!("{error:#}").contains("generated"));
     }
 
     #[test]

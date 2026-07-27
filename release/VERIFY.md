@@ -354,9 +354,10 @@ tree digests before serving it.
 
 ## Install Registryctl From A Versioned Release Asset
 
-Releases whose manifest declares `registryctl-installer` publish
-`registryctl-${tag}-install.sh` as a checksummed, signed, provenance-covered
-release file. The quick path downloads that exact release asset:
+Registry Stack v0.14.0 and later require `registryctl-installer` in the release
+manifest and publish `registryctl-${tag}-install.sh` as a checksummed, signed,
+provenance-covered release file. Earlier releases publish it only when their
+manifest declares it. The quick path downloads that exact release asset:
 
 ```bash
 tag="${RELEASE_TAG:?set RELEASE_TAG to an exact published tag}"

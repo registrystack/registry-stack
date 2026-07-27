@@ -24,6 +24,10 @@ const firstClaimSource = readFileSync(
   resolve(siteRoot, 'src/content/docs/tutorials/verify-claim-registry-api.mdx'),
   'utf8',
 );
+const validationSource = readFileSync(
+  resolve(siteRoot, 'src/content/docs/verify/index.mdx'),
+  'utf8',
+);
 const sidebarSource = configSource.match(/sidebar: \[([\s\S]*?)\n      \],\n    \}\),/)?.[1];
 
 assert.ok(sidebarSource, 'could not isolate the Starlight sidebar configuration');
@@ -188,6 +192,16 @@ test('keeps validation and generated-file help available without making new rail
   const reference = topLevelSection(sidebarSource, 'Reference');
   assert.match(reference, /label: 'Validate a project', slug: 'verify'/);
   assert.match(reference, /label: 'Generated files and ownership', slug: 'generated-artifacts'/);
+});
+
+test('documents safe recovery inspection after an authored input changes', () => {
+  assertOrdered(
+    validationSource,
+    ['registryctl status', 'registryctl logs', 'registryctl open', 'registryctl start'],
+    'recovery command',
+  );
+  assert.match(validationSource, /do not rebuild, start, or trust the changed authored input/);
+  assert.match(validationSource, /\]\(\.\.\/reference\/diagnostics\/operator\/\)/);
 });
 
 test('every hand-authored sidebar slug resolves to a published documentation page', () => {
