@@ -70,6 +70,36 @@ class FirstCountryReleaseFormTest(TestCase):
         ):
             return self.module.verify_asset_set(self.assets, self.tag)
 
+    def write_runtime_inspection(self, workbook_classification):
+        project = self.root / "project"
+        relay_config = (
+            project / ".registry-stack/build/local/private/relay/config/relay.yaml"
+        )
+        runtime = project / ".registry-stack/runtime/local"
+        secrets = runtime / "secrets"
+        secrets.mkdir(parents=True)
+        relay_config.parent.mkdir(parents=True)
+        relay_config.write_text("server:\n  bind: 0.0.0.0:8080\n", encoding="utf-8")
+        compose = runtime / "compose.yaml"
+        compose.write_text("services: {}\n", encoding="utf-8")
+        manifest = {
+            "schema_version": "registryctl.local_runtime.v1",
+            "environment": "local",
+            "relay_image": self.relay,
+            "compose_digest": f"sha256:{self.module.sha256(compose)}",
+            "artifact_manifest_digest": "sha256:" + "b" * 64,
+            "relay_config_digest": f"sha256:{self.module.sha256(relay_config)}",
+            "workbook_digest": "sha256:" + "c" * 64,
+            "workbook_classification": workbook_classification,
+            "workbook_project_file": "data/public_works_projects.xlsx",
+            "workbook_runtime_path": "/data/public_works_projects.xlsx",
+        }
+        (runtime / "manifest.json").write_text(
+            json.dumps(manifest) + "\n",
+            encoding="utf-8",
+        )
+        return project
+
     def write_valid_report_evidence(self):
         verified = self.verify_assets()
         evidence = self.root / "evidence"
@@ -81,6 +111,8 @@ class FirstCountryReleaseFormTest(TestCase):
                 contents = (
                     json.dumps(self.module.ALLOWED_EVIDENCE, sort_keys=True) + "\n"
                 )
+            elif name == "negative_workbooks":
+                contents = self.module.NEGATIVE_WORKBOOK_EVIDENCE
             else:
                 contents = f"{name} completed\n"
             log = logs / f"{name}.log"
@@ -134,6 +166,29 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertEqual(verified["installer_name"], self.installer)
         self.assertEqual(verified["binary_name"], self.binary)
         self.assertEqual(verified["relay_image"], self.relay)
+
+    def test_runtime_inspection_accepts_registryctl_manifest_shape(self) -> None:
+        project = self.write_runtime_inspection("operator_owned_source_data")
+
+        inspection = self.module.read_runtime_inspection(project, self.relay)
+
+        self.assertEqual(
+            set(inspection),
+            {
+                "relay_config_sha256",
+                "runtime_manifest_sha256",
+                "compose_sha256",
+            },
+        )
+
+    def test_runtime_inspection_rejects_workbook_classification_drift(self) -> None:
+        project = self.write_runtime_inspection("generated_product_input")
+
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError,
+            "does not bind the compiled Relay artifact and Compose",
+        ):
+            self.module.read_runtime_inspection(project, self.relay)
 
     def test_missing_installer_checksum_fails_closed(self) -> None:
         lines = (self.assets / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
@@ -473,6 +528,30 @@ class FirstCountryReleaseFormTest(TestCase):
         path.write_text(json.dumps(report), encoding="utf-8")
 
         with self.assertRaisesRegex(self.module.ReleaseFormError, "exact value-free"):
+            self.verify_report(path)
+
+    def test_report_rejects_changed_negative_workbook_evidence(self) -> None:
+        path, report, logs = self.write_valid_report_evidence()
+        negative_log = logs / "negative_workbooks.log"
+        negative_log.write_text(
+            self.module.NEGATIVE_WORKBOOK_EVIDENCE
+            + "workbook value: private-project-value\n",
+            encoding="utf-8",
+        )
+        negative_command = next(
+            command
+            for command in report["commands"]
+            if command["name"] == "negative_workbooks"
+        )
+        negative_command["log_sha256"] = hashlib.sha256(
+            negative_log.read_bytes()
+        ).hexdigest()
+        path.write_text(json.dumps(report), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError,
+            "exact value-free categories",
+        ):
             self.verify_report(path)
 
     def test_report_rejects_reordered_or_failed_journey(self) -> None:

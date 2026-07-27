@@ -1,6 +1,8 @@
 node_modules/
 dist/
 dist-check/
+dist-production/
+preview-evidence/
 .astro/
 .playwright-mcp/
 .DS_Store

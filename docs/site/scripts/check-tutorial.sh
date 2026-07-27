@@ -166,7 +166,7 @@ done
 REGISTRYCTL_TUTORIALS=(
 	"author-registry-project:32"
 	"publish-spreadsheet-secured-registry-api:26"
-	"use-your-spreadsheet:14"
+	"use-your-spreadsheet:15"
 	"verify-claim-registry-api:24"
 )
 

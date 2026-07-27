@@ -48,7 +48,7 @@ fn published_diagnostic_references_are_closed_complete_and_unreleased() {
 
     assert_eq!(authoring.entries.len(), 17);
     assert_eq!(fixture.entries.len(), 16);
-    assert_eq!(operator.entries.len(), 60);
+    assert_eq!(operator.entries.len(), 61);
     assert!(
         operator.omissions.is_empty(),
         "all operator catalogs now expose complete product-owned metadata"
@@ -66,7 +66,7 @@ fn published_diagnostic_references_are_closed_complete_and_unreleased() {
         BTreeMap::from([
             ("bundle_verification", 4),
             ("notary_activation", 18),
-            ("operator_preflight", 11),
+            ("operator_preflight", 12),
             ("relay_activation", 9),
             ("relay_process_startup", 18),
         ])
@@ -281,7 +281,7 @@ fn operator_schema_accepts_exact_catalog_and_rejects_open_values() {
         .compile(&schema)
         .unwrap();
     let canonical = serde_json::to_value(operator_error_reference()).unwrap();
-    assert_eq!(canonical["entries"].as_array().unwrap().len(), 60);
+    assert_eq!(canonical["entries"].as_array().unwrap().len(), 61);
     assert!(validator.is_valid(&canonical));
 
     let mut open_code = canonical.clone();

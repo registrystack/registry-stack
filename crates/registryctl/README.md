@@ -2,34 +2,19 @@
 
 `registryctl` is the local adopter CLI for Registry Stack.
 
-The complete local beginner runtime is supported on Linux x86_64. Linux arm64
-and macOS arm64 release assets support CLI authoring, validation, and build
-tasks, but the current image lock does not advertise those hosts for the
-complete runtime. Intel macOS and Windows are unsupported.
+The latest published Registry Stack release is
+[v0.13.0](https://github.com/registrystack/registry-stack/releases/tag/v0.13.0).
+Use its [versioned documentation](https://docs.registrystack.org/v/0.13.0/)
+and exact release assets. The spreadsheet onboarding flow described in this
+source tree is unreleased. No published Registryctl currently supports it, so
+do not substitute a repository checkout or source build for a released
+adopter path.
 
-Install a pinned release without cloning this repo:
-
-```sh
-tag=v0.14.0
-curl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/registryctl-${tag}-install.sh"
-bash "./registryctl-${tag}-install.sh"
-```
-
-Executing this quick installer trusts GitHub and TLS. The installer then
-verifies the downloaded binary and image lock against the release's
-`SHA256SUMS`. It does not authenticate the installer, checksums, signatures,
-or provenance. Use [`release/VERIFY.md`](../../release/VERIFY.md) to verify
-release authenticity before installation.
-
-Then create and start your first secured spreadsheet API:
-
-```sh
-registryctl init --from spreadsheet --project-dir my-first-api
-cd my-first-api
-registryctl doctor --profile local
-registryctl start
-registryctl smoke
-```
+The next release is intended to support the complete local beginner runtime
+on Linux x86_64. Its Linux arm64 and macOS arm64 assets are intended for CLI
+authoring, validation, and build tasks only because the candidate image lock
+does not advertise those hosts for the complete runtime. Intel macOS and
+Windows remain unsupported.
 
 Interactive report commands print concise human-readable results. Add `--format json` when
 another program needs a versioned report. Artifact and protocol commands, including authoring
@@ -46,11 +31,10 @@ It validates the authored project, complete workbook, generated product input,
 closed runtime, and required provider while redacting local secret values. Add
 `--format json` when another program needs the versioned diagnostic report.
 
-For the full walkthroughs, use the Registry Docs tutorials:
-
-- [Run a protected registry API locally](https://docs.registrystack.org/v/0.14.0/tutorials/publish-spreadsheet-secured-registry-api/)
-- [Use your own spreadsheet](https://docs.registrystack.org/v/0.14.0/tutorials/use-your-spreadsheet/)
-- [Evaluate your first registry-backed claim](https://docs.registrystack.org/v/0.14.0/tutorials/verify-claim-registry-api/)
+The final-form next-release walkthroughs are retained as an unreleased,
+digest-bound CI preview. They are not production documentation and must not
+be presented as published until matching CLI, installer, image-lock, and docs
+artifacts exist.
 
 ## Registry Stack project authoring
 
@@ -128,14 +112,16 @@ The versioned filename selects the same release by default. An explicit
 `REGISTRYCTL_VERSION` must match that release unless a release operator is
 performing a separately verified compatibility check.
 
-Prebuilt Registryctl binaries are published for the `v0.14.0` stack release on
-Linux x86_64, Linux arm64, and macOS arm64. The complete local beginner
-runtime is supported and release-gated on Linux x86_64 only because the
-release image lock currently binds Linux amd64 images. The Linux arm64 and
-macOS arm64 binaries support CLI authoring, validation, and build tasks, but
-are not advertised for the complete local runtime. Intel macOS and Windows
-have no prebuilt `v0.14.0` binary. Use Linux x86_64 for the beginner runtime
-instead of building the tool from source.
+The unreleased v0.14.0 candidate is designed to contain prebuilt Registryctl
+binaries for Linux x86_64, Linux arm64, and macOS arm64. Do not treat those
+assets as published until the release page contains the exact installer,
+binaries, image lock, checksums, signatures, and provenance. The complete
+local beginner runtime is release-gated on Linux x86_64 only because the
+candidate image lock binds Linux amd64 images. Linux arm64 and macOS arm64 are
+authoring, validation, and build platforms. Intel macOS and Windows have no
+planned prebuilt v0.14.0 binary. Use Linux x86_64 for the beginner runtime
+after the matching release is published instead of building the tool from
+source.
 
 ## Release image lock (`v0.9.0` and later)
 

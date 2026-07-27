@@ -455,13 +455,13 @@ def _validate_artifacts(
     artifact_root: Path | None,
     artifact_metadata: dict[int, tuple[str, str]] | None,
     expected_names: set[str],
-) -> set[str]:
+) -> dict[str, tuple[str, int]]:
     artifacts = require_list(artifacts_value, "artifacts")
     if not artifacts:
         raise CandidateError("artifacts must not be empty")
     names: set[str] = set()
     ids: set[int] = set()
-    paths: set[str] = set()
+    files_by_path: dict[str, tuple[str, int]] = {}
     for index, record_value in enumerate(artifacts):
         label = f"artifacts[{index}]"
         record = require_object(
@@ -504,9 +504,9 @@ def _validate_artifacts(
                 raise CandidateError(
                     f"{file_label}.size must be a non-negative integer"
                 )
-            if relative in paths:
+            if relative in files_by_path:
                 raise CandidateError(f"duplicate candidate file path {relative}")
-            paths.add(relative)
+            files_by_path[relative] = (expected_sha, size)
             if artifact_root is not None:
                 path = artifact_root / relative
                 if sha256_file(path) != expected_sha:
@@ -519,9 +519,10 @@ def _validate_artifacts(
             for path in artifact_root.rglob("*")
             if path.is_file() or path.is_symlink()
         }
-        if actual_paths != paths:
-            missing = sorted(paths - actual_paths)
-            unexpected = sorted(actual_paths - paths)
+        expected_paths = set(files_by_path)
+        if actual_paths != expected_paths:
+            missing = sorted(expected_paths - actual_paths)
+            unexpected = sorted(actual_paths - expected_paths)
             raise CandidateError(
                 "candidate file inventory mismatch: "
                 f"missing={missing!r} unexpected={unexpected!r}"
@@ -532,7 +533,48 @@ def _validate_artifacts(
             f"missing={sorted(expected_names - names)!r} "
             f"unexpected={sorted(names - expected_names)!r}"
         )
-    return paths
+    return files_by_path
+
+
+def _validate_native_payload_provenance(
+    files_by_path: dict[str, tuple[str, int]],
+    *,
+    artifact_root: Path | None,
+    run_id: int,
+    run_attempt: int,
+    tag: str,
+) -> None:
+    payload = (
+        f"registry-stack-release-candidate-payload-{run_id}-{run_attempt}/dist/bin"
+    )
+    for asset in ("macos-arm64", "linux-arm64"):
+        binary = f"registryctl-{tag}-{asset}"
+        source = (
+            f"registry-stack-candidate-{asset}-{run_id}-{run_attempt}/dist/bin/{binary}"
+        )
+        sealed = f"{payload}/{binary}"
+        source_record = files_by_path.get(source)
+        sealed_record = files_by_path.get(sealed)
+        if source_record is None or sealed_record is None:
+            raise CandidateError(
+                f"native asset provenance paths are incomplete for {asset}"
+            )
+        if source_record != sealed_record:
+            raise CandidateError(
+                f"sealed payload native asset provenance mismatch for {asset}"
+            )
+        if artifact_root is not None:
+            source_path = artifact_root / source
+            sealed_path = artifact_root / sealed
+            try:
+                if source_path.read_bytes() != sealed_path.read_bytes():
+                    raise CandidateError(
+                        f"sealed payload native asset provenance mismatch for {asset}"
+                    )
+            except OSError as exc:
+                raise CandidateError(
+                    f"cannot compare sealed payload native asset bytes for {asset}: {exc}"
+                ) from exc
 
 
 def _validate_images(images_value: Any, paths: set[str], *, now: datetime) -> None:
@@ -863,7 +905,7 @@ def validate_receipt(
         )
 
     _validate_builds(receipt["builds"])
-    paths = _validate_artifacts(
+    files_by_path = _validate_artifacts(
         receipt["artifacts"],
         artifact_root=artifact_root,
         artifact_metadata=artifact_metadata,
@@ -875,7 +917,14 @@ def validate_receipt(
             f"registry-stack-release-candidate-payload-{run_id}-{run_attempt}",
         },
     )
-    _validate_images(receipt["images"], paths, now=current)
+    _validate_native_payload_provenance(
+        files_by_path,
+        artifact_root=artifact_root,
+        run_id=run_id,
+        run_attempt=run_attempt,
+        tag=release["tag"],
+    )
+    _validate_images(receipt["images"], set(files_by_path), now=current)
 
     comparisons = require_object(
         receipt["comparisons"],
@@ -899,7 +948,7 @@ def validate_receipt(
         storage["measurement_path"], "storage.measurement_path"
     )
     require_sha256(storage["measurement_sha256"], "storage.measurement_sha256")
-    if measurement_path not in paths:
+    if measurement_path not in files_by_path:
         raise CandidateError("storage measurement is absent from artifact inventory")
 
     attestation = require_object(

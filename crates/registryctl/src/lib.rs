@@ -196,6 +196,7 @@ const CANONICAL_RUNTIME_NO_MATCH_RAW_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_NO_MAT
 const CANONICAL_RUNTIME_MATCH_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_HASH";
 const CANONICAL_RUNTIME_NO_MATCH_HASH_ENV: &str = "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_HASH";
 const CANONICAL_RUNTIME_NO_MATCH_PRINCIPAL: &str = "registryctl_local_no_match";
+const CANONICAL_SMOKE_RECORD_FIELDS: &[&str] = &["project_id", "district_code", "sector", "status"];
 const REGISTRYCTL_RELAY_STAGING_IMAGE_ENV: &str = "REGISTRYCTL_RELAY_STAGING_IMAGE";
 const CANONICAL_RELAY_CONFIG_MOUNT: &str = "/etc/registry-relay/config.yaml";
 const CANONICAL_RELAY_CONTAINER_PORT: &str = "0.0.0.0:8080";
@@ -1442,6 +1443,7 @@ struct CanonicalRuntimeManifest {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CanonicalRuntimeValidation {
+    Shutdown,
     GeneratedClosure,
     Full,
 }
@@ -1455,12 +1457,17 @@ fn retired_legacy_project_error() -> anyhow::Error {
     )
 }
 
-fn require_canonical_project(project_dir: &Path) -> Result<()> {
+fn require_real_project_root(project_dir: &Path) -> Result<()> {
     let root = fs::symlink_metadata(project_dir)
         .context("failed to inspect the Registry Stack project root")?;
     if root.file_type().is_symlink() || !root.is_dir() {
         bail!("the Registry Stack project root must be a real directory");
     }
+    Ok(())
+}
+
+fn require_canonical_project(project_dir: &Path) -> Result<()> {
+    require_real_project_root(project_dir)?;
     if fs::symlink_metadata(project_dir.join("registryctl.yaml")).is_ok() {
         return Err(retired_legacy_project_error());
     }
@@ -1469,6 +1476,26 @@ fn require_canonical_project(project_dir: &Path) -> Result<()> {
         .map_err(|_| anyhow!("the canonical project is missing registry-stack.yaml"))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         bail!("registry-stack.yaml must be a regular non-symlink file");
+    }
+    Ok(())
+}
+
+fn validate_canonical_workbook_paths(project_file: &str, runtime_path: &str) -> Result<()> {
+    let relative = Path::new(project_file);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        bail!("the declared XLSX project_file must be a contained project-relative path");
+    }
+    if !runtime_path.starts_with('/')
+        || runtime_path.contains(':')
+        || Path::new(runtime_path)
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("the declared XLSX runtime path must be a contained absolute container path");
     }
     Ok(())
 }
@@ -1514,22 +1541,8 @@ fn canonical_spreadsheet_binding(project_dir: &Path) -> Result<CanonicalSpreadsh
         bail!("the canonical local runtime requires exactly one declared XLSX project workbook");
     }
     let (project_file_text, runtime_path) = bindings.remove(0);
+    validate_canonical_workbook_paths(&project_file_text, &runtime_path)?;
     let relative = Path::new(&project_file_text);
-    if relative.is_absolute()
-        || relative
-            .components()
-            .any(|component| !matches!(component, std::path::Component::Normal(_)))
-    {
-        bail!("the declared XLSX project_file must be a contained project-relative path");
-    }
-    if !runtime_path.starts_with('/')
-        || runtime_path.contains(':')
-        || Path::new(&runtime_path)
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        bail!("the declared XLSX runtime path must be a contained absolute container path");
-    }
     let project_file = project_dir.join(relative);
     ensure_no_symlink_components(project_dir, &project_file)?;
     let metadata = fs::symlink_metadata(&project_file)
@@ -1874,6 +1887,11 @@ fn strict_runtime_credentials(
         .map_err(|_| anyhow!("local runtime credentials do not meet the minimum entropy shape"))?;
     validate_api_key_entropy(&credentials.no_match_raw)
         .map_err(|_| anyhow!("local runtime credentials do not meet the minimum entropy shape"))?;
+    if credentials.match_raw == credentials.no_match_raw
+        || credentials.match_hash == credentials.no_match_hash
+    {
+        bail!("local runtime match and no-match credentials must remain distinct");
+    }
     if fingerprint_api_key(&credentials.match_raw) != credentials.match_hash
         || fingerprint_api_key(&credentials.no_match_raw) != credentials.no_match_hash
     {
@@ -2007,7 +2025,11 @@ fn load_canonical_runtime(
     project_dir: &Path,
     validation: CanonicalRuntimeValidation,
 ) -> Result<CanonicalRuntime> {
-    require_canonical_project(project_dir)?;
+    if validation == CanonicalRuntimeValidation::Shutdown {
+        require_real_project_root(project_dir)?;
+    } else {
+        require_canonical_project(project_dir)?;
+    }
     let runtime_dir = project_dir.join(CANONICAL_RUNTIME_ROOT);
     let secrets_dir = project_dir.join(CANONICAL_RUNTIME_SECRETS);
     let compose_file = project_dir.join(CANONICAL_RUNTIME_COMPOSE);
@@ -2040,24 +2062,50 @@ fn load_canonical_runtime(
         bail!("local runtime manifest has an unsupported contract");
     }
     validate_canonical_runtime_image_ref(&manifest.relay_image)?;
-    let binding = canonical_spreadsheet_binding(project_dir)?;
-    let workbook_input = compiled_workbook_input(project_dir, &binding)?;
-    if binding.project_file_text != manifest.workbook_project_file
-        || binding.runtime_path != manifest.workbook_runtime_path
-    {
-        bail!("the authored project changed after the local runtime was compiled");
-    }
-    if workbook_input.digest.as_str() != manifest.workbook_digest
-        || workbook_input.classification != manifest.workbook_classification
-        || manifest.workbook_classification != ArtifactInputClassification::OperatorOwnedSourceData
-    {
-        bail!("local runtime workbook provenance does not match the artifact manifest");
-    }
+    let binding = if validation == CanonicalRuntimeValidation::Shutdown {
+        validate_canonical_workbook_paths(
+            &manifest.workbook_project_file,
+            &manifest.workbook_runtime_path,
+        )?;
+        if manifest.workbook_classification != ArtifactInputClassification::OperatorOwnedSourceData
+        {
+            bail!("local runtime workbook provenance has an unsupported classification");
+        }
+        CanonicalSpreadsheetBinding {
+            project_file_text: manifest.workbook_project_file.clone(),
+            runtime_path: manifest.workbook_runtime_path.clone(),
+            match_principal: String::new(),
+        }
+    } else {
+        let binding = canonical_spreadsheet_binding(project_dir)?;
+        let workbook_input = compiled_workbook_input(project_dir, &binding)?;
+        if binding.project_file_text != manifest.workbook_project_file
+            || binding.runtime_path != manifest.workbook_runtime_path
+        {
+            bail!("the authored project changed after the local runtime was compiled");
+        }
+        if workbook_input.digest.as_str() != manifest.workbook_digest
+            || workbook_input.classification != manifest.workbook_classification
+            || manifest.workbook_classification
+                != ArtifactInputClassification::OperatorOwnedSourceData
+        {
+            bail!("local runtime workbook provenance does not match the artifact manifest");
+        }
+        binding
+    };
     let compose = fs::read_to_string(&compose_file).context("failed to read local Compose")?;
     if sha256_uri(compose.as_bytes()) != manifest.compose_digest {
         bail!("generated local Compose integrity check failed");
     }
     validate_canonical_compose(&compose, &manifest.relay_image, &binding)?;
+    if validation == CanonicalRuntimeValidation::Shutdown {
+        return Ok(CanonicalRuntime {
+            compose_file,
+            relay_config: project_dir.join(CANONICAL_RELAY_CONFIG),
+            secrets_env,
+            image: manifest.relay_image,
+        });
+    }
     let relay_config = project_dir.join(CANONICAL_RELAY_CONFIG);
     ensure_no_symlink_components(project_dir, &relay_config)?;
     if digest_path(&relay_config, "compiled Relay config")? != manifest.relay_config_digest {
@@ -2105,8 +2153,7 @@ fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<(
 }
 
 pub fn stop_project(project_dir: &Path) -> Result<()> {
-    let runtime =
-        load_canonical_runtime(project_dir, CanonicalRuntimeValidation::GeneratedClosure)?;
+    let runtime = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Shutdown)?;
     run_compose_for_canonical_runtime(project_dir, &runtime, &["down"])?;
     Ok(())
 }
@@ -2114,6 +2161,7 @@ pub fn stop_project(project_dir: &Path) -> Result<()> {
 /// Stops and starts the project so edits to the bind-mounted config files
 /// take effect; a plain `start` leaves an already-running container as is.
 pub fn restart_project(project_dir: &Path) -> Result<()> {
+    require_canonical_project(project_dir)?;
     stop_project(project_dir)?;
     start_project(project_dir)
 }
@@ -4237,7 +4285,7 @@ fn run_canonical_smoke_checks(
             ("Data-Purpose".to_string(), PURPOSE.to_string()),
         ],
     );
-    record_row_count_smoke_check(
+    record_exact_row_smoke_check(
         &mut checks,
         base_url,
         "allowed matching principal returns one record",
@@ -4247,8 +4295,9 @@ fn run_canonical_smoke_checks(
             ("Data-Purpose".to_string(), PURPOSE.to_string()),
         ],
         1,
+        CANONICAL_SMOKE_RECORD_FIELDS,
     );
-    record_row_count_smoke_check(
+    record_exact_row_smoke_check(
         &mut checks,
         base_url,
         "wrong principal safely returns no match",
@@ -4258,6 +4307,7 @@ fn run_canonical_smoke_checks(
             ("Data-Purpose".to_string(), PURPOSE.to_string()),
         ],
         0,
+        CANONICAL_SMOKE_RECORD_FIELDS,
     );
     SmokeReport {
         schema_version: SmokeReportSchema::V1,
@@ -4386,19 +4436,25 @@ fn run_smoke_checks(base_url: &str, secrets: &LocalEnv) -> SmokeReport {
     }
 }
 
-fn record_row_count_smoke_check(
+fn record_exact_row_smoke_check(
     checks: &mut Vec<SmokeCheck>,
     base_url: &str,
     name: &'static str,
     path: &'static str,
     headers: &[(String, String)],
     expected_rows: usize,
+    expected_fields: &[&str],
 ) {
     let url = format!("{base_url}{path}");
     match http_get(&url, headers) {
         Ok(response) => {
             let passed = response.status == 200
-                && validate_exact_row_count_response(&response.body, expected_rows).is_ok();
+                && validate_exact_row_shape_response(
+                    &response.body,
+                    expected_rows,
+                    expected_fields,
+                )
+                .is_ok();
             checks.push(SmokeCheck {
                 name: name.to_string(),
                 method: "GET".to_string(),
@@ -4423,7 +4479,11 @@ fn record_row_count_smoke_check(
     }
 }
 
-fn validate_exact_row_count_response(contents: &str, expected_rows: usize) -> Result<()> {
+fn validate_exact_row_shape_response(
+    contents: &str,
+    expected_rows: usize,
+    expected_fields: &[&str],
+) -> Result<()> {
     let document: serde_json::Value =
         serde_json::from_str(contents).context("record response was not valid JSON")?;
     let object = document
@@ -4433,11 +4493,20 @@ fn validate_exact_row_count_response(contents: &str, expected_rows: usize) -> Re
         .get("data")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| anyhow!("record response data was not an array"))?;
-    if rows.iter().any(|row| !row.is_object()) {
-        bail!("record response data contained a non-object row");
-    }
     if rows.len() != expected_rows {
         bail!("record response did not contain the expected exact row count");
+    }
+    for row in rows {
+        let row = row
+            .as_object()
+            .ok_or_else(|| anyhow!("record response data contained a non-object row"))?;
+        if row.len() != expected_fields.len()
+            || expected_fields
+                .iter()
+                .any(|field| !row.contains_key(*field))
+        {
+            bail!("record response row did not contain the expected exact field set");
+        }
     }
     Ok(())
 }
@@ -6022,63 +6091,115 @@ mod tests {
     }
 
     #[test]
-    fn exact_row_count_smoke_rejects_duplicate_match_rows() {
+    fn exact_row_shape_smoke_rejects_duplicate_match_rows() {
         let response = serde_json::json!({
             "data": [
-                {"project_id": "project-1"},
-                {"project_id": "project-1"}
+                {
+                    "project_id": "project-1",
+                    "district_code": "D-01",
+                    "sector": "transport",
+                    "status": "active"
+                },
+                {
+                    "project_id": "project-1",
+                    "district_code": "D-01",
+                    "sector": "transport",
+                    "status": "active"
+                }
             ]
         });
 
-        assert!(validate_exact_row_count_response(&response.to_string(), 1).is_err());
+        assert!(validate_exact_row_shape_response(
+            &response.to_string(),
+            1,
+            CANONICAL_SMOKE_RECORD_FIELDS,
+        )
+        .is_err());
     }
 
     #[test]
-    fn exact_row_count_smoke_rejects_unexpected_nonempty_no_match() {
+    fn exact_row_shape_smoke_rejects_unexpected_nonempty_no_match() {
         let response = serde_json::json!({
-            "data": [{"project_id": "unexpected"}]
-        });
-
-        assert!(validate_exact_row_count_response(&response.to_string(), 0).is_err());
-    }
-
-    #[test]
-    fn exact_row_count_smoke_accepts_one_object_match_and_empty_no_match() {
-        let match_response = serde_json::json!({
             "data": [{
-                "project_id": "project-1",
+                "project_id": "unexpected",
                 "district_code": "D-01",
                 "sector": "transport",
                 "status": "active"
             }]
         });
-        let no_match_response = serde_json::json!({"data": []});
 
-        validate_exact_row_count_response(&match_response.to_string(), 1).unwrap();
-        validate_exact_row_count_response(&no_match_response.to_string(), 0).unwrap();
+        assert!(validate_exact_row_shape_response(
+            &response.to_string(),
+            0,
+            CANONICAL_SMOKE_RECORD_FIELDS,
+        )
+        .is_err());
     }
 
     #[test]
-    fn exact_row_count_smoke_rejects_malformed_and_non_object_data() {
+    fn exact_row_shape_smoke_accepts_match_in_any_field_order_and_empty_no_match() {
+        let match_response = r#"{
+            "data": [{
+                "status": "active",
+                "project_id": "project-1",
+                "sector": "transport",
+                "district_code": "D-01"
+            }]
+        }"#;
+        let no_match_response = serde_json::json!({"data": []});
+
+        validate_exact_row_shape_response(match_response, 1, CANONICAL_SMOKE_RECORD_FIELDS)
+            .unwrap();
+        validate_exact_row_shape_response(
+            &no_match_response.to_string(),
+            0,
+            CANONICAL_SMOKE_RECORD_FIELDS,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn exact_row_shape_smoke_rejects_malformed_and_non_object_data() {
         for response in ["not JSON", "[]", r#"{"data": {}}"#, r#"{"data": [42]}"#] {
             assert!(
-                validate_exact_row_count_response(response, 1).is_err(),
+                validate_exact_row_shape_response(response, 1, CANONICAL_SMOKE_RECORD_FIELDS)
+                    .is_err(),
                 "unexpectedly accepted {response}"
             );
         }
     }
 
     #[test]
-    fn exact_row_count_smoke_allows_disclosure_field_changes() {
-        let response = serde_json::json!({
+    fn exact_row_shape_smoke_rejects_extra_and_missing_disclosure_fields() {
+        let extra = serde_json::json!({
             "data": [{
                 "project_id": "project-1",
                 "district_code": "D-01",
+                "sector": "transport",
+                "status": "active",
                 "newly_disclosed_field": "reviewed"
             }]
         });
+        let missing = serde_json::json!({
+            "data": [{
+                "project_id": "project-1",
+                "district_code": "D-01",
+                "sector": "transport"
+            }]
+        });
 
-        validate_exact_row_count_response(&response.to_string(), 1).unwrap();
+        assert!(validate_exact_row_shape_response(
+            &extra.to_string(),
+            1,
+            CANONICAL_SMOKE_RECORD_FIELDS
+        )
+        .is_err());
+        assert!(validate_exact_row_shape_response(
+            &missing.to_string(),
+            1,
+            CANONICAL_SMOKE_RECORD_FIELDS,
+        )
+        .is_err());
     }
 
     #[test]
@@ -6695,6 +6816,86 @@ mod tests {
     }
 
     #[test]
+    fn canonical_runtime_rejects_equal_raw_api_keys_without_value_echo() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap();
+
+        let relay_path = project.join(CANONICAL_RUNTIME_RELAY_ENV);
+        let client_path = project.join(CANONICAL_RUNTIME_ENV);
+        let credentials = strict_runtime_credentials(&relay_path, &client_path).unwrap();
+        let client_contents = fs::read_to_string(&client_path).unwrap();
+        let tampered = client_contents.replace(
+            &format!(
+                "{CANONICAL_RUNTIME_NO_MATCH_RAW_ENV}={}",
+                credentials.no_match_raw
+            ),
+            &format!(
+                "{CANONICAL_RUNTIME_NO_MATCH_RAW_ENV}={}",
+                credentials.match_raw
+            ),
+        );
+        assert_ne!(tampered, client_contents);
+        write_private_text(&client_path, &tampered).unwrap();
+
+        let error = load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap_err();
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("match and no-match credentials must remain distinct"),
+            "{rendered}"
+        );
+        for secret in [
+            &credentials.match_raw,
+            &credentials.no_match_raw,
+            &credentials.match_hash,
+            &credentials.no_match_hash,
+        ] {
+            assert!(!rendered.contains(secret), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn canonical_runtime_rejects_equal_api_key_fingerprints_without_value_echo() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap();
+
+        let relay_path = project.join(CANONICAL_RUNTIME_RELAY_ENV);
+        let client_path = project.join(CANONICAL_RUNTIME_ENV);
+        let credentials = strict_runtime_credentials(&relay_path, &client_path).unwrap();
+        let relay_contents = fs::read_to_string(&relay_path).unwrap();
+        let tampered = relay_contents.replace(
+            &format!(
+                "{CANONICAL_RUNTIME_NO_MATCH_HASH_ENV}={}",
+                credentials.no_match_hash
+            ),
+            &format!(
+                "{CANONICAL_RUNTIME_NO_MATCH_HASH_ENV}={}",
+                credentials.match_hash
+            ),
+        );
+        assert_ne!(tampered, relay_contents);
+        write_private_text(&relay_path, &tampered).unwrap();
+
+        let error = load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap_err();
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("match and no-match credentials must remain distinct"),
+            "{rendered}"
+        );
+        for secret in [
+            &credentials.match_raw,
+            &credentials.no_match_raw,
+            &credentials.match_hash,
+            &credentials.no_match_hash,
+        ] {
+            assert!(!rendered.contains(secret), "{rendered}");
+        }
+    }
+
+    #[test]
     fn canonical_runtime_rejects_missing_source_without_value_echo() {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("spreadsheet-project");
@@ -6736,6 +6937,29 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("PW-001"), "{rendered}");
+    }
+
+    #[test]
+    fn canonical_runtime_shutdown_validation_does_not_reread_removed_workbook() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap();
+        fs::remove_file(project.join("data/public_works_projects.xlsx")).unwrap();
+
+        let full_error =
+            load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap_err();
+        assert!(
+            format!("{full_error:#}").contains("project workbook is missing"),
+            "{full_error:#}"
+        );
+
+        let runtime =
+            load_canonical_runtime(&project, CanonicalRuntimeValidation::Shutdown).unwrap();
+        assert_eq!(
+            runtime.compose_file,
+            project.join(CANONICAL_RUNTIME_COMPOSE)
+        );
     }
 
     #[cfg(unix)]

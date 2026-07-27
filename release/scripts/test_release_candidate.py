@@ -37,6 +37,10 @@ def sha256(payload: bytes) -> str:
 
 def fixture(root: Path, *, now: datetime) -> dict:
     payload = "registry-stack-release-candidate-payload-123-2"
+    native_binaries = {
+        "macos-arm64": b"registryctl macos arm64",
+        "linux-arm64": b"registryctl linux arm64",
+    }
     files = {
         "registry-stack-candidate-build-a-123-2/build.json": b'{"build":"a"}\n',
         "registry-stack-candidate-build-b-123-2/build.json": b'{"build":"b"}\n',
@@ -46,6 +50,12 @@ def fixture(root: Path, *, now: datetime) -> dict:
         f"{payload}/dist/images/storage-measurement.json": b'{"peak_bytes":123}\n',
         f"{payload}/dist/grype/grype-db-status.json": b'{"status":"valid"}\n',
     }
+    for asset, binary_bytes in native_binaries.items():
+        binary = f"registryctl-v1.2.3-{asset}"
+        files[f"registry-stack-candidate-{asset}-123-2/dist/bin/{binary}"] = (
+            binary_bytes
+        )
+        files[f"{payload}/dist/bin/{binary}"] = binary_bytes
     for name in ("registry-notary", "registry-relay"):
         files[f"{payload}/dist/sbom/{name}.spdx.json"] = f"{name} spdx".encode()
         files[f"{payload}/dist/sbom/{name}.syft.json"] = f"{name} syft".encode()
@@ -507,6 +517,24 @@ class ReleaseCandidateTest(unittest.TestCase):
             / "registry-stack-release-candidate-payload-123-2/dist/bin/registryctl-v1.2.3-linux-amd64"
         ).write_bytes(b"tampered")
         with self.assertRaisesRegex(self.module.CandidateError, "sha256 mismatch"):
+            self.verify()
+
+    def test_sealed_native_payload_mutation_fails_provenance_binding(self) -> None:
+        relative = (
+            "registry-stack-release-candidate-payload-123-2/"
+            "dist/bin/registryctl-v1.2.3-macos-arm64"
+        )
+        mutated = b"independently valid but not native-runner bytes"
+        (self.root / relative).write_bytes(mutated)
+        for artifact in self.receipt["artifacts"]:
+            for file_record in artifact["files"]:
+                if file_record["path"] == relative:
+                    file_record["sha256"] = sha256(mutated)
+                    file_record["size"] = len(mutated)
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "native asset provenance mismatch for macos-arm64",
+        ):
             self.verify()
 
     def test_partial_or_extra_upload_fails_exact_inventory(self) -> None:

@@ -58,6 +58,25 @@ def load_debian13_image_check():
 
 
 class RegistryReleaseTest(unittest.TestCase):
+    def test_candidate_payload_binds_native_runner_bytes_before_checksums(self) -> None:
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/release-candidate.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        steps = workflow["jobs"]["verify-candidate"]["steps"]
+        assembly = next(
+            step["run"]
+            for step in steps
+            if step.get("name") == "Assemble exact candidate payload"
+        )
+
+        self.assertIn("for asset in macos-arm64 linux-arm64", assembly)
+        self.assertIn(
+            'cmp -- "${source}" "dist/candidate/dist/bin/${binary}"', assembly
+        )
+        self.assertLess(assembly.index("cmp --"), assembly.index("sha256sum"))
+
     def test_required_ci_contexts_wrap_path_gated_jobs(self) -> None:
         workflow = yaml.safe_load(
             (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")

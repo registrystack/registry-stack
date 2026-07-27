@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -86,6 +89,34 @@ function registryctl(args) {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
   });
+}
+
+function directoryDigest(root) {
+  const digest = createHash('sha256');
+
+  function visit(directory, relativeDirectory) {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
+      left.name.localeCompare(right.name),
+    )) {
+      const relative = join(relativeDirectory, entry.name);
+      const path = join(directory, entry.name);
+      const metadata = statSync(path);
+      digest.update(`${entry.isDirectory() ? 'directory' : 'file'} ${relative} ${metadata.mode & 0o777}\n`);
+      if (entry.isDirectory()) {
+        visit(path, relative);
+      } else {
+        assert.equal(entry.isFile(), true, `unexpected project entry type: ${relative}`);
+        digest.update(readFileSync(path));
+      }
+    }
+  }
+
+  visit(root, '.');
+  return digest.digest('hex');
+}
+
+function fileDigest(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
 test('extracts shell fences with headings, occurrences, and multiline commands intact', () => {
@@ -235,10 +266,61 @@ test('source tutorial gate validates canonical authoring without rewriting relea
   const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
 
   assert.match(script, /source "\$BLOCKS\/02\.sh"/);
+  assert.match(script, /bash checks\/validate-negative-workbooks\.sh/);
+  assert.match(script, /source project: unchanged/);
   assert.match(script, /registryctl preflight --project-dir \. --environment local/);
   assert.match(script, /registryctl build --project-dir \. --environment local/);
   assert.match(script, /exact runtime sequence is release-gated from the sealed candidate payload/);
   assert.doesNotMatch(script, /docker build|rebind-project|REGISTRYCTL_RELAY_STAGING_IMAGE/);
+});
+
+test('spreadsheet negative-workbook check is value-free and does not mutate its project', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'registryctl-spreadsheet-negatives-'));
+  const projectDirectory = join(directory, 'country-registry');
+  try {
+    registryctl(['init', '--from', 'spreadsheet', '--project-dir', projectDirectory]);
+    const before = directoryDigest(projectDirectory);
+    const output = execFileSync(
+      'bash',
+      [join(projectDirectory, 'checks/validate-negative-workbooks.sh')],
+      {
+        cwd: projectDirectory,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          REGISTRYCTL_BIN: exactRegistryctlBinary(),
+          REGISTRYCTL_NO_UPDATE_CHECK: '1',
+        },
+        maxBuffer: 16 * 1024 * 1024,
+      },
+    );
+
+    assert.equal(
+      output,
+      [
+        'spreadsheet negative checks: PASS',
+        '  duplicate primary key: registryctl.preflight.runtime_file_content_invalid; ingest.schema_mismatch',
+        '  formula source: registryctl.preflight.runtime_file_content_invalid; ingest.source_unreadable',
+        '  source project: unchanged',
+        '',
+      ].join('\n'),
+    );
+    assert.doesNotMatch(output, /PW-1000|PW-001|D-01|roads|active|calculated|1\+1/);
+    assert.equal(directoryDigest(projectDirectory), before);
+
+    for (const fixture of [
+      'duplicate_primary_key_after_1000.xlsx',
+      'formula_outside_projection.xlsx',
+    ]) {
+      assert.equal(
+        fileDigest(join(projectDirectory, 'checks/fixtures', fixture)),
+        fileDigest(resolve(repoRoot, 'crates/registry-relay/tests/fixtures_xlsx', fixture)),
+        `${fixture} must remain byte-identical to the production Relay test fixture`,
+      );
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('source tutorial gate does not stand in for the first-claim or runtime gates', () => {

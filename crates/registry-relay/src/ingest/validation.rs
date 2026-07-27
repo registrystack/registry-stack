@@ -56,6 +56,13 @@ struct ColumnPlan {
 pub struct ProjectionPlan {
     plan: Vec<ColumnPlan>,
     output_schema: SchemaRef,
+    diagnostics: SchemaDiagnostics,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SchemaDiagnostics {
+    Detailed,
+    Redacted,
 }
 
 impl ProjectionPlan {
@@ -74,14 +81,21 @@ impl ProjectionPlan {
                 src.clone()
             } else {
                 cast(src.as_ref(), &col.target_type).map_err(|e| {
-                    error!(
-                        event = "ingest.schema_mismatch",
-                        reason = "cast_failed_at_apply",
-                        column = %col.name,
-                        from_type = ?src.data_type(),
-                        to_type = ?col.target_type,
-                        error = %e,
-                    );
+                    match self.diagnostics {
+                        SchemaDiagnostics::Detailed => error!(
+                            event = "ingest.schema_mismatch",
+                            reason = "cast_failed_at_apply",
+                            column = %col.name,
+                            from_type = ?src.data_type(),
+                            to_type = ?col.target_type,
+                            error = %e,
+                        ),
+                        SchemaDiagnostics::Redacted => error!(
+                            event = "ingest.schema_mismatch",
+                            reason = "cast_failed_at_apply",
+                            diagnostics = "redacted_sensitive_schema",
+                        ),
+                    }
                     IngestError::SchemaMismatch
                 })?
             };
@@ -128,6 +142,46 @@ pub fn validate(
     primary_key: Option<&str>,
     materialized_rows: Option<&RecordBatch>,
 ) -> Result<ProjectionPlan, IngestError> {
+    validate_with_diagnostics(
+        dataset_id,
+        resource_id,
+        declared,
+        observed,
+        primary_key,
+        materialized_rows,
+        SchemaDiagnostics::Detailed,
+    )
+}
+
+pub(crate) fn validate_with_redacted_diagnostics(
+    dataset_id: &DatasetId,
+    resource_id: &ResourceId,
+    declared: &DeclaredSchema,
+    observed: &Schema,
+    primary_key: Option<&str>,
+    materialized_rows: Option<&RecordBatch>,
+) -> Result<ProjectionPlan, IngestError> {
+    validate_with_diagnostics(
+        dataset_id,
+        resource_id,
+        declared,
+        observed,
+        primary_key,
+        materialized_rows,
+        SchemaDiagnostics::Redacted,
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn validate_with_diagnostics(
+    dataset_id: &DatasetId,
+    resource_id: &ResourceId,
+    declared: &DeclaredSchema,
+    observed: &Schema,
+    primary_key: Option<&str>,
+    materialized_rows: Option<&RecordBatch>,
+    diagnostics: SchemaDiagnostics,
+) -> Result<ProjectionPlan, IngestError> {
     let declared_names: Vec<&str> = declared.fields.iter().map(|f| f.name.as_str()).collect();
     let observed_names: Vec<&str> = observed
         .fields()
@@ -148,6 +202,7 @@ pub fn validate(
             declared,
             observed,
             missing.iter().map(|m| format!("missing: {m}")).collect(),
+            diagnostics,
         );
         return Err(IngestError::SchemaMismatch);
     }
@@ -160,26 +215,42 @@ pub fn validate(
         .collect();
     if !extras.is_empty() {
         if declared.strict {
-            error!(
-                event = "ingest.strict_extra_column",
-                dataset_id = %dataset_id,
-                resource_id = %resource_id,
-                declared = ?summarise_fields_declared(declared),
-                observed = ?summarise_fields_arrow(observed),
-                diff = ?extras
-                    .iter()
-                    .map(|e| format!("extra: {e}"))
-                    .collect::<Vec<_>>(),
-            );
+            match diagnostics {
+                SchemaDiagnostics::Detailed => error!(
+                    event = "ingest.strict_extra_column",
+                    dataset_id = %dataset_id,
+                    resource_id = %resource_id,
+                    declared = ?summarise_fields_declared(declared),
+                    observed = ?summarise_fields_arrow(observed),
+                    diff = ?extras
+                        .iter()
+                        .map(|e| format!("extra: {e}"))
+                        .collect::<Vec<_>>(),
+                ),
+                SchemaDiagnostics::Redacted => error!(
+                    event = "ingest.strict_extra_column",
+                    dataset_id = %dataset_id,
+                    resource_id = %resource_id,
+                    diagnostics = "redacted_sensitive_schema",
+                ),
+            }
             return Err(IngestError::StrictExtraColumn);
         } else {
             // Lax: log a warn, drop the column from the projection.
-            warn!(
-                event = "ingest.extra_column_dropped",
-                dataset_id = %dataset_id,
-                resource_id = %resource_id,
-                extras = ?extras,
-            );
+            match diagnostics {
+                SchemaDiagnostics::Detailed => warn!(
+                    event = "ingest.extra_column_dropped",
+                    dataset_id = %dataset_id,
+                    resource_id = %resource_id,
+                    extras = ?extras,
+                ),
+                SchemaDiagnostics::Redacted => warn!(
+                    event = "ingest.extra_column_dropped",
+                    dataset_id = %dataset_id,
+                    resource_id = %resource_id,
+                    diagnostics = "redacted_sensitive_schema",
+                ),
+            }
         }
     }
 
@@ -192,6 +263,7 @@ pub fn validate(
                 declared,
                 observed,
                 vec![format!("primary_key_missing_from_declared: {pk}")],
+                diagnostics,
             );
             return Err(IngestError::SchemaMismatch);
         }
@@ -202,6 +274,7 @@ pub fn validate(
                 declared,
                 observed,
                 vec![format!("primary_key_missing_from_observed: {pk}")],
+                diagnostics,
             );
             return Err(IngestError::SchemaMismatch);
         }
@@ -238,6 +311,7 @@ pub fn validate(
                             declared,
                             observed,
                             vec![diff],
+                            diagnostics,
                         );
                         return Err(IngestError::SchemaMismatch);
                     }
@@ -257,6 +331,7 @@ pub fn validate(
                         dfield.ty,
                         obs_field.data_type()
                     )],
+                    diagnostics,
                 );
                 return Err(IngestError::SchemaMismatch);
             }
@@ -293,6 +368,7 @@ pub fn validate(
                     declared,
                     observed,
                     vec![format!("non_null_violation: {}", dfield.name)],
+                    diagnostics,
                 );
                 return Err(IngestError::SchemaMismatch);
             }
@@ -307,6 +383,28 @@ pub fn validate(
                 .iter()
                 .position(|f| f.name() == pk)
                 .expect("primary key presence checked above");
+            if batch.column(obs_idx).null_count() > 0 {
+                log_schema_mismatch(
+                    dataset_id,
+                    resource_id,
+                    declared,
+                    observed,
+                    vec![format!("primary_key_null: {pk}")],
+                    diagnostics,
+                );
+                return Err(IngestError::SchemaMismatch);
+            }
+            if primary_key_has_blank_string(batch.column(obs_idx).as_ref()) {
+                log_schema_mismatch(
+                    dataset_id,
+                    resource_id,
+                    declared,
+                    observed,
+                    vec![format!("primary_key_blank_string: {pk}")],
+                    diagnostics,
+                );
+                return Err(IngestError::SchemaMismatch);
+            }
             if !primary_key_unique(batch, obs_idx) {
                 log_schema_mismatch(
                     dataset_id,
@@ -314,6 +412,7 @@ pub fn validate(
                     declared,
                     observed,
                     vec![format!("primary_key_not_unique: {pk}")],
+                    diagnostics,
                 );
                 return Err(IngestError::SchemaMismatch);
             }
@@ -323,6 +422,7 @@ pub fn validate(
     Ok(ProjectionPlan {
         plan,
         output_schema: Arc::new(Schema::new(output_fields)),
+        diagnostics,
     })
 }
 
@@ -461,6 +561,25 @@ fn type_compatibility(declared: FieldType, observed: &DataType) -> TypeCheck {
     }
 }
 
+/// Return true when a string primary key has no content after trimming.
+///
+/// This is an emptiness check only. Non-empty keys retain their original
+/// whitespace for projection and uniqueness, so the validator does not
+/// silently normalize country-owned identifiers.
+fn primary_key_has_blank_string(arr: &dyn Array) -> bool {
+    use datafusion::arrow::array::{LargeStringArray, StringArray};
+
+    if let Some(strings) = arr.as_any().downcast_ref::<StringArray>() {
+        return (0..strings.len())
+            .any(|row| !strings.is_null(row) && strings.value(row).trim().is_empty());
+    }
+    if let Some(strings) = arr.as_any().downcast_ref::<LargeStringArray>() {
+        return (0..strings.len())
+            .any(|row| !strings.is_null(row) && strings.value(row).trim().is_empty());
+    }
+    false
+}
+
 /// Check primary-key uniqueness across the complete materialized source.
 /// The column may be any supported Arrow scalar type.
 fn primary_key_unique(batch: &RecordBatch, col_idx: usize) -> bool {
@@ -524,15 +643,24 @@ fn log_schema_mismatch(
     declared: &DeclaredSchema,
     observed: &Schema,
     diff: Vec<String>,
+    diagnostics: SchemaDiagnostics,
 ) {
-    error!(
-        event = "ingest.schema_mismatch",
-        dataset_id = %dataset_id,
-        resource_id = %resource_id,
-        declared = ?summarise_fields_declared(declared),
-        observed = ?summarise_fields_arrow(observed),
-        diff = ?diff,
-    );
+    match diagnostics {
+        SchemaDiagnostics::Detailed => error!(
+            event = "ingest.schema_mismatch",
+            dataset_id = %dataset_id,
+            resource_id = %resource_id,
+            declared = ?summarise_fields_declared(declared),
+            observed = ?summarise_fields_arrow(observed),
+            diff = ?diff,
+        ),
+        SchemaDiagnostics::Redacted => error!(
+            event = "ingest.schema_mismatch",
+            dataset_id = %dataset_id,
+            resource_id = %resource_id,
+            diagnostics = "redacted_sensitive_schema",
+        ),
+    }
 }
 
 fn summarise_fields_declared(s: &DeclaredSchema) -> Vec<String> {

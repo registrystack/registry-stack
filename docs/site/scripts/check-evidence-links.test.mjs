@@ -238,18 +238,66 @@ test('release verification uses the resolved tag target without installing the d
   assert.doesNotMatch(verifyJob, /npm ci/);
 });
 
-test('Pages stages released-root routing before checking the mounted Main corpus', () => {
+test('Pages receipts the verified preview before production staging', () => {
   const workflow = readFileSync(
     resolve(repositoryRoot, '.github/workflows/docs-pages.yml'),
     'utf8',
   );
-  const llmsCheck = workflow.indexOf('npm run check:llms:built');
+  const buildJob = workflow.split('\n  build:\n', 2)[1].split('\n  deploy:\n', 1)[0];
+  const previewVerification = buildJob.indexOf('name: Verify Main-source preview');
+  const previewPackaging = buildJob.indexOf('npm run package:unreleased-preview');
+  const previewUpload = buildJob.indexOf('name: Upload unreleased preview evidence');
   const archiveAssembly = workflow.indexOf('npm run assemble:archives');
   const rootStaging = workflow.indexOf('npm run stage:production-docsets');
-  assert.ok(llmsCheck >= 0);
+  const productionSeal = workflow.indexOf('test -d dist-production');
+  assert.ok(previewVerification >= 0);
+  assert.ok(previewPackaging > previewVerification);
+  assert.ok(previewUpload > previewPackaging);
+  assert.ok(archiveAssembly > previewUpload);
   assert.ok(rootStaging > archiveAssembly);
-  assert.ok(llmsCheck > rootStaging);
-  assert.match(workflow, /DOCS_DIST_DIR: \$\{\{ github\.workspace \}\}\/docs\/site\/dist\/preview/);
-  assert.match(workflow, /DOCS_PUBLIC_BASE: \/preview\//);
-  assert.equal(workflow.indexOf('npm run check:llms:built', llmsCheck + 1), -1);
+  assert.ok(productionSeal > rootStaging);
+  assert.match(
+    buildJob,
+    /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4\.6\.2/,
+  );
+  assert.match(buildJob, /retention-days: 90/);
+  assert.match(buildJob, /steps\.preview-evidence\.outputs\.artifact-digest/);
+  assert.match(buildJob, /DOCS_PUBLIC_BASE=\/preview\//);
+});
+
+test('only the sealed production tree can reach Pages', () => {
+  const workflow = readFileSync(
+    resolve(repositoryRoot, '.github/workflows/docs-pages.yml'),
+    'utf8',
+  );
+  const buildJob = workflow.split('\n  build:\n', 2)[1].split('\n  deploy:\n', 1)[0];
+  const deployJob = workflow.split('\n  deploy:\n', 2)[1];
+
+  assert.match(buildJob, /if: github\.ref == 'refs\/heads\/main'/);
+  assert.match(deployJob, /if: github\.ref == 'refs\/heads\/main'/);
+  assert.match(
+    buildJob,
+    /uses: actions\/upload-pages-artifact@[^\n]+\n\s+with:\n\s+path: docs\/site\/dist-production/,
+  );
+  assert.doesNotMatch(buildJob, /path: docs\/site\/dist\s*$/m);
+});
+
+test('read-only CI docs job uploads preview evidence without Pages authority', () => {
+  const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/ci.yml'), 'utf8');
+  const docsJob = workflow.split('\n  docs:\n', 2)[1].split('\n  docs-required:\n', 1)[0];
+  const verification = docsJob.indexOf('name: Verify Main-source preview evidence');
+  const packaging = docsJob.indexOf('npm run package:unreleased-preview');
+  const upload = docsJob.indexOf('name: Upload unreleased preview evidence');
+
+  assert.ok(verification >= 0);
+  assert.ok(packaging > verification);
+  assert.ok(upload > packaging);
+  assert.match(
+    docsJob,
+    /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4\.6\.2/,
+  );
+  assert.match(docsJob, /retention-days: 90/);
+  assert.match(docsJob, /steps\.preview-evidence\.outputs\.artifact-url/);
+  assert.doesNotMatch(docsJob, /\bpages:\s*write\b/);
+  assert.doesNotMatch(docsJob, /\bid-token:\s*write\b/);
 });

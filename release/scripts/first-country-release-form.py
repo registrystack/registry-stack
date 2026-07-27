@@ -30,6 +30,7 @@ COMMAND_ORDER = (
     "install",
     "version",
     "init",
+    "negative_workbooks",
     "preflight",
     "start",
     "smoke",
@@ -61,6 +62,15 @@ ALLOWED_EVIDENCE = [
         "row_count": 0,
     },
 ]
+NEGATIVE_WORKBOOK_EVIDENCE = "\n".join(
+    [
+        "spreadsheet negative checks: PASS",
+        "  duplicate primary key: registryctl.preflight.runtime_file_content_invalid; ingest.schema_mismatch",
+        "  formula source: registryctl.preflight.runtime_file_content_invalid; ingest.source_unreadable",
+        "  source project: unchanged",
+        "",
+    ]
+)
 
 
 class ReleaseFormError(RuntimeError):
@@ -464,6 +474,7 @@ def read_runtime_inspection(project: Path, expected_image: str) -> dict[str, str
         "artifact_manifest_digest",
         "relay_config_digest",
         "workbook_digest",
+        "workbook_classification",
         "workbook_project_file",
         "workbook_runtime_path",
     }
@@ -477,6 +488,8 @@ def read_runtime_inspection(project: Path, expected_image: str) -> dict[str, str
         or runtime_manifest.get("relay_image") != expected_image
         or runtime_manifest.get("relay_config_digest") != relay_digest
         or runtime_manifest.get("compose_digest") != compose_digest
+        or runtime_manifest.get("workbook_classification")
+        != "operator_owned_source_data"
     ):
         raise ReleaseFormError(
             "canonical runtime does not bind the compiled Relay artifact and Compose"
@@ -594,6 +607,19 @@ def run_release_form(args: argparse.Namespace) -> Path:
                         str(project),
                     ],
                     cwd=root,
+                    env=environment,
+                    logs=logs,
+                )
+            )
+            environment["REGISTRYCTL_BIN"] = str(registryctl)
+            commands.append(
+                run_command(
+                    "negative_workbooks",
+                    [
+                        "bash",
+                        str(project / "checks/validate-negative-workbooks.sh"),
+                    ],
+                    cwd=project,
                     env=environment,
                     logs=logs,
                 )
@@ -883,6 +909,16 @@ def verify_evidence_logs(report_path: Path, commands: list[dict[str, Any]]) -> N
     if not exact_scalar_types or allowed != ALLOWED_EVIDENCE:
         raise ReleaseFormError(
             "allowed evidence log does not prove the exact value-free match and no-match summaries"
+        )
+    try:
+        negative_workbooks = contents["negative_workbooks"].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ReleaseFormError(
+            "negative-workbook evidence log is not valid UTF-8"
+        ) from error
+    if negative_workbooks != NEGATIVE_WORKBOOK_EVIDENCE:
+        raise ReleaseFormError(
+            "negative-workbook evidence log does not prove the exact value-free categories"
         )
 
 

@@ -19,6 +19,9 @@ journeys:
       - crates/registryctl/assets/project-starters/spreadsheet/environments/local.yaml
       - crates/registryctl/assets/project-starters/spreadsheet/entities/projects.yaml
       - crates/registryctl/assets/project-starters/spreadsheet/README.md
+      - crates/registryctl/assets/project-starters/spreadsheet/checks/validate-negative-workbooks.sh
+      - crates/registryctl/assets/project-starters/spreadsheet/checks/fixtures/duplicate_primary_key_after_1000.xlsx
+      - crates/registryctl/assets/project-starters/spreadsheet/checks/fixtures/formula_outside_projection.xlsx
       - crates/registryctl/src/project_authoring/compiler/relay.rs
       - crates/registryctl/tests/project_authoring.rs
       - crates/registryctl/tests/init_output.rs
@@ -84,12 +87,14 @@ journeys:
       format: generated_sample
       expected_trace:
         - Registryctl initializes the embedded synthetic workbook and complete authored project.
+        - The shipped negative-workbook check rejects a late duplicate primary key and a formula-bearing source through temporary canonical projects without changing the source project.
         - Preflight, check, and build validate the strict spreadsheet binding and compile the Relay input.
         - Doctor and start prepare the isolated local runtime after the authored and generated surfaces are reviewed.
         - Smoke exercises maintained local allowed and denied requests without publishing credentials.
     contract:
       proves:
         - The embedded starter compiles one local Relay over synthetic tabular data.
+        - Maintained invalid workbooks fail with stable value-free preflight and Relay validation categories.
         - Protected metadata and record operations enforce configured caller, scope, purpose, and field-release boundaries.
         - Authored, generated build, and generated runtime surfaces have distinct ownership.
       does_not_prove:
@@ -111,6 +116,9 @@ journeys:
       - name: Registryctl smoke
         proves: Maintained synthetic allowed and denied requests behaved as expected against the local runtime.
         does_not_prove: Live-source interoperability, load behavior, disaster recovery, or external acceptance.
+      - name: Spreadsheet negative-workbook check
+        proves: Temporary canonical projects reject duplicate primary keys and formula-bearing sources without changing the source project or retaining workbook values.
+        does_not_prove: Compatibility with the country implementer's workbook schema or business rules.
     production_delta: &runtime_delta
       environment: Bind the reviewed candidate to the intended production environment and product instance.
       secrets: Provision credentials and trust material through operator-managed references.

@@ -122,10 +122,44 @@ fn validate_generated_product_configs(compiled: &CompiledProject) -> Result<()> 
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum WorkbookValidationPolicy {
+    Reject,
+    ReportInvalid,
+}
+
+struct WorkbookValidation {
+    inputs: Vec<ArtifactInputDigest>,
+    content_invalid_paths: Vec<PathBuf>,
+}
+
 fn validate_project_workbook_inputs(
     loaded: &LoadedRegistryProject,
     compiled: &CompiledProject,
 ) -> Result<Vec<ArtifactInputDigest>> {
+    let validation =
+        validate_project_workbook_inputs_with_policy(loaded, compiled, WorkbookValidationPolicy::Reject)?;
+    debug_assert!(validation.content_invalid_paths.is_empty());
+    Ok(validation.inputs)
+}
+
+fn invalid_project_workbook_inputs_for_preflight(
+    loaded: &LoadedRegistryProject,
+    compiled: &CompiledProject,
+) -> Result<Vec<PathBuf>> {
+    Ok(validate_project_workbook_inputs_with_policy(
+        loaded,
+        compiled,
+        WorkbookValidationPolicy::ReportInvalid,
+    )?
+    .content_invalid_paths)
+}
+
+fn validate_project_workbook_inputs_with_policy(
+    loaded: &LoadedRegistryProject,
+    compiled: &CompiledProject,
+    policy: WorkbookValidationPolicy,
+) -> Result<WorkbookValidation> {
     let environment = loaded
         .environment
         .as_ref()
@@ -136,7 +170,10 @@ fn validate_project_workbook_inputs(
         .filter(|(_, binding)| matches!(binding.provider, RecordProvider::Xlsx { .. }))
         .collect::<Vec<_>>();
     if workbook_bindings.is_empty() {
-        return Ok(loaded.artifact_inputs.clone());
+        return Ok(WorkbookValidation {
+            inputs: loaded.artifact_inputs.clone(),
+            content_invalid_paths: Vec::new(),
+        });
     }
 
     let relay_config = compiled
@@ -188,16 +225,37 @@ fn validate_project_workbook_inputs(
         .cloned()
         .map(|input| (input.path.as_str().to_string(), input))
         .collect::<BTreeMap<_, _>>();
-    for (relative, (project_file, resources)) in workbooks {
-        let bytes = read_project_workbook(&loaded.root, &project_file, byte_limit)?;
+    let mut content_invalid_paths = Vec::new();
+    'workbooks: for (relative, (project_file, resources)) in workbooks {
+        let path = loaded.root.join(&project_file);
+        let bytes = match read_project_workbook(&loaded.root, &project_file, byte_limit) {
+            Ok(bytes) => bytes,
+            Err(error) => match policy {
+                WorkbookValidationPolicy::Reject => return Err(error),
+                WorkbookValidationPolicy::ReportInvalid => {
+                    // Missing, unreadable, unsafe, or unbounded files are owned by the
+                    // preflight runtime-file posture report. Content validation only
+                    // overrides files that were safely read but failed Relay validation.
+                    continue;
+                }
+            },
+        };
         for resource in resources {
-            runtime
+            let validation = runtime
                 .block_on(registry_relay::ingest::validate_xlsx_source_bytes(
                     &relay, &resource, &bytes,
-                ))
-                .map_err(|error| {
-                    anyhow!("workbook validation failed ({})", error.code())
-                })?;
+                ));
+            if let Err(error) = validation {
+                match policy {
+                    WorkbookValidationPolicy::Reject => {
+                        return Err(anyhow!("workbook validation failed ({})", error.code()));
+                    }
+                    WorkbookValidationPolicy::ReportInvalid => {
+                        content_invalid_paths.push(path);
+                        continue 'workbooks;
+                    }
+                }
+            }
         }
         let input = ArtifactInputDigest {
             path: ProjectRelativePath::new(relative.clone())
@@ -210,7 +268,12 @@ fn validate_project_workbook_inputs(
             bail!("workbook source path overlaps an authored project input");
         }
     }
-    Ok(inputs.into_values().collect())
+    content_invalid_paths.sort();
+    content_invalid_paths.dedup();
+    Ok(WorkbookValidation {
+        inputs: inputs.into_values().collect(),
+        content_invalid_paths,
+    })
 }
 
 fn read_project_workbook(
@@ -226,11 +289,45 @@ fn read_project_workbook(
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > byte_limit {
         bail!("workbook source input is missing, unreadable, or exceeds the Relay byte limit");
     }
+    #[cfg(unix)]
+    let file = {
+        use rustix::fs::{Mode, OFlags};
+        use std::os::unix::fs::MetadataExt as _;
+
+        let descriptor = rustix::fs::open(
+            &path,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .map_err(|_| anyhow!("workbook source input is missing or unreadable"))?;
+        let file = fs::File::from(descriptor);
+        let opened = file
+            .metadata()
+            .map_err(|_| anyhow!("workbook source input is missing or unreadable"))?;
+        if !opened.is_file()
+            || opened.len() > byte_limit
+            || metadata.dev() != opened.dev()
+            || metadata.ino() != opened.ino()
+        {
+            bail!("workbook source input changed or is not a bounded regular file");
+        }
+        file
+    };
+    #[cfg(not(unix))]
+    let file = {
+        let file = fs::File::open(&path)
+            .map_err(|_| anyhow!("workbook source input is missing or unreadable"))?;
+        let opened = file
+            .metadata()
+            .map_err(|_| anyhow!("workbook source input is missing or unreadable"))?;
+        if !opened.is_file() || opened.len() > byte_limit {
+            bail!("workbook source input is not a bounded regular file");
+        }
+        file
+    };
     let read_limit = byte_limit
         .checked_add(1)
         .ok_or_else(|| anyhow!("workbook source byte limit is invalid"))?;
-    let file = fs::File::open(&path)
-        .map_err(|_| anyhow!("workbook source input is missing or unreadable"))?;
     let mut bytes = Vec::with_capacity(
         usize::try_from(metadata.len())
             .map_err(|_| anyhow!("workbook source input exceeds the Relay byte limit"))?,
@@ -2217,6 +2314,48 @@ mod runtime_path_tests {
                 "unexpectedly accepted {value}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod workbook_input_security_tests {
+    use super::*;
+
+    #[test]
+    fn workbook_reader_accepts_only_the_opened_bounded_regular_file() {
+        let root = tempfile::tempdir().expect("temporary project");
+        let workbook = root.path().join("data/workbook.xlsx");
+        fs::create_dir_all(workbook.parent().expect("workbook parent"))
+            .expect("workbook directory");
+        fs::write(&workbook, b"exact workbook bytes").expect("workbook writes");
+
+        assert_eq!(
+            read_project_workbook(root.path(), Path::new("data/workbook.xlsx"), 1024)
+                .expect("regular workbook reads"),
+            b"exact workbook bytes"
+        );
+        assert!(
+            read_project_workbook(root.path(), Path::new("data/workbook.xlsx"), 4).is_err(),
+            "opened file metadata must enforce the byte ceiling"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workbook_reader_rejects_a_direct_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("temporary project");
+        let data = root.path().join("data");
+        fs::create_dir_all(&data).expect("workbook directory");
+        let target = data.join("target.xlsx");
+        fs::write(&target, b"target workbook").expect("target writes");
+        symlink(&target, data.join("workbook.xlsx")).expect("workbook symlink");
+
+        assert!(
+            read_project_workbook(root.path(), Path::new("data/workbook.xlsx"), 1024).is_err(),
+            "O_NOFOLLOW boundary must reject a direct workbook symlink"
+        );
     }
 }
 

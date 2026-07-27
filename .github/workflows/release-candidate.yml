@@ -919,8 +919,23 @@ jobs:
         run: |
           set -euo pipefail
           cp -R inputs/build-a/dist/bin dist/candidate/dist/bin
-          cp inputs/macos-arm64/dist/bin/* dist/candidate/dist/bin/
-          cp inputs/linux-arm64/dist/bin/* dist/candidate/dist/bin/
+          for asset in macos-arm64 linux-arm64; do
+            binary="registryctl-${{ needs.validate.outputs.tag }}-${asset}"
+            source="inputs/${asset}/dist/bin/${binary}"
+            actual="$(
+              find "inputs/${asset}/dist/bin" -maxdepth 1 -type f -printf '%f\n' \
+                | sort
+            )"
+            if [[ "${actual}" != "${binary}" ]]; then
+              echo "Native ${asset} binary inventory is not exact" >&2
+              exit 1
+            fi
+            cp "${source}" "dist/candidate/dist/bin/${binary}"
+            if ! cmp -- "${source}" "dist/candidate/dist/bin/${binary}"; then
+              echo "Sealed ${asset} payload bytes do not match the native-runner artifact" >&2
+              exit 1
+            fi
+          done
           for name in registry-notary registry-relay; do
             staging="$(cat "dist/candidate/dist/images/${name}.digest")"
             digest="${staging##*@}"

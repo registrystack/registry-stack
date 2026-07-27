@@ -6,6 +6,7 @@
 //! yielded. `IngestPlan` enforces the max-file-bytes guard before
 //! calling `decode`; this module does not enforce it.
 
+use std::collections::HashSet;
 use std::io::Cursor;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -19,7 +20,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit}
 use datafusion::arrow::record_batch::RecordBatch;
 use futures::stream;
 use time::format_description::well_known::Rfc3339;
-use time::OffsetDateTime;
+use time::{Date, Month, OffsetDateTime};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::config::FieldType;
@@ -184,6 +185,7 @@ fn decode_xlsx(bytes: Vec<u8>, hints: FormatHints) -> Result<DecodedStream, Form
     // Build column name list from the header row.
     let col_names: Vec<String> = {
         let mut names = Vec::new();
+        let mut seen = HashSet::new();
         for col in window_col_start..=window_col_end {
             let cell = full_range
                 .get((header_abs_row as usize, col as usize))
@@ -198,6 +200,11 @@ fn decode_xlsx(bytes: Vec<u8>, hints: FormatHints) -> Result<DecodedStream, Form
                 }
                 _ => format!("c{}", col - window_col_start),
             };
+            if !seen.insert(name.clone()) {
+                return Err(FormatError::Parse(
+                    "XLSX header names must be unique".to_string(),
+                ));
+            }
             names.push(name);
         }
         names
@@ -455,27 +462,12 @@ fn parse_date_string_to_days(s: &str) -> Option<i32> {
 
 /// Convert year/month/day to days since UNIX epoch (1970-01-01), i32 (Arrow Date32).
 fn ymd_to_unix_days(year: i32, month: u32, day: u32) -> Option<i32> {
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-    // Days from a proleptic Gregorian year start.
-    let days_before_year = |y: i64| -> i64 {
-        let y = y - 1;
-        365 * y + y / 4 - y / 100 + y / 400
-    };
-    let is_leap = |y: i32| -> bool { (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 };
-    let days_in_months: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut doy = 0u32;
-    for m in 0..(month - 1) {
-        doy += days_in_months[m as usize];
-    }
-    if month > 2 && is_leap(year) {
-        doy += 1;
-    }
-    doy += day;
-
-    let unix_days = days_before_year(year as i64) + doy as i64 - days_before_year(1970) - 1;
-    i32::try_from(unix_days).ok()
+    let month = Month::try_from(u8::try_from(month).ok()?).ok()?;
+    let day = u8::try_from(day).ok()?;
+    let date = Date::from_calendar_date(year, month, day).ok()?;
+    let unix_epoch =
+        Date::from_calendar_date(1970, Month::January, 1).expect("UNIX epoch is a valid date");
+    date.to_julian_day().checked_sub(unix_epoch.to_julian_day())
 }
 
 fn build_timestamp_millis_col(col_idx: usize, col_data: &[&Data]) -> Result<ArrayRef, FormatError> {

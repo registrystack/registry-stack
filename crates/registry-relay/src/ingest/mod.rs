@@ -43,7 +43,7 @@ use crate::format::{Format, FormatHints, FormatRegistry};
 use crate::ingest::cache::CacheLayout;
 use crate::ingest::declared_schema::DeclaredSchema;
 use crate::ingest::refresh::{run_refresh_loop, RefreshPolicy};
-use crate::ingest::validation::validate;
+use crate::ingest::validation::{validate, validate_with_redacted_diagnostics};
 use crate::source::Source;
 use crate::source::{OpenedSource, SourceDescriptor, SourceError, SourceFuture, SourceMetadata};
 use crate::source_backend::{SnapshotMaterializationCandidate, SnapshotMaterializationCoordinator};
@@ -168,7 +168,7 @@ pub async fn validate_xlsx_source_bytes(
         serde_json::from_str("\"project_workbook\"").expect("static dataset id is valid");
     let resource_id: ResourceId =
         serde_json::from_str("\"authored_xlsx\"").expect("static resource id is valid");
-    let projection = validate(
+    let projection = validate_with_redacted_diagnostics(
         &dataset_id,
         &resource_id,
         &declared,

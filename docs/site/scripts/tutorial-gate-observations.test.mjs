@@ -104,6 +104,22 @@ test('spreadsheet gates are progressive and explain each observed outcome', () =
     spreadsheetTutorial,
     /`registryctl start`, Relay parses the\s+workbook again during its initial load/,
   );
+  assert.match(
+    spreadsheetTutorial,
+    /bash checks\/validate-negative-workbooks\.sh[\s\S]*duplicate primary key:[\s\S]*ingest\.schema_mismatch[\s\S]*formula source:[\s\S]*ingest\.source_unreadable[\s\S]*source project: unchanged/,
+  );
+  assert.match(
+    spreadsheetTutorial,
+    /Exact primary-key lookup cannot return an ambiguous multiple-row result[\s\S]*duplicate therefore blocks activation/,
+  );
+  assert.match(
+    spreadsheetTutorial,
+    /\| Match \|[\s\S]*\| No match \|[\s\S]*\| Denial \|[\s\S]*\| Ambiguous source \|[\s\S]*\| Unreadable source \|/,
+  );
+  assert.doesNotMatch(
+    spreadsheetTutorial,
+    /Diagnostics name the safe file, field, row class/,
+  );
 });
 
 test('claim gates are progressive and distinguish offline authoring from runtime readiness', () => {

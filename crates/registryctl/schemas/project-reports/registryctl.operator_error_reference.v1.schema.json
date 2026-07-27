@@ -11,8 +11,8 @@
     },
     "entries": {
       "type": "array",
-      "minItems": 60,
-      "maxItems": 60,
+      "minItems": 61,
+      "maxItems": 61,
       "uniqueItems": true,
       "items": {
         "allOf": [
@@ -203,6 +203,7 @@
               "enum": [
                 "registryctl.preflight.product_validator_not_checked",
                 "registryctl.preflight.report_capacity_exceeded",
+                "registryctl.preflight.runtime_file_content_invalid",
                 "registryctl.preflight.runtime_file_empty",
                 "registryctl.preflight.runtime_file_missing",
                 "registryctl.preflight.runtime_file_not_checked",

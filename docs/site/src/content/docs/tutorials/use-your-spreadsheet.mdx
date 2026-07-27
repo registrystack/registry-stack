@@ -244,6 +244,29 @@ This gate validates the project's maintained synthetic fixtures. The
 records-only spreadsheet starter has no source-integration fixtures, so this
 expected result does not validate workbook rows.
 
+### Run the maintained source failures
+
+```sh
+bash checks/validate-negative-workbooks.sh
+```
+
+The command reports:
+
+```text
+spreadsheet negative checks: PASS
+  duplicate primary key: registryctl.preflight.runtime_file_content_invalid; ingest.schema_mismatch
+  formula source: registryctl.preflight.runtime_file_content_invalid; ingest.source_unreadable
+  source project: unchanged
+```
+
+This release-shipped check creates disposable canonical projects, replaces
+only their synthetic workbooks, and runs `preflight` and `check`.
+It proves that a duplicate primary key and a formula-bearing source fail
+through Registry Relay's production XLSX validation without changing your
+project or retaining workbook values.
+The negative workbooks test the maintained starter contract, not the column
+names or business rules in your reviewed workbook.
+
 ### Check runtime prerequisites
 
 ```sh
@@ -336,12 +359,8 @@ The validation rejects:
 - a project, environment, or generated product input that fails its product
   contract.
 
-Diagnostics name the safe file, field, row class, and error category needed to
+Diagnostics name the safe project file and stable error category needed to
 correct the authored input. They do not include cell values.
-
-Exact primary-key lookup makes a multiple-row result inapplicable to this
-journey. A duplicate key is treated as an invalid ambiguous source and blocks
-activation instead of returning an arbitrary row.
 
 ## Review generated product input
 
@@ -380,6 +399,21 @@ The maintained checks cover public readiness, anonymous denial, invalid-key
 denial, one principal-bound match, and one safe no-match. Registryctl uses the
 same compiled Relay input reviewed above. It mounts both the compiled config
 and workbook read-only and publishes only `127.0.0.1:4242`.
+
+Together, the maintained commands cover this records-specific outcome matrix:
+
+| Outcome | Maintained check | Safe result |
+| --- | --- | --- |
+| Match | `registryctl smoke` | One principal-bound row with the exact reviewed projection |
+| No match | `registryctl smoke` | An empty result for the maintained absent principal |
+| Denial | `registryctl smoke` | Anonymous and invalid-key requests return `401` |
+| Ambiguous source | `bash checks/validate-negative-workbooks.sh` | A duplicate primary key fails validation before a listener starts |
+| Unreadable source | `bash checks/validate-negative-workbooks.sh` | A formula-bearing worksheet fails with a stable value-free category |
+
+Exact primary-key lookup cannot return an ambiguous multiple-row result in
+this journey. Registry Relay requires the primary key to be unique across the
+complete selected sheet. A duplicate therefore blocks activation instead of
+allowing the exact lookup to choose or return multiple rows.
 
 You can repeat the manual denied and allowed requests from
 [the first API tutorial](../publish-spreadsheet-secured-registry-api/#make-one-denied-request).

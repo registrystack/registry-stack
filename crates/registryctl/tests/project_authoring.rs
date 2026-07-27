@@ -2507,6 +2507,12 @@ fn spreadsheet_commands_reject_invalid_complete_workbooks_without_writing_or_rep
     ] {
         std::fs::copy(relay_fixtures.join(fixture), &workbook)
             .expect("invalid workbook fixture copies");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&workbook, std::fs::Permissions::from_mode(0o600))
+                .expect("invalid workbook fixture keeps source-owned permissions");
+        }
         let before_commands = directory_closure(&project);
         let check = check_registry_project(&ProjectCheckOptions {
             project_directory: project.clone(),
@@ -2526,11 +2532,25 @@ fn spreadsheet_commands_reject_invalid_complete_workbooks_without_writing_or_rep
             project_directory: project.clone(),
             environment: "local".to_string(),
         })
-        .expect_err("invalid workbook must fail preflight");
-        assert_eq!(
-            format!("{preflight:#}"),
-            format!("workbook validation failed ({expected_code})")
+        .expect("invalid workbook must produce a closed preflight report");
+        assert_eq!(preflight.status, registryctl::PreflightStatus::NotReady);
+        assert!(
+            preflight.runtime_files.iter().any(|file| {
+                file.kind == registryctl::PreflightRuntimeFileKind::EntityXlsx
+                    && file.state == registryctl::PreflightCheckState::ContentInvalid
+            }),
+            "{fixture}: {:?}",
+            preflight.runtime_files
         );
+        assert!(preflight.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == registryctl::PreflightDiagnosticCode::RuntimeFileContentInvalid
+        }));
+        assert!(!preflight.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == registryctl::PreflightDiagnosticCode::RuntimeFileNotRegular
+        }));
+        let serialized = serde_json::to_string(&preflight).expect("preflight report serializes");
+        assert!(!serialized.contains(expected_code));
+        assert!(!serialized.contains(workbook.to_str().expect("workbook path is UTF-8")));
         assert_eq!(before_commands, directory_closure(&project));
 
         let build = build_registry_project(&build_options)
@@ -2542,7 +2562,8 @@ fn spreadsheet_commands_reject_invalid_complete_workbooks_without_writing_or_rep
         assert_eq!(valid_output, directory_closure(&output));
     }
 
-    std::fs::write(&workbook, b"not an XLSX workbook").expect("corrupt workbook writes");
+    const CORRUPT_WORKBOOK_SENTINEL: &str = "COUNTRY_PRIVATE_WORKBOOK_CONTENT_SENTINEL";
+    std::fs::write(&workbook, CORRUPT_WORKBOOK_SENTINEL).expect("corrupt workbook writes");
     for error in [
         check_registry_project(&ProjectCheckOptions {
             project_directory: project.clone(),
@@ -2552,11 +2573,6 @@ fn spreadsheet_commands_reject_invalid_complete_workbooks_without_writing_or_rep
             anchor: None,
         })
         .expect_err("corrupt workbook must fail check"),
-        preflight_registry_project(&ProjectPreflightOptions {
-            project_directory: project.clone(),
-            environment: "local".to_string(),
-        })
-        .expect_err("corrupt workbook must fail preflight"),
         build_registry_project(&build_options).expect_err("corrupt workbook must fail build"),
     ] {
         assert_eq!(
@@ -2564,6 +2580,29 @@ fn spreadsheet_commands_reject_invalid_complete_workbooks_without_writing_or_rep
             "workbook validation failed (ingest.source_unreadable)"
         );
     }
+    let corrupt_preflight = preflight_registry_project(&ProjectPreflightOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+    })
+    .expect("corrupt workbook must produce a closed preflight report");
+    assert_eq!(
+        corrupt_preflight.status,
+        registryctl::PreflightStatus::NotReady
+    );
+    assert!(corrupt_preflight.runtime_files.iter().any(|file| {
+        file.kind == registryctl::PreflightRuntimeFileKind::EntityXlsx
+            && file.state == registryctl::PreflightCheckState::ContentInvalid
+    }));
+    assert!(corrupt_preflight.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == registryctl::PreflightDiagnosticCode::RuntimeFileContentInvalid
+    }));
+    assert!(!corrupt_preflight.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == registryctl::PreflightDiagnosticCode::RuntimeFileNotRegular
+    }));
+    let serialized =
+        serde_json::to_string(&corrupt_preflight).expect("preflight report serializes");
+    assert!(!serialized.contains(CORRUPT_WORKBOOK_SENTINEL));
+    assert!(!serialized.contains(workbook.to_str().expect("workbook path is UTF-8")));
     assert_eq!(valid_output, directory_closure(&output));
 
     std::fs::remove_file(&workbook).expect("workbook removes");
@@ -2576,11 +2615,6 @@ fn spreadsheet_commands_reject_invalid_complete_workbooks_without_writing_or_rep
             anchor: None,
         })
         .expect_err("missing workbook must fail check"),
-        preflight_registry_project(&ProjectPreflightOptions {
-            project_directory: project.clone(),
-            environment: "local".to_string(),
-        })
-        .expect_err("missing workbook must fail preflight"),
         build_registry_project(&build_options).expect_err("missing workbook must fail build"),
     ] {
         assert_eq!(
@@ -2588,6 +2622,19 @@ fn spreadsheet_commands_reject_invalid_complete_workbooks_without_writing_or_rep
             "workbook source input is missing or unreadable"
         );
     }
+    let missing_preflight = preflight_registry_project(&ProjectPreflightOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+    })
+    .expect("missing workbook must produce a closed preflight report");
+    assert_eq!(
+        missing_preflight.status,
+        registryctl::PreflightStatus::NotReady
+    );
+    assert!(missing_preflight.runtime_files.iter().any(|file| {
+        file.kind == registryctl::PreflightRuntimeFileKind::EntityXlsx
+            && file.state == registryctl::PreflightCheckState::Missing
+    }));
     assert_eq!(valid_output, directory_closure(&output));
 }
 

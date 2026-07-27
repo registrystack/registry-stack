@@ -12,7 +12,7 @@ mod support;
 use std::fs;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use datafusion::arrow::array::{
     Array, BooleanArray, Date32Array, Float64Array, Int64Array, StringArray,
@@ -28,6 +28,33 @@ use registry_relay::ingest::declared_schema::{DeclaredField, DeclaredSchema};
 use registry_relay::ingest::validate_xlsx_source_bytes;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+#[derive(Clone, Default)]
+struct SharedLog(Arc<Mutex<Vec<u8>>>);
+
+struct SharedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedLog {
+    type Writer = SharedLogWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SharedLogWriter(Arc::clone(&self.0))
+    }
+}
+
+impl std::io::Write for SharedLogWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("log buffer lock")
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 fn fixture(name: &str) -> Pin<Box<dyn AsyncRead + Send + Unpin>> {
     Box::pin(std::io::Cursor::new(fixture_bytes(name)))
@@ -542,23 +569,32 @@ fn build_uncached_formula_xlsx() -> Vec<u8> {
 }
 
 fn build_strict_validation_xlsx(duplicate_primary_key: bool, extra_column: bool) -> Vec<u8> {
+    build_strict_validation_xlsx_with_extra(duplicate_primary_key, extra_column.then_some("extra"))
+}
+
+fn build_strict_validation_xlsx_with_extra(
+    duplicate_primary_key: bool,
+    extra_header_name: Option<&str>,
+) -> Vec<u8> {
     let second_id = if duplicate_primary_key { "1" } else { "2" };
-    let extra_header = if extra_column {
-        r#"<c r="C1" t="inlineStr"><is><t>extra</t></is></c>"#
-    } else {
-        ""
-    };
-    let extra_first = if extra_column {
+    let extra_header = extra_header_name
+        .map(|name| format!(r#"<c r="C1" t="inlineStr"><is><t>{name}</t></is></c>"#))
+        .unwrap_or_default();
+    let extra_first = if extra_header_name.is_some() {
         r#"<c r="C2" t="inlineStr"><is><t>unexpected</t></is></c>"#
     } else {
         ""
     };
-    let extra_second = if extra_column {
+    let extra_second = if extra_header_name.is_some() {
         r#"<c r="C3" t="inlineStr"><is><t>unexpected</t></is></c>"#
     } else {
         ""
     };
-    let dimension = if extra_column { "A1:C3" } else { "A1:B3" };
+    let dimension = if extra_header_name.is_some() {
+        "A1:C3"
+    } else {
+        "A1:B3"
+    };
     build_minimal_xlsx(&format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -582,6 +618,81 @@ fn build_strict_validation_xlsx(duplicate_primary_key: bool, extra_column: bool)
   </sheetData>
 </worksheet>"#
     ))
+}
+
+fn build_blank_primary_key_xlsx() -> Vec<u8> {
+    build_minimal_xlsx(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:B2"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>id</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>name</t></is></c>
+    </row>
+    <row r="2">
+      <c r="B2" t="inlineStr"><is><t>Alice</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>"#,
+    )
+}
+
+fn build_duplicate_header_xlsx(header: &str) -> Vec<u8> {
+    build_minimal_xlsx(&format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:B2"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>{header}</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>{header}</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="inlineStr"><is><t>left</t></is></c>
+      <c r="B2" t="inlineStr"><is><t>right</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>"#
+    ))
+}
+
+fn build_string_primary_key_xlsx(primary_key: &str) -> Vec<u8> {
+    build_minimal_xlsx(&format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:B2"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>id</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>name</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="inlineStr"><is><t xml:space="preserve">{primary_key}</t></is></c>
+      <c r="B2" t="inlineStr"><is><t>Alice</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>"#
+    ))
+}
+
+fn build_invalid_calendar_date_xlsx() -> Vec<u8> {
+    build_minimal_xlsx(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:B2"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="inlineStr"><is><t>id</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>reported_on</t></is></c>
+    </row>
+    <row r="2">
+      <c r="A2"><v>1</v></c>
+      <c r="B2" t="inlineStr"><is><t>2024-02-31</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>"#,
+    )
 }
 
 fn strict_validation_schema(fields: &[(&str, FieldType)]) -> SchemaConfig {
@@ -677,6 +788,118 @@ async fn project_workbook_validation_rejects_corrupt_formula_duplicate_and_extra
         .await
         .is_err(),
         "strict extra column must fail"
+    );
+}
+
+#[tokio::test]
+async fn project_workbook_validation_rejects_one_null_primary_key() {
+    let mut schema =
+        strict_validation_schema(&[("id", FieldType::Integer), ("name", FieldType::String)]);
+    schema.fields[0].nullable = true;
+
+    assert!(
+        validate_temporary_project_workbook(&build_blank_primary_key_xlsx(), &schema, Some("id"))
+            .await
+            .is_err(),
+        "a primary key cannot be null even when its field is declared nullable"
+    );
+}
+
+#[tokio::test]
+async fn xlsx_decode_rejects_duplicate_header_names_without_echoing_them() {
+    const SENTINEL: &str = "country-sensitive-duplicate-header";
+    let result = XlsxFormat::new()
+        .decode(
+            Box::pin(std::io::Cursor::new(build_duplicate_header_xlsx(SENTINEL))),
+            hints_default(),
+        )
+        .await;
+
+    match result {
+        Err(FormatError::Parse(message)) => {
+            assert!(message.contains("header names must be unique"), "{message}");
+            assert!(!message.contains(SENTINEL), "{message}");
+        }
+        Err(other) => panic!("expected duplicate-header parse error, got {other:?}"),
+        Ok(_) => panic!("duplicate XLSX header names must fail"),
+    }
+}
+
+#[tokio::test]
+async fn project_workbook_validation_rejects_whitespace_only_string_primary_key() {
+    let schema =
+        strict_validation_schema(&[("id", FieldType::String), ("name", FieldType::String)]);
+
+    assert!(
+        validate_temporary_project_workbook(
+            &build_string_primary_key_xlsx(" \t "),
+            &schema,
+            Some("id"),
+        )
+        .await
+        .is_err(),
+        "a string primary key must contain non-whitespace content"
+    );
+}
+
+#[tokio::test]
+async fn project_workbook_validation_preserves_non_empty_whitespace_bearing_primary_key() {
+    let schema =
+        strict_validation_schema(&[("id", FieldType::String), ("name", FieldType::String)]);
+
+    validate_temporary_project_workbook(
+        &build_string_primary_key_xlsx("  country-1  "),
+        &schema,
+        Some("id"),
+    )
+    .await
+    .expect("non-empty whitespace-bearing primary key remains valid");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn project_workbook_validation_redacts_sensitive_header_names_from_logs() {
+    const SENTINEL: &str = "country-sensitive-header-sentinel";
+    let schema =
+        strict_validation_schema(&[("id", FieldType::Integer), ("name", FieldType::String)]);
+    let logs = SharedLog::default();
+    let subscriber = tracing_subscriber::fmt()
+        .compact()
+        .with_ansi(false)
+        .with_target(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(logs.clone())
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+
+    let result = validate_temporary_project_workbook(
+        &build_strict_validation_xlsx_with_extra(false, Some(SENTINEL)),
+        &schema,
+        Some("id"),
+    )
+    .await;
+    drop(guard);
+    let rendered = String::from_utf8(logs.0.lock().expect("log buffer lock").clone())
+        .expect("captured logs are UTF-8");
+
+    assert!(result.is_err(), "strict extra header must fail");
+    assert!(rendered.contains("redacted_sensitive_schema"), "{rendered}");
+    assert!(!rendered.contains(SENTINEL), "{rendered}");
+}
+
+#[tokio::test]
+async fn project_workbook_validation_rejects_invalid_calendar_dates() {
+    let schema =
+        strict_validation_schema(&[("id", FieldType::Integer), ("reported_on", FieldType::Date)]);
+
+    assert!(
+        validate_temporary_project_workbook(
+            &build_invalid_calendar_date_xlsx(),
+            &schema,
+            Some("id"),
+        )
+        .await
+        .is_err(),
+        "invalid calendar dates must not be normalized into valid Date32 values"
     );
 }
 

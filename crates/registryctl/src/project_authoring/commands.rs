@@ -1814,12 +1814,14 @@ pub fn preflight_registry_project(
     )?;
     let compiled = compile_project(&loaded, None)?;
     validate_generated_product_configs(&compiled)?;
-    validate_project_workbook_inputs(&loaded, &compiled)?;
     let environment = loaded
         .environment
         .as_ref()
         .ok_or_else(|| anyhow!("preflight requires an explicit environment"))?;
     let mut input = offline_preflight_input(&loaded, environment, &options.environment)?;
+    for path in invalid_project_workbook_inputs_for_preflight(&loaded, &compiled)? {
+        input.mark_runtime_file_invalid(path, PreflightRuntimeFileKind::EntityXlsx)?;
+    }
     let (requires_relay, requires_notary) = project_product_topology(&loaded.project);
     if requires_relay {
         input.require_product(PreflightProduct::RegistryRelay);

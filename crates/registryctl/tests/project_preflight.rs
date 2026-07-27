@@ -209,6 +209,70 @@ fn secret_missing_whitespace_and_present_states_never_expose_names_or_values() {
     assert_eq!(report.status, PreflightStatus::NotReady);
 }
 
+#[cfg(unix)]
+#[test]
+fn content_validation_state_is_typed_value_free_and_does_not_mask_filesystem_errors() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    const CONTENT_SENTINEL: &str = "COUNTRY_PRIVATE_CONTENT_VALIDATION_SENTINEL";
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let workbook = directory.path().join("country.xlsx");
+    fs::write(&workbook, CONTENT_SENTINEL).expect("workbook writes");
+    fs::set_permissions(&workbook, fs::Permissions::from_mode(0o600))
+        .expect("private workbook permissions");
+    let field = address(
+        "environments/production.yaml",
+        "/entities/projects/provider/project_file",
+    );
+
+    let mut content_invalid = validated_input();
+    content_invalid
+        .add_runtime_file(
+            workbook.clone(),
+            PreflightRuntimeFileKind::EntityXlsx,
+            field.clone(),
+        )
+        .expect("workbook requirement records");
+    content_invalid
+        .mark_runtime_file_invalid(workbook.clone(), PreflightRuntimeFileKind::EntityXlsx)
+        .expect("content failure records");
+    let report = run_with(content_invalid, &BTreeMap::new());
+    assert_eq!(
+        report.runtime_files[0].state,
+        PreflightCheckState::ContentInvalid
+    );
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == PreflightDiagnosticCode::RuntimeFileContentInvalid
+            && diagnostic.addresses == [field.clone()]
+    }));
+    let serialized = serde_json::to_string(&report).expect("report serializes");
+    assert!(!serialized.contains(CONTENT_SENTINEL));
+    assert!(!serialized.contains(workbook.to_str().expect("workbook path is UTF-8")));
+    assert_schema_valid(&serde_json::to_value(&report).expect("report is JSON"));
+
+    fs::remove_file(&workbook).expect("workbook removes");
+    let mut missing = validated_input();
+    missing
+        .add_runtime_file(
+            workbook.clone(),
+            PreflightRuntimeFileKind::EntityXlsx,
+            field,
+        )
+        .expect("missing workbook requirement records");
+    missing
+        .mark_runtime_file_invalid(workbook, PreflightRuntimeFileKind::EntityXlsx)
+        .expect("stale content failure records");
+    let report = run_with(missing, &BTreeMap::new());
+    assert_eq!(report.runtime_files[0].state, PreflightCheckState::Missing);
+    assert!(report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| { diagnostic.code == PreflightDiagnosticCode::RuntimeFileMissing }));
+    assert!(!report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == PreflightDiagnosticCode::RuntimeFileContentInvalid
+    }));
+}
+
 #[test]
 fn duplicate_secret_reference_is_looked_up_once_and_keeps_sorted_multi_addresses() {
     const DUPLICATE_NAME: &str = "PREFLIGHT_DUPLICATE_REFERENCE";
@@ -737,44 +801,37 @@ fn command_adapter_checks_csv_xlsx_and_parquet_entity_provider_paths() {
             project_directory: project,
             environment: "local".to_string(),
         };
-        if provider_type == "xlsx" {
-            let error = registryctl::preflight_registry_project(&options)
-                .expect_err("missing project workbook fails before preflight reporting");
-            assert_eq!(
-                format!("{error:#}"),
-                "workbook source input is missing or unreadable"
-            );
-        } else {
-            let missing = registryctl::preflight_registry_project(&options)
-                .expect("missing preflight reports");
-            assert_eq!(missing.status, registryctl::PreflightStatus::NotReady);
-            assert_eq!(missing.runtime_files.len(), 1);
-            assert_eq!(missing.runtime_files[0].kind, kind);
-            assert_eq!(
-                missing.runtime_files[0].generation,
-                registryctl::PreflightGenerationState::Declared
-            );
-            assert_eq!(
-                missing.runtime_files[0].state,
-                registryctl::PreflightCheckState::Missing
-            );
-            assert_eq!(missing.runtime_files[0].addresses.len(), 1);
-            assert_eq!(
-                missing.runtime_files[0].addresses[0].file.as_str(),
-                "environments/local.yaml"
-            );
-            assert_eq!(
-                missing.runtime_files[0].addresses[0].pointer.as_str(),
+        let missing =
+            registryctl::preflight_registry_project(&options).expect("missing preflight reports");
+        assert_eq!(missing.status, registryctl::PreflightStatus::NotReady);
+        assert_eq!(missing.runtime_files.len(), 1);
+        assert_eq!(missing.runtime_files[0].kind, kind);
+        assert_eq!(
+            missing.runtime_files[0].generation,
+            registryctl::PreflightGenerationState::Declared
+        );
+        assert_eq!(
+            missing.runtime_files[0].state,
+            registryctl::PreflightCheckState::Missing
+        );
+        assert_eq!(missing.runtime_files[0].addresses.len(), 1);
+        assert_eq!(
+            missing.runtime_files[0].addresses[0].file.as_str(),
+            "environments/local.yaml"
+        );
+        assert_eq!(
+            missing.runtime_files[0].addresses[0].pointer.as_str(),
+            if provider_type == "xlsx" {
+                "/entities/people/provider/project_file"
+            } else {
                 "/entities/people/provider/path"
-            );
-            assert!(missing.diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == registryctl::PreflightDiagnosticCode::RuntimeFileMissing
-                    && diagnostic.addresses == missing.runtime_files[0].addresses
-            }));
-            assert_schema_valid(
-                &serde_json::to_value(&missing).expect("missing report serializes"),
-            );
-        }
+            }
+        );
+        assert!(missing.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == registryctl::PreflightDiagnosticCode::RuntimeFileMissing
+                && diagnostic.addresses == missing.runtime_files[0].addresses
+        }));
+        assert_schema_valid(&serde_json::to_value(&missing).expect("missing report serializes"));
 
         if provider_type == "xlsx" {
             fs::copy(
@@ -909,6 +966,7 @@ fn project_workbook_is_validated_without_preflight_writes_and_digest_bound_on_bu
 
 #[test]
 fn corrupt_project_workbook_fails_preflight_and_build_without_output() {
+    const CORRUPT_WORKBOOK_SENTINEL: &str = "COUNTRY_PRIVATE_WORKBOOK_CONTENT_SENTINEL";
     let directory = tempfile::tempdir().expect("temporary directory");
     let project = directory.path().join("spreadsheet-project");
     copy_tree(
@@ -917,16 +975,38 @@ fn corrupt_project_workbook_fails_preflight_and_build_without_output() {
     );
     fs::write(
         project.join("data/public_works_projects.xlsx"),
-        b"not an xlsx workbook",
+        CORRUPT_WORKBOOK_SENTINEL,
     )
     .expect("corrupt workbook writes");
+    #[cfg(unix)]
+    fs::set_permissions(project.join("data/public_works_projects.xlsx"), {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::Permissions::from_mode(0o600)
+    })
+    .expect("private workbook permissions");
     let before = directory_snapshot(&project);
 
-    registryctl::preflight_registry_project(&registryctl::ProjectPreflightOptions {
-        project_directory: project.clone(),
-        environment: "local".to_string(),
-    })
-    .expect_err("corrupt workbook must fail preflight");
+    let preflight =
+        registryctl::preflight_registry_project(&registryctl::ProjectPreflightOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+        })
+        .expect("corrupt workbook must produce a closed preflight report");
+    assert_eq!(preflight.status, registryctl::PreflightStatus::NotReady);
+    assert!(preflight.runtime_files.iter().any(|file| {
+        file.kind == registryctl::PreflightRuntimeFileKind::EntityXlsx
+            && file.state == registryctl::PreflightCheckState::ContentInvalid
+    }));
+    assert!(preflight.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == registryctl::PreflightDiagnosticCode::RuntimeFileContentInvalid
+    }));
+    assert!(!preflight.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == registryctl::PreflightDiagnosticCode::RuntimeFileNotRegular
+    }));
+    let serialized = serde_json::to_string(&preflight).expect("preflight report serializes");
+    assert!(!serialized.contains(CORRUPT_WORKBOOK_SENTINEL));
+    assert!(!serialized.contains(project.to_str().expect("project path is UTF-8")));
+    assert_schema_valid(&serde_json::to_value(&preflight).expect("preflight report is JSON"));
     assert_eq!(directory_snapshot(&project), before);
 
     registryctl::build_registry_project(&registryctl::ProjectBuildOptions {

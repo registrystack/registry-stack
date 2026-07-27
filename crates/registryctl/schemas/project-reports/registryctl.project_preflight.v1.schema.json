@@ -127,6 +127,7 @@
         "missing",
         "empty",
         "not_regular",
+        "content_invalid",
         "unsafe_owner",
         "unsafe_mode",
         "not_checked",
@@ -297,6 +298,7 @@
             "missing",
             "empty",
             "not_regular",
+            "content_invalid",
             "unsafe_owner",
             "unsafe_mode",
             "not_checked"
@@ -341,6 +343,7 @@
         "registryctl.preflight.secret_empty",
         "registryctl.preflight.runtime_file_missing",
         "registryctl.preflight.runtime_file_empty",
+        "registryctl.preflight.runtime_file_content_invalid",
         "registryctl.preflight.runtime_file_not_regular",
         "registryctl.preflight.runtime_file_unsafe_owner",
         "registryctl.preflight.runtime_file_unsafe_mode",
@@ -354,6 +357,7 @@
         "registryctl.preflight.product_validator_locally_available",
         "registryctl.preflight.secret_reference_available",
         "registryctl.preflight.runtime_file_bounded_regular",
+        "registryctl.preflight.runtime_file_content_valid",
         "registryctl.preflight.runtime_file_safe_owner",
         "registryctl.preflight.runtime_file_safe_mode",
         "registryctl.preflight.runtime_file_posture_supported",
@@ -369,6 +373,7 @@
         "A declared runtime file is missing.",
         "A declared runtime file is empty.",
         "A declared runtime file is not an acceptable bounded regular file.",
+        "A declared runtime file failed content validation.",
         "A declared runtime file has an unsafe owner.",
         "A declared runtime file has unsafe local access permissions.",
         "Runtime file posture could not be checked with the required local invariant.",
@@ -411,6 +416,7 @@
             "static_validation",
             "secret_availability",
             "runtime_file_posture",
+            "runtime_file_content",
             "product_capability",
             "report_boundary"
           ]

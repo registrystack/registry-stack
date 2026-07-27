@@ -44,6 +44,7 @@ pub enum PreflightCheckState {
     Missing,
     Empty,
     NotRegular,
+    ContentInvalid,
     UnsafeOwner,
     UnsafeMode,
     NotChecked,
@@ -207,6 +208,7 @@ pub enum PreflightPhase {
     StaticValidation,
     SecretAvailability,
     RuntimeFilePosture,
+    RuntimeFileContent,
     ProductCapability,
     ReportBoundary,
 }
@@ -227,6 +229,8 @@ pub enum PreflightDiagnosticCode {
     RuntimeFileEmpty,
     #[serde(rename = "registryctl.preflight.runtime_file_not_regular")]
     RuntimeFileNotRegular,
+    #[serde(rename = "registryctl.preflight.runtime_file_content_invalid")]
+    RuntimeFileContentInvalid,
     #[serde(rename = "registryctl.preflight.runtime_file_unsafe_owner")]
     RuntimeFileUnsafeOwner,
     #[serde(rename = "registryctl.preflight.runtime_file_unsafe_mode")]
@@ -247,6 +251,8 @@ pub enum PreflightRuleId {
     SecretReferenceAvailable,
     #[serde(rename = "registryctl.preflight.runtime_file_bounded_regular")]
     RuntimeFileBoundedRegular,
+    #[serde(rename = "registryctl.preflight.runtime_file_content_valid")]
+    RuntimeFileContentValid,
     #[serde(rename = "registryctl.preflight.runtime_file_safe_owner")]
     RuntimeFileSafeOwner,
     #[serde(rename = "registryctl.preflight.runtime_file_safe_mode")]
@@ -273,6 +279,8 @@ pub enum PreflightDiagnosticMessage {
     RuntimeFileEmpty,
     #[serde(rename = "A declared runtime file is not an acceptable bounded regular file.")]
     RuntimeFileNotRegular,
+    #[serde(rename = "A declared runtime file failed content validation.")]
+    RuntimeFileContentInvalid,
     #[serde(rename = "A declared runtime file has an unsafe owner.")]
     RuntimeFileUnsafeOwner,
     #[serde(rename = "A declared runtime file has unsafe local access permissions.")]
@@ -350,6 +358,14 @@ pub(crate) const PREFLIGHT_DIAGNOSTIC_DEFINITIONS: &[PreflightDiagnosticDefiniti
         ReportCapacityExceeded,
         "Reduce declared preflight inputs.",
         None
+    ),
+    preflight_diagnostic!(
+        RuntimeFileContentInvalid,
+        RuntimeFileContent,
+        RuntimeFileContentValid,
+        RuntimeFileContentInvalid,
+        "Replace the runtime file with content that satisfies its declared schema.",
+        Some("<declared-field-address>")
     ),
     preflight_diagnostic!(
         RuntimeFileEmpty,
@@ -435,16 +451,17 @@ pub(crate) const fn preflight_diagnostic_definition(
     match code {
         PreflightDiagnosticCode::ProductValidatorNotChecked => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[0],
         PreflightDiagnosticCode::ReportCapacityExceeded => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[1],
-        PreflightDiagnosticCode::RuntimeFileEmpty => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[2],
-        PreflightDiagnosticCode::RuntimeFileMissing => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[3],
-        PreflightDiagnosticCode::RuntimeFileNotChecked => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[4],
-        PreflightDiagnosticCode::RuntimeFileNotRegular => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[5],
-        PreflightDiagnosticCode::RuntimeFileUnsafeMode => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[6],
-        PreflightDiagnosticCode::RuntimeFileUnsafeOwner => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[7],
-        PreflightDiagnosticCode::SecretEmpty => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[8],
-        PreflightDiagnosticCode::SecretMissing => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[9],
+        PreflightDiagnosticCode::RuntimeFileContentInvalid => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[2],
+        PreflightDiagnosticCode::RuntimeFileEmpty => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[3],
+        PreflightDiagnosticCode::RuntimeFileMissing => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[4],
+        PreflightDiagnosticCode::RuntimeFileNotChecked => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[5],
+        PreflightDiagnosticCode::RuntimeFileNotRegular => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[6],
+        PreflightDiagnosticCode::RuntimeFileUnsafeMode => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[7],
+        PreflightDiagnosticCode::RuntimeFileUnsafeOwner => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[8],
+        PreflightDiagnosticCode::SecretEmpty => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[9],
+        PreflightDiagnosticCode::SecretMissing => &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[10],
         PreflightDiagnosticCode::StaticValidationNotChecked => {
-            &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[10]
+            &PREFLIGHT_DIAGNOSTIC_DEFINITIONS[11]
         }
     }
 }
@@ -834,6 +851,7 @@ pub(crate) struct OfflinePreflightInput {
     available_product_validators: BTreeSet<PreflightProduct>,
     secrets: Vec<SecretRequirement>,
     runtime_files: Vec<RuntimeFileRequirement>,
+    content_invalid_runtime_files: BTreeSet<(RuntimePath, PreflightRuntimeFileKind)>,
 }
 
 impl fmt::Debug for OfflinePreflightInput {
@@ -850,6 +868,10 @@ impl fmt::Debug for OfflinePreflightInput {
             )
             .field("secret_requirement_count", &self.secrets.len())
             .field("runtime_file_requirement_count", &self.runtime_files.len())
+            .field(
+                "content_invalid_runtime_file_count",
+                &self.content_invalid_runtime_files.len(),
+            )
             .finish()
     }
 }
@@ -872,6 +894,7 @@ impl OfflinePreflightInput {
             available_product_validators: BTreeSet::new(),
             secrets: Vec::new(),
             runtime_files: Vec::new(),
+            content_invalid_runtime_files: BTreeSet::new(),
         })
     }
 
@@ -923,6 +946,18 @@ impl OfflinePreflightInput {
             kind,
             address,
         });
+        Ok(())
+    }
+
+    pub(crate) fn mark_runtime_file_invalid(
+        &mut self,
+        path: impl Into<PathBuf>,
+        kind: PreflightRuntimeFileKind,
+    ) -> Result<(), PreflightInputError> {
+        // The command adapter records this only after a bounded no-follow read
+        // succeeds and the linked product validator rejects the file's content.
+        self.content_invalid_runtime_files
+            .insert((RuntimePath::new(path)?, kind));
         Ok(())
     }
 }
@@ -1017,8 +1052,11 @@ pub(crate) fn run_offline_preflight_with_secret_lookup(
     let (secret_checks, secret_truncated) =
         collect_secret_checks(input.secrets, secrets, &mut diagnostics);
     truncated |= secret_truncated;
-    let (runtime_files, runtime_truncated) =
-        collect_runtime_file_checks(input.runtime_files, &mut diagnostics);
+    let (runtime_files, runtime_truncated) = collect_runtime_file_checks(
+        input.runtime_files,
+        &input.content_invalid_runtime_files,
+        &mut diagnostics,
+    );
     truncated |= runtime_truncated;
 
     diagnostics.sort();
@@ -1151,6 +1189,7 @@ struct GroupedRuntimeFile {
 
 fn collect_runtime_file_checks(
     requirements: Vec<RuntimeFileRequirement>,
+    content_invalid_runtime_files: &BTreeSet<(RuntimePath, PreflightRuntimeFileKind)>,
     diagnostics: &mut Vec<PreflightDiagnostic>,
 ) -> (Vec<PreflightRuntimeFileCheck>, bool) {
     let mut grouped =
@@ -1179,9 +1218,16 @@ fn collect_runtime_file_checks(
     for ((path, kind), grouped) in grouped {
         let posture = kind.posture();
         let max_bytes = kind.max_bytes();
-        let state = *inspection_cache
+        let inspected = *inspection_cache
             .entry((path.clone(), posture, max_bytes))
             .or_insert_with(|| inspect_runtime_file(&path.0, posture, max_bytes));
+        let state = if inspected == PreflightCheckState::Available
+            && content_invalid_runtime_files.contains(&(path.clone(), kind))
+        {
+            PreflightCheckState::ContentInvalid
+        } else {
+            inspected
+        };
         let addresses = grouped.addresses.into_iter().collect::<Vec<_>>();
         if let Some(diagnostic) = runtime_file_diagnostic(state, addresses.clone()) {
             diagnostics.push(diagnostic);
@@ -1225,6 +1271,12 @@ fn runtime_file_diagnostic(
             PreflightDiagnosticMessage::RuntimeFileNotRegular,
             PreflightRemediation::ReplaceRuntimeFile,
         ),
+        PreflightCheckState::ContentInvalid => (
+            PreflightDiagnosticCode::RuntimeFileContentInvalid,
+            PreflightRuleId::RuntimeFileContentValid,
+            PreflightDiagnosticMessage::RuntimeFileContentInvalid,
+            PreflightRemediation::ReplaceRuntimeFile,
+        ),
         PreflightCheckState::UnsafeOwner => (
             PreflightDiagnosticCode::RuntimeFileUnsafeOwner,
             PreflightRuleId::RuntimeFileSafeOwner,
@@ -1249,7 +1301,11 @@ fn runtime_file_diagnostic(
     };
     Some(PreflightDiagnostic::new(
         fields.0,
-        PreflightPhase::RuntimeFilePosture,
+        if state == PreflightCheckState::ContentInvalid {
+            PreflightPhase::RuntimeFileContent
+        } else {
+            PreflightPhase::RuntimeFilePosture
+        },
         addresses,
         fields.1,
         fields.2,

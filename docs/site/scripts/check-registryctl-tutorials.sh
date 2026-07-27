@@ -107,10 +107,22 @@ test -f registry-stack.yaml
 test -f entities/projects.yaml
 test -f environments/local.yaml
 test -f data/public_works_projects.xlsx
+test -f checks/validate-negative-workbooks.sh
+test -f checks/fixtures/duplicate_primary_key_after_1000.xlsx
+test -f checks/fixtures/formula_outside_projection.xlsx
 test ! -e relay
 test ! -e compose.yaml
 
 registryctl test --project-dir .
+negative_output="$(
+	REGISTRYCTL_BIN="$REGISTRYCTL_BIN" \
+		bash checks/validate-negative-workbooks.sh
+)"
+expected_negative_output=$'spreadsheet negative checks: PASS\n  duplicate primary key: registryctl.preflight.runtime_file_content_invalid; ingest.schema_mismatch\n  formula source: registryctl.preflight.runtime_file_content_invalid; ingest.source_unreadable\n  source project: unchanged'
+if [[ "$negative_output" != "$expected_negative_output" ]]; then
+	printf 'spreadsheet negative-workbook output changed without review\n' >&2
+	exit 1
+fi
 registryctl preflight --project-dir . --environment local
 registryctl check --project-dir . --environment local --explain
 registryctl build --project-dir . --environment local

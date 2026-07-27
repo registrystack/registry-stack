@@ -12,6 +12,8 @@
     "build:archive": "node scripts/build-archive.mjs",
     "build:archives": "node scripts/build-archives.mjs",
     "assemble:archives": "node scripts/assemble-archives.mjs",
+    "prepare:unreleased-preview": "node scripts/prepare-unreleased-preview.mjs",
+    "package:unreleased-preview": "node scripts/package-unreleased-preview.mjs",
     "stage:production-docsets": "node scripts/stage-production-docsets.mjs",
     "archive:snapshot": "node scripts/archive-lock.mjs snapshot",
     "preview": "astro preview",

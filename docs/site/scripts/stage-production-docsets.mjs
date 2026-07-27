@@ -1,14 +1,36 @@
-import { lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import {
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { archiveOutputDirectory, treeDigest } from './archive-bundle.mjs';
+import {
+  archiveOutputDirectory,
+  fileDigest,
+  publicArchiveBundlePath,
+  treeDigest,
+} from './archive-bundle.mjs';
 import { loadArchiveLock, validateArchiveLock } from './archive-lock.mjs';
 import { getDocset, loadDocsets } from './docsets.mjs';
 
-const productionCurrentPath = '/preview/';
+const publicOrigin = 'https://docs.registrystack.org';
 const reservedRootDirectories = new Set(['_archive-bundles', 'preview', 'v']);
-const discoveryUrls = ['llms.txt', 'llms-full.txt', 'llms-small.txt', 'sitemap-index.xml'];
+const forbiddenArchiveNames = new Set([
+  '_pagefind',
+  'llms-full.txt',
+  'llms-small.txt',
+  'pagefind',
+  'sitemap-0.xml',
+  'sitemap-index.xml',
+]);
 
 async function existingInfo(path) {
   try {
@@ -33,7 +55,7 @@ async function requireRegularFile(path, label) {
   }
 }
 
-async function collectIndexFiles(root, current = root) {
+async function collectArchiveIndexFiles(root, current = root) {
   const entries = await readdir(current, { withFileTypes: true });
   const files = [];
   for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
@@ -42,34 +64,18 @@ async function collectIndexFiles(root, current = root) {
     if (info.isSymbolicLink()) {
       throw new Error(`released archive cannot contain symlinks: ${path}`);
     }
-    if (info.isDirectory()) {
-      files.push(...await collectIndexFiles(root, path));
-    } else if (info.isFile() && entry.name === 'index.html') {
-      files.push(path);
-    }
-  }
-  return files;
-}
-
-async function collectPreviewTextFiles(root, current = root) {
-  const entries = await readdir(current, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    const path = resolve(current, entry.name);
-    const info = await lstat(path);
-    if (info.isSymbolicLink()) {
-      throw new Error(`Main-source preview cannot contain symlinks: ${path}`);
-    }
-    if (info.isDirectory()) {
-      files.push(...await collectPreviewTextFiles(root, path));
-    } else if (
-      info.isFile() &&
-      (entry.name.endsWith('.html') ||
-        entry.name.endsWith('.md') ||
-        entry.name === 'robots.txt' ||
-        /^llms(?:-(?:full|small))?\.txt$/.test(entry.name))
+    if (
+      forbiddenArchiveNames.has(entry.name) ||
+      /^sitemap(?:-[0-9]+|-index)?\.xml$/.test(entry.name)
     ) {
-      files.push(path);
+      throw new Error(`released archive contains production-excluded output: ${path}`);
+    }
+    if (info.isDirectory()) {
+      files.push(...await collectArchiveIndexFiles(root, path));
+    } else if (info.isFile()) {
+      if (entry.name === 'index.html') files.push(path);
+    } else {
+      throw new Error(`released archive contains an unsupported filesystem entry: ${path}`);
     }
   }
   return files;
@@ -88,7 +94,23 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;');
 }
 
+function assertReleasedTarget(docset, target) {
+  const canonical = new URL(target, publicOrigin);
+  if (
+    canonical.origin !== publicOrigin ||
+    canonical.search ||
+    canonical.hash ||
+    canonical.pathname !== target ||
+    !canonical.pathname.startsWith(docset.path)
+  ) {
+    throw new Error(
+      `released route target must remain within ${docset.path}: ${target}`,
+    );
+  }
+}
+
 function redirectDocument(docset, target) {
+  assertReleasedTarget(docset, target);
   const escapedTarget = escapeHtml(target);
   const escapedId = escapeHtml(docset.id);
   return `<!doctype html>
@@ -98,7 +120,7 @@ function redirectDocument(docset, target) {
     <meta name="robots" content="noindex,follow">
     <meta name="registry-docset-redirect" content="${escapedId}">
     <meta http-equiv="refresh" content="0;url=${escapedTarget}">
-    <link rel="canonical" href="https://docs.registrystack.org${escapedTarget}">
+    <link rel="canonical" href="${publicOrigin}${escapedTarget}">
     <title>Registry Stack documentation</title>
     <script>location.replace(${JSON.stringify(target)});</script>
   </head>
@@ -107,146 +129,202 @@ function redirectDocument(docset, target) {
 `;
 }
 
-function rewritePreviewHtml(html, archivedPaths) {
-  return html.replace(
-    /(\s(?:href|src)=)(["'])(\/(?!\/)[^"']*)\2/g,
-    (match, attribute, quote, value) => {
-      const pathname = value.split(/[?#]/, 1)[0];
-      if (
-        pathname === '/preview' ||
-        pathname.startsWith('/preview/') ||
-        pathname === '/v' ||
-        pathname.startsWith('/v/') ||
-        pathname === '/_archive-bundles' ||
-        pathname.startsWith('/_archive-bundles/') ||
-        archivedPaths.some((path) => pathname === path.slice(0, -1) || pathname.startsWith(path))
-      ) {
-        return match;
-      }
-      return `${attribute}${quote}/preview${value}${quote}`;
-    },
-  );
+function releasedDiscoveryFiles(released) {
+  return {
+    'robots.txt': `User-agent: *\nAllow: ${released.path}\n`,
+    'llms.txt': `# Registry Stack documentation
+
+> Selected released docset: ${released.id}.
+
+- [${released.label}](${publicOrigin}${released.path})
+`,
+  };
 }
 
-function rewriteDiscoveryUrls(contents) {
-  let rewritten = contents;
-  for (const path of discoveryUrls) {
-    rewritten = rewritten.replaceAll(
-      `https://docs.registrystack.org/${path}`,
-      `https://docs.registrystack.org${productionCurrentPath}${path}`,
-    );
-  }
-  return rewritten;
-}
-
-async function rejectDestinationCollisions(distRoot, destinations) {
-  for (const destination of destinations) {
-    if (!isWithin(distRoot, destination)) {
-      throw new Error(`production redirect resolves outside dist: ${destination}`);
-    }
-    const rel = relative(distRoot, destination).replaceAll(sep, '/');
+function redirectRoutes(archiveRoot, indexFiles, released) {
+  const destinations = new Set();
+  const routes = [];
+  for (const archiveFile of indexFiles) {
+    const rel = relative(archiveRoot, archiveFile).replaceAll(sep, '/');
     const top = rel.split('/')[0];
     if (reservedRootDirectories.has(top)) {
       throw new Error(`released route collides with reserved production path /${top}/`);
     }
-    if (await existingInfo(destination)) {
-      throw new Error(`production redirect destination already exists: ${destination}`);
-    }
-    let parent = dirname(destination);
-    while (parent !== distRoot) {
-      const info = await existingInfo(parent);
-      if (info && (info.isSymbolicLink() || !info.isDirectory())) {
-        throw new Error(`production redirect parent is not a real directory: ${parent}`);
+    const route = rel === 'index.html' ? '' : `${dirname(rel).replaceAll(sep, '/')}/`;
+    const target = `${released.path}${route}`;
+    assertReleasedTarget(released, target);
+    for (const prefix of ['', 'preview/']) {
+      const destination = `${prefix}${rel}`;
+      if (destinations.has(destination)) {
+        throw new Error(`released route has duplicate production destination: /${destination}`);
       }
-      parent = dirname(parent);
+      destinations.add(destination);
+      routes.push({
+        destination,
+        mount: prefix === '' ? 'root' : 'preview',
+        target,
+      });
     }
   }
+  return routes;
+}
+
+async function copyTree(source, destination) {
+  await mkdir(dirname(destination), { recursive: true });
+  await cp(source, destination, {
+    recursive: true,
+    dereference: false,
+    force: false,
+    errorOnExist: true,
+    preserveTimestamps: false,
+    verbatimSymlinks: true,
+  });
 }
 
 export async function stageProductionDocsets({
   docsRoot = process.cwd(),
   dataDir = resolve(docsRoot, 'src/data'),
   lockPath = resolve(dataDir, 'archive-lock.yaml'),
+  productionRoot = resolve(docsRoot, 'dist-production'),
 } = {}) {
   const distRoot = resolve(docsRoot, 'dist');
-  const previewRoot = resolve(distRoot, productionCurrentPath.slice(1, -1));
-  await requireRealDirectory(distRoot, 'production dist root');
+  const previewRoot = resolve(distRoot, 'preview');
+  const cnameSource = resolve(docsRoot, 'public/CNAME');
+  await requireRealDirectory(distRoot, 'assembled docs root');
   await requireRealDirectory(previewRoot, 'Main-source preview');
   await requireRegularFile(resolve(previewRoot, 'index.html'), 'Main-source preview entrypoint');
-  const cnameSource = resolve(previewRoot, 'CNAME');
-  const cnameDestination = resolve(distRoot, 'CNAME');
-  const robotsSource = resolve(previewRoot, 'robots.txt');
-  const robotsDestination = resolve(distRoot, 'robots.txt');
-  await requireRegularFile(cnameSource, 'GitHub Pages custom-domain declaration');
-  await requireRegularFile(robotsSource, 'Main-source robots declaration');
+  await requireRegularFile(cnameSource, 'public custom-domain declaration');
+  if (await existingInfo(productionRoot)) {
+    throw new Error(`production output already exists: ${productionRoot}`);
+  }
+  if (!isWithin(docsRoot, productionRoot) || productionRoot === docsRoot) {
+    throw new Error(`production output must be a child of the docs root: ${productionRoot}`);
+  }
 
+  const previewDigest = await treeDigest(previewRoot);
   const docsets = await loadDocsets({ dataDir });
   const released = getDocset(docsets, docsets.released);
   const lock = await loadArchiveLock({ lockPath });
   const lockErrors = validateArchiveLock(lock, docsets);
   if (lockErrors.length > 0) throw new Error(lockErrors.join('\n'));
 
-  const archiveRoot = archiveOutputDirectory(docsRoot, released);
-  const lockedDigest = lock.archives[released.id].tree_sha256;
-  const beforeDigest = await treeDigest(archiveRoot);
-  if (beforeDigest !== lockedDigest) {
-    throw new Error(
-      `released archive ${released.id} does not match its immutable tree lock`,
-    );
+  const releasedArtifacts = [];
+  for (const docset of docsets.docsets.filter(
+    (entry) => entry.status === 'archived' && entry.availability === 'released',
+  )) {
+    const archiveRoot = archiveOutputDirectory(docsRoot, docset);
+    const lockEntry = lock.archives[docset.id];
+    const sourceTreeDigest = await treeDigest(archiveRoot);
+    if (sourceTreeDigest !== lockEntry.tree_sha256) {
+      throw new Error(
+        `released archive ${docset.id} does not match its immutable tree lock`,
+      );
+    }
+    const indexFiles = await collectArchiveIndexFiles(archiveRoot);
+    const bundlePath = publicArchiveBundlePath(docsRoot, docset);
+    const bundleInfo = await existingInfo(bundlePath);
+    if (bundleInfo && (bundleInfo.isSymbolicLink() || !bundleInfo.isFile())) {
+      throw new Error(`public archive bundle must be a regular file: ${bundlePath}`);
+    }
+    if (bundleInfo && await fileDigest(bundlePath) !== lockEntry.bundle_sha256) {
+      throw new Error(
+        `released archive bundle ${docset.id} does not match its immutable bundle lock`,
+      );
+    }
+    releasedArtifacts.push({
+      archiveRoot,
+      bundlePath: bundleInfo ? bundlePath : null,
+      docset,
+      indexFiles,
+      lockEntry,
+    });
   }
 
-  const indexFiles = await collectIndexFiles(archiveRoot);
-  if (indexFiles.length === 0) {
+  const selected = releasedArtifacts.find(({ docset }) => docset.id === released.id);
+  if (!selected) {
+    throw new Error(`selected released docset ${released.id} has no released archive`);
+  }
+  if (selected.indexFiles.length === 0) {
     throw new Error(`released archive ${released.id} contains no index.html routes`);
   }
-  const redirects = indexFiles.map((archiveFile) => {
-    const rel = relative(archiveRoot, archiveFile);
-    const route = rel === 'index.html'
-      ? '/'
-      : `/${dirname(rel).replaceAll(sep, '/')}/`;
-    return {
-      destination: resolve(distRoot, rel),
-      target: `${released.path}${route.slice(1)}`,
-    };
-  });
+  const routes = redirectRoutes(selected.archiveRoot, selected.indexFiles, released);
+  const cname = await readFile(cnameSource);
 
-  await rejectDestinationCollisions(
-    distRoot,
-    [cnameDestination, robotsDestination, ...redirects.map((entry) => entry.destination)],
-  );
-  const archivedPaths = docsets.docsets
-    .filter((docset) => docset.status === 'archived')
-    .map((docset) => docset.path);
-  for (const file of await collectPreviewTextFiles(previewRoot)) {
-    const contents = await readFile(file, 'utf8');
-    const withMountedLinks = file.endsWith('.html')
-      ? rewritePreviewHtml(contents, archivedPaths)
-      : contents;
-    const rewritten = rewriteDiscoveryUrls(withMountedLinks);
-    if (rewritten !== contents) await writeFile(file, rewritten, 'utf8');
-  }
-  await writeFile(cnameDestination, await readFile(cnameSource), { flag: 'wx' });
-  await writeFile(robotsDestination, await readFile(robotsSource), { flag: 'wx' });
-  for (const redirect of redirects) {
-    await mkdir(dirname(redirect.destination), { recursive: true });
-    await writeFile(
-      redirect.destination,
-      redirectDocument(released, redirect.target),
-      { encoding: 'utf8', flag: 'wx' },
-    );
+  const stagingRoot = await mkdtemp(resolve(docsRoot, '.dist-production-stage-'));
+  let published = false;
+  try {
+    for (const artifact of releasedArtifacts) {
+      const archiveDestination = resolve(
+        stagingRoot,
+        artifact.docset.path.slice(1, -1),
+      );
+      if (!isWithin(resolve(stagingRoot, 'v'), archiveDestination)) {
+        throw new Error(`released archive resolves outside production /v: ${artifact.docset.id}`);
+      }
+      await copyTree(artifact.archiveRoot, archiveDestination);
+      if (await treeDigest(archiveDestination) !== artifact.lockEntry.tree_sha256) {
+        throw new Error(`copied released archive ${artifact.docset.id} failed digest validation`);
+      }
+      if (artifact.bundlePath) {
+        const bundleDestination = resolve(
+          stagingRoot,
+          '_archive-bundles',
+          `${artifact.docset.id}.tar.gz`,
+        );
+        await mkdir(dirname(bundleDestination), { recursive: true });
+        await cp(artifact.bundlePath, bundleDestination, {
+          force: false,
+          errorOnExist: true,
+        });
+        if (await fileDigest(bundleDestination) !== artifact.lockEntry.bundle_sha256) {
+          throw new Error(
+            `copied released archive bundle ${artifact.docset.id} failed digest validation`,
+          );
+        }
+      }
+    }
+
+    await writeFile(resolve(stagingRoot, 'CNAME'), cname, { flag: 'wx' });
+    for (const [name, contents] of Object.entries(releasedDiscoveryFiles(released))) {
+      await writeFile(resolve(stagingRoot, name), contents, { encoding: 'utf8', flag: 'wx' });
+    }
+    for (const route of routes) {
+      const destination = resolve(stagingRoot, route.destination);
+      if (!isWithin(stagingRoot, destination)) {
+        throw new Error(`production redirect resolves outside output: ${route.destination}`);
+      }
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(
+        destination,
+        redirectDocument(released, route.target),
+        { encoding: 'utf8', flag: 'wx' },
+      );
+    }
+
+    if (await treeDigest(previewRoot) !== previewDigest) {
+      throw new Error('Main-source preview changed during production staging');
+    }
+    await rename(stagingRoot, productionRoot);
+    published = true;
+  } finally {
+    if (!published) await rm(stagingRoot, { recursive: true, force: true });
   }
 
-  const afterDigest = await treeDigest(archiveRoot);
-  if (afterDigest !== beforeDigest) {
-    throw new Error(`released archive ${released.id} changed during production staging`);
-  }
-  return { released: released.id, redirects: redirects.length };
+  return {
+    archives: releasedArtifacts.length,
+    bundles: releasedArtifacts.filter(({ bundlePath }) => bundlePath).length,
+    preview_redirects: routes.filter(({ mount }) => mount === 'preview').length,
+    released: released.id,
+    root_redirects: routes.filter(({ mount }) => mount === 'root').length,
+  };
 }
 
 async function main() {
   const result = await stageProductionDocsets();
   console.log(
-    `Staged ${result.redirects} root redirect(s) to released docset ${result.released}; Main remains under ${productionCurrentPath}.`,
+    `Staged ${result.archives} released archive(s), ${result.bundles} locked bundle(s), and ` +
+      `${result.root_redirects} root plus ${result.preview_redirects} preview redirect(s) in ` +
+      'dist-production; dist/preview is unchanged.',
   );
 }
 

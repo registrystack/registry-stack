@@ -59,8 +59,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: docs-pages
@@ -69,7 +67,12 @@ concurrency:
 jobs:
   build:
     name: Build docs site
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -103,6 +106,52 @@ jobs:
           PUBLIC_UMAMI_SCRIPT_SRC: ${{ vars.PUBLIC_UMAMI_SCRIPT_SRC }}
           PUBLIC_UMAMI_DOMAINS: ${{ vars.PUBLIC_UMAMI_DOMAINS }}
 
+      - name: Prepare Main-source preview mount
+        working-directory: docs/site
+        run: npm run prepare:unreleased-preview
+
+      - name: Verify Main-source preview
+        working-directory: docs/site
+        run: |
+          DOCS_DIST_DIR="${GITHUB_WORKSPACE}/docs/site/dist/preview" npm run check:accessibility:built
+          DOCS_DIST_DIR="${GITHUB_WORKSPACE}/docs/site/dist/preview" DOCS_PUBLIC_BASE=/preview/ npm run check:llms:built
+          DOCS_DIST_DIR="${GITHUB_WORKSPACE}/docs/site/dist" npm run check:seo:current
+          DOCS_DIST_DIR="${GITHUB_WORKSPACE}/docs/site/dist" npm run check:links:current
+
+      - name: Package deterministic unreleased preview evidence
+        working-directory: docs/site
+        run: npm run package:unreleased-preview
+        env:
+          DOCS_BUILD_COMMIT: ${{ github.sha }}
+          DOCS_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DOCS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+
+      - name: Upload unreleased preview evidence
+        id: preview-evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registry-docs-unreleased-preview-${{ github.run_id }}-${{ github.run_attempt }}
+          path: docs/site/preview-evidence/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Record unreleased preview evidence
+        shell: bash
+        env:
+          PREVIEW_ARTIFACT_ID: ${{ steps.preview-evidence.outputs.artifact-id }}
+          PREVIEW_ARTIFACT_URL: ${{ steps.preview-evidence.outputs.artifact-url }}
+          PREVIEW_ARTIFACT_DIGEST: ${{ steps.preview-evidence.outputs.artifact-digest }}
+        run: |
+          {
+            echo "### Unreleased documentation preview"
+            echo
+            echo "- Release coordinate: unassigned"
+            echo "- Artifact ID: \`${PREVIEW_ARTIFACT_ID}\`"
+            echo "- Artifact URL: ${PREVIEW_ARTIFACT_URL}"
+            echo "- Artifact digest: \`${PREVIEW_ARTIFACT_DIGEST}\`"
+            echo "- Evidence class: unreleased preview, not release evidence and not human-acceptance evidence"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Assemble immutable archived docs
         working-directory: docs/site
         run: npm run assemble:archives -- --bootstrap
@@ -111,18 +160,19 @@ jobs:
         working-directory: docs/site
         run: npm run stage:production-docsets
 
-      - name: Verify current machine-readable documentation
+      - name: Assert sealed production Pages directory
         working-directory: docs/site
-        run: npm run check:llms:built
-        env:
-          DOCS_DIST_DIR: ${{ github.workspace }}/docs/site/dist/preview
-          DOCS_PUBLIC_BASE: /preview/
+        run: |
+          test -d dist-production
+          test -f dist-production/index.html
 
       - name: Verify assembled documentation tree
         working-directory: docs/site
         run: |
           npm run check:seo:built
           npm run check:links:built
+        env:
+          DOCS_DIST_DIR: ${{ github.workspace }}/docs/site/dist-production
 
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
@@ -130,12 +180,16 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
-          path: docs/site/dist
+          path: docs/site/dist-production
 
   deploy:
     name: Deploy docs site
     needs: build
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
