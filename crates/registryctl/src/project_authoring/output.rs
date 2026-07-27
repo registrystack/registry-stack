@@ -155,8 +155,13 @@ fn validate_project_workbook_inputs(
         .ok_or_else(|| anyhow!("workbook validation requires generated Relay configuration"))?;
     let relay: registry_relay::config::Config = serde_norway::from_slice(relay_config)
         .map_err(|_| anyhow!("generated Relay configuration is invalid"))?;
-    let mut workbooks =
-        BTreeMap::<String, (PathBuf, Vec<registry_relay::config::ResourceConfig>)>::new();
+    let mut workbooks = BTreeMap::<
+        String,
+        (
+            PathBuf,
+            Vec<(registry_relay::config::ResourceConfig, u64, u64)>,
+        ),
+    >::new();
     for (entity_id, binding) in workbook_bindings {
         let RecordProvider::Xlsx { project_file, .. } = &binding.provider else {
             unreachable!("workbook bindings are filtered above");
@@ -177,6 +182,12 @@ fn validate_project_workbook_inputs(
         if resources.len() != 1 {
             bail!("workbook binding has no exact generated Relay resource");
         }
+        let resource = resources
+            .into_iter()
+            .next()
+            .expect("exactly one generated Relay resource was checked");
+        let max_records = entity.materialization.max_records;
+        let max_bytes = parse_entity_generation_bytes(&entity.materialization.max_bytes)?;
         let relative = project_file
             .to_str()
             .ok_or_else(|| anyhow!("workbook source path is invalid"))?
@@ -184,7 +195,7 @@ fn validate_project_workbook_inputs(
         let entry = workbooks
             .entry(relative)
             .or_insert_with(|| (project_file.clone(), Vec::new()));
-        entry.1.extend(resources);
+        entry.1.push((resource, max_records, max_bytes));
     }
 
     let byte_limit = registry_relay::ingest::xlsx_source_byte_limit(&relay);
@@ -200,11 +211,16 @@ fn validate_project_workbook_inputs(
         .collect::<BTreeMap<_, _>>();
     for (relative, (project_file, resources)) in workbooks {
         let bytes = read_project_workbook(&loaded.root, &project_file, byte_limit)?;
-        for resource in resources {
+        for (resource, max_records, max_bytes) in resources {
             runtime
-                .block_on(registry_relay::ingest::validate_xlsx_source_bytes(
-                    &relay, &resource, &bytes,
-                ))
+                .block_on(
+                    registry_relay::ingest::validate_xlsx_source_bytes_with_limits(
+                        &relay,
+                        &resource,
+                        &bytes,
+                        Some((max_records, max_bytes)),
+                    ),
+                )
                 .map_err(|error| anyhow!("workbook validation failed ({})", error.code()))?;
         }
         let input = ArtifactInputDigest {

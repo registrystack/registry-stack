@@ -8,7 +8,7 @@ use std::path::Path;
 
 use registry_relay::config::ResourceConfig;
 use registry_relay::error::IngestError;
-use registry_relay::ingest::validate_xlsx_source_bytes;
+use registry_relay::ingest::{validate_xlsx_source_bytes, validate_xlsx_source_bytes_with_limits};
 
 fn fixture_bytes(name: &str) -> Vec<u8> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -168,4 +168,27 @@ async fn both_configured_byte_caps_are_enforced() {
         .await
         .expect_err("source byte cap rejects workbook");
     assert_eq!(error.code(), "ingest.source_unreadable");
+}
+
+#[tokio::test]
+async fn authored_materialization_record_and_byte_limits_are_enforced() {
+    let config = support::load_example_config_for_tests("xlsx-validation-authored-limits");
+    let resource = simple_resource();
+    let bytes = fixture_bytes("simple.xlsx");
+
+    let record_error =
+        validate_xlsx_source_bytes_with_limits(&config, &resource, &bytes, Some((1, u64::MAX)))
+            .await
+            .expect_err("authored record cap rejects the complete workbook");
+    assert_eq!(record_error.code(), "ingest.materialization_failed");
+
+    let byte_error = validate_xlsx_source_bytes_with_limits(
+        &config,
+        &resource,
+        &bytes,
+        Some((u64::MAX, bytes.len() as u64 - 1)),
+    )
+    .await
+    .expect_err("authored byte cap rejects the complete workbook");
+    assert_eq!(byte_error.code(), "ingest.materialization_failed");
 }

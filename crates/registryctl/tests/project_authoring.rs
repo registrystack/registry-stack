@@ -2592,6 +2592,52 @@ fn spreadsheet_commands_reject_invalid_complete_workbooks_without_writing_or_rep
 }
 
 #[test]
+fn spreadsheet_commands_enforce_the_entity_materialization_record_limit() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("spreadsheet-project");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Spreadsheet,
+        directory: project.clone(),
+    })
+    .expect("spreadsheet starter initializes");
+    let entity_path = project.join("entities/projects.yaml");
+    let entity = std::fs::read_to_string(&entity_path)
+        .expect("entity reads")
+        .replace("max_records: 10000", "max_records: 1");
+    std::fs::write(&entity_path, entity).expect("entity writes");
+    let build_options = ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    };
+
+    for error in [
+        check_registry_project(&ProjectCheckOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+            explain: false,
+            against: None,
+            anchor: None,
+        })
+        .expect_err("check rejects a workbook above the authored record limit"),
+        preflight_registry_project(&ProjectPreflightOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+        })
+        .expect_err("preflight rejects a workbook above the authored record limit"),
+        build_registry_project(&build_options)
+            .expect_err("build rejects a workbook above the authored record limit"),
+    ] {
+        assert_eq!(
+            format!("{error:#}"),
+            "workbook validation failed (ingest.materialization_failed)"
+        );
+    }
+    assert!(!project.join(".registry-stack/build").exists());
+}
+
+#[test]
 fn spreadsheet_local_api_keys_are_rejected_outside_the_local_profile() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = temporary.path().join("spreadsheet-project");

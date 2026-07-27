@@ -1585,7 +1585,7 @@ struct CanonicalRuntime {
     compose_file: PathBuf,
     relay_config: PathBuf,
     secrets_env: PathBuf,
-    image: String,
+    images: CanonicalRuntimeImages,
     topology: CanonicalRuntimeTopology,
 }
 
@@ -3426,6 +3426,37 @@ fn prepare_canonical_runtime(
     prepare_canonical_runtime_with_images(project_dir, &images)
 }
 
+fn canonical_runtime_images_for_start(project_dir: &Path) -> Result<CanonicalRuntimeImages> {
+    require_canonical_project(project_dir)?;
+    let binding = canonical_spreadsheet_binding(project_dir)?;
+    if project_dir.join(CANONICAL_RUNTIME_ROOT).exists() {
+        let runtime =
+            load_canonical_runtime(project_dir, CanonicalRuntimeValidation::GeneratedClosure)?;
+        if runtime.topology == binding.topology {
+            return Ok(runtime.images);
+        }
+    }
+
+    let image_lock = load_registryctl_image_lock()?;
+    Ok(CanonicalRuntimeImages {
+        relay: selected_canonical_relay_image(&image_lock)?,
+        notary: binding
+            .topology
+            .has_notary()
+            .then(|| selected_canonical_notary_image(&image_lock))
+            .transpose()?,
+        postgresql: binding
+            .topology
+            .has_notary()
+            .then(|| image_lock.postgresql_image().to_string()),
+    })
+}
+
+fn prepare_canonical_runtime_for_start(project_dir: &Path) -> Result<CanonicalRuntime> {
+    let images = canonical_runtime_images_for_start(project_dir)?;
+    prepare_canonical_runtime_with_images(project_dir, &images)
+}
+
 #[cfg(test)]
 fn prepare_canonical_runtime_with_image(
     project_dir: &Path,
@@ -3874,7 +3905,7 @@ fn load_canonical_runtime(
         compose_file,
         relay_config,
         secrets_env,
-        image: manifest.relay_image,
+        images,
         topology: manifest.topology,
     })
 }
@@ -3959,8 +3990,7 @@ pub fn start_project(project_dir: &Path) -> Result<()> {
 }
 
 fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<()> {
-    let image_lock = load_registryctl_image_lock()?;
-    let runtime = prepare_canonical_runtime(project_dir, &image_lock)?;
+    let runtime = prepare_canonical_runtime_for_start(project_dir)?;
     if runtime.topology.has_notary() {
         let wait_timeout = timeout.as_secs().max(1).to_string();
         run_compose_for_canonical_runtime(
@@ -4488,7 +4518,7 @@ fn product_doctor_invocations(
         cwd: project_dir.to_path_buf(),
         config_path: runtime.relay_config.clone(),
         args: compose_command_args(compose_file, &doctor_args),
-        platform_override: canonical_compose_platform_override(&runtime.image, true, path),
+        platform_override: canonical_compose_platform_override(&runtime.images.relay, true, path),
     }])
 }
 
@@ -5697,7 +5727,7 @@ fn run_compose_for_canonical_runtime(
         .strip_prefix(project_dir)
         .map_err(|_| anyhow!("local Compose path escaped the canonical project"))?;
     let platform_override = canonical_compose_platform_override(
-        &runtime.image,
+        &runtime.images.relay,
         should_probe_compose_platform(args),
         None,
     );
@@ -8730,6 +8760,19 @@ mod tests {
             .unwrap();
         }
         prepare_canonical_runtime_with_images(project, &combined_runtime_images()).unwrap()
+    }
+
+    #[test]
+    fn existing_runtime_reuses_all_stored_image_pins_without_the_release_lock() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        prepare_combined_runtime(&project);
+
+        let images = canonical_runtime_images_for_start(&project).unwrap();
+
+        assert_eq!(images.relay, TEST_RELAY_IMAGE);
+        assert_eq!(images.notary.as_deref(), Some(TEST_NOTARY_IMAGE));
+        assert_eq!(images.postgresql.as_deref(), Some(TEST_POSTGRESQL_IMAGE));
     }
 
     #[test]
