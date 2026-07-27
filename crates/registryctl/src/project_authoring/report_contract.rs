@@ -774,6 +774,14 @@ pub enum ArtifactGeneratorName {
 pub struct ArtifactInputDigest {
     pub path: ProjectRelativePath,
     pub digest: Sha256Digest,
+    pub classification: ArtifactInputClassification,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactInputClassification {
+    AuthoredProjectInput,
+    OperatorOwnedSourceData,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]

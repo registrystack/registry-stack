@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-26"
+last_reviewed: "2026-07-27"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -16,14 +16,9 @@ import ProjectWorkspaceJourneys from '../../../components/ProjectWorkspaceJourne
 
 `registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
 
-This page lists commands in Main source (unreleased).
-The source has not been designated as a release candidate.
-The last released `registryctl` is `v0.13.0`.
-That artifact does not contain `preflight`, `capabilities`, `compare`, `promote`, `migrate`,
-`authoring reference`, or `project diagnostics`; use a current source build for those commands.
-The [current-source test procedure](../../start/test-current-source-revision/) pins the checkout,
-builds the CLI, and distinguishes the temporary source-test artifacts from release evidence.
-Run `registryctl <command> --help` for the built-in usage text.
+This page describes `registryctl 0.14.0`. Use the binary, installer, image
+lock, and verification material from that same release. Run
+`registryctl <command> --help` for built-in usage text.
 Most human-facing commands also perform a once-per-day update check; see
 [Update check](#update-check).
 
@@ -40,7 +35,7 @@ complete workflow and generated trust boundary.
 
 | Subcommand or flag | Purpose |
 | --- | --- |
-| `init --from <starter>` | Copy `http`, `dhis2-tracker`, `opencrvs-dci`, `fhir-r4`, or `snapshot` into a local workspace. |
+| `init --from <starter>` | Copy `spreadsheet`, `http`, `dhis2-tracker`, `opencrvs-dci`, `fhir-r4`, or `snapshot` into a local workspace. |
 | `init --project-dir <dir>` | Destination for `init --from`. Defaults to the current directory. |
 | `init --format json` | Emit the versioned machine-readable initialization report instead of the default human-readable result. |
 | `test --project-dir <dir>` | Compile and run every integration fixture through the Relay decoder and configured claim evaluator offline. Defaults to the current directory. |
@@ -85,7 +80,7 @@ complete workflow and generated trust boundary.
 
 Interactive report commands print concise human-readable results by default. Add `--format json`
 when another program needs a report containing only versioned JSON on standard output.
-This policy covers `init`, `add notary`, non-watch `test`, `check`, `preflight`, `capabilities`,
+This policy covers `init`, non-watch `test`, `check`, `preflight`, `capabilities`,
 `compare`, `promote`, `migrate`, `authoring editor`, `project diagnostics`, `build`, `doctor`, `bundle`, and
 `anchor`. Watch mode prints one concise
 pass/fail summary per run and rejects JSON
@@ -103,7 +98,6 @@ when coverage is incomplete.
 | JSON command result | Schema version |
 | --- | --- |
 | `init` | `registryctl.init.v1` |
-| `add notary` | `registryctl.add_notary.v1` |
 | Successful `test`, `check`, or `build` | `registryctl.project_command.v1` |
 | Invalid-project `check` | `registryctl.project_diagnostics.v1` |
 | `preflight` | `registryctl.project_preflight.v1` |
@@ -397,26 +391,24 @@ default and accept `--format json` for automation.
 
 ## Project setup
 
-The canonical `init relay` command creates a local Relay-backed spreadsheet API tutorial project.
-In registryctl `v0.13.0`, this generation command requires the strict
+`registryctl init --from spreadsheet --project-dir <dir>` creates the
+canonical protected spreadsheet project. `registryctl init --from snapshot`
+creates the canonical offline Relay-and-Notary claim project. Both use
+`registry-stack.yaml`, explicit entity and environment files, and generated
+product inputs under `.registry-stack/`.
+
+The human-readable result identifies the authored project and next validation
+command. The JSON result contains no progress text, so another program can
+parse standard output directly. Automation must read the project root from
+`output` and supported authored entry points from `artifacts` in the
+`registryctl.init.v1` report. Generated layout remains a private implementation
+detail.
+
+Local runtime commands require the strict
 `registryctl-vX.Y.Z-image-lock.json` from the same release beside the running
-binary. Set `REGISTRYCTL_IMAGE_LOCK` only when an operator has verified the same
-file at a separate explicit path. Registryctl does not search the current
-working directory or query a registry for image tags. Lifecycle commands use
-the immutable image references already stored in an existing project and do
-not need the lock. Registryctl `v0.8.4` predates the image-lock contract.
-
-| Subcommand or flag | Purpose |
-| --- | --- |
-| `init relay <dir>` | Create a local Relay-backed spreadsheet API project in `<dir>`. |
-| `init relay --sample <sample>` | Sample project to generate. Defaults to `benefits`. |
-| `init relay --format json` | Emit the same `registryctl.init.v1` machine-readable report used by `init --from`. |
-
-The human-readable result identifies the generated Bruno collection and gives the validation and
-start commands. The JSON result contains no progress text, so another program can parse standard
-output directly. Automation must read the project root from `output` and supported generated entry
-points from `artifacts` in the `registryctl.init.v1` report. The remaining generated layout is a
-private implementation detail.
+binary. Set `REGISTRYCTL_IMAGE_LOCK` only when an operator has separately
+verified the same file at an explicit path. Registryctl does not search the
+working directory or resolve mutable image tags.
 
 {/* Evidence: crates/registryctl/src/main.rs and crates/registryctl/tests/init_output.rs. */}
 
@@ -425,24 +417,18 @@ Notary-only, and combined deployments. Registry Notary does not have a direct-so
 generator. Registry-backed Notary claims consume compiler-pinned Relay consultations, while a
 Notary-only project contains source-free or self-attested evaluation-only claims.
 
-### Local Notary add-on
+### Retired direct projects
 
-Registryctl `v0.13.0` includes `registryctl add notary`. From a generated `benefits` spreadsheet
-project, it creates an editable authored project under `notary/project/`, adds a private
-consultation Relay and local Notary services, and generates local-only evaluator and workload
-credentials. It refuses an existing Notary directory or a second invocation instead of
-overwriting authored work.
+Registryctl 0.14.0 retires the pre-1.0 `init relay` scaffold and
+`add notary` mutation. Either command returns a precise reinitialization path
+and does not modify the target directory. Registryctl does not silently
+translate a direct project or preserve two public project models.
 
-The default result identifies the authored claim, the Notary URL available after start, and the
-next command. Add `--format json` for the `registryctl.add_notary.v1` report.
-
-`registryctl start` and `registryctl restart` validate and rebuild this add-on from the authored
-project before starting it. Registryctl validates the fixed local runtime overrides with the
-production product models and publishes one complete generated bundle, so services do not observe
-a partially updated contract. The command is a tutorial convenience for the generated benefits
-workbook, not a custom-registry import command.
-The tutorial path evaluates a registry-backed claim only. It does not issue a
-credential or prove wallet, credential-presentation, or OID4VCI interoperability.
+Reinitialize with `init --from spreadsheet` for a protected records API or
+`init --from snapshot` for the offline claim tutorial, then re-express the
+reviewed intent in the canonical project. The
+[archived 0.13.0 documentation](/v/0.13.0/) remains the behavioral reference
+for an existing 0.13.0 scaffold during that review.
 
 ## Lifecycle
 
@@ -452,7 +438,7 @@ Lifecycle commands run against the project in the current working directory.
 | --- | --- |
 | `start` | Start the local project with Docker Compose and wait for readiness. |
 | `stop` | Stop the local project. |
-| `restart` | Stop the local project, rebuild an added Notary project when present, then start and wait for readiness. |
+| `restart` | Stop the local project, rebuild and verify its canonical generated closure, then start and wait for readiness. |
 | `status` | Print local runtime status, including health and readiness probes. |
 
 ## Inspect
@@ -498,11 +484,9 @@ Smoke commands run built-in local checks and write a versioned JSON result file.
 
 Related environment variables are listed in the [environment variable reference](../environment-variables/): `REGISTRYCTL_NO_UPDATE_CHECK`, `REGISTRYCTL_UPDATE_CHECK`, and `REGISTRYCTL_VERSION`.
 
-## Source
+## Release boundary
 
-The command tables on this page come from Main source (unreleased).
-They do not establish a release candidate and do not describe the `v0.13.0` artifact.
-Use [Test one current source revision](../../start/test-current-source-revision/) to build and
-identify the exact source used for a review.
-For the last released command tree, read the
-[registryctl `v0.13.0` command tree](https://github.com/registrystack/registry-stack/blob/v0.13.0/crates/registryctl/src/main.rs).
+This reference describes Registryctl 0.14.0. The
+[archived 0.13.0 reference](/v/0.13.0/reference/registryctl/) remains the
+authority for that earlier release. Do not mix commands, binaries, image
+locks, or generated projects across releases.

@@ -213,7 +213,7 @@ test('redacts generated env values and credential headers before output is print
   assert.match(redacted, /REDACTED:ROW_READER_RAW/);
 });
 
-test('Relay disclosure-floor rejection uses the value-free startup contract', () => {
+test('canonical first API tutorial keeps pre-start rejection value-free', () => {
   const tutorial = readFileSync(
     new URL(
       '../src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx',
@@ -223,36 +223,32 @@ test('Relay disclosure-floor rejection uses the value-free startup contract', ()
   );
   const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
 
-  assert.match(tutorial, /relay\.startup\.config_validation_rejected/);
-  assert.doesNotMatch(tutorial, /code="config\.validation_error"/);
-  assert.doesNotMatch(tutorial, /requires disclosure_control\.min_cell_size >= 2/);
-  assert.match(
-    script,
-    /assert_contains "\$LAST_OUTPUT" relay\.startup\.config_validation_rejected/,
-  );
-  assert.match(
-    script,
-    /assert_not_contains "\$LAST_OUTPUT" config\.validation_error 'min_cell_size >= 2'/,
-  );
+  assert.match(tutorial, /changed generated artifact/);
+  assert.match(tutorial, /unsafe listener/);
+  assert.match(tutorial, /invalid[\s\S]*workbook before the API starts/);
+  assert.match(tutorial, /It does not contain raw keys or[\s\S]*workbook rows/);
+  assert.doesNotMatch(tutorial, /relay\.startup\.config_validation_rejected|min_cell_size/);
+  assert.doesNotMatch(script, /set-relay-min-group-size|min_cell_size/);
 });
 
-test('source tutorial image staging includes the dedicated Relay Rhai worker', () => {
+test('source tutorial gate validates canonical authoring without rewriting release images', () => {
   const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
-  const worker = 'registry-relay-rhai-worker';
 
-  assert.match(script, new RegExp(`\\$LINUX_TARGET/\\$BUILD_PROFILE/${worker}`));
-  assert.match(script, new RegExp(`dist/image-bin/${worker}`));
-  assert.match(script, new RegExp(`chmod 0755[\\s\\S]*dist/image-bin/${worker}`));
+  assert.match(script, /source "\$BLOCKS\/02\.sh"/);
+  assert.match(script, /registryctl preflight --project-dir \. --environment local/);
+  assert.match(script, /registryctl build --project-dir \. --environment local/);
+  assert.match(script, /exact runtime sequence is release-gated from the sealed candidate payload/);
+  assert.doesNotMatch(script, /docker build|rebind-project|REGISTRYCTL_RELAY_STAGING_IMAGE/);
 });
 
-test('source tutorial image staging includes the dedicated Notary CEL worker', () => {
+test('source tutorial gate does not stand in for the first-claim or runtime gates', () => {
   const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
-  const worker = 'registry-notary-cel-worker';
 
-  assert.match(script, new RegExp(`--bin ${worker}`));
-  assert.match(script, new RegExp(`\\$LINUX_TARGET/\\$BUILD_PROFILE/${worker}`));
-  assert.match(script, new RegExp(`dist/image-bin/${worker}`));
-  assert.match(script, new RegExp(`chmod 0755[\\s\\S]*dist/image-bin/${worker}`));
+  assert.match(script, /does not execute the release installer[\s\S]*or local runtime/);
+  assert.doesNotMatch(
+    script,
+    /run_notary_tutorial|active-registration-exists|population-record-exists/,
+  );
 });
 
 test('HTTP authoring tutorial output stays synchronized with the current starter', () => {
@@ -359,17 +355,17 @@ test('HTTP authoring tutorial output stays synchronized with the current starter
   }
 });
 
-test('Notary tutorial keeps no-match false bounded and renames broadened semantics', () => {
+test('release-form claim tutorial keeps the snapshot no-match result bounded', () => {
   const tutorial = readFileSync(
     new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
     'utf8',
   );
   const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
 
-  assert.match(tutorial, /active-registration-exists/);
+  assert.match(tutorial, /population-record-exists/);
   assert.match(
     tutorial,
-    /false` means no active matching record was found by this[\s\S]*selected registry source/,
+    /`false` means this bounded source observation produced no match/,
   );
   for (const broaderNegative of [
     'global nonexistence',
@@ -377,36 +373,32 @@ test('Notary tutorial keeps no-match false bounded and renames broadened semanti
     'ineligibility',
     'legal negative',
   ]) {
-    assert.match(tutorial, new RegExp(broaderNegative));
+    assert.match(tutorial, new RegExp(broaderNegative.replace(' ', '\\s+')));
   }
-  assert.match(tutorial, /active-or-pending-registration-exists/);
-  for (const fixture of ['match.yaml', 'pending.yaml', 'no-match.yaml']) {
-    assert.match(script, new RegExp(`fixtures/${fixture.replace('.', '\\.')}`));
-  }
-  assert.match(script, /pending-registration-request\.json/);
+  assert.doesNotMatch(
+    tutorial,
+    /person-registration-accepted|active-registration-exists|active-or-pending-registration-exists/,
+  );
+  assert.doesNotMatch(script, /population-record-exists/);
 });
 
-test('Notary tutorial does not pair the unreleased claim with v0.13.0 assets', () => {
+test('release-form claim tutorial uses the canonical v0.14.0 offline starter', () => {
   const tutorial = readFileSync(
     new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
     'utf8',
   );
 
-  assert.match(tutorial, /^status: draft$/m);
-  assert.match(tutorial, /Registry Stack Main checkout pinned to one exact commit/);
-  assert.match(tutorial, /git rev-parse HEAD/);
-  assert.match(tutorial, /manifest_source_ref/);
-  assert.match(tutorial, /tag_target/);
-  assert.match(tutorial, /v0\.13\.0 is incompatible with these instructions/);
-  assert.match(
+  assert.match(tutorial, /^status: current$/m);
+  assert.match(tutorial, /registryctl 0\.14\.0 and its matching image lock/);
+  assert.match(tutorial, /registryctl init --from snapshot --project-dir my-first-claim/);
+  assert.match(tutorial, /entirely offline/);
+  assert.doesNotMatch(
     tutorial,
-    /registryctl --version` reports a[\s\S]*does not establish source revision or artifact identity/,
+    /Main checkout|git rev-parse|manifest_source_ref|tag_target|registryctl add notary/,
   );
-  assert.doesNotMatch(tutorial, /Matching Registry Stack v0\.13\.0/);
-  assert.doesNotMatch(tutorial, /same Registry Stack `v0\.13\.0` release/);
 });
 
-test('current-source bootstrap stays executable and non-candidate', () => {
+test('current-source bootstrap stays executable and outside adopter release-form pages', () => {
   const bootstrap = readFileSync(
     new URL('../src/content/docs/start/test-current-source-revision.mdx', import.meta.url),
     'utf8',
@@ -441,7 +433,8 @@ test('current-source bootstrap stays executable and non-candidate', () => {
     /not a release, release candidate, signed artifact set, production image, country[\s\S]*acceptance result, or interoperability result/,
   );
 
-  for (const page of [authoring, notary, reference]) {
-    assert.match(page, /test-current-source-revision/);
+  for (const page of [authoring, reference, notary]) {
+    assert.doesNotMatch(page, /test-current-source-revision/);
+    assert.doesNotMatch(page, /git switch --detach|cargo build --locked/);
   }
 });

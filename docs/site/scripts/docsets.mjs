@@ -34,6 +34,9 @@ export function validateDocsets(manifest) {
   if (!manifest.current || typeof manifest.current !== 'string') {
     throw new Error('docsets.yaml must declare current');
   }
+  if (!manifest.released || typeof manifest.released !== 'string') {
+    throw new Error('docsets.yaml must declare released');
+  }
   if (!Array.isArray(manifest.docsets) || manifest.docsets.length === 0) {
     throw new Error('docsets.yaml must contain a non-empty docsets list');
   }
@@ -41,7 +44,17 @@ export function validateDocsets(manifest) {
   const ids = new Set();
   for (const [index, docset] of manifest.docsets.entries()) {
     const prefix = `docsets[${index}]`;
-    for (const key of ['id', 'label', 'path', 'status', 'source', 'published_at', 'description', 'products']) {
+    for (const key of [
+      'id',
+      'label',
+      'path',
+      'status',
+      'availability',
+      'source',
+      'published_at',
+      'description',
+      'products',
+    ]) {
       if (docset[key] === undefined || docset[key] === null || docset[key] === '') {
         throw new Error(`${prefix} is missing ${key}`);
       }
@@ -78,6 +91,30 @@ export function validateDocsets(manifest) {
 
   if (!ids.has(manifest.current)) {
     throw new Error(`docsets.yaml current "${manifest.current}" does not match a docset id`);
+  }
+  if (!ids.has(manifest.released)) {
+    throw new Error(`docsets.yaml released "${manifest.released}" does not match a docset id`);
+  }
+  if (manifest.current === manifest.released) {
+    throw new Error('docsets.yaml current and released selectors must be different');
+  }
+
+  const current = manifest.docsets.find((docset) => docset.id === manifest.current);
+  if (
+    current.status !== 'current' ||
+    current.availability !== 'unreleased' ||
+    current.path !== '/'
+  ) {
+    throw new Error(
+      `docsets.yaml current "${manifest.current}" must be current, unreleased, and mounted at /`,
+    );
+  }
+
+  const released = manifest.docsets.find((docset) => docset.id === manifest.released);
+  if (released.status !== 'archived' || released.availability !== 'released') {
+    throw new Error(
+      `docsets.yaml released "${manifest.released}" must select an archived released docset`,
+    );
   }
 }
 

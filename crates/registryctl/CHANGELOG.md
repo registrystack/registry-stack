@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Added the canonical `spreadsheet` project starter and
+  `registryctl init --from spreadsheet --project-dir <directory>` path. The
+  starter keeps the workbook as a contained human-owned input, validates the
+  complete selected sheet without retaining cell values in diagnostics, marks
+  spreadsheet fields sensitive by default, and emits deterministic Relay
+  inputs only for explicitly reviewed projections.
+- Added a Docker Compose v2 local runtime for the canonical spreadsheet
+  project. `doctor`, `start`, `smoke`, `status`, `restart`, and `stop` use the
+  exact compiled project, a digest-pinned Relay image, a read-only workbook,
+  an IPv4 loopback listener, and owner-only generated runtime credentials.
 - Added strict, value-free project authoring reports and commands for field
   explanation, offline preflight, capability inventory, semantic comparison,
   signed-baseline promotion analysis, same-v1 migration, fixture coverage, and
@@ -24,6 +34,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Generated local Relay and Notary ports now publish only on IPv4 loopback.
+  Local secret directories use Unix mode `0700`, raw credential files use
+  `0600`, and regeneration rejects symlink substitutions before writing.
+- `registryctl doctor --profile local` now runs product validation through the
+  digest-pinned Docker Compose v2 service. It no longer depends on ambient
+  Registry Relay or Registry Notary executables.
+- Local runtime selection is closed to Docker Compose v2 and the generated
+  Compose document. Unsupported engine names or alternate Compose paths fail
+  before command execution.
+- Update notices and higher-assurance installation guidance now use the
+  versioned `registryctl-vX.Y.Z-install.sh` release asset. The release pipeline
+  binds that installer to checksums, signatures, SBOM, capsule, and provenance
+  evidence before publication.
 - Source-free string claim compilation now preserves the authored
   `value.max_bytes` contract in generated Notary configuration instead of
   silently discarding it.
@@ -82,6 +105,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 
+- **BREAKING:** Retired the pre-1.0 `registryctl init relay` project model.
+  Reinitialize with
+  `registryctl init --from spreadsheet --project-dir <directory>` and
+  re-express the reviewed project intent. Registryctl does not silently
+  migrate or operate both project models.
 - Removed the unused attribute-release subject input and response cache-age
   fields from project authoring. Generated profiles remain non-storable and do
   not opt into source metadata disclosure.

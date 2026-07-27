@@ -30,9 +30,11 @@ test('current docs are explicit unreleased main source while v0.13.0 stays pinne
   ]);
   assert.deepEqual(generatedDocsets, docsets, 'generated docset metadata must match its source');
   const current = docsets.docsets.find((docset) => docset.id === docsets.current);
-  const released = docsets.docsets.find((docset) => docset.id === 'v0.13.0');
+  const released = docsets.docsets.find((docset) => docset.id === docsets.released);
 
   assert.equal(current.id, 'latest');
+  assert.equal(docsets.released, 'v0.13.0');
+  assert.notEqual(docsets.current, docsets.released);
   assert.equal(current.label, 'Main source (unreleased)');
   assert.equal(current.status, 'current');
   assert.equal(current.availability, 'unreleased');

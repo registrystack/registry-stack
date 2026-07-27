@@ -36,14 +36,15 @@ true.
 
 ### Structure
 
-Relay reads a workbook by addressing one rectangular range per table. Anything
-outside that range (titles, totals, comments, formatting) is invisible to
-ingest; anything inside it has to parse cleanly.
+Relay reads a workbook by addressing one rectangular range per table. Values
+outside that range are not ingested, but formulas anywhere in the selected
+worksheet are rejected. Anything inside the range has to parse cleanly.
 
 - Sheet names used by Relay are stable and documented.
 - Each Relay table maps to one rectangular worksheet range.
 - The configured `header_row` points to a single row of unique column names.
 - Required columns are present with stable names.
+- No undeclared columns are present when the generated schema is strict.
 - Notes, titles, and totals are outside `data_range`.
 - Merged cells, hidden rows or columns, comments, styling, and filters carry
   no ingestion semantics.
@@ -57,16 +58,16 @@ a sheet, or is only a row number breaks all of that.
 - Every exposed entity has one configured primary key column.
 - Primary key values are non-empty after trimming, unique within the range,
   and stable across exports. Row numbers are not keys.
+- Relay checks the complete configured range, including rows after 1,000.
 
 ### References
 
-Foreign keys are how Relay stitches sheets together into entities and
-relationships. A reference that points at a row that doesn't exist (or used
-to) surfaces as a silent join failure, worse than no reference at all.
+Foreign keys can be used to model relationships, but XLSX ingest does not
+validate cross-sheet referential integrity.
 
 - Foreign key columns reference documented target sheets and key columns.
-- Required references resolve before promotion. Optional references are
-  declared nullable in the Relay schema.
+- Required references are checked outside Relay before promotion. Optional
+  references are declared nullable in the Relay schema.
 - Broken or unresolved references surface as explicit data quality records,
   not silent key corruption.
 
@@ -84,8 +85,8 @@ so the workbook has to pick one form per column and stick with it.
   `1`/`0`).
 - Non-nullable fields have no empty cells. Nullable fields declare what empty
   means.
-- Formulas are not the source of truth unless formula output is explicitly
-  tested. Prefer materialized values.
+- Formula cells are rejected anywhere in the selected worksheet, even outside
+  `data_range`. Use materialized values.
 
 ### Codes
 
@@ -106,11 +107,11 @@ caller queries.
 ### Privacy
 
 The workbook is the perimeter. Anything in a cell is something Relay might
-serve, filter on, audit, or include in an error message.
+serve, filter on, or audit. XLSX decoding errors report structural location
+without echoing cell values.
 
-- Sensitive columns are identified before exposure and marked
-  `sensitive: true` in Relay config when they may appear in filters, audit, or
-  errors.
+- Spreadsheet-backed stored and published fields start as `sensitive: true`.
+- Published fields are limited to the explicit records API projection.
 - The workbook avoids unnecessary direct identifiers (full phone numbers,
   exact addresses, national IDs) unless the use case requires them.
 
@@ -124,6 +125,9 @@ old audit log no longer matches what callers now see.
   alongside the workbook.
 - The file is mounted read-only for Relay and is not edited in place while
   Relay is reading it.
+- Registry Stack authoring keeps the workbook in a contained, symlink-free
+  project-relative `project_file`; generated Relay config contains only the
+  read-only container `path`.
 - Same workbook plus same config produces the same entity records.
 
 ## Anti-patterns
@@ -169,9 +173,12 @@ tables:
 
 A workbook version is ready when:
 
-- Preflight validation passes (file exists and is under
-  `server.xlsx_max_file_bytes`, sheets and columns exist, primary keys are
-  unique, required FKs resolve, types parse).
+- Registry Stack preflight confirms the contained workbook exists, is a
+  regular owner-only file, and is within the source-size limit.
+- Relay ingest checks the selected sheet, strict columns, complete-range
+  nullability and types, formula absence across the selected worksheet, and
+  complete-range primary-key uniqueness.
+- Any required cross-sheet references are validated separately.
 - Relay ingests every configured table on a clean startup or admin reload,
   and `/ready` reports the dataset resources as ready.
 - Focused API checks confirm allowed access succeeds and missing credentials,
@@ -185,9 +192,9 @@ source file or Relay config is fixed.
 
 ```mermaid
 flowchart TD
-  WB["New workbook version"] --> Pre{"Preflight validation<br/>file size, sheets, columns, unique keys, FKs resolve, types parse"}
+  WB["New workbook version"] --> Pre{"Registry Stack preflight<br/>contained regular file, size, permissions"}
   Pre -- "fail" --> Keep["Keep serving the previous known-good version"]
-  Pre -- "pass" --> Ingest{"Relay ingests every table<br/>/ready reports resources ready"}
+  Pre -- "pass" --> Ingest{"Relay ingests every configured range<br/>strict columns, full-row validation, no formulas"}
   Ingest -- "fail" --> Keep
   Ingest -- "pass" --> API{"Focused API checks<br/>allowed access succeeds, denials enforced"}
   API -- "fail" --> Keep

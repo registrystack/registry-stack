@@ -17,11 +17,14 @@ function relativeToRoot(pathname, root) {
 export function pathForDocset(currentPath, activePath, targetPath, basePath = '/') {
   const normalizedActive = normalizeRoot(activePath);
   const normalizedBase = normalizeRoot(basePath);
+  const normalizedTarget = normalizeRoot(targetPath);
   const sourceRoot = normalizedActive === '/' ? normalizedBase : normalizedActive;
   const targetRoot =
-    normalizedActive === '/' && normalizeRoot(targetPath) === normalizedActive
+    normalizedActive === '/' && normalizedTarget === normalizedActive
       ? normalizedBase
-      : normalizeRoot(targetPath);
+      : normalizedTarget === '/' && normalizedActive !== '/'
+        ? '/preview/'
+        : normalizedTarget;
   const relativePath = relativeToRoot(currentPath, sourceRoot);
 
   return `${targetRoot}${relativePath}`.replace(/\/{2,}/g, '/');

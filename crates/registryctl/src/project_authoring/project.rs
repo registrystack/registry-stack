@@ -46,11 +46,7 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
             .to_str()
             .ok_or_else(|| anyhow!("integration path is not Unicode"))?;
         record_artifact_input(&mut artifact_inputs, integration_relative, &bytes)?;
-        hash_authored_file(
-            &mut hasher,
-            integration_relative,
-            &bytes,
-        );
+        hash_authored_file(&mut hasher, integration_relative, &bytes);
         let authored: AuthoredIntegrationDocument =
             parse_yaml(&bytes, &reference.file.display().to_string())?;
         let document = lower_project_integration(&authored, &entities)?;
@@ -61,12 +57,7 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
             .parent()
             .ok_or_else(|| anyhow!("integration file has no parent"))?
             .join(&document.fixtures);
-        let fixtures = load_fixtures(
-            &root,
-            &fixture_dir,
-            &mut hasher,
-            &mut artifact_inputs,
-        )?;
+        let fixtures = load_fixtures(&root, &fixture_dir, &mut hasher, &mut artifact_inputs)?;
         validate_fixture_inputs(alias, &document, &fixtures)?;
         let script = integration_script(&document)
             .map(|script| {
@@ -79,11 +70,7 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
                     .to_str()
                     .ok_or_else(|| anyhow!("script path is not Unicode"))?;
                 record_artifact_input(&mut artifact_inputs, relative, &script_bytes)?;
-                hash_authored_file(
-                    &mut hasher,
-                    relative,
-                    &script_bytes,
-                );
+                hash_authored_file(&mut hasher, relative, &script_bytes);
                 Ok::<(PathBuf, Box<[u8]>), anyhow::Error>((
                     script_path,
                     script_bytes.into_boxed_slice(),
@@ -109,11 +96,7 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
                     .to_str()
                     .ok_or_else(|| anyhow!("script module path is not Unicode"))?;
                 record_artifact_input(&mut artifact_inputs, relative, &module_bytes)?;
-                hash_authored_file(
-                    &mut hasher,
-                    relative,
-                    &module_bytes,
-                );
+                hash_authored_file(&mut hasher, relative, &module_bytes);
                 script_modules.push((module_path, module_bytes.into_boxed_slice()));
             }
         }
@@ -150,14 +133,11 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
                 .to_str()
                 .ok_or_else(|| anyhow!("environment path is not Unicode"))?;
             record_artifact_input(&mut artifact_inputs, environment_relative, &bytes)?;
-            hash_authored_file(
-                &mut hasher,
-                environment_relative,
-                &bytes,
-            );
+            hash_authored_file(&mut hasher, environment_relative, &bytes);
             let document: EnvironmentDocument =
                 parse_yaml(&bytes, &relative.display().to_string())?;
             validate_environment(&project, &integrations, &entities, &document)?;
+            validate_environment_project_files(&root, &document)?;
             (Some(name.to_owned()), Some(document))
         }
         None => (None, None),
@@ -190,7 +170,11 @@ fn record_artifact_input(
     if artifact_inputs
         .insert(
             relative.to_owned(),
-            ArtifactInputDigest { path, digest },
+            ArtifactInputDigest {
+                path,
+                digest,
+                classification: ArtifactInputClassification::AuthoredProjectInput,
+            },
         )
         .is_some()
     {
@@ -901,7 +885,7 @@ fn semantic_digests(
 // A schema or knowledge change must therefore be reviewed for promotion
 // semantics before a new projection can be emitted.
 const PROMOTION_FIELD_KNOWLEDGE_REVISION: &str =
-    "sha256:0a095899dc4354edeaf517adacbbeec1aae74eceb80690f654a650ed58361e21";
+    "sha256:eed43229766dec0e03f9a415b625781630236231c8802ae8d78f10e81b876c1d";
 
 fn project_promotion_projection(
     loaded: &LoadedRegistryProject,
@@ -1008,10 +992,7 @@ fn project_promotion_projection(
         )
         .collect::<Vec<_>>();
 
-    let caller_state = environment
-        .callers
-        .iter()
-        .collect::<BTreeMap<_, _>>();
+    let caller_state = environment.callers.iter().collect::<BTreeMap<_, _>>();
     let caller_members = environment
         .callers
         .iter()
@@ -2222,9 +2203,7 @@ fn validate_record_attribute_release_profiles(
     entity: &EntityDefinition,
     fields: &BTreeSet<&str>,
 ) -> Result<()> {
-    if !api.attribute_release_profiles.is_empty()
-        && !api.required_principal_filters.is_empty()
-    {
+    if !api.attribute_release_profiles.is_empty() && !api.required_principal_filters.is_empty() {
         bail!(
             "attribute release profiles cannot use required principal filters because the caller-supplied subject cannot satisfy a principal-bound filter"
         );
@@ -2241,9 +2220,7 @@ fn validate_record_attribute_release_profiles(
         .collect::<BTreeSet<_>>();
     for (profile_id, profile) in &api.attribute_release_profiles {
         if !is_record_release_profile_id(profile_id) {
-            bail!(
-                "attribute release profile id must match [a-z][a-z0-9_-]{{0,95}}"
-            );
+            bail!("attribute release profile id must match [a-z][a-z0-9_-]{{0,95}}");
         }
         validate_release_version(&profile.version, "attribute release profile version")?;
         if let Some(title) = &profile.title {
@@ -2252,11 +2229,7 @@ fn validate_record_attribute_release_profiles(
         if let Some(description) = &profile.description {
             validate_authored_text(description, "attribute release profile description")?;
         }
-        validate_header_token(
-            &profile.purpose,
-            "attribute release profile purpose",
-            256,
-        )?;
+        validate_header_token(&profile.purpose, "attribute release profile purpose", 256)?;
         if !api.purposes.contains(&profile.purpose) {
             bail!("attribute release profile purpose must be a records API permitted purpose");
         }
@@ -2332,7 +2305,8 @@ fn validate_record_release_expression(
     if expression.cel.is_empty() || expression.cel.len() > 4096 {
         bail!("{label} CEL must contain between one and 4096 bytes");
     }
-    let roots = cel_member_roots(&expression.cel).with_context(|| format!("invalid {label} CEL"))?;
+    let roots =
+        cel_member_roots(&expression.cel).with_context(|| format!("invalid {label} CEL"))?;
     if roots != BTreeSet::from(["source".to_string()]) {
         bail!("{label} CEL may reference only the projected source object");
     }
@@ -3717,6 +3691,23 @@ fn validate_environment_entity(
     }
     if let RecordProvider::Xlsx { sheet, .. } = &binding.provider {
         validate_token(sheet, "entity provider sheet", 256)?;
+    }
+    if let RecordProvider::Xlsx { project_file, .. } = &binding.provider {
+        validate_relative_authored_path(project_file)
+            .context("entity provider project_file is invalid")?;
+    }
+    Ok(())
+}
+
+fn validate_environment_project_files(
+    root: &Path,
+    environment: &EnvironmentDocument,
+) -> Result<()> {
+    for binding in environment.entities.values() {
+        if let RecordProvider::Xlsx { project_file, .. } = &binding.provider {
+            reject_symlink_components(root, &root.join(project_file))
+                .context("entity provider project_file is invalid")?;
+        }
     }
     Ok(())
 }

@@ -14,6 +14,7 @@ const docset = {
   label: 'v1.2.3',
   path: '/v/1.2.3/',
   status: 'archived',
+  availability: 'released',
   source: 'registry-stack-v1.2.3',
   published_at: '2026-07-26',
   description: 'Test archive.',
@@ -44,6 +45,7 @@ async function fixture(t) {
     resolve(targetRoot, 'src/data/docsets.yaml'),
     YAML.stringify({
       current: 'latest',
+      released: docset.id,
       docsets: [
         {
           ...docset,
@@ -51,6 +53,7 @@ async function fixture(t) {
           label: 'Latest',
           path: '/',
           status: 'current',
+          availability: 'unreleased',
           source: 'registry-stack-main',
           products: {
             'registry-stack': { version: 'v1.2.3', ref: 'HEAD' },

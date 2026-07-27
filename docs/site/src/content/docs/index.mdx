@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-relay
   - registry-notary
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-07-27"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -15,12 +15,13 @@ standards_referenced: []
 Registry Stack adds registry-facing services, protected reads,
 [governed evidence](reference/glossary/), and audit
 records, over data an institution already holds.
-The data never leaves the source system.
+The source remains authoritative; only an authorized, minimized result crosses
+the reviewed boundary.
 
-Start with [your first registry API](journeys/spreadsheet-protected-api/), then
-[inspect its instance OpenAPI](journeys/instance-openapi/) as the next maintained step.
-Continue through the Journeys path to
-[evaluate a claim](journeys/registry-backed-notary-claim/) against a local registry API.
+Start with [your first registry API](tutorials/publish-spreadsheet-secured-registry-api/),
+then [use your own spreadsheet](tutorials/use-your-spreadsheet/) or
+[evaluate a claim](tutorials/verify-claim-registry-api/) from a canonical
+offline fixture.
 
 ## Two products
 
@@ -33,16 +34,17 @@ Use the local tutorials below for the current first-run path.
 Registry Relay exposes protected, scoped, read-only APIs over existing sources: files, extracts,
 databases, and legacy registry systems.
 
-[Your first registry API](journeys/spreadsheet-protected-api/): run a protected
+[Your first registry API](tutorials/publish-spreadsheet-secured-registry-api/): run a protected
 API locally over a sample spreadsheet.
 
 ### Registry Notary
 
-Registry Notary certifies evidence: claim evaluation, credential issuance, disclosure policy, and
-audit provenance.
+Registry Notary evaluates and attests governed evidence: bounded claim results,
+credential issuance, disclosure policy, and audit provenance.
 
-[Your first claim check](journeys/registry-backed-notary-claim/): evaluate a claim and compare the
-result with a protected row read.
+[Your first claim check](tutorials/verify-claim-registry-api/): evaluate
+synthetic match and no-match claim fixtures, then build validated unsigned
+Relay and Notary inputs.
 
 ## Security
 

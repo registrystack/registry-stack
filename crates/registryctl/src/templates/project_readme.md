@@ -57,7 +57,13 @@ registryctl doctor --profile local
 ```
 
 The generated local demo credentials live in `secrets/local.env`. They are for
-this local project only and are not production credentials.
+this local project only and are not production credentials. The file contains
+raw API keys and an audit hash secret. On Unix, registryctl protects the
+`secrets/` directory with mode `0700` and raw credential files, including the
+Bruno `environments/local.bru` file, with mode `0600`. Keep the project on a
+trusted local filesystem and replace these credentials before non-local use.
+Non-Unix builds inherit the host filesystem's access controls and cannot
+promise equivalent POSIX mode enforcement.
 Back up that file before upgrades or host moves. It contains the keys that keep
 audit hashes and generated API credentials stable.
 
@@ -79,8 +85,10 @@ Before exposing this project through a reverse proxy, IAM, and front rate
 limiter, follow
 https://docs.registrystack.org/operate/single-node-compose-behind-proxy/.
 
-Run `registryctl doctor` after config edits. It calls the Relay validator and redacts local secret
-values in the report. Add `--format json` for automation. Then run
+Run `registryctl doctor` after config edits. It runs the Relay validator through
+the digest-pinned Docker Compose v2 service, so no host Relay binary is needed,
+and redacts local secret values in the report. Add `--format json` for
+automation. Then run
 `registryctl restart` so the running containers pick up the edited config; a
 plain `start` leaves running containers unchanged.
 

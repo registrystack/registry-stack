@@ -2084,6 +2084,9 @@
                   "path": {
                     "type": "string"
                   },
+                  "project_file": {
+                    "type": "string"
+                  },
                   "sheet": {
                     "type": "string"
                   },
@@ -2094,6 +2097,7 @@
                 },
                 "required": [
                   "type",
+                  "project_file",
                   "path",
                   "sheet"
                 ],
@@ -2161,6 +2165,17 @@
               "jwks_url": {
                 "type": "string"
               },
+              "local_api_keys": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RelayLocalApiKeyBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
               "origin": {
                 "type": "string"
               }
@@ -2171,6 +2186,29 @@
               "jwks_url",
               "audience",
               "allowed_clients"
+            ],
+            "type": "object"
+          },
+          "RelayLocalApiKeyBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "match_principal": {
+                "type": "string"
+              },
+              "no_match_principal": {
+                "type": "string"
+              },
+              "scopes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "match_principal",
+              "no_match_principal",
+              "scopes"
             ],
             "type": "object"
           },

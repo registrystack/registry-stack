@@ -16,6 +16,7 @@ const { resolveDocsetBuildContext } = await import(helperUrl);
 
 const docsets = {
   current: 'latest',
+  released: 'v0.8.4',
   docsets: [
     { id: 'latest', status: 'current' },
     { id: 'v0.8.4', status: 'archived' },
@@ -44,7 +45,7 @@ test('current docset with a preview base remains current', () => {
   );
 });
 
-test('archived docset redirects current-only pages to canonical production', () => {
+test('archived docset redirects current-only pages to the Main-source preview', () => {
   const context = resolveDocsetBuildContext(docsets, {
     DOCS_DOCSET: 'v0.8.4',
     DOCS_BASE: '/v/0.8.4/',
@@ -53,7 +54,7 @@ test('archived docset redirects current-only pages to canonical production', () 
   assert.equal(context.isArchivedBuild, true);
   assert.equal(
     context.currentDocsetRedirect(currentOnlyPath),
-    `https://docs.registrystack.org${currentOnlyPath}`,
+    `https://docs.registrystack.org/preview${currentOnlyPath}`,
   );
 });
 

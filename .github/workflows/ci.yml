@@ -680,6 +680,9 @@ jobs:
       - name: Test release helper
         run: python3 -m unittest release/scripts/test_registry_release.py
 
+      - name: Test first-country release-form runner
+        run: python3 -m unittest release/scripts/test_first_country_release_form.py
+
       - name: Test release planning commands
         run: python3 -m unittest release/scripts/test_registry_release_plans.py
 
@@ -936,8 +939,7 @@ jobs:
         uses: actions/cache/restore@2c8a9bd7457de244a408f35966fab2fb45fda9c8
         with:
           path: |
-            target/registryctl-tutorial-cargo-home
-            target/registryctl-tutorial-linux-amd64
+            target/registryctl-tutorial-source
           key: registryctl-tutorial-ci-${{ runner.os }}-${{ hashFiles('docs/site/scripts/check-registryctl-tutorials.sh', 'Cargo.lock', 'Cargo.toml') }}
           restore-keys: |
             registryctl-tutorial-ci-${{ runner.os }}-
@@ -952,8 +954,7 @@ jobs:
         uses: actions/cache/save@2c8a9bd7457de244a408f35966fab2fb45fda9c8
         with:
           path: |
-            target/registryctl-tutorial-cargo-home
-            target/registryctl-tutorial-linux-amd64
+            target/registryctl-tutorial-source
           key: ${{ steps.tutorial-cache.outputs.cache-primary-key }}
 
       - name: Report tutorial disk usage
@@ -961,8 +962,7 @@ jobs:
         run: |
           df -h /
           du -sh \
-            target/registryctl-tutorial-cargo-home \
-            target/registryctl-tutorial-linux-amd64 \
+            target/registryctl-tutorial-source \
             2>/dev/null || true
 
   docs:

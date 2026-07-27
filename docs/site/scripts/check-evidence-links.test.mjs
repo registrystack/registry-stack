@@ -238,14 +238,18 @@ test('release verification uses the resolved tag target without installing the d
   assert.doesNotMatch(verifyJob, /npm ci/);
 });
 
-test('Pages checks the current machine-readable corpus before inserting archives', () => {
+test('Pages stages released-root routing before checking the mounted Main corpus', () => {
   const workflow = readFileSync(
     resolve(repositoryRoot, '.github/workflows/docs-pages.yml'),
     'utf8',
   );
   const llmsCheck = workflow.indexOf('npm run check:llms:built');
   const archiveAssembly = workflow.indexOf('npm run assemble:archives');
+  const rootStaging = workflow.indexOf('npm run stage:production-docsets');
   assert.ok(llmsCheck >= 0);
-  assert.ok(archiveAssembly > llmsCheck);
+  assert.ok(rootStaging > archiveAssembly);
+  assert.ok(llmsCheck > rootStaging);
+  assert.match(workflow, /DOCS_DIST_DIR: \$\{\{ github\.workspace \}\}\/docs\/site\/dist\/preview/);
+  assert.match(workflow, /DOCS_PUBLIC_BASE: \/preview\//);
   assert.equal(workflow.indexOf('npm run check:llms:built', llmsCheck + 1), -1);
 });

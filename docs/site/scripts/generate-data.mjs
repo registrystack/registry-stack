@@ -2,6 +2,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import YAML from 'yaml';
 
+import { validateDocsets } from './docsets.mjs';
+
 const root = process.cwd();
 const dataDir = resolve(root, 'src/data');
 const generatedDir = resolve(dataDir, 'generated');
@@ -104,6 +106,7 @@ for (const name of Object.keys(required)) {
 }
 
 const docsets = YAML.parse(await readFile(resolve(dataDir, 'docsets.yaml'), 'utf8'));
+validateDocsets(docsets);
 await writeFile(resolve(generatedDir, 'docsets.json'), `${JSON.stringify(docsets, null, 2)}\n`);
 generated.push('docsets');
 

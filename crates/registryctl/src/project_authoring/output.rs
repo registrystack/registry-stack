@@ -122,6 +122,131 @@ fn validate_generated_product_configs(compiled: &CompiledProject) -> Result<()> 
     Ok(())
 }
 
+fn validate_project_workbook_inputs(
+    loaded: &LoadedRegistryProject,
+    compiled: &CompiledProject,
+) -> Result<Vec<ArtifactInputDigest>> {
+    let environment = loaded
+        .environment
+        .as_ref()
+        .ok_or_else(|| anyhow!("workbook validation requires an explicit environment"))?;
+    let workbook_bindings = environment
+        .entities
+        .iter()
+        .filter(|(_, binding)| matches!(binding.provider, RecordProvider::Xlsx { .. }))
+        .collect::<Vec<_>>();
+    if workbook_bindings.is_empty() {
+        return Ok(loaded.artifact_inputs.clone());
+    }
+
+    let relay_config = compiled
+        .relay_private
+        .get(Path::new("config/relay.yaml"))
+        .ok_or_else(|| anyhow!("workbook validation requires generated Relay configuration"))?;
+    let relay: registry_relay::config::Config = serde_norway::from_slice(relay_config)
+        .map_err(|_| anyhow!("generated Relay configuration is invalid"))?;
+    let mut workbooks =
+        BTreeMap::<String, (PathBuf, Vec<registry_relay::config::ResourceConfig>)>::new();
+    for (entity_id, binding) in workbook_bindings {
+        let RecordProvider::Xlsx { project_file, .. } = &binding.provider else {
+            unreachable!("workbook bindings are filtered above");
+        };
+        let entity = &loaded
+            .entities
+            .get(entity_id)
+            .ok_or_else(|| anyhow!("workbook binding has no generated entity"))?
+            .document;
+        let resource_id = entity_materialization_resource_id(entity, binding)?;
+        let resources = relay
+            .datasets
+            .iter()
+            .flat_map(registry_relay::config::DatasetConfig::table_configs)
+            .filter(|resource| resource.id.as_str() == resource_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        if resources.len() != 1 {
+            bail!("workbook binding has no exact generated Relay resource");
+        }
+        let relative = project_file
+            .to_str()
+            .ok_or_else(|| anyhow!("workbook source path is invalid"))?
+            .to_string();
+        let entry = workbooks
+            .entry(relative)
+            .or_insert_with(|| (project_file.clone(), Vec::new()));
+        entry.1.extend(resources);
+    }
+
+    let byte_limit = registry_relay::ingest::xlsx_source_byte_limit(&relay);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| anyhow!("workbook validation runtime is unavailable"))?;
+    let mut inputs = loaded
+        .artifact_inputs
+        .iter()
+        .cloned()
+        .map(|input| (input.path.as_str().to_string(), input))
+        .collect::<BTreeMap<_, _>>();
+    for (relative, (project_file, resources)) in workbooks {
+        let bytes = read_project_workbook(&loaded.root, &project_file, byte_limit)?;
+        for resource in resources {
+            runtime
+                .block_on(registry_relay::ingest::validate_xlsx_source_bytes(
+                    &relay, &resource, &bytes,
+                ))
+                .map_err(|error| {
+                    anyhow!("workbook validation failed ({})", error.code())
+                })?;
+        }
+        let input = ArtifactInputDigest {
+            path: ProjectRelativePath::new(relative.clone())
+                .map_err(|_| anyhow!("workbook source path is invalid"))?,
+            digest: Sha256Digest::new(sha256_uri(&bytes))
+                .map_err(|_| anyhow!("workbook source digest is invalid"))?,
+            classification: ArtifactInputClassification::OperatorOwnedSourceData,
+        };
+        if inputs.insert(relative, input).is_some() {
+            bail!("workbook source path overlaps an authored project input");
+        }
+    }
+    Ok(inputs.into_values().collect())
+}
+
+fn read_project_workbook(
+    root: &Path,
+    relative: &Path,
+    byte_limit: u64,
+) -> Result<Vec<u8>> {
+    let path = root.join(relative);
+    reject_symlink_components(root, &path)
+        .map_err(|_| anyhow!("workbook source input is not a contained regular file"))?;
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|_| anyhow!("workbook source input is missing or unreadable"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > byte_limit {
+        bail!("workbook source input is missing, unreadable, or exceeds the Relay byte limit");
+    }
+    let read_limit = byte_limit
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("workbook source byte limit is invalid"))?;
+    let file = fs::File::open(&path)
+        .map_err(|_| anyhow!("workbook source input is missing or unreadable"))?;
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(metadata.len())
+            .map_err(|_| anyhow!("workbook source input exceeds the Relay byte limit"))?,
+    );
+    file.take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|_| anyhow!("workbook source input is unreadable"))?;
+    if u64::try_from(bytes.len())
+        .map_err(|_| anyhow!("workbook source input exceeds the Relay byte limit"))?
+        > byte_limit
+    {
+        bail!("workbook source input exceeds the Relay byte limit");
+    }
+    Ok(bytes)
+}
+
 fn validate_generated_notary(compiled: &CompiledProject) -> Result<()> {
     let notary_config = compiled
         .notary_private
@@ -162,6 +287,7 @@ fn validate_generated_relay_activation(
     let mut local_config: Value = serde_norway::from_slice(relay_config)
         .context("generated Relay config did not parse for activation validation")?;
     local_config["deployment"]["profile"] = Value::String("local".to_string());
+    materialize_generated_relay_validation_fingerprints(&mut local_config, &validation_root.path)?;
     fs::remove_file(&config_path)
         .context("failed to stage generated Relay activation validation")?;
     write_private_file(
@@ -176,6 +302,60 @@ fn validate_generated_relay_activation(
             artifacts,
         )
         .context("generated Relay config failed production consultation activation validation")?;
+    }
+    Ok(())
+}
+
+fn materialize_generated_relay_validation_fingerprints(
+    config: &mut Value,
+    validation_root: &Path,
+) -> Result<()> {
+    let Some(api_keys) = config
+        .pointer_mut("/auth/api_keys")
+        .and_then(Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+    let mut references = BTreeMap::<String, (PathBuf, String)>::new();
+    for key in api_keys {
+        let Some(fingerprint) = key
+            .as_object_mut()
+            .and_then(|key| key.get_mut("fingerprint"))
+        else {
+            continue;
+        };
+        let Some(reference) = fingerprint.as_object() else {
+            continue;
+        };
+        if reference.len() != 2 || reference.get("provider").and_then(Value::as_str) != Some("env")
+        {
+            continue;
+        }
+        let Some(name) = reference
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        let next_index = references.len() + 1;
+        let (path, synthetic) = references
+            .entry(name.to_string())
+            .or_insert_with(|| {
+                (
+                    validation_root.join(format!("api-key-fingerprint-{next_index}")),
+                    format!("sha256:{next_index:064x}"),
+                )
+            })
+            .clone();
+        if !path.exists() {
+            write_private_file(&path, synthetic.as_bytes())
+                .map_err(|_| anyhow!("failed to stage a generated Relay validation credential"))?;
+        }
+        *fingerprint = json!({
+            "provider": "file",
+            "path": path,
+        });
     }
     Ok(())
 }
@@ -1560,9 +1740,7 @@ fn lower_authored_fixture(
         }
         let request = serde_json::to_value(request)
             .context("failed to inspect the governed synthetic fixture request")?;
-        if contains_sensitive_request_key(&request)
-            || contains_fixture_secret_reference(&request)
-        {
+        if contains_sensitive_request_key(&request) || contains_fixture_secret_reference(&request) {
             bail!("fixture governed request contains a forbidden credential-like field");
         }
     }

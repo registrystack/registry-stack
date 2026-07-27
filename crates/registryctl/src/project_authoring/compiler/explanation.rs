@@ -526,15 +526,6 @@ fn trusted_local_authored_values(
     Ok(values)
 }
 
-#[cfg(test)]
-pub(crate) fn generated_explanation_for_test(
-    root: &Path,
-    environment_name: &str,
-) -> Result<ProjectExplanationReportV1> {
-    let loaded = load_registry_project(root, Some(environment_name))?;
-    generated_explanation(&loaded, environment_name)
-}
-
 fn add_project_topology_fields(
     builder: &mut ExplanationBuilder<'_>,
     loaded: &LoadedRegistryProject,

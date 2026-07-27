@@ -17,6 +17,9 @@ const distDir = process.env.DOCS_DIST_DIR
   ? resolve(process.env.DOCS_DIST_DIR)
   : resolve(here, '../dist');
 const docsDir = resolve(here, '../src/content/docs');
+const publicBase = `/${String(process.env.DOCS_PUBLIC_BASE || '/')
+  .replace(/^\/+|\/+$/g, '')}/`.replace(/^\/\/$/, '/');
+const canonicalRoot = `https://docs.registrystack.org${publicBase}`;
 
 // Load the discovery header from its single source of truth so this post-build
 // check fails loudly if the built corpus or any per-page .md drifts from it.
@@ -28,7 +31,10 @@ if (!headerMatch) {
   console.error('check-llms: could not extract DISCOVERY_HEADER from src/lib/page-markdown.ts');
   process.exit(1);
 }
-const DISCOVERY_HEADER = headerMatch[1];
+const DISCOVERY_HEADER = headerMatch[1].replaceAll(
+  'https://docs.registrystack.org/',
+  canonicalRoot,
+);
 const HEADER_LINES = DISCOVERY_HEADER.split('\n');
 
 // Site roots: the main build root plus every archived docset mount point.
@@ -143,7 +149,7 @@ function hasDraftCorpusEntry(file, content, page) {
   if (heading.test(content)) return true;
   if (file !== 'llms.txt') return false;
 
-  const canonicalUrl = `https://docs.registrystack.org/${page.pagePath ? `${page.pagePath}/` : ''}`;
+  const canonicalUrl = `${canonicalRoot}${page.pagePath ? `${page.pagePath}/` : ''}`;
   return content.includes(`[${page.title}](${canonicalUrl})`);
 }
 
@@ -249,11 +255,11 @@ for (const f of sampleFiles) {
     );
     assert(
       `dist/${f} contains llms.txt URL`,
-      content.includes('https://docs.registrystack.org/llms.txt'),
+      content.includes(`${canonicalRoot}llms.txt`),
     );
     assert(
       `dist/${f} contains llms-full.txt URL`,
-      content.includes('https://docs.registrystack.org/llms-full.txt'),
+      content.includes(`${canonicalRoot}llms-full.txt`),
     );
   }
 }

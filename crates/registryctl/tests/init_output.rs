@@ -3,32 +3,8 @@
 use std::fs;
 use std::process::{Command, Output};
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use tempfile::TempDir;
-
-const RELAY_IMAGE: &str = "ghcr.io/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const NOTARY_IMAGE: &str = "ghcr.io/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
-fn write_image_lock(temp: &TempDir) -> std::path::PathBuf {
-    let path = temp.path().join("release-image-lock.json");
-    fs::write(
-        &path,
-        serde_json::to_vec_pretty(&json!({
-            "schema_version": "registryctl.release_image_lock.v1",
-            "release_tag": format!("v{}", env!("CARGO_PKG_VERSION")),
-            "manifest_source_ref": "a".repeat(40),
-            "tag_target": "b".repeat(40),
-            "platform": "linux/amd64",
-            "images": {
-                "registry-relay": RELAY_IMAGE,
-                "registry-notary": NOTARY_IMAGE,
-            }
-        }))
-        .expect("image lock serializes"),
-    )
-    .expect("image lock writes");
-    path
-}
 
 fn run_registryctl(args: &[&str], image_lock: Option<&std::path::Path>) -> Output {
     run_registryctl_in(None, args, image_lock)
@@ -267,62 +243,42 @@ fn starter_init_json_is_versioned_and_contains_only_init_facts() {
 
 #[cfg(unix)]
 #[test]
-fn json_init_rejects_non_utf8_destinations_before_all_dispatches() {
+fn json_init_rejects_non_utf8_starter_destinations_before_dispatch() {
     use std::os::unix::ffi::OsStringExt as _;
 
     let temporary = TempDir::new().expect("temporary directory");
-    for (name, before, after, needs_image_lock) in [
-        (
-            "starter",
-            &["init", "--from", "http", "--project-dir"][..],
-            &["--format", "json"][..],
-            false,
-        ),
-        (
-            "relay",
-            &["init", "relay"][..],
-            &["--format", "json"][..],
-            true,
-        ),
-    ] {
-        let mut leaf = format!("{name}-").into_bytes();
-        leaf.push(0xff);
-        let destination = temporary.path().join(std::ffi::OsString::from_vec(leaf));
-        let missing_image_lock = temporary.path().join(format!("{name}-missing-lock.json"));
-        let mut command = Command::new(env!("CARGO_BIN_EXE_registryctl"));
-        command
-            .args(before)
-            .arg(&destination)
-            .args(after)
-            .env("REGISTRYCTL_NO_UPDATE_CHECK", "1");
-        if needs_image_lock {
-            // Missing on purpose: the UTF-8 preflight must run before image-lock loading.
-            command.env("REGISTRYCTL_IMAGE_LOCK", &missing_image_lock);
-        }
-        let output = command.output().expect("registryctl runs");
+    let mut leaf = b"starter-".to_vec();
+    leaf.push(0xff);
+    let destination = temporary.path().join(std::ffi::OsString::from_vec(leaf));
+    let output = Command::new(env!("CARGO_BIN_EXE_registryctl"))
+        .args(["init", "--from", "http", "--project-dir"])
+        .arg(&destination)
+        .args(["--format", "json"])
+        .env("REGISTRYCTL_NO_UPDATE_CHECK", "1")
+        .output()
+        .expect("registryctl runs");
 
-        assert!(
-            !output.status.success(),
-            "{name} init unexpectedly succeeded"
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("init --format json requires a UTF-8 destination path"),
-            "{name} stderr was: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            !destination.exists(),
-            "{name} JSON destination validation must happen before initialization"
-        );
-    }
+    assert!(
+        !output.status.success(),
+        "starter init unexpectedly succeeded"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("init --format json requires a UTF-8 destination path"),
+        "stderr was: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !destination.exists(),
+        "JSON destination validation must happen before initialization"
+    );
 }
 
 #[test]
-fn relay_init_defaults_to_the_same_human_result_structure() {
+fn relay_init_is_retired_before_image_lock_loading_or_project_mutation() {
     let temporary = TempDir::new().expect("temporary directory");
-    let image_lock = write_image_lock(&temporary);
     let project = temporary.path().join("my-first-api");
+    let missing_image_lock = temporary.path().join("missing-image-lock.json");
     let output = run_registryctl(
         &[
             "init",
@@ -331,56 +287,29 @@ fn relay_init_defaults_to_the_same_human_result_structure() {
             "--sample",
             "benefits",
         ],
-        Some(&image_lock),
+        Some(&missing_image_lock),
     );
-    assert_success(&output);
 
-    let stdout = String::from_utf8(output.stdout).expect("UTF-8 output");
+    assert!(
+        !output.status.success(),
+        "retired command unexpectedly succeeded"
+    );
+    assert!(output.stdout.is_empty(), "retired command emitted stdout");
     assert_eq!(
-        stdout,
-        format!(
-            "Initialized Relay spreadsheet API \"my-first-api\".\n  Directory: {}\n  Sample: benefits\n  Bruno collection: {}\n\nNext:\n  cd {}\n  registryctl doctor --profile local\n  registryctl start\n",
-            project.display(),
-            project.join("bruno/registry-api").display(),
-            project.display(),
-        )
+        String::from_utf8(output.stderr).expect("UTF-8 stderr"),
+        "Error: `registryctl init relay` was retired before 1.0. Reinitialize with \
+`registryctl init --from spreadsheet --project-dir <directory>` and re-express the reviewed \
+project intent; legacy direct projects are not migrated automatically.\n"
+    );
+    assert!(
+        !project.exists(),
+        "retired command must not create a project directory"
     );
 }
 
 #[cfg(unix)]
 #[test]
-fn relay_init_human_artifact_paths_are_line_safe_and_shell_usable() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let image_lock = write_image_lock(&temporary);
-    let project = control_character_project(&temporary, "my-first-api");
-    let output = run_registryctl(
-        &[
-            "init",
-            "relay",
-            project.to_str().expect("UTF-8 project path"),
-            "--sample",
-            "benefits",
-        ],
-        Some(&image_lock),
-    );
-    assert_success(&output);
-
-    let stdout = String::from_utf8(output.stdout).expect("UTF-8 output");
-    let rendered_project = expected_human_path(&project);
-    let rendered_bruno = expected_human_path(&project.join("bruno/registry-api"));
-    assert_eq!(
-        stdout,
-        format!(
-            "Initialized Relay spreadsheet API \"my-first-api\".\n  Directory: {rendered_project}\n  Sample: benefits\n  Bruno collection: {rendered_bruno}\n\nNext:\n  cd {rendered_project}\n  registryctl doctor --profile local\n  registryctl start\n",
-        )
-    );
-    assert_stdout_has_no_terminal_controls(&stdout);
-    assert_shell_path_is_usable(&rendered_project);
-}
-
-#[cfg(unix)]
-#[test]
-fn json_init_paths_preserve_control_characters_for_both_forms() {
+fn json_init_paths_preserve_control_characters() {
     let temporary = TempDir::new().expect("temporary directory");
 
     let starter_project = control_character_project(&temporary, "registry-project-json");
@@ -417,127 +346,35 @@ fn json_init_paths_preserve_control_characters_for_both_forms() {
             .to_str()
             .expect("UTF-8 artifact path")
     );
-
-    let relay_project = control_character_project(&temporary, "relay-project-json");
-    let image_lock = write_image_lock(&temporary);
-    let relay_output = run_registryctl(
-        &[
-            "init",
-            "relay",
-            relay_project.to_str().expect("UTF-8 project path"),
-            "--sample",
-            "benefits",
-            "--format",
-            "json",
-        ],
-        Some(&image_lock),
-    );
-    assert_success(&relay_output);
-    let relay: Value =
-        serde_json::from_slice(&relay_output.stdout).expect("Relay init emits valid JSON");
-    assert_eq!(
-        relay["output"],
-        relay_project.to_str().expect("UTF-8 project path")
-    );
-    assert_eq!(
-        relay["artifacts"]["project_file"],
-        relay_project
-            .join("registryctl.yaml")
-            .to_str()
-            .expect("UTF-8 artifact path")
-    );
-    assert_eq!(
-        relay["artifacts"]["bruno_collection"],
-        relay_project
-            .join("bruno/registry-api")
-            .to_str()
-            .expect("UTF-8 artifact path")
-    );
 }
 
 #[test]
-fn relay_init_accepts_json_format_after_the_subcommand_without_mixed_output() {
+fn add_notary_is_retired_without_loading_image_lock_or_mutating_the_directory() {
     let temporary = TempDir::new().expect("temporary directory");
-    let image_lock = write_image_lock(&temporary);
-    let project = temporary.path().join("my-first-api-json");
-    let output = run_registryctl(
-        &[
-            "init",
-            "relay",
-            project.to_str().expect("UTF-8 project path"),
-            "--sample",
-            "benefits",
-            "--format",
-            "json",
-        ],
-        Some(&image_lock),
-    );
-    assert_success(&output);
-
-    let report: Value = serde_json::from_slice(&output.stdout).expect("init emits only JSON");
-    assert_eq!(report["schema_version"], "registryctl.init.v1");
-    assert_eq!(report["status"], "initialized");
-    assert_eq!(report["project"], "my-first-api-json");
-    assert_eq!(report["project_kind"], "relay_spreadsheet_api");
-    assert_eq!(
-        report["source"],
-        json!({"kind": "sample", "id": "benefits"})
-    );
-    assert_eq!(
-        report["artifacts"]["bruno_collection"],
-        project
-            .join("bruno/registry-api")
-            .to_string_lossy()
-            .as_ref()
-    );
-    assert!(report["artifacts"].get("editor_manifest").is_none());
-}
-
-#[test]
-fn add_notary_defaults_to_human_output_and_keeps_versioned_json_opt_in() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let image_lock = write_image_lock(&temporary);
-
-    let human_project = temporary.path().join("my-first-api");
-    let init = run_registryctl(
-        &[
-            "init",
-            "relay",
-            human_project.to_str().expect("UTF-8 project path"),
-        ],
-        Some(&image_lock),
-    );
-    assert_success(&init);
-    let human = run_registryctl_in(Some(&human_project), &["add", "notary"], Some(&image_lock));
-    assert_success(&human);
-    assert_eq!(
-        String::from_utf8(human.stdout).expect("UTF-8 output"),
-        "Added Registry Notary to \"my-first-api\".\n  Claim: notary/project/registry-stack.yaml\n  Notary API after start: http://127.0.0.1:4255\n\nNext:\n  registryctl start\n"
-    );
-
-    let json_project = temporary.path().join("my-first-api-json");
-    let init = run_registryctl(
-        &[
-            "init",
-            "relay",
-            json_project.to_str().expect("UTF-8 project path"),
-        ],
-        Some(&image_lock),
-    );
-    assert_success(&init);
-    let json_output = run_registryctl_in(
-        Some(&json_project),
+    let missing_image_lock = temporary.path().join("missing-image-lock.json");
+    let sentinel = temporary.path().join("sentinel");
+    fs::write(&sentinel, "unchanged").expect("sentinel writes");
+    let output = run_registryctl_in(
+        Some(temporary.path()),
         &["add", "notary", "--format", "json"],
-        Some(&image_lock),
+        Some(&missing_image_lock),
     );
-    assert_success(&json_output);
-    let report: Value =
-        serde_json::from_slice(&json_output.stdout).expect("add notary emits only JSON");
-    assert_eq!(report["schema_version"], "registryctl.add_notary.v1");
-    assert_eq!(report["status"], "added");
-    assert_eq!(report["project"], "my-first-api-json");
-    assert_eq!(report["notary_url"], "http://127.0.0.1:4255");
-    assert_eq!(report["claim_file"], "notary/project/registry-stack.yaml");
+
+    assert!(
+        !output.status.success(),
+        "retired command unexpectedly succeeded"
+    );
+    assert!(output.stdout.is_empty(), "retired command emitted stdout");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("UTF-8 stderr"),
+        "Error: `registryctl add notary` was retired before 1.0. Initialize a canonical project \
+with `registryctl init --from spreadsheet`, then author and test a Notary evidence service in \
+registry-stack.yaml; registryctl does not automatically migrate the legacy add-on project.\n"
+    );
+    assert_eq!(
+        fs::read_to_string(sentinel).expect("sentinel reads"),
+        "unchanged"
+    );
 }
 
 #[test]

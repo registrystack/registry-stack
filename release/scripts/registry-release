@@ -44,6 +44,9 @@ EXACT_ARTIFACT_INVENTORY = {
     "registryctl-image-lock",
     "registry-docs",
 }
+OPTIONAL_EXACT_ARTIFACTS = {
+    "registryctl-installer",
+}
 RELEASE_IMAGE_LOCK_REPOSITORIES = {
     "registry-relay": "ghcr.io/registrystack/registry-relay",
     "registry-notary": "ghcr.io/registrystack/registry-notary",
@@ -107,7 +110,9 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
     ):
         artifact_names = set(artifacts)
         missing = sorted(EXACT_ARTIFACT_INVENTORY - artifact_names)
-        unexpected = sorted(artifact_names - EXACT_ARTIFACT_INVENTORY)
+        unexpected = sorted(
+            artifact_names - EXACT_ARTIFACT_INVENTORY - OPTIONAL_EXACT_ARTIFACTS
+        )
         if missing or unexpected:
             details = []
             if missing:
@@ -938,6 +943,7 @@ def render_capsule(
     default_branch: str,
     require_registryctl_image_lock: bool = False,
     require_registry_docs_archive: bool = False,
+    require_registryctl_installer: bool = False,
 ) -> int:
     manifest = load_yaml(manifest_path)
     if not isinstance(manifest, dict):
@@ -946,6 +952,17 @@ def render_capsule(
     if default_branch_protection not in {"verified", "unverified", "not-public"}:
         print("error: default branch protection must be verified, unverified, or not-public", file=sys.stderr)
         return 1
+    artifacts = manifest.get("artifacts", {})
+    if require_registryctl_installer and (
+        not isinstance(artifacts, dict)
+        or str(artifacts.get("registryctl-installer", "")) != version
+    ):
+        print(
+            "error: capsule requires manifest artifact registryctl-installer "
+            f"at version {version}",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         checksums = parse_sha256s(binary_dir / "SHA256SUMS")
@@ -953,6 +970,7 @@ def render_capsule(
         release_files = []
         expected_image_lock_name = f"registryctl-v{version}-image-lock.json"
         expected_docs_archive_name = f"registry-docs-v{version}.tar.gz"
+        expected_installer_name = f"registryctl-v{version}-install.sh"
         for path in sorted(binary_dir.iterdir()) if binary_dir.exists() else []:
             if not path.is_file() or path.name == "SHA256SUMS":
                 continue
@@ -963,6 +981,10 @@ def render_capsule(
             if path.name.startswith("registry-docs-") and path.name != expected_docs_archive_name:
                 raise ValueError(
                     f"unexpected registry docs archive filename {path.name}; expected {expected_docs_archive_name}"
+                )
+            if path.name.startswith("registryctl-v") and path.name.endswith("-install.sh") and path.name != expected_installer_name:
+                raise ValueError(
+                    f"unexpected registryctl installer filename {path.name}; expected {expected_installer_name}"
                 )
             file_sha256 = verified_binary_sha256(path, checksums)
             sbom = binary_sbom_dir / f"{path.name}.spdx.json"
@@ -988,6 +1010,9 @@ def render_capsule(
             elif path.name == expected_docs_archive_name:
                 file_evidence["kind"] = "registry-docs-archive"
                 release_files.append(file_evidence)
+            elif path.name == expected_installer_name:
+                file_evidence["kind"] = "registryctl-installer"
+                release_files.append(file_evidence)
             else:
                 binaries.append(file_evidence)
 
@@ -999,6 +1024,10 @@ def render_capsule(
             entry for entry in release_files
             if entry["kind"] == "registry-docs-archive"
         ]
+        installers = [
+            entry for entry in release_files
+            if entry["kind"] == "registryctl-installer"
+        ]
         if require_registryctl_image_lock and len(image_locks) != 1:
             raise ValueError(
                 f"capsule requires exactly one registryctl release image lock named {expected_image_lock_name}"
@@ -1006,6 +1035,10 @@ def render_capsule(
         if require_registry_docs_archive and len(docs_archives) != 1:
             raise ValueError(
                 f"capsule requires exactly one registry docs archive named {expected_docs_archive_name}"
+            )
+        if require_registryctl_installer and len(installers) != 1:
+            raise ValueError(
+                f"capsule requires exactly one registryctl installer named {expected_installer_name}"
             )
 
         images = []
@@ -2840,6 +2873,7 @@ def main() -> int:
     capsule_parser.add_argument("--default-branch", default="origin/main")
     capsule_parser.add_argument("--require-registryctl-image-lock", action="store_true")
     capsule_parser.add_argument("--require-registry-docs-archive", action="store_true")
+    capsule_parser.add_argument("--require-registryctl-installer", action="store_true")
     prepare_parser = subparsers.add_parser("prepare")
     prepare_parser.add_argument("--version", required=True)
     prepare_parser.add_argument("--release-id", required=True)
@@ -2919,6 +2953,7 @@ def main() -> int:
             args.default_branch,
             args.require_registryctl_image_lock,
             args.require_registry_docs_archive,
+            args.require_registryctl_installer,
         )
     if args.command == "prepare":
         return run_release_plan(

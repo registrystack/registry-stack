@@ -717,6 +717,16 @@ class GateInventoryTest(unittest.TestCase):
             self.module.missing_gates(text),
         )
 
+    def test_missing_first_country_release_form_runner_tests_are_reported(self) -> None:
+        text = self.workflow.replace(
+            "python3 -m unittest release/scripts/test_first_country_release_form.py",
+            "python3 release/scripts/first-country-release-form.py --help",
+        )
+        self.assertIn(
+            "First-country release-form runner tests",
+            self.module.missing_gates(text),
+        )
+
     def test_missing_external_integration_packet_validation_is_reported(self) -> None:
         text = self.workflow.replace(
             "python3 release/scripts/integration-e2-runner.py validate",

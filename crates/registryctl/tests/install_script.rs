@@ -62,6 +62,113 @@ fn installer_help_describes_version_aware_release_assets() {
         "{stdout}"
     );
     assert!(stdout.contains("matching release image lock"), "{stdout}");
+    assert!(stdout.contains("REGISTRYCTL_ASSET_DIR"), "{stdout}");
+    assert!(
+        stdout.contains("higher-assurance installation mode"),
+        "{stdout}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn versioned_release_asset_selects_its_own_release_without_an_override() {
+    let fixture = InstallerFixture::new();
+    let versioned_installer = fixture
+        ._temp
+        .path()
+        .join(format!("registryctl-{}-install.sh", fixture.version));
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh"),
+        &versioned_installer,
+    )
+    .unwrap();
+    let output = fixture
+        .command_for(&versioned_installer, false)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "versioned installer failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let downloads = fs::read_to_string(fixture.fake_curl_log()).unwrap();
+    assert!(
+        downloads.contains(&format!("/releases/download/{}/", fixture.version)),
+        "{downloads}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn versioned_release_asset_rejects_a_different_release_override_before_download() {
+    let fixture = InstallerFixture::new();
+    let versioned_installer = fixture
+        ._temp
+        .path()
+        .join(format!("registryctl-{}-install.sh", fixture.version));
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh"),
+        &versioned_installer,
+    )
+    .unwrap();
+
+    let output = fixture
+        .command_for(&versioned_installer, false)
+        .env("REGISTRYCTL_VERSION", "v9.8.6")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains(
+            "Refusing a release override that does not match the versioned installer asset."
+        ),
+        "{stderr}"
+    );
+    assert!(!fixture.fake_curl_log().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn verified_local_asset_mode_installs_without_network_downloads() {
+    let fixture = InstallerFixture::new();
+    fs::remove_file(fixture.fake_bin.join("curl")).unwrap();
+    let output = fixture.run_from_verified_assets();
+
+    assert!(
+        output.status.success(),
+        "local asset installation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Installing verified local registryctl"),
+        "{stdout}"
+    );
+    assert!(!fixture.fake_curl_log().exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn unsupported_platform_fails_before_download_without_a_source_build_fallback() {
+    let fixture = InstallerFixture::new();
+    let output = fixture
+        .command()
+        .env("FAKE_UNAME_S", "Darwin")
+        .env("FAKE_UNAME_M", "x86_64")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("Supported platforms: Linux amd64, Linux arm64, and macOS arm64."),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("cargo"), "{stderr}");
+    assert!(!fixture.fake_curl_log().exists());
 }
 
 #[cfg(unix)]
@@ -131,6 +238,16 @@ fn installer_checksum_verifies_and_installs_binary_with_matching_lock() {
         stdout.contains("Evidence availability varies by release, and v0.8.0 is unsigned."),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("registryctl init --from spreadsheet --project-dir my-first-api"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("registryctl doctor --profile local"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("registryctl init relay"), "{stdout}");
+    assert!(!stdout.contains("registryctl add notary"), "{stdout}");
 }
 
 #[cfg(unix)]
@@ -347,8 +464,8 @@ cp "${FAKE_RELEASE_DIR}/${url##*/}" "$dest"
             &fake_bin.join("uname"),
             r#"#!/usr/bin/env bash
 case "${1:-}" in
-  -s) printf 'Linux\n' ;;
-  -m) printf 'x86_64\n' ;;
+  -s) printf '%s\n' "${FAKE_UNAME_S:-Linux}" ;;
+  -m) printf '%s\n' "${FAKE_UNAME_M:-x86_64}" ;;
   *) exit 1 ;;
 esac
 "#,
@@ -389,6 +506,13 @@ esac
 
     fn run(&self) -> std::process::Output {
         self.command().output().unwrap()
+    }
+
+    fn run_from_verified_assets(&self) -> std::process::Output {
+        self.command()
+            .env("REGISTRYCTL_ASSET_DIR", &self.release_dir)
+            .output()
+            .unwrap()
     }
 
     fn run_with_second_mv_failure(&self) -> std::process::Output {
@@ -462,6 +586,10 @@ exec "$REAL_MV" "$@"
 
     fn command(&self) -> Command {
         let installer = Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh");
+        self.command_for(&installer, true)
+    }
+
+    fn command_for(&self, installer: &Path, set_version: bool) -> Command {
         let path = format!(
             "{}:{}",
             self.fake_bin.display(),
@@ -473,8 +601,10 @@ exec "$REAL_MV" "$@"
             .env("PATH", path)
             .env("FAKE_RELEASE_DIR", &self.release_dir)
             .env("FAKE_CURL_LOG", self.fake_curl_log())
-            .env("REGISTRYCTL_VERSION", &self.version)
             .env("REGISTRYCTL_INSTALL_DIR", &self.install_dir);
+        if set_version {
+            command.env("REGISTRYCTL_VERSION", &self.version);
+        }
         command
     }
 }

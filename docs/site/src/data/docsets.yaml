@@ -1,4 +1,5 @@
 current: latest
+released: v0.13.0
 docsets:
   - id: latest
     label: Main source (unreleased)

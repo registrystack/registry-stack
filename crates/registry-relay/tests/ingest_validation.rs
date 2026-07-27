@@ -336,10 +336,10 @@ fn primary_key_present_in_observed_accepts() {
     run(&decl, &obs, Some("id"), None).expect("pk present");
 }
 
-// ── Rule 13b: primary_key non-unique in sample -> SchemaMismatch ─────────────
+// ── Rule 13b: primary_key non-unique in materialized rows -> SchemaMismatch ──
 
 #[test]
-fn primary_key_non_unique_in_sample_fails() {
+fn primary_key_non_unique_in_materialized_rows_fails() {
     let decl = declared(false, vec![field("id", FieldType::Integer, false)]);
     let obs = arrow_schema(vec![("id", DataType::Int64, false)]);
     let batch = RecordBatch::try_new(
@@ -352,7 +352,7 @@ fn primary_key_non_unique_in_sample_fails() {
 }
 
 #[test]
-fn primary_key_unique_in_sample_accepts() {
+fn primary_key_unique_in_materialized_rows_accepts() {
     let decl = declared(false, vec![field("id", FieldType::Integer, false)]);
     let obs = arrow_schema(vec![("id", DataType::Int64, false)]);
     let batch = RecordBatch::try_new(
@@ -361,6 +361,18 @@ fn primary_key_unique_in_sample_accepts() {
     )
     .unwrap();
     run(&decl, &obs, Some("id"), Some(&batch)).expect("unique pk");
+}
+
+#[test]
+fn primary_key_duplicate_after_row_one_thousand_fails() {
+    let decl = declared(false, vec![field("id", FieldType::Integer, false)]);
+    let obs = arrow_schema(vec![("id", DataType::Int64, false)]);
+    let mut ids = (0_i64..1_002).collect::<Vec<_>>();
+    ids[1_001] = ids[1_000];
+    let batch =
+        RecordBatch::try_new(Arc::new(obs.clone()), vec![Arc::new(Int64Array::from(ids))]).unwrap();
+    let err = run(&decl, &obs, Some("id"), Some(&batch)).unwrap_err();
+    assert!(matches!(err, IngestError::SchemaMismatch));
 }
 
 // ── Rule 14: declared type uncastable to observed -> SchemaMismatch ──────────

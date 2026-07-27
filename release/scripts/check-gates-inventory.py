@@ -174,6 +174,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_registry_release.py",
     ),
     (
+        "First-country release-form runner tests",
+        "run: python3 -m unittest release/scripts/test_first_country_release_form.py",
+    ),
+    (
         "Release planning command tests",
         "run: python3 -m unittest release/scripts/test_registry_release_plans.py",
     ),

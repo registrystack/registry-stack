@@ -9,17 +9,21 @@ Use this skill to troubleshoot generated local Registry projects without duplica
 
 ## Workflow
 
-1. Inspect `registryctl.yaml` to identify Relay, Notary, env file, output directory, and generated layout.
+1. Inspect `registry-stack.yaml` and the selected environment file to identify
+   the authored services, source binding, and ownership boundary. Do not edit
+   generated files under `.registry-stack/`.
 2. Run:
 
    ```sh
-   registryctl doctor --format json
+   registryctl doctor --profile local --format json
    ```
 
-   Add `--profile <local|hosted_lab|production|evidence_grade>` only when the user asks for an explicit review override.
+   The clone-free local runtime supports Docker Compose v2. Do not substitute
+   another provider name or widen the listener.
 
 3. Parse the merged report. Attribute product failures back to the product that emitted them.
-4. For runtime failures, use `registryctl status`, `registryctl logs`, `registryctl smoke`, or `registryctl notary smoke` as appropriate.
+4. For runtime failures, use `registryctl status`, `registryctl logs`, or
+   `registryctl smoke` as appropriate.
 5. Fix the smallest project/config issue, rerun the relevant product doctor through registryctl, then rerun smoke only when runtime behavior was affected.
 
 ## Redaction Rules
@@ -28,4 +32,7 @@ Do not print raw env-file values, API keys, source tokens, Redis URLs, private J
 
 ## Output
 
-Lead with the failing check and concrete fix. Include commands run and final doctor/smoke result. If a product binary is missing, report the `not_run` result and installation/PATH action.
+Lead with the failing check and concrete fix. Include commands run and final
+doctor or smoke result. If Docker Compose v2 is unavailable, report the
+`not_run` result and supported-provider action. The local doctor runs the
+digest-pinned Relay container; it does not require an ambient Relay binary.

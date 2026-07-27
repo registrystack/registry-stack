@@ -2846,7 +2846,7 @@ mod tests {
             .expect("embedded reference coverage is readable");
         assert!(!coverage.source_contract.reads_country_workspaces);
         assert!(!coverage.source_contract.reads_runtime_configuration);
-        assert_eq!(coverage.coverage.path_count, 649);
+        assert_eq!(coverage.coverage.path_count, 656);
     }
 
     #[test]

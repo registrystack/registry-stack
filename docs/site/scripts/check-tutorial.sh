@@ -165,8 +165,9 @@ done
 # remove a documented command.
 REGISTRYCTL_TUTORIALS=(
 	"author-registry-project:32"
-	"publish-spreadsheet-secured-registry-api:49"
-	"verify-claim-registry-api:79"
+	"publish-spreadsheet-secured-registry-api:26"
+	"use-your-spreadsheet:14"
+	"verify-claim-registry-api:24"
 )
 
 count_sh_command_lines() {
