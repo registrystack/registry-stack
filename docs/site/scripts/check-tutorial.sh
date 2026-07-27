@@ -165,7 +165,7 @@ done
 # remove a documented command.
 REGISTRYCTL_TUTORIALS=(
 	"author-registry-project:32"
-	"publish-spreadsheet-secured-registry-api:23"
+	"publish-spreadsheet-secured-registry-api:24"
 	"use-your-spreadsheet:19"
 	"verify-claim-registry-api:87"
 )
