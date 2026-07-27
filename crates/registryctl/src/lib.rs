@@ -248,6 +248,7 @@ const NOTARY_PROJECT_DIR: &str = "notary/project";
 const NOTARY_RUNTIME_VISIBILITY_SERVICE: &str = "registry-relay-consultation-bootstrap";
 const NOTARY_RUNTIME_VISIBILITY_ATTEMPTS: usize = 8;
 const NOTARY_RUNTIME_VISIBILITY_RETRY_DELAY: Duration = Duration::from_millis(500);
+const MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES: usize = 1024;
 #[cfg(test)]
 const NOTARY_CONFIG_DIR: &str = "notary/project/.registry-stack/build/local/private/notary/config";
 const NOTARY_CONFIG_PATH: &str =
@@ -3511,6 +3512,8 @@ fn compose_platform_for_project(
 
 fn wait_for_notary_runtime_visibility(project_dir: &Path, project: &Project) -> Result<()> {
     let platform_override = compose_platform_for_project(project, "docker", true);
+    let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
+    let redactor = SecretRedactor::new(&secrets);
     let relay_config_path = project_dir.join(CONSULTATION_RELAY_CONFIG_PATH);
     let expected_config_digest = sha256_uri(
         &fs::read(&relay_config_path)
@@ -3540,6 +3543,7 @@ fn wait_for_notary_runtime_visibility(project_dir: &Path, project: &Project) -> 
                     &expected_config_digest,
                 ],
                 platform_override,
+                &redactor,
             )
         },
     )
@@ -3556,7 +3560,7 @@ where
     if attempts == 0 {
         bail!("generated Notary runtime visibility check has no configured attempts");
     }
-    let mut last_failure = RuntimeClosureProbeFailure::ComposeVerificationFailed;
+    let mut last_failure = RuntimeClosureProbeFailure::ComposeVerificationFailed(None);
     for attempt in 0..attempts {
         match check()? {
             RuntimeClosureProbe::Verified => return Ok(()),
@@ -3569,24 +3573,28 @@ where
     bail!(last_failure.message())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum RuntimeClosureProbe {
     Verified,
     Rejected(RuntimeClosureProbeFailure),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum RuntimeClosureProbeFailure {
     GenerationMismatch,
     GenerationUnavailable,
     ConsultationArtifactsRejected,
+    ConsultationConfigurationMissing,
+    ConsultationQuotaLimitsRejected,
+    ConsultationPlanUnsupported,
+    ConsultationWorkloadBindingRejected,
     ConfigurationRejected,
     EnvironmentRejected,
-    ComposeVerificationFailed,
+    ComposeVerificationFailed(Option<String>),
 }
 
 impl RuntimeClosureProbeFailure {
-    fn message(self) -> &'static str {
+    fn message(&self) -> String {
         match self {
             Self::GenerationMismatch => {
                 "Docker did not expose the just-generated Relay consultation configuration before the bounded verification retry expired"
@@ -3597,16 +3605,36 @@ impl RuntimeClosureProbeFailure {
             Self::ConsultationArtifactsRejected => {
                 "Docker rejected the generated Relay consultation artifact closure; run registryctl check for the authored project, correct it, and retry"
             }
+            Self::ConsultationConfigurationMissing => {
+                "Docker could not find the generated Relay consultation configuration; rebuild the reviewed Relay consultation configuration and retry"
+            }
+            Self::ConsultationQuotaLimitsRejected => {
+                "Docker rejected the generated Relay consultation quota limits; correct the reviewed quota limits, rebuild the consultation artifacts, and retry"
+            }
+            Self::ConsultationPlanUnsupported => {
+                "Docker could not activate a capability required by the generated Relay consultation plan; use a Relay release that supports the reviewed plan or rebuild it with supported capabilities, and retry"
+            }
+            Self::ConsultationWorkloadBindingRejected => {
+                "Docker rejected the Relay consultation workload binding; align the reviewed workload binding with Relay authentication, rebuild, and retry"
+            }
             Self::ConfigurationRejected => {
                 "Docker rejected the generated Relay consultation configuration; run registryctl check for the authored project, correct it, and retry"
             }
             Self::EnvironmentRejected => {
                 "Docker could not verify the Relay consultation environment bindings; run registryctl doctor --profile local, correct the reported requirement, and retry"
             }
-            Self::ComposeVerificationFailed => {
-                "Docker Compose could not verify the generated Relay consultation artifact closure before the bounded retry expired"
+            Self::ComposeVerificationFailed(process_diagnostic) => {
+                return match process_diagnostic {
+                    Some(process_diagnostic) => format!(
+                        "Docker Compose could not verify the generated Relay consultation artifact closure before the bounded retry expired; Docker Compose reported: {process_diagnostic}"
+                    ),
+                    None => {
+                        "Docker Compose could not verify the generated Relay consultation artifact closure before the bounded retry expired".to_string()
+                    }
+                };
             }
         }
+        .to_string()
     }
 }
 
@@ -3615,6 +3643,7 @@ fn run_compose_probe_with_platform(
     binary: &str,
     args: &[&str],
     platform_override: Option<&str>,
+    redactor: &SecretRedactor,
 ) -> Result<RuntimeClosureProbe> {
     let command_args = compose_command_args("compose.yaml", args);
     let mut command = Command::new(binary);
@@ -3628,10 +3657,49 @@ fn run_compose_probe_with_platform(
     if output.status.success() {
         Ok(RuntimeClosureProbe::Verified)
     } else {
-        Ok(RuntimeClosureProbe::Rejected(
-            runtime_closure_probe_failure(&output.stdout),
-        ))
+        let mut failure = runtime_closure_probe_failure(&output.stdout);
+        if matches!(
+            failure,
+            RuntimeClosureProbeFailure::ComposeVerificationFailed(_)
+        ) {
+            failure = RuntimeClosureProbeFailure::ComposeVerificationFailed(
+                compose_process_diagnostic(&output, redactor),
+            );
+        }
+        Ok(RuntimeClosureProbe::Rejected(failure))
     }
+}
+
+fn compose_process_diagnostic(output: &Output, redactor: &SecretRedactor) -> Option<String> {
+    let stderr = bounded_redacted_process_diagnostic(&output.stderr, redactor);
+    match (output.status.code(), stderr) {
+        (Some(code), Some(stderr)) => Some(format!("exit code {code}: {stderr}")),
+        (Some(code), None) => Some(format!("exit code {code} with no stderr output")),
+        (None, Some(stderr)) => Some(format!("terminated without an exit code: {stderr}")),
+        (None, None) => Some("terminated without an exit code or stderr output".to_string()),
+    }
+}
+
+fn bounded_redacted_process_diagnostic(stderr: &[u8], redactor: &SecretRedactor) -> Option<String> {
+    let redacted = redactor.redact_output(stderr)?;
+    let normalized = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+    if normalized.len() <= MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES {
+        return Some(normalized);
+    }
+
+    let content_limit = MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES.saturating_sub(3);
+    let mut bounded = String::with_capacity(MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES);
+    for character in normalized.chars() {
+        if bounded.len() + character.len_utf8() > content_limit {
+            break;
+        }
+        bounded.push(character);
+    }
+    bounded.push_str("...");
+    Some(bounded)
 }
 
 fn runtime_closure_probe_failure(stdout: &[u8]) -> RuntimeClosureProbeFailure {
@@ -3654,22 +3722,20 @@ fn runtime_closure_probe_failure(stdout: &[u8]) -> RuntimeClosureProbeFailure {
         .any(|code| code == "relay.config.generation_unavailable")
     {
         RuntimeClosureProbeFailure::GenerationUnavailable
+    } else if let Some(failure) = codes
+        .iter()
+        .find_map(|code| consultation_activation_failure(code))
+    {
+        failure
     } else if codes.iter().any(|code| {
         code == "relay.env_file.failed"
             || code == "config.missing_secret"
             || code.starts_with("relay.startup.environment_")
             || code.starts_with("relay.startup.secret_")
-            || matches!(
-                code.as_str(),
-                "relay.consultation.activation.pseudonym_material_unavailable"
-                    | "relay.consultation.activation.source_credentials_unavailable"
-                    | "relay.consultation.activation.state_plane_unavailable"
-            )
     }) {
         RuntimeClosureProbeFailure::EnvironmentRejected
     } else if codes.iter().any(|code| {
         code.starts_with("relay.consultation_artifacts.")
-            || code.starts_with("relay.consultation.activation.")
             || code == "relay.startup.consultation_artifacts_rejected"
     }) {
         RuntimeClosureProbeFailure::ConsultationArtifactsRejected
@@ -3683,7 +3749,34 @@ fn runtime_closure_probe_failure(stdout: &[u8]) -> RuntimeClosureProbeFailure {
     }) {
         RuntimeClosureProbeFailure::ConfigurationRejected
     } else {
-        RuntimeClosureProbeFailure::ComposeVerificationFailed
+        RuntimeClosureProbeFailure::ComposeVerificationFailed(None)
+    }
+}
+
+fn consultation_activation_failure(code: &str) -> Option<RuntimeClosureProbeFailure> {
+    match code {
+        "relay.consultation.activation.artifact_registry_invalid"
+        | "relay.consultation.activation.protected_metadata_invalid" => {
+            Some(RuntimeClosureProbeFailure::ConsultationArtifactsRejected)
+        }
+        "relay.consultation.activation.configuration_missing" => {
+            Some(RuntimeClosureProbeFailure::ConsultationConfigurationMissing)
+        }
+        "relay.consultation.activation.quota_limits_invalid" => {
+            Some(RuntimeClosureProbeFailure::ConsultationQuotaLimitsRejected)
+        }
+        "relay.consultation.activation.unsupported_plan" => {
+            Some(RuntimeClosureProbeFailure::ConsultationPlanUnsupported)
+        }
+        "relay.consultation.activation.workload_binding_invalid" => {
+            Some(RuntimeClosureProbeFailure::ConsultationWorkloadBindingRejected)
+        }
+        "relay.consultation.activation.pseudonym_material_unavailable"
+        | "relay.consultation.activation.source_credentials_unavailable"
+        | "relay.consultation.activation.state_plane_unavailable" => {
+            Some(RuntimeClosureProbeFailure::EnvironmentRejected)
+        }
+        _ => None,
     }
 }
 
@@ -5890,15 +5983,62 @@ mod tests {
     #[test]
     fn compose_visibility_check_returns_process_outcome() {
         let temp = TempDir::new().unwrap();
+        let redactor = SecretRedactor { secrets: vec![] };
 
         assert_eq!(
-            run_compose_probe_with_platform(temp.path(), "true", &["ps"], None).unwrap(),
+            run_compose_probe_with_platform(temp.path(), "true", &["ps"], None, &redactor).unwrap(),
             RuntimeClosureProbe::Verified
         );
-        assert_eq!(
-            run_compose_probe_with_platform(temp.path(), "false", &["ps"], None).unwrap(),
-            RuntimeClosureProbe::Rejected(RuntimeClosureProbeFailure::ComposeVerificationFailed)
+        assert!(matches!(
+            run_compose_probe_with_platform(temp.path(), "false", &["ps"], None, &redactor)
+                .unwrap(),
+            RuntimeClosureProbe::Rejected(RuntimeClosureProbeFailure::ComposeVerificationFailed(
+                Some(_)
+            ))
+        ));
+    }
+
+    #[test]
+    fn compose_visibility_check_surfaces_bounded_redacted_stderr() {
+        let temp = TempDir::new().unwrap();
+        let binary = temp.path().join("docker");
+        let secret = "sentinel-secret-value";
+        write_fake_product(
+            &binary,
+            &format!(
+                "printf 'not JSON\\n'\nprintf 'pull failed for {} {}\\n' >&2\nexit 17\n",
+                shell_single_quoted(secret),
+                shell_single_quoted(&"x".repeat(MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES * 2)),
+            ),
         );
+        let redactor = SecretRedactor {
+            secrets: vec![secret.to_string()],
+        };
+
+        let probe = run_compose_probe_with_platform(
+            temp.path(),
+            binary.to_str().unwrap(),
+            &["ps"],
+            None,
+            &redactor,
+        )
+        .unwrap();
+        let RuntimeClosureProbe::Rejected(failure) = probe else {
+            panic!("expected Compose visibility failure");
+        };
+        let message = failure.message();
+
+        assert!(message.contains("exit code 17: pull failed for [REDACTED]"));
+        assert!(!message.contains(secret));
+        assert!(message.ends_with("..."));
+        let RuntimeClosureProbeFailure::ComposeVerificationFailed(Some(diagnostic)) = failure
+        else {
+            panic!("expected process diagnostic");
+        };
+        let stderr = diagnostic
+            .strip_prefix("exit code 17: ")
+            .expect("exit status prefix");
+        assert!(stderr.len() <= MAX_COMPOSE_PROCESS_DIAGNOSTIC_BYTES);
     }
 
     #[test]
@@ -5938,6 +6078,26 @@ mod tests {
     }
 
     #[test]
+    fn runtime_visibility_retry_preserves_the_last_process_diagnostic() {
+        let mut calls = 0;
+
+        let error = retry_verified_runtime_closure(2, Duration::from_millis(0), || {
+            calls += 1;
+            Ok(RuntimeClosureProbe::Rejected(
+                RuntimeClosureProbeFailure::ComposeVerificationFailed(Some(format!(
+                    "exit code {calls}: daemon unavailable"
+                ))),
+            ))
+        })
+        .unwrap_err();
+
+        assert_eq!(calls, 2);
+        assert!(error
+            .to_string()
+            .ends_with("Docker Compose reported: exit code 2: daemon unavailable"));
+    }
+
+    #[test]
     fn runtime_visibility_failure_classification_is_value_free_and_specific() {
         for (code, expected) in [
             (
@@ -5953,6 +6113,26 @@ mod tests {
                 RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
             ),
             (
+                "relay.consultation.activation.protected_metadata_invalid",
+                RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
+            ),
+            (
+                "relay.consultation.activation.configuration_missing",
+                RuntimeClosureProbeFailure::ConsultationConfigurationMissing,
+            ),
+            (
+                "relay.consultation.activation.quota_limits_invalid",
+                RuntimeClosureProbeFailure::ConsultationQuotaLimitsRejected,
+            ),
+            (
+                "relay.consultation.activation.unsupported_plan",
+                RuntimeClosureProbeFailure::ConsultationPlanUnsupported,
+            ),
+            (
+                "relay.consultation.activation.workload_binding_invalid",
+                RuntimeClosureProbeFailure::ConsultationWorkloadBindingRejected,
+            ),
+            (
                 "relay.startup.consultation_artifacts_rejected",
                 RuntimeClosureProbeFailure::ConsultationArtifactsRejected,
             ),
@@ -5966,6 +6146,14 @@ mod tests {
             ),
             (
                 "relay.consultation.activation.source_credentials_unavailable",
+                RuntimeClosureProbeFailure::EnvironmentRejected,
+            ),
+            (
+                "relay.consultation.activation.pseudonym_material_unavailable",
+                RuntimeClosureProbeFailure::EnvironmentRejected,
+            ),
+            (
+                "relay.consultation.activation.state_plane_unavailable",
                 RuntimeClosureProbeFailure::EnvironmentRejected,
             ),
             (
@@ -5996,8 +6184,38 @@ mod tests {
         }
         assert_eq!(
             runtime_closure_probe_failure(b"not JSON"),
-            RuntimeClosureProbeFailure::ComposeVerificationFailed
+            RuntimeClosureProbeFailure::ComposeVerificationFailed(None)
         );
+        assert_eq!(
+            runtime_closure_probe_failure(
+                br#"{"diagnostics":[{"severity":"error","code":"relay.consultation.activation.future_code"}]}"#
+            ),
+            RuntimeClosureProbeFailure::ComposeVerificationFailed(None)
+        );
+    }
+
+    #[test]
+    fn consultation_activation_failures_have_specific_safe_remediation() {
+        for (failure, expected) in [
+            (
+                RuntimeClosureProbeFailure::ConsultationConfigurationMissing,
+                "Docker could not find the generated Relay consultation configuration; rebuild the reviewed Relay consultation configuration and retry",
+            ),
+            (
+                RuntimeClosureProbeFailure::ConsultationQuotaLimitsRejected,
+                "Docker rejected the generated Relay consultation quota limits; correct the reviewed quota limits, rebuild the consultation artifacts, and retry",
+            ),
+            (
+                RuntimeClosureProbeFailure::ConsultationPlanUnsupported,
+                "Docker could not activate a capability required by the generated Relay consultation plan; use a Relay release that supports the reviewed plan or rebuild it with supported capabilities, and retry",
+            ),
+            (
+                RuntimeClosureProbeFailure::ConsultationWorkloadBindingRejected,
+                "Docker rejected the Relay consultation workload binding; align the reviewed workload binding with Relay authentication, rebuild, and retry",
+            ),
+        ] {
+            assert_eq!(failure.message(), expected);
+        }
     }
 
     #[test]
