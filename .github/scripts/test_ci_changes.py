@@ -6,6 +6,7 @@ import fnmatch
 import json
 import re
 import subprocess
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -17,6 +18,7 @@ from ci_changes import (
     SHARDS,
     STANDARD_JOURNEY_SOURCES,
     Workspace,
+    authoring_reference_inputs,
     classify,
     validate_authoring_reference_routing,
 )
@@ -130,6 +132,30 @@ class CiChangesTest(unittest.TestCase):
         for _, path in AUTHORING_REFERENCE_INPUTS:
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["docs"])
+
+    def test_authoring_reference_input_samples_must_exist_as_files(self) -> None:
+        manifest_path = Path("docs/site/scripts/authoring-reference-sources.json")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        missing_sample = (
+            "crates/registryctl/schemas/project-authoring/missing.schema.json"
+        )
+        self.assertTrue(
+            fnmatch.fnmatchcase(
+                missing_sample,
+                manifest["ci_inputs"][0]["pattern"],
+            )
+        )
+        self.assertFalse(Path(missing_sample).is_file())
+        manifest["ci_inputs"][0]["sample"] = missing_sample
+
+        with tempfile.TemporaryDirectory() as temp_directory:
+            planted_manifest = Path(temp_directory) / manifest_path.name
+            planted_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(
+                ValueError,
+                "samples must name existing repository files",
+            ):
+                authoring_reference_inputs(planted_manifest)
 
     def test_authoring_reference_source_contract_has_independent_ci_coverage(self) -> None:
         self.assertEqual(

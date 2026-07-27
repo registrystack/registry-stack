@@ -225,6 +225,11 @@ def authoring_reference_inputs(
                 "authoring-reference CI inputs must have matching "
                 f"repository-relative pattern/sample pairs: {entry!r}"
             )
+        if not (REPO_ROOT / sample).is_file():
+            raise ValueError(
+                "authoring-reference CI input samples must name existing "
+                f"repository files: {sample!r}"
+            )
         parsed.append((pattern, sample))
 
     patterns = [pattern for pattern, _ in parsed]
