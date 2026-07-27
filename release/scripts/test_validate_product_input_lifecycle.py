@@ -98,6 +98,7 @@ class ProductInputLifecycleValidatorTest(unittest.TestCase):
                 f"receipt_sha256: {self.receipt_sha256.removeprefix('sha256:')}",
             )
         )
+        self.tag_binding = tag_binding
         self.run_git("tag", "-a", "v1.2.3", "-m", tag_binding)
 
     def tearDown(self) -> None:
@@ -499,6 +500,20 @@ class ProductInputLifecycleValidatorTest(unittest.TestCase):
 
         self.receipt_path.write_text("{}\n", encoding="utf-8")
         self.run_git("tag", "-d", "v1.2.3")
+        with self.assertRaisesRegex(
+            self.module.LifecycleError,
+            "annotated tag binding is unavailable",
+        ):
+            self.validate(record, allow_template=False)
+
+    def test_lightweight_tag_with_exact_binding_shaped_commit_message_is_rejected(
+        self,
+    ) -> None:
+        record = self.candidate()
+        self.run_git("tag", "-d", "v1.2.3")
+        self.run_git("commit", "--allow-empty", "-q", "-m", self.tag_binding)
+        self.run_git("tag", "v1.2.3", "HEAD")
+
         with self.assertRaisesRegex(
             self.module.LifecycleError,
             "annotated tag binding is unavailable",

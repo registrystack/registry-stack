@@ -407,13 +407,23 @@ def validate_candidate_git_binding(candidate: dict[str, Any], root: Path) -> Non
 
 
 def load_candidate_tag_binding(root: Path, version: str) -> dict[str, Any]:
+    tag_ref = f"refs/tags/{version}"
+    object_type = subprocess.run(
+        ["git", "cat-file", "-t", tag_ref],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if object_type.returncode != 0 or object_type.stdout.strip() != "tag":
+        raise LifecycleError("candidate annotated tag binding is unavailable")
     result = subprocess.run(
         [
             "git",
             "for-each-ref",
             "--format=%(contents)",
             "--count=1",
-            f"refs/tags/{version}",
+            tag_ref,
         ],
         cwd=root,
         capture_output=True,
