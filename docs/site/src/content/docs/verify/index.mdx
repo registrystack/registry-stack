@@ -69,6 +69,23 @@ registryctl smoke
 container provider, and project. `start` prepares the loopback-only runtime.
 `smoke` checks readiness and the maintained allowed and denied requests.
 
+If you edit a workbook or authored YAML while the previous local runtime is
+still present, inspect that existing runtime before rebuilding it:
+
+```sh
+registryctl status
+registryctl logs
+registryctl open
+```
+
+These commands verify the existing generated runtime before reading its status
+or logs. They do not rebuild, start, or trust the changed authored input.
+After you correct the source problem, rerun `registryctl start` to replace the
+generated runtime.
+
+For a stable diagnostic code and recovery action, use the [operator diagnostic
+catalog](../reference/diagnostics/operator/).
+
 Stop it when you finish:
 
 ```sh

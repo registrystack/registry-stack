@@ -40,6 +40,7 @@ SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
 RELEASE_IMAGE_LOCK_MINIMUM_VERSION = (0, 9, 0)
 EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION = (0, 10, 0)
+REGISTRYCTL_INSTALLER_MINIMUM_VERSION = (0, 14, 0)
 EXACT_ARTIFACT_INVENTORY = {
     "registry-notary",
     "registry-notary-cel-worker",
@@ -106,6 +107,12 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
         and "registryctl-image-lock" not in artifacts
     ):
         errors.append("artifact registryctl-image-lock is required for version 0.9.0 or later")
+    if (
+        parsed_version is not None
+        and parsed_version >= REGISTRYCTL_INSTALLER_MINIMUM_VERSION
+        and "registryctl-installer" not in artifacts
+    ):
+        errors.append("artifact registryctl-installer is required for version 0.14.0 or later")
     if (
         parsed_version is not None
         and parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION
