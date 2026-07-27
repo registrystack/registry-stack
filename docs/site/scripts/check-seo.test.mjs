@@ -13,14 +13,18 @@ function write(root, path, contents) {
   writeFileSync(target, contents);
 }
 
-function fixture(t, canonical = 'https://docs.registrystack.org/v/v1/') {
+function fixture(t, options = {}) {
+  const released = options.released ?? 'v1';
+  const releasedPath = options.releasedPath ?? '/v/v1/';
+  const canonical =
+    options.canonical ?? `https://docs.registrystack.org${releasedPath}`;
   const root = mkdtempSync(resolve(tmpdir(), 'registry-seo-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   write(
     root,
     'src/data/docsets.yaml',
     `current: latest
-released: v1
+released: ${released}
 docsets:
   - id: latest
     label: Main
@@ -31,12 +35,12 @@ docsets:
     published_at: 2026-07-27
     description: Main docs.
     products: {}
-  - id: v1
-    label: v1
-    path: /v/v1/
+  - id: ${released}
+    label: ${released}
+    path: ${releasedPath}
     status: archived
     availability: released
-    source: v1
+    source: ${released}
     published_at: 2026-07-27
     description: Released docs.
     products: {}
@@ -46,7 +50,7 @@ docsets:
   write(root, 'dist/preview/index.html', '<html><head></head></html>\n');
   write(
     root,
-    'dist/v/v1/index.html',
+    `dist${releasedPath}index.html`,
     '<html><head></head></html>\n',
   );
   write(
@@ -54,7 +58,7 @@ docsets:
     'dist/index.html',
     `<html><head>
 <meta name="robots" content="noindex,follow">
-<meta name="registry-docset-redirect" content="v1">
+<meta name="registry-docset-redirect" content="${released}">
 <link rel="canonical" href="${canonical}">
 </head></html>
 `,
@@ -76,7 +80,7 @@ test('accepts preview, immutable archive, and released-root redirect SEO roles',
 });
 
 test('rejects a released-root redirect canonicalized outside the released docset', (t) => {
-  const result = run(fixture(t, 'https://docs.registrystack.org/preview/'));
+  const result = run(fixture(t, { canonical: 'https://docs.registrystack.org/preview/' }));
   assert.equal(result.status, 1);
   assert.match(result.stderr, /must canonically redirect into released docset v1/);
 });
@@ -93,4 +97,20 @@ test('rejects noindex on the selected released docset', (t) => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /is the released docset but has robots noindex,follow/);
+});
+
+test('accepts the immutable v0.13.0 legacy noindex bundle only while it is selected', (t) => {
+  const root = fixture(t, {
+    released: 'v0.13.0',
+    releasedPath: '/v/0.13.0/',
+  });
+  write(
+    root,
+    'dist/v/0.13.0/index.html',
+    '<html><head><meta name="robots" content="noindex,follow"></head></html>\n',
+  );
+
+  const result = run(root);
+
+  assert.equal(result.status, 0, result.stderr);
 });
