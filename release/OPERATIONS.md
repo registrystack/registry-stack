@@ -59,10 +59,17 @@ After that run, update the budget with:
 
 - The candidate workflow run URL
 - The measured timestamp
-- The maximum filesystem-used bytes
-- The maximum release-workspace bytes
-- A required available-byte threshold derived from that measurement and the
-  documented safety margin
+- The label, baseline filesystem-used bytes, peak filesystem-used bytes, and
+  peak release-workspace bytes from the job with the largest
+  `peak_additional_filesystem_used_bytes`
+- That job's `peak_additional_filesystem_used_bytes`, which must equal its peak
+  filesystem-used bytes minus its baseline filesystem-used bytes
+- `required_available_bytes`, set to
+  `ceil(peak_additional_filesystem_used_bytes * (1 + safety_margin_ratio))`
+
+The budget loader checks both equations and rejects arbitrary thresholds,
+including a one-byte placeholder. Absolute filesystem-used bytes are retained
+as audit evidence; they are not compared with available bytes.
 
 Splitting build A and build B across separate runners limits the budget to
 per-job peak pressure.
