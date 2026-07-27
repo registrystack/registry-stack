@@ -287,7 +287,13 @@ fn top_level_error_message(
 
 async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let server_startup = args.command.is_none();
-    let doctor_command = matches!(&args.command, Some(Command::Doctor { .. }));
+    let doctor_command = matches!(
+        &args.command,
+        Some(Command::Doctor { .. })
+            | Some(Command::State {
+                command: StateCommand::Doctor,
+            })
+    );
     let env_report = match load_env_file_arg(args.env_file.as_deref(), args.env_file_override) {
         Ok(report) => report,
         Err(error) if server_startup || doctor_command => {
