@@ -541,6 +541,24 @@ outputs:
                 .expect("generated Relay config exists"),
         )
         .expect("generated Relay config parses");
+        let table_fields = relay["datasets"][0]["tables"][0]["schema"]["fields"]
+            .as_array()
+            .expect("generated PostgreSQL table fields are a list");
+        assert!(
+            table_fields
+                .iter()
+                .all(|field| field["sensitive"] == json!(true)),
+            "provider changes must not make stored fields non-sensitive"
+        );
+        let public_fields = relay["datasets"][0]["entities"][0]["fields"]
+            .as_array()
+            .expect("generated public fields are a list");
+        assert!(
+            public_fields
+                .iter()
+                .all(|field| field["sensitive"] == json!(true)),
+            "provider changes must not make projected fields non-sensitive"
+        );
         let profile = &relay["datasets"][0]["entities"][0]["attribute_release_profiles"][0];
         assert_eq!(profile["id"], "solmara-nia-userinfo");
         assert_eq!(profile["version"], "v1");

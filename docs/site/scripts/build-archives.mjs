@@ -152,6 +152,7 @@ export async function buildDocsetArchive(docset, {
   runCommand = run,
   applySeo = applyArchiveSeo,
   stageGeneratedArtifacts = stagePinnedGeneratedArtifacts,
+  indexable = false,
 } = {}) {
   if (docset.status !== 'archived') {
     throw new Error(`Docset "${docset.id}" is not archived`);
@@ -183,7 +184,7 @@ export async function buildDocsetArchive(docset, {
       ['astro', 'build', '--outDir', archiveOutputDirectory(docsRoot, docset)],
       env,
     );
-    await applySeo(outDir);
+    await applySeo(outDir, { indexable });
   } finally {
     await restoreGeneratedArtifacts();
   }
@@ -202,7 +203,9 @@ export async function buildArchivedDocsets({
   }
 
   for (const docset of archived) {
-    await buildDocsetArchive(docset);
+    await buildDocsetArchive(docset, {
+      indexable: docset.id === manifest.released,
+    });
   }
 
   // Return generated files to the current docset so local worktrees stay sane.

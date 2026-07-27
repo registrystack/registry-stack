@@ -3,7 +3,8 @@ set -euo pipefail
 
 repo="registrystack/registry-stack"
 default_version="v0.13.0"
-script_name="${BASH_SOURCE[0]##*/}"
+script_name="${BASH_SOURCE[0]:-}"
+script_name="${script_name##*/}"
 filename_version=""
 if [[ "$script_name" =~ ^registryctl-(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-install\.sh$ ]]; then
 	default_version="${BASH_REMATCH[1]}"

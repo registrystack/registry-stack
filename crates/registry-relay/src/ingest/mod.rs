@@ -43,7 +43,7 @@ use crate::format::{Format, FormatHints, FormatRegistry};
 use crate::ingest::cache::CacheLayout;
 use crate::ingest::declared_schema::DeclaredSchema;
 use crate::ingest::refresh::{run_refresh_loop, RefreshPolicy};
-use crate::ingest::validation::validate;
+use crate::ingest::validation::validate_batches;
 use crate::source::Source;
 use crate::source::{OpenedSource, SourceDescriptor, SourceError, SourceFuture, SourceMetadata};
 use crate::source_backend::{SnapshotMaterializationCandidate, SnapshotMaterializationCoordinator};
@@ -163,18 +163,17 @@ pub async fn validate_xlsx_source_bytes(
     while let Some(batch) = batch_stream.next().await {
         batches.push(batch.map_err(ingest_error_from_connector)?);
     }
-    let validation_batch = build_validation_batch(&batches, &observed_schema);
     let dataset_id: DatasetId =
         serde_json::from_str("\"project_workbook\"").expect("static dataset id is valid");
     let resource_id: ResourceId =
         serde_json::from_str("\"authored_xlsx\"").expect("static resource id is valid");
-    let projection = validate(
+    let projection = validate_batches(
         &dataset_id,
         &resource_id,
         &declared,
         &observed_schema,
         resource.primary_key.as_deref(),
-        validation_batch.as_ref(),
+        Some(&batches),
     )?;
     for batch in &batches {
         projection.apply(batch)?;
@@ -650,16 +649,14 @@ impl IngestPlan {
 
         // Validate the complete materialized source, including nullability,
         // value types, and primary-key uniqueness beyond batch boundaries.
-        let validation_batch = build_validation_batch(&all_batches, &observed_schema);
-
         // Step 3: validate schema and build projection plan.
-        let projection_plan = validate(
+        let projection_plan = validate_batches(
             dataset_id,
             resource_id,
             &self.declared,
             &observed_schema,
             self.primary_key.as_deref(),
-            validation_batch.as_ref(),
+            Some(&all_batches),
         )?;
 
         let output_schema = projection_plan.output_schema();
@@ -1644,30 +1641,6 @@ fn encode_sha256(bytes: [u8; 32]) -> String {
         output.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     output
-}
-
-/// Build one `RecordBatch` containing every materialized source row.
-fn build_validation_batch(batches: &[RecordBatch], schema: &SchemaRef) -> Option<RecordBatch> {
-    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
-    if total == 0 {
-        return Some(RecordBatch::new_empty(Arc::clone(schema)));
-    }
-
-    let mut slices: Vec<RecordBatch> = Vec::with_capacity(batches.len());
-    for batch in batches {
-        slices.push(batch.clone());
-    }
-
-    if slices.is_empty() {
-        return None;
-    }
-    if slices.len() == 1 {
-        return Some(slices.remove(0));
-    }
-
-    // Concatenate slices.
-    use datafusion::arrow::compute::concat_batches;
-    concat_batches(schema, &slices).ok()
 }
 
 /// Build a byte-oriented `Source` from a `SourceConfig`.

@@ -29,7 +29,7 @@ Never edit files under `.registry-stack/`. Registryctl may replace them.
 | `.registry-stack/build/<environment>/artifact-manifest.json` | Lists and hashes the authored inputs and generated outputs used by the build. | Review it and retain it with the handoff evidence. |
 | `.registry-stack/build/<environment>/private/relay/` | Generated Registry Relay configuration, when the project uses Relay. | Inspect it for the expected source, fields, filters, and credential references. Do not edit or publish it. |
 | `.registry-stack/build/<environment>/private/notary/` | Generated Registry Notary configuration, when the project uses Notary. | Inspect the expected claim and source configuration. Do not edit or publish it. |
-| `.registry-stack/runtime/<environment>/` | Local credentials, Compose input, and runtime results. | Keep it private. It is disposable local state, not project source. |
+| `.registry-stack/runtime/local/` | Local credentials, Compose input, and runtime results. | Keep it private. It is disposable local state, not project source. |
 
 Your build may contain only Relay or only Notary. That is normal.
 

@@ -51,6 +51,24 @@ async function collectIndexFiles(root, current = root) {
   return files;
 }
 
+async function collectMarkdownFiles(root, current = root) {
+  const entries = await readdir(current, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    const path = resolve(current, entry.name);
+    const info = await lstat(path);
+    if (info.isSymbolicLink()) {
+      throw new Error(`released archive cannot contain symlinks: ${path}`);
+    }
+    if (info.isDirectory()) {
+      files.push(...await collectMarkdownFiles(root, path));
+    } else if (info.isFile() && entry.name.endsWith('.md')) {
+      files.push(path);
+    }
+  }
+  return files;
+}
+
 async function collectPreviewTextFiles(root, current = root) {
   const entries = await readdir(current, { withFileTypes: true });
   const files = [];
@@ -209,10 +227,19 @@ export async function stageProductionDocsets({
       target: `${released.path}${route.slice(1)}`,
     };
   });
+  const markdownRoutes = (await collectMarkdownFiles(archiveRoot)).map((archiveFile) => ({
+    source: archiveFile,
+    destination: resolve(distRoot, relative(archiveRoot, archiveFile)),
+  }));
 
   await rejectDestinationCollisions(
     distRoot,
-    [cnameDestination, robotsDestination, ...redirects.map((entry) => entry.destination)],
+    [
+      cnameDestination,
+      robotsDestination,
+      ...redirects.map((entry) => entry.destination),
+      ...markdownRoutes.map((entry) => entry.destination),
+    ],
   );
   const archivedPaths = docsets.docsets
     .filter((docset) => docset.status === 'archived')
@@ -235,18 +262,26 @@ export async function stageProductionDocsets({
       { encoding: 'utf8', flag: 'wx' },
     );
   }
+  for (const route of markdownRoutes) {
+    await mkdir(dirname(route.destination), { recursive: true });
+    await writeFile(route.destination, await readFile(route.source), { flag: 'wx' });
+  }
 
   const afterDigest = await treeDigest(archiveRoot);
   if (afterDigest !== beforeDigest) {
     throw new Error(`released archive ${released.id} changed during production staging`);
   }
-  return { released: released.id, redirects: redirects.length };
+  return {
+    released: released.id,
+    redirects: redirects.length,
+    markdownRoutes: markdownRoutes.length,
+  };
 }
 
 async function main() {
   const result = await stageProductionDocsets();
   console.log(
-    `Staged ${result.redirects} root redirect(s) to released docset ${result.released}; Main remains under ${productionCurrentPath}.`,
+    `Staged ${result.redirects} root redirect(s) and ${result.markdownRoutes} Markdown route(s) for released docset ${result.released}; Main remains under ${productionCurrentPath}.`,
   );
 }
 

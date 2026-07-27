@@ -7,7 +7,8 @@ const activeDocset =
   docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
   docsetsManifest.docsets.find((docset) => docset.id === docsetsManifest.current);
 const isArchived = activeDocset?.status === 'archived';
-const head = isArchived
+const isHistoricalArchive = isArchived && activeDocset?.id !== docsetsManifest.released;
+const head = isHistoricalArchive
   ? Astro.locals.starlightRoute.head.filter(
       ({ tag, attrs }) => !(tag === 'link' && attrs?.rel === 'sitemap'),
     )
@@ -23,14 +24,14 @@ const is404 = path === '/404/' || path === '/404';
 const isGeneratedApi =
   path.startsWith('/reference/apis/relay/') || path.startsWith('/reference/apis/notary/');
 const mdHref = mdHrefForPath(Astro.url.pathname, import.meta.env.BASE_URL);
-const umamiWebsiteId = isArchived ? '' : import.meta.env.PUBLIC_UMAMI_WEBSITE_ID?.trim();
+const umamiWebsiteId = isHistoricalArchive ? '' : import.meta.env.PUBLIC_UMAMI_WEBSITE_ID?.trim();
 const umamiScriptSrc =
   import.meta.env.PUBLIC_UMAMI_SCRIPT_SRC?.trim() || 'https://stats.registrystack.org/script.js';
 const umamiDomains = import.meta.env.PUBLIC_UMAMI_DOMAINS?.trim() || 'docs.registrystack.org';
 ---
 
 {head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
-{isArchived && <meta name="robots" content="noindex,follow" />}
+{isHistoricalArchive && <meta name="robots" content="noindex,follow" />}
 {!is404 && !isGeneratedApi && <link rel="alternate" type="text/markdown" href={mdHref} />}
 {
   umamiWebsiteId && (

@@ -29,6 +29,7 @@ test('current docset without a base keeps current-only redirects internal', () =
 
   assert.equal(context.base, undefined);
   assert.equal(context.isArchivedBuild, false);
+  assert.equal(context.isHistoricalArchiveBuild, false);
   assert.equal(context.currentDocsetRedirect(currentOnlyPath), currentOnlyPath);
 });
 
@@ -52,6 +53,7 @@ test('archived docset redirects current-only pages to the Main-source preview', 
   });
 
   assert.equal(context.isArchivedBuild, true);
+  assert.equal(context.isHistoricalArchiveBuild, false);
   assert.equal(
     context.currentDocsetRedirect(currentOnlyPath),
     `https://docs.registrystack.org/preview${currentOnlyPath}`,
@@ -71,4 +73,11 @@ test('unsupported archive flags cannot make current components and config disagr
 
 test('archived builds disable platform-dependent Pagefind output', () => {
   assert.match(configSource, /pagefind:\s*!isArchivedBuild/);
+});
+
+test('only historical archives disable sitemap output', () => {
+  assert.match(
+    configSource,
+    /isHistoricalArchiveBuild\s*\?\s*\[disabledSitemap\]\s*:\s*\[sitemap\(\)\]/,
+  );
 });

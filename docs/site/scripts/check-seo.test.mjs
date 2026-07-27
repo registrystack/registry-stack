@@ -47,7 +47,7 @@ docsets:
   write(
     root,
     'dist/v/v1/index.html',
-    '<html><head><meta name="robots" content="noindex,follow"></head></html>\n',
+    '<html><head></head></html>\n',
   );
   write(
     root,
@@ -69,11 +69,28 @@ function run(root) {
 test('accepts preview, immutable archive, and released-root redirect SEO roles', (t) => {
   const result = run(fixture(t));
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /1 Main HTML files, 1 archived HTML files, and 1 released-root redirects/);
+  assert.match(
+    result.stdout,
+    /1 Main HTML files, 1 released HTML files, 0 historical archive HTML files, and 1 released-root redirects/,
+  );
 });
 
 test('rejects a released-root redirect canonicalized outside the released docset', (t) => {
   const result = run(fixture(t, 'https://docs.registrystack.org/preview/'));
   assert.equal(result.status, 1);
   assert.match(result.stderr, /must canonically redirect into released docset v1/);
+});
+
+test('rejects noindex on the selected released docset', (t) => {
+  const root = fixture(t);
+  write(
+    root,
+    'dist/v/v1/index.html',
+    '<html><head><meta name="robots" content="noindex,follow"></head></html>\n',
+  );
+
+  const result = run(root);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /is the released docset but has robots noindex,follow/);
 });

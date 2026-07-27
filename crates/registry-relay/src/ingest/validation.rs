@@ -4,7 +4,7 @@
 //! Implements strict and permissive schema checks between declared
 //! config and observed Arrow batches.
 //! Public surface:
-//! - [`validate`]: returns a [`ProjectionPlan`] on accept,
+//! - [`validate`] and [`validate_batches`]: return a [`ProjectionPlan`] on accept,
 //!   [`IngestError`] on hard fail. Logs a structured `tracing::error!`
 //!   on every hard fail and on every `strict_extra_column` rejection,
 //!   carrying the declared/observed/diff fields and the dataset/resource
@@ -128,6 +128,28 @@ pub fn validate(
     primary_key: Option<&str>,
     materialized_rows: Option<&RecordBatch>,
 ) -> Result<ProjectionPlan, IngestError> {
+    validate_batches(
+        dataset_id,
+        resource_id,
+        declared,
+        observed,
+        primary_key,
+        materialized_rows.map(std::slice::from_ref),
+    )
+}
+
+/// Validate the complete materialized source without concatenating its Arrow
+/// batches. Cross-batch primary-key uniqueness is enforced with one shared
+/// key set, while value parsing and nullability checks visit each batch once.
+#[allow(clippy::too_many_lines)]
+pub fn validate_batches(
+    dataset_id: &DatasetId,
+    resource_id: &ResourceId,
+    declared: &DeclaredSchema,
+    observed: &Schema,
+    primary_key: Option<&str>,
+    materialized_batches: Option<&[RecordBatch]>,
+) -> Result<ProjectionPlan, IngestError> {
     let declared_names: Vec<&str> = declared.fields.iter().map(|f| f.name.as_str()).collect();
     let observed_names: Vec<&str> = observed
         .fields()
@@ -227,19 +249,21 @@ pub fn validate(
             TypeCheck::NeedsMaterializedParse => {
                 // RFC 3339 / ISO-8601 parse: cheap-mode skips, materialized-mode
                 // parses each non-null row.
-                if let Some(batch) = materialized_rows {
-                    let col = batch.column(obs_idx);
-                    if let Err(diff) =
-                        parse_string_like_array(col.as_ref(), dfield.ty, &dfield.name)
-                    {
-                        log_schema_mismatch(
-                            dataset_id,
-                            resource_id,
-                            declared,
-                            observed,
-                            vec![diff],
-                        );
-                        return Err(IngestError::SchemaMismatch);
+                if let Some(batches) = materialized_batches {
+                    for batch in batches {
+                        let col = batch.column(obs_idx);
+                        if let Err(diff) =
+                            parse_string_like_array(col.as_ref(), dfield.ty, &dfield.name)
+                        {
+                            log_schema_mismatch(
+                                dataset_id,
+                                resource_id,
+                                declared,
+                                observed,
+                                vec![diff],
+                            );
+                            return Err(IngestError::SchemaMismatch);
+                        }
                     }
                 }
                 // Cheap-mode: accept the Utf8 column; the decoder is
@@ -271,8 +295,8 @@ pub fn validate(
     }
 
     // ── Rule: declared non-null columns have no null materialized rows ──
-    if let Some(batch) = materialized_rows {
-        if batch.num_rows() == 0 {
+    if let Some(batches) = materialized_batches {
+        if batches.iter().all(|batch| batch.num_rows() == 0) {
             warn!(
                 event = "ingest.zero_rows",
                 dataset_id = %dataset_id,
@@ -285,8 +309,10 @@ pub fn validate(
                 continue;
             }
             let obs_idx = plan[idx].observed_index;
-            let col = batch.column(obs_idx);
-            if col.null_count() > 0 {
+            if batches
+                .iter()
+                .any(|batch| batch.column(obs_idx).null_count() > 0)
+            {
                 log_schema_mismatch(
                     dataset_id,
                     resource_id,
@@ -301,13 +327,13 @@ pub fn validate(
 
     // ── Rule: primary key uniqueness across all materialized rows ───
     if let Some(pk) = primary_key {
-        if let Some(batch) = materialized_rows {
+        if let Some(batches) = materialized_batches {
             let obs_idx = observed
                 .fields()
                 .iter()
                 .position(|f| f.name() == pk)
                 .expect("primary key presence checked above");
-            if !primary_key_unique(batch, obs_idx) {
+            if !primary_key_unique(batches, obs_idx) {
                 log_schema_mismatch(
                     dataset_id,
                     resource_id,
@@ -461,25 +487,29 @@ fn type_compatibility(declared: FieldType, observed: &DataType) -> TypeCheck {
     }
 }
 
-/// Check primary-key uniqueness across the complete materialized source.
+/// Check primary-key uniqueness across the complete materialized source,
+/// including duplicates that cross Arrow batch boundaries.
 /// The column may be any supported Arrow scalar type.
-fn primary_key_unique(batch: &RecordBatch, col_idx: usize) -> bool {
+fn primary_key_unique(batches: &[RecordBatch], col_idx: usize) -> bool {
     use std::collections::HashSet;
-    let col = batch.column(col_idx);
     // Keep one deterministic scalar representation per observed key.
-    let mut seen: HashSet<String> = HashSet::with_capacity(batch.num_rows());
-    for row in 0..batch.num_rows() {
-        if col.is_null(row) {
-            // Null primary keys are not unique by definition. Treat as
-            // a uniqueness violation so the §4 rule fires.
-            if !seen.insert(String::from("\0__null__\0")) {
+    let capacity = batches.iter().map(RecordBatch::num_rows).sum();
+    let mut seen: HashSet<String> = HashSet::with_capacity(capacity);
+    for batch in batches {
+        let col = batch.column(col_idx);
+        for row in 0..batch.num_rows() {
+            if col.is_null(row) {
+                // Null primary keys are not unique by definition. Treat as
+                // a uniqueness violation so the §4 rule fires.
+                if !seen.insert(String::from("\0__null__\0")) {
+                    return false;
+                }
+                continue;
+            }
+            let key = format_array_value(col.as_ref(), row);
+            if !seen.insert(key) {
                 return false;
             }
-            continue;
-        }
-        let key = format_array_value(col.as_ref(), row);
-        if !seen.insert(key) {
-            return false;
         }
     }
     true
