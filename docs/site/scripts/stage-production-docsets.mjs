@@ -5,8 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { archiveOutputDirectory, treeDigest } from './archive-bundle.mjs';
 import { loadArchiveLock, validateArchiveLock } from './archive-lock.mjs';
 import { getDocset, loadDocsets } from './docsets.mjs';
+import { CURRENT_PRODUCTION_DOCSET_PATH } from '../src/lib/docset-path.mjs';
 
-const productionCurrentPath = '/preview/';
+const productionCurrentPath = CURRENT_PRODUCTION_DOCSET_PATH;
 const reservedRootDirectories = new Set(['_archive-bundles', 'preview', 'v']);
 const discoveryUrls = ['llms.txt', 'llms-full.txt', 'llms-small.txt', 'sitemap-index.xml'];
 
