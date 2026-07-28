@@ -329,6 +329,28 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn('"${REQUEST_EVENT_ACTION}" != "release_candidate"', workflow)
         self.assertNotIn("GITHUB_EVENT_ACTION", workflow)
 
+    def test_candidate_binary_inventory_compares_sorted_lists(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        compare_step = workflow[
+            workflow.index("      - name: Compare canonical binaries") :
+            workflow.index(
+                "      - name: Install pinned candidate inspection tools"
+            )
+        ]
+        expected_block = compare_step[
+            compare_step.index('expected="$(') :
+            compare_step.index('          )"', compare_step.index('expected="$('))
+        ]
+
+        self.assertIn("| sort", expected_block)
+        self.assertIn(
+            'actual="$(find "inputs/build-${build}/dist/bin" '
+            "-maxdepth 1 -type f -printf '%f\\n' | sort)\"",
+            compare_step,
+        )
+
     def test_release_images_publish_and_executably_verify_oci_labels(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
