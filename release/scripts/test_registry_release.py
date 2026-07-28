@@ -320,6 +320,15 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertIn("dist/image-bin", text)
         self.assertIn("release/scripts/build-release-image.sh", workflow)
 
+    def test_candidate_workflow_explicitly_binds_dispatch_action(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("REQUEST_EVENT_ACTION: ${{ github.event.action }}", workflow)
+        self.assertIn('"${REQUEST_EVENT_ACTION}" != "release_candidate"', workflow)
+        self.assertNotIn("GITHUB_EVENT_ACTION", workflow)
+
     def test_release_images_publish_and_executably_verify_oci_labels(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
