@@ -1535,6 +1535,11 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotIn("write", verification["permissions"].values())
         self.assertIn("--release-id", verification_script)
         self.assertIn(
+            "mapfile -t records < <(jq -c '.artifacts[]' \"${receipt}\")",
+            verification_script,
+        )
+        self.assertNotIn("${#records[@]}", verification_script)
+        self.assertIn(
             'if [[ "${GITHUB_EVENT_NAME}" != "repository_dispatch" ]]; then\n'
             '  test "$(git rev-parse refs/remotes/origin/main)" = \\\n'
             '    "${{ steps.release.outputs.tag_target }}"',
