@@ -393,7 +393,11 @@ class ReleaseCandidateTest(unittest.TestCase):
         ]
         contract.write_text(json.dumps(expected), encoding="utf-8")
 
-        def write_provenance(subjects: list[dict]) -> None:
+        def write_provenance(
+            subjects: list[dict],
+            *,
+            github_attestation_bundle: bool = False,
+        ) -> None:
             statement = {
                 "_type": "https://in-toto.io/Statement/v1",
                 "subject": [
@@ -406,7 +410,16 @@ class ReleaseCandidateTest(unittest.TestCase):
                 "payload": base64.b64encode(json.dumps(statement).encode()).decode(),
                 "signatures": [{"keyid": "", "sig": "signature"}],
             }
-            provenance.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+            document = (
+                {
+                    "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+                    "dsseEnvelope": envelope,
+                    "verificationMaterial": {},
+                }
+                if github_attestation_bundle
+                else envelope
+            )
+            provenance.write_text(json.dumps(document) + "\n", encoding="utf-8")
 
         write_provenance(expected)
         self.assertEqual(
@@ -416,6 +429,25 @@ class ReleaseCandidateTest(unittest.TestCase):
             },
             self.module.validate_slsa_subject_set(provenance, contract),
         )
+
+        write_provenance(expected, github_attestation_bundle=True)
+        self.assertEqual(
+            {
+                ("registryctl-v1.2.3-linux-amd64", "1" * 64),
+                ("SHA256SUMS", "2" * 64),
+            },
+            self.module.validate_slsa_subject_set(provenance, contract),
+        )
+
+        provenance.write_text(
+            json.dumps({"dsseEnvelope": []}) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "not a valid DSSE statement",
+        ):
+            self.module.validate_slsa_subject_set(provenance, contract)
 
         write_provenance(
             [

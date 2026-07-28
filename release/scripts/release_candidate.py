@@ -117,9 +117,12 @@ def validate_slsa_subject_set(
         if not line:
             continue
         try:
-            envelope = json.loads(line)
+            provenance = json.loads(line)
+            if not isinstance(provenance, dict):
+                raise TypeError("provenance is not an object")
+            envelope = provenance.get("dsseEnvelope", provenance)
             if not isinstance(envelope, dict):
-                raise TypeError("envelope is not an object")
+                raise TypeError("DSSE envelope is not an object")
             encoded_payload = envelope["payload"]
             if not isinstance(encoded_payload, str):
                 raise TypeError("payload is not a string")
