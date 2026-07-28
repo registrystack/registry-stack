@@ -324,6 +324,20 @@ class ReleaseCandidateTest(unittest.TestCase):
             self.module.expected_attempt_artifact_names(123, 2), set(selected)
         )
 
+        platform_report = {
+            "id": 9998,
+            "name": "registry-stack-candidate-cli-linux-arm64-123-2",
+            "digest": "sha256:" + "8" * 64,
+            "expired": False,
+            "workflow_run": {"id": 123},
+        }
+        selected = self.module.validate_attempt_artifact_inventory(
+            {"artifacts": [*artifacts, platform_report]},
+            run_id=123,
+            run_attempt=2,
+        )
+        self.assertIn(platform_report["name"], selected)
+
         with self.assertRaisesRegex(self.module.CandidateError, "incomplete"):
             self.module.validate_attempt_artifact_inventory(
                 {

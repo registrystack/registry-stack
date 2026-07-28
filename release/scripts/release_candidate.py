@@ -41,8 +41,10 @@ ATTEMPT_ARTIFACT_PREFIXES = {
     "registry-stack-release-candidate-payload",
     "registry-stack-release-candidate-receipt",
 }
-LEGACY_OPTIONAL_ATTEMPT_ARTIFACT_PREFIXES = {
+OPTIONAL_ATTEMPT_ARTIFACT_PREFIXES = {
     "registry-stack-candidate-build-b",
+    "registry-stack-candidate-cli-linux-arm64",
+    "registry-stack-candidate-cli-macos-arm64",
 }
 PROMOTION_STATE_SCHEMA = "registry-stack.release-promotion-state.v1"
 TOP_LEVEL_FIELDS = {
@@ -270,7 +272,7 @@ def validate_attempt_artifact_inventory(
     expected = expected_attempt_artifact_names(run_id, run_attempt)
     suffix = f"-{run_id}-{run_attempt}"
     allowed = expected | {
-        f"{prefix}{suffix}" for prefix in LEGACY_OPTIONAL_ATTEMPT_ARTIFACT_PREFIXES
+        f"{prefix}{suffix}" for prefix in OPTIONAL_ATTEMPT_ARTIFACT_PREFIXES
     }
     selected: dict[str, dict[str, Any]] = {}
     for index, item in enumerate(artifacts):
