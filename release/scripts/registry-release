@@ -1104,7 +1104,14 @@ def render_capsule(
             subject = grype_subject(grype_report)
             if not subject:
                 raise ValueError(f"{name} Grype report has no digest-bound subject")
-            if subject not in {digest_ref, digest}:
+            accepted_subjects = {digest_ref, digest}
+            public_repo = digest_ref.rsplit("@", 1)[0]
+            if (
+                name in {"registry-notary", "registry-relay"}
+                and public_repo == f"ghcr.io/registrystack/{name}"
+            ):
+                accepted_subjects.add(f"{public_repo}-candidate@{digest}")
+            if subject not in accepted_subjects:
                 raise ValueError(f"{name} Grype subject {subject} does not match digest ref {digest_ref}")
             summary = severity_summary(grype_report)
             is_supporting_runtime = name == "postgresql"

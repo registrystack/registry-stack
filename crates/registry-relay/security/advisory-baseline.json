@@ -67,7 +67,7 @@
       },
       "exposure_assertion": {
         "kind": "file_digest_equals",
-        "definition_digest": "sha256:2831adb58aa6e3f0b1dc0f3e15e0ca5952133d025e95965cbbb7637a0fba7f0a",
+        "definition_digest": "sha256:e8cc0389f63ada61aa5927bb1b54cb0ec9c9d0d247bc4a7dc912dca840751fda",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -103,16 +103,16 @@
           },
           {
             "path": "/usr/local/bin/registry-relay",
-            "sha256": "sha256:8342d4707584ab3bc9d325da91960e8f25adfa394fb72bebb792cde4de0c340b"
+            "sha256": "sha256:01827fdabe0e604a85ff1a248f04cb6109064efedeaa552614beda5fe811cf4a"
           },
           {
             "path": "/usr/local/bin/registry-relay-rhai-worker",
-            "sha256": "sha256:25f9a3da144cc9561e2a5ced7bd035f65bc037bd6968580082295ac9f552dcc6"
+            "sha256": "sha256:da852eb9c6e0a7cc20ee64c036a264635a632497332f810a941278f2b60d00a9"
           }
         ]
       },
-      "evidence_image_digest": "sha256:9b6d214d62317822e3927a8e13a363f7ad6c8591713259c0a435fa3edc366273",
-      "evidence_revision": "2b444641b9da344edfad0fdf86b169418f4e6de6",
+      "evidence_image_digest": "sha256:8d39d01f46e63a7e92345242ff79da35c68aa1d1c284ae4fcce3c516ede3f6d8",
+      "evidence_revision": "6ebbe81e082e58b38d829eb9f31ce5794cd5f889",
       "rereview_triggers": [
         "component_layer_changed",
         "expired",
@@ -124,7 +124,7 @@
         "severity_changed"
       ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.1 candidate changed only the two first-party Relay binaries in the enforced closure; every native runtime file retained its reviewed digest. The service still has only the reviewed fixed-format AWS-LC sscanf exposure and no effective vulnerable %mc conversion. Every file in both candidate executable closures remains digest-enforced because dynamic-symbol absence cannot truthfully express a format-string invariant.",
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.2 candidate changed only the two first-party Relay binaries in the enforced closure; every native runtime file retained its reviewed digest. The service still has only the reviewed fixed-format AWS-LC sscanf exposure and no effective vulnerable %mc conversion. Every file in both candidate executable closures remains digest-enforced because dynamic-symbol absence cannot truthfully express a format-string invariant.",
       "reviewed_at": "2026-07-28",
       "expires_at": "2026-08-28"
     },
@@ -202,17 +202,17 @@
           },
           {
             "path": "/usr/local/bin/registry-relay",
-            "sha256": "sha256:8342d4707584ab3bc9d325da91960e8f25adfa394fb72bebb792cde4de0c340b"
+            "sha256": "sha256:01827fdabe0e604a85ff1a248f04cb6109064efedeaa552614beda5fe811cf4a"
           },
           {
             "path": "/usr/local/bin/registry-relay-rhai-worker",
-            "sha256": "sha256:25f9a3da144cc9561e2a5ced7bd035f65bc037bd6968580082295ac9f552dcc6"
+            "sha256": "sha256:da852eb9c6e0a7cc20ee64c036a264635a632497332f810a941278f2b60d00a9"
           }
         ],
-        "definition_digest": "sha256:78a5e62a88488fc26f7c02823a59c86fe885e006d8db71d4fb66b4671ecbf947"
+        "definition_digest": "sha256:41a7dcfa05c42cdece8d8c00c9028ec42c91ee2a5e807b3047a057cab0f5f2bc"
       },
-      "evidence_image_digest": "sha256:9b6d214d62317822e3927a8e13a363f7ad6c8591713259c0a435fa3edc366273",
-      "evidence_revision": "2b444641b9da344edfad0fdf86b169418f4e6de6",
+      "evidence_image_digest": "sha256:8d39d01f46e63a7e92345242ff79da35c68aa1d1c284ae4fcce3c516ede3f6d8",
+      "evidence_revision": "6ebbe81e082e58b38d829eb9f31ce5794cd5f889",
       "rereview_triggers": [
         "component_layer_changed",
         "expired",
@@ -224,7 +224,7 @@
         "severity_changed"
       ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.1 candidate changed only the two first-party Relay binaries in the enforced closure; every native runtime file, including the out-of-closure libstdc++ object that imports ungetwc, retained its reviewed digest. Neither first-party binary directly imports ungetwc. A static dynamic-symbol assertion remains incomplete because the executables import dlsym.",
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.2 candidate changed only the two first-party Relay binaries in the enforced closure; every native runtime file, including the out-of-closure libstdc++ object that imports ungetwc, retained its reviewed digest. Neither first-party binary directly imports ungetwc. A static dynamic-symbol assertion remains incomplete because the executables import dlsym.",
       "reviewed_at": "2026-07-28",
       "expires_at": "2026-08-28"
     },
@@ -302,17 +302,17 @@
           },
           {
             "path": "/usr/local/bin/registry-relay",
-            "sha256": "sha256:8342d4707584ab3bc9d325da91960e8f25adfa394fb72bebb792cde4de0c340b"
+            "sha256": "sha256:01827fdabe0e604a85ff1a248f04cb6109064efedeaa552614beda5fe811cf4a"
           },
           {
             "path": "/usr/local/bin/registry-relay-rhai-worker",
-            "sha256": "sha256:25f9a3da144cc9561e2a5ced7bd035f65bc037bd6968580082295ac9f552dcc6"
+            "sha256": "sha256:da852eb9c6e0a7cc20ee64c036a264635a632497332f810a941278f2b60d00a9"
           }
         ],
-        "definition_digest": "sha256:2e8edf893f1a3a83615ceecaecd08c08168763a8012f19ed0fb01f49848830d9"
+        "definition_digest": "sha256:ceb555d13619fcd4a9b7c807ad63b37c140a2e9c3f974b4f65810fb69cd0c64e"
       },
-      "evidence_image_digest": "sha256:9b6d214d62317822e3927a8e13a363f7ad6c8591713259c0a435fa3edc366273",
-      "evidence_revision": "2b444641b9da344edfad0fdf86b169418f4e6de6",
+      "evidence_image_digest": "sha256:8d39d01f46e63a7e92345242ff79da35c68aa1d1c284ae4fcce3c516ede3f6d8",
+      "evidence_revision": "6ebbe81e082e58b38d829eb9f31ce5794cd5f889",
       "rereview_triggers": [
         "component_layer_changed",
         "expired",
@@ -324,7 +324,7 @@
         "severity_changed"
       ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed upstream or Trixie version. The v0.15.1 candidate changed only the two first-party Relay binaries in the enforced closure; every native runtime file, including libresolv, retained its reviewed digest. Neither first-party binary directly imports ns_printrrf, ns_printrr, or fp_nquery. A static dynamic-symbol assertion remains incomplete because the executables import dlsym.",
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed upstream or Trixie version. The v0.15.2 candidate changed only the two first-party Relay binaries in the enforced closure; every native runtime file, including libresolv, retained its reviewed digest. Neither first-party binary directly imports ns_printrrf, ns_printrr, or fp_nquery. A static dynamic-symbol assertion remains incomplete because the executables import dlsym.",
       "reviewed_at": "2026-07-28",
       "expires_at": "2026-08-28"
     }

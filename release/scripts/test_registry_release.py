@@ -778,6 +778,11 @@ class RegistryReleaseTest(unittest.TestCase):
             "Download verified candidate measurements for telemetry",
             promotion_telemetry,
         )
+        self.assertIn("continue-on-error: true", promotion_telemetry)
+        self.assertNotIn(
+            """test "$(jq -r 'length' <<<"${candidate_storage}")" = 5""",
+            promotion_telemetry,
+        )
         self.assertNotIn(
             'cache_state:"closed receipt builds.a.cargo_cache"',
             promotion_telemetry,
@@ -1741,7 +1746,10 @@ class RegistryReleaseTest(unittest.TestCase):
         result = run_tool("validate-docsets")
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("validated 13 versioned docsets", result.stdout)
+        self.assertRegex(
+            result.stdout,
+            r"validated [1-9][0-9]* versioned docsets against release manifests",
+        )
 
     def test_validate_docsets_rejects_external_ref_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2690,6 +2698,64 @@ class RegistryReleaseTest(unittest.TestCase):
                 grype_subject="ghcr.io/registrystack/registry-notary@sha256:"
                 + "b" * 64,
             )
+            result = render_capsule(
+                manifest,
+                binary_dir,
+                image_dir,
+                root / "capsule.json",
+                root / "capsule.md",
+                root,
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("does not match digest ref", result.stderr)
+
+    def test_render_capsule_accepts_promoted_candidate_grype_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_ref = init_release_repo(root)
+            manifest = write_manifest(root, source_ref=source_ref)
+            binary_dir = write_binary_fixture(root)
+            image_dir = write_image_fixture(
+                root,
+                grype_subject=(
+                    "ghcr.io/registrystack/registry-notary-candidate@"
+                    + IMAGE_DIGEST
+                ),
+            )
+            output_json = root / "capsule.json"
+
+            result = render_capsule(
+                manifest,
+                binary_dir,
+                image_dir,
+                output_json,
+                root / "capsule.md",
+                root,
+            )
+            evidence = json.loads(output_json.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            IMAGE_DIGEST_REF,
+            evidence["images"][0]["vulnerability_scan"]["subject"],
+        )
+
+    def test_render_capsule_rejects_unrelated_grype_repo_with_same_digest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_ref = init_release_repo(root)
+            manifest = write_manifest(root, source_ref=source_ref)
+            binary_dir = write_binary_fixture(root)
+            image_dir = write_image_fixture(
+                root,
+                grype_subject=(
+                    "ghcr.io/registrystack/registry-notary-other@" + IMAGE_DIGEST
+                ),
+            )
+
             result = render_capsule(
                 manifest,
                 binary_dir,
