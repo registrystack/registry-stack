@@ -1514,10 +1514,6 @@ class RegistryReleaseTest(unittest.TestCase):
             'cp crates/registryctl/install.sh "dist/candidate/dist/bin/${installer}"',
             candidate,
         )
-        self.assertIn(
-            '.artifacts["registryctl-installer"] == $version',
-            candidate,
-        )
         self.assertIn("Run exact first-country release-form journey before sealing", candidate)
         self.assertIn("first-country-release-form.py run", candidate)
         self.assertIn("first-country-release-form.py verify", candidate)

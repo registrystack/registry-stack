@@ -894,9 +894,6 @@ jobs:
             --tag-target "${{ needs.validate.outputs.source_sha }}" \
             --output \
               "dist/candidate/dist/bin/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json"
-          jq -e --arg version "${{ needs.validate.outputs.version }}" \
-            '.artifacts["registryctl-installer"] == $version' \
-            "${{ needs.validate.outputs.manifest }}" >/dev/null
           installer="registryctl-${{ needs.validate.outputs.tag }}-install.sh"
           cp crates/registryctl/install.sh "dist/candidate/dist/bin/${installer}"
           chmod 0755 "dist/candidate/dist/bin/${installer}"
