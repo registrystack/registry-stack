@@ -71,7 +71,15 @@ def image_evidence(report: Any, report_name: str, target_key: str) -> tuple[str,
     if SHA256_DIGEST.fullmatch(digest) is None:
         fail(f"{report_name} image target must use a sha256 digest")
     repo_digests = target.get("repoDigests")
-    if not isinstance(repo_digests, list) or user_input not in repo_digests:
+    if (
+        not isinstance(repo_digests, list)
+        or not any(
+            isinstance(repo_digest, str)
+            and "@" in repo_digest
+            and repo_digest.rsplit("@", 1)[1] == digest
+            for repo_digest in repo_digests
+        )
+    ):
         fail(f"{report_name} image target digest must appear in repoDigests")
     if target.get("architecture") != "amd64" or target.get("os") != "linux":
         fail(f"{report_name} image target must be linux/amd64")
