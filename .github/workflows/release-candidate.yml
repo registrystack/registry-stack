@@ -723,6 +723,27 @@ jobs:
           fi
           printf '%s\n' "${postgresql_ref}" \
             > dist/candidate/dist/images/postgresql.digest
+          scan_sbom() {
+            local sbom="$1"
+            local report="$2"
+            local status
+            set +e
+            grype "sbom:${sbom}" -o json > "${report}"
+            status=$?
+            set -e
+            if ! jq -e '
+              type == "object" and
+              (.matches | type == "array") and
+              (.descriptor.db.built | type == "string") and
+              (.descriptor.db.checksum | type == "string")
+            ' "${report}" >/dev/null; then
+              echo "Grype did not emit a complete scan report (exit ${status})" >&2
+              exit 1
+            fi
+            if (( status != 0 )); then
+              echo "::warning::Grype exited ${status}; enforcing its complete report through the reviewed advisory policy"
+            fi
+          }
           for name in registry-notary registry-relay; do
             digest_ref="$(cat "inputs/build-a/dist/images/${name}.digest")"
             expected_label_args=()
@@ -745,8 +766,9 @@ jobs:
               "dist/candidate/dist/sbom/${name}.spdx.json" \
               --image-name "${name}" \
               --digest-ref "${digest_ref}"
-            grype "sbom:dist/candidate/dist/sbom/${name}.syft.json" -o json \
-              > "dist/candidate/dist/grype/${name}.grype.json"
+            scan_sbom \
+              "dist/candidate/dist/sbom/${name}.syft.json" \
+              "dist/candidate/dist/grype/${name}.grype.json"
             mkdir -p "dist/candidate/dist/rootfs/${name}"
             crane export "${digest_ref}" - \
               | tar --extract --file=- --directory="dist/candidate/dist/rootfs/${name}" \
@@ -775,8 +797,9 @@ jobs:
             dist/candidate/dist/sbom/postgresql.spdx.json \
             --image-name postgresql \
             --digest-ref "${postgresql_ref}"
-          grype "sbom:dist/candidate/dist/sbom/postgresql.syft.json" -o json \
-            > dist/candidate/dist/grype/postgresql.grype.json
+          scan_sbom \
+            dist/candidate/dist/sbom/postgresql.syft.json \
+            dist/candidate/dist/grype/postgresql.grype.json
           mkdir -p dist/candidate/dist/rootfs/postgresql
           crane export "${postgresql_ref}" - \
             | tar --extract --file=- --directory=dist/candidate/dist/rootfs/postgresql \

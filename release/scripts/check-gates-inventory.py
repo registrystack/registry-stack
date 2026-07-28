@@ -559,7 +559,6 @@ REQUIRED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] = 
             "build-a:\n    name: Build A cached canonical candidate",
             "name: Restore exact-key Cargo cache",
             "name: Validate canonical binary inventory",
-            'grype "sbom:dist/candidate/dist/sbom/${name}.syft.json"',
         ),
     ),
     (
@@ -648,6 +647,10 @@ REQUIRED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] = 
         (
             "name: Scan immutable staging digests",
             'digest_ref="$(cat "inputs/build-a/dist/images/${name}.digest")"',
+            "scan_sbom() {",
+            '(.matches | type == "array")',
+            "Grype did not emit a complete scan report",
+            "enforcing its complete report through the reviewed advisory policy",
             "name: Enforce advisory policy",
             "--syft-report dist/candidate/dist/sbom/registry-notary.syft.json",
             "--rootfs dist/candidate/dist/rootfs/registry-notary",
