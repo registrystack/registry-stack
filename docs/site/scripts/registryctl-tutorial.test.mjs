@@ -390,7 +390,7 @@ test('release-form claim tutorial continues the canonical v0.15.0 project live',
   );
 
   assert.match(tutorial, /^status: current$/m);
-  assert.match(tutorial, /registryctl 0\.14\.0 with its matching image lock/i);
+  assert.match(tutorial, /registryctl 0\.15\.0 with its matching image lock/i);
   assert.match(tutorial, /Continue from[\s\S]*`my-first-api`/);
   assert.match(tutorial, /registryctl add notary/);
   assert.match(tutorial, /\.registry-stack\/runtime\/local\/secrets\/local\.env/);
