@@ -1,0 +1,38 @@
+stack:
+  release: beta-22
+  version: 0.15.2
+  source_repo: registrystack/registry-stack
+  source_ref: 6ebbe81e082e58b38d829eb9f31ce5794cd5f889
+  source_tag: v0.15.2
+  status: draft
+
+artifacts:
+  registry-notary: 0.15.2
+  registry-notary-cel-worker: 0.15.2
+  registry-relay: 0.15.2
+  registry-relay-rhai-worker: 0.15.2
+  registry-manifest-cli: 0.15.2
+  registryctl: 0.15.2
+  registryctl-image-lock: 0.15.2
+  registryctl-installer: 0.15.2
+  registry-docs: 0.15.2
+
+external:
+  crosswalk:
+    repo: PublicSchema/crosswalk
+    ref: 1d44ec735fdc8a7c719264b339574371e8330337
+    status: tested external input
+
+warnings:
+  - code: draft-source-ref
+    classification: release-preparation
+    detail: The fix-forward source ref intentionally points at the protected-main base until this preparation merges; the finalization change will replace it with the exact merge commit before candidate dispatch.
+  - code: prior-tag-publication-failed
+    classification: failed-train-recorded
+    detail: The immutable v0.15.0 tag exists, but its workflow failed before any public write. The immutable v0.15.1 tag then promoted its public images before capsule generation rejected the intentional candidate-to-public repository mapping. Neither failed train has a GitHub Release, and neither tag or public image is reused.
+  - code: hosted-publication-held
+    classification: hosted-gate-held
+    detail: Source beta may ship; hosted/public announcement remains held until Solmara Lab is atomically repinned to the published v0.15.2 digests and its adopter smoke passes.
+  - code: solmara-adopter-repin-pending
+    classification: adopter-gate-pending
+    detail: Solmara Lab consumes released images and will be repinned and validated only after immutable v0.15.2 digests exist.

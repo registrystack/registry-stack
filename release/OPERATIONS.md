@@ -110,8 +110,8 @@ git fetch origin main
 source_sha="$(git rev-parse origin/main)"
 
 release/scripts/registry-release request-candidate \
-  --version 0.15.1 \
-  --release-id beta-21 \
+  --version 0.15.2 \
+  --release-id beta-22 \
   --source-sha "${source_sha}" \
   --proof-level auto
 ```
@@ -126,8 +126,8 @@ the one instrumented measurement run through the supported release command:
 
 ```sh
 release/scripts/registry-release request-candidate \
-  --version 0.15.1 \
-  --release-id beta-21 \
+  --version 0.15.2 \
+  --release-id beta-22 \
   --source-sha "${source_sha}" \
   --proof-level extended \
   --milestone beta \
@@ -151,8 +151,8 @@ Run the local verifier before creating a tag:
 candidate_run="${CANDIDATE_RUN_ID:?set CANDIDATE_RUN_ID to the exact run}"
 
 release/scripts/registry-release finalize \
-  --version 0.15.1 \
-  --release-id beta-21 \
+  --version 0.15.2 \
+  --release-id beta-22 \
   --promotion-commit "$(git rev-parse origin/main)" \
   --candidate-run "${candidate_run}"
 ```
@@ -166,7 +166,7 @@ binds the run ID, run attempt, and receipt SHA-256.
 Run that printed command, inspect the tag, and push only that exact ref:
 
 ```sh
-tag=v0.15.1
+tag=v0.15.2
 git show --show-signature "${tag}"
 git push origin "refs/tags/${tag}"
 ```
@@ -234,7 +234,7 @@ requires it:
 ```sh
 gh api --method POST repos/registrystack/registry-stack/dispatches \
   -f event_type=release-repeatability \
-  -f 'client_payload[tag]=v0.15.1'
+  -f 'client_payload[tag]=v0.15.2'
 ```
 
 The job compares the clean rebuild with published hashes and image digests,

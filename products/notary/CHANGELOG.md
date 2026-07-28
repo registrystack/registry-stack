@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-07-28
+
+- No user-visible Registry Notary changes. This release fixes forward from the
+  incomplete v0.15.1 publication.
+
 ## [0.15.1] - 2026-07-28
 
 - No user-visible Registry Notary changes. This release fixes forward from the
