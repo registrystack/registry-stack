@@ -77,8 +77,11 @@ The gate is preventive; no prior hosted candidate disk exhaustion is recorded.
 
 ## Request A Candidate
 
-Before requesting the candidate, build the one new archived docset and append
-its bundle and tree digests to the immutable lock:
+The release-prep PR keeps the new docset in `draft` status because the
+protected-main squash commit does not exist yet. In the source-ref
+finalization PR, pin the docset and release manifest to the release-prep merge
+commit, change the docset status to `archived`, build it, and append its bundle
+and tree digests to the immutable lock:
 
 ```sh
 cd docs/site
@@ -90,9 +93,10 @@ npm run check:archive-lock -- --base-ref origin/main
 cd ../..
 ```
 
-Commit the new lock entry with the rest of the release preparation. Existing
-entries cannot be changed or removed. The candidate, tag workflow, and Pages
-deployment all verify the same bytes.
+Commit the new lock entry in that source-ref finalization PR. Existing entries
+cannot be changed or removed. Merge the finalization PR before requesting the
+candidate. The candidate, tag workflow, and Pages deployment all verify the
+same bytes.
 
 Then start from a clean local checkout with current `origin/main`.
 Resolve the exact protected-main commit and choose an unused release ID.

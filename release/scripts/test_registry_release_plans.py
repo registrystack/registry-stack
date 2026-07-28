@@ -469,6 +469,19 @@ class RegistryReleasePlanTest(unittest.TestCase):
             result.stderr,
         )
 
+    def test_prepare_accepts_a_draft_versioned_release_candidate(self) -> None:
+        data_dir = self.repo.root / "docs/site/src/data"
+        path = data_dir / "docsets.yaml"
+        docsets = yaml.safe_load(path.read_text())
+        docsets["docsets"][1]["status"] = "draft"
+        write_yaml(path, docsets)
+        write_json(data_dir / "generated/docsets.json", docsets)
+
+        result = self.prepare()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("ready", json.loads(result.stdout)["status"])
+
     def test_prepare_rejects_versioned_current_repo_docs(self) -> None:
         path = self.repo.root / "docs/site/src/data/repo-docs.yaml"
         repo_docs = yaml.safe_load(path.read_text())

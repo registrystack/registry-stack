@@ -25,7 +25,7 @@ docsets:
   - id: v0.15.0
     label: v0.15.0
     path: /v/0.15.0/
-    status: archived
+    status: draft
     availability: candidate
     source: registry-stack-v0.15.0
     repo_docs_source: monorepo

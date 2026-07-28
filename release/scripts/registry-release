@@ -61,6 +61,11 @@ DOCSET_AVAILABILITY_BY_MANIFEST_STATUS = {
     "release-candidate": "candidate",
     "released": "released",
 }
+DOCSET_STATUSES_BY_MANIFEST_STATUS = {
+    "draft": {"draft", "archived"},
+    "release-candidate": {"draft", "archived"},
+    "released": {"archived"},
+}
 RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 STRICT_SEMVER = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
@@ -1710,12 +1715,21 @@ def selected_docsets(
                 f"{CURRENT_DOCS_VERSION!r} and ref HEAD"
             )
     if tag not in ids:
-        raise ReleasePlanError(f"docsets.yaml has no exact archived docset {tag}")
+        raise ReleasePlanError(f"docsets.yaml has no exact versioned docset {tag}")
     selected_index = ids[tag][0]
     selected = docsets[selected_index]
-    if selected.get("status") != "archived":
-        raise ReleasePlanError(f"docset {tag} status must be archived")
     manifest_status = record["data"]["stack"].get("status")
+    allowed_statuses = DOCSET_STATUSES_BY_MANIFEST_STATUS.get(manifest_status)
+    if allowed_statuses is None:
+        raise ReleasePlanError(
+            f"selected manifest status {manifest_status!r} has no docset status mapping"
+        )
+    if selected.get("status") not in allowed_statuses:
+        expected = " or ".join(sorted(allowed_statuses))
+        raise ReleasePlanError(
+            f"docset {tag} status must be {expected} "
+            f"for manifest status {manifest_status!r}"
+        )
     expected_availability = DOCSET_AVAILABILITY_BY_MANIFEST_STATUS.get(
         manifest_status
     )
@@ -1963,7 +1977,7 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
     checks.append(
         passed_check(
             "docsets",
-            f"current unreleased docs and archived v{version} agree with their sources",
+            f"current unreleased docs and versioned v{version} agree with their sources",
         )
     )
     repo_docs_count = validate_repo_docs(repo)
