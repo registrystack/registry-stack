@@ -264,6 +264,31 @@ class ReleaseCandidateTest(unittest.TestCase):
         validated = self.verify()
         self.assertEqual("beta-20:1.2.3", validated["promotion"]["identity"])
 
+    def test_single_build_candidate_records_comparisons_as_not_performed(self) -> None:
+        candidate = copy.deepcopy(self.receipt)
+        del candidate["builds"]["b"]
+        candidate["artifacts"] = [
+            artifact
+            for artifact in candidate["artifacts"]
+            if not artifact["name"].startswith("registry-stack-candidate-build-b-")
+        ]
+        (
+            self.root
+            / "registry-stack-candidate-build-b-123-2"
+            / "build.json"
+        ).unlink()
+        candidate["comparisons"] = {
+            "binary_bytes": False,
+            "image_config_and_layers": False,
+        }
+        for image in candidate["images"]:
+            image["comparison"] = {
+                "config_equal": False,
+                "layers_equal": False,
+            }
+
+        self.verify(candidate)
+
     def test_exact_attempt_artifact_inventory_includes_receipt(self) -> None:
         artifacts = []
         for index, name in enumerate(

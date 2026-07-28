@@ -23,10 +23,11 @@ The selector requires extended proof when any of these conditions applies:
   not an ancestor of the candidate source
 - The operator requests `extended`
 
-An actual disagreement between the two builds in the current candidate fails
-the candidate. Extended proof is additional evidence, not a bypass for
-non-identical candidate bytes or image config and layers. A promotable receipt
-is emitted only after the current comparison passes.
+A candidate uses one canonical build and fails on incomplete binary inventory,
+invalid immutable image topology, an unreviewed advisory, or any source and
+artifact binding mismatch. Extended proof is additional evidence produced by
+the separate repeatability workflow, not a second build in the blocking
+candidate path.
 
 The selector writes `registry-stack.release-proof-selection.v1` JSON into the
 candidate evidence.
@@ -35,11 +36,9 @@ base.
 The exact previous promoted tag is the fallback and a cross-check when both are
 available.
 
-Two candidate builds on separate hosted runners prove build determinism under
-the declared build contract.
-They do not prove environment independence.
-The later clean rebuild in `.github/workflows/release-repeatability.yml` carries
-that separate claim.
+The candidate path does not claim build determinism from two builds in one
+workflow. The clean rebuild in `.github/workflows/release-repeatability.yml`
+carries that separate claim without delaying publication.
 
 ## Check The Storage Gate
 
@@ -71,8 +70,8 @@ The budget loader checks both equations and rejects arbitrary thresholds,
 including a one-byte placeholder. Absolute filesystem-used bytes are retained
 as audit evidence; they are not compared with available bytes.
 
-Splitting build A and build B across separate runners limits the budget to
-per-job peak pressure.
+Splitting the canonical, platform, and verification work across separate
+runners limits the budget to per-job peak pressure.
 The gate is preventive; no prior hosted candidate disk exhaustion is recorded.
 
 ## Request A Candidate
@@ -155,7 +154,8 @@ release/scripts/registry-release finalize \
 
 The verifier fetches the exact candidate artifact IDs, verifies the closed
 receipt, run attempt, workflow identity, GitHub attestations, artifact bytes,
-image digests, scans, comparison results, and release identity.
+image digests, scans, whether same-run comparisons were performed, and release
+identity.
 On success, it prints one exact annotated `git tag -a` command whose message
 binds the run ID, run attempt, and receipt SHA-256.
 Run that printed command, inspect the tag, and push only that exact ref:

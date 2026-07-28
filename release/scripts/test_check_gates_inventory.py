@@ -239,26 +239,33 @@ class GateInventoryTest(unittest.TestCase):
             ),
         )
 
-    def test_candidate_build_isolation_rejects_cache_or_artifact_reuse(self) -> None:
+    def test_candidate_build_isolation_rejects_duplicate_or_reused_builds(self) -> None:
         workflow = self.module.policy_file_texts(
             ROOT,
             self.module.RELEASE_SECURITY_POLICY_PATHS,
         )[".github/workflows/release-candidate.yml"]
         build_b = self.module.yaml_job_block(workflow, "build-b")
-        self.assertIsNotNone(build_b)
-        for marker in (
-            "uses: actions/cache@fake",
-            "uses: actions/download-artifact@fake",
-        ):
-            with self.subTest(marker=marker):
-                mutated = workflow.replace(
-                    "  other-platforms:",
-                    f"      - name: Unsafe reuse\n        {marker}\n\n  other-platforms:",
-                )
-                self.assertEqual(
-                    ["Candidate build job isolation"],
-                    self.module.candidate_build_isolation_violations(mutated),
-                )
+        self.assertIsNone(build_b)
+        duplicate = workflow.replace(
+            "  other-platforms:",
+            "  build-b:\n"
+            "    name: Duplicate canonical build\n"
+            "    needs: validate\n"
+            "\n"
+            "  other-platforms:",
+        )
+        reused = workflow.replace(
+            "  other-platforms:",
+            "      - name: Unsafe reuse\n"
+            "        uses: actions/download-artifact@fake\n"
+            "\n"
+            "  other-platforms:",
+        )
+        for mutated in (duplicate, reused):
+            self.assertEqual(
+                ["Candidate build job isolation"],
+                self.module.candidate_build_isolation_violations(mutated),
+            )
 
     def test_candidate_verification_cannot_gain_oidc_or_attestation_writes(
         self,
