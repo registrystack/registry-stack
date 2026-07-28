@@ -329,12 +329,12 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn('"${REQUEST_EVENT_ACTION}" != "release_candidate"', workflow)
         self.assertNotIn("GITHUB_EVENT_ACTION", workflow)
 
-    def test_candidate_binary_inventory_compares_sorted_lists(self) -> None:
+    def test_candidate_binary_inventory_validates_sorted_lists(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
         compare_step = workflow[
-            workflow.index("      - name: Compare canonical binaries") :
+            workflow.index("      - name: Validate canonical binary inventory") :
             workflow.index(
                 "      - name: Install pinned candidate inspection tools"
             )
@@ -346,7 +346,7 @@ class RegistryReleaseTest(unittest.TestCase):
 
         self.assertIn("| sort", expected_block)
         self.assertIn(
-            'actual="$(find "inputs/build-${build}/dist/bin" '
+            'actual="$(find inputs/build-a/dist/bin '
             "-maxdepth 1 -type f -printf '%f\\n' | sort)\"",
             compare_step,
         )
@@ -356,7 +356,7 @@ class RegistryReleaseTest(unittest.TestCase):
             encoding="utf-8"
         )
         images_job = workflow[
-            workflow.index("\n  build-a:") : workflow.index("\n  build-b:")
+            workflow.index("\n  build-a:") : workflow.index("\n  other-platforms:")
         ]
         verification_job = workflow[workflow.index("\n  verify-candidate:") :]
         recipe = (ROOT / "release/scripts/build-release-image.sh").read_text(
@@ -404,7 +404,7 @@ class RegistryReleaseTest(unittest.TestCase):
             encoding="utf-8"
         )
         binaries_job = workflow[
-            workflow.index("\n  build-a:") : workflow.index("\n  build-b:")
+            workflow.index("\n  build-a:") : workflow.index("\n  other-platforms:")
         ]
 
         fingerprint_step = binaries_job.index("Fingerprint exact-key Cargo cache")
@@ -433,10 +433,10 @@ class RegistryReleaseTest(unittest.TestCase):
         )
         ci_workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         binaries_job = workflow[
-            workflow.index("\n  build-a:") : workflow.index("\n  build-b:")
+            workflow.index("\n  build-a:") : workflow.index("\n  other-platforms:")
         ]
         images_job = workflow[
-            workflow.index("\n  build-a:") : workflow.index("\n  build-b:")
+            workflow.index("\n  build-a:") : workflow.index("\n  other-platforms:")
         ]
         binary_recipe_path = ROOT / "release/scripts/build-release-binaries.sh"
         image_recipe_path = ROOT / "release/scripts/build-release-image.sh"
@@ -627,7 +627,7 @@ class RegistryReleaseTest(unittest.TestCase):
         )
         promotion = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         binaries_job = workflow[
-            workflow.index("\n  build-a:") : workflow.index("\n  build-b:")
+            workflow.index("\n  build-a:") : workflow.index("\n  other-platforms:")
         ]
         receipt_job = workflow[workflow.index("\n  verify-candidate:") :]
         candidate_telemetry = workflow[workflow.index("\n  candidate-telemetry:") :]

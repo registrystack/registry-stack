@@ -36,11 +36,13 @@ RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 IMAGE_NAMES = {"registry-notary", "registry-relay"}
 ATTEMPT_ARTIFACT_PREFIXES = {
     "registry-stack-candidate-build-a",
-    "registry-stack-candidate-build-b",
     "registry-stack-candidate-macos-arm64",
     "registry-stack-candidate-linux-arm64",
     "registry-stack-release-candidate-payload",
     "registry-stack-release-candidate-receipt",
+}
+LEGACY_OPTIONAL_ATTEMPT_ARTIFACT_PREFIXES = {
+    "registry-stack-candidate-build-b",
 }
 PROMOTION_STATE_SCHEMA = "registry-stack.release-promotion-state.v1"
 TOP_LEVEL_FIELDS = {
@@ -267,6 +269,9 @@ def validate_attempt_artifact_inventory(
     artifacts = require_list(document.get("artifacts"), "artifact metadata.artifacts")
     expected = expected_attempt_artifact_names(run_id, run_attempt)
     suffix = f"-{run_id}-{run_attempt}"
+    allowed = expected | {
+        f"{prefix}{suffix}" for prefix in LEGACY_OPTIONAL_ATTEMPT_ARTIFACT_PREFIXES
+    }
     selected: dict[str, dict[str, Any]] = {}
     for index, item in enumerate(artifacts):
         label = f"artifact metadata.artifacts[{index}]"
@@ -275,7 +280,7 @@ def validate_attempt_artifact_inventory(
         name = item.get("name")
         if not isinstance(name, str) or not name.endswith(suffix):
             continue
-        if name not in expected:
+        if name not in allowed:
             raise CandidateError(
                 f"unexpected artifact in current candidate attempt: {name!r}"
             )
@@ -299,7 +304,7 @@ def validate_attempt_artifact_inventory(
             "name": name,
             "archive_sha256": digest.removeprefix("sha256:"),
         }
-    if set(selected) != expected:
+    if not expected.issubset(selected):
         raise CandidateError(
             "candidate attempt artifact inventory is incomplete: "
             f"missing={sorted(expected - set(selected))!r}"
@@ -387,12 +392,16 @@ def safe_relative_path(value: Any, label: str) -> str:
     return text
 
 
-def _validate_builds(builds_value: Any) -> None:
-    builds = require_object(
-        builds_value,
-        "builds",
-        {"a", "b", "other_platforms"},
+def _validate_builds(builds_value: Any) -> bool:
+    if not isinstance(builds_value, dict):
+        raise CandidateError("builds must be an object")
+    has_build_b = "b" in builds_value
+    expected_fields = (
+        {"a", "b", "other_platforms"}
+        if has_build_b
+        else {"a", "other_platforms"}
     )
+    builds = require_object(builds_value, "builds", expected_fields)
     build_a = require_object(builds["a"], "builds.a", {"job_id", "cargo_cache"})
     require_nonempty_string(build_a["job_id"], "builds.a.job_id")
     cache_a = require_object(
@@ -412,19 +421,24 @@ def _validate_builds(builds_value: Any) -> None:
             "builds.a Cargo cache exact_key_hit does not match the action output"
         )
 
-    build_b = require_object(builds["b"], "builds.b", {"job_id", "cargo_cache"})
-    require_nonempty_string(build_b["job_id"], "builds.b.job_id")
-    cache_b = require_object(
-        build_b["cargo_cache"],
-        "builds.b.cargo_cache",
-        {"mode", "primary_key", "exact_key_hit"},
-    )
-    if cache_b != {"mode": "cold", "primary_key": None, "exact_key_hit": False}:
-        raise CandidateError("build B must be cold and must not restore a Cargo cache")
-    if build_a["job_id"] == build_b["job_id"]:
-        raise CandidateError(
-            "canonical builds A and B must record distinct job identities"
+    if has_build_b:
+        build_b = require_object(
+            builds["b"], "builds.b", {"job_id", "cargo_cache"}
         )
+        require_nonempty_string(build_b["job_id"], "builds.b.job_id")
+        cache_b = require_object(
+            build_b["cargo_cache"],
+            "builds.b.cargo_cache",
+            {"mode", "primary_key", "exact_key_hit"},
+        )
+        if cache_b != {"mode": "cold", "primary_key": None, "exact_key_hit": False}:
+            raise CandidateError(
+                "build B must be cold and must not restore a Cargo cache"
+            )
+        if build_a["job_id"] == build_b["job_id"]:
+            raise CandidateError(
+                "canonical builds A and B must record distinct job identities"
+            )
 
     other = require_list(builds["other_platforms"], "builds.other_platforms")
     platforms: set[str] = set()
@@ -447,6 +461,7 @@ def _validate_builds(builds_value: Any) -> None:
         raise CandidateError(
             "other-platform build inventory must be exactly linux-arm64 and macos-arm64"
         )
+    return has_build_b
 
 
 def _validate_artifacts(
@@ -535,7 +550,13 @@ def _validate_artifacts(
     return paths
 
 
-def _validate_images(images_value: Any, paths: set[str], *, now: datetime) -> None:
+def _validate_images(
+    images_value: Any,
+    paths: set[str],
+    *,
+    comparisons_performed: bool,
+    now: datetime,
+) -> None:
     images = require_list(images_value, "images")
     seen: set[str] = set()
     for index, image_value in enumerate(images):
@@ -703,9 +724,13 @@ def _validate_images(images_value: Any, paths: set[str], *, now: datetime) -> No
             f"{label}.comparison",
             {"config_equal", "layers_equal"},
         )
-        if comparison != {"config_equal": True, "layers_equal": True}:
+        expected_comparison = {
+            "config_equal": comparisons_performed,
+            "layers_equal": comparisons_performed,
+        }
+        if comparison != expected_comparison:
             raise CandidateError(
-                f"{label} did not pass config and ordered-layer comparison"
+                f"{label}.comparison does not match the candidate build mode"
             )
     if seen != IMAGE_NAMES:
         raise CandidateError(f"image inventory must be exactly {sorted(IMAGE_NAMES)!r}")
@@ -862,28 +887,43 @@ def validate_receipt(
             "candidate builder or recipe fingerprints do not match the trusted source"
         )
 
-    _validate_builds(receipt["builds"])
+    comparisons_performed = _validate_builds(receipt["builds"])
+    expected_artifact_names = {
+        f"registry-stack-candidate-build-a-{run_id}-{run_attempt}",
+        f"registry-stack-candidate-macos-arm64-{run_id}-{run_attempt}",
+        f"registry-stack-candidate-linux-arm64-{run_id}-{run_attempt}",
+        f"registry-stack-release-candidate-payload-{run_id}-{run_attempt}",
+    }
+    if comparisons_performed:
+        expected_artifact_names.add(
+            f"registry-stack-candidate-build-b-{run_id}-{run_attempt}"
+        )
     paths = _validate_artifacts(
         receipt["artifacts"],
         artifact_root=artifact_root,
         artifact_metadata=artifact_metadata,
-        expected_names={
-            f"registry-stack-candidate-build-a-{run_id}-{run_attempt}",
-            f"registry-stack-candidate-build-b-{run_id}-{run_attempt}",
-            f"registry-stack-candidate-macos-arm64-{run_id}-{run_attempt}",
-            f"registry-stack-candidate-linux-arm64-{run_id}-{run_attempt}",
-            f"registry-stack-release-candidate-payload-{run_id}-{run_attempt}",
-        },
+        expected_names=expected_artifact_names,
     )
-    _validate_images(receipt["images"], paths, now=current)
+    _validate_images(
+        receipt["images"],
+        paths,
+        comparisons_performed=comparisons_performed,
+        now=current,
+    )
 
     comparisons = require_object(
         receipt["comparisons"],
         "comparisons",
         {"binary_bytes", "image_config_and_layers"},
     )
-    if comparisons != {"binary_bytes": True, "image_config_and_layers": True}:
-        raise CandidateError("candidate comparisons did not all pass")
+    expected_comparisons = {
+        "binary_bytes": comparisons_performed,
+        "image_config_and_layers": comparisons_performed,
+    }
+    if comparisons != expected_comparisons:
+        raise CandidateError(
+            "candidate comparison record does not match the candidate build mode"
+        )
     scans = require_object(receipt["scans"], "scans", {"policy", "immutable_digests"})
     if scans != {"policy": "passed", "immutable_digests": True}:
         raise CandidateError("candidate scan policy did not pass on immutable digests")

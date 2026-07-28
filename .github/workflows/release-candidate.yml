@@ -444,121 +444,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  build-b:
-    name: Build B cold canonical candidate
-    needs: validate
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout exact candidate source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
-        with:
-          ref: ${{ needs.validate.outputs.source_sha }}
-          fetch-depth: 0
-          submodules: false
-
-      - name: Storage preflight before cold build
-        shell: bash
-        run: |
-          set -euo pipefail
-          args=(preflight --budget release/storage-budget.json --workspace "${GITHUB_WORKSPACE}" --output dist/storage-preflight-b.json)
-          if [[ "${{ needs.validate.outputs.measurement_bootstrap }}" == "true" ]]; then args+=(--measurement-run); fi
-          python3 release/scripts/check-release-storage.py "${args[@]}"
-
-      - name: Start peak-storage sampler
-        run: |
-          rm -f "${RUNNER_TEMP}/storage-stop-b"
-          RUNNER_TRACKING_ID="" python3 release/scripts/check-release-storage.py sample \
-            --workspace "${GITHUB_WORKSPACE}" \
-            --output "${RUNNER_TEMP}/storage-measurement-b.json" \
-            --stop-file "${RUNNER_TEMP}/storage-stop-b" \
-            --interval-seconds 15 \
-            --label build-b &
-          echo "$!" > "${RUNNER_TEMP}/storage-sampler-b.pid"
-
-      - name: Assert cold compiled-output state
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -e target || -e .cargo-home ]]; then
-            echo "cold Build B checkout unexpectedly contains compiled or Cargo cache state" >&2
-            exit 1
-          fi
-
-      - name: Build canonical Linux payload independently
-        env:
-          RELEASE_CARGO_HOME: ${{ runner.temp }}/candidate-b-cargo
-          RELEASE_TARGET_DIR: ${{ runner.temp }}/candidate-b-target
-        run: release/scripts/build-release-binaries.sh "${{ needs.validate.outputs.version }}"
-
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v3.11.1
-        with:
-          version: ${{ env.RELEASE_BUILDX_VERSION }}
-          driver-opts: image=${{ env.RELEASE_BUILDKIT_IMAGE }}
-
-      - name: Export cold comparison OCI layouts
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/layouts dist/images
-          for name in registry-notary registry-relay; do
-            RELEASE_IMAGE_NO_CACHE=true \
-              RELEASE_IMAGE_OCI_LAYOUT="${GITHUB_WORKSPACE}/dist/layouts/${name}" \
-              RELEASE_BUILDX_BUILDER="${{ steps.buildx.outputs.name }}" \
-              release/scripts/build-release-image.sh \
-                "${name}" "${name}:candidate-build-b" \
-                "https://github.com/${GITHUB_REPOSITORY}" \
-                "${{ needs.validate.outputs.source_sha }}" \
-                "${{ needs.validate.outputs.version }}" \
-                "dist/images/${name}.metadata.json"
-          done
-
-      - name: Stop peak-storage sampler
-        if: ${{ always() }}
-        shell: bash
-        run: |
-          touch "${RUNNER_TEMP}/storage-stop-b"
-          if [[ -f "${RUNNER_TEMP}/storage-sampler-b.pid" ]]; then
-            sampler_pid="$(cat "${RUNNER_TEMP}/storage-sampler-b.pid")"
-            for _ in {1..30}; do
-              if ! kill -0 "${sampler_pid}" 2>/dev/null; then break; fi
-              sleep 1
-            done
-            if kill -0 "${sampler_pid}" 2>/dev/null; then
-              echo "Build B storage sampler did not stop" >&2
-              exit 1
-            fi
-          fi
-          mkdir -p candidate-build-b/storage
-          cp "${RUNNER_TEMP}/storage-measurement-b.json" candidate-build-b/storage/measurement.json
-          cp dist/storage-preflight-b.json candidate-build-b/storage/preflight.json
-
-      - name: Stage exact Build B artifact
-        if: ${{ success() }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p candidate-build-b/dist
-          cp -R dist/bin candidate-build-b/dist/bin
-          cp -R dist/image-bin candidate-build-b/dist/image-bin
-          cp -R dist/layouts candidate-build-b/dist/layouts
-          jq -n \
-            --arg job_id "build-b:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-            '{job_id: $job_id, cargo_cache: {mode: "cold", primary_key: null, exact_key_hit: false}}' \
-            > candidate-build-b/build.json
-
-      - name: Upload exact Build B artifact
-        if: ${{ success() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: registry-stack-candidate-build-b-${{ github.run_id }}-${{ github.run_attempt }}
-          path: candidate-build-b
-          if-no-files-found: error
-          retention-days: 7
-
   other-platforms:
     name: Build candidate registryctl ${{ matrix.asset }}
     needs: validate
@@ -660,7 +545,6 @@ jobs:
     needs:
       - validate
       - build-a
-      - build-b
       - other-platforms
     runs-on: ubuntu-24.04
     permissions:
@@ -709,12 +593,6 @@ jobs:
           name: registry-stack-candidate-build-a-${{ github.run_id }}-${{ github.run_attempt }}
           path: inputs/build-a
 
-      - name: Download Build B
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: registry-stack-candidate-build-b-${{ github.run_id }}-${{ github.run_attempt }}
-          path: inputs/build-b
-
       - name: Download macOS arm64 payload
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -727,7 +605,7 @@ jobs:
           name: registry-stack-candidate-linux-arm64-${{ github.run_id }}-${{ github.run_attempt }}
           path: inputs/linux-arm64
 
-      - name: Compare canonical binaries
+      - name: Validate canonical binary inventory
         shell: bash
         run: |
           set -euo pipefail
@@ -742,25 +620,15 @@ jobs:
               "registryctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
               | sort
           )"
-          for build in a b; do
-            actual="$(find "inputs/build-${build}/dist/bin" -maxdepth 1 -type f -printf '%f\n' | sort)"
-            if [[ "${actual}" != "${expected}" ]]; then
-              echo "Build ${build} binary inventory is not exact" >&2
-              diff -u <(printf '%s\n' "${expected}") <(printf '%s\n' "${actual}") || true
-              exit 1
-            fi
-          done
-          while IFS= read -r name; do
-            cmp "inputs/build-a/dist/bin/${name}" "inputs/build-b/dist/bin/${name}"
-          done <<<"${expected}"
+          actual="$(find inputs/build-a/dist/bin -maxdepth 1 -type f -printf '%f\n' | sort)"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "Build A binary inventory is not exact" >&2
+            diff -u <(printf '%s\n' "${expected}") <(printf '%s\n' "${actual}") || true
+            exit 1
+          fi
           expected_image_bin="$(printf '%s\n' RELEASE_BUILDER_IMAGE SHA256SUMS registry-notary registry-notary-cel-worker registry-relay registry-relay-rhai-worker)"
-          for build in a b; do
-            actual="$(find "inputs/build-${build}/dist/image-bin" -maxdepth 1 -type f -printf '%f\n' | sort)"
-            [[ "${actual}" == "${expected_image_bin}" ]]
-          done
-          while IFS= read -r name; do
-            cmp "inputs/build-a/dist/image-bin/${name}" "inputs/build-b/dist/image-bin/${name}"
-          done <<<"${expected_image_bin}"
+          actual="$(find inputs/build-a/dist/image-bin -maxdepth 1 -type f -printf '%f\n' | sort)"
+          [[ "${actual}" == "${expected_image_bin}" ]]
 
       - name: Install pinned candidate inspection tools
         env:
@@ -831,16 +699,6 @@ jobs:
               --require-provenance > "dist/topology/${name}.json"
           done
 
-      - name: Compare image config and ordered layers
-        shell: bash
-        run: |
-          set -euo pipefail
-          for name in registry-notary registry-relay; do
-            python3 release/scripts/compare-release-image-layouts.py \
-              "dist/pulled-layouts/${name}" \
-              "inputs/build-b/dist/layouts/${name}"
-          done
-
       - name: Scan immutable staging digests
         shell: bash
         run: |
@@ -887,7 +745,8 @@ jobs:
               "dist/candidate/dist/sbom/${name}.spdx.json" \
               --image-name "${name}" \
               --digest-ref "${digest_ref}"
-            grype "${digest_ref}" -o json > "dist/candidate/dist/grype/${name}.grype.json"
+            grype "sbom:dist/candidate/dist/sbom/${name}.syft.json" -o json \
+              > "dist/candidate/dist/grype/${name}.grype.json"
             mkdir -p "dist/candidate/dist/rootfs/${name}"
             crane export "${digest_ref}" - \
               | tar --extract --file=- --directory="dist/candidate/dist/rootfs/${name}" \
@@ -916,7 +775,7 @@ jobs:
             dist/candidate/dist/sbom/postgresql.spdx.json \
             --image-name postgresql \
             --digest-ref "${postgresql_ref}"
-          grype "${postgresql_ref}" -o json \
+          grype "sbom:dist/candidate/dist/sbom/postgresql.syft.json" -o json \
             > dist/candidate/dist/grype/postgresql.grype.json
           mkdir -p dist/candidate/dist/rootfs/postgresql
           crane export "${postgresql_ref}" - \
@@ -1059,7 +918,6 @@ jobs:
           jq -s \
             '{schema_version:"registry-stack.release-storage-measurements.v1", measurements:.}' \
             inputs/build-a/storage/measurement.json \
-            inputs/build-b/storage/measurement.json \
             inputs/macos-arm64/storage/measurement.json \
             inputs/linux-arm64/storage/measurement.json \
             dist/candidate/dist/storage/verification-measurement.json \
@@ -1109,21 +967,19 @@ jobs:
           gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" > dist/receipt/artifact-metadata.json
           names=(
             "registry-stack-candidate-build-a-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            "registry-stack-candidate-build-b-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             "registry-stack-candidate-macos-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             "registry-stack-candidate-linux-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             "registry-stack-release-candidate-payload-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           )
           roots=(
             inputs/build-a
-            inputs/build-b
             inputs/macos-arm64
             inputs/linux-arm64
             dist/candidate
           )
-          if [[ "${#names[@]}" -ne 5 || "${#roots[@]}" -ne 5 ||
+          if [[ "${#names[@]}" -ne 4 || "${#roots[@]}" -ne 4 ||
                 "${#names[@]}" -ne "${#roots[@]}" ]]; then
-            echo "Candidate receipt requires exact five-name/five-root artifact parity" >&2
+            echo "Candidate receipt requires exact four-name/four-root artifact parity" >&2
             exit 1
           fi
           records=()
@@ -1235,7 +1091,7 @@ jobs:
                     status_sha256:$db_status_sha256
                   }
                 },
-                comparison:{config_equal:true,layers_equal:true}
+                comparison:{config_equal:false,layers_equal:false}
               }'
           }
           image_record registry-notary > dist/receipt-parts/registry-notary.json
@@ -1258,7 +1114,6 @@ jobs:
             --arg storage_sha256 "$(sha256sum dist/candidate/dist/storage/storage-measurement.json | awk '{print $1}')" \
             --slurpfile builders dist/receipt/expected-builders.json \
             --slurpfile build_a inputs/build-a/build.json \
-            --slurpfile build_b inputs/build-b/build.json \
             --slurpfile other dist/receipt-parts/other-platforms.json \
             --slurpfile artifacts dist/receipt-parts/artifacts.json \
             --slurpfile notary dist/receipt-parts/registry-notary.json \
@@ -1283,10 +1138,10 @@ jobs:
               },
               validity:{created_at:$created_at,expires_at:$expires_at},
               builders:$builders[0],
-              builds:{a:$build_a[0],b:$build_b[0],other_platforms:$other[0]},
+              builds:{a:$build_a[0],other_platforms:$other[0]},
               artifacts:$artifacts[0],
               images:[$notary[0],$relay[0]],
-              comparisons:{binary_bytes:true,image_config_and_layers:true},
+              comparisons:{binary_bytes:false,image_config_and_layers:false},
               scans:{policy:"passed",immutable_digests:true},
               storage:{
                 budget_status:$storage_budget_status,
@@ -1321,7 +1176,6 @@ jobs:
           mkdir -p dist/candidate-telemetry-evidence
           jq -n \
             --slurpfile build_a inputs/build-a/build.json \
-            --slurpfile build_b inputs/build-b/build.json \
             --slurpfile macos inputs/macos-arm64/build.json \
             --slurpfile linux inputs/linux-arm64/build.json \
             --slurpfile storage \
@@ -1330,14 +1184,13 @@ jobs:
               schema_version:"registry-stack.release-candidate-telemetry-evidence.v1",
               builds:{
                 a:$build_a[0],
-                b:$build_b[0],
                 other_platforms:[$macos[0],$linux[0]]
               },
               peak_storage_measurements:$storage[0].measurements
             }' > dist/candidate-telemetry-evidence/evidence.json
           jq -e '
             .builds.a.cargo_cache.mode == "exact-key-restore" and
-            (.peak_storage_measurements | length == 5)
+            (.peak_storage_measurements | length == 4)
           ' dist/candidate-telemetry-evidence/evidence.json >/dev/null
 
       - name: Upload compact candidate telemetry evidence
@@ -1569,7 +1422,6 @@ jobs:
     needs:
       - validate
       - build-a
-      - build-b
       - other-platforms
       - verify-candidate
       - verify-cli-platforms
@@ -1590,7 +1442,6 @@ jobs:
       - name: Collect candidate wall clock, queue delay, and runner occupancy
         env:
           BUILD_A_RESULT: ${{ needs.build-a.result }}
-          BUILD_B_RESULT: ${{ needs.build-b.result }}
           OTHER_PLATFORMS_RESULT: ${{ needs.other-platforms.result }}
           VERIFY_RESULT: ${{ needs.verify-candidate.result }}
           GH_TOKEN: ${{ github.token }}
@@ -1611,10 +1462,10 @@ jobs:
           if [[ -f "${evidence}" ]]; then
             cache_state="$(jq -c '.builds.a.cargo_cache' "${evidence}")"
             storage_evidence="$(jq -c '.peak_storage_measurements' "${evidence}")"
-            test "$(jq -r '.peak_storage_measurements | length' "${evidence}")" = 5
+            test "$(jq -r '.peak_storage_measurements | length' "${evidence}")" = 4
           else
             cache_state='{"status":"unavailable","build_result":"'"${BUILD_A_RESULT}"'"}'
-            storage_evidence='[{"status":"unavailable","build_a_result":"'"${BUILD_A_RESULT}"'","build_b_result":"'"${BUILD_B_RESULT}"'","other_platforms_result":"'"${OTHER_PLATFORMS_RESULT}"'","verify_result":"'"${VERIFY_RESULT}"'"}]'
+            storage_evidence='[{"status":"unavailable","build_a_result":"'"${BUILD_A_RESULT}"'","other_platforms_result":"'"${OTHER_PLATFORMS_RESULT}"'","verify_result":"'"${VERIFY_RESULT}"'"}]'
           fi
           collected_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           jq -n \

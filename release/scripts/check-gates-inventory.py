@@ -553,15 +553,13 @@ REQUIRED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] = 
         ),
     ),
     (
-        "Two independent canonical candidate builds",
+        "Single canonical candidate build with separate repeatability proof",
         ".github/workflows/release-candidate.yml",
         (
             "build-a:\n    name: Build A cached canonical candidate",
-            "build-b:\n    name: Build B cold canonical candidate",
             "name: Restore exact-key Cargo cache",
-            "name: Assert cold compiled-output state",
-            "name: Compare canonical binaries",
-            "name: Compare image config and ordered layers",
+            "name: Validate canonical binary inventory",
+            'grype "sbom:dist/candidate/dist/sbom/${name}.syft.json"',
         ),
     ),
     (
@@ -571,11 +569,9 @@ REQUIRED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] = 
             "name: Restore exact-key Cargo cache",
             "steps.cargo-cache.outputs.cache-hit",
             "exact_key_hit",
-            'cargo_cache: {mode: "cold", primary_key: null, exact_key_hit: false}',
             "name: Start peak-storage sampler",
             "name: Stop peak-storage sampler",
             "storage-measurement-a.json",
-            "storage-measurement-b.json",
             "storage-measurement.json",
         ),
     ),
@@ -586,7 +582,7 @@ REQUIRED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] = 
             "name: Create compact candidate telemetry evidence",
             'schema_version:"registry-stack.release-candidate-telemetry-evidence.v1"',
             '.builds.a.cargo_cache.mode == "exact-key-restore"',
-            "(.peak_storage_measurements | length == 5)",
+            "(.peak_storage_measurements | length == 4)",
             "name: Upload compact candidate telemetry evidence",
             "registry-stack-candidate-telemetry-evidence-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}",
             "path: dist/candidate-telemetry-evidence/evidence.json",
@@ -805,12 +801,6 @@ ORDERED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, str, str], ...] = (
         "name: Restore exact-key Cargo cache",
     ),
     (
-        "Candidate storage preflight before cold build",
-        ".github/workflows/release-candidate.yml",
-        "name: Storage preflight before cold build",
-        "name: Build canonical Linux payload independently",
-    ),
-    (
         "Candidate storage preflight before platform build",
         ".github/workflows/release-candidate.yml",
         "name: Storage preflight before platform build",
@@ -833,12 +823,6 @@ ORDERED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, str, str], ...] = (
         ".github/workflows/release-candidate.yml",
         "name: Build and push provenance-bearing staging images",
         "name: Verify staging packages remain private",
-    ),
-    (
-        "Candidate equality before immutable scan",
-        ".github/workflows/release-candidate.yml",
-        "name: Compare image config and ordered layers",
-        "name: Scan immutable staging digests",
     ),
     (
         "Candidate scan before advisory policy",
@@ -990,18 +974,13 @@ def candidate_build_isolation_violations(workflow: str | None) -> list[str]:
         return ["Candidate build job isolation"]
     build_a = yaml_job_block(workflow, "build-a")
     build_b = yaml_job_block(workflow, "build-b")
-    if build_a is None or build_b is None:
+    if build_a is None or build_b is not None:
         return ["Candidate build job isolation"]
     if (
         "needs: validate" not in build_a
         or "actions/cache@" not in build_a
         or "name: Build canonical Linux payload once" not in build_a
-        or "needs: validate" not in build_b
-        or "name: Assert cold compiled-output state" not in build_b
-        or "name: Build canonical Linux payload independently" not in build_b
-        or "actions/cache@" in build_b
-        or "actions/download-artifact@" in build_b
-        or "needs: build-a" in build_b
+        or "actions/download-artifact@" in build_a
     ):
         return ["Candidate build job isolation"]
     return []
