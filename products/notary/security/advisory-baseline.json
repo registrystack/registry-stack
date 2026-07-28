@@ -102,17 +102,17 @@
           },
           {
             "path": "/usr/local/bin/registry-notary",
-            "sha256": "sha256:27a4573d4dcdd27dc7d310598583f9da9fdc7f8f36d7af648fc4f1182b64a6dc"
+            "sha256": "sha256:15805896fae0d2876bb8c8ce3cc8b6ab687ba9bb84487b9e713c9cc26607b0ff"
           },
           {
             "path": "/usr/local/bin/registry-notary-cel-worker",
-            "sha256": "sha256:8b5ff84dbb74873530e222983fe86ef976bd3ca36ef4811e2ec9a80e310a2a7b"
+            "sha256": "sha256:dcc46aab81d29bdc1947747a80d72ca49bb1d54e496512323f813afb59ac6bac"
           }
         ],
-        "definition_digest": "sha256:7830e6bb58e94a42745d4e270b681e3041266472584af11cf8d1a64c115acc10"
+        "definition_digest": "sha256:e8655e54bb4f415669ff3043e3d9a996b9454889da7667213ec845b2665fef85"
       },
-      "evidence_image_digest": "sha256:c2d4b865440d10beff3795363a5798fff217de111da1be5e496f7e4797cd5a93",
-      "evidence_revision": "efdb1c0f553c540a3f902640d59698cb59b4e18c",
+      "evidence_image_digest": "sha256:c9bab10adfd2521b39b076cee98d9cccc89f438fa2ba9969ff3395298f95ecdc",
+      "evidence_revision": "2b444641b9da344edfad0fdf86b169418f4e6de6",
       "rereview_triggers": [
         "component_layer_changed",
         "expired",
@@ -202,17 +202,17 @@
           },
           {
             "path": "/usr/local/bin/registry-notary",
-            "sha256": "sha256:27a4573d4dcdd27dc7d310598583f9da9fdc7f8f36d7af648fc4f1182b64a6dc"
+            "sha256": "sha256:15805896fae0d2876bb8c8ce3cc8b6ab687ba9bb84487b9e713c9cc26607b0ff"
           },
           {
             "path": "/usr/local/bin/registry-notary-cel-worker",
-            "sha256": "sha256:8b5ff84dbb74873530e222983fe86ef976bd3ca36ef4811e2ec9a80e310a2a7b"
+            "sha256": "sha256:dcc46aab81d29bdc1947747a80d72ca49bb1d54e496512323f813afb59ac6bac"
           }
         ],
-        "definition_digest": "sha256:527bc4e0035bfdbe5addc05bac16a4e613764a7a19b4d409b030f7e8dd8a072d"
+        "definition_digest": "sha256:3050814b54cf47bca50ca2037b3c6dcae4e0da82e1740bd4ec0f8df25bcb8652"
       },
-      "evidence_image_digest": "sha256:c2d4b865440d10beff3795363a5798fff217de111da1be5e496f7e4797cd5a93",
-      "evidence_revision": "efdb1c0f553c540a3f902640d59698cb59b4e18c",
+      "evidence_image_digest": "sha256:c9bab10adfd2521b39b076cee98d9cccc89f438fa2ba9969ff3395298f95ecdc",
+      "evidence_revision": "2b444641b9da344edfad0fdf86b169418f4e6de6",
       "rereview_triggers": [
         "component_layer_changed",
         "expired",
@@ -302,17 +302,17 @@
           },
           {
             "path": "/usr/local/bin/registry-notary",
-            "sha256": "sha256:27a4573d4dcdd27dc7d310598583f9da9fdc7f8f36d7af648fc4f1182b64a6dc"
+            "sha256": "sha256:15805896fae0d2876bb8c8ce3cc8b6ab687ba9bb84487b9e713c9cc26607b0ff"
           },
           {
             "path": "/usr/local/bin/registry-notary-cel-worker",
-            "sha256": "sha256:8b5ff84dbb74873530e222983fe86ef976bd3ca36ef4811e2ec9a80e310a2a7b"
+            "sha256": "sha256:dcc46aab81d29bdc1947747a80d72ca49bb1d54e496512323f813afb59ac6bac"
           }
         ],
-        "definition_digest": "sha256:450a437ceb397d28d651cd8d9a245b8498db06f3e81dc5354f9f6c4fa2596720"
+        "definition_digest": "sha256:5186e368c1fa05302eab88133866a6e88954ef2c1b6b1c9d883d982e410a3003"
       },
-      "evidence_image_digest": "sha256:c2d4b865440d10beff3795363a5798fff217de111da1be5e496f7e4797cd5a93",
-      "evidence_revision": "efdb1c0f553c540a3f902640d59698cb59b4e18c",
+      "evidence_image_digest": "sha256:c9bab10adfd2521b39b076cee98d9cccc89f438fa2ba9969ff3395298f95ecdc",
+      "evidence_revision": "2b444641b9da344edfad0fdf86b169418f4e6de6",
       "rereview_triggers": [
         "component_layer_changed",
         "expired",

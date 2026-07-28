@@ -67,7 +67,7 @@
       },
       "exposure_assertion": {
         "kind": "file_digest_equals",
-        "definition_digest": "sha256:ace115a06bacf1a649ae660f0c426eaf99441e9042629941a74a4260ce2b396a",
+        "definition_digest": "sha256:2831adb58aa6e3f0b1dc0f3e15e0ca5952133d025e95965cbbb7637a0fba7f0a",
         "files": [
           {
             "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
@@ -103,16 +103,16 @@
           },
           {
             "path": "/usr/local/bin/registry-relay",
-            "sha256": "sha256:f3c6f38c1e214cf3e3f1f64ced038fcc22d167914bb56e1e6a6c566552022d19"
+            "sha256": "sha256:8342d4707584ab3bc9d325da91960e8f25adfa394fb72bebb792cde4de0c340b"
           },
           {
             "path": "/usr/local/bin/registry-relay-rhai-worker",
-            "sha256": "sha256:603a2a1aec49ca155dc402e8785c77652e69f2cc856dbcc60df12e86d01541f5"
+            "sha256": "sha256:25f9a3da144cc9561e2a5ced7bd035f65bc037bd6968580082295ac9f552dcc6"
           }
         ]
       },
-      "evidence_image_digest": "sha256:7d89baf9102b883cd6cc07dac840971b9378af75e4030c135753487e2ffb2675",
-      "evidence_revision": "d8ad512051a08f9a2a238805dfcd49dbbe883883",
+      "evidence_image_digest": "sha256:9b6d214d62317822e3927a8e13a363f7ad6c8591713259c0a435fa3edc366273",
+      "evidence_revision": "2b444641b9da344edfad0fdf86b169418f4e6de6",
       "rereview_triggers": [
         "component_layer_changed",
         "expired",
@@ -202,17 +202,17 @@
           },
           {
             "path": "/usr/local/bin/registry-relay",
-            "sha256": "sha256:f3c6f38c1e214cf3e3f1f64ced038fcc22d167914bb56e1e6a6c566552022d19"
+            "sha256": "sha256:8342d4707584ab3bc9d325da91960e8f25adfa394fb72bebb792cde4de0c340b"
           },
           {
             "path": "/usr/local/bin/registry-relay-rhai-worker",
-            "sha256": "sha256:603a2a1aec49ca155dc402e8785c77652e69f2cc856dbcc60df12e86d01541f5"
+            "sha256": "sha256:25f9a3da144cc9561e2a5ced7bd035f65bc037bd6968580082295ac9f552dcc6"
           }
         ],
-        "definition_digest": "sha256:744a55be275286aac714383b37caf412d866c8e77a0e01bfd0995164f7467e4f"
+        "definition_digest": "sha256:78a5e62a88488fc26f7c02823a59c86fe885e006d8db71d4fb66b4671ecbf947"
       },
-      "evidence_image_digest": "sha256:7d89baf9102b883cd6cc07dac840971b9378af75e4030c135753487e2ffb2675",
-      "evidence_revision": "d8ad512051a08f9a2a238805dfcd49dbbe883883",
+      "evidence_image_digest": "sha256:9b6d214d62317822e3927a8e13a363f7ad6c8591713259c0a435fa3edc366273",
+      "evidence_revision": "2b444641b9da344edfad0fdf86b169418f4e6de6",
       "rereview_triggers": [
         "component_layer_changed",
         "expired",
@@ -302,17 +302,17 @@
           },
           {
             "path": "/usr/local/bin/registry-relay",
-            "sha256": "sha256:f3c6f38c1e214cf3e3f1f64ced038fcc22d167914bb56e1e6a6c566552022d19"
+            "sha256": "sha256:8342d4707584ab3bc9d325da91960e8f25adfa394fb72bebb792cde4de0c340b"
           },
           {
             "path": "/usr/local/bin/registry-relay-rhai-worker",
-            "sha256": "sha256:603a2a1aec49ca155dc402e8785c77652e69f2cc856dbcc60df12e86d01541f5"
+            "sha256": "sha256:25f9a3da144cc9561e2a5ced7bd035f65bc037bd6968580082295ac9f552dcc6"
           }
         ],
-        "definition_digest": "sha256:52135a981c3d245c4ac16da88b449961e6998e4867fc6d0519e1fd9276a720f8"
+        "definition_digest": "sha256:2e8edf893f1a3a83615ceecaecd08c08168763a8012f19ed0fb01f49848830d9"
       },
-      "evidence_image_digest": "sha256:7d89baf9102b883cd6cc07dac840971b9378af75e4030c135753487e2ffb2675",
-      "evidence_revision": "d8ad512051a08f9a2a238805dfcd49dbbe883883",
+      "evidence_image_digest": "sha256:9b6d214d62317822e3927a8e13a363f7ad6c8591713259c0a435fa3edc366273",
+      "evidence_revision": "2b444641b9da344edfad0fdf86b169418f4e6de6",
       "rereview_triggers": [
         "component_layer_changed",
         "expired",
