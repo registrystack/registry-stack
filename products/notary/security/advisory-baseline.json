@@ -102,17 +102,17 @@
           },
           {
             "path": "/usr/local/bin/registry-notary",
-            "sha256": "sha256:dc26397b47320c7128832d9662e4524e76c598f329d1eb5b3299c0bfcfa1dd38"
+            "sha256": "sha256:27a4573d4dcdd27dc7d310598583f9da9fdc7f8f36d7af648fc4f1182b64a6dc"
           },
           {
             "path": "/usr/local/bin/registry-notary-cel-worker",
-            "sha256": "sha256:02e102218bc322606f27b177eca5845848002834badc21bbe6880481a8a25785"
+            "sha256": "sha256:8b5ff84dbb74873530e222983fe86ef976bd3ca36ef4811e2ec9a80e310a2a7b"
           }
         ],
-        "definition_digest": "sha256:cbe1908f46a350be7da254577c00daaa035074da7dbce389f76aab71b5d57089"
+        "definition_digest": "sha256:7830e6bb58e94a42745d4e270b681e3041266472584af11cf8d1a64c115acc10"
       },
-      "evidence_image_digest": "sha256:88583e77ea51ad355554e88e0b5940257bd22bc40471784115f0649dbf35f9fb",
-      "evidence_revision": "d45761a0104bd3d9c2e4b4db391d4223f289bd44",
+      "evidence_image_digest": "sha256:c2d4b865440d10beff3795363a5798fff217de111da1be5e496f7e4797cd5a93",
+      "evidence_revision": "efdb1c0f553c540a3f902640d59698cb59b4e18c",
       "rereview_triggers": [
         "component_layer_changed",
         "expired",
@@ -124,9 +124,9 @@
         "severity_changed"
       ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The reviewed service and linked libcrypto have only fixed-format %lu and %lx AWS-LC sscanf call sites and no effective vulnerable %mc conversion. Every file in both candidate executable closures is digest-enforced because dynamic-symbol absence cannot truthfully express a format-string invariant.",
-      "reviewed_at": "2026-07-25",
-      "expires_at": "2026-08-25"
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.0 candidate rereview found that only the service binaries changed and every native closure dependency remained identical. Registry Notary still imports __isoc23_sscanf through the unchanged aws-lc dependency, whose reviewed call sites retain only fixed-format %lu and %lx conversions; neither exact candidate binary contains an effective vulnerable %mc format. Every file in both candidate executable closures remains digest-enforced because dynamic-symbol absence cannot truthfully express a format-string invariant.",
+      "reviewed_at": "2026-07-28",
+      "expires_at": "2026-08-28"
     },
     {
       "tool": "grype",
@@ -202,17 +202,17 @@
           },
           {
             "path": "/usr/local/bin/registry-notary",
-            "sha256": "sha256:dc26397b47320c7128832d9662e4524e76c598f329d1eb5b3299c0bfcfa1dd38"
+            "sha256": "sha256:27a4573d4dcdd27dc7d310598583f9da9fdc7f8f36d7af648fc4f1182b64a6dc"
           },
           {
             "path": "/usr/local/bin/registry-notary-cel-worker",
-            "sha256": "sha256:02e102218bc322606f27b177eca5845848002834badc21bbe6880481a8a25785"
+            "sha256": "sha256:8b5ff84dbb74873530e222983fe86ef976bd3ca36ef4811e2ec9a80e310a2a7b"
           }
         ],
-        "definition_digest": "sha256:380044df0fe06fcc44a7aa603de54ae00b294174cb3b507486036c06db251573"
+        "definition_digest": "sha256:527bc4e0035bfdbe5addc05bac16a4e613764a7a19b4d409b030f7e8dd8a072d"
       },
-      "evidence_image_digest": "sha256:88583e77ea51ad355554e88e0b5940257bd22bc40471784115f0649dbf35f9fb",
-      "evidence_revision": "d45761a0104bd3d9c2e4b4db391d4223f289bd44",
+      "evidence_image_digest": "sha256:c2d4b865440d10beff3795363a5798fff217de111da1be5e496f7e4797cd5a93",
+      "evidence_revision": "efdb1c0f553c540a3f902640d59698cb59b4e18c",
       "rereview_triggers": [
         "component_layer_changed",
         "expired",
@@ -224,9 +224,9 @@
         "severity_changed"
       ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. Every file in both candidate executable closures plus the out-of-closure libstdc++ object that imports ungetwc is digest-enforced. A static dynamic-symbol assertion is incomplete because the executables import dlsym.",
-      "reviewed_at": "2026-07-25",
-      "expires_at": "2026-08-25"
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.0 candidate rereview found that only the service binaries changed, every native closure dependency remained identical, and neither executable directly imports ungetwc. Every file in both candidate executable closures plus the out-of-closure libstdc++ object that imports ungetwc remains digest-enforced. A static dynamic-symbol assertion is incomplete because registry-notary imports dlsym.",
+      "reviewed_at": "2026-07-28",
+      "expires_at": "2026-08-28"
     },
     {
       "tool": "grype",
@@ -302,17 +302,17 @@
           },
           {
             "path": "/usr/local/bin/registry-notary",
-            "sha256": "sha256:dc26397b47320c7128832d9662e4524e76c598f329d1eb5b3299c0bfcfa1dd38"
+            "sha256": "sha256:27a4573d4dcdd27dc7d310598583f9da9fdc7f8f36d7af648fc4f1182b64a6dc"
           },
           {
             "path": "/usr/local/bin/registry-notary-cel-worker",
-            "sha256": "sha256:02e102218bc322606f27b177eca5845848002834badc21bbe6880481a8a25785"
+            "sha256": "sha256:8b5ff84dbb74873530e222983fe86ef976bd3ca36ef4811e2ec9a80e310a2a7b"
           }
         ],
-        "definition_digest": "sha256:a06f5c8a75b460d40400e2eb282543468d15275a1796656875c4f31879c0ab5d"
+        "definition_digest": "sha256:450a437ceb397d28d651cd8d9a245b8498db06f3e81dc5354f9f6c4fa2596720"
       },
-      "evidence_image_digest": "sha256:88583e77ea51ad355554e88e0b5940257bd22bc40471784115f0649dbf35f9fb",
-      "evidence_revision": "d45761a0104bd3d9c2e4b4db391d4223f289bd44",
+      "evidence_image_digest": "sha256:c2d4b865440d10beff3795363a5798fff217de111da1be5e496f7e4797cd5a93",
+      "evidence_revision": "efdb1c0f553c540a3f902640d59698cb59b4e18c",
       "rereview_triggers": [
         "component_layer_changed",
         "expired",
@@ -324,9 +324,9 @@
         "severity_changed"
       ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed upstream or Trixie version. Every file in both candidate executable closures plus libresolv is digest-enforced after review found no path to ns_printrrf, ns_printrr, or fp_nquery. A static dynamic-symbol assertion is incomplete because the executables import dlsym.",
-      "reviewed_at": "2026-07-25",
-      "expires_at": "2026-08-25"
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed upstream or Trixie version. The v0.15.0 candidate rereview found that only the service binaries changed, every native closure dependency remained identical, and neither executable directly imports ns_printrrf, ns_printrr, or fp_nquery. Every file in both candidate executable closures plus libresolv remains digest-enforced. A static dynamic-symbol assertion is incomplete because registry-notary imports dlsym.",
+      "reviewed_at": "2026-07-28",
+      "expires_at": "2026-08-28"
     }
   ]
 }
