@@ -187,7 +187,15 @@ class RelayOidcSmokeTest(TestCase):
                 }
             ],
             "images": [
-                {"name": name, "digest_ref": digest_ref}
+                {
+                    "name": name,
+                    "role": (
+                        "supporting-runtime-image"
+                        if name == "postgresql"
+                        else "released-product-image"
+                    ),
+                    "digest_ref": digest_ref,
+                }
                 for name, digest_ref in images.items()
             ],
         }
