@@ -670,6 +670,10 @@ def read_runtime_inspection(
         "workbook_classification",
         "workbook_project_file",
         "workbook_runtime_path",
+        "match_principal",
+        "runtime_uid",
+        "runtime_gid",
+        "runtime_files",
         "topology",
     }
     if expected_notary_image is not None:
@@ -677,11 +681,21 @@ def read_runtime_inspection(
     if not isinstance(runtime_manifest, dict) or set(runtime_manifest) != expected_keys:
         raise ReleaseFormError("canonical runtime manifest fields are not closed")
     if (
-        runtime_manifest.get("schema_version") != "registryctl.local_runtime.v1"
+        runtime_manifest.get("schema_version") != "registryctl.local_runtime.v2"
         or runtime_manifest.get("environment") != "local"
         or runtime_manifest.get("relay_image") != expected_relay_image
         or runtime_manifest.get("workbook_classification")
         != "operator_owned_source_data"
+        or not isinstance(runtime_manifest.get("match_principal"), str)
+        or not runtime_manifest["match_principal"]
+        or not isinstance(runtime_manifest.get("runtime_uid"), str)
+        or not runtime_manifest["runtime_uid"].isdigit()
+        or runtime_manifest.get("runtime_uid") == "0"
+        or not isinstance(runtime_manifest.get("runtime_gid"), str)
+        or not runtime_manifest["runtime_gid"].isdigit()
+        or runtime_manifest.get("runtime_gid") == "0"
+        or not isinstance(runtime_manifest.get("runtime_files"), dict)
+        or not runtime_manifest["runtime_files"]
         or runtime_manifest.get("topology") != expected_topology
     ):
         raise ReleaseFormError(
