@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.15.0
+
 - BREAKING: Attribute release is stable and enabled in the default and
   canonical release builds. Profiles now require a purpose, the exact
   `<dataset_id>:identity_release` scope, and a subject `id_type`. Strict

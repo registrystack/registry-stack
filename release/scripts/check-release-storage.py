@@ -10,6 +10,7 @@ import shutil
 import sys
 import time
 from datetime import UTC, datetime
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from typing import Any
 
@@ -71,8 +72,11 @@ def load_budget(path: Path) -> dict[str, Any]:
         if not isinstance(measurement, dict):
             raise StorageError("enforced budget must cite its real measurement")
         required_measurement = {
+            "baseline_filesystem_used_bytes",
             "candidate_run_url",
+            "limiting_job_label",
             "measured_at",
+            "peak_additional_filesystem_used_bytes",
             "peak_filesystem_used_bytes",
             "peak_workspace_bytes",
         }
@@ -84,19 +88,66 @@ def load_budget(path: Path) -> dict[str, Any]:
             raise StorageError(
                 "enforced budget must cite a Registry Stack candidate run"
             )
-        for field in ("peak_filesystem_used_bytes", "peak_workspace_bytes"):
+        if (
+            not isinstance(measurement["limiting_job_label"], str)
+            or not measurement["limiting_job_label"].strip()
+        ):
+            raise StorageError("measurement limiting_job_label must be non-empty")
+        for field in (
+            "baseline_filesystem_used_bytes",
+            "peak_filesystem_used_bytes",
+            "peak_workspace_bytes",
+        ):
             if (
                 not isinstance(measurement[field], int)
                 or isinstance(measurement[field], bool)
-                or measurement[field] <= 0
+                or measurement[field] < 0
             ):
-                raise StorageError(f"measurement {field} must be a positive integer")
+                raise StorageError(
+                    f"measurement {field} must be a non-negative integer"
+                )
+        additional = measurement["peak_additional_filesystem_used_bytes"]
+        if (
+            not isinstance(additional, int)
+            or isinstance(additional, bool)
+            or additional <= 0
+        ):
+            raise StorageError(
+                "measurement peak_additional_filesystem_used_bytes "
+                "must be a positive integer"
+            )
+        observed_additional = (
+            measurement["peak_filesystem_used_bytes"]
+            - measurement["baseline_filesystem_used_bytes"]
+        )
+        if observed_additional != additional:
+            raise StorageError(
+                "measurement peak additional filesystem use must equal "
+                "peak minus baseline"
+            )
+        derived_required = required_runway_bytes(additional, margin)
+        if required != derived_required:
+            raise StorageError(
+                "enforced budget required_available_bytes must equal "
+                "ceil(peak_additional_filesystem_used_bytes * "
+                f"(1 + safety_margin_ratio)): expected {derived_required}"
+            )
         parse_timestamp(measurement["measured_at"], field="measurement.measured_at")
     else:
         raise StorageError(
             "storage budget status must be measurement_required or enforced"
         )
     return value
+
+
+def required_runway_bytes(additional_bytes: int, margin: int | float) -> int:
+    """Return the available-space threshold for measured additional consumption."""
+    multiplier = Decimal(1) + Decimal(str(margin))
+    return int(
+        (Decimal(additional_bytes) * multiplier).to_integral_value(
+            rounding=ROUND_CEILING
+        )
+    )
 
 
 def parse_timestamp(value: Any, *, field: str) -> datetime:
@@ -185,12 +236,19 @@ def sample_once(
 def render_samples(samples: list[dict[str, Any]], workspace: Path) -> dict[str, Any]:
     if not samples:
         raise StorageError("at least one storage sample is required")
+    baseline_filesystem_used_bytes = samples[0]["filesystem_used_bytes"]
+    peak_filesystem_used_bytes = max(
+        sample["filesystem_used_bytes"] for sample in samples
+    )
     return {
         "schema_version": "registry-stack.release-storage-measurement.v1",
         "workspace": str(workspace.resolve()),
+        "job_label": samples[0]["label"],
         "sample_count": len(samples),
-        "peak_filesystem_used_bytes": max(
-            sample["filesystem_used_bytes"] for sample in samples
+        "baseline_filesystem_used_bytes": baseline_filesystem_used_bytes,
+        "peak_filesystem_used_bytes": peak_filesystem_used_bytes,
+        "peak_additional_filesystem_used_bytes": (
+            peak_filesystem_used_bytes - baseline_filesystem_used_bytes
         ),
         "peak_workspace_bytes": max(sample["workspace_bytes"] for sample in samples),
         "minimum_available_bytes": min(

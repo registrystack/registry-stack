@@ -28,8 +28,13 @@ class CheckReleaseStorageTest(unittest.TestCase):
         self.module = load_module()
         self.bootstrap = self.module.load_budget(BUDGET)
 
-    def enforced_budget(self, required: int = 1_000) -> dict:
+    def enforced_budget(self, required: int | None = None) -> dict:
         value = dict(self.bootstrap)
+        peak_additional = 800
+        if required is None:
+            required = self.module.required_runway_bytes(
+                peak_additional, value["safety_margin_ratio"]
+            )
         value.update(
             {
                 "status": "enforced",
@@ -39,7 +44,10 @@ class CheckReleaseStorageTest(unittest.TestCase):
                         "https://github.com/registrystack/registry-stack/actions/runs/1"
                     ),
                     "measured_at": "2026-07-25T12:00:00Z",
+                    "limiting_job_label": "build-b",
+                    "baseline_filesystem_used_bytes": 1_200,
                     "peak_filesystem_used_bytes": 2_000,
+                    "peak_additional_filesystem_used_bytes": peak_additional,
                     "peak_workspace_bytes": 1_000,
                 },
             }
@@ -78,6 +86,39 @@ class CheckReleaseStorageTest(unittest.TestCase):
         )
         self.assertTrue(result["passed"])
         self.assertEqual("enforced", result["mode"])
+
+    def test_enforced_budget_accepts_exact_derived_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "budget.json"
+            expected = self.enforced_budget()
+            path.write_text(json.dumps(expected), encoding="utf-8")
+            self.assertEqual(expected, self.module.load_budget(path))
+
+    def test_required_runway_rounds_fractional_byte_up(self) -> None:
+        self.assertEqual(4, self.module.required_runway_bytes(3, 0.25))
+
+    def test_enforced_budget_rejects_one_byte_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "budget.json"
+            path.write_text(
+                json.dumps(self.enforced_budget(required=1)), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                self.module.StorageError,
+                "required_available_bytes must equal ceil",
+            ):
+                self.module.load_budget(path)
+
+    def test_enforced_budget_rejects_inconsistent_additional_measurement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "budget.json"
+            invalid = self.enforced_budget()
+            invalid["measurement"]["peak_additional_filesystem_used_bytes"] = 799
+            path.write_text(json.dumps(invalid), encoding="utf-8")
+            with self.assertRaisesRegex(
+                self.module.StorageError, "must equal peak minus baseline"
+            ):
+                self.module.load_budget(path)
 
     def test_measurement_required_rejects_an_invented_number(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -136,8 +177,13 @@ class CheckReleaseStorageTest(unittest.TestCase):
                     max_samples=2,
                 )
             self.assertEqual(4_000, result["peak_filesystem_used_bytes"])
+            self.assertEqual(2_000, result["baseline_filesystem_used_bytes"])
+            self.assertEqual(
+                2_000, result["peak_additional_filesystem_used_bytes"]
+            )
             self.assertEqual(1_500, result["peak_workspace_bytes"])
             self.assertEqual(6_000, result["minimum_available_bytes"])
+            self.assertEqual("candidate", result["job_label"])
             self.assertEqual(result, json.loads(output.read_text(encoding="utf-8")))
 
     def test_sample_once_counts_regular_files_not_symlink_targets(self) -> None:

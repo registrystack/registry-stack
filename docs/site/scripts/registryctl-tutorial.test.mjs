@@ -383,14 +383,14 @@ test('release-form claim tutorial keeps the live no-match result bounded', () =>
   assert.doesNotMatch(script, /project-record-exists/);
 });
 
-test('release-form claim tutorial continues the canonical v0.14.0 project live', () => {
+test('release-form claim tutorial continues the canonical v0.15.0 project live', () => {
   const tutorial = readFileSync(
     new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
     'utf8',
   );
 
   assert.match(tutorial, /^status: current$/m);
-  assert.match(tutorial, /registryctl 0\.14\.0 with its matching image lock/i);
+  assert.match(tutorial, /registryctl 0\.15\.0 with its matching image lock/i);
   assert.match(tutorial, /Continue from[\s\S]*`my-first-api`/);
   assert.match(tutorial, /registryctl add notary/);
   assert.match(tutorial, /\.registry-stack\/runtime\/local\/secrets\/local\.env/);

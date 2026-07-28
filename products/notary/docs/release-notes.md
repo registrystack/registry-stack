@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.15.0
+
 - Registry Notary now requires every configured CEL worker to complete one
   bounded protocol probe and remain live before listener binding or readiness.
   Worker startup uses one 10-second wall-clock bound for the complete

@@ -15,7 +15,7 @@ async function readSite(relative) {
   return readFile(resolve(siteRoot, relative), 'utf8');
 }
 
-test('v0.14 release-form docs stay distinct from published v0.13 and current-source evidence', async () => {
+test('v0.15 release-form docs stay distinct from published v0.13 and current-source evidence', async () => {
   const [docsetsSource, generatedDocsetsSource, registryctl, configuration, tutorial, releaseSource] =
     await Promise.all([
       readSite('src/data/docsets.yaml'),
@@ -39,7 +39,7 @@ test('v0.14 release-form docs stay distinct from published v0.13 and current-sou
   assert.equal(lastRelease.availability, 'released');
 
   const registryctlLead = registryctl.split('## Registry Stack project authoring')[0];
-  assert.match(registryctlLead, /This page describes `registryctl 0\.14\.0`/);
+  assert.match(registryctlLead, /This page describes `registryctl 0\.15\.0`/);
   assert.match(registryctlLead, /binary, installer, image[\s\n]+lock, and verification material from that same release/);
   assert.doesNotMatch(registryctlLead, /Main source \(unreleased\)/);
   assert.doesNotMatch(
@@ -58,7 +58,7 @@ test('v0.14 release-form docs stay distinct from published v0.13 and current-sou
   assert.doesNotMatch(configuration, /field baseline records when/);
   assert.doesNotMatch(configuration, /Configuration release: `0\.13\.0`/);
 
-  assert.match(tutorial, /uses Registryctl 0\.14\.0 and its matching release material/);
+  assert.match(tutorial, /uses Registryctl 0\.15\.0 and its matching release material/);
   assert.doesNotMatch(tutorial, /Main source \(unreleased\)/);
   assert.doesNotMatch(tutorial, /v0\.13\.0/);
   const releaseCommands = releaseSource
@@ -82,7 +82,7 @@ test('v0.14 release-form docs stay distinct from published v0.13 and current-sou
     .split('enum AuthoringCommand {')[1]
     .split('#[derive(Debug, Parser)]')[0];
   assert.doesNotMatch(releaseAuthoring, /\bReference\b/);
-  assert.match(tutorial, /Starter: http \(Registry Stack 0\.14\.0\)/);
+  assert.match(tutorial, /Starter: http \(Registry Stack 0\.15\.0\)/);
   for (const page of [registryctl, tutorial]) {
     assert.match(page, /--show-authored-values/);
     assert.match(page, /human(?:-only| output only)/i);

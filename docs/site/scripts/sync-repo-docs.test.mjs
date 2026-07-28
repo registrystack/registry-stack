@@ -163,6 +163,41 @@ test('rejects malformed and unknown docset override metadata', () => {
   );
 });
 
+test('accepts frozen metadata for a pending versioned release candidate', () => {
+  const candidateDocsets = {
+    current: 'latest',
+    docsets: [
+      { id: 'latest', status: 'current', availability: 'unreleased' },
+      { id: 'v0.15.0', status: 'draft', availability: 'candidate' },
+    ],
+  };
+  const manifest = {
+    repos: {
+      'registry-relay': {
+        docs: [
+          {
+            src: 'docs/provenance.md',
+            last_reviewed: '2026-07-10',
+            standards_referenced: ['openapi'],
+            docset_overrides: [
+              {
+                docsets: ['v0.15.0'],
+                standards_referenced: ['prov-o'],
+                last_reviewed: '2026-07-28',
+              },
+            ],
+          },
+        ],
+      },
+    },
+  };
+
+  assert.equal(
+    validateRepoDocsMetadata(manifest, knownStandards, candidateDocsets),
+    manifest,
+  );
+});
+
 test('requires complete metadata for every applicable archived docset', () => {
   const manifest = {
     repos: {

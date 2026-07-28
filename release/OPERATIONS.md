@@ -59,10 +59,17 @@ After that run, update the budget with:
 
 - The candidate workflow run URL
 - The measured timestamp
-- The maximum filesystem-used bytes
-- The maximum release-workspace bytes
-- A required available-byte threshold derived from that measurement and the
-  documented safety margin
+- The label, baseline filesystem-used bytes, peak filesystem-used bytes, and
+  peak release-workspace bytes from the job with the largest
+  `peak_additional_filesystem_used_bytes`
+- That job's `peak_additional_filesystem_used_bytes`, which must equal its peak
+  filesystem-used bytes minus its baseline filesystem-used bytes
+- `required_available_bytes`, set to
+  `ceil(peak_additional_filesystem_used_bytes * (1 + safety_margin_ratio))`
+
+The budget loader checks both equations and rejects arbitrary thresholds,
+including a one-byte placeholder. Absolute filesystem-used bytes are retained
+as audit evidence; they are not compared with available bytes.
 
 Splitting build A and build B across separate runners limits the budget to
 per-job peak pressure.
@@ -70,8 +77,11 @@ The gate is preventive; no prior hosted candidate disk exhaustion is recorded.
 
 ## Request A Candidate
 
-Before requesting the candidate, build the one new archived docset and append
-its bundle and tree digests to the immutable lock:
+The release-prep PR keeps the new docset in `draft` status because the
+protected-main squash commit does not exist yet. In the source-ref
+finalization PR, pin the docset and release manifest to the release-prep merge
+commit, change the docset status to `archived`, build it, and append its bundle
+and tree digests to the immutable lock:
 
 ```sh
 cd docs/site
@@ -83,9 +93,10 @@ npm run check:archive-lock -- --base-ref origin/main
 cd ../..
 ```
 
-Commit the new lock entry with the rest of the release preparation. Existing
-entries cannot be changed or removed. The candidate, tag workflow, and Pages
-deployment all verify the same bytes.
+Commit the new lock entry in that source-ref finalization PR. Existing entries
+cannot be changed or removed. Merge the finalization PR before requesting the
+candidate. The candidate, tag workflow, and Pages deployment all verify the
+same bytes.
 
 Then start from a clean local checkout with current `origin/main`.
 Resolve the exact protected-main commit and choose an unused release ID.
@@ -95,8 +106,8 @@ git fetch origin main
 source_sha="$(git rev-parse origin/main)"
 
 release/scripts/registry-release request-candidate \
-  --version 0.14.0 \
-  --release-id beta-19 \
+  --version 0.15.0 \
+  --release-id beta-20 \
   --source-sha "${source_sha}" \
   --proof-level auto
 ```
@@ -111,8 +122,8 @@ the one instrumented measurement run through the supported release command:
 
 ```sh
 release/scripts/registry-release request-candidate \
-  --version 0.14.0 \
-  --release-id beta-19 \
+  --version 0.15.0 \
+  --release-id beta-20 \
   --source-sha "${source_sha}" \
   --proof-level extended \
   --milestone beta \
@@ -136,8 +147,8 @@ Run the local verifier before creating a tag:
 candidate_run="${CANDIDATE_RUN_ID:?set CANDIDATE_RUN_ID to the exact run}"
 
 release/scripts/registry-release finalize \
-  --version 0.14.0 \
-  --release-id beta-19 \
+  --version 0.15.0 \
+  --release-id beta-20 \
   --promotion-commit "$(git rev-parse origin/main)" \
   --candidate-run "${candidate_run}"
 ```
@@ -150,7 +161,7 @@ binds the run ID, run attempt, and receipt SHA-256.
 Run that printed command, inspect the tag, and push only that exact ref:
 
 ```sh
-tag=v0.14.0
+tag=v0.15.0
 git show --show-signature "${tag}"
 git push origin "refs/tags/${tag}"
 ```
@@ -218,7 +229,7 @@ requires it:
 ```sh
 gh api --method POST repos/registrystack/registry-stack/dispatches \
   -f event_type=release-repeatability \
-  -f 'client_payload[tag]=v0.14.0'
+  -f 'client_payload[tag]=v0.15.0'
 ```
 
 The job compares the clean rebuild with published hashes and image digests,

@@ -22,7 +22,7 @@ const currentActivationPages = [
   'products/notary/docs/deployment-hardening-runbook.md',
 ];
 
-test('current docs use an adopter-facing preview label while v0.13.0 stays pinned release evidence', async () => {
+test('current docs stay preview while v0.15.0 is a candidate and v0.13.0 stays released', async () => {
   const [docsets, repoDocs, generatedDocsets] = await Promise.all([
     readYaml('docs/site/src/data/docsets.yaml'),
     readYaml('docs/site/src/data/repo-docs.yaml'),
@@ -76,10 +76,18 @@ test('current docs use an adopter-facing preview label while v0.13.0 stays pinne
 
   for (const docset of docsets.docsets) {
     if (docset.id === 'latest') continue;
-    assert.equal(docset.status, 'archived');
+    assert.equal(
+      docset.status,
+      docset.id === 'v0.15.0' ? 'draft' : 'archived',
+      `${docset.id} must expose its release-train status`,
+    );
     assert.equal(
       docset.availability,
-      docset.id.startsWith('v') ? 'released' : 'candidate',
+      docset.id === 'v0.15.0'
+        ? 'candidate'
+        : docset.id.startsWith('v')
+          ? 'released'
+          : 'candidate',
       `${docset.id} must expose release availability`,
     );
   }

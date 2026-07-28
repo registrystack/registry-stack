@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.15.0 - 2026-07-28
+
 - Validate every materialized XLSX row before activation, including rows after
   the first 1,000. Formula cells, duplicate primary keys, missing or unexpected
   strict columns, nulls, and incompatible types fail with bounded value-free

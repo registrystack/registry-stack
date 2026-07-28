@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.15.0 - 2026-07-28
+
+- No separately versioned Registry Platform API changes. This release carries
+  the shared configuration, diagnostic, and operations primitives exercised by
+  the Registryctl, Relay, and Notary onboarding and release gates.
+
 ## v0.13.0 - 2026-07-25
 
 - BREAKING: `registry-platform-ops` replaces deployment-waiver `reason` with

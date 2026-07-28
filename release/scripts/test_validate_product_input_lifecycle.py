@@ -228,7 +228,7 @@ class ProductInputLifecycleValidatorTest(unittest.TestCase):
         if document != {}:
             raise self.module.CandidateReceiptError("unexpected receipt")
         expected = {
-            "expected_source_sha": self.source_ref,
+            "expected_source_sha": self.source_commit,
             "expected_version": "1.2.3",
             "expected_release_id": "beta-20",
         }
@@ -240,7 +240,7 @@ class ProductInputLifecycleValidatorTest(unittest.TestCase):
             "release": {
                 "version": "1.2.3",
                 "release_id": "beta-20",
-                "source_sha": self.source_ref,
+                "source_sha": self.source_commit,
             },
             "validity": {
                 "created_at": "2026-07-26T11:00:00Z",
@@ -431,6 +431,29 @@ class ProductInputLifecycleValidatorTest(unittest.TestCase):
             self.candidate(),
             allow_template=False,
             require_all_passed=True,
+        )
+
+    def test_receipt_authenticates_candidate_commit_after_prepare_commit(self) -> None:
+        record = self.candidate()
+        self.assertNotEqual(
+            record["candidate"]["source_ref"],
+            record["candidate"]["source_commit"],
+        )
+        observed: dict = {}
+
+        def receipt_validator(document, **kwargs):
+            observed.update(kwargs)
+            return self.validated_receipt(document, **kwargs)
+
+        self.validate(
+            record,
+            allow_template=False,
+            require_all_passed=True,
+            receipt_validator=receipt_validator,
+        )
+        self.assertEqual(
+            record["candidate"]["source_commit"],
+            observed["expected_source_sha"],
         )
 
     def test_candidate_evidence_requires_authenticated_release_assets(self) -> None:

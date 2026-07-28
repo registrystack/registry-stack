@@ -43,7 +43,7 @@ An external reviewer can run the same job for an exact tag:
 ```sh
 gh api --method POST repos/registrystack/registry-stack/dispatches \
   -f event_type=release-repeatability \
-  -f 'client_payload[tag]=v0.14.0'
+  -f 'client_payload[tag]=v0.15.0'
 ```
 
 The automated path applies to releases that include

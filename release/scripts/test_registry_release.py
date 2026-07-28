@@ -1151,6 +1151,47 @@ class RegistryReleaseTest(unittest.TestCase):
             step_names.index("Attest candidate payload artifacts"),
         )
 
+    def test_release_workflow_freezes_non_signature_provenance_subjects(self) -> None:
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        )
+        publish_steps = workflow["jobs"]["github-release"]["steps"]
+        step_names = [step.get("name") for step in publish_steps]
+        subjects_name = "Generate exact provenance subjects"
+        inventory_name = "Record exact pre-provenance inventory"
+        signing_name = "Sign promoted release evidence"
+
+        self.assertLess(step_names.index(subjects_name), step_names.index(signing_name))
+        self.assertLess(
+            step_names.index(inventory_name), step_names.index(signing_name)
+        )
+
+        steps_by_name = {
+            step.get("name"): step for step in publish_steps if isinstance(step, dict)
+        }
+        subjects_script = steps_by_name[subjects_name]["run"]
+        signing_script = steps_by_name[signing_name]["run"]
+        reconcile_script = "\n".join(
+            step.get("run", "")
+            for step in workflow["jobs"]["reconcile"]["steps"]
+            if isinstance(step, dict)
+        )
+
+        self.assertIn("-name '*.sig' -o -name '*.pem'", subjects_script)
+        self.assertIn(
+            "Signature material exists before provenance subjects are frozen",
+            subjects_script,
+        )
+        self.assertIn("generated-signatures.sha256", signing_script)
+        self.assertIn(
+            "dist/reconciliation/provenance-subjects.sha256", signing_script
+        )
+        self.assertIn("generated-signatures.sha256", reconcile_script)
+        self.assertIn('sha256sum "downloaded/${name}"', reconcile_script)
+        self.assertIn(
+            "reconciliation/generated-signatures.sha256", reconcile_script
+        )
+
     def test_release_workflow_never_replaces_published_assets(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         step = workflow[
@@ -1443,7 +1484,7 @@ class RegistryReleaseTest(unittest.TestCase):
         result = run_tool("validate-docsets")
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("validated 11 versioned docsets", result.stdout)
+        self.assertIn("validated 12 versioned docsets", result.stdout)
 
     def test_validate_docsets_rejects_external_ref_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -519,7 +519,7 @@ def validate_candidate_assets(
     try:
         receipt = receipt_validator(
             receipt_document,
-            expected_source_sha=candidate["source_ref"],
+            expected_source_sha=candidate["source_commit"],
             expected_version=version.removeprefix("v"),
             expected_release_id=candidate["release_id"],
             now=recorded_at,
