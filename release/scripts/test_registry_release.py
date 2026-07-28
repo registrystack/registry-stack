@@ -702,6 +702,15 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn('status=$?', scan_body)
         self.assertIn('(.matches | type == "array")', scan_body)
         self.assertIn(
+            ".descriptor.db.built // .descriptor.db.status.built",
+            scan_body,
+        )
+        self.assertIn(
+            'test("checksum=sha256%3A[0-9a-fA-F]{64}")',
+            scan_body,
+        )
+        self.assertIn("read_db_metadata() {", scan_body)
+        self.assertIn(
             "Grype did not emit a complete scan report",
             scan_body,
         )
