@@ -650,7 +650,7 @@ jobs:
             release_status=200
           else
             release_status="$(
-              awk '/^HTTP\\// {code=$2} END {print code}' "${response}"
+              awk '/^HTTP\// {code=$2} END {print code}' "${response}"
             )"
           fi
           if [[ "${release_status}" != "404" ]]; then
