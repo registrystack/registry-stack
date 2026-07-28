@@ -191,7 +191,7 @@ class FirstCountryReleaseFormTest(TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(contents, encoding="utf-8")
         manifest = {
-            "schema_version": "registryctl.local_runtime.v1",
+            "schema_version": "registryctl.local_runtime.v2",
             "environment": "local",
             "relay_image": self.relay,
             "compose_digest": self.module.digest_uri(
@@ -210,6 +210,14 @@ class FirstCountryReleaseFormTest(TestCase):
             "workbook_classification": "operator_owned_source_data",
             "workbook_project_file": "data/public_works_projects.xlsx",
             "workbook_runtime_path": "/data/public_works_projects.xlsx",
+            "match_principal": "district-7",
+            "runtime_uid": "1000",
+            "runtime_gid": "1000",
+            "runtime_files": {
+                "compose.yaml": self.module.digest_uri(
+                    self.root / ".registry-stack/runtime/local/compose.yaml"
+                )
+            },
             "topology": "combined_notary",
             "notary": {
                 "notary_image": self.notary,
