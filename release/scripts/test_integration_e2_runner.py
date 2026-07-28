@@ -147,8 +147,30 @@ class IntegrationE2RunnerTest(TestCase):
                 }
             ],
             "images": [
-                {"name": "registry-relay", "digest_ref": self.relay},
-                {"name": "registry-notary", "digest_ref": self.notary},
+                {
+                    "name": "registry-relay",
+                    "role": "released-product-image",
+                    "digest_ref": self.relay,
+                },
+                {
+                    "name": "registry-notary",
+                    "role": "released-product-image",
+                    "digest_ref": self.notary,
+                },
+                *(
+                    [
+                        {
+                            "name": "postgresql",
+                            "role": "supporting-runtime-image",
+                            "digest_ref": images["postgresql"],
+                        }
+                    ]
+                    if (
+                        schema_version == image_lock.SCHEMA_V2
+                        and "postgresql" in images
+                    )
+                    else []
+                ),
             ],
         }
         self.write_json(candidate / capsule_name, capsule)
@@ -427,6 +449,86 @@ class IntegrationE2RunnerTest(TestCase):
             "reviewed release-tooling pin",
         ):
             self.candidate_metadata(drifted)
+
+    def test_candidate_assets_reject_v2_capsule_missing_postgresql(self) -> None:
+        self.tag = "v0.14.0"
+        candidate = self.make_candidate()
+        capsule_path = candidate / f"registry-stack-{self.tag}-release-capsule.json"
+        capsule = json.loads(capsule_path.read_text(encoding="utf-8"))
+        capsule["images"] = [
+            image for image in capsule["images"] if image["name"] != "postgresql"
+        ]
+        self.write_json(capsule_path, capsule)
+
+        with self.assertRaisesRegex(self.module.RunnerError, "image-lock images"):
+            self.candidate_metadata(candidate)
+
+    def test_candidate_assets_rejects_v2_capsule_postgresql_drift_or_role(self) -> None:
+        self.tag = "v0.14.0"
+        for mutation, message in (
+            (
+                lambda image: image.__setitem__(
+                    "digest_ref", "docker.io/library/postgres@sha256:" + "9" * 64
+                ),
+                "do not match the candidate image lock",
+            ),
+            (
+                lambda image: image.__setitem__("role", "released-product-image"),
+                "supporting-runtime-image",
+            ),
+        ):
+            with self.subTest(message=message):
+                candidate = self.make_candidate(candidate_name=message)
+                capsule_path = (
+                    candidate / f"registry-stack-{self.tag}-release-capsule.json"
+                )
+                capsule = json.loads(capsule_path.read_text(encoding="utf-8"))
+                postgresql = next(
+                    image
+                    for image in capsule["images"]
+                    if image["name"] == "postgresql"
+                )
+                mutation(postgresql)
+                self.write_json(capsule_path, capsule)
+
+                with self.assertRaisesRegex(self.module.RunnerError, message):
+                    self.candidate_metadata(candidate)
+
+    def test_candidate_assets_rejects_extra_v2_capsule_image(self) -> None:
+        self.tag = "v0.14.0"
+        candidate = self.make_candidate()
+        capsule_path = candidate / f"registry-stack-{self.tag}-release-capsule.json"
+        capsule = json.loads(capsule_path.read_text(encoding="utf-8"))
+        capsule["images"].append(
+            {
+                "name": "unreviewed-image",
+                "digest_ref": "docker.io/example/unreviewed@sha256:" + "9" * 64,
+            }
+        )
+        self.write_json(capsule_path, capsule)
+
+        with self.assertRaisesRegex(self.module.RunnerError, "image-lock images"):
+            self.candidate_metadata(candidate)
+
+    def test_candidate_assets_rejects_wrong_product_image_role(self) -> None:
+        self.tag = "v0.14.0"
+        for component in ("registry-relay", "registry-notary"):
+            with self.subTest(component=component):
+                candidate = self.make_candidate(candidate_name=component)
+                capsule_path = (
+                    candidate / f"registry-stack-{self.tag}-release-capsule.json"
+                )
+                capsule = json.loads(capsule_path.read_text(encoding="utf-8"))
+                image = next(
+                    item for item in capsule["images"] if item["name"] == component
+                )
+                image["role"] = "supporting-runtime-image"
+                self.write_json(capsule_path, capsule)
+
+                with self.assertRaisesRegex(
+                    self.module.RunnerError, "released-product-image"
+                ):
+                    self.candidate_metadata(candidate)
 
     def test_authenticity_precedes_candidate_binary_execution(self) -> None:
         candidate = self.make_candidate()

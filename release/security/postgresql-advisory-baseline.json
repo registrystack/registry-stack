@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "subject": "postgresql-runtime",
+  "minimum_severity": "high",
+  "block_fixable": true
+}

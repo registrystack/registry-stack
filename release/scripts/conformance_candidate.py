@@ -519,24 +519,31 @@ def verify_release_asset_binding(
     capsule_images = capsule.get("images")
     if (
         not isinstance(capsule_images, list)
-        or len(capsule_images) != len(IMAGE_REPOSITORIES)
+        or len(capsule_images) != len(lock["images"])
         or {
             item.get("name")
             for item in capsule_images
             if isinstance(item, dict)
         }
-        != set(IMAGE_REPOSITORIES)
+        != set(lock["images"])
     ):
         raise CandidateError(
-            "release capsule must contain exactly the two product images"
+            "release capsule must contain exactly the image-lock images"
         )
-    for component in IMAGE_REPOSITORIES:
-        if (
-            find_named(capsule_images, component, "images").get("digest_ref")
-            != lock["images"][component]
-        ):
+    for component, digest_ref in lock["images"].items():
+        image = find_named(capsule_images, component, "images")
+        if image.get("digest_ref") != digest_ref:
             raise CandidateError(
                 "release capsule images do not match the release image lock"
+            )
+        expected_role = (
+            "supporting-runtime-image"
+            if component == "postgresql"
+            else "released-product-image"
+        )
+        if image.get("role") != expected_role:
+            raise CandidateError(
+                f"release capsule {component} image must be a {expected_role}"
             )
 
     capsule_sha256 = sha256(capsule_path)

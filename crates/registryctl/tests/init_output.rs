@@ -35,6 +35,29 @@ fn assert_success(output: &Output) {
     );
 }
 
+fn write_test_image_lock(temporary: &TempDir) -> std::path::PathBuf {
+    let path = temporary.path().join("registryctl-image-lock.json");
+    let digest = "a".repeat(64);
+    fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "registryctl.release_image_lock.v2",
+            "release_tag": format!("v{}", env!("CARGO_PKG_VERSION")),
+            "manifest_source_ref": "b".repeat(40),
+            "tag_target": "c".repeat(40),
+            "platform": "linux/amd64",
+            "images": {
+                "registry-relay": format!("ghcr.io/registrystack/registry-relay@sha256:{digest}"),
+                "registry-notary": format!("ghcr.io/registrystack/registry-notary@sha256:{digest}"),
+                "postgresql": format!("docker.io/library/postgres@sha256:{digest}"),
+            }
+        }))
+        .expect("test image lock renders"),
+    )
+    .expect("test image lock writes");
+    path
+}
+
 #[cfg(unix)]
 fn control_character_project(temp: &TempDir, leaf: &str) -> std::path::PathBuf {
     temp.path()
@@ -408,6 +431,7 @@ fn first_runtime_start_requires_image_lock_before_writing_generated_state() {
 #[test]
 fn add_notary_updates_canonical_spreadsheet_idempotently_and_rejects_legacy_projects() {
     let temporary = TempDir::new().expect("temporary directory");
+    let image_lock = write_test_image_lock(&temporary);
     let project = temporary.path().join("spreadsheet-project");
     let init_human = run_registryctl(
         &[
@@ -441,7 +465,11 @@ fn add_notary_updates_canonical_spreadsheet_idempotently_and_rejects_legacy_proj
     );
     assert_success(&init);
 
-    let output = run_registryctl_in(Some(&project), &["add", "notary", "--format", "json"], None);
+    let output = run_registryctl_in(
+        Some(&project),
+        &["add", "notary", "--format", "json"],
+        Some(&image_lock),
+    );
     assert_success(&output);
     let report: Value = serde_json::from_slice(&output.stdout).expect("add notary emits JSON");
     assert_eq!(report["schema_version"], "registryctl.add_notary.v1");

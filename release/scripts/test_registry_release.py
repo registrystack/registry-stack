@@ -676,10 +676,161 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("dist/candidate/dist/images/postgresql.digest", images_job)
         self.assertIn("dist/candidate/dist/sbom/postgresql.spdx.json", images_job)
         self.assertIn("dist/candidate/dist/grype/postgresql.grype.json", images_job)
+        self.assertIn("dist/candidate/dist/rootfs/postgresql", images_job)
         self.assertIn('crane digest "${postgresql_ref}"', images_job)
         self.assertIn("--syft-report", images_job)
         self.assertIn("--rootfs", images_job)
+        postgresql_enforcement = images_job[enforcement_step:upload_step]
+        self.assertIn(
+            "python3 release/scripts/check_postgresql_advisory_policy.py",
+            postgresql_enforcement,
+        )
+        self.assertIn(
+            "dist/candidate/dist/grype/postgresql.grype.json",
+            postgresql_enforcement,
+        )
+        self.assertIn(
+            "--baseline release/security/postgresql-advisory-baseline.json",
+            postgresql_enforcement,
+        )
+        self.assertIn(
+            "--syft-report dist/candidate/dist/sbom/postgresql.syft.json",
+            postgresql_enforcement,
+        )
+        self.assertIn(
+            "--rootfs dist/candidate/dist/rootfs/postgresql",
+            postgresql_enforcement,
+        )
+        self.assertIn('--expected-image "${postgresql_ref}"', postgresql_enforcement)
+        postgresql_ref_read = postgresql_enforcement.index(
+            'postgresql_ref="$(tr -d \'\\n\' < release/registryctl-postgresql-image.ref)"'
+        )
+        expected_image = postgresql_enforcement.index(
+            '--expected-image "${postgresql_ref}"'
+        )
+        self.assertLess(postgresql_ref_read, expected_image)
         self.assertIn("retention-days: 7", images_job[upload_step:])
+
+    def test_postgresql_advisory_policy_fails_closed(self) -> None:
+        digest = "sha256:" + "b" * 64
+        layer = "sha256:" + "c" * 64
+        image_ref = f"docker.io/library/postgres@{digest}"
+        target = {
+            "userInput": image_ref,
+            "repoDigests": [image_ref],
+            "architecture": "amd64",
+            "os": "linux",
+            "layers": [{"digest": layer}],
+        }
+        artifact = {
+            "id": "postgresql-server",
+            "name": "postgresql-18",
+            "version": "18.0",
+            "type": "deb",
+            "locations": [{"path": "/var/lib/dpkg/status", "layerID": layer}],
+        }
+        baseline = ROOT / "release/security/postgresql-advisory-baseline.json"
+        checker = ROOT / "release/scripts/check_postgresql_advisory_policy.py"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_path = root / "postgresql.grype.json"
+            syft_path = root / "postgresql.syft.json"
+            rootfs = root / "rootfs"
+            rootfs.mkdir()
+
+            def run_checker(
+                severity: str,
+                fix: dict[str, object],
+                grype_artifact: dict[str, object] | None = None,
+                syft_artifact: dict[str, object] | None = None,
+            ) -> subprocess.CompletedProcess[str]:
+                grype_artifact = grype_artifact or artifact
+                syft_artifact = syft_artifact or artifact
+                report_path.write_text(
+                    json.dumps(
+                        {
+                            "source": {"type": "image", "target": target},
+                            "matches": [
+                                {
+                                    "vulnerability": {
+                                        "id": "CVE-2026-0001",
+                                        "severity": severity,
+                                        "fix": fix,
+                                    },
+                                    "artifact": grype_artifact,
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                syft_path.write_text(
+                    json.dumps(
+                        {
+                            "source": {"type": "image", "metadata": target},
+                            "artifacts": [syft_artifact],
+                            "files": [],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(checker),
+                        str(report_path),
+                        "--baseline",
+                        str(baseline),
+                        "--syft-report",
+                        str(syft_path),
+                        "--rootfs",
+                        str(rootfs),
+                        "--expected-image",
+                        image_ref,
+                    ],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                return result
+
+            high_result = run_checker(
+                "High", {"versions": [], "state": "not-fixed"}
+            )
+            self.assertEqual(1, high_result.returncode, high_result.stderr)
+            self.assertIn(
+                "blocking finding: CVE-2026-0001 severity=High", high_result.stderr
+            )
+
+            fixable_result = run_checker(
+                "Low", {"versions": ["18.0.1"], "state": "fixed"}
+            )
+            self.assertEqual(1, fixable_result.returncode, fixable_result.stderr)
+            self.assertIn(
+                "blocking finding: CVE-2026-0001 severity=Low",
+                fixable_result.stderr,
+            )
+            self.assertIn("fixable=True", fixable_result.stderr)
+
+            extra_metadata_result = run_checker(
+                "Low",
+                {"versions": [], "state": "not-fixed"},
+                {**artifact, "foundBy": "grype-only-metadata"},
+            )
+            self.assertEqual(0, extra_metadata_result.returncode, extra_metadata_result.stderr)
+
+            mismatch_result = run_checker(
+                "Low",
+                {"versions": [], "state": "not-fixed"},
+                {**artifact, "version": "18.0.1"},
+            )
+            self.assertEqual(1, mismatch_result.returncode)
+            self.assertIn(
+                "grype finding artifact does not match the Syft package model",
+                mismatch_result.stderr,
+            )
 
     def test_release_packaging_excludes_retired_notary_source_sidecar(self) -> None:
         retired_names = (
