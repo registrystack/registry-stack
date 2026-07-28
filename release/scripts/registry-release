@@ -55,6 +55,12 @@ OPTIONAL_EXACT_ARTIFACTS = {
     "registryctl-installer",
 }
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
+CURRENT_DOCS_VERSION = "main source (unreleased)"
+DOCSET_AVAILABILITY_BY_MANIFEST_STATUS = {
+    "draft": "unreleased",
+    "release-candidate": "candidate",
+    "released": "released",
+}
 RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 STRICT_SEMVER = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
@@ -1690,12 +1696,18 @@ def selected_docsets(
     current = docsets[ids[current_id][0]]
     if current.get("status") != "current" or not isinstance(current.get("products"), dict):
         raise ReleasePlanError("current docset must have current status and a products object")
+    if current.get("availability") != "unreleased":
+        raise ReleasePlanError("current docset availability must be unreleased")
     for name, product in sorted(current["products"].items()):
         if not isinstance(product, dict):
             raise ReleasePlanError(f"current docset product {name} must be an object")
-        if product.get("version") != tag or product.get("ref") != "HEAD":
+        if (
+            product.get("version") != CURRENT_DOCS_VERSION
+            or product.get("ref") != "HEAD"
+        ):
             raise ReleasePlanError(
-                f"current docset product {name} must use version {tag} and ref HEAD"
+                f"current docset product {name} must use version "
+                f"{CURRENT_DOCS_VERSION!r} and ref HEAD"
             )
     if tag not in ids:
         raise ReleasePlanError(f"docsets.yaml has no exact archived docset {tag}")
@@ -1703,6 +1715,19 @@ def selected_docsets(
     selected = docsets[selected_index]
     if selected.get("status") != "archived":
         raise ReleasePlanError(f"docset {tag} status must be archived")
+    manifest_status = record["data"]["stack"].get("status")
+    expected_availability = DOCSET_AVAILABILITY_BY_MANIFEST_STATUS.get(
+        manifest_status
+    )
+    if expected_availability is None:
+        raise ReleasePlanError(
+            f"selected manifest status {manifest_status!r} has no docset availability mapping"
+        )
+    if selected.get("availability") != expected_availability:
+        raise ReleasePlanError(
+            f"docset {tag} availability must be {expected_availability!r} "
+            f"for manifest status {manifest_status!r}"
+        )
     if selected.get("source") != f"registry-stack-{tag}":
         raise ReleasePlanError(
             f"docset {tag} source must be registry-stack-{tag}"
@@ -1737,19 +1762,22 @@ def selected_docsets(
     return data, selected, selected_index
 
 
-def validate_repo_docs(repo: Path, version: str) -> int:
+def validate_repo_docs(repo: Path) -> int:
     path = repo / "docs" / "site" / "src" / "data" / "repo-docs.yaml"
     data = required_yaml(path)
     repos = data.get("repos") if isinstance(data, dict) else None
     if not isinstance(repos, dict) or not repos:
         raise ReleasePlanError("repo-docs.yaml must contain a non-empty repos object")
-    expected_version = f"v{version}"
     for name, entry in sorted(repos.items()):
         if not isinstance(entry, dict):
             raise ReleasePlanError(f"repo-docs.yaml repo {name} must be an object")
-        if entry.get("version") != expected_version or entry.get("ref") != "HEAD":
+        if (
+            entry.get("version") != CURRENT_DOCS_VERSION
+            or entry.get("ref") != "HEAD"
+        ):
             raise ReleasePlanError(
-                f"repo-docs.yaml repo {name} must use version {expected_version} and ref HEAD"
+                f"repo-docs.yaml repo {name} must use version "
+                f"{CURRENT_DOCS_VERSION!r} and ref HEAD"
             )
     return len(repos)
 
@@ -1935,14 +1963,15 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
     checks.append(
         passed_check(
             "docsets",
-            f"current and archived v{version} docsets agree with the selected manifest",
+            f"current unreleased docs and archived v{version} agree with their sources",
         )
     )
-    repo_docs_count = validate_repo_docs(repo, version)
+    repo_docs_count = validate_repo_docs(repo)
     checks.append(
         passed_check(
             "repo-docs",
-            f"{repo_docs_count} current repository documentation sources use v{version}",
+            f"{repo_docs_count} current repository documentation sources use "
+            f"{CURRENT_DOCS_VERSION!r} at HEAD",
         )
     )
     documents = validate_release_documents(repo, version, release_id)
@@ -2016,7 +2045,6 @@ def prepare_changes(context: dict[str, Any]) -> list[dict[str, Any]]:
         (repo / "Cargo.lock", "workspace-lock"),
         (repo / "docs/site/src/data/docsets.yaml", "docset"),
         (repo / "docs/site/src/data/generated/docsets.json", "generated-mirror"),
-        (repo / "docs/site/src/data/repo-docs.yaml", "documentation-version"),
         (context["documents"]["release_note"], "release-note"),
     ]
     surfaces.extend((path, "changelog") for path in context["documents"]["changelogs"])

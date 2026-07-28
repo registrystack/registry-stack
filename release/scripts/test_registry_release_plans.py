@@ -155,8 +155,12 @@ source = "git+https://github.com/PublicSchema/crosswalk?rev={CROSSWALK_REF}#{CRO
                 {
                     "id": "latest",
                     "status": "current",
+                    "availability": "unreleased",
                     "products": {
-                        "registry-stack": {"version": "v1.1.0", "ref": "HEAD"}
+                        "registry-stack": {
+                            "version": "main source (unreleased)",
+                            "ref": "HEAD",
+                        }
                     },
                 },
                 {
@@ -164,6 +168,7 @@ source = "git+https://github.com/PublicSchema/crosswalk?rev={CROSSWALK_REF}#{CRO
                     "label": "v1.1.0",
                     "path": "/v/1.1.0/",
                     "status": "archived",
+                    "availability": "candidate",
                     "source": "registry-stack-v1.1.0",
                     "products": {
                         "registry-stack": {
@@ -181,6 +186,7 @@ source = "git+https://github.com/PublicSchema/crosswalk?rev={CROSSWALK_REF}#{CRO
                     "label": "v1.0.0",
                     "path": "/v/1.0.0/",
                     "status": "archived",
+                    "availability": "released",
                     "source": "registry-stack-v1.0.0",
                     "products": {
                         "registry-stack": {
@@ -202,7 +208,10 @@ source = "git+https://github.com/PublicSchema/crosswalk?rev={CROSSWALK_REF}#{CRO
             data / "repo-docs.yaml",
             {
                 "repos": {
-                    "registry-core": {"ref": "HEAD", "version": "v1.1.0"}
+                    "registry-core": {
+                        "ref": "HEAD",
+                        "version": "main source (unreleased)",
+                    }
                 }
             },
         )
@@ -394,6 +403,10 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertTrue(
             all(set(change) == {"path", "kind", "from", "to"} for change in plan["changes"])
         )
+        self.assertNotIn(
+            "docs/site/src/data/repo-docs.yaml",
+            {change["path"] for change in plan["changes"]},
+        )
         keys = [(change["path"], change.get("pointer")) for change in plan["changes"]]
         self.assertEqual(len(keys), len(set(keys)))
         self.assertEqual(
@@ -403,6 +416,74 @@ class RegistryReleasePlanTest(unittest.TestCase):
         self.assertEqual(0, repeated.returncode, repeated.stderr)
         self.assertEqual(result.stdout, repeated.stdout)
         self.assertEqual(before, self.repo.snapshot())
+
+    def test_prepare_rejects_versioned_current_docs(self) -> None:
+        data_dir = self.repo.root / "docs/site/src/data"
+        path = data_dir / "docsets.yaml"
+        docsets = yaml.safe_load(path.read_text())
+        docsets["docsets"][0]["products"]["registry-stack"]["version"] = "v1.1.0"
+        write_yaml(path, docsets)
+        write_json(data_dir / "generated/docsets.json", docsets)
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("", result.stdout)
+        self.assertIn(
+            "current docset product registry-stack must use version "
+            "'main source (unreleased)' and ref HEAD",
+            result.stderr,
+        )
+
+    def test_prepare_rejects_current_docs_that_claim_release_availability(self) -> None:
+        data_dir = self.repo.root / "docs/site/src/data"
+        path = data_dir / "docsets.yaml"
+        docsets = yaml.safe_load(path.read_text())
+        docsets["docsets"][0]["availability"] = "released"
+        write_yaml(path, docsets)
+        write_json(data_dir / "generated/docsets.json", docsets)
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("", result.stdout)
+        self.assertIn("current docset availability must be unreleased", result.stderr)
+
+    def test_prepare_rejects_archived_availability_that_disagrees_with_manifest(
+        self,
+    ) -> None:
+        data_dir = self.repo.root / "docs/site/src/data"
+        path = data_dir / "docsets.yaml"
+        docsets = yaml.safe_load(path.read_text())
+        docsets["docsets"][1]["availability"] = "released"
+        write_yaml(path, docsets)
+        write_json(data_dir / "generated/docsets.json", docsets)
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("", result.stdout)
+        self.assertIn(
+            "docset v1.1.0 availability must be 'candidate' "
+            "for manifest status 'release-candidate'",
+            result.stderr,
+        )
+
+    def test_prepare_rejects_versioned_current_repo_docs(self) -> None:
+        path = self.repo.root / "docs/site/src/data/repo-docs.yaml"
+        repo_docs = yaml.safe_load(path.read_text())
+        repo_docs["repos"]["registry-core"]["version"] = "v1.1.0"
+        write_yaml(path, repo_docs)
+
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("", result.stdout)
+        self.assertIn(
+            "repo-docs.yaml repo registry-core must use version "
+            "'main source (unreleased)' and ref HEAD",
+            result.stderr,
+        )
 
     def test_prepare_writes_an_identical_optional_plan_output(self) -> None:
         output = Path(self.temporary.name) / "release-plan.json"
@@ -633,6 +714,12 @@ class RegistryReleasePlanTest(unittest.TestCase):
         data = yaml.safe_load(target.read_text())
         data["stack"]["status"] = "draft"
         write_yaml(target, data)
+        data_dir = self.repo.root / "docs/site/src/data"
+        docsets_path = data_dir / "docsets.yaml"
+        docsets = yaml.safe_load(docsets_path.read_text())
+        docsets["docsets"][1]["availability"] = "unreleased"
+        write_yaml(docsets_path, docsets)
+        write_json(data_dir / "generated/docsets.json", docsets)
         not_candidate = self.finalize()
         self.assertNotEqual(0, not_candidate.returncode)
         self.assertIn("release-candidate status", not_candidate.stderr)
