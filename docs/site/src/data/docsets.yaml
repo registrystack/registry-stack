@@ -25,7 +25,7 @@ docsets:
   - id: v0.15.0
     label: v0.15.0
     path: /v/0.15.0/
-    status: draft
+    status: archived
     availability: candidate
     source: registry-stack-v0.15.0
     repo_docs_source: monorepo
@@ -34,22 +34,22 @@ docsets:
     products:
       registry-stack:
         version: v0.15.0
-        ref: 41d0569c3f2b8d59877d188bd82df385704103f1
+        ref: fd778970037a8420e183c9bd0808e4b205e30c95
       registry-platform:
         version: v0.15.0
-        ref: 41d0569c3f2b8d59877d188bd82df385704103f1
+        ref: fd778970037a8420e183c9bd0808e4b205e30c95
       registry-manifest:
         version: v0.15.0
-        ref: 41d0569c3f2b8d59877d188bd82df385704103f1
+        ref: fd778970037a8420e183c9bd0808e4b205e30c95
       registry-notary:
         version: v0.15.0
-        ref: 41d0569c3f2b8d59877d188bd82df385704103f1
+        ref: fd778970037a8420e183c9bd0808e4b205e30c95
       registry-relay:
         version: v0.15.0
-        ref: 41d0569c3f2b8d59877d188bd82df385704103f1
+        ref: fd778970037a8420e183c9bd0808e4b205e30c95
       registry-registryctl:
         version: v0.15.0
-        ref: 41d0569c3f2b8d59877d188bd82df385704103f1
+        ref: fd778970037a8420e183c9bd0808e4b205e30c95
       crosswalk:
         version: crosswalk-core-v0.2.0
         ref: 1d44ec735fdc8a7c719264b339574371e8330337
