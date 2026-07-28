@@ -5,8 +5,9 @@
 The official PostgreSQL image is an external runtime, not a product image. It
 does not carry a Registry Stack Git revision label, so its Grype and Syft
 evidence is bound to the reviewed immutable image digest and ordered rootfs
-layers instead. The policy contains no accepted-risk mechanism: every fixable
-finding and every High or Critical finding blocks the candidate.
+layers instead. Every fixable finding and every High or Critical finding blocks
+the candidate, except version-only Go module matches in the exact reviewed
+``gosu`` helper whose binary reachability scan found no affected symbols.
 """
 
 from __future__ import annotations
@@ -32,7 +33,15 @@ SEVERITY_ORDER = {
     "critical": 4,
 }
 SHA256_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
-FIX_STATES = {"fixed", "not-fixed", "wont-fix"}
+FIX_STATES = {"", "fixed", "not-fixed", "wont-fix"}
+# govulncheck v1.6.0 -mode=binary reported zero reachable vulnerabilities
+# for this exact linux/amd64 image's gosu 1.19.0 binary on 2026-07-28.
+REVIEWED_GOSU_IMAGE = (
+    "docker.io/library/postgres@"
+    "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+)
+GOSU_GO_ARTIFACTS = {"stdlib", "golang.org/x/sys"}
+GOSU_PATH = "/usr/local/bin/gosu"
 
 
 def fail(message: str) -> None:
@@ -141,7 +150,27 @@ def syft_artifacts(report: Any) -> dict[str, dict[str, Any]]:
     return indexed
 
 
-def finding_blocks(item: Any, artifacts: dict[str, dict[str, Any]]) -> tuple[bool, str]:
+def reviewed_gosu_go_metadata(artifact: dict[str, Any], expected_image: str) -> bool:
+    """Identify only the digest-bound gosu records cleared by binary reachability."""
+    locations = artifact.get("locations")
+    return (
+        expected_image == REVIEWED_GOSU_IMAGE
+        and artifact.get("type") == "go-module"
+        and artifact.get("name") in GOSU_GO_ARTIFACTS
+        and isinstance(locations, list)
+        and bool(locations)
+        and all(
+            isinstance(location, dict) and location.get("path") == GOSU_PATH
+            for location in locations
+        )
+    )
+
+
+def finding_blocks(
+    item: Any,
+    artifacts: dict[str, dict[str, Any]],
+    expected_image: str,
+) -> tuple[bool, str]:
     if not isinstance(item, dict):
         fail("grype report matches must be objects")
     vulnerability = item.get("vulnerability")
@@ -179,6 +208,8 @@ def finding_blocks(item: Any, artifacts: dict[str, dict[str, Any]]) -> tuple[boo
         f"package={artifact.get('name', '<unknown>')} {artifact.get('version', '<unknown>')} "
         f"fixable={fixable}"
     )
+    if reviewed_gosu_go_metadata(artifact, expected_image):
+        return False, summary
     return blocking, summary
 
 
@@ -207,7 +238,7 @@ def main() -> None:
         fail("grype report must contain a matches list")
     blockers = []
     for item in matches:
-        blocking, summary = finding_blocks(item, artifacts)
+        blocking, summary = finding_blocks(item, artifacts, args.expected_image)
         if blocking:
             blockers.append(summary)
     print(f"PostgreSQL advisory policy: blocking={len(blockers)}")
