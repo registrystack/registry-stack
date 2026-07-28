@@ -769,7 +769,12 @@ class ReleaseCandidateTest(unittest.TestCase):
             },
             self.module.parse_tag_binding(message),
         )
+        self.assertEqual(
+            self.module.parse_tag_binding(message),
+            self.module.parse_tag_binding(message + "\n"),
+        )
         for tampered in (
+            message + "\n\n",
             message + "extra: accepted\n",
             message.replace("run_attempt: 2", "run_attempt: 3"),
             message.replace(

@@ -1204,7 +1204,7 @@ def parse_tag_binding(message: str) -> dict[str, Any]:
         re.escape(TAG_BINDING_HEADER)
         + r"\nrun_id: ([1-9][0-9]*)"
         + r"\nrun_attempt: ([1-9][0-9]*)"
-        + r"\nreceipt_sha256: ([0-9a-f]{64})\n?",
+        + r"\nreceipt_sha256: ([0-9a-f]{64})\n{0,2}",
         message,
     )
     if match is None:
