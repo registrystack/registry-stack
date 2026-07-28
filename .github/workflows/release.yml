@@ -288,16 +288,6 @@ jobs:
           gh api \
             "/repos/${GITHUB_REPOSITORY}/actions/runs/${EXPECTED_RUN_ID}/artifacts?per_page=100" \
             > promotion/control/artifact-metadata.json
-          if [[ "${GITHUB_EVENT_NAME}" == "repository_dispatch" ]]; then
-            jq '
-              .artifacts |= map(
-                select((.name | startswith("registry-stack-candidate-cli-")) | not)
-              )
-            ' promotion/control/artifact-metadata.json \
-              > promotion/control/artifact-metadata.filtered.json
-            mv promotion/control/artifact-metadata.filtered.json \
-              promotion/control/artifact-metadata.json
-          fi
           python3 release/scripts/release_candidate.py verify-attempt-artifacts \
             --artifact-metadata promotion/control/artifact-metadata.json \
             --run-id "${EXPECTED_RUN_ID}" \
@@ -321,10 +311,6 @@ jobs:
             "${EXPECTED_RECEIPT_SHA256}"
 
           mapfile -t records < <(jq -c '.artifacts[]' "${receipt}")
-          if [[ "${#records[@]}" -ne 5 ]]; then
-            echo "Candidate receipt must bind exactly five payload artifacts" >&2
-            exit 1
-          fi
           for record in "${records[@]}"; do
             name="$(jq -er '.name' <<<"${record}")"
             artifact_id="$(jq -er '.artifact_id' <<<"${record}")"

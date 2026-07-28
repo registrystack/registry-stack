@@ -41,11 +41,6 @@ ATTEMPT_ARTIFACT_PREFIXES = {
     "registry-stack-release-candidate-payload",
     "registry-stack-release-candidate-receipt",
 }
-OPTIONAL_ATTEMPT_ARTIFACT_PREFIXES = {
-    "registry-stack-candidate-build-b",
-    "registry-stack-candidate-cli-linux-arm64",
-    "registry-stack-candidate-cli-macos-arm64",
-}
 PROMOTION_STATE_SCHEMA = "registry-stack.release-promotion-state.v1"
 TOP_LEVEL_FIELDS = {
     "schema_version",
@@ -264,16 +259,17 @@ def validate_attempt_artifact_inventory(
     run_id: int,
     run_attempt: int,
 ) -> dict[str, dict[str, Any]]:
-    """Select the one exact, unexpired artifact set for a workflow attempt."""
+    """Select the exact, unexpired artifact inventory for a workflow attempt.
+
+    Additional artifacts from the same attempt are safe to retain here. Promotion
+    remains closed over the names, IDs, and hashes bound by the sealed receipt.
+    """
 
     if not isinstance(document, dict):
         raise CandidateError("artifact metadata must be an object")
     artifacts = require_list(document.get("artifacts"), "artifact metadata.artifacts")
     expected = expected_attempt_artifact_names(run_id, run_attempt)
     suffix = f"-{run_id}-{run_attempt}"
-    allowed = expected | {
-        f"{prefix}{suffix}" for prefix in OPTIONAL_ATTEMPT_ARTIFACT_PREFIXES
-    }
     selected: dict[str, dict[str, Any]] = {}
     for index, item in enumerate(artifacts):
         label = f"artifact metadata.artifacts[{index}]"
@@ -282,10 +278,6 @@ def validate_attempt_artifact_inventory(
         name = item.get("name")
         if not isinstance(name, str) or not name.endswith(suffix):
             continue
-        if name not in allowed:
-            raise CandidateError(
-                f"unexpected artifact in current candidate attempt: {name!r}"
-            )
         if name in selected:
             raise CandidateError(f"duplicate artifact in current attempt: {name}")
         if item.get("expired") is not False:

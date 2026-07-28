@@ -361,12 +361,12 @@ class ReleaseCandidateTest(unittest.TestCase):
                 "workflow_run": {"id": 123},
             }
         )
-        with self.assertRaisesRegex(self.module.CandidateError, "unexpected"):
-            self.module.validate_attempt_artifact_inventory(
-                {"artifacts": unexpected},
-                run_id=123,
-                run_attempt=2,
-            )
+        selected = self.module.validate_attempt_artifact_inventory(
+            {"artifacts": unexpected},
+            run_id=123,
+            run_attempt=2,
+        )
+        self.assertIn("registry-stack-candidate-unknown-123-2", selected)
 
     def test_full_github_run_api_response_is_normalized_to_closed_metadata(
         self,

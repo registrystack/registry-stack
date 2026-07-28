@@ -1434,6 +1434,11 @@ class RegistryReleaseTest(unittest.TestCase):
 
         self.assertNotIn("write", verification["permissions"].values())
         self.assertIn("--release-id", verification_script)
+        self.assertNotIn(
+            "Candidate receipt must bind exactly",
+            verification_script,
+        )
+        self.assertNotIn("artifact-metadata.filtered", verification_script)
         self.assertIn(
             'if [[ "${GITHUB_EVENT_NAME}" != "repository_dispatch" ]]; then\n'
             '  test "$(git rev-parse refs/remotes/origin/main)" = \\\n'
