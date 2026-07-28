@@ -874,6 +874,31 @@ class RegistryReleaseTest(unittest.TestCase):
             )
             self.assertEqual(0, extra_metadata_result.returncode, extra_metadata_result.stderr)
 
+            target["repoDigests"] = [
+                f"index.docker.io/library/postgres@{digest}"
+            ]
+            normalized_repository_result = run_checker(
+                "Low", {"versions": [], "state": "not-fixed"}
+            )
+            self.assertEqual(
+                0,
+                normalized_repository_result.returncode,
+                normalized_repository_result.stderr,
+            )
+
+            target["repoDigests"] = [
+                "index.docker.io/library/postgres@sha256:" + "d" * 64
+            ]
+            wrong_digest_result = run_checker(
+                "Low", {"versions": [], "state": "not-fixed"}
+            )
+            self.assertEqual(1, wrong_digest_result.returncode)
+            self.assertIn(
+                "image target digest must appear in repoDigests",
+                wrong_digest_result.stderr,
+            )
+            target["repoDigests"] = [image_ref]
+
             mismatch_result = run_checker(
                 "Low",
                 {"versions": [], "state": "not-fixed"},
