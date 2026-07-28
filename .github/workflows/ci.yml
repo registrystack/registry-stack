@@ -725,6 +725,9 @@ jobs:
       - name: Test external integration evidence runner
         run: python3 -m unittest release/scripts/test_integration_e2_runner.py
 
+      - name: Test conformance candidate binding
+        run: python3 -m unittest release/scripts/test_conformance_candidate.py
+
       - name: Validate external integration evidence packet
         run: python3 release/scripts/integration-e2-runner.py validate
 

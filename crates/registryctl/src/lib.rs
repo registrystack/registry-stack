@@ -218,7 +218,11 @@ const CANONICAL_RUNTIME_WORKLOAD_JWKS: &str =
     ".registry-stack/runtime/local/private/workload/jwks.json";
 const CANONICAL_RUNTIME_WORKLOAD_PRIVATE_JWK: &str =
     ".registry-stack/runtime/local/secrets/workload-private.jwk";
-const CANONICAL_RUNTIME_MANIFEST_SCHEMA: &str = "registryctl.local_runtime.v1";
+const CANONICAL_RUNTIME_RELAY_CONFIG: &str =
+    ".registry-stack/runtime/local/private/relay/config/relay.yaml";
+const CANONICAL_RUNTIME_WORKBOOK: &str = ".registry-stack/runtime/local/private/data/workbook.xlsx";
+const CANONICAL_RUNTIME_MANIFEST_SCHEMA: &str = "registryctl.local_runtime.v2";
+const CANONICAL_RUNTIME_LEGACY_MANIFEST_SCHEMA: &str = "registryctl.local_runtime.v1";
 const CANONICAL_RUNTIME_AUDIT_SECRET_ENV: &str = "REGISTRY_RELAY_AUDIT_HASH_SECRET";
 const CANONICAL_RUNTIME_NOTARY_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_AUDIT_HASH_SECRET";
 const CANONICAL_RUNTIME_CONSULTATION_AUDIT_SECRET_ENV: &str = "REGISTRY_RELAY_AUDIT_HASH_SECRET";
@@ -1654,6 +1658,10 @@ struct CanonicalRuntimeManifest {
     workbook_classification: ArtifactInputClassification,
     workbook_project_file: String,
     workbook_runtime_path: String,
+    match_principal: String,
+    runtime_uid: String,
+    runtime_gid: String,
+    runtime_files: BTreeMap<String, String>,
     #[serde(default)]
     topology: CanonicalRuntimeTopology,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1694,6 +1702,13 @@ fn require_canonical_project(project_dir: &Path) -> Result<()> {
 }
 
 pub fn add_notary_to_canonical_project(project_dir: &Path) -> Result<AddNotaryReport> {
+    add_notary_to_canonical_project_with_lock(project_dir, load_registryctl_image_lock)
+}
+
+fn add_notary_to_canonical_project_with_lock(
+    project_dir: &Path,
+    load_image_lock: impl FnOnce() -> Result<RegistryctlImageLock>,
+) -> Result<AddNotaryReport> {
     require_canonical_project(project_dir)?;
     let _ = canonical_spreadsheet_binding(project_dir)?;
     let project_file = project_dir.join(CANONICAL_PROJECT_FILE);
@@ -1755,13 +1770,22 @@ pub fn add_notary_to_canonical_project(project_dir: &Path) -> Result<AddNotaryRe
         });
     }
 
+    let image_lock = load_image_lock().context(
+        "`registryctl add notary` requires the matching release image lock before changing authored files",
+    )?;
+    let _ = selected_canonical_relay_image(&image_lock)?;
+    let _ = selected_canonical_notary_image(&image_lock)?;
+    validate_locked_image_ref(
+        "images.postgresql",
+        image_lock.postgresql_image(),
+        POSTGRES_IMAGE_REPOSITORY,
+    )?;
+
     if project_dir
         .join("integrations/project-record-snapshot")
         .exists()
         || current_project.contains("project-record-snapshot")
         || current_project.contains("public-works-verification")
-        || current_environment.contains("notary_relay:")
-        || current_environment.contains("notary:")
     {
         bail!(
             "`registryctl add notary` found an unsupported or conflicting Notary add-on shape; no files were changed"
@@ -1898,7 +1922,25 @@ fn canonical_notary_project_yaml(current: &str) -> Result<String> {
 }
 
 fn canonical_notary_environment_yaml(current: &str) -> Result<String> {
-    if current.contains("notary_relay:") || current.contains("callers:") {
+    let document: serde_norway::Value = serde_norway::from_str(current)
+        .context("failed to parse the canonical local environment")?;
+    let root = document
+        .as_mapping()
+        .ok_or_else(|| anyhow!("the canonical local environment must be a YAML mapping"))?;
+    let has_callers = root.contains_key(serde_norway::Value::String("callers".to_string()));
+    let has_notary_relay =
+        root.contains_key(serde_norway::Value::String("notary_relay".to_string()));
+    let deployment = document["deployment"].as_mapping();
+    let has_deployment_notary = deployment.is_some_and(|mapping| {
+        mapping.contains_key(serde_norway::Value::String("notary".to_string()))
+    });
+    if has_callers || has_notary_relay || has_deployment_notary {
+        if !(has_callers && has_notary_relay && has_deployment_notary) {
+            bail!(
+                "`registryctl add notary` found a partial Notary environment shape; no files were changed"
+            );
+        }
+        validate_canonical_notary_environment_shape(&document)?;
         return Ok(current.to_string());
     }
     if !current.contains("relay:\n")
@@ -1943,6 +1985,46 @@ notary_relay:
         bail!("canonical Relay deployment binding is absent");
     }
     Ok(with_deployment)
+}
+
+fn validate_canonical_notary_environment_shape(document: &serde_norway::Value) -> Result<()> {
+    if document["notary_relay"]["base_url"].as_str() != Some("http://127.0.0.1:8080")
+        || document["notary_relay"]["workload_client_id"].as_str()
+            != Some(CANONICAL_RUNTIME_WORKLOAD_CLIENT)
+        || document["notary_relay"]["token_file"].as_str()
+            != Some("/run/secrets/relay-workload-token")
+        || document["deployment"]["notary"]["service"].as_str() != Some("registryctl-local-notary")
+    {
+        bail!(
+            "`registryctl add notary` found an unsupported Notary environment shape; no files were changed"
+        );
+    }
+    let callers = document["callers"]
+        .as_mapping()
+        .ok_or_else(|| anyhow!("the canonical local Notary callers are absent"))?;
+    if callers.len() != 2 {
+        bail!(
+            "`registryctl add notary` found an unsupported Notary caller shape; no files were changed"
+        );
+    }
+    let full = &document["callers"]["public-works-service"];
+    let under = &document["callers"]["public-works-under-scoped"];
+    if full["api_key_fingerprint"]["secret"].as_str()
+        != Some(CANONICAL_RUNTIME_NOTARY_CALLER_HASH_ENV)
+        || under["api_key_fingerprint"]["secret"].as_str()
+            != Some(CANONICAL_RUNTIME_NOTARY_UNDER_SCOPED_HASH_ENV)
+        || full["scopes"].as_sequence().is_none_or(|values| {
+            values.len() != 1 || values[0].as_str() != Some("evidence:projects:read")
+        })
+        || under["scopes"].as_sequence().is_none_or(|values| {
+            values.len() != 1 || values[0].as_str() != Some("evidence:projects:metadata")
+        })
+    {
+        bail!(
+            "`registryctl add notary` found an unsupported Notary caller shape; no files were changed"
+        );
+    }
+    Ok(())
 }
 
 fn canonical_notary_integration_yaml() -> &'static str {
@@ -2043,46 +2125,25 @@ fn canonical_spreadsheet_binding(project_dir: &Path) -> Result<CanonicalSpreadsh
         .as_str()
         .ok_or_else(|| anyhow!("the local spreadsheet Relay audience is absent"))?
         .to_string();
-    let has_notary_shape = !document["notary_relay"].is_null()
-        || !document["deployment"]["notary"].is_null()
-        || !document["callers"].is_null();
+    let root = document
+        .as_mapping()
+        .ok_or_else(|| anyhow!("the canonical local environment must be a YAML mapping"))?;
+    let has_callers = root.contains_key(serde_norway::Value::String("callers".to_string()));
+    let has_notary_relay =
+        root.contains_key(serde_norway::Value::String("notary_relay".to_string()));
+    let has_deployment_notary = document["deployment"].as_mapping().is_some_and(|mapping| {
+        mapping.contains_key(serde_norway::Value::String("notary".to_string()))
+    });
+    let has_notary_shape = has_callers || has_notary_relay || has_deployment_notary;
     let topology = if has_notary_shape {
+        if !(has_callers && has_notary_relay && has_deployment_notary) {
+            bail!("the canonical local Notary topology binding is partial");
+        }
         if relay_audience != CANONICAL_RUNTIME_WORKLOAD_AUDIENCE {
             bail!("the canonical local consultation Relay audience is unsupported");
         }
-        if document["notary_relay"]["base_url"].as_str() != Some("http://127.0.0.1:8080")
-            || document["notary_relay"]["workload_client_id"].as_str()
-                != Some(CANONICAL_RUNTIME_WORKLOAD_CLIENT)
-            || document["notary_relay"]["token_file"].as_str()
-                != Some("/run/secrets/relay-workload-token")
-            || document["deployment"]["notary"]["service"].as_str()
-                != Some("registryctl-local-notary")
-        {
-            bail!("the canonical local Notary topology binding is incomplete or unsupported");
-        }
-        let callers = document["callers"]
-            .as_mapping()
-            .ok_or_else(|| anyhow!("the canonical local Notary callers are absent"))?;
-        if callers.len() != 2 {
-            bail!("the canonical local Notary must declare exactly two tutorial callers");
-        }
-        let full = &document["callers"]["public-works-service"];
-        let under = &document["callers"]["public-works-under-scoped"];
-        if full["api_key_fingerprint"]["secret"].as_str()
-            != Some(CANONICAL_RUNTIME_NOTARY_CALLER_HASH_ENV)
-            || under["api_key_fingerprint"]["secret"].as_str()
-                != Some(CANONICAL_RUNTIME_NOTARY_UNDER_SCOPED_HASH_ENV)
-            || full["scopes"]
-                .as_sequence()
-                .and_then(|values| (values.len() == 1).then(|| values[0].as_str()).flatten())
-                != Some("evidence:projects:read")
-            || under["scopes"]
-                .as_sequence()
-                .and_then(|values| (values.len() == 1).then(|| values[0].as_str()).flatten())
-                != Some("evidence:projects:metadata")
-        {
-            bail!("the canonical local Notary caller bindings are incomplete or unsupported");
-        }
+        validate_canonical_notary_environment_shape(&document)
+            .context("the canonical local Notary topology binding is incomplete or unsupported")?;
         CanonicalRuntimeTopology::CombinedNotary
     } else {
         CanonicalRuntimeTopology::RelayOnly
@@ -2163,8 +2224,8 @@ fn canonical_compose_document(
                 "ports": [CANONICAL_RELAY_HOST_PORT],
                 "networks": ["public"],
                 "volumes": [
-                    format!("../../build/local/private/relay/config/relay.yaml:{CANONICAL_RELAY_CONFIG_MOUNT}:ro"),
-                    format!("../../../{}:{}:ro", binding.project_file_text, binding.runtime_path),
+                    format!("./private/relay/config/relay.yaml:{CANONICAL_RELAY_CONFIG_MOUNT}:ro"),
+                    format!("./private/data/workbook.xlsx:{}:ro", binding.runtime_path),
                 ],
                 "read_only": true,
                 "init": true,
@@ -2271,9 +2332,7 @@ fn canonical_compose_document(
                 ],
                 "env_file": ["secrets/relay-bootstrap.env"],
                 "volumes": [
-                    "../../build/local/private/relay:/etc/registry-relay:ro",
                     "./private/relay/config:/etc/registry-relay/config:ro",
-                    "../../build/local/private/relay/config/artifacts:/etc/registry-relay/config/artifacts:ro",
                 ],
                 "depends_on": {
                     "postgresql": {"condition": "service_healthy"},
@@ -2336,10 +2395,8 @@ fn canonical_compose_document(
                 "env_file": ["secrets/relay-consultation.env"],
                 "network_mode": "service:notary-network",
                 "volumes": [
-                    format!("../../build/local/private/relay:/etc/registry-relay:ro"),
-                    format!("../../../{}:{}:ro", binding.project_file_text, binding.runtime_path),
+                    format!("./private/data/workbook.xlsx:{}:ro", binding.runtime_path),
                     "./private/relay/config:/etc/registry-relay/config:ro",
-                    "../../build/local/private/relay/config/artifacts:/etc/registry-relay/config/artifacts:ro",
                 ],
                 "depends_on": {
                     "postgresql": {"condition": "service_healthy"},
@@ -3125,11 +3182,11 @@ fn strict_canonical_runtime_credentials(
         &workload_token_path,
         &workload_private_jwk_path,
         &workload_jwks_path,
+        &postgres_ca_path,
     ] {
         validate_private_file_mode(path)?;
     }
     validate_runtime_nonsecret_file_mode(&database_init_path)?;
-    validate_runtime_nonsecret_file_mode(&postgres_ca_path)?;
     let notary_values = parse_local_env(
         &fs::read_to_string(&notary_env_path)
             .context("failed to read Notary runtime credentials")?,
@@ -3429,7 +3486,9 @@ fn prepare_canonical_runtime(
 fn canonical_runtime_images_for_start(project_dir: &Path) -> Result<CanonicalRuntimeImages> {
     require_canonical_project(project_dir)?;
     let binding = canonical_spreadsheet_binding(project_dir)?;
-    if project_dir.join(CANONICAL_RUNTIME_ROOT).exists() {
+    if project_dir.join(CANONICAL_RUNTIME_ROOT).exists()
+        && !has_legacy_canonical_runtime_manifest(project_dir)?
+    {
         let runtime =
             load_canonical_runtime(project_dir, CanonicalRuntimeValidation::GeneratedClosure)?;
         if runtime.topology == binding.topology {
@@ -3478,7 +3537,9 @@ fn prepare_canonical_runtime_with_images(
 ) -> Result<CanonicalRuntime> {
     require_canonical_project(project_dir)?;
     validate_canonical_runtime_image_ref(&images.relay)?;
-    if project_dir.join(CANONICAL_RUNTIME_ROOT).exists() {
+    if project_dir.join(CANONICAL_RUNTIME_ROOT).exists()
+        && !has_legacy_canonical_runtime_manifest(project_dir)?
+    {
         let _ = load_canonical_runtime(project_dir, CanonicalRuntimeValidation::GeneratedClosure)?;
     }
     if project_dir.join(CANONICAL_ARTIFACT_MANIFEST).exists() {
@@ -3531,6 +3592,119 @@ fn prepare_canonical_runtime_with_images(
     load_canonical_runtime(project_dir, CanonicalRuntimeValidation::Full)
 }
 
+fn has_legacy_canonical_runtime_manifest(project_dir: &Path) -> Result<bool> {
+    let manifest = project_dir.join(CANONICAL_RUNTIME_MANIFEST);
+    ensure_no_symlink_components(project_dir, &manifest)?;
+    let bytes =
+        fs::read(&manifest).context("failed to read the existing local runtime manifest")?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .context("failed to parse the existing local runtime manifest")?;
+    Ok(value["schema_version"].as_str() == Some(CANONICAL_RUNTIME_LEGACY_MANIFEST_SCHEMA))
+}
+
+fn copy_private_runtime_tree(source: &Path, destination: &Path) -> Result<()> {
+    let source_metadata = fs::symlink_metadata(source)
+        .with_context(|| format!("failed to inspect {}", source.display()))?;
+    if source_metadata.file_type().is_symlink() || !source_metadata.is_dir() {
+        bail!("generated runtime source must be a regular non-symlink directory");
+    }
+    create_private_dir_all(destination)?;
+    for entry in fs::read_dir(source).context("failed to inspect generated runtime source")? {
+        let entry = entry.context("failed to inspect generated runtime source entry")?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path)
+            .context("failed to inspect generated runtime source entry metadata")?;
+        if metadata.file_type().is_symlink() {
+            bail!("generated runtime source contains a symlink");
+        }
+        if metadata.is_dir() {
+            copy_private_runtime_tree(&source_path, &destination_path)?;
+        } else if metadata.is_file() {
+            write_private_bytes(
+                &destination_path,
+                &fs::read(&source_path).context("failed to read generated runtime source entry")?,
+            )?;
+        } else {
+            bail!("generated runtime source contains a non-regular entry");
+        }
+    }
+    Ok(())
+}
+
+fn snapshot_runtime_files(runtime_root: &Path) -> Result<BTreeMap<String, String>> {
+    let mut files = BTreeMap::new();
+    let mut pending = vec![runtime_root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).context("failed to inspect staged runtime closure")? {
+            let entry = entry.context("failed to inspect staged runtime entry")?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)
+                .context("failed to inspect staged runtime entry metadata")?;
+            if metadata.file_type().is_symlink() {
+                bail!("staged runtime closure contains a symlink");
+            }
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if metadata.is_file() {
+                let relative = path
+                    .strip_prefix(runtime_root)
+                    .context("staged runtime entry escaped its root")?
+                    .to_string_lossy()
+                    .into_owned();
+                if relative == "manifest.json" {
+                    bail!("staged runtime manifest was written before closure capture");
+                }
+                files.insert(relative, digest_path(&path, "staged runtime input")?);
+            } else {
+                bail!("staged runtime closure contains a non-regular entry");
+            }
+        }
+    }
+    Ok(files)
+}
+
+#[cfg(unix)]
+fn set_runtime_bind_input_owner(path: &Path, binding: &CanonicalSpreadsheetBinding) -> Result<()> {
+    use std::os::unix::fs::{lchown, MetadataExt};
+
+    let uid = binding
+        .runtime_uid
+        .parse::<u32>()
+        .context("runtime UID snapshot is invalid")?;
+    let gid = binding
+        .runtime_gid
+        .parse::<u32>()
+        .context("runtime GID snapshot is invalid")?;
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        bail!("runtime bind input must not be a symlink");
+    }
+    if metadata.uid() != uid || metadata.gid() != gid {
+        lchown(path, Some(uid), Some(gid)).with_context(|| {
+            format!(
+                "cannot safely make runtime input {} readable by mapped non-root identity {uid}:{gid}; run registryctl as the project owner or root",
+                path.display()
+            )
+        })?;
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path).context("failed to inspect runtime bind input directory")? {
+            set_runtime_bind_input_owner(&entry?.path(), binding)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_runtime_bind_input_owner(
+    _path: &Path,
+    _binding: &CanonicalSpreadsheetBinding,
+) -> Result<()> {
+    Ok(())
+}
+
 fn publish_canonical_runtime(
     project_dir: &Path,
     images: &CanonicalRuntimeImages,
@@ -3541,19 +3715,20 @@ fn publish_canonical_runtime(
     ensure_no_symlink_components(project_dir, &runtime_parent)?;
     create_private_dir_all(&runtime_parent)?;
     let runtime_dir = project_dir.join(CANONICAL_RUNTIME_ROOT);
-    let prior_credentials = if runtime_dir.exists() {
-        let prior_manifest: CanonicalRuntimeManifest = serde_json::from_slice(
-            &fs::read(project_dir.join(CANONICAL_RUNTIME_MANIFEST))
-                .context("failed to read the prior local runtime manifest")?,
-        )
-        .context("failed to parse the prior local runtime manifest")?;
-        Some(strict_canonical_runtime_credentials(
-            project_dir,
-            prior_manifest.topology,
-        )?)
-    } else {
-        None
-    };
+    let prior_credentials =
+        if runtime_dir.exists() && !has_legacy_canonical_runtime_manifest(project_dir)? {
+            let prior_manifest: CanonicalRuntimeManifest = serde_json::from_slice(
+                &fs::read(project_dir.join(CANONICAL_RUNTIME_MANIFEST))
+                    .context("failed to read the prior local runtime manifest")?,
+            )
+            .context("failed to parse the prior local runtime manifest")?;
+            Some(strict_canonical_runtime_credentials(
+                project_dir,
+                prior_manifest.topology,
+            )?)
+        } else {
+            None
+        };
     let mut credentials = prior_credentials
         .map(Ok)
         .unwrap_or_else(CanonicalRuntimeCredentials::generate)?;
@@ -3569,6 +3744,16 @@ fn publish_canonical_runtime(
         .context("failed to stage the local runtime")?;
     create_private_dir_all(staging.path())?;
     create_private_dir_all(&staging.path().join("secrets"))?;
+    create_private_dir_all(&staging.path().join("private/data"))?;
+    copy_private_runtime_tree(
+        &project_dir.join(".registry-stack/build/local/private/relay/config"),
+        &staging.path().join("private/relay/config"),
+    )?;
+    write_private_bytes(
+        &staging.path().join("private/data/workbook.xlsx"),
+        &fs::read(project_dir.join(&binding.project_file_text))
+            .context("failed to read the canonical project workbook for runtime staging")?,
+    )?;
     let compose = render_canonical_compose(images, binding)?;
     let workbook_input = compiled_workbook_input(project_dir, binding)?;
     write_private_text(&staging.path().join("compose.yaml"), &compose)?;
@@ -3586,9 +3771,6 @@ fn publish_canonical_runtime(
             "private/db",
             "private/notary",
             "private/notary/config",
-            "private/relay",
-            "private/relay/config",
-            "private/relay/config/artifacts",
             "private/workload",
         ] {
             create_private_dir_all(&staging.path().join(relative))?;
@@ -3623,17 +3805,17 @@ fn publish_canonical_runtime(
             &notary.workload_private_jwk,
         )?;
         write_runtime_nonsecret_text(&staging.path().join("private/db/init.sh"), &database_init)?;
-        write_runtime_nonsecret_text(
+        write_private_text(
             &staging.path().join("private/notary/config/notary.yaml"),
             &runtime_notary_config,
         )?;
-        write_runtime_nonsecret_text(
+        write_private_text(
             &staging
                 .path()
                 .join("private/relay/config/relay-consultation.yaml"),
             &runtime_consultation_relay_config,
         )?;
-        write_runtime_nonsecret_text(
+        write_private_text(
             &staging
                 .path()
                 .join("private/relay/config/state-plane-ca.pem"),
@@ -3677,6 +3859,19 @@ fn publish_canonical_runtime(
     } else {
         None
     };
+    set_runtime_bind_input_owner(&staging.path().join("private/data/workbook.xlsx"), binding)?;
+    set_runtime_bind_input_owner(&staging.path().join("private/relay/config"), binding)?;
+    if binding.topology.has_notary() {
+        set_runtime_bind_input_owner(
+            &staging.path().join("private/notary/config/notary.yaml"),
+            binding,
+        )?;
+        set_runtime_bind_input_owner(
+            &staging.path().join("secrets/relay-workload-token"),
+            binding,
+        )?;
+    }
+    let runtime_files = snapshot_runtime_files(staging.path())?;
     let manifest = CanonicalRuntimeManifest {
         schema_version: CANONICAL_RUNTIME_MANIFEST_SCHEMA.to_string(),
         environment: CANONICAL_LOCAL_ENVIRONMENT.to_string(),
@@ -3694,6 +3889,10 @@ fn publish_canonical_runtime(
         workbook_classification: workbook_input.classification,
         workbook_project_file: binding.project_file_text.clone(),
         workbook_runtime_path: binding.runtime_path.clone(),
+        match_principal: binding.match_principal.clone(),
+        runtime_uid: binding.runtime_uid.clone(),
+        runtime_gid: binding.runtime_gid.clone(),
+        runtime_files,
         topology: binding.topology,
         notary: notary_manifest,
     };
@@ -3722,11 +3921,177 @@ fn publish_canonical_runtime(
     Ok(())
 }
 
+fn canonical_runtime_binding_from_manifest(
+    manifest: &CanonicalRuntimeManifest,
+) -> Result<CanonicalSpreadsheetBinding> {
+    let project_file = Path::new(&manifest.workbook_project_file);
+    if project_file.is_absolute()
+        || project_file
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        bail!("local runtime manifest contains an invalid workbook project path");
+    }
+    if !manifest.workbook_runtime_path.starts_with('/')
+        || manifest.workbook_runtime_path.contains(':')
+        || Path::new(&manifest.workbook_runtime_path)
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("local runtime manifest contains an invalid workbook runtime path");
+    }
+    if manifest.match_principal.is_empty()
+        || manifest.match_principal.len() > 256
+        || !manifest
+            .match_principal
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        bail!("local runtime manifest contains an invalid match principal");
+    }
+    let uid = manifest
+        .runtime_uid
+        .parse::<u32>()
+        .context("local runtime manifest contains an invalid runtime UID")?;
+    let gid = manifest
+        .runtime_gid
+        .parse::<u32>()
+        .context("local runtime manifest contains an invalid runtime GID")?;
+    if uid == 0
+        || gid == 0
+        || uid.to_string() != manifest.runtime_uid
+        || gid.to_string() != manifest.runtime_gid
+    {
+        bail!("local runtime manifest must use a canonical non-root runtime identity");
+    }
+    Ok(CanonicalSpreadsheetBinding {
+        project_file_text: manifest.workbook_project_file.clone(),
+        runtime_path: manifest.workbook_runtime_path.clone(),
+        match_principal: manifest.match_principal.clone(),
+        topology: manifest.topology,
+        runtime_user: format!("{uid}:{gid}"),
+        runtime_uid: manifest.runtime_uid.clone(),
+        runtime_gid: manifest.runtime_gid.clone(),
+    })
+}
+
+#[cfg(unix)]
+fn validate_runtime_bind_input_owner(
+    path: &Path,
+    binding: &CanonicalSpreadsheetBinding,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let uid = binding
+        .runtime_uid
+        .parse::<u32>()
+        .context("runtime UID snapshot is invalid")?;
+    let gid = binding
+        .runtime_gid
+        .parse::<u32>()
+        .context("runtime GID snapshot is invalid")?;
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        bail!("runtime bind input must not be a symlink");
+    }
+    if metadata.uid() != uid || metadata.gid() != gid {
+        bail!(
+            "runtime bind input is not owned by the mapped non-root identity {}:{}",
+            binding.runtime_uid,
+            binding.runtime_gid
+        );
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path).context("failed to inspect runtime bind input directory")? {
+            validate_runtime_bind_input_owner(&entry?.path(), binding)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_runtime_bind_input_owner(
+    _path: &Path,
+    _binding: &CanonicalSpreadsheetBinding,
+) -> Result<()> {
+    Ok(())
+}
+
+fn validate_canonical_runtime_against_authored(
+    project_dir: &Path,
+    manifest: &CanonicalRuntimeManifest,
+    binding: &CanonicalSpreadsheetBinding,
+) -> Result<()> {
+    let authored = canonical_spreadsheet_binding(project_dir)?;
+    if authored.project_file_text != binding.project_file_text
+        || authored.runtime_path != binding.runtime_path
+        || authored.match_principal != binding.match_principal
+        || authored.topology != binding.topology
+        || authored.runtime_uid != binding.runtime_uid
+        || authored.runtime_gid != binding.runtime_gid
+    {
+        bail!("the authored project changed after the local runtime was compiled");
+    }
+    let workbook_input = compiled_workbook_input(project_dir, &authored)?;
+    if workbook_input.digest.as_str() != manifest.workbook_digest
+        || workbook_input.classification != manifest.workbook_classification
+    {
+        bail!("operator-owned source data changed after the local runtime was compiled");
+    }
+    if digest_path(
+        &project_dir.join(CANONICAL_ARTIFACT_MANIFEST),
+        "generated project artifact manifest",
+    )? != manifest.artifact_manifest_digest
+    {
+        bail!("generated project artifact manifest integrity check failed");
+    }
+    validate_compiled_artifact_manifest(project_dir, true)?;
+    let compiled_relay = project_dir.join(CANONICAL_RELAY_CONFIG);
+    if digest_path(&compiled_relay, "compiled Relay config")? != manifest.relay_config_digest {
+        bail!("compiled Relay config integrity check failed");
+    }
+    validate_compiled_local_relay_auth(&compiled_relay, &authored)?;
+    if let Some(notary) = &manifest.notary {
+        let compiled_consultation = project_dir.join(CANONICAL_CONSULTATION_RELAY_CONFIG);
+        let compiled_notary = project_dir.join(CANONICAL_COMPILED_NOTARY_CONFIG);
+        for path in [&compiled_consultation, &compiled_notary] {
+            ensure_no_symlink_components(project_dir, path)?;
+            validate_private_file_mode(path)?;
+        }
+        if digest_path(&compiled_consultation, "compiled consultation Relay config")?
+            != notary.consultation_relay_config_digest
+            || digest_path(&compiled_notary, "compiled Notary config")?
+                != notary.compiled_notary_config_digest
+        {
+            bail!("combined runtime compiled-input integrity check failed");
+        }
+        if render_runtime_consultation_relay_config(&compiled_consultation)?
+            != fs::read_to_string(project_dir.join(CANONICAL_RUNTIME_CONSULTATION_RELAY_CONFIG))
+                .context("failed to read runtime consultation Relay config")?
+            || render_runtime_notary_config(&compiled_notary)?
+                != fs::read_to_string(project_dir.join(CANONICAL_RUNTIME_NOTARY_CONFIG))
+                    .context("failed to read runtime Notary config")?
+        {
+            bail!("combined runtime snapshot does not match its compiled source");
+        }
+    }
+    Ok(())
+}
+
 fn load_canonical_runtime(
     project_dir: &Path,
     validation: CanonicalRuntimeValidation,
 ) -> Result<CanonicalRuntime> {
-    require_canonical_project(project_dir)?;
+    if validation == CanonicalRuntimeValidation::Full {
+        require_canonical_project(project_dir)?;
+    } else {
+        let root = fs::symlink_metadata(project_dir)
+            .context("failed to inspect the Registry Stack project root")?;
+        if root.file_type().is_symlink() || !root.is_dir() {
+            bail!("the Registry Stack project root must be a real directory");
+        }
+    }
     let runtime_dir = project_dir.join(CANONICAL_RUNTIME_ROOT);
     let secrets_dir = project_dir.join(CANONICAL_RUNTIME_SECRETS);
     let compose_file = project_dir.join(CANONICAL_RUNTIME_COMPOSE);
@@ -3748,10 +4113,17 @@ fn load_canonical_runtime(
     validate_private_dir_mode(&secrets_dir)?;
     validate_private_file_mode(&compose_file)?;
     validate_private_file_mode(&manifest_file)?;
-    let manifest: CanonicalRuntimeManifest = serde_json::from_slice(
-        &fs::read(&manifest_file).context("failed to read the local runtime manifest")?,
-    )
-    .context("failed to parse the local runtime manifest")?;
+    let manifest_bytes =
+        fs::read(&manifest_file).context("failed to read the local runtime manifest")?;
+    let manifest_value: serde_json::Value = serde_json::from_slice(&manifest_bytes)
+        .context("failed to parse the local runtime manifest")?;
+    if manifest_value["schema_version"].as_str() == Some(CANONICAL_RUNTIME_LEGACY_MANIFEST_SCHEMA) {
+        bail!(
+            "local runtime uses a legacy generated contract that cannot support authored-input-independent recovery; restore the authored project and rerun `registryctl start`"
+        );
+    }
+    let manifest: CanonicalRuntimeManifest = serde_json::from_slice(&manifest_bytes)
+        .context("failed to parse the local runtime manifest")?;
     if manifest.schema_version != CANONICAL_RUNTIME_MANIFEST_SCHEMA
         || manifest.environment != CANONICAL_LOCAL_ENVIRONMENT
     {
@@ -3762,26 +4134,15 @@ fn load_canonical_runtime(
         bail!("local runtime manifest topology is incomplete");
     }
     let _ = strict_canonical_runtime_credentials(project_dir, manifest.topology)?;
-    validate_runtime_file_closure(project_dir, manifest.topology)?;
-    let authored_binding = canonical_spreadsheet_binding(project_dir)?;
-    if validation == CanonicalRuntimeValidation::Full
-        && authored_binding.topology != manifest.topology
-    {
-        bail!("the authored topology changed; rerun `registryctl start` to regenerate the runtime");
-    }
-    let mut binding = authored_binding;
-    binding.topology = manifest.topology;
-    let workbook_input = compiled_workbook_input(project_dir, &binding)?;
-    if binding.project_file_text != manifest.workbook_project_file
-        || binding.runtime_path != manifest.workbook_runtime_path
-    {
-        bail!("the authored project changed after the local runtime was compiled");
-    }
-    if workbook_input.digest.as_str() != manifest.workbook_digest
-        || workbook_input.classification != manifest.workbook_classification
+    validate_runtime_file_closure(project_dir, &manifest)?;
+    let binding = canonical_runtime_binding_from_manifest(&manifest)?;
+    let runtime_workbook = project_dir.join(CANONICAL_RUNTIME_WORKBOOK);
+    validate_private_file_mode(&runtime_workbook)?;
+    validate_runtime_bind_input_owner(&runtime_workbook, &binding)?;
+    if digest_path(&runtime_workbook, "staged runtime workbook")? != manifest.workbook_digest
         || manifest.workbook_classification != ArtifactInputClassification::OperatorOwnedSourceData
     {
-        bail!("local runtime workbook provenance does not match the artifact manifest");
+        bail!("local runtime workbook provenance does not match its generated snapshot");
     }
     let compose = fs::read_to_string(&compose_file).context("failed to read local Compose")?;
     if sha256_uri(compose.as_bytes()) != manifest.compose_digest {
@@ -3799,10 +4160,17 @@ fn load_canonical_runtime(
             .map(|notary| notary.postgresql_image.clone()),
     };
     validate_canonical_compose(&compose, &images, &binding)?;
-    let relay_config = project_dir.join(CANONICAL_RELAY_CONFIG);
+    let relay_config = project_dir.join(CANONICAL_RUNTIME_RELAY_CONFIG);
     ensure_no_symlink_components(project_dir, &relay_config)?;
-    if digest_path(&relay_config, "compiled Relay config")? != manifest.relay_config_digest {
-        bail!("compiled Relay config integrity check failed");
+    validate_private_file_mode(&relay_config)?;
+    validate_runtime_bind_input_owner(
+        &project_dir
+            .join(CANONICAL_RUNTIME_ROOT)
+            .join("private/relay/config"),
+        &binding,
+    )?;
+    if digest_path(&relay_config, "staged Relay config")? != manifest.relay_config_digest {
+        bail!("generated Relay config integrity check failed");
     }
     validate_compiled_local_relay_auth(&relay_config, &binding)?;
     if let Some(notary) = &manifest.notary {
@@ -3812,30 +4180,25 @@ fn load_canonical_runtime(
             &notary.postgresql_image,
             POSTGRES_IMAGE_REPOSITORY,
         )?;
-        let consultation_config = project_dir.join(CANONICAL_CONSULTATION_RELAY_CONFIG);
-        let compiled_notary_config = project_dir.join(CANONICAL_COMPILED_NOTARY_CONFIG);
         let runtime_notary_config = project_dir.join(CANONICAL_RUNTIME_NOTARY_CONFIG);
         let runtime_consultation_config =
             project_dir.join(CANONICAL_RUNTIME_CONSULTATION_RELAY_CONFIG);
         let postgres_ca = project_dir.join(CANONICAL_RUNTIME_POSTGRES_CA);
-        for path in [&consultation_config, &compiled_notary_config] {
-            ensure_no_symlink_components(project_dir, path)?;
-            validate_private_file_mode(path)?;
-        }
         ensure_no_symlink_components(project_dir, &runtime_notary_config)?;
         ensure_no_symlink_components(project_dir, &runtime_consultation_config)?;
         ensure_no_symlink_components(project_dir, &postgres_ca)?;
-        validate_runtime_nonsecret_file_mode(&runtime_notary_config)?;
-        validate_runtime_nonsecret_file_mode(&runtime_consultation_config)?;
-        validate_runtime_nonsecret_file_mode(&postgres_ca)?;
-        if digest_path(&consultation_config, "compiled consultation Relay config")?
-            != notary.consultation_relay_config_digest
-            || digest_path(
-                &runtime_consultation_config,
-                "runtime consultation Relay config",
-            )? != notary.runtime_consultation_relay_config_digest
-            || digest_path(&compiled_notary_config, "compiled Notary config")?
-                != notary.compiled_notary_config_digest
+        validate_private_file_mode(&runtime_notary_config)?;
+        validate_private_file_mode(&runtime_consultation_config)?;
+        validate_private_file_mode(&postgres_ca)?;
+        validate_runtime_bind_input_owner(&runtime_notary_config, &binding)?;
+        validate_runtime_bind_input_owner(
+            &project_dir.join(CANONICAL_RUNTIME_WORKLOAD_TOKEN),
+            &binding,
+        )?;
+        if digest_path(
+            &runtime_consultation_config,
+            "runtime consultation Relay config",
+        )? != notary.runtime_consultation_relay_config_digest
             || digest_path(&runtime_notary_config, "runtime Notary config")?
                 != notary.runtime_notary_config_digest
             || digest_path(&postgres_ca, "PostgreSQL trust root")? != notary.postgres_ca_digest
@@ -3874,33 +4237,10 @@ fn load_canonical_runtime(
         {
             bail!("combined runtime generated-input integrity check failed");
         }
-        let expected_notary_config = render_runtime_notary_config(&compiled_notary_config)?;
-        if fs::read_to_string(&runtime_notary_config)
-            .context("failed to read runtime Notary config")?
-            != expected_notary_config
-        {
-            bail!("runtime Notary config does not match its compiled source");
-        }
-        let expected_consultation_config =
-            render_runtime_consultation_relay_config(&consultation_config)?;
-        if fs::read_to_string(&runtime_consultation_config)
-            .context("failed to read runtime consultation Relay config")?
-            != expected_consultation_config
-        {
-            bail!("runtime consultation Relay config does not match its compiled source");
-        }
     }
-    if digest_path(
-        &project_dir.join(CANONICAL_ARTIFACT_MANIFEST),
-        "generated project artifact manifest",
-    )? != manifest.artifact_manifest_digest
-    {
-        bail!("generated project artifact manifest integrity check failed");
+    if validation == CanonicalRuntimeValidation::Full {
+        validate_canonical_runtime_against_authored(project_dir, &manifest, &binding)?;
     }
-    validate_compiled_artifact_manifest(
-        project_dir,
-        validation == CanonicalRuntimeValidation::Full,
-    )?;
     Ok(CanonicalRuntime {
         compose_file,
         relay_config,
@@ -3912,32 +4252,47 @@ fn load_canonical_runtime(
 
 fn validate_runtime_file_closure(
     project_dir: &Path,
-    topology: CanonicalRuntimeTopology,
+    manifest: &CanonicalRuntimeManifest,
 ) -> Result<()> {
-    let mut expected = BTreeSet::from([
-        "compose.yaml".to_string(),
-        "manifest.json".to_string(),
-        "secrets/local.env".to_string(),
-        "secrets/relay.env".to_string(),
+    let mut required = BTreeSet::from([
+        "compose.yaml",
+        "secrets/local.env",
+        "secrets/relay.env",
+        "private/data/workbook.xlsx",
+        "private/relay/config/relay.yaml",
     ]);
-    if topology.has_notary() {
-        expected.extend(
-            [
-                "secrets/relay-consultation.env",
-                "secrets/relay-bootstrap.env",
-                "secrets/notary.env",
-                "secrets/postgres.env",
-                "secrets/relay-workload-token",
-                "secrets/workload-private.jwk",
-                "private/db/init.sh",
-                "private/notary/config/notary.yaml",
-                "private/relay/config/relay-consultation.yaml",
-                "private/relay/config/state-plane-ca.pem",
-                "private/workload/jwks.json",
-            ]
-            .into_iter()
-            .map(str::to_string),
-        );
+    if manifest.topology.has_notary() {
+        required.extend([
+            "secrets/relay-consultation.env",
+            "secrets/relay-bootstrap.env",
+            "secrets/notary.env",
+            "secrets/postgres.env",
+            "secrets/relay-workload-token",
+            "secrets/workload-private.jwk",
+            "private/db/init.sh",
+            "private/notary/config/notary.yaml",
+            "private/relay/config/relay-consultation.yaml",
+            "private/relay/config/state-plane-ca.pem",
+            "private/workload/jwks.json",
+        ]);
+    }
+    if required
+        .iter()
+        .any(|required| !manifest.runtime_files.contains_key(*required))
+    {
+        bail!("local runtime manifest omits a required generated input");
+    }
+    for relative in manifest.runtime_files.keys() {
+        let path = Path::new(relative);
+        if path.is_absolute()
+            || relative == "manifest.json"
+            || relative == "smoke-results.json"
+            || path
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            bail!("local runtime manifest contains an invalid generated-input path");
+        }
     }
     let root = project_dir.join(CANONICAL_RUNTIME_ROOT);
     let mut actual = BTreeSet::new();
@@ -3960,18 +4315,22 @@ fn validate_runtime_file_closure(
                     .context("local runtime entry escaped its root")?
                     .to_string_lossy()
                     .into_owned();
-                if matches!(
-                    relative.as_str(),
-                    "private/db/init.sh"
-                        | "private/notary/config/notary.yaml"
-                        | "private/relay/config/relay-consultation.yaml"
-                        | "private/relay/config/state-plane-ca.pem"
-                ) {
+                if relative == "private/db/init.sh" {
                     validate_runtime_nonsecret_file_mode(&path)?;
                 } else {
                     validate_private_file_mode(&path)?;
                 }
-                if relative != "smoke-results.json" {
+                if relative == "smoke-results.json" {
+                    continue;
+                }
+                if relative != "manifest.json" {
+                    let expected_digest =
+                        manifest.runtime_files.get(&relative).ok_or_else(|| {
+                            anyhow!("local runtime closure contains an unexpected generated input")
+                        })?;
+                    if digest_path(&path, "generated runtime input")? != *expected_digest {
+                        bail!("local runtime generated-input integrity check failed");
+                    }
                     actual.insert(relative);
                 }
             } else {
@@ -3979,7 +4338,7 @@ fn validate_runtime_file_closure(
             }
         }
     }
-    if actual != expected {
+    if actual != manifest.runtime_files.keys().cloned().collect() {
         bail!("local runtime generated-input closure is incomplete or contains unexpected files");
     }
     Ok(())
@@ -4035,8 +4394,7 @@ fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<(
 }
 
 pub fn stop_project(project_dir: &Path) -> Result<()> {
-    let runtime =
-        load_canonical_runtime(project_dir, CanonicalRuntimeValidation::GeneratedClosure)?;
+    let runtime = load_canonical_runtime_for_recovery(project_dir)?;
     run_compose_for_canonical_runtime(project_dir, &runtime, &["down"])?;
     Ok(())
 }
@@ -4728,6 +5086,11 @@ impl SecretRedactor {
 
 #[cfg(unix)]
 fn write_private_text(path: &Path, contents: &str) -> Result<()> {
+    write_private_bytes(path, contents.as_bytes())
+}
+
+#[cfg(unix)]
+fn write_private_bytes(path: &Path, contents: &[u8]) -> Result<()> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
     reject_private_path_symlinks(path)?;
@@ -4739,7 +5102,7 @@ fn write_private_text(path: &Path, contents: &str) -> Result<()> {
         .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
         .open(path)
         .with_context(|| format!("failed to write {}", path.display()))?;
-    file.write_all(contents.as_bytes())
+    file.write_all(contents)
         .with_context(|| format!("failed to write {}", path.display()))?;
     let mut permissions = file.metadata()?.permissions();
     permissions.set_mode(0o600);
@@ -4749,8 +5112,13 @@ fn write_private_text(path: &Path, contents: &str) -> Result<()> {
 
 #[cfg(not(unix))]
 fn write_private_text(path: &Path, contents: &str) -> Result<()> {
+    write_private_bytes(path, contents.as_bytes())
+}
+
+#[cfg(not(unix))]
+fn write_private_bytes(path: &Path, contents: &[u8]) -> Result<()> {
     reject_private_path_symlinks(path)?;
-    write_text(path.to_path_buf(), contents)
+    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
 }
 
 #[cfg(unix)]
@@ -8156,12 +8524,14 @@ mod tests {
     }
 
     #[test]
-    fn restart_project_requires_a_canonical_project() {
+    fn restart_project_requires_an_existing_generated_runtime() {
         let temp = TempDir::new().unwrap();
 
         let error = restart_project(temp.path()).unwrap_err();
 
-        assert!(error.to_string().contains("registry-stack.yaml"));
+        assert!(error
+            .to_string()
+            .contains("local runtime recovery inspection is unavailable"));
     }
 
     #[test]
@@ -8699,6 +9069,42 @@ mod tests {
         assert_eq!(identity.gid.to_string(), DEFAULT_NONROOT_CONTAINER_ID);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn root_owned_private_runtime_inputs_are_mapped_or_rejected_before_publication() {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp = TempDir::new().unwrap();
+        let workbook = temp.path().join("workbook.xlsx");
+        let token = temp.path().join("relay-workload-token");
+        write_private_bytes(&workbook, b"private workbook").unwrap();
+        write_private_text(&token, "private-token\n").unwrap();
+        let identity = runtime_identity_for_owner(0, 0);
+        let binding = CanonicalSpreadsheetBinding {
+            project_file_text: "data/workbook.xlsx".to_string(),
+            runtime_path: "/var/lib/registry/workbook.xlsx".to_string(),
+            match_principal: "match".to_string(),
+            topology: CanonicalRuntimeTopology::CombinedNotary,
+            runtime_user: format!("{}:{}", identity.uid, identity.gid),
+            runtime_uid: identity.uid.to_string(),
+            runtime_gid: identity.gid.to_string(),
+        };
+
+        let owner = fs::metadata(temp.path()).unwrap().uid();
+        let workbook_result = set_runtime_bind_input_owner(&workbook, &binding);
+        let token_result = set_runtime_bind_input_owner(&token, &binding);
+        if owner == 0 {
+            workbook_result.unwrap();
+            token_result.unwrap();
+            validate_runtime_bind_input_owner(&workbook, &binding).unwrap();
+            validate_runtime_bind_input_owner(&token, &binding).unwrap();
+        } else {
+            let error = workbook_result.unwrap_err();
+            assert!(format!("{error:#}").contains("cannot safely make runtime input"));
+            assert!(token_result.is_err());
+        }
+    }
+
     fn assert_runtime_env_matches_project_owner(project: &Path) {
         let env = fs::read_to_string(project.join(".env")).unwrap();
         let uid = env_value(&env, REGISTRY_STACK_RUNTIME_UID_ENV);
@@ -8739,7 +9145,7 @@ mod tests {
 
     fn prepare_combined_runtime(project: &Path) -> CanonicalRuntime {
         init_canonical_spreadsheet(project);
-        add_notary_to_canonical_project(project).unwrap();
+        add_notary_to_canonical_project_with_lock(project, || Ok(test_image_lock())).unwrap();
         // These unit tests exercise generated runtime topology and private-file
         // closure. Fixture evaluation is covered through the real registryctl
         // binary because only that binary owns the internal CEL worker mode.
@@ -8805,7 +9211,8 @@ mod tests {
     }
 
     #[test]
-    fn recovery_runtime_remains_inspectable_after_authored_inputs_change() {
+    fn recovery_runtime_ignores_missing_or_malformed_authored_inputs_but_rejects_generated_tamper()
+    {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("spreadsheet-project");
         init_canonical_spreadsheet(&project);
@@ -8814,26 +9221,60 @@ mod tests {
         load_canonical_runtime_for_recovery(&project)
             .expect("a healthy generated runtime is inspectable");
 
-        fs::write(
-            project.join("data/public_works_projects.xlsx"),
-            b"changed operator workbook",
-        )
-        .unwrap();
+        fs::remove_file(project.join("data/public_works_projects.xlsx")).unwrap();
         assert!(load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).is_err());
         load_canonical_runtime_for_recovery(&project)
-            .expect("a workbook edit does not hide recovery diagnostics");
+            .expect("a missing authored workbook does not hide recovery diagnostics");
 
-        let entity_path = project.join("entities/projects.yaml");
-        let mut entity = fs::read_to_string(&entity_path).unwrap();
-        entity.push_str("\n# changed authored description\n");
-        fs::write(&entity_path, entity).unwrap();
+        fs::write(project.join(CANONICAL_PROJECT_FILE), b": malformed\n[").unwrap();
+        fs::remove_file(project.join(CANONICAL_LOCAL_ENVIRONMENT_FILE)).unwrap();
         load_canonical_runtime_for_recovery(&project)
-            .expect("an authored YAML edit does not hide recovery diagnostics");
+            .expect("malformed and deleted authored YAML do not hide recovery diagnostics");
 
-        fs::remove_file(project.join(CANONICAL_RELAY_CONFIG)).unwrap();
+        let runtime_config = project.join(CANONICAL_RUNTIME_RELAY_CONFIG);
+        let mut config = fs::read(&runtime_config).unwrap();
+        config.push(b'\n');
+        write_private_bytes(&runtime_config, &config).unwrap();
         let error = load_canonical_runtime_for_recovery(&project)
-            .expect_err("missing generated output remains an integrity failure");
-        assert!(format!("{error:#}").contains("generated"));
+            .expect_err("tampered generated output remains an integrity failure");
+        assert!(format!("{error:#}").contains("integrity"));
+    }
+
+    #[test]
+    fn legacy_runtime_recovery_fails_closed_and_strict_start_regenerates_v2() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap();
+        let manifest_path = project.join(CANONICAL_RUNTIME_MANIFEST);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["schema_version"] =
+            serde_json::Value::String(CANONICAL_RUNTIME_LEGACY_MANIFEST_SCHEMA.to_string());
+        for field in [
+            "match_principal",
+            "runtime_uid",
+            "runtime_gid",
+            "runtime_files",
+        ] {
+            manifest.as_object_mut().unwrap().remove(field);
+        }
+        write_private_text(
+            &manifest_path,
+            &serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let error = load_canonical_runtime_for_recovery(&project).unwrap_err();
+        assert!(format!("{error:#}").contains("legacy generated contract"));
+
+        prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap();
+        let regenerated: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        assert_eq!(
+            regenerated["schema_version"],
+            CANONICAL_RUNTIME_MANIFEST_SCHEMA
+        );
     }
 
     #[test]
@@ -8842,7 +9283,8 @@ mod tests {
         let project = temp.path().join("spreadsheet-project");
         init_canonical_spreadsheet(&project);
 
-        let first = add_notary_to_canonical_project(&project).unwrap();
+        let first =
+            add_notary_to_canonical_project_with_lock(&project, || Ok(test_image_lock())).unwrap();
         let second = add_notary_to_canonical_project(&project).unwrap();
 
         assert_eq!(first.status, "updated");
@@ -8857,6 +9299,73 @@ mod tests {
             canonical_spreadsheet_binding(&project).unwrap().topology,
             CanonicalRuntimeTopology::CombinedNotary
         );
+    }
+
+    #[test]
+    fn add_notary_requires_image_lock_before_authored_mutation_but_not_for_exact_noop() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("spreadsheet-project");
+        init_canonical_spreadsheet(&project);
+        let project_file = project.join(CANONICAL_PROJECT_FILE);
+        let environment_file = project.join(CANONICAL_LOCAL_ENVIRONMENT_FILE);
+        let project_before = fs::read(&project_file).unwrap();
+        let environment_before = fs::read(&environment_file).unwrap();
+
+        let error = add_notary_to_canonical_project_with_lock(&project, || {
+            Err(anyhow!("injected missing image lock"))
+        })
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("requires the matching release image lock"));
+        assert_eq!(fs::read(&project_file).unwrap(), project_before);
+        assert_eq!(fs::read(&environment_file).unwrap(), environment_before);
+        assert!(!project
+            .join("integrations/project-record-snapshot")
+            .exists());
+
+        add_notary_to_canonical_project_with_lock(&project, || Ok(test_image_lock())).unwrap();
+        let unchanged = add_notary_to_canonical_project_with_lock(&project, || {
+            Err(anyhow!("exact no-op must not load the image lock"))
+        })
+        .unwrap();
+        assert_eq!(unchanged.status, "unchanged");
+    }
+
+    #[test]
+    fn add_notary_uses_yaml_semantics_for_comments_and_rejects_partial_shapes() {
+        let temp = TempDir::new().unwrap();
+        let commented = temp.path().join("commented");
+        init_canonical_spreadsheet(&commented);
+        let environment = commented.join(CANONICAL_LOCAL_ENVIRONMENT_FILE);
+        let mut contents = fs::read_to_string(&environment).unwrap();
+        contents.push_str("\n# callers:\n# notary_relay:\n");
+        fs::write(&environment, &contents).unwrap();
+
+        let report =
+            add_notary_to_canonical_project_with_lock(&commented, || Ok(test_image_lock()))
+                .unwrap();
+        assert_eq!(report.status, "updated");
+        let updated = fs::read_to_string(&environment).unwrap();
+        assert!(updated.contains("# callers:"));
+        assert!(updated.contains("\ncallers:\n"));
+
+        let partial = temp.path().join("partial");
+        init_canonical_spreadsheet(&partial);
+        let environment = partial.join(CANONICAL_LOCAL_ENVIRONMENT_FILE);
+        let before = fs::read_to_string(&environment).unwrap();
+        fs::write(&environment, format!("callers: {{}}\n{before}")).unwrap();
+        let project_before = fs::read(partial.join(CANONICAL_PROJECT_FILE)).unwrap();
+        let environment_before = fs::read(&environment).unwrap();
+        let error = add_notary_to_canonical_project_with_lock(&partial, || Ok(test_image_lock()))
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("partial"));
+        assert_eq!(
+            fs::read(partial.join(CANONICAL_PROJECT_FILE)).unwrap(),
+            project_before
+        );
+        assert_eq!(fs::read(&environment).unwrap(), environment_before);
+        assert!(!partial
+            .join("integrations/project-record-snapshot")
+            .exists());
     }
 
     #[test]
@@ -8911,7 +9420,7 @@ mod tests {
         );
         assert_eq!(
             services["registry-relay-consultation"]["volumes"][0],
-            "../../build/local/private/relay:/etc/registry-relay:ro"
+            "./private/data/workbook.xlsx:/var/lib/registry/public_works_projects.xlsx:ro"
         );
         assert_eq!(
             services["registry-relay-consultation"]["command"][1],
@@ -9060,7 +9569,7 @@ mod tests {
             manifest.notary.as_ref().unwrap().postgresql_image,
             TEST_POSTGRESQL_IMAGE
         );
-        validate_runtime_file_closure(&project, CanonicalRuntimeTopology::CombinedNotary).unwrap();
+        validate_runtime_file_closure(&project, &manifest).unwrap();
         for relative in [
             CANONICAL_RUNTIME_ROOT,
             CANONICAL_RUNTIME_SECRETS,
@@ -9093,6 +9602,11 @@ mod tests {
             CANONICAL_RUNTIME_WORKLOAD_TOKEN,
             CANONICAL_RUNTIME_WORKLOAD_PRIVATE_JWK,
             CANONICAL_RUNTIME_WORKLOAD_JWKS,
+            CANONICAL_RUNTIME_WORKBOOK,
+            CANONICAL_RUNTIME_RELAY_CONFIG,
+            CANONICAL_RUNTIME_NOTARY_CONFIG,
+            CANONICAL_RUNTIME_CONSULTATION_RELAY_CONFIG,
+            CANONICAL_RUNTIME_POSTGRES_CA,
         ] {
             assert_eq!(
                 fs::metadata(project.join(relative))
@@ -9104,22 +9618,16 @@ mod tests {
                 "{relative}"
             );
         }
-        for relative in [
-            CANONICAL_RUNTIME_DB_INIT,
-            CANONICAL_RUNTIME_NOTARY_CONFIG,
-            CANONICAL_RUNTIME_CONSULTATION_RELAY_CONFIG,
-            CANONICAL_RUNTIME_POSTGRES_CA,
-        ] {
-            assert_eq!(
-                fs::metadata(project.join(relative))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o644,
-                "{relative}"
-            );
-        }
+        let relative = CANONICAL_RUNTIME_DB_INIT;
+        assert_eq!(
+            fs::metadata(project.join(relative))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o644,
+            "{relative}"
+        );
 
         let jwks = project.join(CANONICAL_RUNTIME_WORKLOAD_JWKS);
         let original = fs::read_to_string(&jwks).unwrap();
@@ -9252,7 +9760,8 @@ mod tests {
             & 0o777;
 
         ADD_NOTARY_FAIL_AFTER_PUBLISH_COUNT.with(|count| count.set(3));
-        let error = add_notary_to_canonical_project(&project).unwrap_err();
+        let error = add_notary_to_canonical_project_with_lock(&project, || Ok(test_image_lock()))
+            .unwrap_err();
         ADD_NOTARY_FAIL_AFTER_PUBLISH_COUNT.with(|count| count.set(0));
         assert!(
             format!("{error:#}").contains("rolled back"),
@@ -9345,8 +9854,8 @@ mod tests {
         assert_eq!(
             document["services"]["registry-relay"]["volumes"],
             serde_json::json!([
-                "../../build/local/private/relay/config/relay.yaml:/etc/registry-relay/config.yaml:ro",
-                "../../../data/public_works_projects.xlsx:/var/lib/registry/public_works_projects.xlsx:ro"
+                "./private/relay/config/relay.yaml:/etc/registry-relay/config.yaml:ro",
+                "./private/data/workbook.xlsx:/var/lib/registry/public_works_projects.xlsx:ro"
             ])
         );
         assert_eq!(
@@ -9448,7 +9957,7 @@ mod tests {
         )
         .unwrap();
         let error = load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap_err();
-        assert!(format!("{error:#}").contains("Compose integrity"));
+        assert!(format!("{error:#}").contains("generated-input integrity"));
 
         prepare_canonical_runtime_with_image(&project, TEST_RELAY_IMAGE).unwrap_err();
         write_private_text(&compose_path, &compose).unwrap();
@@ -9456,7 +9965,7 @@ mod tests {
         let config = fs::read_to_string(&config_path).unwrap();
         write_private_text(&config_path, &(config + "\n# planted tamper\n")).unwrap();
         let error = load_canonical_runtime(&project, CanonicalRuntimeValidation::Full).unwrap_err();
-        assert!(format!("{error:#}").contains("Relay config integrity"));
+        assert!(format!("{error:#}").contains("integrity"));
     }
 
     #[test]

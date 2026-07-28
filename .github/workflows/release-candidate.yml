@@ -916,6 +916,16 @@ jobs:
             --digest-ref "${postgresql_ref}"
           grype "${postgresql_ref}" -o json \
             > dist/candidate/dist/grype/postgresql.grype.json
+          mkdir -p dist/candidate/dist/rootfs/postgresql
+          crane export "${postgresql_ref}" - \
+            | tar --extract --file=- --directory=dist/candidate/dist/rootfs/postgresql \
+                --no-same-owner --no-same-permissions
+          if find dist/candidate/dist/rootfs/postgresql \
+              \( -type b -o -type c -o -type p -o -type s \) -print -quit \
+              | grep -q .; then
+            echo "Exported rootfs postgresql contains a forbidden special file" >&2
+            exit 1
+          fi
           db_built="$(jq -er '.descriptor.db.built' dist/candidate/dist/grype/postgresql.grype.json)"
           db_checksum="$(jq -er '.descriptor.db.checksum' dist/candidate/dist/grype/postgresql.grype.json)"
           db_built_epoch="$(date -u -d "${db_built}" +%s)"
@@ -933,6 +943,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          postgresql_ref="$(tr -d '\n' < release/registryctl-postgresql-image.ref)"
           python3 products/notary/scripts/check_advisory_baselines.py \
             grype dist/candidate/dist/grype/registry-notary.grype.json \
             --syft-report dist/candidate/dist/sbom/registry-notary.syft.json \
@@ -943,6 +954,12 @@ jobs:
             --syft-report dist/candidate/dist/sbom/registry-relay.syft.json \
             --rootfs dist/candidate/dist/rootfs/registry-relay \
             --subject registry-relay-image
+          python3 release/scripts/check_postgresql_advisory_policy.py \
+            dist/candidate/dist/grype/postgresql.grype.json \
+            --baseline release/security/postgresql-advisory-baseline.json \
+            --syft-report dist/candidate/dist/sbom/postgresql.syft.json \
+            --rootfs dist/candidate/dist/rootfs/postgresql \
+            --expected-image "${postgresql_ref}"
 
       - name: Assemble exact candidate payload
         shell: bash

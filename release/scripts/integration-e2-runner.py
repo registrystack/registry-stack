@@ -899,11 +899,28 @@ def verify_candidate_snapshot(
     capsule_image_names = [
         item.get("name") for item in capsule_image_items if isinstance(item, dict)
     ]
-    if len(capsule_image_names) != 2 or set(capsule_image_names) != {
-        "registry-relay",
-        "registry-notary",
-    }:
-        raise RunnerError("release capsule must contain exactly the two product images")
+    if (
+        len(capsule_image_names) != len(images)
+        or set(capsule_image_names) != set(images)
+    ):
+        raise RunnerError(
+            "release capsule images must contain exactly the image-lock images"
+        )
+    for name, digest_ref in images.items():
+        image = find_named(capsule_image_items, name, "images")
+        if image.get("digest_ref") != digest_ref:
+            raise RunnerError(
+                "release capsule images do not match the candidate image lock"
+            )
+        expected_role = (
+            "supporting-runtime-image"
+            if name == "postgresql"
+            else "released-product-image"
+        )
+        if image.get("role") != expected_role:
+            raise RunnerError(
+                f"release capsule {name} image must be a {expected_role}"
+            )
     relay_entry = find_named(capsule_image_items, "registry-relay", "images")
     notary_entry = find_named(capsule_image_items, "registry-notary", "images")
     if (

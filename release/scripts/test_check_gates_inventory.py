@@ -717,6 +717,17 @@ class GateInventoryTest(unittest.TestCase):
             self.module.missing_gates(text),
         )
 
+    def test_release_tool_runs_conformance_candidate_binding_tests(self) -> None:
+        release_tool = self.workflow[
+            self.workflow.index("  release-tool:\n") : self.workflow.index(
+                "  release-tool-required:\n"
+            )
+        ]
+        self.assertIn(
+            "run: python3 -m unittest release/scripts/test_conformance_candidate.py",
+            release_tool,
+        )
+
     def test_missing_first_country_release_form_runner_tests_are_reported(self) -> None:
         text = self.workflow.replace(
             "python3 -m unittest release/scripts/test_first_country_release_form.py",
