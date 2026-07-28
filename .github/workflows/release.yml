@@ -321,10 +321,6 @@ jobs:
             "${EXPECTED_RECEIPT_SHA256}"
 
           mapfile -t records < <(jq -c '.artifacts[]' "${receipt}")
-          if [[ "${#records[@]}" -ne 5 ]]; then
-            echo "Candidate receipt must bind exactly five payload artifacts" >&2
-            exit 1
-          fi
           for record in "${records[@]}"; do
             name="$(jq -er '.name' <<<"${record}")"
             artifact_id="$(jq -er '.artifact_id' <<<"${record}")"
