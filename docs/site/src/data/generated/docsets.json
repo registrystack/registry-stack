@@ -34,7 +34,7 @@
       "id": "v0.15.0",
       "label": "v0.15.0",
       "path": "/v/0.15.0/",
-      "status": "draft",
+      "status": "archived",
       "availability": "candidate",
       "source": "registry-stack-v0.15.0",
       "repo_docs_source": "monorepo",
@@ -43,27 +43,27 @@
       "products": {
         "registry-stack": {
           "version": "v0.15.0",
-          "ref": "41d0569c3f2b8d59877d188bd82df385704103f1"
+          "ref": "00995964a487c963a9500529ecb2c4429c3d8f01"
         },
         "registry-platform": {
           "version": "v0.15.0",
-          "ref": "41d0569c3f2b8d59877d188bd82df385704103f1"
+          "ref": "00995964a487c963a9500529ecb2c4429c3d8f01"
         },
         "registry-manifest": {
           "version": "v0.15.0",
-          "ref": "41d0569c3f2b8d59877d188bd82df385704103f1"
+          "ref": "00995964a487c963a9500529ecb2c4429c3d8f01"
         },
         "registry-notary": {
           "version": "v0.15.0",
-          "ref": "41d0569c3f2b8d59877d188bd82df385704103f1"
+          "ref": "00995964a487c963a9500529ecb2c4429c3d8f01"
         },
         "registry-relay": {
           "version": "v0.15.0",
-          "ref": "41d0569c3f2b8d59877d188bd82df385704103f1"
+          "ref": "00995964a487c963a9500529ecb2c4429c3d8f01"
         },
         "registry-registryctl": {
           "version": "v0.15.0",
-          "ref": "41d0569c3f2b8d59877d188bd82df385704103f1"
+          "ref": "00995964a487c963a9500529ecb2c4429c3d8f01"
         },
         "crosswalk": {
           "version": "crosswalk-core-v0.2.0",
