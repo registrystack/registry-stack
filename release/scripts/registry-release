@@ -17,8 +17,6 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 import release_candidate
 from registryctl_image_lock import (
     PLATFORM as RELEASE_IMAGE_LOCK_PLATFORM,
@@ -103,6 +101,10 @@ GITHUB_REMOTE = re.compile(
 )
 
 
+class YamlDependencyError(RuntimeError):
+    """Raised when a YAML-reading command runs without PyYAML installed."""
+
+
 def release_version_tuple(version: str) -> tuple[int, int, int] | None:
     if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
         return None
@@ -168,8 +170,17 @@ def verify_registryctl_image_lock_release_version(version: str) -> int:
 
 
 def load_yaml(path: Path) -> object:
-    with path.open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
+    try:
+        import yaml
+    except ModuleNotFoundError as exc:
+        raise YamlDependencyError(
+            "PyYAML is required for release commands that read YAML"
+        ) from exc
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return yaml.safe_load(handle)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid YAML in {path}: {exc}") from exc
 
 
 def load_json(path: Path) -> object:
@@ -265,7 +276,7 @@ def render_registryctl_image_lock(
         )
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(image_lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    except (KeyError, OSError, UnicodeError, ValueError, yaml.YAMLError) as exc:
+    except (KeyError, OSError, UnicodeError, ValueError, YamlDependencyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
@@ -497,7 +508,7 @@ def validate_docsets(
             load_yaml(path)
             for path in sorted(manifest_dir.glob("registry-stack-*.yaml"))
         ]
-    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeError, ValueError, YamlDependencyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
@@ -1314,7 +1325,7 @@ def required_yaml(path: Path) -> Any:
         raise ReleasePlanError(f"required release surface is missing: {path}")
     try:
         return load_yaml(path)
-    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+    except (OSError, UnicodeError, ValueError, YamlDependencyError) as exc:
         raise ReleasePlanError(f"cannot load YAML release surface {path}: {exc}") from exc
 
 
