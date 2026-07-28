@@ -30,7 +30,9 @@ the separate repeatability workflow, not a second build in the blocking
 candidate path.
 Grype process status is not itself the advisory decision. The candidate first
 requires a complete scan report, then the reviewed advisory policy decides
-whether that report is acceptable.
+whether that report is acceptable. Database identity accepts both the legacy
+flat Grype descriptor and the nested descriptor emitted by the pinned Grype
+release.
 
 The selector writes `registry-stack.release-proof-selection.v1` JSON into the
 candidate evidence.

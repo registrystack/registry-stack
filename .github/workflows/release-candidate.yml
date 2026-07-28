@@ -734,8 +734,18 @@ jobs:
             if ! jq -e '
               type == "object" and
               (.matches | type == "array") and
-              (.descriptor.db.built | type == "string") and
-              (.descriptor.db.checksum | type == "string")
+              (
+                (.descriptor.db.built // .descriptor.db.status.built)
+                | type == "string"
+              ) and
+              (
+                (.descriptor.db.checksum | type == "string") or
+                (
+                  .descriptor.db.status.from
+                  | type == "string" and
+                    test("checksum=sha256%3A[0-9a-fA-F]{64}")
+                )
+              )
             ' "${report}" >/dev/null; then
               echo "Grype did not emit a complete scan report (exit ${status})" >&2
               exit 1
@@ -743,6 +753,22 @@ jobs:
             if (( status != 0 )); then
               echo "::warning::Grype exited ${status}; enforcing its complete report through the reviewed advisory policy"
             fi
+          }
+          read_db_metadata() {
+            local report="$1"
+            jq -er '
+              [
+                (.descriptor.db.built // .descriptor.db.status.built),
+                (
+                  .descriptor.db.checksum //
+                  (
+                    .descriptor.db.status.from
+                    | capture("checksum=sha256%3A(?<digest>[0-9a-fA-F]{64})").digest
+                    | ascii_downcase
+                  )
+                )
+              ] | @tsv
+            ' "${report}"
           }
           for name in registry-notary registry-relay; do
             digest_ref="$(cat "inputs/build-a/dist/images/${name}.digest")"
@@ -779,8 +805,9 @@ jobs:
               echo "Exported rootfs ${name} contains a forbidden special file" >&2
               exit 1
             fi
-            db_built="$(jq -er '.descriptor.db.built' "dist/candidate/dist/grype/${name}.grype.json")"
-            db_checksum="$(jq -er '.descriptor.db.checksum' "dist/candidate/dist/grype/${name}.grype.json")"
+            IFS=$'\t' read -r db_built db_checksum < <(
+              read_db_metadata "dist/candidate/dist/grype/${name}.grype.json"
+            )
             db_built_epoch="$(date -u -d "${db_built}" +%s)"
             now_epoch="$(date -u +%s)"
             if (( db_built_epoch > now_epoch || now_epoch - db_built_epoch > 259200 )); then
@@ -810,8 +837,9 @@ jobs:
             echo "Exported rootfs postgresql contains a forbidden special file" >&2
             exit 1
           fi
-          db_built="$(jq -er '.descriptor.db.built' dist/candidate/dist/grype/postgresql.grype.json)"
-          db_checksum="$(jq -er '.descriptor.db.checksum' dist/candidate/dist/grype/postgresql.grype.json)"
+          IFS=$'\t' read -r db_built db_checksum < <(
+            read_db_metadata dist/candidate/dist/grype/postgresql.grype.json
+          )
           db_built_epoch="$(date -u -d "${db_built}" +%s)"
           now_epoch="$(date -u +%s)"
           if (( db_built_epoch > now_epoch || now_epoch - db_built_epoch > 259200 )); then
