@@ -1550,6 +1550,8 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotIn("id-token", publish_images["permissions"])
         self.assertIn("releases/tags/${tag}", publish_script)
         self.assertIn("packages/container/${name}/versions", publish_script)
+        self.assertIn(r"awk '/^HTTP\//", publish_script)
+        self.assertNotIn(r"awk '/^HTTP\\//", publish_script)
         self.assertLess(
             publish_script.index("release_status"),
             publish_script.index('crane copy "${staging}" "${public}"'),
