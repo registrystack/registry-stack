@@ -383,7 +383,7 @@ test('release-form claim tutorial keeps the live no-match result bounded', () =>
   assert.doesNotMatch(script, /project-record-exists/);
 });
 
-test('release-form claim tutorial continues the canonical v0.14.0 project live', () => {
+test('release-form claim tutorial continues the canonical v0.15.0 project live', () => {
   const tutorial = readFileSync(
     new URL('../src/content/docs/tutorials/verify-claim-registry-api.mdx', import.meta.url),
     'utf8',

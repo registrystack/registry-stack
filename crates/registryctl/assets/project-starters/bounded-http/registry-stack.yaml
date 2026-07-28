@@ -1,7 +1,7 @@
 version: 1
 starter:
   id: http
-  release: 0.13.0
+  release: 0.15.0
   content_digest: sha256:a4e0263957f3dd7756ef1a270483f4aa5f856102f070c6e0325e8cc9b1413b76
 
 registry:

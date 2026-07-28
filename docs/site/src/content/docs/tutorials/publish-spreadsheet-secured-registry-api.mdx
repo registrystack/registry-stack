@@ -56,10 +56,10 @@ perform its own stricter runtime and project checks before starting Relay.
 
 ## Install Registryctl
 
-Download and run the Registryctl 0.14.0 installer:
+Download and run the Registryctl 0.15.0 installer:
 
 ```sh
-tag=v0.14.0
+tag=v0.15.0
 curl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/registryctl-${tag}-install.sh"
 bash "./registryctl-${tag}-install.sh"
 registryctl --version
@@ -69,13 +69,13 @@ The installer reports its chosen install directory. The last command prints
 exactly:
 
 ```text
-registryctl 0.14.0
+registryctl 0.15.0
 ```
 
 The installer downloads release files over TLS and verifies their checksums.
 A checksum detects a damaged or mismatched download, but does not authenticate
 who published it. Follow the tag-frozen
-[release verification guide](https://github.com/registrystack/registry-stack/blob/v0.14.0/release/VERIFY.md)
+[release verification guide](https://github.com/registrystack/registry-stack/blob/v0.15.0/release/VERIFY.md)
 when you need signature and provenance verification before installation.
 
 If your shell cannot find `registryctl`, add the install directory reported by
@@ -95,7 +95,7 @@ Registryctl prints:
 ```text
 Initialized Registry Stack project "fictional-public-works-registry".
   Directory: my-first-api
-  Starter: spreadsheet (Registry Stack 0.14.0)
+  Starter: spreadsheet (Registry Stack 0.15.0)
   Starter content: matches bundled digest
   Editor support: VS Code and Zed (my-first-api/.registry-stack-editor/manifest.json)
 

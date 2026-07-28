@@ -1,7 +1,7 @@
 version: 1
 starter:
   id: snapshot
-  release: 0.13.0
+  release: 0.15.0
   content_digest: sha256:8fb0772e01333fd084974550f76829e829bc43f6e6941ac50d2e92522baadede
 registry: { id: fictional-population-registry }
 integrations:

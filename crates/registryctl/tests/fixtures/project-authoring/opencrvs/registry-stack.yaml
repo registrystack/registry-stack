@@ -1,7 +1,7 @@
 version: 1
 starter:
   id: opencrvs-dci
-  release: 0.13.0
+  release: 0.15.0
   content_digest: sha256:da86a8af6281e7a3552b009783ce83fe4574daf7d37b47568e232db0767cd842
 registry: { id: fictional-civil-registry }
 integrations:

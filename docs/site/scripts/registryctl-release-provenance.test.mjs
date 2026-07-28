@@ -15,7 +15,7 @@ async function readSite(relative) {
   return readFile(resolve(siteRoot, relative), 'utf8');
 }
 
-test('v0.14 release-form docs stay distinct from published v0.13 and current-source evidence', async () => {
+test('v0.15 release-form docs stay distinct from published v0.13 and current-source evidence', async () => {
   const [docsetsSource, generatedDocsetsSource, registryctl, configuration, tutorial, releaseSource] =
     await Promise.all([
       readSite('src/data/docsets.yaml'),

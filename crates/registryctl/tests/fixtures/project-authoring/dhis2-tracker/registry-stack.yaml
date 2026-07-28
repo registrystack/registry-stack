@@ -1,7 +1,7 @@
 version: 1
 starter:
   id: dhis2-tracker
-  release: 0.13.0
+  release: 0.15.0
   content_digest: sha256:7901a738c1a3fe216be4e6f5dcef17e5a1b30d65dc739a31bc9c8621f964dd8c
 registry: { id: fictional-health-registry }
 integrations:

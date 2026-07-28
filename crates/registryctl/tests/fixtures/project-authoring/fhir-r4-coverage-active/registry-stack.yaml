@@ -1,7 +1,7 @@
 version: 1
 starter:
   id: fhir-r4
-  release: 0.13.0
+  release: 0.15.0
   content_digest: sha256:b99bff37a59c34d90ee6d212b61fd5f50e0ec6995310f574c5020535ebbd4f8d
 registry: { id: fictional-fhir-registry }
 integrations:
