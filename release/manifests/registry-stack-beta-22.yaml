@@ -4,7 +4,7 @@ stack:
   source_repo: registrystack/registry-stack
   source_ref: 5da961bf965cc9bb0e962db8bd3b6055459a0d97
   source_tag: v0.15.2
-  status: release-candidate
+  status: released
 
 artifacts:
   registry-notary: 0.15.2
