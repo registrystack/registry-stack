@@ -53,6 +53,7 @@ jobs:
         id: request
         env:
           GH_TOKEN: ${{ github.token }}
+          REQUEST_EVENT_ACTION: ${{ github.event.action }}
           REQUEST_VERSION: ${{ github.event.client_payload.version }}
           REQUEST_RELEASE_ID: ${{ github.event.client_payload.release_id }}
           REQUEST_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
@@ -63,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" != "repository_dispatch" ||
-                "${GITHUB_EVENT_ACTION}" != "release_candidate" ]]; then
+                "${REQUEST_EVENT_ACTION}" != "release_candidate" ]]; then
             echo "Candidate workflow accepts only repository_dispatch:release_candidate" >&2
             exit 1
           fi
