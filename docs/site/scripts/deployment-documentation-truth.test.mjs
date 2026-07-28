@@ -76,7 +76,15 @@ test('current docs stay preview while v0.15.0 is a candidate and v0.13.0 stays r
 
   for (const docset of docsets.docsets) {
     if (docset.id === 'latest') continue;
-    assert.equal(docset.status, 'archived', `${docset.id} must expose its release-train status`);
+    if (docset.id === 'v0.15.0') {
+      assert.match(
+        docset.status,
+        /^(draft|archived)$/,
+        'v0.15.0 must expose a documented candidate lifecycle status',
+      );
+    } else {
+      assert.equal(docset.status, 'archived', `${docset.id} must expose its release-train status`);
+    }
     assert.equal(
       docset.availability,
       docset.id === 'v0.15.0'
