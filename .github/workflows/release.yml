@@ -905,32 +905,19 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.1
 
-      - name: Sign promoted release evidence
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/reconciliation
-          mapfile -d '' -t files < <(find dist/bin dist/binary-sbom \
-            dist/image-evidence dist/release-capsule -type f -print0 | sort -z)
-          if [[ "${#files[@]}" -eq 0 ]]; then
-            echo "No verified release files to sign" >&2
-            exit 1
-          fi
-          signed_subjects="dist/reconciliation/signed-subjects.sha256"
-          for file in "${files[@]}"; do
-            printf '%s  %s\n' "$(sha256sum "${file}" | awk '{print $1}')" \
-              "$(basename "${file}")" >> "${signed_subjects}"
-            cosign sign-blob --yes \
-              --output-signature "${file}.sig" \
-              --output-certificate "${file}.pem" \
-              "${file}"
-          done
-
       - name: Generate exact provenance subjects
         id: provenance-subjects
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p dist/reconciliation
+          if find dist/bin dist/binary-sbom dist/image-evidence \
+              dist/release-capsule -type f \
+              \( -name '*.sig' -o -name '*.pem' \) -print -quit \
+              | grep -q .; then
+            echo "Signature material exists before provenance subjects are frozen" >&2
+            exit 1
+          fi
           subjects="dist/reconciliation/provenance-subjects.sha256"
           while IFS= read -r -d '' file; do
             printf '%s  %s\n' "$(sha256sum "${file}" | awk '{print $1}')" \
@@ -957,6 +944,36 @@ jobs:
             length > 0 and
             (group_by(.name) | all(length == 1))
           ' dist/reconciliation/pre-provenance.json >/dev/null
+
+      - name: Sign promoted release evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/reconciliation
+          mapfile -d '' -t files < <(find dist/bin dist/binary-sbom \
+            dist/image-evidence dist/release-capsule -type f -print0 | sort -z)
+          if [[ "${#files[@]}" -eq 0 ]]; then
+            echo "No verified release files to sign" >&2
+            exit 1
+          fi
+          signed_subjects="dist/reconciliation/signed-subjects.sha256"
+          generated_signatures="dist/reconciliation/generated-signatures.sha256"
+          for file in "${files[@]}"; do
+            printf '%s  %s\n' "$(sha256sum "${file}" | awk '{print $1}')" \
+              "$(basename "${file}")" >> "${signed_subjects}"
+            cosign sign-blob --yes \
+              --output-signature "${file}.sig" \
+              --output-certificate "${file}.pem" \
+              "${file}"
+            for generated in "${file}.sig" "${file}.pem"; do
+              printf '%s  %s\n' \
+                "$(sha256sum "${generated}" | awk '{print $1}')" \
+                "$(basename "${generated}")" >> "${generated_signatures}"
+            done
+          done
+          cmp -s "${signed_subjects}" \
+            dist/reconciliation/provenance-subjects.sha256
+          test -s "${generated_signatures}"
 
       - name: Create immutable GitHub Release
         env:
@@ -1080,8 +1097,11 @@ jobs:
           set -euo pipefail
           tag="${{ needs.verify.outputs.tag }}"
           provenance="registry-stack-${tag}-release-provenance.intoto.jsonl"
-          jq -r '.[].name' reconciliation/pre-provenance.json \
-            | { cat; printf '%s\n' "${provenance}"; } | sort > expected-assets
+          {
+            jq -r '.[].name' reconciliation/pre-provenance.json
+            awk '{print $2}' reconciliation/generated-signatures.sha256
+            printf '%s\n' "${provenance}"
+          } | sort > expected-assets
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
             > release.json
           jq -r '.assets[].name' release.json | sort > actual-assets
@@ -1098,6 +1118,13 @@ jobs:
             test "${api_digest}" = "sha256:${actual_sha}"
           done < <(jq -r '.[] | [.name,.sha256] | @tsv' \
             reconciliation/pre-provenance.json)
+          while read -r expected_sha name; do
+            actual_sha="$(sha256sum "downloaded/${name}" | awk '{print $1}')"
+            test "${actual_sha}" = "${expected_sha}"
+            api_digest="$(jq -er --arg name "${name}" \
+              '.assets[] | select(.name==$name) | .digest' release.json)"
+            test "${api_digest}" = "sha256:${actual_sha}"
+          done < reconciliation/generated-signatures.sha256
           provenance_sha="$(sha256sum "downloaded/${provenance}" | awk '{print $1}')"
           test "$(jq -er --arg name "${provenance}" \
             '.assets[] | select(.name==$name) | .digest' release.json)" = \
