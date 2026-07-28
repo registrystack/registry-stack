@@ -1894,6 +1894,35 @@ class RegistryReleaseTest(unittest.TestCase):
             mismatch.stderr,
         )
 
+    def test_verify_registryctl_binary_version_does_not_require_pyyaml(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "registryctl"
+            binary.write_text(
+                "#!/bin/sh\nprintf 'registryctl 0.15.0\\n'\n", encoding="utf-8"
+            )
+            binary.chmod(0o755)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-S",
+                    str(TOOL),
+                    "verify-registryctl-binary-version",
+                    str(binary),
+                    "--version",
+                    "0.15.0",
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(
+            "verified registryctl binary version 0.15.0", result.stdout
+        )
+
     def test_render_registryctl_image_lock_rejects_wrong_repository_and_filename(
         self,
     ) -> None:
