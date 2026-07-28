@@ -5,6 +5,25 @@ use super::support::*;
 use super::{
     admin::*, auth::*, credentials::*, federation::*, http_contracts::*, oid4vci::*, preauth::*,
 };
+use registry_platform_audit::{AuditError, JsonlFileSink};
+
+async fn wait_for_audit_writer_shutdown(audit_path: &std::path::Path) {
+    const ATTEMPTS: usize = 100;
+    const RETRY_DELAY: Duration = Duration::from_millis(10);
+
+    for attempt in 1..=ATTEMPTS {
+        match JsonlFileSink::with_rotation_single_writer(audit_path, 0, 1) {
+            Ok(probe) => {
+                drop(probe);
+                return;
+            }
+            Err(AuditError::SinkLocked { .. }) if attempt < ATTEMPTS => {
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+            Err(error) => panic!("audit writer did not shut down cleanly: {error}"),
+        }
+    }
+}
 
 #[tokio::test]
 #[cfg(not(feature = "registry-notary-cel"))]
@@ -136,7 +155,7 @@ pub(super) async fn audit_chain_bootstraps_from_sink_tail() {
     // A restart releases the single-writer audit lock: the first instance must
     // be fully torn down before the replacement acquires the lock (#211).
     drop(first);
-    tokio::task::yield_now().await;
+    wait_for_audit_writer_shutdown(&audit_path).await;
 
     let second = TestServer::builder().mock_transport().build(
         standalone_router(config)
@@ -193,7 +212,7 @@ pub(super) async fn audit_chain_detects_inserted_envelope() {
     // A restart releases the single-writer audit lock before the replacement
     // instance acquires it (#211).
     drop(first);
-    tokio::task::yield_now().await;
+    wait_for_audit_writer_shutdown(&audit_path).await;
 
     let contents = std::fs::read_to_string(&audit_path).expect("audit was written");
     let mut lines = contents.lines().collect::<Vec<_>>();
@@ -239,7 +258,7 @@ pub(super) async fn standalone_router_verifies_audit_before_returning_readiness(
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
     drop(first);
-    tokio::task::yield_now().await;
+    wait_for_audit_writer_shutdown(&audit_path).await;
 
     let contents = std::fs::read_to_string(&audit_path).expect("audit was written");
     std::fs::write(
