@@ -25,6 +25,7 @@ function fixture(t, archivedHref) {
     'dist/v/v1/reference/standards/index.html',
     `<html><a href="${archivedHref}">Evidence</a></html>`,
   );
+  write(root, 'dist/v/v2/explanation/current/index.html', '<html id="archived"></html>');
   write(root, 'src/data/contracts.yaml', '[]\n');
   write(
     root,
@@ -49,6 +50,15 @@ docsets:
     source: v1
     published_at: 2026-07-25
     description: Archived docs.
+    products: {}
+  - id: v2
+    label: Version 2
+    path: /v/v2/
+    status: archived
+    availability: released
+    source: v2
+    published_at: 2026-07-24
+    description: Another archived docset.
     products: {}
 `,
   );
@@ -75,8 +85,34 @@ test('allows an archived standards page to cite root-relative current evidence',
   assert.match(result.stdout, /Built link check passed/);
 });
 
+test('allows archived navigation to the production current-docset mount', (t) => {
+  const result = run(fixture(t, '/preview/explanation/current/'));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Built link check passed/);
+});
+
+test('does not fall back when the production current-docset mount exists', (t) => {
+  const root = fixture(t, '/preview/explanation/current/');
+  write(root, 'dist/preview/index.html', '<html></html>');
+  const result = run(root);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /links to missing/);
+});
+
+test('allows archived navigation to another declared archive', (t) => {
+  const result = run(fixture(t, '/v/v2/explanation/current/'));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Built link check passed/);
+});
+
 test('keeps rejecting unrelated links that escape an archive', (t) => {
   const result = run(fixture(t, '/not-evidence/'));
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /links outside its archive/);
+});
+
+test('rejects paths that only share the production mount prefix', (t) => {
+  const result = run(fixture(t, '/preview-escape/explanation/current/'));
   assert.equal(result.status, 1);
   assert.match(result.stderr, /links outside its archive/);
 });

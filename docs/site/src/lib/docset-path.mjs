@@ -3,6 +3,8 @@ function normalizeRoot(path) {
   return normalized === '//' ? '/' : normalized;
 }
 
+export const CURRENT_PRODUCTION_DOCSET_PATH = '/preview/';
+
 function relativeToRoot(pathname, root) {
   const normalizedRoot = normalizeRoot(root);
   const rootWithoutSlash = normalizedRoot.replace(/\/$/, '');
@@ -23,7 +25,7 @@ export function pathForDocset(currentPath, activePath, targetPath, basePath = '/
     normalizedActive === '/' && normalizedTarget === normalizedActive
       ? normalizedBase
       : normalizedTarget === '/' && normalizedActive !== '/'
-        ? '/preview/'
+        ? CURRENT_PRODUCTION_DOCSET_PATH
         : normalizedTarget;
   const relativePath = relativeToRoot(currentPath, sourceRoot);
 

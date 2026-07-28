@@ -3,6 +3,7 @@ import { dirname, join, normalize, relative, resolve } from 'node:path';
 
 import { extractEvidenceUrlsFromYaml } from './check-evidence-links.mjs';
 import { loadDocsets } from './docsets.mjs';
+import { CURRENT_PRODUCTION_DOCSET_PATH } from '../src/lib/docset-path.mjs';
 
 const distDir = resolve(process.env.DOCS_DIST_DIR || 'dist');
 const attrPattern = /\s(?:href|src)=["']([^"']+)["']/g;
@@ -86,6 +87,25 @@ function targetPath(url) {
   return join(distDir, path);
 }
 
+function isWithinRoot(path, root) {
+  return path === root.slice(0, -1) || path.startsWith(root);
+}
+
+function resolveTarget(path) {
+  const target = targetPath(path);
+  if (
+    productionCurrentMountExists ||
+    !isWithinRoot(path, CURRENT_PRODUCTION_DOCSET_PATH)
+  ) {
+    return target;
+  }
+
+  const relativePath = path === CURRENT_PRODUCTION_DOCSET_PATH.slice(0, -1)
+    ? '/'
+    : `/${path.slice(CURRENT_PRODUCTION_DOCSET_PATH.length)}`;
+  return targetPath(relativePath);
+}
+
 async function currentEvidencePaths() {
   const paths = new Set();
   const dataDir = join('src', 'data');
@@ -104,13 +124,19 @@ const idsByFile = new Map();
 const evidencePaths = await currentEvidencePaths();
 const scope = scopeFromArgs(process.argv.slice(2));
 const archivedRootPattern = /^\/v\/[^/]+\//;
-const archivedRoots = scope === 'current'
-  ? new Set(
-    (await loadDocsets()).docsets
-      .filter((docset) => docset.status === 'archived')
-      .map((docset) => docset.path),
-  )
-  : new Set();
+const productionCurrentMountExists = await exists(
+  targetPath(CURRENT_PRODUCTION_DOCSET_PATH),
+);
+const docsets = await loadDocsets();
+const archivedRoots = new Set(
+  docsets.docsets
+    .filter((docset) => docset.status === 'archived')
+    .map((docset) => docset.path),
+);
+const declaredArchiveDestinations = new Set([
+  CURRENT_PRODUCTION_DOCSET_PATH,
+  ...archivedRoots,
+]);
 
 const files = (await htmlFiles(distDir)).filter(
   (file) => scope === 'all' || archiveRoot(file) === null,
@@ -128,12 +154,14 @@ for (const file of files) {
   for (const match of html.matchAll(attrPattern)) {
     const raw = match[1];
     const root = archiveRoot(file);
+    const rawPath = splitUrl(raw)[0];
     if (
       root &&
       raw.startsWith('/') &&
       raw !== '/' &&
-      !raw.startsWith(root) &&
-      !evidencePaths.has(splitUrl(raw)[0]) &&
+      !isWithinRoot(rawPath, root) &&
+      !evidencePaths.has(rawPath) &&
+      ![...declaredArchiveDestinations].some((path) => isWithinRoot(rawPath, path)) &&
       !isExternal(raw)
     ) {
       errors.push(`${relative('.', file)} links outside its archive: ${raw}`);
@@ -153,7 +181,7 @@ for (const file of files) {
 
     checked += 1;
     const [path, fragment] = splitUrl(url);
-    const target = targetPath(path);
+    const target = resolveTarget(path);
     if (!await exists(target)) {
       errors.push(`${relative('.', file)} links to missing ${raw}`);
       continue;
