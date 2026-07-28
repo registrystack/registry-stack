@@ -1435,8 +1435,9 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotIn("write", verification["permissions"].values())
         self.assertIn("--release-id", verification_script)
         self.assertIn(
-            'test "$(git rev-parse refs/remotes/origin/main)" = \\\n'
-            '  "${{ steps.release.outputs.tag_target }}"',
+            'if [[ "${GITHUB_EVENT_NAME}" != "repository_dispatch" ]]; then\n'
+            '  test "$(git rev-parse refs/remotes/origin/main)" = \\\n'
+            '    "${{ steps.release.outputs.tag_target }}"',
             source_verification,
         )
         self.assertEqual("read", publish_images["permissions"]["contents"])

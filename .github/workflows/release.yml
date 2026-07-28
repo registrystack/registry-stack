@@ -4,12 +4,14 @@ on:
   push:
     tags:
       - "v*"
+  repository_dispatch:
+    types: [release_recovery]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.client_payload.tag || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -44,16 +46,19 @@ jobs:
       - name: Checkout annotated release tag
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
         with:
+          ref: ${{ github.event.client_payload.tag || github.ref }}
           fetch-depth: 0
           submodules: false
           persist-credentials: false
 
       - name: Resolve exact release identity
         id: release
+        env:
+          REQUESTED_TAG: ${{ github.event.client_payload.tag || '' }}
         shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tag="${REQUESTED_TAG:-${GITHUB_REF_NAME}}"
           if [[ ! "${tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "Release tag must be canonical semantic version text" >&2
             exit 1
@@ -108,9 +113,10 @@ jobs:
           from pathlib import Path
           import release_candidate
 
-          binding = release_candidate.parse_tag_binding(
-              Path(sys.argv[1]).read_text(encoding="utf-8")
-          )
+          message = Path(sys.argv[1]).read_text(encoding="utf-8")
+          if message.endswith("\n\n"):
+              message = message[:-1]
+          binding = release_candidate.parse_tag_binding(message)
           with Path(sys.argv[2]).open("a", encoding="utf-8") as handle:
               for field in ("run_id", "run_attempt", "receipt_sha256"):
                   handle.write(f"{field}={binding[field]}\n")
@@ -132,10 +138,12 @@ jobs:
           set -euo pipefail
           git fetch --force origin refs/heads/main:refs/remotes/origin/main
           test "$(git rev-parse HEAD)" = "${{ steps.release.outputs.tag_target }}"
-          test "$(git rev-parse refs/remotes/origin/main)" = \
-            "${{ steps.release.outputs.tag_target }}"
           git merge-base --is-ancestor \
             "${{ steps.release.outputs.tag_target }}" refs/remotes/origin/main
+          if [[ "${GITHUB_EVENT_NAME}" != "repository_dispatch" ]]; then
+            test "$(git rev-parse refs/remotes/origin/main)" = \
+              "${{ steps.release.outputs.tag_target }}"
+          fi
           release/scripts/registry-release validate \
             "${{ steps.release.outputs.manifest }}"
           release/scripts/registry-release validate-docsets
@@ -280,6 +288,16 @@ jobs:
           gh api \
             "/repos/${GITHUB_REPOSITORY}/actions/runs/${EXPECTED_RUN_ID}/artifacts?per_page=100" \
             > promotion/control/artifact-metadata.json
+          if [[ "${GITHUB_EVENT_NAME}" == "repository_dispatch" ]]; then
+            jq '
+              .artifacts |= map(
+                select((.name | startswith("registry-stack-candidate-cli-")) | not)
+              )
+            ' promotion/control/artifact-metadata.json \
+              > promotion/control/artifact-metadata.filtered.json
+            mv promotion/control/artifact-metadata.filtered.json \
+              promotion/control/artifact-metadata.json
+          fi
           python3 release/scripts/release_candidate.py verify-attempt-artifacts \
             --artifact-metadata promotion/control/artifact-metadata.json \
             --run-id "${EXPECTED_RUN_ID}" \
