@@ -28,6 +28,9 @@ invalid immutable image topology, an unreviewed advisory, or any source and
 artifact binding mismatch. Extended proof is additional evidence produced by
 the separate repeatability workflow, not a second build in the blocking
 candidate path.
+Grype process status is not itself the advisory decision. The candidate first
+requires a complete scan report, then the reviewed advisory policy decides
+whether that report is acceptable.
 
 The selector writes `registry-stack.release-proof-selection.v1` JSON into the
 candidate evidence.

@@ -696,6 +696,19 @@ class RegistryReleaseTest(unittest.TestCase):
         upload_step = images_job.index("Upload exact candidate payload")
         self.assertLess(scan_step, enforcement_step)
         self.assertLess(enforcement_step, upload_step)
+        scan_body = images_job[scan_step:enforcement_step]
+        self.assertIn("scan_sbom() {", scan_body)
+        self.assertIn("set +e", scan_body)
+        self.assertIn('status=$?', scan_body)
+        self.assertIn('(.matches | type == "array")', scan_body)
+        self.assertIn(
+            "Grype did not emit a complete scan report",
+            scan_body,
+        )
+        self.assertIn(
+            "enforcing its complete report through the reviewed advisory policy",
+            scan_body,
+        )
         self.assertIn(
             "grype dist/candidate/dist/grype/registry-notary.grype.json",
             images_job,
