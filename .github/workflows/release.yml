@@ -114,9 +114,9 @@ jobs:
           import release_candidate
 
           message = Path(sys.argv[1]).read_text(encoding="utf-8")
-          if message.endswith("\n\n"):
-              message = message[:-1]
-          binding = release_candidate.parse_tag_binding(message)
+          if not message.endswith("\n"):
+              raise SystemExit("git for-each-ref did not emit a record separator")
+          binding = release_candidate.parse_tag_binding(message[:-1])
           with Path(sys.argv[2]).open("a", encoding="utf-8") as handle:
               for field in ("run_id", "run_attempt", "receipt_sha256"):
                   handle.write(f"{field}={binding[field]}\n")
@@ -373,6 +373,16 @@ jobs:
           git for-each-ref --format='%(contents)' \
             "refs/tags/${{ needs.verify.outputs.tag }}" \
             > promotion/control/tag-message
+          python3 - promotion/control/tag-message <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          message = path.read_text(encoding="utf-8")
+          if not message.endswith("\n"):
+              raise SystemExit("git for-each-ref did not emit a record separator")
+          path.write_text(message[:-1], encoding="utf-8")
+          PY
           python3 release/scripts/release_candidate.py verify-tag-binding \
             --message promotion/control/tag-message \
             --receipt "${receipt}" \

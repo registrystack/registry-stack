@@ -1459,6 +1459,22 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("reconcile", extended["needs"])
         self.assertNotRegex(text, r"(?m)^\s*git (?:push|tag|update-ref)\b")
 
+    def test_release_workflow_removes_for_each_ref_record_separators(self) -> None:
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        )
+        scripts = [
+            step["run"]
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if "git for-each-ref --format='%(contents)'" in step.get("run", "")
+        ]
+
+        self.assertEqual(2, len(scripts))
+        for script in scripts:
+            self.assertIn('message.endswith("\\n")', script)
+            self.assertIn("message[:-1]", script)
+
     def test_release_workflow_publishes_digest_bound_release_file_sboms(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         candidate = (ROOT / ".github/workflows/release-candidate.yml").read_text(
@@ -1618,7 +1634,7 @@ class RegistryReleaseTest(unittest.TestCase):
         result = run_tool("validate-docsets")
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("validated 12 versioned docsets", result.stdout)
+        self.assertIn("validated 13 versioned docsets", result.stdout)
 
     def test_validate_docsets_rejects_external_ref_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

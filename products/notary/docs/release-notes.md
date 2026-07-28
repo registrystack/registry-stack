@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.15.1
+
+- Registry Notary has no user-visible changes. This release fixes forward from
+  the failed v0.15.0 publication workflow.
+
 ## 0.15.0
 
 - Registry Notary now requires every configured CEL worker to complete one

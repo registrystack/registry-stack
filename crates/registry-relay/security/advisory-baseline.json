@@ -124,7 +124,7 @@
         "severity_changed"
       ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.0 candidate changed only the two first-party Relay binaries in the enforced closure; every native runtime file retained its reviewed digest. The service still has only the reviewed fixed-format AWS-LC sscanf exposure and no effective vulnerable %mc conversion. Every file in both candidate executable closures remains digest-enforced because dynamic-symbol absence cannot truthfully express a format-string invariant.",
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.1 candidate changed only the two first-party Relay binaries in the enforced closure; every native runtime file retained its reviewed digest. The service still has only the reviewed fixed-format AWS-LC sscanf exposure and no effective vulnerable %mc conversion. Every file in both candidate executable closures remains digest-enforced because dynamic-symbol absence cannot truthfully express a format-string invariant.",
       "reviewed_at": "2026-07-28",
       "expires_at": "2026-08-28"
     },
@@ -224,7 +224,7 @@
         "severity_changed"
       ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.0 candidate changed only the two first-party Relay binaries in the enforced closure; every native runtime file, including the out-of-closure libstdc++ object that imports ungetwc, retained its reviewed digest. Neither first-party binary directly imports ungetwc. A static dynamic-symbol assertion remains incomplete because the executables import dlsym.",
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.1 candidate changed only the two first-party Relay binaries in the enforced closure; every native runtime file, including the out-of-closure libstdc++ object that imports ungetwc, retained its reviewed digest. Neither first-party binary directly imports ungetwc. A static dynamic-symbol assertion remains incomplete because the executables import dlsym.",
       "reviewed_at": "2026-07-28",
       "expires_at": "2026-08-28"
     },
@@ -324,7 +324,7 @@
         "severity_changed"
       ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed upstream or Trixie version. The v0.15.0 candidate changed only the two first-party Relay binaries in the enforced closure; every native runtime file, including libresolv, retained its reviewed digest. Neither first-party binary directly imports ns_printrrf, ns_printrr, or fp_nquery. A static dynamic-symbol assertion remains incomplete because the executables import dlsym.",
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed upstream or Trixie version. The v0.15.1 candidate changed only the two first-party Relay binaries in the enforced closure; every native runtime file, including libresolv, retained its reviewed digest. Neither first-party binary directly imports ns_printrrf, ns_printrr, or fp_nquery. A static dynamic-symbol assertion remains incomplete because the executables import dlsym.",
       "reviewed_at": "2026-07-28",
       "expires_at": "2026-08-28"
     }

@@ -124,7 +124,7 @@
         "severity_changed"
       ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.0 candidate rereview found that only the service binaries changed and every native closure dependency remained identical. Registry Notary still imports __isoc23_sscanf through the unchanged aws-lc dependency, whose reviewed call sites retain only fixed-format %lu and %lx conversions; neither exact candidate binary contains an effective vulnerable %mc format. Every file in both candidate executable closures remains digest-enforced because dynamic-symbol absence cannot truthfully express a format-string invariant.",
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.1 candidate rereview found that only the service binaries changed and every native closure dependency remained identical. Registry Notary still imports __isoc23_sscanf through the unchanged aws-lc dependency, whose reviewed call sites retain only fixed-format %lu and %lx conversions; neither exact candidate binary contains an effective vulnerable %mc format. Every file in both candidate executable closures remains digest-enforced because dynamic-symbol absence cannot truthfully express a format-string invariant.",
       "reviewed_at": "2026-07-28",
       "expires_at": "2026-08-28"
     },
@@ -224,7 +224,7 @@
         "severity_changed"
       ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.0 candidate rereview found that only the service binaries changed, every native closure dependency remained identical, and neither executable directly imports ungetwc. Every file in both candidate executable closures plus the out-of-closure libstdc++ object that imports ungetwc remains digest-enforced. A static dynamic-symbol assertion is incomplete because registry-notary imports dlsym.",
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no Trixie fix. The v0.15.1 candidate rereview found that only the service binaries changed, every native closure dependency remained identical, and neither executable directly imports ungetwc. Every file in both candidate executable closures plus the out-of-closure libstdc++ object that imports ungetwc remains digest-enforced. A static dynamic-symbol assertion is incomplete because registry-notary imports dlsym.",
       "reviewed_at": "2026-07-28",
       "expires_at": "2026-08-28"
     },
@@ -324,7 +324,7 @@
         "severity_changed"
       ],
       "owner": "@jeremi",
-      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed upstream or Trixie version. The v0.15.0 candidate rereview found that only the service binaries changed, every native closure dependency remained identical, and neither executable directly imports ns_printrrf, ns_printrr, or fp_nquery. Every file in both candidate executable closures plus libresolv remains digest-enforced. A static dynamic-symbol assertion is incomplete because registry-notary imports dlsym.",
+      "reason": "Debian classifies the Trixie issue as minor/no-DSA and has no fixed upstream or Trixie version. The v0.15.1 candidate rereview found that only the service binaries changed, every native closure dependency remained identical, and neither executable directly imports ns_printrrf, ns_printrr, or fp_nquery. Every file in both candidate executable closures plus libresolv remains digest-enforced. A static dynamic-symbol assertion is incomplete because registry-notary imports dlsym.",
       "reviewed_at": "2026-07-28",
       "expires_at": "2026-08-28"
     }

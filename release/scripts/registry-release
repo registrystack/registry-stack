@@ -2528,6 +2528,7 @@ def download_candidate_artifact(
     *,
     expected_archive_sha256: str,
 ) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
     archive = destination.parent / f"artifact-{artifact_id}.zip"
     download_gh_api_bytes(
         f"repos/{repository}/actions/artifacts/{artifact_id}/zip",
@@ -2543,6 +2544,8 @@ def download_candidate_artifact(
         raise ReleasePlanError(
             f"cannot verify candidate artifact {artifact_id}: {exc}"
         ) from exc
+    finally:
+        archive.unlink(missing_ok=True)
 
 
 def verify_candidate_run_for_finalize(
