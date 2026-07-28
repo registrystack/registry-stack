@@ -2,9 +2,9 @@ stack:
   release: beta-21
   version: 0.15.1
   source_repo: registrystack/registry-stack
-  source_ref: cef8fb90d67e741aba8999d552ffcd31fbe7933d
+  source_ref: d609d15207cc75d1e1f50929c519582b3e141f6f
   source_tag: v0.15.1
-  status: draft
+  status: release-candidate
 
 artifacts:
   registry-notary: 0.15.1
@@ -24,9 +24,6 @@ external:
     status: tested external input
 
 warnings:
-  - code: draft-source-ref
-    classification: release-preparation
-    detail: The fix-forward source ref intentionally points at the protected-main base until this preparation merges; the finalization change will replace it with the exact merge commit before candidate dispatch.
   - code: prior-tag-publication-failed
     classification: failed-train-recorded
     detail: The immutable v0.15.0 tag exists, but its workflow failed before any public write because the frozen workflow did not remove Git's for-each-ref record separator before parsing the candidate binding. This release fixes forward without retagging.
