@@ -2,7 +2,7 @@ stack:
   release: beta-21
   version: 0.15.1
   source_repo: registrystack/registry-stack
-  source_ref: 547ecb3e3a088f00b4101ac3e4244bd9a925075c
+  source_ref: cef8fb90d67e741aba8999d552ffcd31fbe7933d
   source_tag: v0.15.1
   status: draft
 
