@@ -59,8 +59,6 @@ RECORDS_URL = "http://127.0.0.1:4242/v1/datasets/projects/entities/projects/reco
 RELAY_LISTENER = "127.0.0.1:4242"
 NOTARY_LISTENER = "127.0.0.1:4255"
 RECORDS_PURPOSE = "public-works-case-management"
-CANONICAL_WORKBOOK_PROJECT_FILE = "data/public_works_projects.xlsx"
-CANONICAL_WORKBOOK_RUNTIME_PATH = "/data/public_works_projects.xlsx"
 MATCH_KEY_ENV = "REGISTRYCTL_LOCAL_RELAY_MATCH_KEY_RAW"
 NO_MATCH_KEY_ENV = "REGISTRYCTL_LOCAL_RELAY_NO_MATCH_KEY_RAW"
 MATCH_FIELDS = {"project_id", "district_code", "sector", "status"}
@@ -103,41 +101,6 @@ SMOKE_EVIDENCE = {
         {"name": name, "http_status": status}
         for name, status in {**RELAY_SMOKE_OUTCOMES, **NOTARY_SMOKE_OUTCOMES}.items()
     ],
-}
-NOTARY_MANIFEST_DIGEST_PATHS = {
-    "consultation_relay_config_digest": (
-        ".registry-stack/build/local/private/relay/config/relay-consultation.yaml"
-    ),
-    "runtime_consultation_relay_config_digest": (
-        ".registry-stack/runtime/local/private/relay/config/relay-consultation.yaml"
-    ),
-    "compiled_notary_config_digest": (
-        ".registry-stack/build/local/private/notary/config/notary.yaml"
-    ),
-    "runtime_notary_config_digest": (
-        ".registry-stack/runtime/local/private/notary/config/notary.yaml"
-    ),
-    "postgres_ca_digest": (
-        ".registry-stack/runtime/local/private/relay/config/state-plane-ca.pem"
-    ),
-    "database_init_digest": ".registry-stack/runtime/local/private/db/init.sh",
-    "workload_jwks_digest": (
-        ".registry-stack/runtime/local/private/workload/jwks.json"
-    ),
-    "consultation_relay_env_digest": (
-        ".registry-stack/runtime/local/secrets/relay-consultation.env"
-    ),
-    "relay_bootstrap_env_digest": (
-        ".registry-stack/runtime/local/secrets/relay-bootstrap.env"
-    ),
-    "notary_env_digest": ".registry-stack/runtime/local/secrets/notary.env",
-    "postgres_env_digest": ".registry-stack/runtime/local/secrets/postgres.env",
-    "workload_token_digest": (
-        ".registry-stack/runtime/local/secrets/relay-workload-token"
-    ),
-    "workload_private_jwk_digest": (
-        ".registry-stack/runtime/local/secrets/workload-private.jwk"
-    ),
 }
 SECRET_FILES = {
     "local_env": "local.env",
@@ -622,17 +585,6 @@ def digest_uri(path: Path) -> str:
     return f"sha256:{sha256(path)}"
 
 
-def require_manifest_digest(
-    manifest: dict[str, Any],
-    field: str,
-    path: Path,
-) -> None:
-    if manifest.get(field) != digest_uri(path):
-        raise ReleaseFormError(
-            f"canonical runtime manifest does not bind {field}"
-        )
-
-
 def read_runtime_inspection(
     project: Path,
     *,
@@ -659,90 +611,49 @@ def read_runtime_inspection(
     expected_topology = (
         "combined_notary" if expected_notary_image is not None else "relay_only"
     )
-    expected_keys = {
+    # registryctl start and smoke validate the internal runtime contract. Keep
+    # this release-form check limited to the identity recorded as evidence.
+    required_keys = {
         "schema_version",
         "environment",
         "relay_image",
-        "compose_digest",
-        "artifact_manifest_digest",
-        "relay_config_digest",
-        "workbook_digest",
         "workbook_classification",
-        "workbook_project_file",
-        "workbook_runtime_path",
-        "match_principal",
-        "runtime_uid",
-        "runtime_gid",
-        "runtime_files",
         "topology",
     }
     if expected_notary_image is not None:
-        expected_keys.add("notary")
-    if not isinstance(runtime_manifest, dict) or set(runtime_manifest) != expected_keys:
-        raise ReleaseFormError("canonical runtime manifest fields are not closed")
+        required_keys.add("notary")
+    if (
+        not isinstance(runtime_manifest, dict)
+        or not required_keys.issubset(runtime_manifest)
+    ):
+        raise ReleaseFormError(
+            "canonical runtime manifest is missing required evidence fields"
+        )
     if (
         runtime_manifest.get("schema_version") != "registryctl.local_runtime.v2"
         or runtime_manifest.get("environment") != "local"
         or runtime_manifest.get("relay_image") != expected_relay_image
         or runtime_manifest.get("workbook_classification")
         != "operator_owned_source_data"
-        or not isinstance(runtime_manifest.get("match_principal"), str)
-        or not runtime_manifest["match_principal"]
-        or not isinstance(runtime_manifest.get("runtime_uid"), str)
-        or not runtime_manifest["runtime_uid"].isdigit()
-        or runtime_manifest.get("runtime_uid") == "0"
-        or not isinstance(runtime_manifest.get("runtime_gid"), str)
-        or not runtime_manifest["runtime_gid"].isdigit()
-        or runtime_manifest.get("runtime_gid") == "0"
-        or not isinstance(runtime_manifest.get("runtime_files"), dict)
-        or not runtime_manifest["runtime_files"]
         or runtime_manifest.get("topology") != expected_topology
     ):
         raise ReleaseFormError(
-            "canonical runtime identity, topology, or workbook classification is invalid"
+            "canonical runtime release identity, topology, or workbook classification is invalid"
         )
-    require_manifest_digest(runtime_manifest, "relay_config_digest", relay_config)
-    require_manifest_digest(runtime_manifest, "compose_digest", compose)
-    artifact_manifest = project / ".registry-stack/build/local/artifact-manifest.json"
-    require_manifest_digest(
-        runtime_manifest, "artifact_manifest_digest", artifact_manifest
-    )
-    workbook_project_file = runtime_manifest.get("workbook_project_file")
-    workbook_runtime_path = runtime_manifest.get("workbook_runtime_path")
-    if (
-        workbook_project_file != CANONICAL_WORKBOOK_PROJECT_FILE
-        or workbook_runtime_path != CANONICAL_WORKBOOK_RUNTIME_PATH
-    ):
-        raise ReleaseFormError(
-            "canonical runtime does not bind the maintained spreadsheet starter"
-        )
-    require_manifest_digest(
-        runtime_manifest,
-        "workbook_digest",
-        project / workbook_project_file,
-    )
     notary = runtime_manifest.get("notary")
     if expected_notary_image is None:
         if notary is not None or expected_postgresql_image is not None:
             raise ReleaseFormError("Relay-only canonical runtime contains Notary state")
     else:
-        expected_notary_keys = {
-            "notary_image",
-            "postgresql_image",
-            *NOTARY_MANIFEST_DIGEST_PATHS,
-        }
         if (
             expected_postgresql_image is None
             or not isinstance(notary, dict)
-            or set(notary) != expected_notary_keys
             or notary.get("notary_image") != expected_notary_image
             or notary.get("postgresql_image") != expected_postgresql_image
         ):
             raise ReleaseFormError(
                 "combined canonical runtime Notary manifest is incomplete"
             )
-        for field, relative in NOTARY_MANIFEST_DIGEST_PATHS.items():
-            require_manifest_digest(notary, field, project / relative)
     return {
         "relay_config_sha256": sha256(relay_config),
         "runtime_manifest_sha256": sha256(manifest),

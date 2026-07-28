@@ -176,16 +176,14 @@ class FirstCountryReleaseFormTest(TestCase):
     def write_combined_runtime(self) -> Path:
         files = {
             ".registry-stack/build/local/private/relay/config/relay.yaml": "relay\n",
+            ".registry-stack/build/local/private/notary/config/notary.yaml": (
+                "notary\n"
+            ),
             ".registry-stack/build/local/artifact-manifest.json": "artifacts\n",
             "data/public_works_projects.xlsx": "workbook\n",
             ".registry-stack/runtime/local/compose.yaml": "services: {}\n",
+            ".registry-stack/runtime/local/secrets/local.env": "secret\n",
         }
-        files.update(
-            {
-                relative: f"{field}\n"
-                for field, relative in self.module.NOTARY_MANIFEST_DIGEST_PATHS.items()
-            }
-        )
         for relative, contents in files.items():
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -222,10 +220,6 @@ class FirstCountryReleaseFormTest(TestCase):
             "notary": {
                 "notary_image": self.notary,
                 "postgresql_image": self.postgresql,
-                **{
-                    field: self.module.digest_uri(self.root / relative)
-                    for field, relative in self.module.NOTARY_MANIFEST_DIGEST_PATHS.items()
-                },
             },
         }
         path = self.root / ".registry-stack/runtime/local/manifest.json"
@@ -517,15 +511,17 @@ class FirstCountryReleaseFormTest(TestCase):
                 expected_postgresql_image=self.postgresql,
             )
 
-    def test_runtime_inspection_rejects_unbound_notary_config(self) -> None:
+    def test_runtime_inspection_rejects_wrong_notary_image(self) -> None:
         path = self.write_combined_runtime()
         manifest = json.loads(path.read_text(encoding="utf-8"))
-        manifest["notary"]["runtime_notary_config_digest"] = "sha256:" + "0" * 64
+        manifest["notary"]["notary_image"] = (
+            "ghcr.io/registrystack/registry-notary@sha256:" + "0" * 64
+        )
         path.write_text(json.dumps(manifest), encoding="utf-8")
 
         with self.assertRaisesRegex(
             self.module.ReleaseFormError,
-            "does not bind runtime_notary_config_digest",
+            "Notary manifest is incomplete",
         ):
             self.module.read_runtime_inspection(
                 self.root,
