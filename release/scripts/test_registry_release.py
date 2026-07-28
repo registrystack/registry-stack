@@ -765,7 +765,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("retention-days: 7", images_job[upload_step:])
 
     def test_postgresql_advisory_policy_fails_closed(self) -> None:
-        digest = "sha256:" + "b" * 64
+        digest = "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
         layer = "sha256:" + "c" * 64
         image_ref = f"docker.io/library/postgres@{digest}"
         target = {
@@ -797,6 +797,7 @@ class RegistryReleaseTest(unittest.TestCase):
                 fix: dict[str, object],
                 grype_artifact: dict[str, object] | None = None,
                 syft_artifact: dict[str, object] | None = None,
+                expected_image: str = image_ref,
             ) -> subprocess.CompletedProcess[str]:
                 grype_artifact = grype_artifact or artifact
                 syft_artifact = syft_artifact or artifact
@@ -840,7 +841,7 @@ class RegistryReleaseTest(unittest.TestCase):
                         "--rootfs",
                         str(rootfs),
                         "--expected-image",
-                        image_ref,
+                        expected_image,
                     ],
                     cwd=ROOT,
                     capture_output=True,
@@ -873,6 +874,64 @@ class RegistryReleaseTest(unittest.TestCase):
                 {**artifact, "foundBy": "grype-only-metadata"},
             )
             self.assertEqual(0, extra_metadata_result.returncode, extra_metadata_result.stderr)
+
+            empty_fix_state_result = run_checker(
+                "Low", {"versions": [], "state": ""}
+            )
+            self.assertEqual(
+                0,
+                empty_fix_state_result.returncode,
+                empty_fix_state_result.stderr,
+            )
+
+            gosu_artifact = {
+                "id": "gosu-stdlib",
+                "name": "stdlib",
+                "version": "go1.24.6",
+                "type": "go-module",
+                "locations": [{"path": "/usr/local/bin/gosu", "layerID": layer}],
+            }
+            gosu_result = run_checker(
+                "Critical",
+                {"versions": ["1.24.13"], "state": "fixed"},
+                gosu_artifact,
+                gosu_artifact,
+            )
+            self.assertEqual(0, gosu_result.returncode, gosu_result.stderr)
+
+            other_image = "docker.io/library/postgres@sha256:" + "e" * 64
+            target["userInput"] = other_image
+            target["repoDigests"] = [other_image]
+            unreviewed_gosu_result = run_checker(
+                "Critical",
+                {"versions": ["1.24.13"], "state": "fixed"},
+                gosu_artifact,
+                gosu_artifact,
+                expected_image=other_image,
+            )
+            self.assertEqual(1, unreviewed_gosu_result.returncode)
+            self.assertIn(
+                "blocking finding: CVE-2026-0001 severity=Critical",
+                unreviewed_gosu_result.stderr,
+            )
+            target["userInput"] = image_ref
+            target["repoDigests"] = [image_ref]
+
+            other_go_binary = {
+                **gosu_artifact,
+                "locations": [{"path": "/usr/local/bin/other", "layerID": layer}],
+            }
+            other_go_binary_result = run_checker(
+                "Critical",
+                {"versions": ["1.24.13"], "state": "fixed"},
+                other_go_binary,
+                other_go_binary,
+            )
+            self.assertEqual(1, other_go_binary_result.returncode)
+            self.assertIn(
+                "blocking finding: CVE-2026-0001 severity=Critical",
+                other_go_binary_result.stderr,
+            )
 
             target["repoDigests"] = [
                 f"index.docker.io/library/postgres@{digest}"
