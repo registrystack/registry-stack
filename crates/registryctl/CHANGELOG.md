@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-07-28
+
+- No user-visible Registryctl changes. This release fixes forward from the
+  failed v0.15.0 publication workflow.
+
 ## [0.15.0] - 2026-07-28
 
 ### Added

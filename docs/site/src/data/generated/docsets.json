@@ -31,6 +31,47 @@
       }
     },
     {
+      "id": "v0.15.1",
+      "label": "v0.15.1",
+      "path": "/v/0.15.1/",
+      "status": "draft",
+      "availability": "unreleased",
+      "source": "registry-stack-v0.15.1",
+      "repo_docs_source": "monorepo",
+      "published_at": "2026-07-28",
+      "description": "Registry Stack v0.15.1 beta-21 fix-forward candidate documentation set pinned to its prepared source.",
+      "products": {
+        "registry-stack": {
+          "version": "v0.15.1",
+          "ref": "cef8fb90d67e741aba8999d552ffcd31fbe7933d"
+        },
+        "registry-platform": {
+          "version": "v0.15.1",
+          "ref": "cef8fb90d67e741aba8999d552ffcd31fbe7933d"
+        },
+        "registry-manifest": {
+          "version": "v0.15.1",
+          "ref": "cef8fb90d67e741aba8999d552ffcd31fbe7933d"
+        },
+        "registry-notary": {
+          "version": "v0.15.1",
+          "ref": "cef8fb90d67e741aba8999d552ffcd31fbe7933d"
+        },
+        "registry-relay": {
+          "version": "v0.15.1",
+          "ref": "cef8fb90d67e741aba8999d552ffcd31fbe7933d"
+        },
+        "registry-registryctl": {
+          "version": "v0.15.1",
+          "ref": "cef8fb90d67e741aba8999d552ffcd31fbe7933d"
+        },
+        "crosswalk": {
+          "version": "crosswalk-core-v0.2.0",
+          "ref": "1d44ec735fdc8a7c719264b339574371e8330337"
+        }
+      }
+    },
+    {
       "id": "v0.15.0",
       "label": "v0.15.0",
       "path": "/v/0.15.0/",

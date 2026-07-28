@@ -22,7 +22,7 @@ const currentActivationPages = [
   'products/notary/docs/deployment-hardening-runbook.md',
 ];
 
-test('current docs stay preview while v0.15.0 is a candidate and v0.13.0 stays released', async () => {
+test('current docs stay preview while v0.15.1 advances and v0.13.0 stays released', async () => {
   const [docsets, repoDocs, generatedDocsets] = await Promise.all([
     readYaml('docs/site/src/data/docsets.yaml'),
     readYaml('docs/site/src/data/repo-docs.yaml'),
@@ -76,22 +76,28 @@ test('current docs stay preview while v0.15.0 is a candidate and v0.13.0 stays r
 
   for (const docset of docsets.docsets) {
     if (docset.id === 'latest') continue;
-    if (docset.id === 'v0.15.0') {
+    if (docset.id === 'v0.15.1') {
       assert.match(
         docset.status,
         /^(draft|archived)$/,
-        'v0.15.0 must expose a documented candidate lifecycle status',
+        'v0.15.1 must expose a documented candidate lifecycle status',
       );
     } else {
       assert.equal(docset.status, 'archived', `${docset.id} must expose its release-train status`);
     }
+    const expectedAvailability =
+      docset.id === 'v0.15.1'
+        ? docset.status === 'draft'
+          ? 'unreleased'
+          : 'candidate'
+        : docset.id === 'v0.15.0'
+          ? 'candidate'
+          : docset.id.startsWith('v')
+            ? 'released'
+            : 'candidate';
     assert.equal(
       docset.availability,
-      docset.id === 'v0.15.0'
-        ? 'candidate'
-        : docset.id.startsWith('v')
-          ? 'released'
-          : 'candidate',
+      expectedAvailability,
       `${docset.id} must expose release availability`,
     );
   }

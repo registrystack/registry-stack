@@ -58,7 +58,7 @@ node "$HELPER" assert-layout "$TUTORIAL" \
 	'["Before you start","Install Registryctl","Create the sample project","Check your computer and project","Start the API","Check the API","Make one denied request","Make one allowed request","Make one allowed request","See what you can edit","Stop and clean up"]'
 node "$HELPER" extract-shell "$TUTORIAL" "$BLOCKS"
 
-expected_install=$'tag=v0.15.0\ncurl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/registryctl-${tag}-install.sh"\nbash "./registryctl-${tag}-install.sh"\nregistryctl --version'
+expected_install=$'tag=v0.15.1\ncurl -fsSLO "https://github.com/registrystack/registry-stack/releases/download/${tag}/registryctl-${tag}-install.sh"\nbash "./registryctl-${tag}-install.sh"\nregistryctl --version'
 if [[ "$(cat "$BLOCKS/02.sh")" != "$expected_install" ]]; then
 	printf 'release-form installer block changed without updating its source contract\n' >&2
 	exit 1

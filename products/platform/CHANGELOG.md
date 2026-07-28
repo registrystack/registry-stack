@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.15.1 - 2026-07-28
+
+- No user-visible Registry Platform changes. This release fixes forward from
+  the failed v0.15.0 publication workflow.
+
 ## v0.15.0 - 2026-07-28
 
 - No separately versioned Registry Platform API changes. This release carries

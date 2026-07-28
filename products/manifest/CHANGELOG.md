@@ -7,6 +7,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-07-28
+
+- No user-visible Registry Manifest changes. This release fixes forward from
+  the failed v0.15.0 publication workflow.
+
 ## [0.15.0] - 2026-07-28
 
 - No user-visible Registry Manifest changes.

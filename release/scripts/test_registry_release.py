@@ -8,7 +8,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -68,7 +70,105 @@ def load_registryctl_image_lock():
     return module
 
 
+def load_registry_release():
+    module_name = "registry_release_module"
+    loader = SourceFileLoader(module_name, str(TOOL))
+    spec = importlib.util.spec_from_loader(module_name, loader)
+    if spec is None:
+        raise ImportError(f"could not load module spec from {TOOL}")
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(TOOL.parent))
+    try:
+        loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module
+
+
 class RegistryReleaseTest(unittest.TestCase):
+    def test_candidate_artifact_download_removes_transport_archive(self) -> None:
+        registry_release = load_registry_release()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            destination = root / "candidate" / "payload"
+            archive = destination.parent / "artifact-42.zip"
+
+            def download(_endpoint: str, path: Path) -> None:
+                self.assertTrue(path.parent.is_dir())
+                path.write_bytes(b"archive")
+
+            def extract(
+                path: Path,
+                output: Path,
+                *,
+                expected_sha256: str,
+            ) -> None:
+                self.assertEqual(archive, path)
+                self.assertEqual("a" * 64, expected_sha256)
+                output.mkdir()
+                (output / "payload.txt").write_text("verified\n", encoding="utf-8")
+
+            with (
+                mock.patch.object(
+                    registry_release,
+                    "download_gh_api_bytes",
+                    side_effect=download,
+                ),
+                mock.patch.object(
+                    registry_release.release_candidate,
+                    "extract_artifact_archive",
+                    side_effect=extract,
+                ),
+            ):
+                registry_release.download_candidate_artifact(
+                    "registrystack/registry-stack",
+                    42,
+                    destination,
+                    expected_archive_sha256="a" * 64,
+                )
+
+            self.assertFalse(archive.exists())
+            self.assertEqual(
+                "verified\n",
+                (destination / "payload.txt").read_text(encoding="utf-8"),
+            )
+
+    def test_candidate_artifact_download_removes_archive_after_rejection(self) -> None:
+        registry_release = load_registry_release()
+        with tempfile.TemporaryDirectory() as tmp:
+            destination = Path(tmp) / "candidate" / "payload"
+            archive = destination.parent / "artifact-42.zip"
+
+            def download(_endpoint: str, path: Path) -> None:
+                path.write_bytes(b"archive")
+
+            with (
+                mock.patch.object(
+                    registry_release,
+                    "download_gh_api_bytes",
+                    side_effect=download,
+                ),
+                mock.patch.object(
+                    registry_release.release_candidate,
+                    "extract_artifact_archive",
+                    side_effect=registry_release.release_candidate.CandidateError(
+                        "digest mismatch"
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    registry_release.ReleasePlanError,
+                    "cannot verify candidate artifact 42: digest mismatch",
+                ),
+            ):
+                registry_release.download_candidate_artifact(
+                    "registrystack/registry-stack",
+                    42,
+                    destination,
+                    expected_archive_sha256="a" * 64,
+                )
+
+            self.assertFalse(archive.exists())
+
     def test_registryctl_image_lock_schema_boundary_preserves_historical_v1(
         self,
     ) -> None:
@@ -1459,6 +1559,22 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("reconcile", extended["needs"])
         self.assertNotRegex(text, r"(?m)^\s*git (?:push|tag|update-ref)\b")
 
+    def test_release_workflow_removes_for_each_ref_record_separators(self) -> None:
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        )
+        scripts = [
+            step["run"]
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if "git for-each-ref --format='%(contents)'" in step.get("run", "")
+        ]
+
+        self.assertEqual(2, len(scripts))
+        for script in scripts:
+            self.assertIn('message.endswith("\\n")', script)
+            self.assertIn("message[:-1]", script)
+
     def test_release_workflow_publishes_digest_bound_release_file_sboms(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         candidate = (ROOT / ".github/workflows/release-candidate.yml").read_text(
@@ -1618,7 +1734,7 @@ class RegistryReleaseTest(unittest.TestCase):
         result = run_tool("validate-docsets")
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("validated 12 versioned docsets", result.stdout)
+        self.assertIn("validated 13 versioned docsets", result.stdout)
 
     def test_validate_docsets_rejects_external_ref_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -24,7 +24,7 @@ authored status policy.
   outcome="A live Registry Notary evaluation over the synthetic public-works workbook, with allowed, rejected, and absent-record results."
   time="About 15 minutes after completing the first API tutorial"
   level="Local single-node"
-  prerequisites={['The unmodified my-first-api project from the first tutorial', 'Registryctl 0.15.0 with its matching image lock', 'Linux amd64', 'Docker Engine with Compose v2', 'curl', 'Ports 4242 and 4255 available on loopback'] }
+  prerequisites={['The unmodified my-first-api project from the first tutorial', 'Registryctl 0.15.1 with its matching image lock', 'Linux amd64', 'Docker Engine with Compose v2', 'curl', 'Ports 4242 and 4255 available on loopback'] }
 />
 
 The workbook, project identifiers, and caller credentials are synthetic and
@@ -474,7 +474,7 @@ project.
 
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
-| `registryctl add notary` reports an unsupported shape | The project differs from the maintained spreadsheet starter or already has a conflicting Notary integration. | Start from the unmodified `my-first-api` project created by Registryctl 0.15.0. |
+| `registryctl add notary` reports an unsupported shape | The project differs from the maintained spreadsheet starter or already has a conflicting Notary integration. | Start from the unmodified `my-first-api` project created by Registryctl 0.15.1. |
 | `registryctl add notary` prints `Verified local Notary add-on.` | The exact maintained add-on is already present. | Continue with the fixture check. The command made no further changes. |
 | `registryctl test` fails after the policy edit | The authored rule and fixture expectation disagree. | Keep the planned source output unchanged and set its `project-status-accepted` expectation to `true`. |
 | Notary returns `401` | The caller credential is missing or belongs to another project. | Source this project's private `local.env` again without printing it. |
