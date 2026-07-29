@@ -10,6 +10,10 @@ import {
 import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { parse, serialize } from 'parse5';
+import TurndownService from 'turndown';
+import turndownPluginGfm from 'turndown-plugin-gfm';
+
 import { archiveOutputDirectory, treeDigest } from './archive-bundle.mjs';
 import { loadArchiveLock, validateArchiveLock } from './archive-lock.mjs';
 import { getDocset, loadDocsets } from './docsets.mjs';
@@ -18,9 +22,16 @@ import { CURRENT_PRODUCTION_DOCSET_PATH } from '../src/lib/docset-path.mjs';
 const productionCurrentPath = CURRENT_PRODUCTION_DOCSET_PATH;
 const legacyPreviewPath = '/preview/';
 const discoveryFiles = ['llms.txt', 'llms-full.txt', 'llms-small.txt'];
-const reservedRootDirectories = new Set(['_archive-bundles', 'dev', 'preview', 'v']);
+const reservedRootDirectories = new Set([
+  '_archive-bundles',
+  'dev',
+  'pagefind',
+  'preview',
+  'v',
+]);
 const generatedRootFiles = new Set([
   'CNAME',
+  ...discoveryFiles,
   'robots.txt',
   'sitemap-index.xml',
   'sitemap-0.xml',
@@ -117,6 +128,43 @@ function canonicalReleaseBanner(docset) {
   return `<aside class="registry-preview-banner" role="note" aria-label="Site status"><p><strong>Latest release.</strong> You are viewing ${label}. For an immutable URL, use <a href="${archivePath}">${label}</a>.</p></aside>`;
 }
 
+function canonicalSearchMarkup() {
+  return `<div class="registry-search registry-canonical-search" data-registry-canonical-search>
+        <span class="registry-search-label">Search</span>
+        <div id="registry-canonical-search-results"></div>
+      </div>
+      `;
+}
+
+function addCanonicalSearch(html) {
+  if (/<meta\s+http-equiv=["']refresh["']/i.test(html)) return html;
+  if (/class=["'][^"']*\bregistry-search\b/i.test(html)) return html;
+  const utility = /<nav class=["']registry-utility["']/i;
+  if (!utility.test(html)) {
+    throw new Error('released content page has no registry utility navigation for canonical search');
+  }
+  if (!html.includes('</head>')) {
+    throw new Error('released content page has no document head for canonical search assets');
+  }
+  return html
+    .replace(
+      '</head>',
+      `<link rel="stylesheet" href="/pagefind/pagefind-ui.css"><script src="/pagefind/pagefind-ui.js" defer></script><script>
+document.addEventListener("DOMContentLoaded", () => {
+  if (!window.PagefindUI) return;
+  new window.PagefindUI({ element: "#registry-canonical-search-results", bundlePath: "/pagefind/", showSubResults: true, resetStyles: false });
+  document.addEventListener("keydown", (event) => {
+    if (event.key.toLowerCase() === "k" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      document.querySelector("#registry-canonical-search-results input")?.focus();
+    }
+  });
+});
+</script></head>`,
+    )
+    .replace(utility, `${canonicalSearchMarkup()}<nav class="registry-utility"`);
+}
+
 function removeNoindex(html) {
   return html.replace(
     /\s*<meta\s+name=["']robots["']\s+content=["']noindex,follow["']\s*\/?>/gi,
@@ -183,6 +231,7 @@ function rewriteReleasedText(contents, released, file) {
       canonicalReleaseBanner(released),
     );
     rewritten = addRootSitemapLink(rewritten);
+    rewritten = addCanonicalSearch(rewritten);
   }
   return rewritten;
 }
@@ -239,6 +288,176 @@ async function rewriteDevelopmentDiscoveryFiles(currentRoot) {
     const rewritten = rewriteDevelopmentDiscoveryUrls(contents);
     if (rewritten !== contents) await writeFile(file, rewritten, 'utf8');
   }
+}
+
+function nodeAttribute(node, name) {
+  return node.attrs?.find((attribute) => attribute.name === name)?.value;
+}
+
+function nodeHasClass(node, className) {
+  return (nodeAttribute(node, 'class') ?? '').split(/\s+/).includes(className);
+}
+
+function findNode(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.childNodes ?? []) {
+    const match = findNode(child, predicate);
+    if (match) return match;
+  }
+  return null;
+}
+
+function skipCorpusNode(node, minify) {
+  if (nodeAttribute(node, 'data-pagefind-ignore') !== undefined) return true;
+  if (
+    ['script', 'style', 'svg', 'button', 'template'].includes(node.tagName) ||
+    nodeHasClass(node, 'registry-preview-banner') ||
+    nodeHasClass(node, 'sl-anchor-link') ||
+    nodeHasClass(node, 'sr-only')
+  ) {
+    return true;
+  }
+  return minify && (
+    node.tagName === 'details' ||
+    nodeHasClass(node, 'starlight-aside--note') ||
+    nodeHasClass(node, 'starlight-aside--tip')
+  );
+}
+
+function pruneCorpusNodes(node, minify) {
+  if (!node.childNodes) return;
+  node.childNodes = node.childNodes.filter((child) => !skipCorpusNode(child, minify));
+  for (const child of node.childNodes) {
+    pruneCorpusNodes(child, minify);
+  }
+}
+
+const corpusMarkdown = new TurndownService({
+  bulletListMarker: '-',
+  codeBlockStyle: 'fenced',
+  headingStyle: 'atx',
+});
+corpusMarkdown.use(turndownPluginGfm.gfm);
+
+function renderedCorpusPage(html, file, minify) {
+  const document = parse(html);
+  const main = findNode(
+    document,
+    (node) => node.tagName === 'main' && nodeAttribute(node, 'data-pagefind-body') !== undefined,
+  );
+  if (!main) throw new Error(`released content page has no data-pagefind-body: ${file}`);
+  pruneCorpusNodes(main, minify);
+  return corpusMarkdown.turndown(serialize(main))
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function corpusOrder(relativePath) {
+  const id = relativePath === 'index.html'
+    ? 'index'
+    : relativePath.replace(/\/index\.html$/, '').replace(/\.html$/, '');
+  if (id === 'index') return [0, id];
+  if (id.startsWith('explanation/')) return [1, id];
+  if (id.startsWith('reference/') || id.startsWith('decisions/')) return [3, id];
+  return [2, id];
+}
+
+function canonicalCorpusIndex(discoveryHeader) {
+  return `# Registry stack docs
+
+> Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Registry Notary.
+
+${discoveryHeader}
+
+## Documentation Sets
+
+- [Abridged documentation](https://docs.registrystack.org/llms-small.txt): a compact version of the released documentation
+- [Complete documentation](https://docs.registrystack.org/llms-full.txt): the full released documentation
+
+## Notes
+
+- Both corpora are generated from the same locked release pages served at the canonical root.
+- Immutable versioned archives remain unchanged.
+`;
+}
+
+function canonicalCorpusDocument(kind, released, pages) {
+  return `<SYSTEM>This is the ${kind} developer documentation for Registry stack docs ${released.label}</SYSTEM>
+
+${pages.join('\n\n')}
+`;
+}
+
+async function writeCanonicalCorpora(distRoot, promotedFiles, released) {
+  const index = promotedFiles.find((entry) => entry.relative === 'index.md');
+  if (!index) {
+    throw new Error(`released archive ${released.id} contains no index.md`);
+  }
+
+  const indexContents = await readFile(index.destination, 'utf8');
+  const firstHeading = indexContents.indexOf('\n\n# ');
+  if (firstHeading === -1) {
+    throw new Error(`released archive ${released.id} index.md has no discovery header`);
+  }
+  const discoveryHeader = indexContents.slice(0, firstHeading).trim();
+  for (const file of ['llms.txt', 'llms-full.txt']) {
+    if (!discoveryHeader.includes(`https://docs.registrystack.org/${file}`)) {
+      throw new Error(
+        `released archive ${released.id} index.md discovery header is missing ${file}`,
+      );
+    }
+  }
+
+  const htmlFiles = promotedFiles
+    .filter((entry) => entry.relative.endsWith('.html'))
+    .sort((left, right) => {
+      const [leftRank, leftId] = corpusOrder(left.relative);
+      const [rightRank, rightId] = corpusOrder(right.relative);
+      return leftRank - rightRank || leftId.localeCompare(rightId);
+    });
+  const pages = [];
+  for (const entry of htmlFiles) {
+    const html = await readFile(entry.destination, 'utf8');
+    if (/<meta\s+http-equiv=["']refresh["']/i.test(html)) continue;
+    if (!html.includes('data-pagefind-body')) continue;
+    pages.push({
+      relative: entry.relative,
+      full: renderedCorpusPage(html, entry.relative, false),
+      small: renderedCorpusPage(html, entry.relative, true),
+    });
+  }
+  if (pages.length === 0) {
+    throw new Error(`released archive ${released.id} contains no rendered corpus pages`);
+  }
+  const abridgedPages = pages.filter(
+    (page) => !page.relative.startsWith('reference/apis/'),
+  );
+  await writeFile(
+    resolve(distRoot, 'llms.txt'),
+    canonicalCorpusIndex(discoveryHeader),
+    { encoding: 'utf8', flag: 'wx' },
+  );
+  await writeFile(
+    resolve(distRoot, 'llms-full.txt'),
+    canonicalCorpusDocument(
+      'full',
+      released,
+      pages.map((page) => page.full),
+    ),
+    { encoding: 'utf8', flag: 'wx' },
+  );
+  await writeFile(
+    resolve(distRoot, 'llms-small.txt'),
+    canonicalCorpusDocument(
+      'abridged',
+      released,
+      abridgedPages.map((page) => page.small),
+    ),
+    { encoding: 'utf8', flag: 'wx' },
+  );
+  return discoveryFiles.length;
 }
 
 async function rejectDestinationCollisions(distRoot, destinations) {
@@ -341,6 +560,7 @@ export async function stageProductionDocsets({
   const robotsDestination = resolve(distRoot, 'robots.txt');
   const sitemapIndexDestination = resolve(distRoot, 'sitemap-index.xml');
   const sitemapPagesDestination = resolve(distRoot, 'sitemap-0.xml');
+  const corpusDestinations = discoveryFiles.map((file) => resolve(distRoot, file));
 
   await rejectDestinationCollisions(
     distRoot,
@@ -349,6 +569,7 @@ export async function stageProductionDocsets({
       robotsDestination,
       sitemapIndexDestination,
       sitemapPagesDestination,
+      ...corpusDestinations,
       ...promotedFiles.map((entry) => entry.destination),
       ...legacyRedirects.map((entry) => entry.destination),
     ],
@@ -375,6 +596,8 @@ export async function stageProductionDocsets({
     }
   }
 
+  const corpusFiles = await writeCanonicalCorpora(distRoot, promotedFiles, released);
+
   for (const redirect of legacyRedirects) {
     await mkdir(dirname(redirect.destination), { recursive: true });
     await writeFile(
@@ -392,6 +615,7 @@ export async function stageProductionDocsets({
     released: released.id,
     promotedFiles: promotedFiles.length,
     canonicalRoutes: canonicalRoutes.length,
+    corpusFiles,
     legacyRedirects: legacyRedirects.length,
   };
 }
@@ -399,7 +623,7 @@ export async function stageProductionDocsets({
 async function main() {
   const result = await stageProductionDocsets();
   console.log(
-    `Promoted ${result.promotedFiles} file(s) across ${result.canonicalRoutes} canonical content route(s) for released docset ${result.released}; staged ${result.legacyRedirects} legacy /preview/ redirect(s); Main remains under ${productionCurrentPath}.`,
+    `Promoted ${result.promotedFiles} file(s) across ${result.canonicalRoutes} canonical content route(s) and generated ${result.corpusFiles} corpus file(s) for released docset ${result.released}; staged ${result.legacyRedirects} legacy /preview/ redirect(s); Main remains under ${productionCurrentPath}.`,
   );
 }
 

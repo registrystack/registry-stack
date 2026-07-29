@@ -67,6 +67,8 @@ The production site uses one indexable namespace:
 The Pages workflow verifies the selected release archive against
 `src/data/archive-lock.yaml`, copies that locked tree into `/`, and changes URLs and SEO metadata only
 in the promoted copy. The immutable `/v/<version>/` tree and its release asset are not changed.
+Search data and machine-readable corpora are generated from the promoted release pages, so the
+canonical site does not depend on unreleased `/dev/` content.
 
 ## Content Sources
 
