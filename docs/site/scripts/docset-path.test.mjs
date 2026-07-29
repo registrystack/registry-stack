@@ -3,28 +3,35 @@ import { test } from 'node:test';
 
 import { pathForDocset } from '../src/lib/docset-path.mjs';
 
-test('removes a current preview base when linking to an archive', () => {
+test('removes the development base when linking to an archive', () => {
   assert.equal(
-    pathForDocset('/preview/tutorials/example/', '/', '/v/0.8.4/', '/preview/'),
+    pathForDocset('/dev/tutorials/example/', '/dev/', '/v/0.8.4/', '/dev/'),
     '/v/0.8.4/tutorials/example/',
   );
 });
 
-test('keeps the current preview path for the selected current docset', () => {
+test('keeps the development path for the selected current docset', () => {
   assert.equal(
-    pathForDocset('/preview/tutorials/example/', '/', '/', '/preview/'),
-    '/preview/tutorials/example/',
+    pathForDocset('/dev/tutorials/example/', '/dev/', '/dev/', '/dev/'),
+    '/dev/tutorials/example/',
   );
 });
 
 test('removes an archive base when linking to current documentation', () => {
   assert.equal(
-    pathForDocset('/v/0.8.4/tutorials/example/', '/v/0.8.4/', '/', '/v/0.8.4/'),
-    '/preview/tutorials/example/',
+    pathForDocset('/v/0.8.4/tutorials/example/', '/v/0.8.4/', '/dev/', '/v/0.8.4/'),
+    '/dev/tutorials/example/',
   );
 });
 
-test('preserves paths when switching docsets at the canonical root', () => {
+test('maps an old archive current-root option to the development namespace', () => {
+  assert.equal(
+    pathForDocset('/v/0.8.4/tutorials/example/', '/v/0.8.4/', '/', '/v/0.8.4/'),
+    '/dev/tutorials/example/',
+  );
+});
+
+test('preserves paths when switching from the canonical root to an archive', () => {
   assert.equal(
     pathForDocset('/tutorials/example/', '/', '/v/0.8.4/', '/'),
     '/v/0.8.4/tutorials/example/',

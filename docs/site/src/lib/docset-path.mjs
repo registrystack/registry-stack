@@ -3,7 +3,7 @@ function normalizeRoot(path) {
   return normalized === '//' ? '/' : normalized;
 }
 
-export const CURRENT_PRODUCTION_DOCSET_PATH = '/preview/';
+export const CURRENT_PRODUCTION_DOCSET_PATH = '/dev/';
 
 function relativeToRoot(pathname, root) {
   const normalizedRoot = normalizeRoot(root);

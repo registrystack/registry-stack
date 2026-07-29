@@ -1,14 +1,14 @@
 current: latest
-released: v0.13.0
+released: v0.15.2
 docsets:
   - id: latest
-    label: Documentation preview
-    path: /
+    label: Development (unreleased)
+    path: /dev/
     status: current
     availability: unreleased
     source: registry-stack-main
     published_at: 2026-06-24
-    description: Draft Registry Stack documentation for content and navigation review.
+    description: Unreleased Registry Stack documentation built from the main branch.
     products:
       registry-stack:
         version: main source (unreleased)
@@ -26,11 +26,11 @@ docsets:
     label: v0.15.2
     path: /v/0.15.2/
     status: archived
-    availability: candidate
+    availability: released
     source: registry-stack-v0.15.2
     repo_docs_source: monorepo
     published_at: 2026-07-28
-    description: Registry Stack v0.15.2 beta-22 fix-forward candidate documentation set pinned to its prepared source.
+    description: Released Registry Stack v0.15.2 beta-22 fix-forward documentation set pinned to its prepared source.
     products:
       registry-stack:
         version: v0.15.2

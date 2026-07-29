@@ -55,6 +55,19 @@ The release workflow repeats those steps from the exact annotated tag and
 publishes `registry-docs-vX.Y.Z.tar.gz` with the other signed, SBOM-covered,
 SLSA-provenanced release files.
 
+## Published layout
+
+The production site uses one indexable namespace:
+
+- `/` serves the latest released documentation with self-canonical URLs and the public sitemap.
+- `/dev/` serves unreleased documentation built from `main` with `noindex,follow`.
+- `/v/<version>/` serves immutable release archives with `noindex,follow`.
+- `/preview/` keeps old links working by redirecting matching pages to `/`.
+
+The Pages workflow verifies the selected release archive against
+`src/data/archive-lock.yaml`, copies that locked tree into `/`, and changes URLs and SEO metadata only
+in the promoted copy. The immutable `/v/<version>/` tree and its release asset are not changed.
+
 ## Content Sources
 
 Data-backed reference tables are generated from:

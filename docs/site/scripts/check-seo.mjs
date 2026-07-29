@@ -1,12 +1,12 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
+
 import { loadDocsets } from './docsets.mjs';
+import { CURRENT_PRODUCTION_DOCSET_PATH } from '../src/lib/docset-path.mjs';
 
 const distDir = resolve(process.env.DOCS_DIST_DIR || 'dist');
-// v0.13.0 was sealed before selected releases became indexable. Its immutable
-// bundle cannot be rewritten. The exception disappears automatically when the
-// released selector advances, and no later release is allowed to inherit it.
-const immutableLegacyNoindexReleasedDocsets = new Set(['v0.13.0']);
+const docsOrigin = 'https://docs.registrystack.org';
+const legacyPreviewPath = '/preview/';
 
 function scopeFromArgs(args) {
   if (args.length === 0) return 'all';
@@ -36,113 +36,177 @@ async function htmlFiles(dir) {
   return files;
 }
 
-function archiveRootForFile(file, archivedDocsets) {
+function isWithinMount(file, mount) {
   const rel = relative(distDir, file).replaceAll('\\', '/');
-  return archivedDocsets.find((docset) => rel.startsWith(docset.path.replace(/^\//, '')));
+  const root = mount.replace(/^\/|\/$/g, '');
+  return rel === `${root}.html` || rel.startsWith(`${root}/`);
 }
 
-const manifest = await loadDocsets();
-const releasedDocset = manifest.docsets.find((docset) => docset.id === manifest.released);
-const archivedDocsets = manifest.docsets.filter((docset) => docset.status === 'archived');
-const historicalDocsets = archivedDocsets.filter((docset) => docset.id !== manifest.released);
-const releasedHasLegacyNoindex =
-  immutableLegacyNoindexReleasedDocsets.has(manifest.released);
-const searchExcludedDocsets = archivedDocsets.filter(
-  (docset) => docset.id !== manifest.released || releasedHasLegacyNoindex,
-);
-const scope = scopeFromArgs(process.argv.slice(2));
-const errors = [];
-let currentChecked = 0;
-let archivedChecked = 0;
-let releasedChecked = 0;
-let redirectsChecked = 0;
-const previewDir = join(distDir, 'preview');
-const productionLayout = await exists(join(previewDir, 'index.html'));
-const currentOutput = productionLayout ? previewDir : distDir;
-
-if (!await exists(join(currentOutput, 'sitemap-index.xml'))) {
-  errors.push(`Main sitemap is missing: ${join(currentOutput, 'sitemap-index.xml')}`);
+function archiveForFile(file, archivedDocsets) {
+  return archivedDocsets.find((docset) => isWithinMount(file, docset.path));
 }
 
-if (scope === 'all') {
-  for (const docset of searchExcludedDocsets) {
-    const archiveDir = join(distDir, docset.path);
-    const archiveSitemap = join(archiveDir, 'sitemap-index.xml');
-    const archiveSitemapPage = join(archiveDir, 'sitemap-0.xml');
-    if (await exists(archiveSitemap)) {
-      errors.push(`Archived docset ${docset.id} must not publish sitemap-index.xml`);
-    }
-    if (await exists(archiveSitemapPage)) {
-      errors.push(`Archived docset ${docset.id} must not publish sitemap-0.xml`);
+function canonicalFromHtml(html) {
+  return html.match(
+    /<link\b(?=[^>]*\brel=["']canonical["'])(?=[^>]*\bhref=["']([^"']+)["'])[^>]*>/i,
+  )?.[1];
+}
+
+function isCanonicalRootUrl(value) {
+  if (!value?.startsWith(docsOrigin)) return false;
+  const path = value.slice(docsOrigin.length) || '/';
+  return ![
+    CURRENT_PRODUCTION_DOCSET_PATH,
+    legacyPreviewPath,
+    '/v/',
+  ].some((mount) => path === mount.slice(0, -1) || path.startsWith(mount));
+}
+
+async function rejectSitemap(dir, label, errors) {
+  for (const name of ['sitemap-index.xml', 'sitemap-0.xml']) {
+    if (await exists(join(dir, name))) {
+      errors.push(`${label} must not publish ${name}`);
     }
   }
 }
 
+const manifest = await loadDocsets();
+const archivedDocsets = manifest.docsets.filter((docset) => docset.status === 'archived');
+const scope = scopeFromArgs(process.argv.slice(2));
+const errors = [];
+let developmentChecked = 0;
+let archiveChecked = 0;
+let canonicalChecked = 0;
+let legacyRedirectsChecked = 0;
+const developmentDir = join(
+  distDir,
+  CURRENT_PRODUCTION_DOCSET_PATH.replace(/^\/|\/$/g, ''),
+);
+const productionLayout = await exists(join(developmentDir, 'index.html'));
+const developmentOutput = productionLayout ? developmentDir : distDir;
+
+await rejectSitemap(developmentOutput, 'Unreleased Main documentation', errors);
+
+if (scope === 'all' && productionLayout) {
+  const rootSitemapIndex = join(distDir, 'sitemap-index.xml');
+  const rootSitemapPages = join(distDir, 'sitemap-0.xml');
+  if (!await exists(rootSitemapIndex)) {
+    errors.push(`Canonical sitemap is missing: ${rootSitemapIndex}`);
+  }
+  if (!await exists(rootSitemapPages)) {
+    errors.push(`Canonical sitemap page is missing: ${rootSitemapPages}`);
+  } else {
+    const sitemap = await readFile(rootSitemapPages, 'utf8');
+    for (const match of sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)) {
+      if (!isCanonicalRootUrl(match[1])) {
+        errors.push(`Canonical sitemap contains a non-root URL: ${match[1]}`);
+        continue;
+      }
+      const pathname = new URL(match[1]).pathname;
+      const page = pathname === '/'
+        ? join(distDir, 'index.html')
+        : join(distDir, pathname, 'index.html');
+      if (!await exists(page)) {
+        errors.push(`Canonical sitemap points to a missing page: ${match[1]}`);
+        continue;
+      }
+      const html = await readFile(page, 'utf8');
+      if (/<meta\s+http-equiv=["']refresh["']/i.test(html)) {
+        errors.push(`Canonical sitemap must not include redirect page: ${match[1]}`);
+      }
+    }
+  }
+  const robots = join(distDir, 'robots.txt');
+  if (!await exists(robots)) {
+    errors.push(`Production robots declaration is missing: ${robots}`);
+  } else {
+    const contents = await readFile(robots, 'utf8');
+    if (!contents.includes(`${docsOrigin}/sitemap-index.xml`)) {
+      errors.push('Production robots declaration must point to the canonical root sitemap');
+    }
+  }
+  for (const docset of archivedDocsets) {
+    await rejectSitemap(join(distDir, docset.path), `Archived docset ${docset.id}`, errors);
+  }
+  await rejectSitemap(
+    join(distDir, legacyPreviewPath),
+    'Legacy /preview/ redirects',
+    errors,
+  );
+}
+
 for (const file of await htmlFiles(distDir)) {
   const html = await readFile(file, 'utf8');
-  const archiveDocset = archiveRootForFile(file, archivedDocsets);
-  const isArchived = Boolean(archiveDocset);
-  const isReleasedArchive = archiveDocset?.id === manifest.released;
-  const isProductionRedirect =
-    /<meta\s+name=["']registry-docset-redirect["']\s+content=["'][^"']+["']\s*\/?>/.test(html);
-  if (scope === 'current' && (isArchived || isProductionRedirect)) continue;
-  const hasNoindex = /<meta\s+name=["']robots["']\s+content=["']noindex,follow["']\s*\/?>/.test(html);
-  const hasSitemapLink = /<link\b(?=[^>]*\brel=["']sitemap["'])[^>]*>/i.test(html);
+  const archive = archiveForFile(file, archivedDocsets);
+  const isDevelopment = productionLayout
+    ? isWithinMount(file, CURRENT_PRODUCTION_DOCSET_PATH)
+    : !archive;
+  const isLegacyRedirect = productionLayout && isWithinMount(file, legacyPreviewPath);
+  const isCanonical = productionLayout && !archive && !isDevelopment && !isLegacyRedirect;
+  if (
+    scope === 'current' &&
+    (productionLayout ? !isDevelopment : Boolean(archive))
+  ) {
+    continue;
+  }
 
-  if (isProductionRedirect) {
-    redirectsChecked += 1;
+  const hasNoindex =
+    /<meta\s+name=["']robots["']\s+content=["']noindex,follow["']\s*\/?>/i.test(html);
+  const hasSitemapLink = /<link\b(?=[^>]*\brel=["']sitemap["'])[^>]*>/i.test(html);
+  const canonical = canonicalFromHtml(html);
+
+  if (isDevelopment) {
+    developmentChecked += 1;
     if (!hasNoindex) {
-      errors.push(`${relative('.', file)} is a root redirect but missing robots noindex,follow`);
+      errors.push(`${relative('.', file)} is unreleased Main but missing robots noindex,follow`);
     }
     if (hasSitemapLink) {
-      errors.push(`${relative('.', file)} is a root redirect but links a sitemap`);
+      errors.push(`${relative('.', file)} is unreleased Main but links a sitemap`);
     }
-    const canonical = html.match(
-      /<link\b(?=[^>]*\brel=["']canonical["'])(?=[^>]*\bhref=["']([^"']+)["'])[^>]*>/i,
-    )?.[1];
-    if (!canonical?.startsWith(`https://docs.registrystack.org${releasedDocset.path}`)) {
-      errors.push(
-        `${relative('.', file)} must canonically redirect into released docset ${manifest.released}`,
-      );
-    }
-  } else if (isReleasedArchive) {
-    releasedChecked += 1;
-    if (releasedHasLegacyNoindex && !hasNoindex) {
-      errors.push(
-        `${relative('.', file)} is immutable legacy release ${manifest.released} but is missing robots noindex,follow`,
-      );
-    } else if (!releasedHasLegacyNoindex && hasNoindex) {
-      errors.push(`${relative('.', file)} is the released docset but has robots noindex,follow`);
-    }
-    if (releasedHasLegacyNoindex && hasSitemapLink) {
-      errors.push(
-        `${relative('.', file)} is immutable legacy release ${manifest.released} but links a sitemap`,
-      );
-    }
-  } else if (isArchived) {
-    archivedChecked += 1;
+  } else if (archive) {
+    archiveChecked += 1;
     if (!hasNoindex) {
       errors.push(`${relative('.', file)} is archived but missing robots noindex,follow`);
     }
     if (hasSitemapLink) {
       errors.push(`${relative('.', file)} is archived but links a sitemap`);
     }
-  } else {
-    currentChecked += 1;
+  } else if (isLegacyRedirect) {
+    legacyRedirectsChecked += 1;
+    if (!hasNoindex) {
+      errors.push(`${relative('.', file)} is a legacy redirect but missing robots noindex,follow`);
+    }
+    if (hasSitemapLink) {
+      errors.push(`${relative('.', file)} is a legacy redirect but links a sitemap`);
+    }
+    if (!html.includes('name="registry-legacy-preview-redirect"')) {
+      errors.push(`${relative('.', file)} is under /preview/ but is not a declared legacy redirect`);
+    }
+    if (!isCanonicalRootUrl(canonical)) {
+      errors.push(`${relative('.', file)} must canonicalize to the released root namespace`);
+    }
+  } else if (isCanonical) {
+    canonicalChecked += 1;
+    const isRedirectPage = /<meta\s+http-equiv=["']refresh["']/i.test(html);
     if (hasNoindex) {
-      errors.push(`${relative('.', file)} is Main but has robots noindex,follow`);
+      errors.push(`${relative('.', file)} is canonical release documentation but has noindex`);
+    }
+    if (!isRedirectPage && !hasSitemapLink) {
+      errors.push(`${relative('.', file)} is canonical release documentation but has no sitemap link`);
+    }
+    if (!isRedirectPage && !isCanonicalRootUrl(canonical)) {
+      errors.push(`${relative('.', file)} must have a canonical URL in the root namespace`);
     }
   }
 }
 
-if (scope === 'all' && archivedDocsets.length > 0 && archivedChecked === 0) {
-  if (historicalDocsets.length > 0) errors.push('No historical archive HTML files were checked.');
+if (developmentChecked === 0) {
+  errors.push('No unreleased Main HTML files were checked.');
 }
-if (scope === 'all' && releasedDocset && releasedChecked === 0) {
-  errors.push('No released-docset HTML files were checked.');
-}
-if (scope === 'all' && productionLayout && redirectsChecked === 0) {
-  errors.push('No released-root redirect HTML files were checked.');
+if (scope === 'all' && productionLayout) {
+  if (archiveChecked === 0) errors.push('No immutable archive HTML files were checked.');
+  if (canonicalChecked === 0) errors.push('No canonical release HTML files were checked.');
+  if (legacyRedirectsChecked === 0) errors.push('No legacy /preview/ redirects were checked.');
 }
 
 if (errors.length) {
@@ -151,5 +215,5 @@ if (errors.length) {
 }
 
 console.log(
-  `SEO check passed: ${currentChecked} Main HTML files, ${releasedChecked} released HTML files, ${archivedChecked} historical archive HTML files, and ${redirectsChecked} released-root redirects checked.`,
+  `SEO check passed: ${canonicalChecked} canonical release HTML files, ${developmentChecked} unreleased Main HTML files, ${archiveChecked} immutable archive HTML files, and ${legacyRedirectsChecked} legacy redirects checked.`,
 );

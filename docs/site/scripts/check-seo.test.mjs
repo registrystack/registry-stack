@@ -13,104 +13,197 @@ function write(root, path, contents) {
   writeFileSync(target, contents);
 }
 
-function fixture(t, options = {}) {
-  const released = options.released ?? 'v1';
-  const releasedPath = options.releasedPath ?? '/v/v1/';
-  const canonical =
-    options.canonical ?? `https://docs.registrystack.org${releasedPath}`;
-  const root = mkdtempSync(resolve(tmpdir(), 'registry-seo-'));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+function docsets(root) {
   write(
     root,
     'src/data/docsets.yaml',
     `current: latest
-released: ${released}
+released: v1
 docsets:
   - id: latest
-    label: Main
-    path: /
+    label: Development
+    path: /dev/
     status: current
     availability: unreleased
     source: main
     published_at: 2026-07-27
     description: Main docs.
     products: {}
-  - id: ${released}
-    label: ${released}
-    path: ${releasedPath}
+  - id: v1
+    label: v1
+    path: /v/v1/
     status: archived
     availability: released
-    source: ${released}
+    source: v1
     published_at: 2026-07-27
     description: Released docs.
     products: {}
 `,
   );
-  write(root, 'dist/preview/sitemap-index.xml', '<sitemapindex/>\n');
-  write(root, 'dist/preview/index.html', '<html><head></head></html>\n');
-  write(
-    root,
-    `dist${releasedPath}index.html`,
-    '<html><head></head></html>\n',
-  );
-  write(
-    root,
-    'dist/index.html',
-    `<html><head>
-<meta name="robots" content="noindex,follow">
-<meta name="registry-docset-redirect" content="${released}">
-<link rel="canonical" href="${canonical}">
-</head></html>
-`,
-  );
-  return root;
 }
 
-function run(root) {
-  return spawnSync(process.execPath, [checker], { cwd: root, encoding: 'utf8' });
-}
-
-test('accepts preview, immutable archive, and released-root redirect SEO roles', (t) => {
-  const result = run(fixture(t));
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(
-    result.stdout,
-    /1 Main HTML files, 1 released HTML files, 0 historical archive HTML files, and 1 released-root redirects/,
+function productionFixture(t) {
+  const root = mkdtempSync(resolve(tmpdir(), 'registry-seo-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  docsets(root);
+  write(
+    root,
+    'dist/dev/index.html',
+    '<html><head><meta name="robots" content="noindex,follow"></head></html>\n',
   );
-});
-
-test('rejects a released-root redirect canonicalized outside the released docset', (t) => {
-  const result = run(fixture(t, { canonical: 'https://docs.registrystack.org/preview/' }));
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /must canonically redirect into released docset v1/);
-});
-
-test('rejects noindex on the selected released docset', (t) => {
-  const root = fixture(t);
   write(
     root,
     'dist/v/v1/index.html',
     '<html><head><meta name="robots" content="noindex,follow"></head></html>\n',
   );
-
-  const result = run(root);
-
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /is the released docset but has robots noindex,follow/);
-});
-
-test('accepts the immutable v0.13.0 legacy noindex bundle only while it is selected', (t) => {
-  const root = fixture(t, {
-    released: 'v0.13.0',
-    releasedPath: '/v/0.13.0/',
-  });
   write(
     root,
-    'dist/v/0.13.0/index.html',
+    'dist/index.html',
+    '<html><head><link rel="canonical" href="https://docs.registrystack.org/"><link rel="sitemap" href="https://docs.registrystack.org/sitemap-index.xml"></head></html>\n',
+  );
+  write(
+    root,
+    'dist/preview/index.html',
+    '<html><head><meta name="robots" content="noindex,follow"><meta name="registry-legacy-preview-redirect" content="v1"><link rel="canonical" href="https://docs.registrystack.org/"></head></html>\n',
+  );
+  write(
+    root,
+    'dist/sitemap-index.xml',
+    '<sitemapindex><sitemap><loc>https://docs.registrystack.org/sitemap-0.xml</loc></sitemap></sitemapindex>\n',
+  );
+  write(
+    root,
+    'dist/sitemap-0.xml',
+    '<urlset><url><loc>https://docs.registrystack.org/</loc></url></urlset>\n',
+  );
+  write(
+    root,
+    'dist/robots.txt',
+    'Sitemap: https://docs.registrystack.org/sitemap-index.xml\n',
+  );
+  return root;
+}
+
+function run(root, args = []) {
+  return spawnSync(process.execPath, [checker, ...args], { cwd: root, encoding: 'utf8' });
+}
+
+test('accepts canonical root, unreleased Main, immutable archives, and legacy redirects', (t) => {
+  const result = run(productionFixture(t));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(
+    result.stdout,
+    /1 canonical release HTML files, 1 unreleased Main HTML files, 1 immutable archive HTML files, and 1 legacy redirects/,
+  );
+});
+
+test('accepts a local unreleased build at dist root', (t) => {
+  const root = mkdtempSync(resolve(tmpdir(), 'registry-seo-current-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  docsets(root);
+  write(
+    root,
+    'dist/index.html',
     '<html><head><meta name="robots" content="noindex,follow"></head></html>\n',
+  );
+
+  const result = run(root, ['--scope', 'current']);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /1 unreleased Main HTML files/);
+});
+
+test('accepts a canonical release redirect without a sitemap link', (t) => {
+  const root = productionFixture(t);
+  write(
+    root,
+    'dist/old/index.html',
+    '<!doctype html><title>Redirect</title><meta http-equiv="refresh" content="0;url=/"><link rel="canonical" href="https://docs.registrystack.org/">\n',
   );
 
   const result = run(root);
 
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /2 canonical release HTML files/);
+});
+
+test('rejects indexable unreleased Main documentation', (t) => {
+  const root = productionFixture(t);
+  write(root, 'dist/dev/index.html', '<html><head></head></html>\n');
+
+  const result = run(root);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /unreleased Main but missing robots noindex,follow/);
+});
+
+test('rejects an indexable immutable archive', (t) => {
+  const root = productionFixture(t);
+  write(root, 'dist/v/v1/index.html', '<html><head></head></html>\n');
+
+  const result = run(root);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /is archived but missing robots noindex,follow/);
+});
+
+test('rejects noindex on canonical release documentation', (t) => {
+  const root = productionFixture(t);
+  write(
+    root,
+    'dist/index.html',
+    '<html><head><meta name="robots" content="noindex,follow"><link rel="canonical" href="https://docs.registrystack.org/"><link rel="sitemap" href="https://docs.registrystack.org/sitemap-index.xml"></head></html>\n',
+  );
+
+  const result = run(root);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /canonical release documentation but has noindex/);
+});
+
+test('rejects a legacy redirect canonicalized to development documentation', (t) => {
+  const root = productionFixture(t);
+  write(
+    root,
+    'dist/preview/index.html',
+    '<html><head><meta name="robots" content="noindex,follow"><meta name="registry-legacy-preview-redirect" content="v1"><link rel="canonical" href="https://docs.registrystack.org/dev/"></head></html>\n',
+  );
+
+  const result = run(root);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /must canonicalize to the released root namespace/);
+});
+
+test('rejects non-root URLs in the canonical sitemap', (t) => {
+  const root = productionFixture(t);
+  write(
+    root,
+    'dist/sitemap-0.xml',
+    '<urlset><url><loc>https://docs.registrystack.org/dev/</loc></url></urlset>\n',
+  );
+
+  const result = run(root);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Canonical sitemap contains a non-root URL/);
+});
+
+test('rejects redirect pages in the canonical sitemap', (t) => {
+  const root = productionFixture(t);
+  write(
+    root,
+    'dist/old/index.html',
+    '<!doctype html><title>Redirect</title><meta http-equiv="refresh" content="0;url=/"><link rel="canonical" href="https://docs.registrystack.org/">\n',
+  );
+  write(
+    root,
+    'dist/sitemap-0.xml',
+    '<urlset><url><loc>https://docs.registrystack.org/old/</loc></url></urlset>\n',
+  );
+
+  const result = run(root);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Canonical sitemap must not include redirect page/);
 });

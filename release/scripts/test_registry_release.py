@@ -1808,6 +1808,74 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("source 'manual-docset'", result.stderr)
 
+    def test_validate_docsets_rejects_candidate_docs_for_released_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            manifest_path = manifest_dir / "registry-stack-beta-6.yaml"
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            manifest["stack"]["status"] = "released"
+            manifest_path.write_text(
+                yaml.safe_dump(manifest, sort_keys=False),
+                encoding="utf-8",
+            )
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["released"] = "v0.8.0"
+            data["docsets"][0]["availability"] = "candidate"
+            docsets.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "docset v0.8.0 availability must be 'released' because its "
+            "release manifest status is 'released'",
+            result.stderr,
+        )
+
+    def test_validate_docsets_rejects_stale_released_selector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            manifest_path = manifest_dir / "registry-stack-beta-6.yaml"
+            manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+            manifest["stack"]["status"] = "released"
+            manifest_path.write_text(
+                yaml.safe_dump(manifest, sort_keys=False),
+                encoding="utf-8",
+            )
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["released"] = "v0.7.0"
+            data["docsets"][0]["availability"] = "released"
+            docsets.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "docsets.yaml released selector must be 'v0.8.0', the newest "
+            "released manifest, not 'v0.7.0'",
+            result.stderr,
+        )
+
     def test_validate_docsets_rejects_missing_release_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

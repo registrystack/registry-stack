@@ -8,6 +8,7 @@ import { CURRENT_PRODUCTION_DOCSET_PATH } from '../src/lib/docset-path.mjs';
 const distDir = resolve(process.env.DOCS_DIST_DIR || 'dist');
 const attrPattern = /\s(?:href|src)=["']([^"']+)["']/g;
 const idPattern = /\sid=["']([^"']+)["']/g;
+const LEGACY_PREVIEW_PATH = '/preview/';
 
 function scopeFromArgs(args) {
   if (args.length === 0) return 'all';
@@ -135,6 +136,7 @@ const archivedRoots = new Set(
 );
 const declaredArchiveDestinations = new Set([
   CURRENT_PRODUCTION_DOCSET_PATH,
+  LEGACY_PREVIEW_PATH,
   ...archivedRoots,
 ]);
 

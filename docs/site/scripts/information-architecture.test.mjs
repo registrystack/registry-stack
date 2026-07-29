@@ -174,9 +174,9 @@ test('does not expose source-assurance material as an adopter journey', () => {
   assert.match(configSource, /'\/journeys\/': internalRedirect\('\/'\)/);
 });
 
-test('archived pages send readers directly to the current preview docset', () => {
-  assert.match(registryBannerSource, /<a href="\/preview\/">Latest<\/a>/);
-  assert.doesNotMatch(registryBannerSource, /<a href="\/">Latest<\/a>/);
+test('archived pages send readers to the canonical latest release', () => {
+  assert.match(registryBannerSource, /<a href="\/">Latest release<\/a>/);
+  assert.doesNotMatch(registryBannerSource, /href="\/preview\//);
 });
 
 test('keeps detailed product navigation under collapsed Reference', () => {

@@ -238,7 +238,7 @@ test('release verification uses the resolved tag target without installing the d
   assert.doesNotMatch(verifyJob, /npm ci/);
 });
 
-test('Pages stages released-root routing before checking the mounted Main corpus', () => {
+test('Pages promotes the released root before checking the mounted Main corpus', () => {
   const workflow = readFileSync(
     resolve(repositoryRoot, '.github/workflows/docs-pages.yml'),
     'utf8',
@@ -249,7 +249,8 @@ test('Pages stages released-root routing before checking the mounted Main corpus
   assert.ok(llmsCheck >= 0);
   assert.ok(rootStaging > archiveAssembly);
   assert.ok(llmsCheck > rootStaging);
-  assert.match(workflow, /DOCS_DIST_DIR: \$\{\{ github\.workspace \}\}\/docs\/site\/dist\/preview/);
-  assert.match(workflow, /DOCS_PUBLIC_BASE: \/preview\//);
+  assert.match(workflow, /node scripts\/apply-archive-seo\.mjs dist\/dev/);
+  assert.match(workflow, /DOCS_DIST_DIR: \$\{\{ github\.workspace \}\}\/docs\/site\/dist\/dev/);
+  assert.match(workflow, /DOCS_PUBLIC_BASE: \/dev\//);
   assert.equal(workflow.indexOf('npm run check:llms:built', llmsCheck + 1), -1);
 });

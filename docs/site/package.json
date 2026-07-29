@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "npm run generate && astro dev",
-    "build": "npm run generate && astro check && astro build",
+    "build": "npm run generate && astro check && astro build && node scripts/apply-archive-seo.mjs dist",
     "build:archive": "node scripts/build-archive.mjs",
     "build:archives": "node scripts/build-archives.mjs",
     "assemble:archives": "node scripts/assemble-archives.mjs",

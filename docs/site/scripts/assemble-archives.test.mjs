@@ -51,7 +51,7 @@ async function fixture(t) {
           ...docset,
           id: 'latest',
           label: 'Latest',
-          path: '/',
+          path: '/dev/',
           status: 'current',
           availability: 'unreleased',
           source: 'registry-stack-main',

@@ -35,7 +35,7 @@ released: v1
 docsets:
   - id: latest
     label: Latest
-    path: /
+    path: /dev/
     status: current
     availability: unreleased
     source: main
@@ -85,15 +85,23 @@ test('allows an archived standards page to cite root-relative current evidence',
   assert.match(result.stdout, /Built link check passed/);
 });
 
-test('allows archived navigation to the production current-docset mount', (t) => {
-  const result = run(fixture(t, '/preview/explanation/current/'));
+test('allows archived navigation to the production development mount', (t) => {
+  const result = run(fixture(t, '/dev/explanation/current/'));
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Built link check passed/);
+});
+
+test('allows archived navigation through the legacy preview redirect', (t) => {
+  const root = fixture(t, '/preview/');
+  write(root, 'dist/preview/index.html', '<html></html>');
+  const result = run(root);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Built link check passed/);
 });
 
 test('does not fall back when the production current-docset mount exists', (t) => {
-  const root = fixture(t, '/preview/explanation/current/');
-  write(root, 'dist/preview/index.html', '<html></html>');
+  const root = fixture(t, '/dev/explanation/current/');
+  write(root, 'dist/dev/index.html', '<html></html>');
   const result = run(root);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /links to missing/);
@@ -112,7 +120,7 @@ test('keeps rejecting unrelated links that escape an archive', (t) => {
 });
 
 test('rejects paths that only share the production mount prefix', (t) => {
-  const result = run(fixture(t, '/preview-escape/explanation/current/'));
+  const result = run(fixture(t, '/dev-escape/explanation/current/'));
   assert.equal(result.status, 1);
   assert.match(result.stderr, /links outside its archive/);
 });

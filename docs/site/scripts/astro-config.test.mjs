@@ -18,8 +18,8 @@ const docsets = {
   current: 'latest',
   released: 'v0.8.4',
   docsets: [
-    { id: 'latest', status: 'current' },
-    { id: 'v0.8.4', status: 'archived' },
+    { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/' },
+    { id: 'v0.8.4', status: 'archived', availability: 'released', path: '/v/0.8.4/' },
   ],
 };
 const currentOnlyPath = '/products/registry-notary/opencrvs-onboarding/';
@@ -29,34 +29,34 @@ test('current docset without a base keeps current-only redirects internal', () =
 
   assert.equal(context.base, undefined);
   assert.equal(context.isArchivedBuild, false);
-  assert.equal(context.isHistoricalArchiveBuild, false);
+  assert.equal(context.isSearchExcludedBuild, true);
   assert.equal(context.currentDocsetRedirect(currentOnlyPath), currentOnlyPath);
 });
 
-test('current docset with a preview base remains current', () => {
+test('current docset with the development base remains current', () => {
   const context = resolveDocsetBuildContext(docsets, {
     DOCS_DOCSET: 'latest',
-    DOCS_BASE: '/preview',
+    DOCS_BASE: '/dev',
   });
 
   assert.equal(context.isArchivedBuild, false);
   assert.equal(
     context.currentDocsetRedirect(currentOnlyPath),
-    `/preview${currentOnlyPath}`,
+    `/dev${currentOnlyPath}`,
   );
 });
 
-test('archived docset redirects current-only pages to the Main-source preview', () => {
+test('archived docset redirects current-only pages to unreleased Main', () => {
   const context = resolveDocsetBuildContext(docsets, {
     DOCS_DOCSET: 'v0.8.4',
     DOCS_BASE: '/v/0.8.4/',
   });
 
   assert.equal(context.isArchivedBuild, true);
-  assert.equal(context.isHistoricalArchiveBuild, false);
+  assert.equal(context.isSearchExcludedBuild, true);
   assert.equal(
     context.currentDocsetRedirect(currentOnlyPath),
-    `https://docs.registrystack.org/preview${currentOnlyPath}`,
+    `https://docs.registrystack.org/dev${currentOnlyPath}`,
   );
 });
 
@@ -75,9 +75,9 @@ test('archived builds disable platform-dependent Pagefind output', () => {
   assert.match(configSource, /pagefind:\s*!isArchivedBuild/);
 });
 
-test('only historical archives disable sitemap output', () => {
+test('all search-excluded builds disable sitemap output', () => {
   assert.match(
     configSource,
-    /isHistoricalArchiveBuild\s*\?\s*\[disabledSitemap\]\s*:\s*\[sitemap\(\)\]/,
+    /isSearchExcludedBuild\s*\?\s*\[disabledSitemap\]\s*:\s*\[sitemap\(\)\]/,
   );
 });
