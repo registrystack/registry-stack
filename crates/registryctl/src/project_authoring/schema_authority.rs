@@ -1980,6 +1980,7 @@ mod schema_authority_tests {
                 "/$defs/integrationRequestByteSize",
                 "/$defs/integrationResponseByteSize",
                 "/$defs/integrationSourceByteSize",
+                "/$defs/oid4vci/properties/registrar_clients",
                 "/$defs/oid4vci/properties/tx_code/properties/required",
                 "/properties/issuance/properties/algorithm",
             ]
@@ -2050,6 +2051,20 @@ mod schema_authority_tests {
         assert_eq!(
             serde_json::to_value(tx_omitted).expect("tx code serializes"),
             serde_json::to_value(tx_explicit).expect("tx code serializes")
+        );
+
+        let environment_schema: Value =
+            serde_json::from_str(ProjectSchemaKind::Environment.document())
+                .expect("environment schema parses");
+        let registrar_clients_default: Vec<String> = serde_json::from_value(
+            environment_schema["$defs"]["oid4vci"]["properties"]["registrar_clients"]["default"]
+                .clone(),
+        )
+        .expect("registrar client default parses");
+        assert_eq!(
+            registrar_clients_default,
+            Vec::<String>::default(),
+            "schema and serde use the same empty registrar-client default"
         );
     }
 
