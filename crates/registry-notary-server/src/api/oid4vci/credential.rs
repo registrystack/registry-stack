@@ -215,6 +215,9 @@ pub(in crate::api) async fn oid4vci_credential(
     let (response_body, evaluation) = match materialized {
         Ok(materialized) => materialized,
         Err(error) => {
+            // Materialization failures are terminal in both state backends.
+            // Resetting after an ambiguous signer or persistence failure could
+            // produce a second credential for the same transaction.
             let _ = preauth
                 .preauthorization_state()
                 .fail_credential_materialization(transaction_id, &holder_thumbprint)

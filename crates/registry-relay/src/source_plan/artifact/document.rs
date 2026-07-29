@@ -379,44 +379,35 @@ impl ResponseSchemaDocument {
     pub(super) fn validates_public_output(&self, output: &OutputFieldDocument) -> bool {
         match (self, output) {
             (
-                Self::String {
-                    nullable,
-                    max_bytes,
-                },
+                Self::String { nullable, .. },
                 OutputFieldDocument::String {
                     nullable: output_nullable,
-                    max_bytes: output_max_bytes,
+                    ..
                 },
-            ) => nullable == output_nullable && max_bytes == output_max_bytes,
+            ) => scalar_nullability_is_compatible(*nullable, *output_nullable),
             (
                 Self::Date { nullable },
                 OutputFieldDocument::Date {
                     nullable: output_nullable,
                     max_bytes,
                 },
-            ) => nullable == output_nullable && matches!(max_bytes, None | Some(10)),
+            ) => {
+                scalar_nullability_is_compatible(*nullable, *output_nullable)
+                    && matches!(max_bytes, None | Some(10))
+            }
             (
                 Self::Boolean { nullable },
                 OutputFieldDocument::Boolean {
                     nullable: output_nullable,
                 },
-            ) => nullable == output_nullable,
+            ) => scalar_nullability_is_compatible(*nullable, *output_nullable),
             (
-                Self::Integer {
-                    nullable,
-                    minimum,
-                    maximum,
-                },
+                Self::Integer { nullable, .. },
                 OutputFieldDocument::Integer {
                     nullable: output_nullable,
-                    minimum: output_minimum,
-                    maximum: output_maximum,
+                    ..
                 },
-            ) => {
-                nullable == output_nullable
-                    && minimum == output_minimum
-                    && maximum == output_maximum
-            }
+            ) => scalar_nullability_is_compatible(*nullable, *output_nullable),
             (
                 Self::Object {
                     nullable,
@@ -508,6 +499,10 @@ impl ResponseSchemaDocument {
             _ => self == selected,
         }
     }
+}
+
+const fn scalar_nullability_is_compatible(source_nullable: bool, output_nullable: bool) -> bool {
+    !source_nullable || output_nullable
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

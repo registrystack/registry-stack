@@ -2531,7 +2531,7 @@ async fn oid4vci_registry_offer_rejects_elapsed_credential_validity_before_signi
 
 #[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
-async fn oid4vci_registry_offer_rejects_validity_shorter_than_signer_deadline() {
+async fn oid4vci_registry_offer_caps_signer_deadline_to_remaining_validity() {
     let sign_attempt_count = Arc::new(AtomicUsize::new(0));
     let preauth = oid4vci_test_preauth_runtime_with_limited_signer(
         registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP,
@@ -2559,11 +2559,11 @@ async fn oid4vci_registry_offer_rejects_validity_shorter_than_signer_deadline() 
         "registrar-signer-deadline",
     )
     .await;
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         sign_attempt_count.load(Ordering::SeqCst),
-        0,
-        "insufficient remaining validity rejects before signer work",
+        1,
+        "the signer runs with a deadline capped to the remaining validity",
     );
 }
 
