@@ -1879,6 +1879,14 @@
               "redirect_uri": {
                 "type": "string"
               },
+              "registrar_clients": {
+                "default": [],
+                "description": "Machine OIDC clients admitted to create registrar-initiated offers.\n\nThese clients use the pinned authorization server and the Notary public\nbase URL as their resource audience. They are deliberately separate\nfrom the citizen client so generated subject-access classification\nremains closed.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "sensitive_state_key": {
                 "$ref": "#/$defs/SecretReference"
               },

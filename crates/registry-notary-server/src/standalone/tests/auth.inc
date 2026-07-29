@@ -609,6 +609,224 @@
     }
 
     #[test]
+    fn oidc_citizen_candidate_uses_any_configured_client_or_audience_signal() {
+        let citizen_client_ids = vec!["citizen-client".to_string()];
+        let citizen_audiences = vec!["citizen-portal".to_string()];
+        let mut machine = verified_token_with_extra(Map::new());
+        machine.claims.azp = Some("registrar-client".to_string());
+        machine.claims.client_id = Some("registrar-client".to_string());
+        machine.claims.aud = Some(Audience::One(
+            "https://notary.example.invalid".to_string(),
+        ));
+        machine.matched_client = Some("azp:registrar-client".to_string());
+
+        assert!(!oidc_citizen_candidate(
+            &machine,
+            &citizen_client_ids,
+            &citizen_audiences,
+        ));
+
+        let mut citizen_client_with_resource_audience = machine.clone();
+        citizen_client_with_resource_audience.claims.azp = Some("citizen-client".to_string());
+        citizen_client_with_resource_audience.matched_client =
+            Some("azp:citizen-client".to_string());
+        assert!(oidc_citizen_candidate(
+            &citizen_client_with_resource_audience,
+            &citizen_client_ids,
+            &citizen_audiences,
+        ));
+
+        let mut registrar_client_with_citizen_audience = machine.clone();
+        registrar_client_with_citizen_audience.claims.aud =
+            Some(Audience::One("citizen-portal".to_string()));
+        assert!(oidc_citizen_candidate(
+            &registrar_client_with_citizen_audience,
+            &citizen_client_ids,
+            &citizen_audiences,
+        ));
+
+        let mut mixed_clients = machine;
+        mixed_clients.claims.client_id = Some("citizen-client".to_string());
+        assert!(
+            oidc_citizen_candidate(
+                &mixed_clients,
+                &citizen_client_ids,
+                &citizen_audiences,
+            ),
+            "any citizen identity signal must select the subject-bound authentication path"
+        );
+    }
+
+    #[tokio::test]
+    async fn signed_registrar_oidc_token_authenticates_without_citizen_credentials() {
+        let idp = registry_platform_testing::MockIdp::start().await;
+        let notary_audience = "https://notary.example.invalid";
+        let citizen_client = "citizen-client";
+        let registrar_client = "registrar-client";
+        let verifier = TokenVerifier::new(
+            TokenVerifierConfig::registry_notary_access_profile(
+                idp.issuer(),
+                vec![citizen_client.to_string(), notary_audience.to_string()],
+                vec![Algorithm::EdDSA],
+                vec!["JWT".to_string()],
+            )
+            .with_allowed_clients(vec![
+                citizen_client.to_string(),
+                registrar_client.to_string(),
+            ]),
+            Arc::new(JwksFetcher::new_with_fetch_url_policy(
+                idp.jwks_uri(),
+                JwksFetcherConfig::defaults(),
+                FetchUrlPolicy::dev(),
+            )),
+        );
+        let machine_token = idp.mint_token(json!({
+            "aud": notary_audience,
+            "sub": "opencrvs-machine-1",
+            "azp": registrar_client,
+            "client_id": registrar_client,
+            "scope": "registry_notary:credential_offer_create birth_certificate",
+            "authorization_details": [{
+                "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
+                "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+                "actions": ["create_credential_offer"],
+                "locations": [notary_audience]
+            }]
+        }));
+        let machine_credentials = RequestCredentials {
+            authorization_present: true,
+            bearer_token: Some(machine_token),
+            ..RequestCredentials::default()
+        };
+
+        let principal = authenticate_oidc(
+            &machine_credentials,
+            &verifier,
+            &FetchUrlPolicy::dev(),
+            "sub",
+            Some("civil_id"),
+            SubjectAccessClaimSource::Userinfo,
+            SubjectAccessAssuranceClaimSource::IdToken,
+            None,
+            &[idp.issuer()],
+            &[citizen_client.to_string()],
+            &[citizen_client.to_string()],
+        )
+        .await
+        .expect("signed registrar access token needs neither userinfo nor an ID token");
+        assert_eq!(principal.principal_id, "opencrvs-machine-1");
+        assert_eq!(principal.access_mode(), AccessMode::MachineClient);
+        assert_eq!(
+            principal
+                .authorization_details
+                .as_ref()
+                .and_then(|details| details.actions.first())
+                .map(String::as_str),
+            Some("create_credential_offer")
+        );
+
+        let cross_pair_token = idp.mint_token(json!({
+            "aud": citizen_client,
+            "sub": "opencrvs-machine-1",
+            "azp": registrar_client,
+            "client_id": registrar_client,
+            "scope": "registry_notary:credential_offer_create birth_certificate"
+        }));
+        let cross_pair_credentials = RequestCredentials {
+            authorization_present: true,
+            bearer_token: Some(cross_pair_token),
+            ..RequestCredentials::default()
+        };
+        assert!(matches!(
+            authenticate_oidc(
+                &cross_pair_credentials,
+                &verifier,
+                &FetchUrlPolicy::dev(),
+                "sub",
+                Some("civil_id"),
+                SubjectAccessClaimSource::Userinfo,
+                SubjectAccessAssuranceClaimSource::IdToken,
+                None,
+                &[idp.issuer()],
+                &[citizen_client.to_string()],
+                &[citizen_client.to_string()],
+            )
+            .await,
+            Err(EvidenceError::MissingCredential)
+        ));
+
+        idp.stop().await;
+    }
+
+    #[test]
+    fn oidc_machine_principal_needs_no_userinfo_or_id_token_assurance() {
+        let mut extra = Map::new();
+        extra.insert("acr".to_string(), json!("untrusted-machine-acr"));
+        extra.insert("auth_time".to_string(), json!(1_700_000_000_i64));
+        extra.insert(
+            "authorization_details".to_string(),
+            json!([{
+                "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
+                "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
+                "actions": ["create_credential_offer"],
+                "locations": ["https://notary.example.invalid"]
+            }]),
+        );
+        let mut verified = verified_token_with_extra(extra);
+        verified.claims.azp = Some("registrar-client".to_string());
+        verified.claims.client_id = Some("registrar-client".to_string());
+        verified.claims.aud = Some(Audience::One(
+            "https://notary.example.invalid".to_string(),
+        ));
+        verified.matched_client = Some("azp:registrar-client".to_string());
+        verified.scopes = vec![
+            "registry_notary:credential_offer_create".to_string(),
+            "evidence:birth:read".to_string(),
+        ];
+
+        let principal = principal_from_machine_oidc(
+            &verified,
+            EvidenceAuthProfileId::ExternalOidc,
+            verified_claim_value("at+jwt"),
+            "sub",
+        )
+        .expect("verified registrar token authenticates without citizen credentials");
+        let claims = principal
+            .verified_claims
+            .as_ref()
+            .expect("verified machine claims are retained");
+
+        assert_eq!(principal.access_mode(), AccessMode::MachineClient);
+        assert_eq!(principal.principal_id, "login-subject-123");
+        assert_eq!(
+            claims.client_id.as_ref().map(VerifiedClaimValue::as_str),
+            Some("azp:registrar-client")
+        );
+        assert_eq!(
+            claims
+                .audiences
+                .iter()
+                .map(VerifiedClaimValue::as_str)
+                .collect::<Vec<_>>(),
+            vec!["https://notary.example.invalid"]
+        );
+        assert!(claims.subject_binding_claim.is_none());
+        assert!(claims.subject_binding_value.is_none());
+        assert!(
+            claims.acr.is_none() && claims.auth_time.is_none(),
+            "machine access-token assurance must not be reinterpreted as citizen assurance"
+        );
+        assert_eq!(
+            principal
+                .authorization_details
+                .as_ref()
+                .and_then(|details| details.actions.first())
+                .map(String::as_str),
+            Some("create_credential_offer")
+        );
+    }
+
+    #[test]
     fn oidc_principal_carries_bounded_verified_claims() {
         let subject_binding_claim = "https://id.example.gov/claims/national_id";
         let mut extra = Map::new();

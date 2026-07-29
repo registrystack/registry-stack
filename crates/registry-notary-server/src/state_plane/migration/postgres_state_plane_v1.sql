@@ -1457,6 +1457,80 @@ BEGIN
 END
 $function$;
 
+CREATE OR REPLACE FUNCTION registry_notary_api.registry_client_offer_preflight_v1(
+    p_idempotency_key_hash bytea,
+    p_request_hash bytea,
+    p_evaluation_hash bytea,
+    p_key_id bytea
+)
+RETURNS TABLE (
+    outcome smallint,
+    key_id bytea,
+    response_aead_nonce bytea,
+    response_ciphertext bytea,
+    retention_expires_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+DECLARE
+    v_now timestamptz := pg_catalog.clock_timestamp();
+    v_stored registry_notary_private.registry_client_offer%ROWTYPE;
+BEGIN
+    IF pg_catalog.octet_length(p_idempotency_key_hash) <> 32
+       OR pg_catalog.octet_length(p_request_hash) <> 32
+       OR pg_catalog.octet_length(p_evaluation_hash) <> 32
+       OR pg_catalog.octet_length(p_key_id) <> 32 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'invalid registry-client offer preflight';
+    END IF;
+    SELECT offer.* INTO v_stored
+      FROM registry_notary_private.registry_client_offer AS offer
+     WHERE offer.idempotency_key_hash = p_idempotency_key_hash
+       AND offer.purge_after > v_now;
+    IF FOUND THEN
+        IF v_stored.key_id <> p_key_id THEN
+            RAISE EXCEPTION USING ERRCODE = '55000',
+                MESSAGE = 'sensitive-state key generation mismatch';
+        ELSIF v_stored.request_hash <> p_request_hash THEN
+            RETURN QUERY SELECT 0::smallint, NULL::bytea, NULL::bytea,
+                NULL::bytea, NULL::timestamptz;
+        ELSIF v_stored.retention_expires_at > v_now THEN
+            RETURN QUERY SELECT 2::smallint, v_stored.key_id,
+                v_stored.response_aead_nonce, v_stored.response_ciphertext,
+                v_stored.retention_expires_at;
+        ELSE
+            RETURN QUERY SELECT -2::smallint, NULL::bytea, NULL::bytea,
+                NULL::bytea, NULL::timestamptz;
+        END IF;
+        RETURN;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+          FROM registry_notary_private.issuance_evaluation_consumption AS consumption
+         WHERE consumption.evaluation_hash = p_evaluation_hash
+           AND consumption.expires_at > v_now
+           AND consumption.key_id <> p_key_id
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '55000',
+            MESSAGE = 'sensitive-state key generation mismatch';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+          FROM registry_notary_private.issuance_evaluation_consumption AS consumption
+         WHERE consumption.evaluation_hash = p_evaluation_hash
+           AND consumption.expires_at > v_now
+    ) THEN
+        RETURN QUERY SELECT -2::smallint, NULL::bytea, NULL::bytea,
+            NULL::bytea, NULL::timestamptz;
+        RETURN;
+    END IF;
+    RETURN QUERY SELECT 1::smallint, NULL::bytea, NULL::bytea,
+        NULL::bytea, NULL::timestamptz;
+END
+$function$;
+
 CREATE OR REPLACE FUNCTION registry_notary_api.registry_client_offer_reserve_v1(
     p_idempotency_key_hash bytea,
     p_request_hash bytea,

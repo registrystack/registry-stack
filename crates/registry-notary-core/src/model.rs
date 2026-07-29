@@ -1630,6 +1630,13 @@ pub struct StoredIssuanceProvenance {
     /// record. A missing empty legacy field is readable but nonissuable.
     #[serde(default)]
     pub consultations: Vec<StoredIssuanceConsultationProvenance>,
+    /// Keyed commitment joining the complete opaque evaluated target reference
+    /// to the target's canonical primary authorization identity. The
+    /// commitment permits a later RAR comparison without retaining the raw
+    /// identity. Evaluations stored before this field existed remain readable,
+    /// but cannot initiate a registry-client credential offer.
+    #[serde(default)]
+    pub authorization_target_binding: String,
 }
 
 impl std::fmt::Debug for StoredIssuanceProvenance {
@@ -2100,6 +2107,27 @@ mod tests {
                 .expect("versioned claim ref deserializes");
         assert_eq!(versioned.id, "person-is-alive");
         assert_eq!(versioned.version.as_deref(), Some("2026-05"));
+    }
+
+    #[test]
+    fn private_issuance_target_binding_is_backward_readable_and_debug_redacted() {
+        let legacy: StoredIssuanceProvenance = serde_json::from_value(json!({
+            "claims": [],
+            "consultations": [],
+        }))
+        .expect("legacy private provenance remains readable");
+        assert!(legacy.authorization_target_binding.is_empty());
+
+        let stored = StoredIssuanceProvenance {
+            claims: Vec::new(),
+            consultations: Vec::new(),
+            authorization_target_binding:
+                "hmac-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
+        };
+        let debug = format!("{stored:?}");
+        assert!(!debug.contains("hmac-sha256"));
+        assert!(!debug.contains("aaaaaaaa"));
     }
 
     #[test]

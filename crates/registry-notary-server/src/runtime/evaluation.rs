@@ -571,6 +571,8 @@ impl RegistryNotaryRuntime {
             .collect::<Result<Vec<_>, EvidenceError>>()?;
         let issuance_provenance = stored_issuance_provenance(
             &evidence,
+            &self.subject_access_rate_keys,
+            target,
             &request.claims,
             &claim_versions,
             &internal,
@@ -1241,6 +1243,11 @@ impl RegistryNotaryRuntime {
             .collect::<Result<Vec<_>, EvidenceError>>()?;
         let issuance_provenance = stored_issuance_provenance(
             &evidence,
+            &self.subject_access_rate_keys,
+            item.request
+                .target
+                .as_ref()
+                .ok_or(EvidenceError::InvalidRequest)?,
             &item.request.claims,
             &item.claim_versions,
             &internal,
@@ -1652,6 +1659,8 @@ fn relay_expected_result(
 
 fn stored_issuance_provenance(
     evidence: &EvidenceConfig,
+    subject_access_rate_keys: &SubjectAccessRateLimitKeys,
+    target: &EvidenceEntity,
     selected_claims: &[ClaimRef],
     claim_versions: &ClaimVersionSelections,
     internal: &BTreeMap<String, ClaimResultInternal>,
@@ -1747,9 +1756,25 @@ fn stored_issuance_provenance(
         )?;
         claims.push(claim);
     }
+    let target_ref = target_ref_view(subject_access_rate_keys, target)?;
+    let primary_identity = target
+        .to_subject_request()
+        .ok_or(EvidenceError::InvalidRequest)?;
+    let primary_id_type = match primary_identity.id_type.as_deref() {
+        Some("id") => return Err(EvidenceError::InvalidRequest),
+        Some(id_type) => id_type,
+        None => "id",
+    };
+    let authorization_target_binding = issuance_authorization_target_binding(
+        subject_access_rate_keys,
+        &target_ref,
+        primary_id_type,
+        &primary_identity.id,
+    )?;
     Ok(Some(StoredIssuanceProvenance {
         claims,
         consultations: consultations.into_values().collect(),
+        authorization_target_binding,
     }))
 }
 

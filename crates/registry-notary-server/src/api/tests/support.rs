@@ -554,6 +554,80 @@
         Arc::new(PreAuthRuntime::for_api_tests(access_token_typ))
     }
 
+    struct AttemptLimitedAccessTokenSigner {
+        inner: LocalJwkSigner,
+        sign_attempt_count: Arc<AtomicUsize>,
+        allowed_signatures: usize,
+    }
+
+    impl AttemptLimitedAccessTokenSigner {
+        fn new(sign_attempt_count: Arc<AtomicUsize>, allowed_signatures: usize) -> Self {
+            let inner = LocalJwkSigner::new(
+                PrivateJwk::parse(
+                    &json!({
+                        "kty": "OKP",
+                        "crv": "Ed25519",
+                        "d": HOLDER_PRIV_D_B64,
+                        "x": HOLDER_PUB_X_B64,
+                        "alg": "EdDSA",
+                        "kid": "did:web:notary.example#access"
+                    })
+                    .to_string(),
+                )
+                .expect("test access-token JWK parses"),
+            )
+            .expect("test access-token signer builds");
+            Self {
+                inner,
+                sign_attempt_count,
+                allowed_signatures,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SigningProvider for AttemptLimitedAccessTokenSigner {
+        fn algorithm(&self) -> registry_platform_crypto::SigningAlgorithm {
+            self.inner.algorithm()
+        }
+
+        fn key_id(&self) -> &str {
+            self.inner.key_id()
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            self.inner.public_jwk()
+        }
+
+        async fn sign(
+            &self,
+            payload: &[u8],
+        ) -> Result<Vec<u8>, registry_platform_crypto::SigningError> {
+            let attempt = self.sign_attempt_count.fetch_add(1, Ordering::SeqCst);
+            if attempt >= self.allowed_signatures {
+                return Err(registry_platform_crypto::SigningError::external(
+                    "test access-token signer capacity exhausted",
+                ));
+            }
+            self.inner.sign(payload).await
+        }
+    }
+
+    fn oid4vci_test_preauth_runtime_with_limited_signer(
+        access_token_typ: &str,
+        sign_attempt_count: Arc<AtomicUsize>,
+        allowed_signatures: usize,
+    ) -> Arc<PreAuthRuntime> {
+        let signer = Arc::new(AttemptLimitedAccessTokenSigner::new(
+            sign_attempt_count,
+            allowed_signatures,
+        ));
+        Arc::new(
+            PreAuthRuntime::for_api_tests(access_token_typ)
+                .with_access_token_signer_for_tests(signer),
+        )
+    }
+
     fn oid4vci_test_audit_hasher() -> AuditKeyHasher {
         const ENV: &str = "TEST_OID4VCI_AUDIT_HASH_SECRET";
         std::env::set_var(ENV, "0123456789abcdef0123456789abcdef");
@@ -1036,6 +1110,7 @@ evaluation_profiles:
                     acquired_at: "2026-05-23T00:00:00Z".to_string(),
                 },
             ],
+            authorization_target_binding: String::new(),
         };
         bind_fixture_issuance_claim(&mut stored, 0, evaluation_id, 1);
         stored
@@ -1084,6 +1159,7 @@ evaluation_profiles:
                     acquired_at: "2026-05-23T00:00:00Z".to_string(),
                 },
             ],
+            authorization_target_binding: String::new(),
         };
         bind_fixture_issuance_claim(&mut stored, 0, evaluation_id, 1);
         bind_fixture_issuance_claim(&mut stored, 1, evaluation_id, 2);

@@ -35,11 +35,11 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "preauthorization-tx-code=verified-notary-issuer-stable-scope-jti-keyed-pin-verifier-peek-redeem-one-winner-expiry-live-key-attestation-v3\0",
     "oid4vci-issuance-transaction=keyed-id-encrypted-immutable-record-sha256-uri-commitment-token-nonce-bind-holder-and-request-atomic-one-materialization-encrypted-response-terminal-failure-expiry-v2\0",
     "issuance-evaluation-consumption=keyed-owner-evaluation-single-lineage-shared-direct-and-offer-expiry-capacity-v1\0",
-    "registry-client-offer=hashed-idempotency-exact-encrypted-response-shared-evaluation-consumption-atomic-client-quota-transaction-and-optional-pin-expiry-capacity-v2\0",
+    "registry-client-offer=hashed-idempotency-exact-encrypted-response-read-only-preflight-before-side-effects-shared-evaluation-consumption-atomic-client-quota-transaction-and-optional-pin-expiry-capacity-v3\0",
     "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2\0",
 );
 pub const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "56e32f72f7cfb555487e0e1b94959780c24d0a4e2427496766ad03c135c65313";
+    "f0f447b39578d23e54ba5168db09a5d813240c8373038cf079b4697ee59503a1";
 // The immediately preceding v1 contract is the only supported in-place
 // upgrade source. Its exact catalog is attested before any DDL runs.
 const PREVIOUS_STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
@@ -47,7 +47,7 @@ const PREVIOUS_STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
 
 const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 0x4e4f_5441_5259_0001;
 const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 13;
-const EXPECTED_API_FUNCTION_COUNT_V1: i64 = 33;
+const EXPECTED_API_FUNCTION_COUNT_V1: i64 = 34;
 
 /// The `NOLOGIN` role that owns the Notary schemas and fixed functions.
 #[derive(Clone, PartialEq, Eq)]
@@ -503,6 +503,7 @@ fn state_plane_acl_sql(runtime_role: &RuntimeDatabaseRole) -> String {
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_key_attest_v1(bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_redeem_v1(bytea, bytea, timestamptz, boolean, bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.evaluation_issuance_consume_v1(bytea, bytea, timestamptz) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.registry_client_offer_preflight_v1(bytea, bytea, bytea, bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.registry_client_offer_reserve_v1(bytea, bytea, bytea, bytea, bytea, bytea, text, text, bytea, bytea, timestamptz, bytea, smallint, timestamptz, bytea, bytea, timestamptz, timestamptz, bytea, integer, integer) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_reserve_v1(bytea, bytea, text, text, bytea, bytea, timestamptz) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_get_v1(bytea) TO {role};\n\
@@ -921,11 +922,11 @@ fn expected_previous_catalog_definition_fingerprint(
 // These fingerprints are derived from the deterministic catalog projection
 // below and are pinned separately for every supported PostgreSQL major.
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG16_V1: &str =
-    "2ead81e377f2781032e933be2934d55e9253506e0de7435eb851e34bb74aa589";
+    "36d0d9839d8fb991a831ad65f9bfd35507743fcf9c4c80b281a3367caa2f7722";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG17_V1: &str =
-    "2ead81e377f2781032e933be2934d55e9253506e0de7435eb851e34bb74aa589";
+    "36d0d9839d8fb991a831ad65f9bfd35507743fcf9c4c80b281a3367caa2f7722";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG18_V1: &str =
-    "b96c69fe23f974815880668079a57c156e957a66144c5882c63a0712f29be89d";
+    "eb8998790a23d7954ea7dd9dbcb6821c51e2166946a444fe0da25a9ed946e2b8";
 const PREVIOUS_CATALOG_DEFINITION_FINGERPRINT_PG16_V1: &str =
     "cf45576aced8a825cd2891800f2636ec1ca0dd0959b81f3a787cc0ed36ea09a5";
 const PREVIOUS_CATALOG_DEFINITION_FINGERPRINT_PG17_V1: &str =

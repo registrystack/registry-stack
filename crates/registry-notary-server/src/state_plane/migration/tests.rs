@@ -7,9 +7,9 @@ use registry_notary_core::{StateConfig, StatePostgresqlConfig, STATE_STORAGE_POS
 
 use crate::preauth_state::{
     CredentialMaterialization, IssuanceAuthority, IssuanceTransaction, LoginState,
-    PreauthorizationState, PreauthorizationStateError, RegistryClientOfferReservation,
-    RegistryClientOfferReservationOutcome, RegistryClientOfferResponse,
-    RegistryClientTransactionCode,
+    PreauthorizationState, PreauthorizationStateError, RegistryClientOfferPreflightOutcome,
+    RegistryClientOfferReservation, RegistryClientOfferReservationOutcome,
+    RegistryClientOfferResponse, RegistryClientTransactionCode,
 };
 use crate::state_plane::{
     attest_postgres_state_plane_runtime, LoginReserveOutcome, NotaryPostgresStatePlaneError,
@@ -60,7 +60,7 @@ fn schema_fingerprint_is_the_framed_semantic_identity() {
         "preauthorization-tx-code=verified-notary-issuer-stable-scope-jti-keyed-pin-verifier-peek-redeem-one-winner-expiry-live-key-attestation-v3",
         "oid4vci-issuance-transaction=keyed-id-encrypted-immutable-record-sha256-uri-commitment-token-nonce-bind-holder-and-request-atomic-one-materialization-encrypted-response-terminal-failure-expiry-v2",
         "issuance-evaluation-consumption=keyed-owner-evaluation-single-lineage-shared-direct-and-offer-expiry-capacity-v1",
-        "registry-client-offer=hashed-idempotency-exact-encrypted-response-shared-evaluation-consumption-atomic-client-quota-transaction-and-optional-pin-expiry-capacity-v2",
+        "registry-client-offer=hashed-idempotency-exact-encrypted-response-read-only-preflight-before-side-effects-shared-evaluation-consumption-atomic-client-quota-transaction-and-optional-pin-expiry-capacity-v3",
         "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2",
     ] {
         assert!(
@@ -2363,6 +2363,7 @@ async fn assert_sensitive_adapter_contract(
             .transaction(transaction_id)
             .await?
             .expect("encrypted transaction must round trip")
+            .transaction
             .evaluation_id,
         transaction.evaluation_id.as_str()
     );
@@ -2525,12 +2526,76 @@ async fn assert_sensitive_adapter_contract(
             quota_cost: 1,
         }
     };
+    let before_preflight_rows: i64 = admin
+        .query_one(
+            "SELECT (SELECT count(*) FROM registry_notary_private.registry_client_offer) + \
+                    (SELECT count(*) FROM registry_notary_private.issuance_evaluation_consumption)",
+            &[],
+        )
+        .await?
+        .get(0);
+    assert!(matches!(
+        preauthorization_state
+            .registry_client_offer_preflight(
+                "adapter-registry-offer-evaluation",
+                "adapter-registry-client",
+                &format!("hmac-sha256:{}", "1".repeat(64)),
+                &format!("sha256:{}", "a".repeat(64)),
+            )
+            .await?,
+        RegistryClientOfferPreflightOutcome::Available
+    ));
+    let after_preflight_rows: i64 = admin
+        .query_one(
+            "SELECT (SELECT count(*) FROM registry_notary_private.registry_client_offer) + \
+                    (SELECT count(*) FROM registry_notary_private.issuance_evaluation_consumption)",
+            &[],
+        )
+        .await?
+        .get(0);
+    assert_eq!(
+        after_preflight_rows, before_preflight_rows,
+        "PostgreSQL preflight must not mutate offer or evaluation state",
+    );
     assert_eq!(
         preauthorization_state
             .reserve_registry_client_offer(offer_reservation('1', 'a', offer_transaction.clone(),))
             .await?,
         RegistryClientOfferReservationOutcome::Created(offer_response.clone())
     );
+    assert_eq!(
+        preauthorization_state
+            .registry_client_offer_preflight(
+                "adapter-registry-offer-evaluation",
+                "adapter-registry-client",
+                &format!("hmac-sha256:{}", "1".repeat(64)),
+                &format!("sha256:{}", "a".repeat(64)),
+            )
+            .await?,
+        RegistryClientOfferPreflightOutcome::Replayed(offer_response.clone())
+    );
+    assert!(matches!(
+        preauthorization_state
+            .registry_client_offer_preflight(
+                "adapter-registry-offer-evaluation",
+                "adapter-registry-client",
+                &format!("hmac-sha256:{}", "1".repeat(64)),
+                &format!("sha256:{}", "b".repeat(64)),
+            )
+            .await?,
+        RegistryClientOfferPreflightOutcome::IdempotencyConflict
+    ));
+    assert!(matches!(
+        preauthorization_state
+            .registry_client_offer_preflight(
+                "adapter-registry-offer-evaluation",
+                "adapter-registry-client",
+                &format!("hmac-sha256:{}", "2".repeat(64)),
+                &format!("sha256:{}", "a".repeat(64)),
+            )
+            .await?,
+        RegistryClientOfferPreflightOutcome::EvaluationConsumed
+    ));
     assert_eq!(
         preauthorization_state
             .reserve_registry_client_offer(offer_reservation('1', 'a', offer_transaction.clone(),))

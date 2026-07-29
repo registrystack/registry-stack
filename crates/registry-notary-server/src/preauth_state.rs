@@ -84,6 +84,22 @@ pub(crate) struct IssuanceTransaction {
     pub(crate) authority: IssuanceAuthority,
 }
 
+#[derive(Clone)]
+pub(crate) struct LiveIssuanceTransaction {
+    pub(crate) transaction: IssuanceTransaction,
+    pub(crate) expires_at: OffsetDateTime,
+}
+
+impl std::fmt::Debug for LiveIssuanceTransaction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LiveIssuanceTransaction")
+            .field("transaction", &self.transaction)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
 impl std::fmt::Debug for IssuanceTransaction {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -191,6 +207,25 @@ impl std::fmt::Debug for RegistryClientOfferReservation {
 pub(crate) enum RegistryClientOfferReservationOutcome {
     Created(RegistryClientOfferResponse),
     Replayed(RegistryClientOfferResponse),
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum RegistryClientOfferPreflightOutcome {
+    Available,
+    Replayed(RegistryClientOfferResponse),
+    IdempotencyConflict,
+    EvaluationConsumed,
+}
+
+impl std::fmt::Debug for RegistryClientOfferPreflightOutcome {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Available => formatter.write_str("Available"),
+            Self::Replayed(_) => formatter.write_str("Replayed([redacted])"),
+            Self::IdempotencyConflict => formatter.write_str("IdempotencyConflict"),
+            Self::EvaluationConsumed => formatter.write_str("EvaluationConsumed"),
+        }
+    }
 }
 
 impl std::fmt::Debug for RegistryClientOfferReservationOutcome {
@@ -384,6 +419,36 @@ impl PreauthorizationState {
         }
     }
 
+    /// Read-only fast path for exact replay/conflict and consumed-evaluation
+    /// decisions. The final reservation remains authoritative for races.
+    pub(crate) async fn registry_client_offer_preflight(
+        &self,
+        evaluation_id: &str,
+        evaluation_client_id: &str,
+        idempotency_key_hash: &str,
+        canonical_request_hash: &str,
+    ) -> Result<RegistryClientOfferPreflightOutcome, PreauthorizationStateError> {
+        match &self.backend {
+            PreauthorizationBackend::InMemory(state) => state.registry_client_offer_preflight(
+                evaluation_id,
+                evaluation_client_id,
+                idempotency_key_hash,
+                canonical_request_hash,
+            ),
+            PreauthorizationBackend::Postgresql(handle) => {
+                handle
+                    .sensitive_state()?
+                    .registry_client_offer_preflight(
+                        evaluation_id,
+                        evaluation_client_id,
+                        idempotency_key_hash,
+                        canonical_request_hash,
+                    )
+                    .await
+            }
+        }
+    }
+
     /// Terminally consume one evaluation lineage before direct issuance side
     /// effects. Registry-client offer creation uses the same ledger, so only
     /// one path can win for an evaluation and its owning client.
@@ -415,7 +480,7 @@ impl PreauthorizationState {
     pub(crate) async fn transaction(
         &self,
         transaction_id: &str,
-    ) -> Result<Option<IssuanceTransaction>, PreauthorizationStateError> {
+    ) -> Result<Option<LiveIssuanceTransaction>, PreauthorizationStateError> {
         if let PreauthorizationBackend::Postgresql(handle) = &self.backend {
             return Ok(handle
                 .sensitive_state()?
@@ -830,6 +895,46 @@ impl InMemoryPreauthorizationState {
         Ok(RegistryClientOfferReservationOutcome::Created(response))
     }
 
+    fn registry_client_offer_preflight(
+        &self,
+        evaluation_id: &str,
+        evaluation_client_id: &str,
+        idempotency_key_hash: &str,
+        canonical_request_hash: &str,
+    ) -> Result<RegistryClientOfferPreflightOutcome, PreauthorizationStateError> {
+        if evaluation_id.is_empty() || evaluation_client_id.is_empty() {
+            return Err(PreauthorizationStateError::Unavailable);
+        }
+        let idempotency_hash = decode_hash_uri(idempotency_key_hash, "hmac-sha256:")?;
+        let request_hash = decode_hash_uri(canonical_request_hash, "sha256:")?;
+        let evaluation_hash = self.evaluation_issuance_hash(evaluation_id, evaluation_client_id);
+        let now = OffsetDateTime::now_utc();
+        let records = self.lock_records()?;
+        if let Some(stored) = records
+            .registry_client_offers
+            .get(&idempotency_hash)
+            .filter(|stored| stored.purge_after > now)
+        {
+            if stored.request_hash != request_hash {
+                return Ok(RegistryClientOfferPreflightOutcome::IdempotencyConflict);
+            }
+            if stored.retention_expires_at > now {
+                return Ok(RegistryClientOfferPreflightOutcome::Replayed(
+                    stored.response.clone(),
+                ));
+            }
+            return Ok(RegistryClientOfferPreflightOutcome::EvaluationConsumed);
+        }
+        if records
+            .consumed_evaluations
+            .get(&evaluation_hash)
+            .is_some_and(|expires_at| *expires_at > now)
+        {
+            return Ok(RegistryClientOfferPreflightOutcome::EvaluationConsumed);
+        }
+        Ok(RegistryClientOfferPreflightOutcome::Available)
+    }
+
     fn reserve_evaluation_issuance(
         &self,
         evaluation_id: &str,
@@ -872,7 +977,7 @@ impl InMemoryPreauthorizationState {
     fn transaction(
         &self,
         transaction_id: &str,
-    ) -> Result<Option<IssuanceTransaction>, PreauthorizationStateError> {
+    ) -> Result<Option<LiveIssuanceTransaction>, PreauthorizationStateError> {
         let now = OffsetDateTime::now_utc();
         let key = replay_identifier_hash(transaction_id);
         let mut records = self.lock_records()?;
@@ -880,7 +985,10 @@ impl InMemoryPreauthorizationState {
         Ok(records
             .issuance
             .get(&key)
-            .map(|record| record.value.transaction.clone()))
+            .map(|record| LiveIssuanceTransaction {
+                transaction: record.value.transaction.clone(),
+                expires_at: record.expires_at,
+            }))
     }
 
     fn bind_transaction_nonce(
@@ -1585,6 +1693,71 @@ mod tests {
                 .unwrap(),
             RegistryClientOfferReservationOutcome::Replayed(expected)
         );
+    }
+
+    #[tokio::test]
+    async fn registry_client_offer_preflight_is_exact_and_nonmutating() {
+        let state = memory_state();
+        let reservation =
+            registry_client_offer_reservation("offer-transaction", "evaluation", '1', 'a');
+        assert!(matches!(
+            state
+                .registry_client_offer_preflight(
+                    "evaluation",
+                    "registry-client",
+                    &reservation.idempotency_key_hash,
+                    &reservation.canonical_request_hash,
+                )
+                .await
+                .unwrap(),
+            RegistryClientOfferPreflightOutcome::Available
+        ));
+        assert!(state
+            .transaction("offer-transaction")
+            .await
+            .unwrap()
+            .is_none());
+        let expected = reservation.response.clone();
+        state
+            .reserve_registry_client_offer(reservation)
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .registry_client_offer_preflight(
+                    "evaluation",
+                    "registry-client",
+                    &format!("hmac-sha256:{}", "1".repeat(64)),
+                    &format!("sha256:{}", "a".repeat(64)),
+                )
+                .await
+                .unwrap(),
+            RegistryClientOfferPreflightOutcome::Replayed(expected)
+        );
+        assert!(matches!(
+            state
+                .registry_client_offer_preflight(
+                    "evaluation",
+                    "registry-client",
+                    &format!("hmac-sha256:{}", "1".repeat(64)),
+                    &format!("sha256:{}", "b".repeat(64)),
+                )
+                .await
+                .unwrap(),
+            RegistryClientOfferPreflightOutcome::IdempotencyConflict
+        ));
+        assert!(matches!(
+            state
+                .registry_client_offer_preflight(
+                    "evaluation",
+                    "registry-client",
+                    &format!("hmac-sha256:{}", "2".repeat(64)),
+                    &format!("sha256:{}", "a".repeat(64)),
+                )
+                .await
+                .unwrap(),
+            RegistryClientOfferPreflightOutcome::EvaluationConsumed
+        ));
     }
 
     #[tokio::test]

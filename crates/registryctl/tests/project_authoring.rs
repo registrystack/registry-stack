@@ -6877,6 +6877,26 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
         "household-eligibility",
         "household_reference",
     );
+    let baseline_build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("OID4VCI project without registrar clients remains compatible");
+    let baseline_output = resolve_build_output(
+        &project,
+        baseline_build.output.expect("baseline build output"),
+    );
+    let baseline_approval: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(baseline_output.join("private/notary/approval/project-state.json"))
+            .expect("baseline approval state reads"),
+    )
+    .expect("baseline approval state parses");
+    merge_environment_yaml(
+        &project.join("environments/local.yaml"),
+        "oid4vci:\n  registrar_clients: [benefits-service]\n",
+    );
 
     let build = build_registry_project(&ProjectBuildOptions {
         project_directory: project.clone(),
@@ -6887,6 +6907,48 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     .expect("typed OID4VCI authority project builds through the production validator");
     let output = resolve_build_output(&project, build.output.expect("build output"));
     let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
+    let approval: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(output.join("private/notary/approval/project-state.json"))
+            .expect("registrar approval state reads"),
+    )
+    .expect("registrar approval state parses");
+
+    assert_ne!(
+        baseline_approval["semantic_digests"]["operator_security"],
+        approval["semantic_digests"]["operator_security"],
+        "registrar trust must alter operator-security review semantics"
+    );
+    assert_eq!(
+        baseline_approval["semantic_digests"]["claim"], approval["semantic_digests"]["claim"],
+        "registrar trust must not alter claim semantics"
+    );
+    let baseline_trust = baseline_approval["promotion_projection"]["fields"]
+        .as_array()
+        .expect("baseline promotion fields are an array")
+        .iter()
+        .find(|field| field["kind"].as_str() == Some("trust"))
+        .expect("baseline trust promotion field exists");
+    let registrar_trust = approval["promotion_projection"]["fields"]
+        .as_array()
+        .expect("registrar promotion fields are an array")
+        .iter()
+        .find(|field| field["kind"].as_str() == Some("trust"))
+        .expect("registrar trust promotion field exists");
+    assert_ne!(
+        baseline_trust["digest"], registrar_trust["digest"],
+        "registrar clients must be projected as trust"
+    );
+    assert_eq!(
+        registrar_trust["authority_members"]
+            .as_array()
+            .expect("registrar trust authority members")
+            .len(),
+        baseline_trust["authority_members"]
+            .as_array()
+            .expect("baseline trust authority members")
+            .len()
+            + 1
+    );
 
     assert_eq!(
         notary["instance"]["public_base_url"].as_str(),
@@ -6904,6 +6966,23 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     assert_eq!(
         notary["auth"]["oidc"]["issuer"].as_str(),
         Some("https://esignet.example.invalid")
+    );
+    assert_eq!(
+        notary["auth"]["oidc"]["audiences"],
+        serde_norway::from_str::<serde_norway::Value>(
+            "[example-wallet-client, https://notary.example.invalid]"
+        )
+        .expect("OIDC audiences parse")
+    );
+    assert_eq!(
+        notary["auth"]["oidc"]["allowed_clients"],
+        serde_norway::from_str::<serde_norway::Value>("[example-wallet-client, benefits-service]")
+            .expect("OIDC clients parse")
+    );
+    assert_eq!(
+        notary["auth"]["oidc"]["allowed_token_types"],
+        serde_norway::from_str::<serde_norway::Value>("[JWT]")
+            .expect("OIDC access-token types parse")
     );
     assert_eq!(
         notary["auth"]["access_token_signing"]["signing_key_id"].as_str(),
@@ -6961,6 +7040,16 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     assert_eq!(
         notary["subject_access"]["allowed_wallet_origins"][0].as_str(),
         Some("https://wallet.example.invalid")
+    );
+    assert_eq!(
+        notary["subject_access"]["citizen_clients"]["allowed_client_ids"],
+        serde_norway::from_str::<serde_norway::Value>("[example-wallet-client]")
+            .expect("citizen client ids parse")
+    );
+    assert_eq!(
+        notary["subject_access"]["citizen_clients"]["allowed_audiences"],
+        serde_norway::from_str::<serde_norway::Value>("[example-wallet-client]")
+            .expect("citizen audiences parse")
     );
     assert_eq!(
         notary["subject_access"]["allowed_operations"]["evaluate"].as_bool(),
@@ -7085,6 +7174,21 @@ fn authored_oid4vci_binding_rejects_open_or_incoherent_trust_topologies() {
             "notary_state: null\n",
             "OID4VCI requires a Notary PostgreSQL state binding",
         ),
+        (
+            "invalid registrar client",
+            "oid4vci:\n  registrar_clients: ['']\n",
+            "OID4VCI registrar client id must not be empty",
+        ),
+        (
+            "duplicate registrar client",
+            "oid4vci:\n  registrar_clients: [registrar-a, registrar-a]\n",
+            "OID4VCI registrar_clients must not contain duplicates",
+        ),
+        (
+            "citizen client reused as registrar",
+            "oid4vci:\n  registrar_clients: [example-wallet-client]\n",
+            "OID4VCI registrar_clients must not contain the citizen client id",
+        ),
     ] {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let project = copy_project("custom-system", temporary.path());
@@ -7113,6 +7217,37 @@ fn authored_oid4vci_binding_rejects_open_or_incoherent_trust_topologies() {
         let _ = (name, expected);
         assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
     }
+
+    let temporary = tempfile::tempdir().expect("oversized registrar-client temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let project_path = project.join("registry-stack.yaml");
+    let mut document = read_yaml(&project_path);
+    document["services"]["household-eligibility"]["credential_profiles"]["household-eligibility"]
+        ["claims"] = serde_norway::from_str("[household-record-exists]")
+        .expect("single registry-backed credential claim");
+    write_yaml(&project_path, &document);
+    author_oid4vci_binding(
+        &project,
+        "household-eligibility",
+        "household-eligibility",
+        "household_reference",
+    );
+    let registrar_clients = (0..65)
+        .map(|index| serde_norway::Value::String(format!("registrar-{index}")))
+        .collect::<Vec<_>>();
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["oid4vci"]["registrar_clients"] = serde_norway::Value::Sequence(registrar_clients);
+    write_yaml(&environment_path, &environment);
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("oversized registrar-client trust must fail closed");
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
 
     for (name, scopes, expected) in [
         (

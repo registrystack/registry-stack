@@ -218,6 +218,12 @@
             "signing_kid": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/token2048" }
           }
         },
+        "registrar_clients": {
+          "x-registry-field": "sensitive_property",
+          "description": "Closed OIDC machine-client allow-list for registrar-created credential offers. Each client uses this authorization server and the Notary public base URL as its resource audience; citizen client classification remains separate.",
+          "type": "array", "maxItems": 64, "uniqueItems": true, "default": [],
+          "items": {"x-registry-field": "sensitive_array_item", "$ref": "#/$defs/token256" }
+        },
         "access_token": {
           "x-registry-field": "property",
           "description": "Dedicated Notary access-token signing key and published key identifier.",
