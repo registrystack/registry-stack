@@ -1377,7 +1377,7 @@ pub struct EvidenceFormat {
     pub status: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimResultView {
     pub evaluation_id: String,
@@ -1396,6 +1396,28 @@ pub struct ClaimResultView {
     pub issued_at: String,
     pub expires_at: Option<String>,
     pub provenance: ClaimProvenance,
+}
+
+impl std::fmt::Debug for ClaimResultView {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClaimResultView")
+            .field("evaluation_id", &"[REDACTED]")
+            .field("claim_id", &self.claim_id)
+            .field("claim_version", &self.claim_version)
+            .field("subject_type", &self.subject_type)
+            .field("requester_ref", &"[REDACTED]")
+            .field("target_ref", &"[REDACTED]")
+            .field("value", &"[REDACTED]")
+            .field("satisfied", &self.satisfied)
+            .field("disclosure", &self.disclosure)
+            .field("redacted_fields", &self.redacted_fields)
+            .field("format", &self.format)
+            .field("issued_at", &self.issued_at)
+            .field("expires_at", &self.expires_at)
+            .field("provenance", &self.provenance)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1522,7 +1544,7 @@ pub struct ProvenanceUsed {
     pub relay_consultation_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StoredEvaluation {
     pub client_id: String,
     pub purpose: String,
@@ -1548,6 +1570,26 @@ pub struct StoredEvaluation {
     pub issuance_provenance: Option<StoredIssuanceProvenance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_access: Option<StoredSubjectAccessMetadata>,
+}
+
+impl std::fmt::Debug for StoredEvaluation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StoredEvaluation")
+            .field("client_id", &"[REDACTED]")
+            .field("purpose", &self.purpose)
+            .field("claim_ids", &self.claim_ids)
+            .field("claim_refs", &self.claim_refs)
+            .field("disclosure", &self.disclosure)
+            .field("format", &self.format)
+            .field("result_count", &self.results.len())
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .field("request_hash", &"[REDACTED]")
+            .field("issuance_provenance", &self.issuance_provenance)
+            .field("subject_access", &self.subject_access)
+            .finish()
+    }
 }
 
 impl StoredEvaluation {
@@ -1617,6 +1659,11 @@ pub struct StoredIssuanceClaimProvenance {
     /// credential-issuable.
     #[serde(default)]
     pub execution_binding: String,
+    /// Canonical commitment to the exact evaluated result retained for
+    /// issuance. The value itself is deliberately not duplicated into this
+    /// restricted provenance record.
+    #[serde(default)]
+    pub result_content_binding: String,
 }
 
 impl std::fmt::Debug for StoredIssuanceClaimProvenance {
@@ -1630,6 +1677,7 @@ impl std::fmt::Debug for StoredIssuanceClaimProvenance {
             .field("canonical_purpose", &self.canonical_purpose)
             .field("consultation_id", &"[REDACTED]")
             .field("execution_binding", &self.execution_binding)
+            .field("result_content_binding", &self.result_content_binding)
             .finish()
     }
 }

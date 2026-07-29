@@ -831,8 +831,8 @@ mod tests {
 
     use super::*;
     use crate::rhai_worker::{
-        evaluate_in_process, hardened_engine, BlockingTransport, OutputSchema, OutputType,
-        SourceCall, SourceResponse, TypedValue, WorkerOutcome, WorkerOutput, WorkerRequest,
+        evaluate_in_process, hardened_engine, BlockingTransport, OutputSchema, SourceCall,
+        SourceResponse, TypedValue, WorkerOutcome, WorkerOutput, WorkerRequest,
     };
 
     struct NoCallTransport;
@@ -944,12 +944,9 @@ mod tests {
         );
         request.output_schema.insert(
             "normalized".to_owned(),
-            OutputSchema {
-                output_type: OutputType::String,
+            OutputSchema::String {
                 nullable: false,
-                max_bytes: Some(64),
-                minimum: None,
-                maximum: None,
+                max_bytes: 64,
             },
         );
         assert_eq!(
@@ -986,12 +983,9 @@ mod tests {
             );
             request.output_schema.insert(
                 "normalized".to_owned(),
-                OutputSchema {
-                    output_type: OutputType::String,
+                OutputSchema::String {
                     nullable: false,
-                    max_bytes: Some(64),
-                    minimum: None,
-                    maximum: None,
+                    max_bytes: 64,
                 },
             );
             let error = evaluate_in_process(&request, Arc::new(NoCallTransport))

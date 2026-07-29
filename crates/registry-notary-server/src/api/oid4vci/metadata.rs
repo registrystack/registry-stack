@@ -267,6 +267,31 @@ pub(in crate::api) fn oid4vci_type_metadata_claim(
     {
         claim["registry_notary_semantics"] = semantics;
     }
+    if let Some(value_schema) = evidence
+        .claims
+        .iter()
+        .find(|definition| definition.id == claim_id)
+        .and_then(
+            |definition| match (&definition.evidence_mode, &definition.rule) {
+                (
+                    ClaimEvidenceMode::RegistryBacked { consultations },
+                    RuleConfig::ConsultationOutput {
+                        consultation,
+                        output,
+                    },
+                ) => consultations
+                    .get(consultation)
+                    .and_then(|consultation| consultation.outputs.get(output)),
+                _ => None,
+            },
+        )
+        .and_then(|schema| serde_json::to_value(schema).ok())
+    {
+        // SD-JWT VC Type Metadata intentionally has no standard JSON Schema
+        // member. This namespaced extension publishes the exact compiler-pinned
+        // closed Relay value shape without suggesting nested disclosure.
+        claim["registry_notary_value_schema"] = value_schema;
+    }
     claim
 }
 

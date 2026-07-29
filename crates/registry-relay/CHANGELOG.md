@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Consultation public contracts can now declare recursive closed object and
+  array outputs. Composite schemas, required fields, item limits, and canonical
+  serialized-size limits are compiler-validated and hash-bound, and Relay
+  rejects unknown keys, wrong nested types, excessive structures, and
+  over-bound values before publishing a match.
+
 ## 0.15.2 - 2026-07-28
 
 - No user-visible Registry Relay changes. This release fixes forward from the

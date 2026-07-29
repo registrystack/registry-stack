@@ -42,7 +42,7 @@ impl RuntimeRelayExpectedResult {
         outputs: BTreeMap<String, RelayOutputContract>,
     ) -> Result<Self, ConsultationPlanError> {
         if outputs.is_empty()
-            || outputs.len() > 64
+            || outputs.len() > 32
             || outputs.keys().any(|name| {
                 !input_name(name, MAX_INPUT_NAME_BYTES)
                     || matches!(name.as_str(), "matched" | "outcome")
@@ -566,6 +566,7 @@ enum RuntimeRelayOutputValue {
     Boolean(bool),
     Integer(i64),
     String(Zeroizing<String>),
+    CanonicalJson(Zeroizing<Vec<u8>>),
 }
 
 impl RuntimeRelayOutputMap {
@@ -582,8 +583,11 @@ impl RuntimeRelayOutputMap {
                         .map(RuntimeRelayOutputValue::Integer)
                         .ok_or(RelayClientError::InvalidResult)?,
                     Value::String(value) => RuntimeRelayOutputValue::String(Zeroizing::new(value)),
-                    Value::Array(_) | Value::Object(_) => {
-                        return Err(RelayClientError::InvalidResult)
+                    value @ (Value::Array(_) | Value::Object(_)) => {
+                        RuntimeRelayOutputValue::CanonicalJson(Zeroizing::new(
+                            canonicalize_json(&value)
+                                .map_err(|_| RelayClientError::InvalidResult)?,
+                        ))
                     }
                 };
                 Ok((name.into_boxed_str(), value))
@@ -603,6 +607,9 @@ impl RuntimeRelayOutputMap {
                     ProjectedJsonScalar::String(value) => {
                         RuntimeRelayOutputValue::String(Zeroizing::new(value.to_string()))
                     }
+                    ProjectedJsonScalar::CanonicalJson(value) => {
+                        RuntimeRelayOutputValue::CanonicalJson(Zeroizing::new(value.to_vec()))
+                    }
                     ProjectedJsonScalar::Number(_) => return Err(RelayClientError::InvalidResult),
                 };
                 Ok((name.into(), value))
@@ -620,6 +627,8 @@ impl RuntimeRelayOutputMap {
                     RuntimeRelayOutputValue::Boolean(value) => Value::Bool(*value),
                     RuntimeRelayOutputValue::Integer(value) => Value::Number((*value).into()),
                     RuntimeRelayOutputValue::String(value) => Value::String(value.to_string()),
+                    RuntimeRelayOutputValue::CanonicalJson(value) => serde_json::from_slice(value)
+                        .expect("verified canonical Relay output remains valid JSON"),
                 };
                 (name.to_string(), value)
             })

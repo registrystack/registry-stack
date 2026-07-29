@@ -166,12 +166,43 @@ fn cel_policy_validation_rejects_invalid_alias_and_unlisted_dependency() {
 #[test]
 fn registry_cel_startup_is_limited_to_one_output_root_and_declared_variables() {
     let mut claim = typed_registry_claim(
-            "age-band",
-            RuleConfig::Cel {
-                expression: "enrollment.matched && enrollment.date_of_birth != null ? date.age_on(enrollment.date_of_birth, as_of_date) : null".to_string(),
-                bindings: Default::default(),
+        "age-band",
+        RuleConfig::Cel {
+            expression: "enrollment.matched && enrollment.date_of_birth != null ? date.age_on(enrollment.date_of_birth, as_of_date) : null".to_string(),
+            bindings: Default::default(),
+        },
+        "integer",
+    );
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+        panic!("registry-backed claim");
+    };
+    consultations
+        .get_mut("enrollment")
+        .expect("consultation exists")
+        .outputs
+        .insert(
+            "parents".to_string(),
+            registry_notary_core::RelayOutputContract::Array {
+                nullable: false,
+                max_bytes: 4_096,
+                max_items: 4,
+                items: Box::new(registry_notary_core::RelayOutputContract::Object {
+                    nullable: false,
+                    max_bytes: 1_024,
+                    fields: BTreeMap::from([(
+                        "name".to_string(),
+                        registry_notary_core::RelayOutputObjectFieldContract {
+                            required: true,
+                            schema: Box::new(
+                                registry_notary_core::RelayOutputContract::String {
+                                    nullable: false,
+                                    max_bytes: 128,
+                                },
+                            ),
+                        },
+                    )]),
+                }),
             },
-            "integer",
         );
     let mut evidence = EvidenceConfig {
         enabled: true,
@@ -188,6 +219,24 @@ fn registry_cel_startup_is_limited_to_one_output_root_and_declared_variables() {
     );
     validate_cel_claims_for_startup(&evidence, &RegistryNotaryCelConfig::default())
         .expect("OpenCRVS-style full-date derivation preflights");
+    let projected = registry_cel_scalar_consultation_outputs(
+        &claim,
+        &BTreeMap::from([(
+            "enrollment".to_string(),
+            json!({
+                "matched": true,
+                "outcome": "match",
+                "date_of_birth": "2000-01-01",
+                "parents": [{"name": "Ada"}]
+            }),
+        )]),
+    )
+    .expect("scalar CEL view projects");
+    assert_eq!(projected["enrollment"]["date_of_birth"], "2000-01-01");
+    assert!(
+        projected["enrollment"].get("parents").is_none(),
+        "composite outputs never enter the CEL binding surface"
+    );
 
     for expression in [
         "caller.scopes.contains('admin')",
@@ -197,6 +246,7 @@ fn registry_cel_startup_is_limited_to_one_output_root_and_declared_variables() {
         "disclosure == 'value'",
         "consultation == 'other-profile'",
         "enrollment.secret == 'x'",
+        "enrollment.parents.size() > 0",
         "enrollment['date_of_birth'] != null",
         "date.age_on(enrollment.date_of_birth, as_of_date)",
     ] {

@@ -7,9 +7,9 @@ use std::{
 
 use async_trait::async_trait;
 use registry_relay::rhai_worker::{
-    HostFailure, OutputSchema, OutputType, ScriptFailure, SourceCall, SourceHost, SourceResponse,
-    TypedValue, WorkerError, WorkerLimits, WorkerOutcome, WorkerOutput, WorkerProcess,
-    WorkerRequest,
+    HostFailure, OutputObjectField, OutputSchema, ScriptFailure, SourceCall, SourceHost,
+    SourceResponse, TypedValue, WorkerError, WorkerLimits, WorkerOutcome, WorkerOutput,
+    WorkerProcess, WorkerRequest,
 };
 use serde_json::json;
 
@@ -25,13 +25,7 @@ fn request(script: impl Into<String>) -> WorkerRequest {
     let mut request = WorkerRequest::v1(script, "consult", limits);
     request.output_schema.insert(
         "active".to_string(),
-        OutputSchema {
-            output_type: OutputType::Boolean,
-            nullable: false,
-            max_bytes: None,
-            minimum: None,
-            maximum: None,
-        },
+        OutputSchema::Boolean { nullable: false },
     );
     request
 }
@@ -73,6 +67,83 @@ fn matched(output: WorkerOutput) -> BTreeMap<String, TypedValue> {
     }
 }
 
+fn required(schema: OutputSchema) -> OutputObjectField {
+    OutputObjectField {
+        required: true,
+        schema: Box::new(schema),
+    }
+}
+
+fn opencrvs_output_request(script: &str) -> WorkerRequest {
+    let mut request = WorkerRequest::v1(script, "consult", WorkerLimits::default());
+    let name = OutputSchema::Object {
+        nullable: false,
+        max_bytes: 512,
+        fields: BTreeMap::from([
+            (
+                "family".to_owned(),
+                required(OutputSchema::String {
+                    nullable: false,
+                    max_bytes: 128,
+                }),
+            ),
+            (
+                "given".to_owned(),
+                required(OutputSchema::String {
+                    nullable: false,
+                    max_bytes: 128,
+                }),
+            ),
+        ]),
+    };
+    request.output_schema.insert(
+        "registration".to_owned(),
+        OutputSchema::Object {
+            nullable: false,
+            max_bytes: 1_024,
+            fields: BTreeMap::from([
+                (
+                    "registration_number".to_owned(),
+                    required(OutputSchema::String {
+                        nullable: false,
+                        max_bytes: 64,
+                    }),
+                ),
+                (
+                    "status".to_owned(),
+                    required(OutputSchema::String {
+                        nullable: false,
+                        max_bytes: 32,
+                    }),
+                ),
+            ]),
+        },
+    );
+    request.output_schema.insert(
+        "parents".to_owned(),
+        OutputSchema::Array {
+            nullable: false,
+            max_bytes: 4_096,
+            max_items: 2,
+            items: Box::new(OutputSchema::Object {
+                nullable: false,
+                max_bytes: 1_024,
+                fields: BTreeMap::from([
+                    ("name".to_owned(), required(name)),
+                    (
+                        "relationship".to_owned(),
+                        required(OutputSchema::String {
+                            nullable: false,
+                            max_bytes: 32,
+                        }),
+                    ),
+                ]),
+            }),
+        },
+    );
+    request
+}
+
 #[tokio::test]
 async fn fresh_workers_return_the_same_closed_result() {
     let worker = relay_worker();
@@ -83,6 +154,244 @@ async fn fresh_workers_return_the_same_closed_result() {
     assert_eq!(
         matched(first).get("active"),
         Some(&TypedValue::Boolean { value: Some(true) })
+    );
+}
+
+#[tokio::test]
+async fn worker_preserves_opencrvs_object_and_parents_array_outputs() {
+    let request = opencrvs_output_request(
+        r#"
+        fn consult(ctx) {
+            result.match(#{
+                registration: #{
+                    registration_number: "2026-000042",
+                    status: "registered"
+                },
+                parents: [
+                    #{
+                        relationship: "mother",
+                        name: #{ given: "Ada", family: "Lovelace" }
+                    },
+                    #{
+                        relationship: "father",
+                        name: #{ given: "William", family: "King" }
+                    }
+                ]
+            })
+        }
+        "#,
+    );
+
+    let output = matched(
+        relay_worker()
+            .evaluate(&request)
+            .await
+            .expect("structured worker output"),
+    );
+    assert_eq!(
+        output.get("registration"),
+        Some(&TypedValue::Object {
+            value: Some(json!({
+                "registration_number": "2026-000042",
+                "status": "registered"
+            }))
+        })
+    );
+    assert_eq!(
+        output.get("parents"),
+        Some(&TypedValue::Array {
+            value: Some(json!([
+                {
+                    "name": {"family": "Lovelace", "given": "Ada"},
+                    "relationship": "mother"
+                },
+                {
+                    "name": {"family": "King", "given": "William"},
+                    "relationship": "father"
+                }
+            ]))
+        })
+    );
+    let debug = format!("{:?}", output.get("parents").expect("parents output"));
+    assert!(debug.contains("[REDACTED]"));
+    assert!(!debug.contains("Lovelace"));
+}
+
+#[tokio::test]
+async fn worker_rejects_structured_output_type_extra_key_and_value_bounds() {
+    let worker = relay_worker();
+    for script in [
+        r#"fn consult(ctx) {
+            result.match(#{
+                registration: #{
+                    registration_number: "2026-000042",
+                    status: "registered",
+                    undeclared: true
+                },
+                parents: []
+            })
+        }"#,
+        r#"fn consult(ctx) {
+            result.match(#{
+                registration: #{
+                    registration_number: 42,
+                    status: "registered"
+                },
+                parents: []
+            })
+        }"#,
+        r#"fn consult(ctx) {
+            result.match(#{
+                registration: #{
+                    registration_number: "2026-000042",
+                    status: "registered"
+                },
+                parents: [
+                    #{ relationship: "mother", name: #{ given: "A", family: "B" } },
+                    #{ relationship: "father", name: #{ given: "C", family: "D" } },
+                    #{ relationship: "guardian", name: #{ given: "E", family: "F" } }
+                ]
+            })
+        }"#,
+    ] {
+        assert_eq!(
+            worker.evaluate(&opencrvs_output_request(script)).await,
+            Err(WorkerError::ContractViolation)
+        );
+    }
+
+    let mut serialized_bound = opencrvs_output_request(
+        r#"fn consult(ctx) {
+            result.match(#{
+                registration: #{
+                    registration_number: "2026-000042",
+                    status: "registered"
+                },
+                parents: []
+            })
+        }"#,
+    );
+    let OutputSchema::Object { max_bytes, .. } = serialized_bound
+        .output_schema
+        .get_mut("registration")
+        .expect("registration schema")
+    else {
+        panic!("registration object schema");
+    };
+    *max_bytes = 16;
+    assert_eq!(
+        worker.evaluate(&serialized_bound).await,
+        Err(WorkerError::ContractViolation)
+    );
+}
+
+#[tokio::test]
+async fn worker_rejects_output_schema_depth_field_and_array_bounds() {
+    let worker = relay_worker();
+    let script = "fn consult(ctx) { result.match(#{ value: #{} }) }";
+
+    let mut too_deep = WorkerRequest::v1(script, "consult", WorkerLimits::default());
+    let mut schema = OutputSchema::Boolean { nullable: false };
+    for depth in (0..8).rev() {
+        schema = OutputSchema::Object {
+            nullable: false,
+            max_bytes: 1_024,
+            fields: BTreeMap::from([(format!("level_{depth}"), required(schema))]),
+        };
+    }
+    too_deep.output_schema.insert("value".to_owned(), schema);
+    assert_eq!(
+        worker.evaluate(&too_deep).await,
+        Err(WorkerError::ContractViolation)
+    );
+
+    let mut too_many_fields = WorkerRequest::v1(script, "consult", WorkerLimits::default());
+    too_many_fields.output_schema.insert(
+        "value".to_owned(),
+        OutputSchema::Object {
+            nullable: false,
+            max_bytes: 4_096,
+            fields: (0..33)
+                .map(|index| {
+                    (
+                        format!("field_{index}"),
+                        required(OutputSchema::Boolean { nullable: false }),
+                    )
+                })
+                .collect(),
+        },
+    );
+    assert_eq!(
+        worker.evaluate(&too_many_fields).await,
+        Err(WorkerError::ContractViolation)
+    );
+
+    let mut too_many_items = WorkerRequest::v1(script, "consult", WorkerLimits::default());
+    too_many_items.output_schema.insert(
+        "value".to_owned(),
+        OutputSchema::Array {
+            nullable: false,
+            max_bytes: 4_096,
+            max_items: 257,
+            items: Box::new(OutputSchema::Boolean { nullable: false }),
+        },
+    );
+    assert_eq!(
+        worker.evaluate(&too_many_items).await,
+        Err(WorkerError::ContractViolation)
+    );
+
+    let mut too_expanded = WorkerRequest::v1(script, "consult", WorkerLimits::default());
+    too_expanded.output_schema.insert(
+        "value".to_owned(),
+        OutputSchema::Array {
+            nullable: false,
+            max_bytes: 65_536,
+            max_items: 256,
+            items: Box::new(OutputSchema::Array {
+                nullable: false,
+                max_bytes: 65_536,
+                max_items: 256,
+                items: Box::new(OutputSchema::Boolean { nullable: false }),
+            }),
+        },
+    );
+    assert_eq!(
+        worker.evaluate(&too_expanded).await,
+        Err(WorkerError::ContractViolation)
+    );
+
+    let child_fields = (0..8)
+        .map(|index| {
+            (
+                format!("child_{index}"),
+                required(OutputSchema::Boolean { nullable: false }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut too_many_nodes = WorkerRequest::v1(script, "consult", WorkerLimits::default());
+    too_many_nodes.output_schema.insert(
+        "value".to_owned(),
+        OutputSchema::Object {
+            nullable: false,
+            max_bytes: 65_536,
+            fields: (0..32)
+                .map(|index| {
+                    (
+                        format!("field_{index}"),
+                        required(OutputSchema::Object {
+                            nullable: false,
+                            max_bytes: 4_096,
+                            fields: child_fields.clone(),
+                        }),
+                    )
+                })
+                .collect(),
+        },
+    );
+    assert_eq!(
+        worker.evaluate(&too_many_nodes).await,
+        Err(WorkerError::ContractViolation)
     );
 }
 
@@ -268,12 +577,9 @@ async fn process_denies_instruction_depth_output_call_and_wall_time_overruns() {
     );
     output.output_schema.insert(
         "payload".to_string(),
-        OutputSchema {
-            output_type: OutputType::String,
+        OutputSchema::String {
             nullable: false,
-            max_bytes: Some(512),
-            minimum: None,
-            maximum: None,
+            max_bytes: 512,
         },
     );
     output.limits.max_output_bytes = 256;

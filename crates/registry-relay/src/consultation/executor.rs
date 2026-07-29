@@ -26,9 +26,9 @@ use async_trait::async_trait;
 use serde_json::Value as JsonValue;
 
 use crate::rhai_worker::{
-    HostFailure, OutputSchema as RhaiOutputSchema, OutputType as RhaiOutputType, ScriptFailure,
-    SourceCall, SourceHost, SourceResponse, TypedValue as RhaiTypedValue, WorkerLimits,
-    WorkerOutcome, WorkerOutput, WorkerProcess, WorkerRequest,
+    HostFailure, OutputSchema as RhaiOutputSchema, ScriptFailure, SourceCall, SourceHost,
+    SourceResponse, TypedValue as RhaiTypedValue, WorkerLimits, WorkerOutcome, WorkerOutput,
+    WorkerProcess, WorkerRequest,
 };
 
 use crate::source_backend::{
@@ -39,10 +39,10 @@ use crate::source_plan::runtime_profile::CompiledConsentProfile;
 use crate::source_plan::{
     CompiledBasicSourceCredentialProvider, CompiledBodyTemplate, CompiledInputRole,
     CompiledOAuthSourceCredentialProvider, CompiledOperation, CompiledRequestCodec,
-    CompiledResponseFormat, CompiledRhaiOutputType, CompiledSelectorLocation,
-    CompiledSelectorSource, CompiledSourceAuth, CompiledSourcePlan,
-    CompiledStaticBearerSourceCredentialProvider, CompiledStatusOutcome, CompiledStepPredicate,
-    CompiledValueExpression, ParsedOAuth2AccessToken, ReadMethod, SourcePlanKind,
+    CompiledResponseFormat, CompiledSelectorLocation, CompiledSelectorSource, CompiledSourceAuth,
+    CompiledSourcePlan, CompiledStaticBearerSourceCredentialProvider, CompiledStatusOutcome,
+    CompiledStepPredicate, CompiledValueExpression, ParsedOAuth2AccessToken, ReadMethod,
+    SourcePlanKind,
 };
 use crate::state_plane::{
     AuditedConsultationDispatch, KnownConsultationCompletionFacts, KnownFailureClass,
@@ -1067,35 +1067,8 @@ fn build_rhai_request(
     for output in plan.rhai_outputs() {
         request.output_schema.insert(
             output.name().to_owned(),
-            RhaiOutputSchema {
-                output_type: match output.output_type() {
-                    CompiledRhaiOutputType::String { .. } => RhaiOutputType::String,
-                    CompiledRhaiOutputType::Boolean => RhaiOutputType::Boolean,
-                    CompiledRhaiOutputType::Integer { .. } => RhaiOutputType::Integer,
-                    CompiledRhaiOutputType::Date => RhaiOutputType::Date,
-                },
-                nullable: output.nullable(),
-                max_bytes: match output.output_type() {
-                    CompiledRhaiOutputType::String { max_bytes } => {
-                        Some(usize::try_from(max_bytes).map_err(|_| ConcreteExecutorUnfinished)?)
-                    }
-                    CompiledRhaiOutputType::Boolean
-                    | CompiledRhaiOutputType::Integer { .. }
-                    | CompiledRhaiOutputType::Date => None,
-                },
-                minimum: match output.output_type() {
-                    CompiledRhaiOutputType::Integer { minimum, .. } => Some(minimum),
-                    CompiledRhaiOutputType::String { .. }
-                    | CompiledRhaiOutputType::Boolean
-                    | CompiledRhaiOutputType::Date => None,
-                },
-                maximum: match output.output_type() {
-                    CompiledRhaiOutputType::Integer { maximum, .. } => Some(maximum),
-                    CompiledRhaiOutputType::String { .. }
-                    | CompiledRhaiOutputType::Boolean
-                    | CompiledRhaiOutputType::Date => None,
-                },
-            },
+            RhaiOutputSchema::from_compiled(output.output_type())
+                .map_err(|_| ConcreteExecutorUnfinished)?,
         );
     }
     if signed_dci_script_host_required(plan).map_err(|_| ConcreteExecutorUnfinished)? {
@@ -1117,6 +1090,14 @@ fn rhai_output_value(
         }
         RhaiTypedValue::Integer { value } => {
             Ok(value.map_or(ProjectedJsonScalar::Null, ProjectedJsonScalar::Integer))
+        }
+        RhaiTypedValue::Object { value } | RhaiTypedValue::Array { value } => {
+            value.map_or(Ok(ProjectedJsonScalar::Null), |value| {
+                canonicalize_json(&value)
+                    .map(Zeroizing::new)
+                    .map(ProjectedJsonScalar::CanonicalJson)
+                    .map_err(|_| ConcreteExecutorUnfinished)
+            })
         }
     }
 }
@@ -2020,9 +2001,9 @@ fn render_text_expression<'a>(
             ProjectedJsonScalar::String(value) => Ok(Cow::Borrowed(value.as_str())),
             ProjectedJsonScalar::Boolean(value) => Ok(Cow::Owned(value.to_string())),
             ProjectedJsonScalar::Integer(value) => Ok(Cow::Owned(value.to_string())),
-            ProjectedJsonScalar::Null | ProjectedJsonScalar::Number(_) => {
-                Err(ConcreteExecutorUnfinished)
-            }
+            ProjectedJsonScalar::Null
+            | ProjectedJsonScalar::Number(_)
+            | ProjectedJsonScalar::CanonicalJson(_) => Err(ConcreteExecutorUnfinished),
         },
     }
 }
@@ -2073,7 +2054,9 @@ fn render_body_node(
                 ProjectedJsonScalar::Integer(value) => {
                     append_body_bytes(output, value.to_string().as_bytes(), limit)
                 }
-                ProjectedJsonScalar::Number(_) => Err(ConcreteExecutorUnfinished),
+                ProjectedJsonScalar::Number(_) | ProjectedJsonScalar::CanonicalJson(_) => {
+                    Err(ConcreteExecutorUnfinished)
+                }
             },
             _ => {
                 let value = render_text_expression(bound, expression, memory)?;

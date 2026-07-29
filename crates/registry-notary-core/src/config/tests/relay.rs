@@ -65,6 +65,29 @@ fn valid_registry_backed_config() -> StandaloneRegistryNotaryConfig {
     config
 }
 
+fn registry_backed_config_with_output(
+    output_name: &str,
+    output: RelayOutputContract,
+) -> StandaloneRegistryNotaryConfig {
+    let mut config = valid_registry_backed_config();
+    let value_type = output.value_type().to_string();
+    let claim = &mut config.evidence.claims[0];
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+        panic!("registry-backed mode")
+    };
+    consultations
+        .get_mut("person_status")
+        .expect("consultation exists")
+        .outputs = BTreeMap::from([(output_name.to_string(), output)]);
+    claim.rule = RuleConfig::ConsultationOutput {
+        consultation: "person_status".to_string(),
+        output: output_name.to_string(),
+    };
+    claim.value.value_type = value_type;
+    claim.value.nullable = true;
+    config
+}
+
 fn expect_mode_error(config: &StandaloneRegistryNotaryConfig, expected: &str) {
     let error = config
         .validate()
@@ -1212,13 +1235,60 @@ outputs:
   date_of_birth: { type: date, nullable: true }
   sequence: { type: integer, nullable: false, minimum: 0, maximum: 9007199254740991 }
   given_name: { type: string, nullable: true, max_bytes: 128 }
+  parents:
+    type: array
+    nullable: false
+    max_bytes: 4096
+    max_items: 2
+    items:
+      type: object
+      nullable: false
+      max_bytes: 2048
+      fields:
+        type:
+          required: true
+          schema: { type: string, nullable: false, max_bytes: 16 }
+        name:
+          required: true
+          schema: { type: string, nullable: false, max_bytes: 256 }
+        identifier:
+          required: false
+          schema: { type: string, nullable: true, max_bytes: 128 }
 "#,
     )
     .expect("authored typed consultation parses");
-    assert_eq!(consultation.outputs.len(), 4);
+    assert_eq!(consultation.outputs.len(), 5);
     assert!(matches!(
         consultation.outputs.get("date_of_birth"),
         Some(RelayOutputContract::Date { nullable: true })
+    ));
+    let parents = consultation
+        .outputs
+        .get("parents")
+        .expect("parents contract exists");
+    let RelayOutputContract::Array {
+        nullable,
+        max_bytes,
+        max_items,
+        items,
+    } = parents
+    else {
+        panic!("parents is an array contract")
+    };
+    assert!(!nullable);
+    assert_eq!(*max_bytes, 4096);
+    assert_eq!(*max_items, 2);
+    assert!(matches!(
+        items.as_ref(),
+        RelayOutputContract::Object { fields, .. }
+            if !fields["identifier"].required
+                && matches!(
+                    fields["name"].schema.as_ref(),
+                    RelayOutputContract::String {
+                        nullable: false,
+                        max_bytes: 256
+                    }
+                )
     ));
 
     assert!(serde_norway::from_str::<RelayConsultationConfig>(
@@ -1232,4 +1302,337 @@ outputs:
 "#,
     )
     .is_err());
+}
+
+#[test]
+fn recursive_output_contract_serde_is_closed_and_preserves_scalar_shapes() {
+    let wire = serde_json::json!({
+        "type": "object",
+        "nullable": true,
+        "max_bytes": 1024,
+        "fields": {
+            "active": {
+                "required": true,
+                "schema": { "type": "boolean", "nullable": false }
+            },
+            "children": {
+                "required": false,
+                "schema": {
+                    "type": "array",
+                    "nullable": true,
+                    "max_bytes": 512,
+                    "max_items": 4,
+                    "items": { "type": "integer", "nullable": false, "minimum": 0, "maximum": 9 }
+                }
+            }
+        }
+    });
+    let contract: RelayOutputContract =
+        serde_json::from_value(wire.clone()).expect("recursive contract parses");
+    assert_eq!(
+        serde_json::to_value(contract).expect("recursive contract serializes"),
+        wire
+    );
+
+    for invalid in [
+        serde_json::json!({
+            "type": "object",
+            "nullable": false,
+            "max_bytes": 64,
+            "fields": {},
+            "open": true
+        }),
+        serde_json::json!({
+            "type": "object",
+            "nullable": false,
+            "max_bytes": 64,
+            "fields": {
+                "value": {
+                    "required": true,
+                    "schema": { "type": "string", "nullable": false, "max_bytes": 8 },
+                    "default": "secret"
+                }
+            }
+        }),
+        serde_json::json!({
+            "type": "array",
+            "nullable": false,
+            "max_bytes": 64,
+            "max_items": 2,
+            "items": {
+                "type": "string",
+                "nullable": false,
+                "max_bytes": 8,
+                "pattern": ".*"
+            }
+        }),
+    ] {
+        serde_json::from_value::<RelayOutputContract>(invalid)
+            .expect_err("recursive contract variants must remain closed");
+    }
+}
+
+#[test]
+fn recursive_output_contract_validates_exact_values_and_composite_byte_bounds() {
+    let parent = RelayOutputContract::Object {
+        nullable: false,
+        max_bytes: 128,
+        fields: BTreeMap::from([
+            (
+                "birth_date".to_string(),
+                RelayOutputObjectFieldContract {
+                    required: false,
+                    schema: Box::new(RelayOutputContract::Date { nullable: false }),
+                },
+            ),
+            (
+                "name".to_string(),
+                RelayOutputObjectFieldContract {
+                    required: true,
+                    schema: Box::new(RelayOutputContract::String {
+                        nullable: false,
+                        max_bytes: 8,
+                    }),
+                },
+            ),
+            (
+                "sequence".to_string(),
+                RelayOutputObjectFieldContract {
+                    required: true,
+                    schema: Box::new(RelayOutputContract::Integer {
+                        nullable: false,
+                        minimum: 0,
+                        maximum: 2,
+                    }),
+                },
+            ),
+        ]),
+    };
+    let parents = RelayOutputContract::Array {
+        nullable: true,
+        max_bytes: 256,
+        max_items: 2,
+        items: Box::new(parent),
+    };
+
+    assert!(parents.validates_value(&serde_json::Value::Null));
+    assert!(parents.validates_value(&serde_json::json!([
+        { "name": "Ada", "sequence": 0, "birth_date": "2000-02-29" },
+        { "name": "Grace", "sequence": 2 }
+    ])));
+    for invalid in [
+        serde_json::json!({ "name": "Ada", "sequence": 0 }),
+        serde_json::json!([{ "sequence": 0 }]),
+        serde_json::json!([{ "name": "Ada", "sequence": 0, "unknown": true }]),
+        serde_json::json!([{ "name": "too-long-name", "sequence": 0 }]),
+        serde_json::json!([{ "name": "Ada", "sequence": 3 }]),
+        serde_json::json!([{ "name": "Ada", "sequence": 1.0 }]),
+        serde_json::json!([{ "name": "Ada", "sequence": 0, "birth_date": null }]),
+        serde_json::json!([{ "name": "Ada", "sequence": 0, "birth_date": "2001-02-29" }]),
+        serde_json::json!([
+            { "name": "Ada", "sequence": 0 },
+            { "name": "Grace", "sequence": 1 },
+            { "name": "Linus", "sequence": 2 }
+        ]),
+    ] {
+        assert!(
+            !parents.validates_value(&invalid),
+            "wrong type, shape, or bound must fail"
+        );
+    }
+
+    let byte_bounded = RelayOutputContract::Object {
+        nullable: false,
+        max_bytes: 8,
+        fields: BTreeMap::from([(
+            "a".to_string(),
+            RelayOutputObjectFieldContract {
+                required: true,
+                schema: Box::new(RelayOutputContract::String {
+                    nullable: false,
+                    max_bytes: 64,
+                }),
+            },
+        )]),
+    };
+    assert!(
+        !byte_bounded.validates_value(&serde_json::json!({ "a": "x" })),
+        "compact serialized object is nine bytes"
+    );
+
+    let nested_byte_bounded = RelayOutputContract::Object {
+        nullable: false,
+        max_bytes: 64,
+        fields: BTreeMap::from([(
+            "inner".to_string(),
+            RelayOutputObjectFieldContract {
+                required: true,
+                schema: Box::new(byte_bounded),
+            },
+        )]),
+    };
+    assert!(
+        !nested_byte_bounded.validates_value(&serde_json::json!({ "inner": { "a": "x" } })),
+        "every composite enforces its own serialized byte bound"
+    );
+}
+
+#[test]
+fn direct_consultation_output_accepts_object_and_array_claim_types_but_cel_stays_scalar() {
+    let parent_fields = BTreeMap::from([(
+        "name".to_string(),
+        RelayOutputObjectFieldContract {
+            required: true,
+            schema: Box::new(RelayOutputContract::String {
+                nullable: false,
+                max_bytes: 128,
+            }),
+        },
+    )]);
+    let object = RelayOutputContract::Object {
+        nullable: false,
+        max_bytes: 1024,
+        fields: parent_fields.clone(),
+    };
+    registry_backed_config_with_output("parent", object)
+        .validate()
+        .expect("direct object-valued consultation output validates");
+
+    let array = RelayOutputContract::Array {
+        nullable: false,
+        max_bytes: 4096,
+        max_items: 2,
+        items: Box::new(RelayOutputContract::Object {
+            nullable: false,
+            max_bytes: 1024,
+            fields: parent_fields,
+        }),
+    };
+    let config = registry_backed_config_with_output("parents", array);
+    config
+        .validate()
+        .expect("direct array-valued consultation output validates");
+
+    let mut wrong_claim_type = config.clone();
+    wrong_claim_type.evidence.claims[0].value.value_type = "object".to_string();
+    expect_mode_error(&wrong_claim_type, "must match its declared output");
+
+    let mut cel = config;
+    cel.evidence.claims[0].rule = RuleConfig::Cel {
+        expression: "true".to_string(),
+        bindings: CelBindingsConfig::default(),
+    };
+    cel.evidence.claims[0].value.value_type = "boolean".to_string();
+    cel.evidence.claims[0].value.nullable = false;
+    cel.validate()
+        .expect("a scalar CEL claim may share a consultation with direct composite outputs");
+}
+
+#[test]
+fn recursive_output_schema_enforces_envelope_compatible_platform_bounds() {
+    fn array_layers(depth: usize) -> RelayOutputContract {
+        if depth == 1 {
+            RelayOutputContract::Boolean { nullable: false }
+        } else {
+            RelayOutputContract::Array {
+                nullable: false,
+                max_bytes: MAX_RELAY_OUTPUT_VALUE_BYTES_V1,
+                max_items: 1,
+                items: Box::new(array_layers(depth - 1)),
+            }
+        }
+    }
+
+    registry_backed_config_with_output("value", array_layers(6))
+        .validate()
+        .expect("six output-schema levels fit beneath the two-level Relay envelope");
+
+    for output in [
+        array_layers(7),
+        RelayOutputContract::Array {
+            nullable: false,
+            max_bytes: MAX_RELAY_OUTPUT_VALUE_BYTES_V1,
+            max_items: MAX_RELAY_OUTPUT_ARRAY_ITEMS_V1 + 1,
+            items: Box::new(RelayOutputContract::Boolean { nullable: false }),
+        },
+        RelayOutputContract::Array {
+            nullable: false,
+            max_bytes: MAX_RELAY_OUTPUT_VALUE_BYTES_V1 + 1,
+            max_items: 1,
+            items: Box::new(RelayOutputContract::Boolean { nullable: false }),
+        },
+        RelayOutputContract::Array {
+            nullable: false,
+            max_bytes: MAX_RELAY_OUTPUT_VALUE_BYTES_V1,
+            max_items: 256,
+            items: Box::new(RelayOutputContract::Array {
+                nullable: false,
+                max_bytes: MAX_RELAY_OUTPUT_VALUE_BYTES_V1,
+                max_items: 16,
+                items: Box::new(RelayOutputContract::Boolean { nullable: false }),
+            }),
+        },
+        RelayOutputContract::Object {
+            nullable: false,
+            max_bytes: MAX_RELAY_OUTPUT_VALUE_BYTES_V1,
+            fields: (0..33)
+                .map(|index| {
+                    (
+                        format!("field_{index}"),
+                        RelayOutputObjectFieldContract {
+                            required: true,
+                            schema: Box::new(RelayOutputContract::Boolean { nullable: false }),
+                        },
+                    )
+                })
+                .collect(),
+        },
+        RelayOutputContract::Object {
+            nullable: false,
+            max_bytes: MAX_RELAY_OUTPUT_VALUE_BYTES_V1,
+            fields: BTreeMap::from([(
+                "x".repeat(MAX_RELAY_OUTPUT_NAME_BYTES_V1 + 1),
+                RelayOutputObjectFieldContract {
+                    required: true,
+                    schema: Box::new(RelayOutputContract::Boolean { nullable: false }),
+                },
+            )]),
+        },
+        RelayOutputContract::Object {
+            nullable: false,
+            max_bytes: MAX_RELAY_OUTPUT_VALUE_BYTES_V1,
+            fields: (0..8)
+                .map(|outer| {
+                    (
+                        format!("outer_{outer}"),
+                        RelayOutputObjectFieldContract {
+                            required: true,
+                            schema: Box::new(RelayOutputContract::Object {
+                                nullable: false,
+                                max_bytes: MAX_RELAY_OUTPUT_VALUE_BYTES_V1,
+                                fields: (0..32)
+                                    .map(|inner| {
+                                        (
+                                            format!("inner_{inner}"),
+                                            RelayOutputObjectFieldContract {
+                                                required: true,
+                                                schema: Box::new(RelayOutputContract::Boolean {
+                                                    nullable: false,
+                                                }),
+                                            },
+                                        )
+                                    })
+                                    .collect(),
+                            }),
+                        },
+                    )
+                })
+                .collect(),
+        },
+    ] {
+        expect_mode_error(
+            &registry_backed_config_with_output("value", output),
+            "consultation output schema",
+        );
+    }
 }

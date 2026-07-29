@@ -681,6 +681,51 @@
       "open_map_semantics": "Each reviewed key names a Relay consultation and each value defines the bounded consultation contract used to support this evidence claim."
     },
     {
+      "id": "notary_evidence_claims_evidence_mode_consultations_output_fields_open_map",
+      "purpose": "Each reviewed key names a closed structured output field and each value defines its requiredness and bounded recursive schema.",
+      "semantic_owner": "notary_runtime",
+      "human_owner": "notary_maintainers",
+      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "environment_behavior": "bound_by_environment",
+      "sensitivity": "structural",
+      "state": "runtime",
+      "products": [
+        "notary",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
+      "introduced_in": "0.15.3",
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
+      "example_guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+      "consumers": [
+        "registry_notary",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "notary",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "arbitrary_map_keys_not_fixed_properties"
+      ],
+      "open_map_semantics": "Each reviewed key names a closed structured output field and each value defines its requiredness and bounded recursive schema."
+    },
+    {
       "id": "notary_evidence_claims_evidence_mode_consultations_outputs_open_map",
       "purpose": "Each reviewed key names a consultation output and each value defines its bounded evidence-result interpretation.",
       "semantic_owner": "notary_runtime",
@@ -3592,8 +3637,68 @@
     },
     {
       "schema": "notary",
+      "pointer": "/$defs/RelayOutputContract/oneOf/4/properties/fields",
+      "key_path": "evidence.claims[].evidence_mode.consultations.*.outputs.*.fields",
+      "path_kind": "property",
+      "profile": "notary_evidence_internal",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
+      "pointer": "/$defs/RelayOutputContract/oneOf/4/properties/fields/additionalProperties",
+      "key_path": "evidence.claims[].evidence_mode.consultations.*.outputs.*.fields.*",
+      "path_kind": "map_value",
+      "profile": "notary_evidence_claims_evidence_mode_consultations_output_fields_open_map",
+      "purpose_source": "profile",
+      "default_source": "not_applicable",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
+      "pointer": "/$defs/RelayOutputObjectFieldContract/properties/required",
+      "key_path": "evidence.claims[].evidence_mode.consultations.*.outputs.*.fields.*.required",
+      "path_kind": "property",
+      "profile": "notary_evidence_internal",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
+      "pointer": "/$defs/RelayOutputObjectFieldContract/properties/schema",
+      "key_path": "evidence.claims[].evidence_mode.consultations.*.outputs.*.fields.*.schema",
+      "path_kind": "property",
+      "profile": "notary_evidence_internal",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
+      "pointer": "/$defs/RelayOutputContract/oneOf/5/properties/items",
+      "key_path": "evidence.claims[].evidence_mode.consultations.*.outputs.*.items",
+      "path_kind": "property",
+      "profile": "notary_evidence_internal",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
       "pointer": "/$defs/RelayOutputContract/oneOf/2/properties/max_bytes",
       "key_path": "evidence.claims[].evidence_mode.consultations.*.outputs.*.max_bytes",
+      "path_kind": "property",
+      "profile": "notary_evidence_internal",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
+      "pointer": "/$defs/RelayOutputContract/oneOf/5/properties/max_items",
+      "key_path": "evidence.claims[].evidence_mode.consultations.*.outputs.*.max_items",
       "path_kind": "property",
       "profile": "notary_evidence_internal",
       "purpose_source": "profile",

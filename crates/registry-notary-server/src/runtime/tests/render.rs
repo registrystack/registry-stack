@@ -273,6 +273,12 @@ profile_b:
         let mut claim = test_claim("registry-fact", Vec::new(), false);
         claim.version = "1".to_string();
         claim.purpose = Some("credential-purpose".to_string());
+        claim.value = registry_notary_core::ClaimValueConfig {
+            value_type: "object".to_string(),
+            nullable: true,
+            max_bytes: None,
+            unit: None,
+        };
         claim.evidence_mode = ClaimEvidenceMode::RegistryBacked {
             consultations: BTreeMap::from([(
                 "registry".to_string(),
@@ -288,14 +294,63 @@ profile_b:
                         RelayConsultationInput::TargetId,
                     )]),
                     outputs: BTreeMap::from([(
-                        "active".to_string(),
-                        registry_notary_core::RelayOutputContract::Boolean { nullable: false },
+                        "record".to_string(),
+                        registry_notary_core::RelayOutputContract::Object {
+                            nullable: false,
+                            max_bytes: 4_096,
+                            fields: BTreeMap::from([
+                                (
+                                    "name".to_string(),
+                                    registry_notary_core::RelayOutputObjectFieldContract {
+                                        required: true,
+                                        schema: Box::new(
+                                            registry_notary_core::RelayOutputContract::String {
+                                                nullable: false,
+                                                max_bytes: 128,
+                                            },
+                                        ),
+                                    },
+                                ),
+                                (
+                                    "parents".to_string(),
+                                    registry_notary_core::RelayOutputObjectFieldContract {
+                                        required: true,
+                                        schema: Box::new(
+                                            registry_notary_core::RelayOutputContract::Array {
+                                                nullable: false,
+                                                max_bytes: 2_048,
+                                                max_items: 4,
+                                                items: Box::new(
+                                                    registry_notary_core::RelayOutputContract::Object {
+                                                        nullable: false,
+                                                        max_bytes: 512,
+                                                        fields: BTreeMap::from([(
+                                                            "name".to_string(),
+                                                            registry_notary_core::RelayOutputObjectFieldContract {
+                                                                required: true,
+                                                                schema: Box::new(
+                                                                    registry_notary_core::RelayOutputContract::String {
+                                                                        nullable: false,
+                                                                        max_bytes: 128,
+                                                                    },
+                                                                ),
+                                                            },
+                                                        )]),
+                                                    },
+                                                ),
+                                            },
+                                        ),
+                                    },
+                                ),
+                            ]),
+                        },
                     )]),
                 },
             )]),
         };
-        claim.rule = RuleConfig::ConsultationMatched {
+        claim.rule = RuleConfig::ConsultationOutput {
             consultation: "registry".to_string(),
+            output: "record".to_string(),
         };
         let evidence = test_evidence(vec![claim]);
         let evaluation_id = "01J00000000000000000000001";
@@ -312,9 +367,15 @@ profile_b:
                 identifier_schemes: Vec::new(),
                 profile: None,
             },
-            value: Some(json!(true)),
-            satisfied: Some(true),
-            disclosure: "predicate".to_string(),
+            value: Some(json!({
+                "name": "Ada",
+                "parents": [
+                    { "name": "Grace" },
+                    { "name": "Charles" }
+                ]
+            })),
+            satisfied: None,
+            disclosure: "value".to_string(),
             redacted_fields: Vec::new(),
             format: FORMAT_CLAIM_RESULT_JSON.to_string(),
             issued_at: issued_at.to_string(),
@@ -334,7 +395,7 @@ profile_b:
             purpose: "credential-purpose".to_string(),
             claim_ids: vec!["registry-fact".to_string()],
             claim_refs: vec![ClaimRef::with_version("registry-fact", "1")],
-            disclosure: "predicate".to_string(),
+            disclosure: "value".to_string(),
             format: FORMAT_CLAIM_RESULT_JSON.to_string(),
             results: vec![result],
             created_at: issued_at.to_string(),
@@ -351,6 +412,7 @@ profile_b:
                     canonical_purpose: "credential-purpose".to_string(),
                     consultation_id: "01J00000000000000000000000".to_string(),
                     execution_binding: String::new(),
+                    result_content_binding: String::new(),
                 }],
                 consultations: vec![StoredIssuanceConsultationProvenance {
                     consultation_id: "01J00000000000000000000000".to_string(),
@@ -359,10 +421,13 @@ profile_b:
             }),
             subject_access: None,
         };
+        let result_content_binding = issuance_result_content_binding(&evaluation.results[0])
+            .expect("result content binding hashes");
         let issuance = evaluation
             .issuance_provenance
             .as_mut()
             .expect("private issuance provenance exists");
+        issuance.claims[0].result_content_binding = result_content_binding;
         issuance.claims[0].execution_binding = issuance_execution_binding(
             &issuance.claims[0],
             &issuance.consultations[0],
@@ -469,6 +534,10 @@ profile_b:
         assert_not_issuable(&evidence, &tampered);
 
         let mut tampered = evaluation.clone();
+        tampered.results[0].value.as_mut().unwrap()["parents"][0]["name"] = json!("Mallory");
+        assert_not_issuable(&evidence, &tampered);
+
+        let mut tampered = evaluation.clone();
         let duplicate = tampered
             .issuance_provenance
             .as_ref()
@@ -503,4 +572,25 @@ profile_b:
             "the public count models a delegated relationship proof"
         );
         assert_not_issuable(&source_free, &evaluation);
+    }
+
+    #[test]
+    fn structured_claim_values_are_absent_from_result_and_stored_evaluation_debug() {
+        let (_, evaluation) = issuable_registry_evaluation();
+        let result_debug = format!("{:?}", evaluation.results[0]);
+        let evaluation_debug = format!("{evaluation:?}");
+
+        for secret in ["Ada", "Grace", "Charles", "Mallory"] {
+            assert!(
+                !result_debug.contains(secret),
+                "claim-result Debug must not expose structured value member {secret}"
+            );
+            assert!(
+                !evaluation_debug.contains(secret),
+                "stored-evaluation Debug must not expose structured value member {secret}"
+            );
+        }
+        assert!(result_debug.contains("value: \"[REDACTED]\""));
+        assert!(evaluation_debug.contains("result_count: 1"));
+        assert!(!evaluation_debug.contains("request-hash"));
     }

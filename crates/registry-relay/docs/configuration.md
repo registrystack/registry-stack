@@ -768,6 +768,32 @@ artifact hash where applicable and its raw SHA-256 digest. Non-local profiles
 must receive the files through the verified signed Config Bundle path. Relay
 does not discover, download, or hot-reload consultation profiles.
 
+### Structured consultation outputs
+
+A consultation public contract can declare scalar, object, and array outputs.
+An object declares every child under `fields` with `required` and `schema`.
+An array declares one recursive `items` schema and `max_items`. Every object
+and array declares `max_bytes` for its complete canonical serialized value.
+The compiler binds this recursive schema into the public contract hash and the
+physical projection digest.
+
+The schema is closed and bounded. A contract can declare no more than 32
+top-level outputs or fields in one object, 256 items in one array, 8 levels,
+256 schema nodes, 4,096 expanded nodes, and 65,536 canonical serialized bytes
+in one structured value. Unknown object keys, missing required fields, wrong
+nested types, overlong arrays, and over-bound values are rejected before Relay
+publishes a `match` result.
+
+Use project authoring to produce the integration pack and public contract. For
+example, the synthetic OpenCRVS integration declares `parents` as an array of
+at most two closed objects. Each object releases only `type`, `name`, and an
+optional nullable `identifier`; the reviewed Rhai adapter constructs those
+fields rather than returning the source parent record.
+
+Notary must pin the same recursive output contract. Changing a field,
+requirement, type, item limit, or byte limit changes the contract hash and
+requires a coordinated Relay and Notary generation.
+
 Each private destination binding defaults to
 `dns_family: dual_stack_strict`: Relay requires definitive A and AAAA lookup
 outcomes before it connects. For a domain destination intentionally operated

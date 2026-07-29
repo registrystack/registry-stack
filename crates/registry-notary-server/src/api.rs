@@ -57,17 +57,18 @@ use registry_notary_core::tokens::{
 use registry_notary_core::RegistryNotaryCelConfig;
 use registry_notary_core::{
     signing_key_uses_local_software_custody, AccessMode, BatchEvaluateItemRequest,
-    BatchEvaluateRequest, BoundedClaimId, BoundedCorrelationId, ClaimRef, ClaimResultView,
-    ClaimSet, ConfigMetadata, CredentialIssueRequest, CredentialProfileConfig, DeploymentProfile,
-    EvaluateRequest, EvaluationCapability, EvidenceActor, EvidenceAuditEvent,
-    EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity, EvidenceEntityReference,
-    EvidenceError, EvidenceOnBehalfOf, EvidencePrincipal, EvidenceRelationship, FederationConfig,
-    Hashed, HolderRequest, Oid4vciConfig, Oid4vciCredentialClaimMode,
-    Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig,
-    PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RenderEvaluationRequest,
-    StandaloneRegistryNotaryConfig, StoredSubjectAccessMetadata, SubjectAccessConfig,
-    SubjectAccessDelegatedRelationshipConfig, SubjectAccessDenialCode, SubjectAccessScopePolicy,
-    SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    BatchEvaluateRequest, BoundedClaimId, BoundedCorrelationId, ClaimEvidenceMode, ClaimRef,
+    ClaimResultView, ClaimSet, ConfigMetadata, CredentialIssueRequest, CredentialProfileConfig,
+    DeploymentProfile, DisclosureProfile, EvaluateRequest, EvaluationCapability, EvidenceActor,
+    EvidenceAuditEvent, EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity,
+    EvidenceEntityReference, EvidenceError, EvidenceOnBehalfOf, EvidencePrincipal,
+    EvidenceRelationship, FederationConfig, Hashed, HolderRequest, Oid4vciConfig,
+    Oid4vciCredentialClaimMode, Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig,
+    Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode,
+    RenderEvaluationRequest, RuleConfig, StandaloneRegistryNotaryConfig,
+    StoredSubjectAccessMetadata, SubjectAccessConfig, SubjectAccessDelegatedRelationshipConfig,
+    SubjectAccessDenialCode, SubjectAccessScopePolicy, SubjectRequest, TargetRefView,
+    VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_crypto::KeyReadiness;
@@ -90,7 +91,7 @@ use registry_platform_pdp::{
 };
 use registry_platform_replay::{ReplayKey, ReplayScope, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
@@ -110,13 +111,16 @@ use crate::{
     openapi_document,
     posture::{posture_document, PostureContext, PostureDocumentError},
     preauth_state::{
-        CredentialMaterialization, IssuanceTransaction, LoginState, PreauthorizationStateError,
+        CredentialMaterialization, IssuanceAuthority, IssuanceTransaction, LoginState,
+        PreauthorizationStateError, RegistryClientOfferReservation,
+        RegistryClientOfferReservationOutcome, RegistryClientOfferResponse,
+        RegistryClientTransactionCode,
     },
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::{
         build_claim_levels, claim_ids, claim_semantics_metadata, requested_claim_versions,
         require_issuable_evaluation_provenance, require_registry_backed_credential_claims,
-        validate_batch_subject_limit, EvaluationAuditSnapshot,
+        target_ref_view, validate_batch_subject_limit, EvaluationAuditSnapshot,
     },
     standalone::{
         generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge, pre_auth_audit_event,
@@ -138,6 +142,7 @@ const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 pub(crate) const ADMIN_SCOPE: &str = "registry_notary:admin";
 pub(crate) const METRICS_SCOPE: &str = "registry_notary:metrics_read";
 pub(crate) const OPS_READ_SCOPE: &str = "registry_notary:ops_read";
+pub(crate) const REGISTRY_OFFER_CREATE_SCOPE: &str = "registry_notary:credential_offer_create";
 const OID4VCI_CREDENTIAL_PATH: &str = "/oid4vci/credential";
 // SD-JWT VC Type Metadata well-known prefix inserted between host and vct path.
 const WELL_KNOWN_VCT_PREFIX: &str = "/.well-known/vct";
@@ -185,6 +190,7 @@ where
         )
         .route("/oid4vci/offer/start", get(oid4vci_offer_start))
         .route("/oid4vci/offer/callback", get(oid4vci_offer_callback))
+        .route("/oid4vci/offers", post(oid4vci_create_registry_offer))
         .route("/oid4vci/token", post(oid4vci_token))
         .route("/oid4vci/credential", post(oid4vci_credential))
         .route("/v1/claims", get(list_claims))

@@ -46,5 +46,24 @@ outputs:
   child_given_name: { type: [string, "null"], maxLength: 80 }
   child_family_name: { type: [string, "null"], maxLength: 80 }
   place_of_birth: { type: [string, "null"], maxLength: 120 }
+  parents:
+    type: array
+    nullable: false
+    max_bytes: 1024
+    max_items: 2
+    items:
+      type: object
+      nullable: false
+      max_bytes: 384
+      fields:
+        type:
+          required: true
+          schema: { type: string, maxLength: 16 }
+        name:
+          required: true
+          schema: { type: string, maxLength: 160 }
+        identifier:
+          required: false
+          schema: { type: [string, "null"], maxLength: 64 }
 
 limits: { calls: 1, source_bytes: 512KiB, request_bytes: 32KiB, deadline: 20s }

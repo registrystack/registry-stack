@@ -449,7 +449,7 @@ pub(super) fn compile_operation_descriptors(
                 }
             })?;
             let projection = compile_projection(operation)?;
-            let response = compile_response(operation)?;
+            let response = compile_response(operation, &pack.document.spec.output)?;
             let response_decoder = (response.normalization()
                 != CompiledResponseNormalization::ScriptBody)
                 .then(|| compile_closed_json_decoder(&response))
@@ -793,6 +793,7 @@ fn compile_projection(
 
 fn compile_response(
     operation: &HttpOperationDocument,
+    output_schema: &BTreeMap<String, OutputFieldDocument>,
 ) -> Result<CompiledResponse, SourcePlanCompileError> {
     let outputs = operation
         .response
@@ -803,6 +804,11 @@ fn compile_response(
                 field: AcquiredField::try_from(field.as_str())
                     .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
                 pointer: compile_json_pointer(pointer)?,
+                schema: super::super::runtime_profile::compile_output_shape(
+                    output_schema
+                        .get(field)
+                        .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+                ),
             })
         })
         .collect::<Result<Box<[_]>, _>>()?;

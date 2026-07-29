@@ -316,6 +316,109 @@ fn build_openapi_document() -> Value {
                     }
                 }
             },
+            "/oid4vci/offers": {
+                "post": {
+                    "summary": "Create a registrar-initiated pre-authorized offer",
+                    "operationId": "createOid4vciRegistryOffer",
+                    "description": "Creates one short-lived pre-authorized OID4VCI offer from an existing fresh registry-backed evaluation owned by the authenticated machine client. The client supplies only the evaluation id and credential configuration id. Registry Notary reloads the exact stored values, target, purpose, compiler-pinned Relay provenance, credential profile, and configuration fingerprint. The caller must present an external API-key or OIDC machine credential with registry_notary:credential_offer_create, the selected configuration scope, and exact target-scoped authorization_details for create_credential_offer; a Notary-issued wallet access token is not accepted. Idempotency-Key is required. Reusing one key with the same request returns the exact stored response, while changing the request or attempting to create another offer from the consumed evaluation returns 409. The credential_offer_uri describes the required tx_code but never contains its numeric value. The registrar must deliver that value to the holder through a separate channel. Every response is non-storable.",
+                    "security": [
+                        { "apiKeyAuth": [] },
+                        { "bearerAuth": [] }
+                    ],
+                    "parameters": [
+                        {
+                            "name": "Idempotency-Key",
+                            "in": "header",
+                            "required": true,
+                            "description": "Caller-generated retry key. Use the same key only for an exact retry of the same request.",
+                            "schema": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 256,
+                                "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]{1,256}$"
+                            }
+                        }
+                    ],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RegistryClientOfferRequest"
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "New or exactly replayed credential offer response",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "$ref": "#/components/schemas/RegistryClientOfferResponse"
+                                    }
+                                }
+                            }
+                        },
+                        "400": {
+                            "description": "Invalid request or idempotency key",
+                            "content": {
+                                "application/problem+json": {
+                                    "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+                                }
+                            }
+                        },
+                        "401": {
+                            "description": "Missing or invalid machine credential",
+                            "content": {
+                                "application/problem+json": {
+                                    "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+                                }
+                            }
+                        },
+                        "403": {
+                            "description": "Caller lacks a required scope or exact target-scoped authorization",
+                            "content": {
+                                "application/problem+json": {
+                                    "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+                                }
+                            }
+                        },
+                        "404": {
+                            "description": "Flow is disabled or the evaluation is unavailable to this caller",
+                            "content": {
+                                "application/problem+json": {
+                                    "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+                                }
+                            }
+                        },
+                        "409": {
+                            "description": "Idempotency conflict or evaluation already consumed",
+                            "content": {
+                                "application/problem+json": {
+                                    "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+                                }
+                            }
+                        },
+                        "429": {
+                            "description": "Offer creation is rate limited",
+                            "content": {
+                                "application/problem+json": {
+                                    "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+                                }
+                            }
+                        },
+                        "503": {
+                            "description": "Offer correctness state or another required dependency is unavailable",
+                            "content": {
+                                "application/problem+json": {
+                                    "schema": { "$ref": "#/components/schemas/ProblemDetails" }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
             "/oid4vci/offer/start": {
                 "get": {
                     "summary": "Begin an authenticated pre-authorized-code offer",
@@ -722,6 +825,8 @@ fn build_openapi_document() -> Value {
                 "SdJwtVcTypeMetadata": sd_jwt_vc_type_metadata_schema(),
                 "CredentialRequest": credential_request_schema(),
                 "CredentialResponse": credential_response_schema(),
+                "RegistryClientOfferRequest": registry_client_offer_request_schema(),
+                "RegistryClientOfferResponse": registry_client_offer_response_schema(),
                 "TokenRequest": token_request_schema(),
                 "TokenResponse": token_response_schema(),
                 "Oid4vciError": oid4vci_error_schema()
@@ -815,10 +920,16 @@ fn build_openapi_document() -> Value {
         ("ProvenanceUsed", provenance_used_schema()),
         ("TargetRefView", target_ref_view_schema()),
         ("EvidenceEntityRef", evidence_entity_ref_schema()),
+        ("RelayOutputContract", relay_output_contract_schema()),
+        (
+            "RelayOutputObjectFieldContract",
+            relay_output_object_field_contract_schema(),
+        ),
     ];
     for (name, schema) in schema_overrides.iter() {
         document_value["components"]["schemas"][*name] = schema.clone();
     }
+    set_registry_offer_no_store_headers(&mut document_value);
     set_json_response_schema(
         &mut document_value,
         "/ready",
@@ -1383,6 +1494,68 @@ fn add_response_examples(document: &mut Value) {
                 _ => "OpenID4VCI issuer failed",
             },
             oid4vci_error_example(code, description),
+        );
+    }
+    set_json_response(
+        document,
+        "/oid4vci/offers",
+        "post",
+        "200",
+        "New or exactly replayed credential offer response",
+        registry_client_offer_response_example(),
+    );
+    for (status, code, title, detail) in [
+        (
+            "400",
+            "request.invalid",
+            "Invalid evidence request",
+            "the offer request or Idempotency-Key is invalid",
+        ),
+        (
+            "401",
+            "auth.missing_credential",
+            "Missing credential",
+            "missing authentication credential",
+        ),
+        (
+            "403",
+            "auth.scope_denied",
+            "Scope denied",
+            "missing the offer-create or credential-configuration scope",
+        ),
+        (
+            "404",
+            "evaluation.not_found",
+            "Evaluation not found",
+            "the evaluation is unknown, expired, or not owned by this client",
+        ),
+        (
+            "409",
+            "offer_conflict",
+            "Credential offer was not created",
+            "the idempotency key conflicts or the evaluation was already consumed",
+        ),
+        (
+            "429",
+            "evaluation.quota_exceeded",
+            "Machine quota exceeded",
+            "the machine offer quota was exceeded for this principal",
+        ),
+        (
+            "503",
+            "offer_unavailable",
+            "Credential offer was not created",
+            "the offer correctness state is unavailable",
+        ),
+    ] {
+        let status_code = status.parse::<u16>().expect("static status is valid");
+        set_problem_response(
+            document,
+            "/oid4vci/offers",
+            "post",
+            status,
+            title,
+            problem_example(status_code, code, title, detail),
         );
     }
     set_json_response(
@@ -2417,6 +2590,33 @@ fn set_problem_response_schema(
     );
 }
 
+fn set_registry_offer_no_store_headers(document: &mut Value) {
+    let Some(responses) = document
+        .pointer_mut("/paths/~1oid4vci~1offers/post/responses")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    for status in ["200", "400", "401", "403", "404", "409", "429", "503"] {
+        let Some(response) = responses.get_mut(status).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        response.insert(
+            "headers".to_string(),
+            json!({
+                "Cache-Control": {
+                    "description": "Prevents storage of offer, code, and transaction material.",
+                    "schema": { "type": "string", "enum": ["no-store"] }
+                },
+                "Pragma": {
+                    "description": "Compatibility cache directive for sensitive offer responses.",
+                    "schema": { "type": "string", "enum": ["no-cache"] }
+                }
+            }),
+        );
+    }
+}
+
 fn set_response_schema(
     document: &mut Value,
     path: &str,
@@ -2965,11 +3165,15 @@ fn sd_jwt_vc_type_metadata_schema() -> Value {
                         },
                         "sd": {
                             "type": "string",
-                            "enum": ["always"]
+                            "enum": ["always"],
+                            "description": "The complete top-level claim is selectively disclosed as one unit. Nested object fields and array items are not independently disclosable."
                         },
                         "mandatory": { "type": "boolean" },
                         "registry_notary_semantics": {
                             "$ref": "#/components/schemas/ClaimSemantics"
+                        },
+                        "registry_notary_value_schema": {
+                            "$ref": "#/components/schemas/RelayOutputContract"
                         }
                     },
                     "additionalProperties": true
@@ -2977,6 +3181,161 @@ fn sd_jwt_vc_type_metadata_schema() -> Value {
             }
         },
         "additionalProperties": true
+    })
+}
+
+fn registry_client_offer_request_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["evaluation_id", "credential_configuration_id"],
+        "properties": {
+            "evaluation_id": {
+                "type": "string",
+                "description": "Identifier of the fresh registry-backed evaluation owned by the authenticated machine client."
+            },
+            "credential_configuration_id": {
+                "type": "string",
+                "description": "Configured credential type authorized for the evaluation's exact claim set, purpose, and target."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn registry_client_offer_response_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["credential_offer_uri", "tx_code", "expires_at"],
+        "properties": {
+            "credential_offer_uri": {
+                "type": "string",
+                "format": "uri",
+                "description": "Sensitive standard credential offer URI. It contains the pre-authorized code and describes the tx_code requirement, but never contains the numeric tx_code value."
+            },
+            "tx_code": {
+                "type": "string",
+                "pattern": "^[0-9]+$",
+                "description": "Required sensitive numeric transaction code. Deliver it to the holder through a channel separate from the credential_offer_uri."
+            },
+            "expires_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Expiry of the pre-authorized code, capped by the stored evaluation expiry."
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn relay_output_contract_schema() -> Value {
+    // Keep the published schema aligned with the v1 recursive contract bounds
+    // enforced by registry-notary-core.
+    let max_bytes = 65_536_u32;
+    let max_fields = 32_usize;
+    let max_items = 256_u16;
+    json!({
+        "description": "Recursive, closed compiler-pinned Relay output contract. Runtime validation also enforces maximum depth 8, 256 schema nodes, 4096 expanded nodes, and 128-byte field names.",
+        "oneOf": [
+            {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                    "type": { "type": "string", "enum": ["boolean"] },
+                    "nullable": { "type": "boolean", "default": false }
+                },
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "required": ["type", "minimum", "maximum"],
+                "properties": {
+                    "type": { "type": "string", "enum": ["integer"] },
+                    "nullable": { "type": "boolean", "default": false },
+                    "minimum": { "type": "integer", "format": "int64" },
+                    "maximum": { "type": "integer", "format": "int64" }
+                },
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "required": ["type", "max_bytes"],
+                "properties": {
+                    "type": { "type": "string", "enum": ["string"] },
+                    "nullable": { "type": "boolean", "default": false },
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": max_bytes
+                    }
+                },
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                    "type": { "type": "string", "enum": ["date"] },
+                    "nullable": { "type": "boolean", "default": false }
+                },
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "required": ["type", "max_bytes", "fields"],
+                "properties": {
+                    "type": { "type": "string", "enum": ["object"] },
+                    "nullable": { "type": "boolean", "default": false },
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": max_bytes
+                    },
+                    "fields": {
+                        "type": "object",
+                        "minProperties": 1,
+                        "maxProperties": max_fields,
+                        "additionalProperties": {
+                            "$ref": "#/components/schemas/RelayOutputObjectFieldContract"
+                        }
+                    }
+                },
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "required": ["type", "max_bytes", "max_items", "items"],
+                "properties": {
+                    "type": { "type": "string", "enum": ["array"] },
+                    "nullable": { "type": "boolean", "default": false },
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": max_bytes
+                    },
+                    "max_items": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": max_items
+                    },
+                    "items": {
+                        "$ref": "#/components/schemas/RelayOutputContract"
+                    }
+                },
+                "additionalProperties": false
+            }
+        ]
+    })
+}
+
+fn relay_output_object_field_contract_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["required", "schema"],
+        "properties": {
+            "required": { "type": "boolean" },
+            "schema": { "$ref": "#/components/schemas/RelayOutputContract" }
+        },
+        "additionalProperties": false
     })
 }
 
@@ -3316,6 +3675,10 @@ fn sd_jwt_vc_type_metadata_example() -> Value {
                     "concept": "https://publicschema.org/Person",
                     "predicate": "urn:registry-notary:predicate:person-is-alive",
                     "derived_from": ["https://publicschema.org/date_of_death"]
+                },
+                "registry_notary_value_schema": {
+                    "type": "boolean",
+                    "nullable": false
                 }
             }
         ]
@@ -3326,6 +3689,14 @@ fn oid4vci_credential_response_example() -> Value {
     json!({
         "credential": "eyJhbGciOiJFZERTQSIsInR5cCI6ImRjK3NkLWp3dCJ9.payload.signature~disclosure~",
         "format": "dc+sd-jwt"
+    })
+}
+
+fn registry_client_offer_response_example() -> Value {
+    json!({
+        "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.gov%22%2C%22credential_configuration_ids%22%3A%5B%22birth_certificate_sd_jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22fake-example-code%22%2C%22tx_code%22%3A%7B%22input_mode%22%3A%22numeric%22%2C%22length%22%3A6%7D%7D%7D%7D",
+        "tx_code": "123456",
+        "expires_at": "2026-07-29T12:05:00Z"
     })
 }
 
@@ -3714,6 +4085,7 @@ mod tests {
             "/credentials/{vct_path}",
             "/.well-known/vct/{vct_path}",
             "/oid4vci/credential",
+            "/oid4vci/offers",
             "/oid4vci/offer/start",
             "/oid4vci/offer/callback",
             "/oid4vci/token",
@@ -3974,6 +4346,7 @@ mod tests {
             ("/credentials/{vct_path}", "get", "200"),
             ("/.well-known/vct/{vct_path}", "get", "200"),
             ("/oid4vci/credential", "post", "200"),
+            ("/oid4vci/offers", "post", "200"),
             ("/oid4vci/token", "post", "200"),
             ("/v1/claims", "get", "200"),
             ("/v1/claims/{claim_id}", "get", "200"),
@@ -4297,6 +4670,16 @@ mod tests {
             json!(["always"])
         );
         assert_eq!(
+            doc["components"]["schemas"]["SdJwtVcTypeMetadata"]["properties"]["claims"]["items"]
+                ["properties"]["registry_notary_value_schema"]["$ref"],
+            json!("#/components/schemas/RelayOutputContract")
+        );
+        assert_eq!(
+            doc["paths"]["/credentials/{vct_path}"]["get"]["responses"]["200"]["content"]
+                ["application/json"]["example"]["claims"][0]["registry_notary_value_schema"],
+            json!({"type": "boolean", "nullable": false})
+        );
+        assert_eq!(
             doc["paths"]["/credentials/{vct_path}"]["get"]["responses"]["200"]["content"]
                 ["application/json"]["schema"]["$ref"],
             json!("#/components/schemas/SdJwtVcTypeMetadata")
@@ -4350,6 +4733,117 @@ mod tests {
             json!("^[^/]+(/[^/]+)*$"),
             "well-known vct_path parameter schema must carry a pattern permitting slash-separated segments"
         );
+    }
+
+    #[test]
+    fn registrar_offer_openapi_is_machine_authenticated_idempotent_and_non_storable() {
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+        let operation = &doc["paths"]["/oid4vci/offers"]["post"];
+
+        assert_eq!(
+            operation["security"],
+            json!([{ "apiKeyAuth": [] }, { "bearerAuth": [] }])
+        );
+        assert!(operation["description"]
+            .as_str()
+            .is_some_and(|description| {
+                description.contains("registry_notary:credential_offer_create")
+                    && description.contains("Idempotency-Key")
+                    && description.contains("exact stored values")
+                    && description.contains("exact target-scoped authorization_details")
+                    && description.contains("never contains its numeric value")
+                    && description.contains("separate channel")
+                    && description.contains("non-storable")
+            }));
+        let idempotency_key = operation["parameters"]
+            .as_array()
+            .expect("offer parameters are an array")
+            .iter()
+            .find(|parameter| parameter["name"] == "Idempotency-Key")
+            .expect("Idempotency-Key is documented");
+        assert_eq!(idempotency_key["required"], json!(true));
+        assert_eq!(idempotency_key["schema"]["maxLength"], json!(256));
+        assert_eq!(
+            operation["requestBody"]["content"]["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/RegistryClientOfferRequest")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["RegistryClientOfferRequest"]["required"],
+            json!(["evaluation_id", "credential_configuration_id"])
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["RegistryClientOfferRequest"]["additionalProperties"],
+            json!(false)
+        );
+        assert_eq!(
+            operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/RegistryClientOfferResponse")
+        );
+        assert_eq!(
+            operation["responses"]["200"]["headers"]["Cache-Control"]["schema"]["enum"],
+            json!(["no-store"])
+        );
+        assert_eq!(
+            operation["responses"]["200"]["headers"]["Pragma"]["schema"]["enum"],
+            json!(["no-cache"])
+        );
+        for status in ["400", "401", "403", "404", "409", "429", "503"] {
+            assert_eq!(
+                operation["responses"][status]["content"]["application/problem+json"]["schema"]
+                    ["$ref"],
+                json!("#/components/schemas/ProblemDetails")
+            );
+            assert_eq!(
+                operation["responses"][status]["headers"]["Cache-Control"]["schema"]["enum"],
+                json!(["no-store"])
+            );
+        }
+        let response = &doc["components"]["schemas"]["RegistryClientOfferResponse"];
+        assert_eq!(
+            response["required"],
+            json!(["credential_offer_uri", "tx_code", "expires_at"])
+        );
+        assert!(
+            response["properties"]["credential_offer_uri"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("never contains the numeric"))
+        );
+        assert!(response["properties"]["tx_code"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("separate")));
+    }
+
+    #[test]
+    fn type_metadata_documents_closed_recursive_claim_value_contract() {
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+        let contract = &doc["components"]["schemas"]["RelayOutputContract"];
+        let variants = contract["oneOf"]
+            .as_array()
+            .expect("Relay output contract variants");
+        assert_eq!(variants.len(), 6);
+
+        let object = variants
+            .iter()
+            .find(|variant| variant["properties"]["type"]["enum"] == json!(["object"]))
+            .expect("object output contract");
+        assert_eq!(object["additionalProperties"], json!(false));
+        assert_eq!(object["properties"]["fields"]["maxProperties"], json!(32));
+        assert_eq!(
+            object["properties"]["fields"]["additionalProperties"]["$ref"],
+            json!("#/components/schemas/RelayOutputObjectFieldContract")
+        );
+
+        let array = variants
+            .iter()
+            .find(|variant| variant["properties"]["type"]["enum"] == json!(["array"]))
+            .expect("array output contract");
+        assert_eq!(array["additionalProperties"], json!(false));
+        assert_eq!(array["properties"]["max_items"]["maximum"], json!(256));
+        assert_eq!(
+            array["properties"]["items"]["$ref"],
+            json!("#/components/schemas/RelayOutputContract")
+        );
+        assert_eq!(array["properties"]["max_bytes"]["maximum"], json!(65_536));
     }
 
     #[test]

@@ -31,7 +31,7 @@ use super::artifact::{
     InputRoleDocument, InputTypeDocument, IntegrationPackArtifact,
     MaterializationRefreshClassDocument, OAuth2ClientCredentialsRequestFormatDocument,
     OAuth2TokenCacheModeDocument, OAuth2TokenResponseSchemaDocument, OAuth2TokenTypeDocument,
-    OutputTypeDocument, PriorOutputBindingDocument, PrivateBindingArtifact,
+    OutputFieldDocument, OutputTypeDocument, PriorOutputBindingDocument, PrivateBindingArtifact,
     ProjectionMechanismDocument, PublicContractArtifact, ReadMethod, RequestCodecDocument,
     RequestSelectorLocationDocument, RequestSignerDocument, ResponseFormatDocument,
     ResponseNormalizationDocument, ResponseSchemaDocument, ScriptAuthorityDocument,
@@ -909,6 +909,7 @@ impl CompiledPriorOutputSlot {
 pub struct CompiledOutputMapping {
     field: AcquiredField,
     pointer: CompiledJsonPointer,
+    schema: super::runtime_profile::CompiledOutputShape,
 }
 
 impl CompiledOutputMapping {
@@ -919,6 +920,10 @@ impl CompiledOutputMapping {
 
     pub(crate) const fn extraction_pointer(&self) -> &CompiledJsonPointer {
         &self.pointer
+    }
+
+    pub(crate) const fn schema(&self) -> &super::runtime_profile::CompiledOutputShape {
+        &self.schema
     }
 }
 
@@ -1831,18 +1836,11 @@ struct CompiledRhaiProgram {
     entrypoint: Box<str>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CompiledRhaiOutputType {
-    String { max_bytes: u32 },
-    Boolean,
-    Integer { minimum: i64, maximum: i64 },
-    Date,
-}
+pub(crate) type CompiledRhaiOutputType = super::runtime_profile::CompiledOutputShape;
 
 pub(crate) struct CompiledRhaiOutput {
     name: Box<str>,
     output_type: CompiledRhaiOutputType,
-    nullable: bool,
 }
 
 impl CompiledRhaiOutput {
@@ -1850,12 +1848,12 @@ impl CompiledRhaiOutput {
         &self.name
     }
 
-    pub(crate) const fn output_type(&self) -> CompiledRhaiOutputType {
-        self.output_type
+    pub(crate) const fn output_type(&self) -> &CompiledRhaiOutputType {
+        &self.output_type
     }
 
     pub(crate) const fn nullable(&self) -> bool {
-        self.nullable
+        self.output_type.nullable()
     }
 }
 
@@ -2668,28 +2666,7 @@ fn compile_one(
             .output()
             .map(|field| CompiledRhaiOutput {
                 name: field.name().into(),
-                output_type: match field.shape() {
-                    super::runtime_profile::CompiledOutputShape::String { max_bytes, .. } => {
-                        CompiledRhaiOutputType::String { max_bytes }
-                    }
-                    super::runtime_profile::CompiledOutputShape::Boolean { .. } => {
-                        CompiledRhaiOutputType::Boolean
-                    }
-                    super::runtime_profile::CompiledOutputShape::Integer {
-                        minimum,
-                        maximum,
-                        ..
-                    } => CompiledRhaiOutputType::Integer { minimum, maximum },
-                    super::runtime_profile::CompiledOutputShape::Date { .. } => {
-                        CompiledRhaiOutputType::Date
-                    }
-                },
-                nullable: match field.shape() {
-                    super::runtime_profile::CompiledOutputShape::String { nullable, .. }
-                    | super::runtime_profile::CompiledOutputShape::Boolean { nullable }
-                    | super::runtime_profile::CompiledOutputShape::Integer { nullable, .. }
-                    | super::runtime_profile::CompiledOutputShape::Date { nullable } => nullable,
-                },
+                output_type: field.shape().clone(),
             })
             .collect::<Box<[_]>>()
     } else {
@@ -3101,5 +3078,5 @@ pub(crate) use tests::{
     rhai_five_operation_two_slot_completion_seed_fixture, rhai_runtime_vector_plan_fixture,
     semantic_alias_completion_seed_fixture, shared_snapshot_registry_fixture,
     signed_dci_expiring_oauth_runtime_plan_fixture, signed_dci_script_runtime_plan_fixture,
-    snapshot_completion_seed_fixture,
+    snapshot_completion_seed_fixture, structured_output_plan_fixture,
 };

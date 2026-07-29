@@ -349,6 +349,133 @@ fn all_scalar_kinds_are_validated_and_projected() {
 }
 
 #[test]
+fn closed_object_and_array_projections_release_exact_canonical_json() {
+    let decoder = ClosedJsonDecoder::new(
+        object(vec![
+            field(
+                "object",
+                true,
+                object(vec![
+                    field("z", true, integer(false, 0, 9)),
+                    field("a", true, string(false, 16)),
+                ]),
+            ),
+            field(
+                "array",
+                true,
+                ClosedJsonSchema::array(
+                    false,
+                    2,
+                    object(vec![
+                        field("z", true, ClosedJsonSchema::boolean(false)),
+                        field("a", true, integer(false, 0, 9)),
+                    ]),
+                )
+                .unwrap(),
+            ),
+        ]),
+        ClosedJsonRecordRoot::Object,
+        vec![
+            projection("projected_object", &["object"]),
+            projection("projected_array", &["array"]),
+        ],
+    )
+    .unwrap();
+
+    let ClosedJsonOutcome::One(record) = decoder
+        .decode(body(
+            br#"{"object":{"z":2,"a":"SECRET"},"array":[{"z":true,"a":1},{"a":2,"z":false}]}"#,
+        ))
+        .unwrap()
+    else {
+        panic!("one root object expected");
+    };
+    assert!(matches!(
+        record.get("projected_object"),
+        Some(ProjectedJsonScalar::CanonicalJson(bytes))
+            if bytes.as_slice() == br#"{"a":"SECRET","z":2}"#
+    ));
+    assert!(matches!(
+        record.get("projected_array"),
+        Some(ProjectedJsonScalar::CanonicalJson(bytes))
+            if bytes.as_slice() == br#"[{"a":1,"z":true},{"a":2,"z":false}]"#
+    ));
+    let diagnostic = format!(
+        "{record:?} {:?}",
+        record
+            .get("projected_object")
+            .expect("object projection is present")
+    );
+    assert!(diagnostic.contains("canonical_json"));
+    assert!(!diagnostic.contains("SECRET"));
+}
+
+#[test]
+fn composite_projection_preserves_closed_schema_and_response_bounds() {
+    let decoder = ClosedJsonDecoder::new(
+        object(vec![field(
+            "payload",
+            true,
+            object(vec![
+                field("name", true, string(false, 4)),
+                field(
+                    "items",
+                    true,
+                    ClosedJsonSchema::array(
+                        false,
+                        2,
+                        object(vec![field("label", true, string(false, 4))]),
+                    )
+                    .unwrap(),
+                ),
+            ]),
+        )]),
+        ClosedJsonRecordRoot::Object,
+        vec![projection("payload", &["payload"])],
+    )
+    .unwrap();
+
+    for invalid in [
+        br#"{"payload":{"name":"safe","items":[],"extra":"SECRET"}}"#.as_slice(),
+        br#"{"payload":{"name":"safe","items":[{"label":"one","extra":true}]}}"#.as_slice(),
+        br#"{"payload":{"name":"safe","items":[{"label":"one"},{"label":"two"},{"label":"tri"}]}}"#
+            .as_slice(),
+        br#"{"payload":{"name":"safe","items":[{"label":"large"}]}}"#.as_slice(),
+        br#"{"payload":{"name":"safe","items":[[[[[["deep"]]]]]]}}"#.as_slice(),
+    ] {
+        assert_eq!(
+            decoder.decode(body(invalid)).unwrap_err(),
+            ClosedJsonDecodeError::ResponseContractViolation
+        );
+    }
+}
+
+#[test]
+fn composite_projection_rejects_any_subtree_that_tolerates_unknown_fields() {
+    let open_nested = ClosedJsonSchema::object_with_unknown_field_policy(
+        false,
+        false,
+        vec![field("declared", true, string(false, 8))],
+    )
+    .unwrap();
+    let schema = object(vec![field(
+        "payload",
+        true,
+        object(vec![field("nested", true, open_nested)]),
+    )]);
+
+    assert_eq!(
+        ClosedJsonDecoder::new(
+            schema,
+            ClosedJsonRecordRoot::Object,
+            vec![projection("payload", &["payload"])],
+        )
+        .unwrap_err(),
+        ClosedJsonDecoderBuildError::InvalidProjection
+    );
+}
+
+#[test]
 fn presence_projection_distinguishes_null_from_a_non_null_object_without_releasing_it() {
     let decoder = ClosedJsonDecoder::new_with_presence(
         object(vec![field(
@@ -413,7 +540,11 @@ fn schema_compilation_rejects_local_depth_expansion_and_normalization_errors() {
         ClosedJsonDecoderBuildError::InvalidSchema
     );
     assert!(ClosedJsonSchema::array(false, 0, string(false, 1)).is_err());
+    assert!(
+        ClosedJsonSchema::array(false, MAX_CLOSED_JSON_ARRAY_ITEMS + 1, string(false, 1)).is_err()
+    );
     assert!(ClosedJsonSchema::string(false, 0).is_err());
+    assert!(ClosedJsonSchema::string(false, MAX_CLOSED_JSON_STRING_BYTES + 1).is_err());
     assert!(ClosedJsonSchema::integer(false, 2, 1).is_err());
     assert_eq!(
         ClosedJsonSchema::object(
@@ -508,10 +639,9 @@ fn schema_compilation_rejects_local_depth_expansion_and_normalization_errors() {
 }
 
 #[test]
-fn projection_compilation_rejects_missing_composite_noncanonical_and_duplicates() {
+fn projection_compilation_rejects_missing_noncanonical_and_duplicates() {
     for projections in [
         vec![projection("missing", &["missing"])],
-        vec![projection("object", &["nested"])],
         vec![projection("bad_index", &["nested", "values", "01"])],
         vec![
             projection("one", &["status"]),

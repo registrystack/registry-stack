@@ -276,6 +276,7 @@ fn lower_project_integration(
                     max_bytes,
                     minimum: field.minimum,
                     maximum: field.maximum,
+                    structured_schema: None,
                     from: Some(format!("snapshot.record.{name}")),
                     source_pointer: None,
                 },
@@ -886,7 +887,7 @@ fn semantic_digests(
 // A schema or knowledge change must therefore be reviewed for promotion
 // semantics before a new projection can be emitted.
 const PROMOTION_FIELD_KNOWLEDGE_REVISION: &str =
-    "sha256:a8f00b404cb86e06f8c2f63ed0df9f27bf1df92636568a265d9338416dea0332";
+    "sha256:09bd1b95dfb5a5141afa41da1f433d4bba5daeb46ed1849bb85e2cb84e144d65";
 
 fn project_promotion_projection(
     loaded: &LoadedRegistryProject,

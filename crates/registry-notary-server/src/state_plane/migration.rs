@@ -34,14 +34,20 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2\0",
     "preauthorization-tx-code=verified-notary-issuer-stable-scope-jti-keyed-pin-verifier-peek-redeem-one-winner-expiry-live-key-attestation-v3\0",
     "oid4vci-issuance-transaction=keyed-id-encrypted-immutable-record-sha256-uri-commitment-token-nonce-bind-holder-and-request-atomic-one-materialization-encrypted-response-terminal-failure-expiry-v2\0",
+    "issuance-evaluation-consumption=keyed-owner-evaluation-single-lineage-shared-direct-and-offer-expiry-capacity-v1\0",
+    "registry-client-offer=hashed-idempotency-exact-encrypted-response-shared-evaluation-consumption-atomic-client-quota-transaction-and-optional-pin-expiry-capacity-v2\0",
     "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2\0",
 );
 pub const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
+    "56e32f72f7cfb555487e0e1b94959780c24d0a4e2427496766ad03c135c65313";
+// The immediately preceding v1 contract is the only supported in-place
+// upgrade source. Its exact catalog is attested before any DDL runs.
+const PREVIOUS_STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
     "f08bb0bc9b927b534ce736c640d43e3c7f898bd110616f92a60857c5fd1323fd";
 
 const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 0x4e4f_5441_5259_0001;
-const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 11;
-const EXPECTED_API_FUNCTION_COUNT_V1: i64 = 31;
+const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 13;
+const EXPECTED_API_FUNCTION_COUNT_V1: i64 = 33;
 
 /// The `NOLOGIN` role that owns the Notary schemas and fixed functions.
 #[derive(Clone, PartialEq, Eq)]
@@ -197,7 +203,33 @@ pub async fn install_postgres_state_plane_v1(
                 .map_err(|_| StatePlaneMigrationError::Unavailable)?;
         }
         2 => {
-            rebind_restored_metadata(&transaction, role_oids, runtime_role, server_major).await?;
+            // Prove ownership and the complete catalog through public catalog
+            // data before inspecting private metadata. A wrong owner or an
+            // unknown catalog must fail closed as drift without gaining access
+            // to restored state.
+            attest_catalog_ownership(&transaction, role_oids.owner).await?;
+            let observed_catalog = catalog_definition_fingerprint(&transaction).await?;
+            if observed_catalog == expected_catalog_definition_fingerprint(server_major)? {
+                if installed_schema_fingerprint(&transaction).await?
+                    != STATE_PLANE_SCHEMA_FINGERPRINT_V1
+                {
+                    return Err(StatePlaneMigrationError::CapabilityDrift);
+                }
+                rebind_restored_metadata(&transaction, role_oids, runtime_role, server_major)
+                    .await?;
+            } else if observed_catalog
+                == expected_previous_catalog_definition_fingerprint(server_major)?
+            {
+                if installed_schema_fingerprint(&transaction).await?
+                    != PREVIOUS_STATE_PLANE_SCHEMA_FINGERPRINT_V1
+                {
+                    return Err(StatePlaneMigrationError::CapabilityDrift);
+                }
+                upgrade_previous_state_plane(&transaction, role_oids, runtime_role, server_major)
+                    .await?;
+            } else {
+                return Err(StatePlaneMigrationError::CapabilityDrift);
+            }
         }
         _ => return Err(StatePlaneMigrationError::PartialInstallation),
     }
@@ -381,6 +413,32 @@ async fn schema_count(client: &impl GenericClient) -> Result<i64, StatePlaneMigr
     row_i64(&row, "schema_count")
 }
 
+async fn installed_schema_fingerprint(
+    client: &impl GenericClient,
+) -> Result<String, StatePlaneMigrationError> {
+    let row = client
+        .query_opt(
+            "SELECT capability_id, schema_version, schema_fingerprint\n\
+               FROM registry_notary_private.schema_metadata\n\
+              WHERE singleton\n\
+              FOR UPDATE",
+            &[],
+        )
+        .await
+        .map_err(|_| StatePlaneMigrationError::Unavailable)?
+        .ok_or(StatePlaneMigrationError::CapabilityDrift)?;
+    let capability: String = row
+        .try_get("capability_id")
+        .map_err(|_| StatePlaneMigrationError::CapabilityDrift)?;
+    if capability != STATE_PLANE_CAPABILITY_V1
+        || row_i32(&row, "schema_version")? != STATE_PLANE_SCHEMA_VERSION_V1
+    {
+        return Err(StatePlaneMigrationError::CapabilityDrift);
+    }
+    row.try_get("schema_fingerprint")
+        .map_err(|_| StatePlaneMigrationError::CapabilityDrift)
+}
+
 async fn bind_metadata(
     transaction: &Transaction<'_>,
     roles: BoundRoleOids,
@@ -444,6 +502,8 @@ fn state_plane_acl_sql(runtime_role: &RuntimeDatabaseRole) -> String {
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_tx_code_peek_v1(bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_key_attest_v1(bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_redeem_v1(bytea, bytea, timestamptz, boolean, bytea) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.evaluation_issuance_consume_v1(bytea, bytea, timestamptz) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.registry_client_offer_reserve_v1(bytea, bytea, bytea, bytea, bytea, bytea, text, text, bytea, bytea, timestamptz, bytea, smallint, timestamptz, bytea, bytea, timestamptz, timestamptz, bytea, integer, integer) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_reserve_v1(bytea, bytea, text, text, bytea, bytea, timestamptz) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_get_v1(bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_bind_nonce_v1(bytea, text, bytea) TO {role};\n\
@@ -464,7 +524,12 @@ async fn rebind_restored_metadata(
     // Check this through pg_catalog before reading private metadata so a wrong
     // owner is rejected as drift rather than gaining enough access to inspect
     // or repair the restored schema.
-    attest_restored_catalog_ownership(transaction, roles.owner, server_major).await?;
+    attest_catalog_ownership_and_definition(
+        transaction,
+        roles.owner,
+        expected_catalog_definition_fingerprint(server_major)?,
+    )
+    .await?;
     let observed_roles = metadata_roles_for_exact_v1(transaction).await?;
     if observed_roles == roles {
         transaction
@@ -493,6 +558,56 @@ async fn rebind_restored_metadata(
                 &STATE_PLANE_CAPABILITY_V1,
                 &STATE_PLANE_SCHEMA_VERSION_V1,
                 &STATE_PLANE_SCHEMA_FINGERPRINT_V1,
+            ],
+        )
+        .await
+        .map_err(|_| StatePlaneMigrationError::Unavailable)?;
+    if updated != 1 {
+        return Err(StatePlaneMigrationError::CapabilityDrift);
+    }
+    transaction
+        .batch_execute(&state_plane_acl_sql(runtime_role))
+        .await
+        .map_err(|_| StatePlaneMigrationError::Unavailable)?;
+    Ok(())
+}
+
+async fn upgrade_previous_state_plane(
+    transaction: &Transaction<'_>,
+    roles: BoundRoleOids,
+    runtime_role: &RuntimeDatabaseRole,
+    server_major: i32,
+) -> Result<(), StatePlaneMigrationError> {
+    // An upgrade is allowed only from the exact previously released catalog,
+    // already wholly owned by the candidate owner. This keeps the idempotent
+    // DDL below from accepting or concealing arbitrary catalog drift.
+    attest_catalog_ownership_and_definition(
+        transaction,
+        roles.owner,
+        expected_previous_catalog_definition_fingerprint(server_major)?,
+    )
+    .await?;
+    transaction
+        .batch_execute(POSTGRES_STATE_PLANE_MIGRATION_V1)
+        .await
+        .map_err(|_| StatePlaneMigrationError::Unavailable)?;
+    let updated = transaction
+        .execute(
+            "UPDATE registry_notary_private.schema_metadata\n\
+                SET schema_fingerprint = $1,\n\
+                    owner_role_oid = $2::bigint::oid,\n\
+                    runtime_role_oid = $3::bigint::oid\n\
+              WHERE singleton\n\
+                AND capability_id = $4\n\
+                AND schema_version = $5\n\
+                AND schema_fingerprint = $6",
+            &[
+                &STATE_PLANE_SCHEMA_FINGERPRINT_V1,
+                &roles.owner,
+                &roles.runtime,
+                &STATE_PLANE_CAPABILITY_V1,
+                &STATE_PLANE_SCHEMA_VERSION_V1,
+                &PREVIOUS_STATE_PLANE_SCHEMA_FINGERPRINT_V1,
             ],
         )
         .await
@@ -540,10 +655,22 @@ async fn metadata_roles_for_exact_v1(
     })
 }
 
-async fn attest_restored_catalog_ownership(
+async fn attest_catalog_ownership_and_definition(
     client: &impl GenericClient,
     owner_oid: i64,
-    server_major: i32,
+    expected_fingerprint: &str,
+) -> Result<(), StatePlaneMigrationError> {
+    attest_catalog_ownership(client, owner_oid).await?;
+    let observed = catalog_definition_fingerprint(client).await?;
+    if observed != expected_fingerprint {
+        return Err(StatePlaneMigrationError::CapabilityDrift);
+    }
+    Ok(())
+}
+
+async fn attest_catalog_ownership(
+    client: &impl GenericClient,
+    owner_oid: i64,
 ) -> Result<(), StatePlaneMigrationError> {
     let ownership = client
         .query_one(
@@ -575,10 +702,6 @@ async fn attest_restored_catalog_ownership(
         || !row_bool(&ownership, "relations_owned")?
         || !row_bool(&ownership, "functions_owned")?
     {
-        return Err(StatePlaneMigrationError::CapabilityDrift);
-    }
-    let observed = catalog_definition_fingerprint(client).await?;
-    if observed != expected_catalog_definition_fingerprint(server_major)? {
         return Err(StatePlaneMigrationError::CapabilityDrift);
     }
     Ok(())
@@ -784,13 +907,30 @@ fn expected_catalog_definition_fingerprint(
     }
 }
 
+fn expected_previous_catalog_definition_fingerprint(
+    server_major: i32,
+) -> Result<&'static str, StatePlaneMigrationError> {
+    match server_major {
+        16 => Ok(PREVIOUS_CATALOG_DEFINITION_FINGERPRINT_PG16_V1),
+        17 => Ok(PREVIOUS_CATALOG_DEFINITION_FINGERPRINT_PG17_V1),
+        18 => Ok(PREVIOUS_CATALOG_DEFINITION_FINGERPRINT_PG18_V1),
+        _ => Err(StatePlaneMigrationError::UnsupportedServerMajor),
+    }
+}
+
 // These fingerprints are derived from the deterministic catalog projection
 // below and are pinned separately for every supported PostgreSQL major.
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG16_V1: &str =
-    "cf45576aced8a825cd2891800f2636ec1ca0dd0959b81f3a787cc0ed36ea09a5";
+    "2ead81e377f2781032e933be2934d55e9253506e0de7435eb851e34bb74aa589";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG17_V1: &str =
-    "cf45576aced8a825cd2891800f2636ec1ca0dd0959b81f3a787cc0ed36ea09a5";
+    "2ead81e377f2781032e933be2934d55e9253506e0de7435eb851e34bb74aa589";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG18_V1: &str =
+    "b96c69fe23f974815880668079a57c156e957a66144c5882c63a0712f29be89d";
+const PREVIOUS_CATALOG_DEFINITION_FINGERPRINT_PG16_V1: &str =
+    "cf45576aced8a825cd2891800f2636ec1ca0dd0959b81f3a787cc0ed36ea09a5";
+const PREVIOUS_CATALOG_DEFINITION_FINGERPRINT_PG17_V1: &str =
+    "cf45576aced8a825cd2891800f2636ec1ca0dd0959b81f3a787cc0ed36ea09a5";
+const PREVIOUS_CATALOG_DEFINITION_FINGERPRINT_PG18_V1: &str =
     "81760fbb2d3839783503774b3e6b436187c1969a154a331929d097e0e654eea2";
 
 const CATALOG_DEFINITION_QUERY_V1: &str = r#"

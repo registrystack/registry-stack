@@ -233,27 +233,44 @@ enum SourceRevision {
     AcquiredString { field: String, max_bytes: u16 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum OutputType {
-    String,
-    Boolean,
-    Integer,
-    Date,
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum Output {
+    String {
+        nullable: bool,
+        max_bytes: u32,
+    },
+    Boolean {
+        nullable: bool,
+    },
+    Integer {
+        nullable: bool,
+        minimum: i64,
+        maximum: i64,
+    },
+    Date {
+        nullable: bool,
+        #[serde(default)]
+        max_bytes: Option<u32>,
+    },
+    Object {
+        nullable: bool,
+        max_bytes: u32,
+        fields: BTreeMap<String, OutputObjectField>,
+    },
+    Array {
+        nullable: bool,
+        max_bytes: u32,
+        max_items: u16,
+        items: Box<Output>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Output {
-    #[serde(rename = "type")]
-    output_type: OutputType,
-    nullable: bool,
-    #[serde(default)]
-    max_bytes: Option<u32>,
-    #[serde(default)]
-    minimum: Option<i64>,
-    #[serde(default)]
-    maximum: Option<i64>,
+struct OutputObjectField {
+    required: bool,
+    schema: Box<Output>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -653,55 +670,107 @@ fn verify_outputs(
         if !stable_id(name) || matches!(name.as_str(), "matched" | "outcome") {
             return Err(());
         }
-        let valid = match (output.output_type, &expected[name]) {
-            (
-                OutputType::String,
-                RelayOutputContract::String {
-                    nullable,
-                    max_bytes,
-                },
-            ) => {
-                output.nullable == *nullable
-                    && output.max_bytes == Some(*max_bytes)
-                    && (1..=MAX_OUTPUT_STRING_BYTES).contains(max_bytes)
-                    && output.minimum.is_none()
-                    && output.maximum.is_none()
-            }
-            (OutputType::Date, RelayOutputContract::Date { nullable }) => {
-                output.nullable == *nullable
-                    && output.max_bytes.is_none_or(|bytes| bytes == 10)
-                    && output.minimum.is_none()
-                    && output.maximum.is_none()
-            }
-            (OutputType::Boolean, RelayOutputContract::Boolean { nullable }) => {
-                output.nullable == *nullable
-                    && output.max_bytes.is_none()
-                    && output.minimum.is_none()
-                    && output.maximum.is_none()
-            }
-            (
-                OutputType::Integer,
-                RelayOutputContract::Integer {
-                    nullable,
-                    minimum,
-                    maximum,
-                },
-            ) => {
-                output.nullable == *nullable
-                    && output.minimum == Some(*minimum)
-                    && output.maximum == Some(*maximum)
-                    && minimum <= maximum
-                    && *minimum >= -MAX_JSON_INTEGER
-                    && *maximum <= MAX_JSON_INTEGER
-                    && output.max_bytes.is_none()
-            }
-            _ => false,
-        };
-        if !valid {
+        if !output_contract_matches(output, &expected[name]) {
             return Err(());
         }
     }
     Ok(())
+}
+
+fn output_contract_matches(output: &Output, expected: &RelayOutputContract) -> bool {
+    match (output, expected) {
+        (
+            Output::String {
+                nullable,
+                max_bytes,
+            },
+            RelayOutputContract::String {
+                nullable: expected_nullable,
+                max_bytes: expected_max_bytes,
+            },
+        ) => {
+            nullable == expected_nullable
+                && max_bytes == expected_max_bytes
+                && (1..=MAX_OUTPUT_STRING_BYTES).contains(max_bytes)
+        }
+        (
+            Output::Date {
+                nullable,
+                max_bytes,
+            },
+            RelayOutputContract::Date {
+                nullable: expected_nullable,
+            },
+        ) => nullable == expected_nullable && max_bytes.is_none_or(|bytes| bytes == 10),
+        (
+            Output::Boolean { nullable },
+            RelayOutputContract::Boolean {
+                nullable: expected_nullable,
+            },
+        ) => nullable == expected_nullable,
+        (
+            Output::Integer {
+                nullable,
+                minimum,
+                maximum,
+            },
+            RelayOutputContract::Integer {
+                nullable: expected_nullable,
+                minimum: expected_minimum,
+                maximum: expected_maximum,
+            },
+        ) => {
+            nullable == expected_nullable
+                && minimum == expected_minimum
+                && maximum == expected_maximum
+                && minimum <= maximum
+                && *minimum >= -MAX_JSON_INTEGER
+                && *maximum <= MAX_JSON_INTEGER
+        }
+        (
+            Output::Object {
+                nullable,
+                max_bytes,
+                fields,
+            },
+            RelayOutputContract::Object {
+                nullable: expected_nullable,
+                max_bytes: expected_max_bytes,
+                fields: expected_fields,
+            },
+        ) => {
+            nullable == expected_nullable
+                && max_bytes == expected_max_bytes
+                && fields.len() <= 32
+                && fields.keys().eq(expected_fields.keys())
+                && fields.iter().all(|(name, field)| {
+                    let expected_field = &expected_fields[name];
+                    bounded_name(name)
+                        && field.required == expected_field.required
+                        && output_contract_matches(&field.schema, &expected_field.schema)
+                })
+        }
+        (
+            Output::Array {
+                nullable,
+                max_bytes,
+                max_items,
+                items,
+            },
+            RelayOutputContract::Array {
+                nullable: expected_nullable,
+                max_bytes: expected_max_bytes,
+                max_items: expected_max_items,
+                items: expected_items,
+            },
+        ) => {
+            nullable == expected_nullable
+                && max_bytes == expected_max_bytes
+                && max_items == expected_max_items
+                && output_contract_matches(items, expected_items)
+        }
+        _ => false,
+    }
 }
 
 fn verify_authorization(

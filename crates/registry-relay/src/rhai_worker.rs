@@ -20,6 +20,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use registry_platform_crypto::canonicalize_json;
 use rhai::{
     packages::{
         BasicArrayPackage, BasicMapPackage, BasicMathPackage, CorePackage, LogicPackage,
@@ -49,6 +50,7 @@ const PROTOCOL_VERSION: u8 = 1;
 const MAX_IPC_FRAME_BYTES: usize = 9 * 1024 * 1024;
 const MAX_SCRIPT_BYTES: usize = 128 * 1024;
 const MAX_NAMES: usize = 64;
+const MAX_OUTPUT_NAMES: usize = 32;
 const MAX_NAME_BYTES: usize = 128;
 const MAX_VALUE_STRING_BYTES: usize = 8 * 1024 * 1024;
 const MIN_OUTPUT_BYTES: usize = 256;
@@ -63,6 +65,11 @@ const MAX_COLLECTION_ITEMS: usize = 4_096;
 const MAX_WALL_TIME_MS: u64 = 60_000;
 const MAX_SOURCE_CALLS: u32 = 16;
 const MAX_JSON_INTEROPERABLE_INTEGER: i64 = (1_i64 << 53) - 1;
+const MAX_OUTPUT_SCHEMA_DEPTH: usize = 8;
+const MAX_OUTPUT_SCHEMA_NODES: usize = 256;
+const MAX_OUTPUT_SCHEMA_EXPANDED_NODES: usize = 4_096;
+const MAX_OUTPUT_OBJECT_FIELDS: usize = 32;
+const MAX_OUTPUT_ARRAY_ITEMS: usize = 256;
 const WORKER_STARTUP_GRACE: Duration = if cfg!(debug_assertions) {
     Duration::from_secs(10)
 } else {
@@ -112,21 +119,137 @@ pub enum OutputType {
     Boolean,
     Integer,
     Date,
+    Object,
+    Array,
 }
 
-/// Expected type and semantic bounds for one output.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// One field of a closed structured output object.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct OutputSchema {
-    pub output_type: OutputType,
-    #[serde(default)]
-    pub nullable: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_bytes: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub minimum: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub maximum: Option<i64>,
+pub struct OutputObjectField {
+    pub required: bool,
+    pub schema: Box<OutputSchema>,
+}
+
+/// Expected recursive type and semantic bounds for one output.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OutputSchema {
+    String {
+        nullable: bool,
+        max_bytes: usize,
+    },
+    Boolean {
+        nullable: bool,
+    },
+    Integer {
+        nullable: bool,
+        minimum: i64,
+        maximum: i64,
+    },
+    Date {
+        nullable: bool,
+    },
+    Object {
+        nullable: bool,
+        max_bytes: usize,
+        fields: BTreeMap<String, OutputObjectField>,
+    },
+    Array {
+        nullable: bool,
+        max_bytes: usize,
+        max_items: usize,
+        items: Box<OutputSchema>,
+    },
+}
+
+impl OutputSchema {
+    fn output_type(&self) -> OutputType {
+        match self {
+            Self::String { .. } => OutputType::String,
+            Self::Boolean { .. } => OutputType::Boolean,
+            Self::Integer { .. } => OutputType::Integer,
+            Self::Date { .. } => OutputType::Date,
+            Self::Object { .. } => OutputType::Object,
+            Self::Array { .. } => OutputType::Array,
+        }
+    }
+
+    const fn nullable(&self) -> bool {
+        match self {
+            Self::String { nullable, .. }
+            | Self::Boolean { nullable }
+            | Self::Integer { nullable, .. }
+            | Self::Date { nullable }
+            | Self::Object { nullable, .. }
+            | Self::Array { nullable, .. } => *nullable,
+        }
+    }
+
+    pub(crate) fn from_compiled(
+        shape: &crate::source_plan::runtime_profile::CompiledOutputShape,
+    ) -> Result<Self, WorkerError> {
+        use crate::source_plan::runtime_profile::CompiledOutputShape;
+
+        Ok(match shape {
+            CompiledOutputShape::String {
+                nullable,
+                max_bytes,
+            } => Self::String {
+                nullable: *nullable,
+                max_bytes: usize::try_from(*max_bytes)
+                    .map_err(|_| WorkerError::ContractViolation)?,
+            },
+            CompiledOutputShape::Boolean { nullable } => Self::Boolean {
+                nullable: *nullable,
+            },
+            CompiledOutputShape::Integer {
+                nullable,
+                minimum,
+                maximum,
+            } => Self::Integer {
+                nullable: *nullable,
+                minimum: *minimum,
+                maximum: *maximum,
+            },
+            CompiledOutputShape::Date { nullable } => Self::Date {
+                nullable: *nullable,
+            },
+            CompiledOutputShape::Object {
+                nullable,
+                max_bytes,
+                fields,
+            } => Self::Object {
+                nullable: *nullable,
+                max_bytes: usize::try_from(*max_bytes)
+                    .map_err(|_| WorkerError::ContractViolation)?,
+                fields: fields
+                    .iter()
+                    .map(|field| {
+                        Ok((
+                            field.name().to_owned(),
+                            OutputObjectField {
+                                required: field.required(),
+                                schema: Box::new(Self::from_compiled(field.shape())?),
+                            },
+                        ))
+                    })
+                    .collect::<Result<_, WorkerError>>()?,
+            },
+            CompiledOutputShape::Array {
+                nullable,
+                max_bytes,
+                max_items,
+                items,
+            } => Self::Array {
+                nullable: *nullable,
+                max_bytes: usize::try_from(*max_bytes)
+                    .map_err(|_| WorkerError::ContractViolation)?,
+                max_items: usize::from(*max_items),
+                items: Box::new(Self::from_compiled(items)?),
+            },
+        })
+    }
 }
 
 /// A typed value crossing the process boundary.
@@ -137,6 +260,8 @@ pub enum TypedValue {
     Boolean { value: Option<bool> },
     Integer { value: Option<i64> },
     Date { value: Option<String> },
+    Object { value: Option<Value> },
+    Array { value: Option<Value> },
 }
 
 impl std::fmt::Debug for TypedValue {
@@ -156,6 +281,8 @@ impl TypedValue {
             Self::Boolean { .. } => OutputType::Boolean,
             Self::Integer { .. } => OutputType::Integer,
             Self::Date { .. } => OutputType::Date,
+            Self::Object { .. } => OutputType::Object,
+            Self::Array { .. } => OutputType::Array,
         }
     }
 
@@ -164,6 +291,7 @@ impl TypedValue {
             Self::String { value } | Self::Date { value } => value.is_none(),
             Self::Boolean { value } => value.is_none(),
             Self::Integer { value } => value.is_none(),
+            Self::Object { value } | Self::Array { value } => value.is_none(),
         }
     }
 
@@ -182,6 +310,12 @@ impl TypedValue {
             {
                 Err(WorkerError::ContractViolation)
             }
+            Self::Object { value: Some(value) } if !value.is_object() => {
+                Err(WorkerError::ContractViolation)
+            }
+            Self::Array { value: Some(value) } if !value.is_array() => {
+                Err(WorkerError::ContractViolation)
+            }
             _ => Ok(()),
         }
     }
@@ -193,6 +327,7 @@ impl TypedValue {
                 .map_or(Value::Null, |value| value.clone().into()),
             Self::Boolean { value } => value.map_or(Value::Null, Value::Bool),
             Self::Integer { value } => value.map_or(Value::Null, Into::into),
+            Self::Object { value } | Self::Array { value } => value.clone().unwrap_or(Value::Null),
         }
     }
 }
@@ -1394,7 +1529,7 @@ fn validate_request(request: &WorkerRequest) -> Result<(), WorkerError> {
         || request.script.is_empty()
         || request.script.len() > MAX_SCRIPT_BYTES
         || request.input.len() > MAX_NAMES
-        || request.output_schema.len() > MAX_NAMES
+        || request.output_schema.len() > MAX_OUTPUT_NAMES
     {
         return Err(WorkerError::ContractViolation);
     }
@@ -1409,8 +1544,21 @@ fn validate_request(request: &WorkerRequest) -> Result<(), WorkerError> {
     for value in request.input.values() {
         value.validate(request.limits.max_string_bytes)?;
     }
+    let mut schema_nodes = 0_usize;
+    let mut expanded_nodes = 0_usize;
     for schema in request.output_schema.values() {
-        validate_output_schema(schema, request.limits.max_string_bytes)?;
+        let expanded = validate_output_schema(
+            schema,
+            request.limits.max_string_bytes,
+            1,
+            &mut schema_nodes,
+        )?;
+        expanded_nodes = expanded_nodes
+            .checked_add(expanded)
+            .ok_or(WorkerError::ContractViolation)?;
+        if expanded_nodes > MAX_OUTPUT_SCHEMA_EXPANDED_NODES {
+            return Err(WorkerError::ContractViolation);
+        }
     }
     Ok(())
 }
@@ -1418,27 +1566,69 @@ fn validate_request(request: &WorkerRequest) -> Result<(), WorkerError> {
 fn validate_output_schema(
     schema: &OutputSchema,
     max_string_bytes: usize,
-) -> Result<(), WorkerError> {
-    let valid = match schema.output_type {
-        OutputType::String => {
-            schema
-                .max_bytes
-                .is_some_and(|value| (1..=max_string_bytes).contains(&value))
-                && schema.minimum.is_none()
-                && schema.maximum.is_none()
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<usize, WorkerError> {
+    *nodes = nodes.checked_add(1).ok_or(WorkerError::ContractViolation)?;
+    if depth > MAX_OUTPUT_SCHEMA_DEPTH || *nodes > MAX_OUTPUT_SCHEMA_NODES {
+        return Err(WorkerError::ContractViolation);
+    }
+    match schema {
+        OutputSchema::String { max_bytes, .. }
+            if (1..=max_string_bytes.min(MAX_OUTPUT_BYTES)).contains(max_bytes) =>
+        {
+            Ok(1)
         }
-        OutputType::Integer => {
-            schema.max_bytes.is_none()
-                && matches!((schema.minimum, schema.maximum), (Some(minimum), Some(maximum))
-                    if minimum <= maximum
-                        && minimum >= -MAX_JSON_INTEROPERABLE_INTEGER
-                        && maximum <= MAX_JSON_INTEROPERABLE_INTEGER)
+        OutputSchema::Boolean { .. } | OutputSchema::Date { .. } => Ok(1),
+        OutputSchema::Integer {
+            minimum, maximum, ..
+        } if minimum <= maximum
+            && *minimum >= -MAX_JSON_INTEROPERABLE_INTEGER
+            && *maximum <= MAX_JSON_INTEROPERABLE_INTEGER =>
+        {
+            Ok(1)
         }
-        OutputType::Boolean | OutputType::Date => {
-            schema.max_bytes.is_none() && schema.minimum.is_none() && schema.maximum.is_none()
+        OutputSchema::Object {
+            max_bytes, fields, ..
+        } => {
+            if !(1..=MAX_OUTPUT_BYTES).contains(max_bytes)
+                || fields.is_empty()
+                || fields.len() > MAX_OUTPUT_OBJECT_FIELDS
+            {
+                return Err(WorkerError::ContractViolation);
+            }
+            let mut expanded = 1_usize;
+            for (name, field) in fields {
+                validate_output_field_name(name)?;
+                let child =
+                    validate_output_schema(&field.schema, max_string_bytes, depth + 1, nodes)?;
+                expanded = expanded
+                    .checked_add(child)
+                    .ok_or(WorkerError::ContractViolation)?;
+            }
+            Ok(expanded)
         }
-    };
-    valid.then_some(()).ok_or(WorkerError::ContractViolation)
+        OutputSchema::Array {
+            max_bytes,
+            max_items,
+            items,
+            ..
+        } => {
+            if !(1..=MAX_OUTPUT_BYTES).contains(max_bytes)
+                || !(1..=MAX_OUTPUT_ARRAY_ITEMS).contains(max_items)
+            {
+                return Err(WorkerError::ContractViolation);
+            }
+            let child = validate_output_schema(items, max_string_bytes, depth + 1, nodes)?;
+            max_items
+                .checked_mul(child)
+                .and_then(|expanded| expanded.checked_add(1))
+                .ok_or(WorkerError::ContractViolation)
+        }
+        OutputSchema::String { .. } | OutputSchema::Integer { .. } => {
+            Err(WorkerError::ContractViolation)
+        }
+    }
 }
 
 fn validate_name(name: &str) -> Result<(), WorkerError> {
@@ -1448,6 +1638,13 @@ fn validate_name(name: &str) -> Result<(), WorkerError> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
     {
+        return Err(WorkerError::ContractViolation);
+    }
+    Ok(())
+}
+
+fn validate_output_field_name(name: &str) -> Result<(), WorkerError> {
+    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.chars().any(char::is_control) {
         return Err(WorkerError::ContractViolation);
     }
     Ok(())
@@ -1496,23 +1693,94 @@ fn validate_typed_output(
         .output_schema
         .get(name)
         .ok_or(WorkerError::ContractViolation)?;
-    if value.output_type() != schema.output_type || (value.is_null() && !schema.nullable) {
+    if value.output_type() != schema.output_type() || (value.is_null() && !schema.nullable()) {
         return Err(WorkerError::ContractViolation);
     }
     value.validate(request.limits.max_string_bytes)?;
-    let within_bound = match (value, schema.output_type) {
-        (TypedValue::String { value: Some(value) }, OutputType::String) => schema
-            .max_bytes
-            .is_some_and(|maximum| value.len() <= maximum),
-        (TypedValue::Integer { value: Some(value) }, OutputType::Integer) => matches!(
-            (schema.minimum, schema.maximum),
-            (Some(minimum), Some(maximum)) if (minimum..=maximum).contains(value)
-        ),
-        _ => true,
-    };
-    within_bound
-        .then_some(())
-        .ok_or(WorkerError::ContractViolation)
+    let json = value.as_script_value();
+    validate_output_value(&json, schema)
+}
+
+fn validate_output_value(value: &Value, schema: &OutputSchema) -> Result<(), WorkerError> {
+    if value.is_null() {
+        return schema
+            .nullable()
+            .then_some(())
+            .ok_or(WorkerError::ContractViolation);
+    }
+    match (value, schema) {
+        (Value::String(value), OutputSchema::String { max_bytes, .. })
+            if value.len() <= *max_bytes =>
+        {
+            Ok(())
+        }
+        (Value::String(value), OutputSchema::Date { .. })
+            if value.len() == 10
+                && Date::parse(
+                    value,
+                    &time::macros::format_description!("[year]-[month]-[day]"),
+                )
+                .is_ok() =>
+        {
+            Ok(())
+        }
+        (Value::Bool(_), OutputSchema::Boolean { .. }) => Ok(()),
+        (
+            Value::Number(value),
+            OutputSchema::Integer {
+                minimum, maximum, ..
+            },
+        ) if value
+            .as_i64()
+            .is_some_and(|value| (*minimum..=*maximum).contains(&value)) =>
+        {
+            Ok(())
+        }
+        (
+            Value::Object(value),
+            OutputSchema::Object {
+                max_bytes, fields, ..
+            },
+        ) => {
+            if value.keys().any(|name| !fields.contains_key(name))
+                || fields
+                    .iter()
+                    .any(|(name, field)| field.required && !value.contains_key(name))
+                || canonicalize_json(&Value::Object(value.clone()))
+                    .ok()
+                    .is_none_or(|encoded| encoded.len() > *max_bytes)
+            {
+                return Err(WorkerError::ContractViolation);
+            }
+            for (name, child) in value {
+                let field = fields.get(name).ok_or(WorkerError::ContractViolation)?;
+                validate_output_value(child, &field.schema)?;
+            }
+            Ok(())
+        }
+        (
+            Value::Array(value),
+            OutputSchema::Array {
+                max_bytes,
+                max_items,
+                items,
+                ..
+            },
+        ) => {
+            if value.len() > *max_items
+                || canonicalize_json(&Value::Array(value.clone()))
+                    .ok()
+                    .is_none_or(|encoded| encoded.len() > *max_bytes)
+            {
+                return Err(WorkerError::ContractViolation);
+            }
+            for child in value {
+                validate_output_value(child, items)?;
+            }
+            Ok(())
+        }
+        _ => Err(WorkerError::ContractViolation),
+    }
 }
 
 fn validate_source_call(call: &SourceCall, limits: &WorkerLimits) -> Result<(), WorkerError> {
@@ -2475,17 +2743,19 @@ fn terminal_to_output(
 
 fn dynamic_to_typed(value: Dynamic, schema: &OutputSchema) -> Result<TypedValue, WorkerError> {
     if value.is_unit() {
-        if !schema.nullable {
+        if !schema.nullable() {
             return Err(WorkerError::ContractViolation);
         }
-        return Ok(match schema.output_type {
+        return Ok(match schema.output_type() {
             OutputType::String => TypedValue::String { value: None },
             OutputType::Boolean => TypedValue::Boolean { value: None },
             OutputType::Integer => TypedValue::Integer { value: None },
             OutputType::Date => TypedValue::Date { value: None },
+            OutputType::Object => TypedValue::Object { value: None },
+            OutputType::Array => TypedValue::Array { value: None },
         });
     }
-    match schema.output_type {
+    match schema.output_type() {
         OutputType::String => value
             .try_cast::<String>()
             .map(|value| TypedValue::String { value: Some(value) })
@@ -2502,6 +2772,22 @@ fn dynamic_to_typed(value: Dynamic, schema: &OutputSchema) -> Result<TypedValue,
             .try_cast::<String>()
             .map(|value| TypedValue::Date { value: Some(value) })
             .ok_or(WorkerError::ContractViolation),
+        OutputType::Object => {
+            let value =
+                from_dynamic::<Value>(&value).map_err(|_| WorkerError::ContractViolation)?;
+            value
+                .is_object()
+                .then_some(TypedValue::Object { value: Some(value) })
+                .ok_or(WorkerError::ContractViolation)
+        }
+        OutputType::Array => {
+            let value =
+                from_dynamic::<Value>(&value).map_err(|_| WorkerError::ContractViolation)?;
+            value
+                .is_array()
+                .then_some(TypedValue::Array { value: Some(value) })
+                .ok_or(WorkerError::ContractViolation)
+        }
     }
 }
 
@@ -2659,13 +2945,7 @@ mod tests {
         let mut request = WorkerRequest::v1(script, "consult", WorkerLimits::default());
         request.output_schema.insert(
             "active".to_string(),
-            OutputSchema {
-                output_type: OutputType::Boolean,
-                nullable: false,
-                max_bytes: None,
-                minimum: None,
-                maximum: None,
-            },
+            OutputSchema::Boolean { nullable: false },
         );
         request
     }

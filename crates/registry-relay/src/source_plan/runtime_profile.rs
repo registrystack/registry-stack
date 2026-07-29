@@ -15,7 +15,7 @@ use crate::consultation::{
 };
 
 use super::artifact::{
-    ConsentRevocationDocument, OutputTypeDocument, PrivateBindingHash, PublicContractArtifact,
+    ConsentRevocationDocument, OutputFieldDocument, PrivateBindingHash, PublicContractArtifact,
     SourceCardinality, SourceObservedAtDocument, SourcePlanKind, SourcePlanLimits,
     SourceRevisionDocument,
 };
@@ -315,7 +315,7 @@ impl CompiledRuntimeProfile {
                     },
                 })
             })
-            .collect::<Result<_, SourcePlanCompileError>>()?;
+            .collect::<Result<Box<[_]>, SourcePlanCompileError>>()?;
         let acquisition = CompiledAcquisitionSchema {
             fields: contract
                 .document
@@ -341,32 +341,10 @@ impl CompiledRuntimeProfile {
                 Ok(CompiledOutputField {
                     name: AcquiredField::try_from(name.as_str())
                         .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
-                    shape: match field.output_type {
-                        OutputTypeDocument::String => CompiledOutputShape::String {
-                            nullable: field.nullable,
-                            max_bytes: field
-                                .max_bytes
-                                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
-                        },
-                        OutputTypeDocument::Boolean => CompiledOutputShape::Boolean {
-                            nullable: field.nullable,
-                        },
-                        OutputTypeDocument::Integer => CompiledOutputShape::Integer {
-                            nullable: field.nullable,
-                            minimum: field
-                                .minimum
-                                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
-                            maximum: field
-                                .maximum
-                                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
-                        },
-                        OutputTypeDocument::Date => CompiledOutputShape::Date {
-                            nullable: field.nullable,
-                        },
-                    },
+                    shape: compile_output_shape(field),
                 })
             })
-            .collect::<Result<_, SourcePlanCompileError>>()?;
+            .collect::<Result<Box<[_]>, SourcePlanCompileError>>()?;
         let outcomes = contract
             .document
             .spec
@@ -442,6 +420,7 @@ impl CompiledRuntimeProfile {
                 &dispatch,
                 rhai_predicate_identity.as_ref(),
                 snapshot,
+                &output,
             )?;
         let (observed, revision) = (
             &contract.document.spec.source_provenance.source_observed_at,
@@ -953,12 +932,33 @@ impl CompiledOutputField {
         self.name.as_str()
     }
 
-    pub(crate) const fn shape(&self) -> CompiledOutputShape {
-        self.shape
+    pub(crate) const fn shape(&self) -> &CompiledOutputShape {
+        &self.shape
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CompiledOutputObjectField {
+    name: Box<str>,
+    required: bool,
+    shape: CompiledOutputShape,
+}
+
+impl CompiledOutputObjectField {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) const fn required(&self) -> bool {
+        self.required
+    }
+
+    pub(crate) const fn shape(&self) -> &CompiledOutputShape {
+        &self.shape
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CompiledOutputShape {
     String {
         nullable: bool,
@@ -975,6 +975,94 @@ pub(crate) enum CompiledOutputShape {
     Date {
         nullable: bool,
     },
+    Object {
+        nullable: bool,
+        max_bytes: u32,
+        fields: Box<[CompiledOutputObjectField]>,
+    },
+    Array {
+        nullable: bool,
+        max_bytes: u32,
+        max_items: u16,
+        items: Box<CompiledOutputShape>,
+    },
+}
+
+impl CompiledOutputShape {
+    pub(crate) const fn nullable(&self) -> bool {
+        match self {
+            Self::String { nullable, .. }
+            | Self::Boolean { nullable }
+            | Self::Integer { nullable, .. }
+            | Self::Date { nullable }
+            | Self::Object { nullable, .. }
+            | Self::Array { nullable, .. } => *nullable,
+        }
+    }
+
+    pub(crate) const fn structured_max_bytes(&self) -> Option<u32> {
+        match self {
+            Self::Object { max_bytes, .. } | Self::Array { max_bytes, .. } => Some(*max_bytes),
+            Self::String { .. }
+            | Self::Boolean { .. }
+            | Self::Integer { .. }
+            | Self::Date { .. } => None,
+        }
+    }
+}
+
+pub(super) fn compile_output_shape(document: &OutputFieldDocument) -> CompiledOutputShape {
+    match document {
+        OutputFieldDocument::String {
+            nullable,
+            max_bytes,
+        } => CompiledOutputShape::String {
+            nullable: *nullable,
+            max_bytes: *max_bytes,
+        },
+        OutputFieldDocument::Boolean { nullable } => CompiledOutputShape::Boolean {
+            nullable: *nullable,
+        },
+        OutputFieldDocument::Integer {
+            nullable,
+            minimum,
+            maximum,
+        } => CompiledOutputShape::Integer {
+            nullable: *nullable,
+            minimum: *minimum,
+            maximum: *maximum,
+        },
+        OutputFieldDocument::Date { nullable, .. } => CompiledOutputShape::Date {
+            nullable: *nullable,
+        },
+        OutputFieldDocument::Object {
+            nullable,
+            max_bytes,
+            fields,
+        } => CompiledOutputShape::Object {
+            nullable: *nullable,
+            max_bytes: *max_bytes,
+            fields: fields
+                .iter()
+                .map(|(name, field)| CompiledOutputObjectField {
+                    name: name.as_str().into(),
+                    required: field.required,
+                    shape: compile_output_shape(&field.schema),
+                })
+                .collect(),
+        },
+        OutputFieldDocument::Array {
+            nullable,
+            max_bytes,
+            max_items,
+            items,
+        } => CompiledOutputShape::Array {
+            nullable: *nullable,
+            max_bytes: *max_bytes,
+            max_items: *max_items,
+            items: Box::new(compile_output_shape(items)),
+        },
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

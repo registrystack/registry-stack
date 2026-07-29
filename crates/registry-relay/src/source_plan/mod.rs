@@ -43,8 +43,8 @@ pub use compiler::{
     RhaiWorkerCapability, SourcePlanArtifactBundle, SourcePlanCompileError,
 };
 pub(crate) use compiler::{
-    CompiledDciExact, CompiledDciSelector, CompiledRhaiOutputType, CompiledScriptAllowRule,
-    CompiledScriptAuthority, ParsedOAuth2AccessToken,
+    CompiledDciExact, CompiledDciSelector, CompiledScriptAllowRule, CompiledScriptAuthority,
+    ParsedOAuth2AccessToken,
 };
 #[allow(
     unused_imports,
@@ -83,5 +83,5 @@ pub(crate) use compiler::{
     rhai_five_operation_two_slot_completion_seed_fixture, rhai_runtime_vector_plan_fixture,
     semantic_alias_completion_seed_fixture, shared_snapshot_registry_fixture,
     signed_dci_expiring_oauth_runtime_plan_fixture, signed_dci_script_runtime_plan_fixture,
-    snapshot_completion_seed_fixture,
+    snapshot_completion_seed_fixture, structured_output_plan_fixture,
 };

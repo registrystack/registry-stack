@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Consultation profiles can publish recursive closed object and array outputs.
+  Relay compiler validation and runtime projection enforce the declared child
+  fields, nested types, item counts, canonical serialized-size limits, and
+  global depth and node bounds before a match is published. Every recursive
+  schema detail is part of the public contract hash.
+
 ## 0.15.2
 
 - Registry Relay has no user-visible changes. This release fixes forward from

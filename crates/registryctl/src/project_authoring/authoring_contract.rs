@@ -1,5 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Generated Notary consultation outputs live under the Relay result root and
+// its closed `outputs` object. Reserve the same fixed depth and node envelope
+// here so authoring acceptance implies downstream Notary config acceptance.
+const OUTPUT_SCHEMA_ROOT_DEPTH_V1: usize = 3;
+const OUTPUT_SCHEMA_ENVELOPE_NODES_V1: usize = 20;
+const MAX_OUTPUT_SCHEMA_DEPTH_V1: usize =
+    registry_notary_core::MAX_RELAY_OUTPUT_SCHEMA_DEPTH_V1;
+const MAX_OUTPUT_SCHEMA_NODES_V1: usize =
+    registry_notary_core::MAX_RELAY_OUTPUT_SCHEMA_NODES_V1;
+const MAX_OUTPUT_EXPANDED_NODES_V1: usize =
+    registry_notary_core::MAX_RELAY_OUTPUT_EXPANDED_NODES_V1;
+
 /// The pre-1.0 project authoring contract. Runtime artifacts may still lower
 /// this concise model into product-owned structures, but authored files never
 /// expose those structures.
@@ -323,8 +335,26 @@ enum AuthoredOutputsDeclaration {
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum AuthoredOutputDeclaration {
+    Scalar(AuthoredScalarOutputDeclaration),
+    Object(AuthoredOutputObjectDeclaration),
+    Array(AuthoredOutputArrayDeclaration),
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum AuthoredOutputSchema {
+    Scalar(AuthoredScalarOutputSchema),
+    Object(AuthoredOutputObjectDeclaration),
+    Array(AuthoredOutputArrayDeclaration),
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct AuthoredOutputDeclaration {
+struct AuthoredScalarOutputDeclaration {
     #[serde(rename = "type")]
     output_type: AuthoredSchemaType,
     #[serde(default)]
@@ -337,6 +367,67 @@ struct AuthoredOutputDeclaration {
     maximum: Option<i64>,
     #[serde(default, rename = "x-registry-source")]
     source: Option<String>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredScalarOutputSchema {
+    #[serde(rename = "type")]
+    output_type: AuthoredSchemaType,
+    #[serde(default)]
+    format: Option<AuthoredStringFormat>,
+    #[serde(default, rename = "maxLength")]
+    max_length: Option<u32>,
+    #[serde(default)]
+    minimum: Option<i64>,
+    #[serde(default)]
+    maximum: Option<i64>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredOutputObjectField {
+    required: bool,
+    schema: Box<AuthoredOutputSchema>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredOutputObjectDeclaration {
+    #[serde(rename = "type")]
+    output_type: AuthoredOutputObjectType,
+    nullable: bool,
+    max_bytes: u32,
+    fields: BTreeMap<String, AuthoredOutputObjectField>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AuthoredOutputObjectType {
+    Object,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredOutputArrayDeclaration {
+    #[serde(rename = "type")]
+    output_type: AuthoredOutputArrayType,
+    nullable: bool,
+    max_bytes: u32,
+    max_items: u16,
+    items: Box<AuthoredOutputSchema>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AuthoredOutputArrayType {
+    Array,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -711,16 +802,7 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
         bail!("canonical selector inputs exceed the fixed 4096-byte aggregate ceiling");
     }
     if let AuthoredOutputsDeclaration::Schemas(outputs) = &authored.outputs {
-        if outputs.is_empty() || outputs.len() > MAX_OUTPUTS {
-            bail!("outputs must contain between one and {MAX_OUTPUTS} fields");
-        }
-        for (name, output) in outputs {
-            validate_input_name(name).with_context(|| format!("outputs.{name}"))?;
-            if matches!(name.as_str(), "matched" | "outcome") {
-                bail!("outputs.{name} is reserved consultation vocabulary");
-            }
-            validate_authored_output(name, output)?;
-        }
+        validate_authored_outputs(outputs)?;
     }
     if let Some(source) = &authored.source {
         validate_authored_source(source)?;
@@ -795,6 +877,28 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
             if authored.source.is_some() || authored.limits.is_some() {
                 bail!("snapshot does not declare remote source or HTTP execution limits");
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_authored_outputs(outputs: &BTreeMap<String, AuthoredOutputDeclaration>) -> Result<()> {
+    if outputs.is_empty() || outputs.len() > MAX_OUTPUTS {
+        bail!("outputs must contain between one and {MAX_OUTPUTS} fields");
+    }
+    let mut schema_nodes = OUTPUT_SCHEMA_ENVELOPE_NODES_V1;
+    let mut expanded_nodes = OUTPUT_SCHEMA_ENVELOPE_NODES_V1;
+    for (name, output) in outputs {
+        validate_input_name(name).with_context(|| format!("outputs.{name}"))?;
+        if matches!(name.as_str(), "matched" | "outcome") {
+            bail!("outputs.{name} is reserved consultation vocabulary");
+        }
+        let expanded = validate_authored_output(name, output, &mut schema_nodes)?;
+        expanded_nodes = expanded_nodes
+            .checked_add(expanded)
+            .ok_or_else(|| anyhow!("outputs recursive expansion overflows"))?;
+        if expanded_nodes > MAX_OUTPUT_EXPANDED_NODES_V1 {
+            bail!("outputs recursive expansion exceeds {MAX_OUTPUT_EXPANDED_NODES_V1} nodes");
         }
     }
     Ok(())
@@ -940,46 +1044,164 @@ fn validate_authored_credential_interface(interface: &CredentialInterface) -> Re
     Ok(())
 }
 
-fn validate_authored_output(name: &str, output: &AuthoredOutputDeclaration) -> Result<()> {
-    let (scalar, _) = schema_type_parts(&output.output_type)?;
+fn validate_authored_output(
+    name: &str,
+    output: &AuthoredOutputDeclaration,
+    nodes: &mut usize,
+) -> Result<usize> {
+    match output {
+        AuthoredOutputDeclaration::Scalar(output) => {
+            record_output_schema_node(name, OUTPUT_SCHEMA_ROOT_DEPTH_V1, nodes)?;
+            validate_authored_scalar_output(
+                name,
+                &output.output_type,
+                output.format,
+                output.max_length,
+                output.minimum,
+                output.maximum,
+            )?;
+            Ok(1)
+        }
+        AuthoredOutputDeclaration::Object(output) => {
+            validate_authored_output_object(name, output, OUTPUT_SCHEMA_ROOT_DEPTH_V1, nodes)
+        }
+        AuthoredOutputDeclaration::Array(output) => {
+            validate_authored_output_array(name, output, OUTPUT_SCHEMA_ROOT_DEPTH_V1, nodes)
+        }
+    }
+}
+
+fn validate_authored_scalar_output(
+    name: &str,
+    output_type: &AuthoredSchemaType,
+    format: Option<AuthoredStringFormat>,
+    max_length: Option<u32>,
+    minimum: Option<i64>,
+    maximum: Option<i64>,
+) -> Result<()> {
+    let (scalar, _) = schema_type_parts(output_type)?;
     match scalar {
         AuthoredScalarType::String => {
-            let max = output
-                .max_length
+            let max = max_length
                 .ok_or_else(|| anyhow!("outputs.{name}.maxLength is required for String"))?;
             if max == 0 || max > 16_384 {
                 bail!("outputs.{name}.maxLength is outside the v1 bounds");
             }
-            if output.minimum.is_some() || output.maximum.is_some() {
+            if minimum.is_some() || maximum.is_some() {
                 bail!("outputs.{name} String schemas cannot declare minimum or maximum");
             }
-            if output.format == Some(AuthoredStringFormat::Date) && max != 10 {
+            if format == Some(AuthoredStringFormat::Date) && max != 10 {
                 bail!("outputs.{name} date format requires maxLength: 10");
             }
         }
         AuthoredScalarType::Boolean => {
-            if output.format.is_some()
-                || output.max_length.is_some()
-                || output.minimum.is_some()
-                || output.maximum.is_some()
+            if format.is_some()
+                || max_length.is_some()
+                || minimum.is_some()
+                || maximum.is_some()
             {
                 bail!("outputs.{name} Boolean schema has incompatible constraints");
             }
         }
         AuthoredScalarType::Integer => {
-            let minimum = output
-                .minimum
+            let minimum = minimum
                 .ok_or_else(|| anyhow!("outputs.{name}.minimum is required for Integer"))?;
-            let maximum = output
-                .maximum
+            let maximum = maximum
                 .ok_or_else(|| anyhow!("outputs.{name}.maximum is required for Integer"))?;
-            if minimum > maximum || output.format.is_some() || output.max_length.is_some() {
+            if minimum > maximum || format.is_some() || max_length.is_some() {
                 bail!("outputs.{name} Integer schema has invalid constraints");
             }
         }
         AuthoredScalarType::Null => bail!("outputs.{name} cannot have only null type"),
     }
     Ok(())
+}
+
+fn record_output_schema_node(name: &str, depth: usize, nodes: &mut usize) -> Result<()> {
+    *nodes = nodes
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("outputs.{name} schema node count overflows"))?;
+    if depth > MAX_OUTPUT_SCHEMA_DEPTH_V1 {
+        bail!("outputs.{name} schema exceeds the maximum depth of {MAX_OUTPUT_SCHEMA_DEPTH_V1}");
+    }
+    if *nodes > MAX_OUTPUT_SCHEMA_NODES_V1 {
+        bail!("outputs schema contains more than {MAX_OUTPUT_SCHEMA_NODES_V1} nodes");
+    }
+    Ok(())
+}
+
+fn validate_authored_output_schema(
+    name: &str,
+    schema: &AuthoredOutputSchema,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<usize> {
+    match schema {
+        AuthoredOutputSchema::Scalar(schema) => {
+            record_output_schema_node(name, depth, nodes)?;
+            validate_authored_scalar_output(
+                name,
+                &schema.output_type,
+                schema.format,
+                schema.max_length,
+                schema.minimum,
+                schema.maximum,
+            )?;
+            Ok(1)
+        }
+        AuthoredOutputSchema::Object(schema) => {
+            validate_authored_output_object(name, schema, depth, nodes)
+        }
+        AuthoredOutputSchema::Array(schema) => {
+            validate_authored_output_array(name, schema, depth, nodes)
+        }
+    }
+}
+
+fn validate_authored_output_object(
+    name: &str,
+    object: &AuthoredOutputObjectDeclaration,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<usize> {
+    record_output_schema_node(name, depth, nodes)?;
+    if object.max_bytes == 0 || object.max_bytes > 65_536 {
+        bail!("outputs.{name} object max_bytes must be between 1 and 65536");
+    }
+    if object.fields.is_empty() || object.fields.len() > 32 {
+        bail!("outputs.{name} object fields must contain between 1 and 32 entries");
+    }
+    let mut expanded = 1_usize;
+    for (field_name, field) in &object.fields {
+        validate_input_name(field_name)
+            .with_context(|| format!("outputs.{name}.fields.{field_name}"))?;
+        let child =
+            validate_authored_output_schema(name, &field.schema, depth + 1, nodes)?;
+        expanded = expanded
+            .checked_add(child)
+            .ok_or_else(|| anyhow!("outputs.{name} recursive expansion overflows"))?;
+    }
+    Ok(expanded)
+}
+
+fn validate_authored_output_array(
+    name: &str,
+    array: &AuthoredOutputArrayDeclaration,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<usize> {
+    record_output_schema_node(name, depth, nodes)?;
+    if array.max_bytes == 0 || array.max_bytes > 65_536 {
+        bail!("outputs.{name} array max_bytes must be between 1 and 65536");
+    }
+    if array.max_items == 0 || array.max_items > 256 {
+        bail!("outputs.{name} array max_items must be between 1 and 256");
+    }
+    let child = validate_authored_output_schema(name, &array.items, depth + 1, nodes)?;
+    usize::from(array.max_items)
+        .checked_mul(child)
+        .and_then(|expanded| expanded.checked_add(1))
+        .ok_or_else(|| anyhow!("outputs.{name} recursive expansion overflows"))
 }
 
 struct LoweredInputSchema {
@@ -1525,38 +1747,81 @@ fn lower_output_map(
     authored
         .iter()
         .map(|(name, declaration)| {
-            let (scalar, nullable) = schema_type_parts(&declaration.output_type)?;
-            let output_type = match (scalar, declaration.format) {
-                (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => OutputType::Date,
-                (AuthoredScalarType::String, None) => OutputType::String,
-                (AuthoredScalarType::Boolean, None) => OutputType::Boolean,
-                (AuthoredScalarType::Integer, None) => OutputType::Integer,
-                (AuthoredScalarType::Null, _) => {
-                    bail!("outputs.{name}: null cannot be the only output type")
+            let (
+                output_type,
+                nullable,
+                max_bytes,
+                minimum,
+                maximum,
+                structured_schema,
+                pointer,
+            ) = match declaration {
+                AuthoredOutputDeclaration::Scalar(declaration) => {
+                    let lowered = lower_authored_scalar_output(
+                        name,
+                        &declaration.output_type,
+                        declaration.format,
+                        declaration.max_length,
+                        declaration.minimum,
+                        declaration.maximum,
+                    )?;
+                    let pointer = match (&declaration.source, require_source) {
+                        (Some(pointer), true) => {
+                            pointer_segments(pointer)?;
+                            Some(pointer.clone())
+                        }
+                        (Some(_), false) => None,
+                        (None, true) => {
+                            bail!("outputs.{name}.x-registry-source is required for http")
+                        }
+                        (None, false) => None,
+                    };
+                    (
+                        lowered.output_type,
+                        lowered.nullable,
+                        lowered.max_bytes,
+                        lowered.minimum,
+                        lowered.maximum,
+                        None,
+                        pointer,
+                    )
                 }
-                (_, Some(_)) => bail!("outputs.{name}: format is valid only for String"),
-            };
-            let pointer = match (&declaration.source, require_source) {
-                (Some(pointer), true) => {
-                    pointer_segments(pointer)?;
-                    Some(pointer.clone())
+                AuthoredOutputDeclaration::Object(declaration) => {
+                    match declaration.output_type {
+                        AuthoredOutputObjectType::Object => {}
+                    }
+                    if require_source {
+                        bail!("outputs.{name}: structured outputs require capability.script");
+                    }
+                    let schema = lower_authored_output_object(name, declaration)?;
+                    (
+                        OutputType::Object,
+                        declaration.nullable,
+                        Some(declaration.max_bytes),
+                        None,
+                        None,
+                        Some(schema),
+                        None,
+                    )
                 }
-                (Some(_), false) => None,
-                (None, true) => {
-                    bail!("outputs.{name}.x-registry-source is required for http")
+                AuthoredOutputDeclaration::Array(declaration) => {
+                    match declaration.output_type {
+                        AuthoredOutputArrayType::Array => {}
+                    }
+                    if require_source {
+                        bail!("outputs.{name}: structured outputs require capability.script");
+                    }
+                    let schema = lower_authored_output_array(name, declaration)?;
+                    (
+                        OutputType::Array,
+                        declaration.nullable,
+                        Some(declaration.max_bytes),
+                        None,
+                        None,
+                        Some(schema),
+                        None,
+                    )
                 }
-                (None, false) => None,
-            };
-            let max_bytes = if output_type == OutputType::String {
-                Some(
-                    declaration
-                        .max_length
-                        .ok_or_else(|| anyhow!("outputs.{name}.maxLength is required"))?
-                        .checked_mul(4)
-                        .ok_or_else(|| anyhow!("outputs.{name}.maxLength exceeds byte limits"))?,
-                )
-            } else {
-                None
             };
             Ok((
                 name.clone(),
@@ -1564,18 +1829,154 @@ fn lower_output_map(
                     output_type,
                     nullable,
                     max_bytes,
-                    minimum: (output_type == OutputType::Integer)
-                        .then_some(declaration.minimum)
-                        .flatten(),
-                    maximum: (output_type == OutputType::Integer)
-                        .then_some(declaration.maximum)
-                        .flatten(),
+                    minimum,
+                    maximum,
+                    structured_schema,
                     from: pointer.as_ref().map(|_| format!("{step}.record.{name}")),
                     source_pointer: pointer,
                 },
             ))
         })
         .collect()
+}
+
+struct LoweredOutputScalar {
+    schema: StructuredOutputSchema,
+    output_type: OutputType,
+    nullable: bool,
+    max_bytes: Option<u32>,
+    minimum: Option<i64>,
+    maximum: Option<i64>,
+}
+
+fn lower_authored_scalar_output(
+    name: &str,
+    output_type: &AuthoredSchemaType,
+    format: Option<AuthoredStringFormat>,
+    max_length: Option<u32>,
+    minimum: Option<i64>,
+    maximum: Option<i64>,
+) -> Result<LoweredOutputScalar> {
+    let (scalar, nullable) = schema_type_parts(output_type)?;
+    match (scalar, format) {
+        (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => {
+            Ok(LoweredOutputScalar {
+                schema: StructuredOutputSchema::Date { nullable },
+                output_type: OutputType::Date,
+                nullable,
+                max_bytes: None,
+                minimum: None,
+                maximum: None,
+            })
+        }
+        (AuthoredScalarType::String, None) => {
+            let max_bytes = max_length
+                .ok_or_else(|| anyhow!("outputs.{name}.maxLength is required"))?
+                .checked_mul(4)
+                .ok_or_else(|| anyhow!("outputs.{name}.maxLength exceeds byte limits"))?;
+            Ok(LoweredOutputScalar {
+                schema: StructuredOutputSchema::String {
+                    nullable,
+                    max_bytes,
+                },
+                output_type: OutputType::String,
+                nullable,
+                max_bytes: Some(max_bytes),
+                minimum: None,
+                maximum: None,
+            })
+        }
+        (AuthoredScalarType::Boolean, None) => Ok(LoweredOutputScalar {
+            schema: StructuredOutputSchema::Boolean { nullable },
+            output_type: OutputType::Boolean,
+            nullable,
+            max_bytes: None,
+            minimum: None,
+            maximum: None,
+        }),
+        (AuthoredScalarType::Integer, None) => {
+            let minimum =
+                minimum.ok_or_else(|| anyhow!("outputs.{name}.minimum is required"))?;
+            let maximum =
+                maximum.ok_or_else(|| anyhow!("outputs.{name}.maximum is required"))?;
+            Ok(LoweredOutputScalar {
+                schema: StructuredOutputSchema::Integer {
+                    nullable,
+                    minimum,
+                    maximum,
+                },
+                output_type: OutputType::Integer,
+                nullable,
+                max_bytes: None,
+                minimum: Some(minimum),
+                maximum: Some(maximum),
+            })
+        }
+        (AuthoredScalarType::Null, _) => {
+            bail!("outputs.{name}: null cannot be the only output type")
+        }
+        (_, Some(_)) => bail!("outputs.{name}: format is valid only for String"),
+    }
+}
+
+fn lower_authored_output_schema(
+    name: &str,
+    schema: &AuthoredOutputSchema,
+) -> Result<StructuredOutputSchema> {
+    match schema {
+        AuthoredOutputSchema::Scalar(schema) => Ok(lower_authored_scalar_output(
+            name,
+            &schema.output_type,
+            schema.format,
+            schema.max_length,
+            schema.minimum,
+            schema.maximum,
+        )?
+        .schema),
+        AuthoredOutputSchema::Object(schema) => lower_authored_output_object(name, schema),
+        AuthoredOutputSchema::Array(schema) => lower_authored_output_array(name, schema),
+    }
+}
+
+fn lower_authored_output_object(
+    name: &str,
+    object: &AuthoredOutputObjectDeclaration,
+) -> Result<StructuredOutputSchema> {
+    match object.output_type {
+        AuthoredOutputObjectType::Object => {}
+    }
+    Ok(StructuredOutputSchema::Object {
+        nullable: object.nullable,
+        max_bytes: object.max_bytes,
+        fields: object
+            .fields
+            .iter()
+            .map(|(field_name, field)| {
+                Ok((
+                    field_name.clone(),
+                    StructuredOutputObjectField {
+                        required: field.required,
+                        schema: Box::new(lower_authored_output_schema(name, &field.schema)?),
+                    },
+                ))
+            })
+            .collect::<Result<_>>()?,
+    })
+}
+
+fn lower_authored_output_array(
+    name: &str,
+    array: &AuthoredOutputArrayDeclaration,
+) -> Result<StructuredOutputSchema> {
+    match array.output_type {
+        AuthoredOutputArrayType::Array => {}
+    }
+    Ok(StructuredOutputSchema::Array {
+        nullable: array.nullable,
+        max_bytes: array.max_bytes,
+        max_items: array.max_items,
+        items: Box::new(lower_authored_output_schema(name, &array.items)?),
+    })
 }
 
 fn response_schema_for_outputs(
@@ -1586,6 +1987,9 @@ fn response_schema_for_outputs(
         fields: BTreeMap::new(),
     };
     for (name, output) in outputs {
+        let AuthoredOutputDeclaration::Scalar(output) = output else {
+            bail!("outputs.{name}: structured HTTP outputs are unavailable");
+        };
         let source = output.source.as_deref().unwrap_or(name.as_str());
         let path = pointer_segments(source)?;
         insert_output_schema(&mut root, &path, output, name)?;
@@ -1596,7 +2000,7 @@ fn response_schema_for_outputs(
 fn insert_output_schema(
     node: &mut SchemaNode,
     path: &[String],
-    output: &AuthoredOutputDeclaration,
+    output: &AuthoredScalarOutputDeclaration,
     output_name: &str,
 ) -> Result<()> {
     let (head, tail) = path
@@ -1628,7 +2032,7 @@ fn insert_output_schema(
     insert_output_schema(&mut field.schema, tail, output, output_name)
 }
 
-fn output_schema_node(output: &AuthoredOutputDeclaration, name: &str) -> Result<SchemaNode> {
+fn output_schema_node(output: &AuthoredScalarOutputDeclaration, name: &str) -> Result<SchemaNode> {
     let (scalar, _) = schema_type_parts(&output.output_type)?;
     match (scalar, output.format) {
         (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => Ok(SchemaNode::Date),

@@ -1601,7 +1601,49 @@ enum OutputType {
     Integer,
     String,
     Date,
+    Object,
+    Array,
     Presence,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StructuredOutputObjectField {
+    required: bool,
+    schema: Box<StructuredOutputSchema>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum StructuredOutputSchema {
+    String {
+        nullable: bool,
+        max_bytes: u32,
+    },
+    Boolean {
+        nullable: bool,
+    },
+    Integer {
+        nullable: bool,
+        minimum: i64,
+        maximum: i64,
+    },
+    Date {
+        nullable: bool,
+    },
+    Object {
+        nullable: bool,
+        max_bytes: u32,
+        fields: BTreeMap<String, StructuredOutputObjectField>,
+    },
+    Array {
+        nullable: bool,
+        max_bytes: u32,
+        max_items: u16,
+        items: Box<StructuredOutputSchema>,
+    },
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -1618,6 +1660,8 @@ struct OutputDeclaration {
     minimum: Option<i64>,
     #[serde(default)]
     maximum: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    structured_schema: Option<StructuredOutputSchema>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

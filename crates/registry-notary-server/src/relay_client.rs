@@ -35,6 +35,7 @@ use registry_platform_httputil::destination::{
 };
 use serde::ser::{SerializeMap, SerializeStruct};
 use serde::{Serialize, Serializer};
+use serde_json::Value;
 use thiserror::Error;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -149,6 +150,28 @@ fn valid_output(output: &NotaryRelayOutputContract) -> bool {
                 && *maximum <= MAX_JSON_INTEROPERABLE_INTEGER as i64
         }
         NotaryRelayOutputContract::Boolean { .. } | NotaryRelayOutputContract::Date { .. } => true,
+        NotaryRelayOutputContract::Object {
+            max_bytes, fields, ..
+        } => {
+            (1..=MAX_PUBLIC_STRING_BYTES).contains(max_bytes)
+                && (1..=32).contains(&fields.len())
+                && fields.iter().all(|(name, field)| {
+                    !name.is_empty()
+                        && name.len() <= 128
+                        && !name.chars().any(char::is_control)
+                        && valid_output(&field.schema)
+                })
+        }
+        NotaryRelayOutputContract::Array {
+            max_bytes,
+            max_items,
+            items,
+            ..
+        } => {
+            (1..=MAX_PUBLIC_STRING_BYTES).contains(max_bytes)
+                && (1..=256).contains(max_items)
+                && valid_output(items)
+        }
     }
 }
 
@@ -1094,13 +1117,40 @@ fn relay_output_schema(
     output: &NotaryRelayOutputContract,
 ) -> Result<ClosedJsonSchema, RelayClientError> {
     match output {
-        NotaryRelayOutputContract::Boolean { .. } => Ok(ClosedJsonSchema::boolean(true)),
+        NotaryRelayOutputContract::Boolean { nullable } => Ok(ClosedJsonSchema::boolean(*nullable)),
         NotaryRelayOutputContract::Integer {
-            minimum, maximum, ..
-        } => ClosedJsonSchema::integer(true, *minimum, *maximum)
+            nullable,
+            minimum,
+            maximum,
+        } => ClosedJsonSchema::integer(*nullable, *minimum, *maximum)
             .map_err(|_| RelayClientError::InvalidConfiguration),
-        NotaryRelayOutputContract::String { max_bytes, .. } => string(true, *max_bytes),
-        NotaryRelayOutputContract::Date { .. } => string(true, 10),
+        NotaryRelayOutputContract::String {
+            nullable,
+            max_bytes,
+        } => string(*nullable, *max_bytes),
+        NotaryRelayOutputContract::Date { nullable } => string(*nullable, 10),
+        NotaryRelayOutputContract::Object {
+            nullable, fields, ..
+        } => object(
+            *nullable,
+            fields
+                .iter()
+                .map(|(name, field_contract)| {
+                    field(
+                        name,
+                        field_contract.required,
+                        relay_output_schema(&field_contract.schema)?,
+                    )
+                })
+                .collect::<Result<Vec<_>, RelayClientError>>()?,
+        ),
+        NotaryRelayOutputContract::Array {
+            nullable,
+            max_items,
+            items,
+            ..
+        } => ClosedJsonSchema::array(*nullable, *max_items, relay_output_schema(items)?)
+            .map_err(|_| RelayClientError::InvalidConfiguration),
     }
 }
 
@@ -1270,6 +1320,15 @@ fn relay_output_value_valid(
         | (NotaryRelayOutputContract::String { .. }, ProjectedJsonScalar::String(_)) => true,
         (NotaryRelayOutputContract::Date { .. }, ProjectedJsonScalar::String(value)) => {
             is_rfc3339_full_date(value)
+        }
+        (
+            output @ (NotaryRelayOutputContract::Object { max_bytes, .. }
+            | NotaryRelayOutputContract::Array { max_bytes, .. }),
+            ProjectedJsonScalar::CanonicalJson(value),
+        ) => {
+            value.len() <= *max_bytes as usize
+                && serde_json::from_slice::<Value>(value)
+                    .is_ok_and(|value| output.validates_value(&value))
         }
         (output, ProjectedJsonScalar::Null) => output.nullable(),
         _ => false,

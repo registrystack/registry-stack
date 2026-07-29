@@ -3324,8 +3324,328 @@ fn semantic_output_aliases_are_distinct_from_complete_raw_acquisition() {
     assert_eq!(seed["acquisition"]["disclosure_fields"], json!(["status"]));
 }
 
+fn structured_output_fixture() -> Fixture {
+    let mut fixture = semantic_alias_fixture();
+    let name_response = json!({
+        "type": "object",
+        "nullable": false,
+        "reject_unknown_fields": true,
+        "fields": {
+            "family": {
+                "required": true,
+                "schema": {"type": "string", "nullable": false, "max_bytes": 128}
+            },
+            "given": {
+                "required": true,
+                "schema": {"type": "string", "nullable": false, "max_bytes": 128}
+            }
+        }
+    });
+    let response = json!({
+        "type": "object",
+        "nullable": false,
+        "reject_unknown_fields": true,
+        "fields": {
+            "registration_number": {
+                "required": true,
+                "schema": {"type": "string", "nullable": false, "max_bytes": 64}
+            },
+            "parents": {
+                "required": true,
+                "schema": {
+                    "type": "array",
+                    "nullable": false,
+                    "max_items": 2,
+                    "items": {
+                        "type": "object",
+                        "nullable": false,
+                        "reject_unknown_fields": true,
+                        "fields": {
+                            "name": {
+                                "required": true,
+                                "schema": name_response
+                            },
+                            "relationship": {
+                                "required": true,
+                                "schema": {
+                                    "type": "string",
+                                    "nullable": false,
+                                    "max_bytes": 32
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let name_output = json!({
+        "type": "object",
+        "nullable": false,
+        "max_bytes": 512,
+        "fields": {
+            "family": {
+                "required": true,
+                "schema": {"type": "string", "nullable": false, "max_bytes": 128}
+            },
+            "given": {
+                "required": true,
+                "schema": {"type": "string", "nullable": false, "max_bytes": 128}
+            }
+        }
+    });
+    let output = json!({
+        "type": "object",
+        "nullable": false,
+        "max_bytes": 4096,
+        "fields": {
+            "registration_number": {
+                "required": true,
+                "schema": {"type": "string", "nullable": false, "max_bytes": 64}
+            },
+            "parents": {
+                "required": true,
+                "schema": {
+                    "type": "array",
+                    "nullable": false,
+                    "max_bytes": 3072,
+                    "max_items": 2,
+                    "items": {
+                        "type": "object",
+                        "nullable": false,
+                        "max_bytes": 1024,
+                        "fields": {
+                            "name": {
+                                "required": true,
+                                "schema": name_output
+                            },
+                            "relationship": {
+                                "required": true,
+                                "schema": {
+                                    "type": "string",
+                                    "nullable": false,
+                                    "max_bytes": 32
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    fixture.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]["fields"]
+        ["registration_status"]["schema"] = response.clone();
+    fixture.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"] =
+        response.clone();
+    fixture.pack_value["spec"]["acquisition"]["fields"]["registration_status"] = response.clone();
+    fixture.contract_value["spec"]["acquisition"]["fields"]["registration_status"] = response;
+    fixture.pack_value["spec"]["output"]["status"] = output.clone();
+    fixture.contract_value["spec"]["output"]["status"] = output;
+    fixture.refresh_all();
+    fixture
+}
+
+pub(crate) fn structured_output_plan_fixture() -> CompiledSourcePlan {
+    compile(&structured_output_fixture())
+        .expect("structured output fixture compiles")
+        .plans
+        .into_values()
+        .next()
+        .expect("one structured output plan")
+}
+
 #[test]
-fn full_date_fact_preserves_its_type_and_rejects_string_substitution() {
+fn recursive_output_schema_compiles_and_is_hash_committed() {
+    let fixture = structured_output_fixture();
+    let registry = compile(&fixture).expect("closed recursive output compiles");
+    let plan = registry.iter().next().expect("structured plan");
+    let output = plan
+        .operations()
+        .next()
+        .expect("structured operation")
+        .response()
+        .outputs()
+        .next()
+        .expect("structured output mapping");
+    assert!(matches!(
+        output.schema(),
+        crate::source_plan::runtime_profile::CompiledOutputShape::Object {
+            nullable: false,
+            max_bytes: 4096,
+            fields,
+        } if fields.iter().any(|field| {
+            field.name() == "parents"
+                && matches!(
+                    field.shape(),
+                    crate::source_plan::runtime_profile::CompiledOutputShape::Array {
+                        nullable: false,
+                        max_bytes: 3072,
+                        max_items: 2,
+                        ..
+                    }
+                )
+        })
+    ));
+
+    let mut changed_bound = fixture.clone();
+    changed_bound.pack_value["spec"]["output"]["status"]["max_bytes"] = json!(4095);
+    changed_bound.contract_value["spec"]["output"]["status"]["max_bytes"] = json!(4095);
+    changed_bound.refresh_all();
+    let changed_registry =
+        compile(&changed_bound).expect("changed structured serialized bound compiles");
+    let changed_plan = changed_registry.iter().next().expect("changed plan");
+    assert_ne!(fixture.contract_hash, changed_bound.contract_hash);
+    assert_ne!(
+        plan.runtime_profile().physical_projection_digest(),
+        changed_plan.runtime_profile().physical_projection_digest()
+    );
+}
+
+#[test]
+fn recursive_output_schema_rejects_depth_node_field_array_and_expansion_bounds() {
+    let valid = structured_output_fixture();
+
+    let mut too_many_fields = valid.clone();
+    let fields = (0..33)
+        .map(|index| {
+            (
+                format!("field_{index}"),
+                json!({
+                    "required": true,
+                    "schema": {"type": "boolean", "nullable": false}
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    for document in [
+        &mut too_many_fields.pack_value,
+        &mut too_many_fields.contract_value,
+    ] {
+        document["spec"]["output"]["status"] = json!({
+            "type": "object",
+            "nullable": false,
+            "max_bytes": 4096,
+            "fields": fields.clone()
+        });
+    }
+    too_many_fields.refresh_all();
+    assert!(matches!(
+        compile(&too_many_fields),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidLimits
+        ))
+    ));
+
+    let mut too_deep_schema = json!({"type": "boolean", "nullable": false});
+    for _ in 0..8 {
+        too_deep_schema = json!({
+            "type": "array",
+            "nullable": false,
+            "max_bytes": 4096,
+            "max_items": 1,
+            "items": too_deep_schema
+        });
+    }
+    let mut too_deep = valid.clone();
+    too_deep.pack_value["spec"]["output"]["status"] = too_deep_schema.clone();
+    too_deep.contract_value["spec"]["output"]["status"] = too_deep_schema;
+    too_deep.refresh_all();
+    assert!(matches!(
+        compile(&too_deep),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidLimits
+        ))
+    ));
+
+    let mut too_many_items = valid.clone();
+    let array = json!({
+        "type": "array",
+        "nullable": false,
+        "max_bytes": 4096,
+        "max_items": 257,
+        "items": {"type": "boolean", "nullable": false}
+    });
+    too_many_items.pack_value["spec"]["output"]["status"] = array.clone();
+    too_many_items.contract_value["spec"]["output"]["status"] = array;
+    too_many_items.refresh_all();
+    assert!(matches!(
+        compile(&too_many_items),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidLimits
+        ))
+    ));
+
+    let mut expanded = valid.clone();
+    let expanded_array = json!({
+        "type": "array",
+        "nullable": false,
+        "max_bytes": 65536,
+        "max_items": 256,
+        "items": {
+            "type": "array",
+            "nullable": false,
+            "max_bytes": 65536,
+            "max_items": 256,
+            "items": {"type": "boolean", "nullable": false}
+        }
+    });
+    expanded.pack_value["spec"]["output"]["status"] = expanded_array.clone();
+    expanded.contract_value["spec"]["output"]["status"] = expanded_array;
+    expanded.refresh_all();
+    assert!(matches!(
+        compile(&expanded),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidLimits
+        ))
+    ));
+
+    let child_fields = (0..8)
+        .map(|index| {
+            (
+                format!("child_{index}"),
+                json!({
+                    "required": true,
+                    "schema": {"type": "boolean", "nullable": false}
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let node_fields = (0..32)
+        .map(|index| {
+            (
+                format!("field_{index}"),
+                json!({
+                    "required": true,
+                    "schema": {
+                        "type": "object",
+                        "nullable": false,
+                        "max_bytes": 4096,
+                        "fields": child_fields.clone()
+                    }
+                }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let mut too_many_nodes = valid;
+    let node_schema = json!({
+        "type": "object",
+        "nullable": false,
+        "max_bytes": 65536,
+        "fields": node_fields
+    });
+    too_many_nodes.pack_value["spec"]["output"]["status"] = node_schema.clone();
+    too_many_nodes.contract_value["spec"]["output"]["status"] = node_schema;
+    too_many_nodes.refresh_all();
+    assert!(matches!(
+        compile(&too_many_nodes),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidLimits
+        ))
+    ));
+}
+
+#[test]
+fn full_date_fact_accepts_legacy_bound_omission_and_rejects_string_substitution() {
     let mut valid = semantic_alias_fixture();
     let date_schema = json!({"type": "date", "nullable": false});
     valid.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]["fields"]
@@ -3339,6 +3659,39 @@ fn full_date_fact_preserves_its_type_and_rejects_string_substitution() {
     valid.contract_value["spec"]["output"]["status"]["type"] = json!("date");
     valid.contract_value["spec"]["output"]["status"]["max_bytes"] = json!(10);
     valid.refresh_all();
+
+    let mut legacy = valid.clone();
+    legacy.pack_value["spec"]["output"]["status"]
+        .as_object_mut()
+        .expect("legacy date output")
+        .remove("max_bytes");
+    legacy.contract_value["spec"]["output"]["status"]
+        .as_object_mut()
+        .expect("legacy date output")
+        .remove("max_bytes");
+    legacy.refresh_all();
+    let legacy_registry = compile(&legacy).expect("legacy date output without max_bytes compiles");
+    let legacy_plan = legacy_registry.iter().next().expect("legacy date plan");
+    let legacy_contract = parse_json_strict(legacy_plan.canonical_public_contract())
+        .expect("legacy contract remains valid JSON");
+    assert!(
+        legacy_contract["spec"]["output"]["status"]
+            .get("max_bytes")
+            .is_none(),
+        "legacy date wire shape remains omitted"
+    );
+
+    let mut invalid_bound = valid.clone();
+    invalid_bound.pack_value["spec"]["output"]["status"]["max_bytes"] = json!(11);
+    invalid_bound.contract_value["spec"]["output"]["status"]["max_bytes"] = json!(11);
+    invalid_bound.refresh_all();
+    assert!(matches!(
+        compile(&invalid_bound),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidLimits
+        ))
+    ));
+
     let registry = compile(&valid).expect("typed full-date output compiles");
     let plan = registry.iter().next().expect("compiled date plan");
     assert!(matches!(
@@ -3535,7 +3888,7 @@ fn bounded_http_runtime_commitment_digests_are_stable() {
     );
     assert_eq!(
         normal.1,
-        "sha256:550f3f915fc0396e5f1dc807ea8435d03db787d1d17f23fbef0eab0289bacb36"
+        "sha256:f7242b9e8ccfd506829614bd5d8a53d9289dd506670607c412bed1daa1365afd"
     );
 }
 
@@ -3600,7 +3953,7 @@ fn rhai_runtime_commitment_digest_binds_safe_script_and_dispatch_outputs() {
     );
     assert_eq!(
         base.1,
-        "sha256:fb6366892e6750e6efb9816f839b167af1aca64c10817d853745665291f1008d"
+        "sha256:6ad249272f62fb264435c7a582ed8ce6ace3ebaf0a69b16a8a897fd213c782ba"
     );
     assert_eq!(
         changed_script_digest.0,
@@ -3826,11 +4179,17 @@ fn script_terminal_output_contract_retains_each_scalar_bound() {
         .next()
         .expect("string plan")
         .rhai_outputs()
-        .map(CompiledRhaiOutput::output_type)
+        .map(|output| output.output_type().clone())
         .collect::<Vec<_>>();
     assert_eq!(
         string_bounds,
-        vec![CompiledRhaiOutputType::String { max_bytes: 64 }; 5]
+        vec![
+            CompiledRhaiOutputType::String {
+                nullable: false,
+                max_bytes: 64
+            };
+            5
+        ]
     );
 
     let mut integer_fixture = rhai_five_operation_fixture();
@@ -3865,6 +4224,7 @@ fn script_terminal_output_contract_retains_each_scalar_bound() {
         .all(|output| matches!(
             output.output_type(),
             CompiledRhaiOutputType::Integer {
+                nullable: false,
                 minimum: -2,
                 maximum: 2
             }

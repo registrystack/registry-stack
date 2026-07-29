@@ -2,7 +2,7 @@ version: 1
 starter:
   id: opencrvs-dci
   release: 0.15.2
-  content_digest: sha256:bb0c7209783b74cfc131eeb274d40b2adab0e4f8491f400c07e2f8ed2d2ce64c
+  content_digest: sha256:199f1025ab1307e1d906997ca83116c7929d5aa633e0b01297868b4425da8e1e
 registry: { id: fictional-civil-registry }
 integrations:
   birth-record: { file: integrations/birth-record/integration.yaml }
@@ -31,6 +31,7 @@ services:
       child-family-name: { output: birth.child_family_name, disclosure: value }
       child-birth-date: { output: birth.date_of_birth, disclosure: value }
       child-place-of-birth: { output: birth.place_of_birth, disclosure: value }
+      parents: { output: birth.parents, disclosure: value }
       age-band:
         cel: >-
           birth.matched && birth.date_of_birth != null
@@ -49,4 +50,4 @@ services:
         format: dc+sd-jwt
         type: https://credentials.invalid/birth-attributes/v1
         validity: 10m
-        claims: [child-given-name, child-family-name, child-birth-date, child-place-of-birth]
+        claims: [child-given-name, child-family-name, child-birth-date, child-place-of-birth, parents]

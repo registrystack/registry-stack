@@ -410,6 +410,175 @@ fn typed_output_expectation() -> RelayExpectedResult {
     .expect("valid typed output expectation")
 }
 
+fn structured_output_contracts() -> BTreeMap<String, NotaryRelayOutputContract> {
+    use registry_notary_core::RelayOutputObjectFieldContract;
+
+    let parent = NotaryRelayOutputContract::Object {
+        nullable: false,
+        max_bytes: 512,
+        fields: BTreeMap::from([
+            (
+                "identifier".to_string(),
+                RelayOutputObjectFieldContract {
+                    required: true,
+                    schema: Box::new(NotaryRelayOutputContract::String {
+                        nullable: false,
+                        max_bytes: 64,
+                    }),
+                },
+            ),
+            (
+                "name".to_string(),
+                RelayOutputObjectFieldContract {
+                    required: true,
+                    schema: Box::new(NotaryRelayOutputContract::String {
+                        nullable: false,
+                        max_bytes: 128,
+                    }),
+                },
+            ),
+            (
+                "type".to_string(),
+                RelayOutputObjectFieldContract {
+                    required: true,
+                    schema: Box::new(NotaryRelayOutputContract::String {
+                        nullable: false,
+                        max_bytes: 32,
+                    }),
+                },
+            ),
+        ]),
+    };
+    BTreeMap::from([
+        (
+            "parents".to_string(),
+            NotaryRelayOutputContract::Array {
+                nullable: false,
+                max_bytes: 2_048,
+                max_items: 4,
+                items: Box::new(parent),
+            },
+        ),
+        (
+            "person".to_string(),
+            NotaryRelayOutputContract::Object {
+                nullable: false,
+                max_bytes: 1_024,
+                fields: BTreeMap::from([
+                    (
+                        "active".to_string(),
+                        RelayOutputObjectFieldContract {
+                            required: true,
+                            schema: Box::new(NotaryRelayOutputContract::Boolean {
+                                nullable: false,
+                            }),
+                        },
+                    ),
+                    (
+                        "name".to_string(),
+                        RelayOutputObjectFieldContract {
+                            required: true,
+                            schema: Box::new(NotaryRelayOutputContract::String {
+                                nullable: false,
+                                max_bytes: 128,
+                            }),
+                        },
+                    ),
+                    (
+                        "tags".to_string(),
+                        RelayOutputObjectFieldContract {
+                            required: false,
+                            schema: Box::new(NotaryRelayOutputContract::Array {
+                                nullable: false,
+                                max_bytes: 256,
+                                max_items: 3,
+                                items: Box::new(NotaryRelayOutputContract::String {
+                                    nullable: false,
+                                    max_bytes: 32,
+                                }),
+                            }),
+                        },
+                    ),
+                ]),
+            },
+        ),
+    ])
+}
+
+fn structured_contract_value() -> Value {
+    let mut contract = contract_value();
+    contract["spec"]["output"] = json!({
+        "parents": {
+            "type": "array",
+            "nullable": false,
+            "max_bytes": 2_048,
+            "max_items": 4,
+            "items": {
+                "type": "object",
+                "nullable": false,
+                "max_bytes": 512,
+                "fields": {
+                    "identifier": {
+                        "required": true,
+                        "schema": { "type": "string", "nullable": false, "max_bytes": 64 }
+                    },
+                    "name": {
+                        "required": true,
+                        "schema": { "type": "string", "nullable": false, "max_bytes": 128 }
+                    },
+                    "type": {
+                        "required": true,
+                        "schema": { "type": "string", "nullable": false, "max_bytes": 32 }
+                    }
+                }
+            }
+        },
+        "person": {
+            "type": "object",
+            "nullable": false,
+            "max_bytes": 1_024,
+            "fields": {
+                "active": {
+                    "required": true,
+                    "schema": { "type": "boolean", "nullable": false }
+                },
+                "name": {
+                    "required": true,
+                    "schema": { "type": "string", "nullable": false, "max_bytes": 128 }
+                },
+                "tags": {
+                    "required": false,
+                    "schema": {
+                        "type": "array",
+                        "nullable": false,
+                        "max_bytes": 256,
+                        "max_items": 3,
+                        "items": { "type": "string", "nullable": false, "max_bytes": 32 }
+                    }
+                }
+            }
+        }
+    });
+    contract
+}
+
+fn structured_result_value(contract_hash: &str) -> Value {
+    let mut result = result_value();
+    result["profile"]["contract_hash"] = json!(contract_hash);
+    result["outputs"] = json!({
+        "parents": [
+            { "type": "mother", "name": "Grace", "identifier": "PARENT-2" },
+            { "identifier": "PARENT-1", "name": "Charles", "type": "father" }
+        ],
+        "person": {
+            "tags": ["citizen", "verified"],
+            "name": "Ada",
+            "active": true
+        }
+    });
+    result
+}
+
 #[test]
 fn output_contract_rejects_reserved_notary_view_names() {
     for name in ["matched", "outcome", "status.code"] {
@@ -1307,6 +1476,113 @@ async fn exact_profile_and_execute_journey_is_strict_and_bounded() {
     assert_eq!(observations[0].operation, ObservedOperation::Metadata);
     assert_eq!(observations[1].operation, ObservedOperation::Execute);
     assert!(observations.iter().all(all_shape_checks_pass));
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn structured_object_and_array_outputs_preserve_exact_nested_json() {
+    let token_file = TestTokenFile::new(&test_token());
+    let contract = structured_contract_value();
+    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+    let result = structured_result_value(&contract_hash);
+    let server = FakeRelay::start(
+        metadata_response_for_contract(&contract, &contract_hash),
+        WireResponse::ok(serde_json::to_vec(&result).unwrap()),
+    )
+    .await;
+    let client = client_with_result(
+        &server,
+        &token_file,
+        &contract_hash,
+        RelayExpectedResult::output_map(structured_output_contracts()).unwrap(),
+    )
+    .verify_profile()
+    .await
+    .expect("recursive output contract verifies");
+
+    let result = client
+        .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+        .await
+        .expect("closed recursive result executes");
+    let Some(RelayMatchData::OutputMap(outputs)) = result.match_data() else {
+        panic!("match exposes the declared structured output map")
+    };
+    let outputs = outputs.fields().collect::<BTreeMap<_, _>>();
+    let expected = structured_result_value(&contract_hash);
+    for name in ["parents", "person"] {
+        let ProjectedJsonScalar::CanonicalJson(actual) = outputs[name] else {
+            panic!("{name} is retained as one canonical JSON value")
+        };
+        let canonical =
+            canonicalize_json(&expected["outputs"][name]).expect("expected value canonicalizes");
+        assert_eq!(
+            actual.as_slice(),
+            canonical.as_slice(),
+            "{name} preserves every nested value and array position"
+        );
+    }
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn structured_outputs_reject_nested_shape_and_scalar_composite_mismatches() {
+    let token_file = TestTokenFile::new(&test_token());
+    let contract = structured_contract_value();
+    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+    let server = FakeRelay::start(
+        metadata_response_for_contract(&contract, &contract_hash),
+        WireResponse::ok(serde_json::to_vec(&structured_result_value(&contract_hash)).unwrap()),
+    )
+    .await;
+    let client = client_with_result(
+        &server,
+        &token_file,
+        &contract_hash,
+        RelayExpectedResult::output_map(structured_output_contracts()).unwrap(),
+    )
+    .verify_profile()
+    .await
+    .expect("recursive output contract verifies");
+
+    let mut cases = Vec::new();
+
+    let mut extra_nested_key = structured_result_value(&contract_hash);
+    extra_nested_key["outputs"]["person"]["undeclared"] = json!("must fail closed");
+    cases.push(("extra nested object key", extra_nested_key));
+
+    let mut wrong_nested_type = structured_result_value(&contract_hash);
+    wrong_nested_type["outputs"]["person"]["active"] = json!("true");
+    cases.push(("wrong nested scalar type", wrong_nested_type));
+
+    let mut malformed_array_item = structured_result_value(&contract_hash);
+    malformed_array_item["outputs"]["parents"][1] = json!("not-an-object");
+    cases.push(("malformed array item", malformed_array_item));
+
+    let mut object_as_scalar = structured_result_value(&contract_hash);
+    object_as_scalar["outputs"]["person"] = json!("Ada");
+    cases.push(("object output returned as scalar", object_as_scalar));
+
+    let mut array_as_object = structured_result_value(&contract_hash);
+    array_as_object["outputs"]["parents"] = json!({
+        "identifier": "PARENT-1",
+        "name": "Charles",
+        "type": "father"
+    });
+    cases.push(("array output returned as object", array_as_object));
+
+    for (label, result) in cases {
+        server
+            .set_execute(WireResponse::ok(serde_json::to_vec(&result).unwrap()))
+            .await;
+        assert_eq!(
+            client
+                .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+                .await
+                .expect_err(label),
+            RelayClientError::InvalidResult,
+            "{label}"
+        );
+    }
     server.shutdown().await;
 }
 

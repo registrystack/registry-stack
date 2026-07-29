@@ -24,10 +24,17 @@
     "digest": "sha256:9cdbdafd868f1fb7bd80402ee557e48e1de1b41115861efbdd234182798493ac"
   },
   "physical_projection": {
-    "domain": "registry.relay.consultation-physical-projection.v1",
+    "domain": "registry.relay.consultation-physical-projection.v2",
     "preimage": {
-      "schema": "registry.relay.consultation-physical-projection.v1",
+      "schema": "registry.relay.consultation-physical-projection.v2",
       "plan_kind": "snapshot_exact",
+      "output_schema": {
+        "registration_status": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 64
+        }
+      },
       "operations": [],
       "snapshot_projection": {
         "keys": [
@@ -48,6 +55,6 @@
         "source_revision": null
       }
     },
-    "digest": "sha256:13de89ae8797bc227cbcff73df485e70e4527fe9a039cf9951571097166dccc3"
+    "digest": "sha256:cc89050872c847ba3dbc82d96ef2f3d95c1fa1cd681003dfda185b3aaae1a345"
   }
 }

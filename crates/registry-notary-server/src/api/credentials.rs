@@ -423,6 +423,48 @@ pub(super) async fn issue_credential(
         }
         state.metrics.record_replay("holder_proof", "accepted");
     }
+    if !principal.is_subject_access() {
+        if let Some(preauth) = preauth_runtime(&state) {
+            let evaluation_expires_at =
+                match OffsetDateTime::parse(&evaluation.expires_at, &Rfc3339) {
+                    Ok(expires_at) if expires_at > OffsetDateTime::now_utc() => expires_at,
+                    _ => {
+                        return credential_denial_response_for_evaluation(
+                            &state,
+                            EvidenceError::EvaluationNotFound,
+                            &request.evaluation_id,
+                            &evaluation,
+                            &principal,
+                            Some((profile_id, profile)),
+                        )
+                    }
+                };
+            if let Err(error) = preauth
+                .preauthorization_state()
+                .reserve_evaluation_issuance(
+                    &request.evaluation_id,
+                    &evaluation.client_id,
+                    evaluation_expires_at,
+                )
+                .await
+            {
+                let error = match error {
+                    PreauthorizationStateError::EvaluationConsumed => {
+                        EvidenceError::EvidenceNotAvailable
+                    }
+                    _ => EvidenceError::CredentialIssuanceFailed,
+                };
+                return credential_denial_response_for_evaluation(
+                    &state,
+                    error,
+                    &request.evaluation_id,
+                    &evaluation,
+                    &principal,
+                    Some((profile_id, profile)),
+                );
+            }
+        }
+    }
     let credential_id = state
         .credential_status
         .is_enabled()

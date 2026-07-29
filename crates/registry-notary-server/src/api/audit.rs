@@ -550,6 +550,47 @@ pub(super) fn attach_subject_access_credential_audit(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) fn attach_registry_client_offer_audit(
+    response: &mut Response,
+    keys: &SubjectAccessRateLimitKeys,
+    decision: &str,
+    evaluation_id: &str,
+    evaluation: &registry_notary_core::StoredEvaluation,
+    credential_configuration_id: &str,
+    profile_id: &str,
+    holder_binding_mode: &str,
+    target_ref: &TargetRefView,
+) -> Result<(), EvidenceError> {
+    let target_ref_hash = hash_audit_handle(
+        keys,
+        "target",
+        target_ref.entity_type.as_str(),
+        Some(evaluation.purpose.as_str()),
+        &target_ref.handle,
+    )?;
+    response.extensions_mut().insert(EvidenceAuditContext {
+        verification_id: Some(evaluation_id.to_string()),
+        verification_decision: Some(decision.to_string()),
+        claim_hash: (!evaluation.claim_ids.is_empty())
+            .then(|| evidence_claim_hash(&evaluation.claim_ids)),
+        purposes: Some(vec![evaluation.purpose.clone()]),
+        row_count: Some(evaluation.results.len() as u64),
+        relay_consultation_count: Some(0),
+        forwarded: Some(false),
+        access_mode: Some(AccessMode::MachineClient),
+        credential_profile: ConfigMetadata::new(profile_id).ok(),
+        protocol: ConfigMetadata::new("openid4vci").ok(),
+        credential_configuration_id: ConfigMetadata::new(credential_configuration_id).ok(),
+        holder_binding_mode: ConfigMetadata::new(holder_binding_mode).ok(),
+        target_type: Some(target_ref.entity_type.clone())
+            .filter(|entity_type| !entity_type.is_empty()),
+        target_ref_hash: Some(target_ref_hash),
+        ..EvidenceAuditContext::default()
+    });
+    Ok(())
+}
+
 pub(super) fn attach_subject_access_success_audit(
     response: &mut Response,
     decision: &str,

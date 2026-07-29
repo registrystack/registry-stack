@@ -10,6 +10,20 @@ use super::*;
 pub const MAX_CLAIM_DEPENDENCY_NODES_V1: usize = 64;
 pub const MAX_CLAIM_DEPENDENCY_EDGES_V1: usize = 256;
 pub const MAX_CLAIM_VALUE_STRING_BYTES_V1: u32 = 64 * 1024;
+pub const MAX_RELAY_OUTPUT_SCHEMA_DEPTH_V1: usize = 8;
+pub const MAX_RELAY_OUTPUT_SCHEMA_NODES_V1: usize = 256;
+pub const MAX_RELAY_OUTPUT_EXPANDED_NODES_V1: usize = 4_096;
+pub const MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1: usize = 32;
+pub const MAX_RELAY_OUTPUT_ARRAY_ITEMS_V1: u16 = 256;
+pub const MAX_RELAY_OUTPUT_NAME_BYTES_V1: usize = 128;
+pub const MAX_RELAY_OUTPUT_VALUE_BYTES_V1: u32 = 64 * 1024;
+
+// The platform decoder wraps consultation outputs in the Relay result root and
+// its closed `outputs` object. The remaining fixed result fields consume 18
+// more nodes. Reserving all 20 fixed nodes here ensures an accepted authored
+// contract cannot fail later when the complete result decoder is compiled.
+const RELAY_OUTPUT_ROOT_DEPTH_V1: usize = 3;
+const RELAY_RESULT_ENVELOPE_NODES_V1: usize = 20;
 
 fn default_claim_formats() -> Vec<String> {
     vec![FORMAT_CLAIM_RESULT_JSON.to_string()]
@@ -160,6 +174,26 @@ pub enum RelayOutputContract {
         #[serde(default)]
         nullable: bool,
     },
+    Object {
+        #[serde(default)]
+        nullable: bool,
+        max_bytes: u32,
+        fields: BTreeMap<String, RelayOutputObjectFieldContract>,
+    },
+    Array {
+        #[serde(default)]
+        nullable: bool,
+        max_bytes: u32,
+        max_items: u16,
+        items: Box<RelayOutputContract>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RelayOutputObjectFieldContract {
+    pub required: bool,
+    pub schema: Box<RelayOutputContract>,
 }
 
 impl RelayOutputContract {
@@ -169,7 +203,9 @@ impl RelayOutputContract {
             Self::Boolean { nullable }
             | Self::Integer { nullable, .. }
             | Self::String { nullable, .. }
-            | Self::Date { nullable } => *nullable,
+            | Self::Date { nullable }
+            | Self::Object { nullable, .. }
+            | Self::Array { nullable, .. } => *nullable,
         }
     }
 
@@ -180,8 +216,105 @@ impl RelayOutputContract {
             Self::Integer { .. } => "integer",
             Self::String { .. } => "string",
             Self::Date { .. } => "date",
+            Self::Object { .. } => "object",
+            Self::Array { .. } => "array",
         }
     }
+
+    #[must_use]
+    pub const fn is_scalar(&self) -> bool {
+        matches!(
+            self,
+            Self::Boolean { .. } | Self::Integer { .. } | Self::String { .. } | Self::Date { .. }
+        )
+    }
+
+    /// Validate one exact public Relay value without retaining a serialized
+    /// copy or exposing value-bearing error details.
+    #[must_use]
+    pub fn validates_value(&self, value: &serde_json::Value) -> bool {
+        if value.is_null() {
+            return self.nullable();
+        }
+        match (self, value) {
+            (Self::Boolean { .. }, serde_json::Value::Bool(_)) => true,
+            (
+                Self::Integer {
+                    minimum, maximum, ..
+                },
+                serde_json::Value::Number(value),
+            ) => exact_json_i64(value).is_some_and(|value| value >= *minimum && value <= *maximum),
+            (Self::String { max_bytes, .. }, serde_json::Value::String(value)) => {
+                value.len() <= *max_bytes as usize
+            }
+            (Self::Date { .. }, serde_json::Value::String(value)) => {
+                crate::is_rfc3339_full_date(value)
+            }
+            (
+                Self::Object {
+                    max_bytes, fields, ..
+                },
+                serde_json::Value::Object(value),
+            ) => {
+                serialized_value_fits(value, *max_bytes)
+                    && value.keys().all(|name| fields.contains_key(name))
+                    && fields.iter().all(|(name, field)| {
+                        value
+                            .get(name)
+                            .is_some_and(|value| field.schema.validates_value(value))
+                            || !field.required && !value.contains_key(name)
+                    })
+            }
+            (
+                Self::Array {
+                    max_bytes,
+                    max_items,
+                    items,
+                    ..
+                },
+                serde_json::Value::Array(value),
+            ) => {
+                value.len() <= usize::from(*max_items)
+                    && serialized_value_fits(value, *max_bytes)
+                    && value.iter().all(|value| items.validates_value(value))
+            }
+            _ => false,
+        }
+    }
+}
+
+fn exact_json_i64(value: &serde_json::Number) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+}
+
+fn serialized_value_fits<T: ?Sized + Serialize>(value: &T, max_bytes: u32) -> bool {
+    struct ByteLimitWriter {
+        remaining: usize,
+    }
+
+    impl std::io::Write for ByteLimitWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.remaining {
+                return Err(std::io::Error::other("serialized value exceeds its bound"));
+            }
+            self.remaining -= bytes.len();
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    serde_json::to_writer(
+        ByteLimitWriter {
+            remaining: max_bytes as usize,
+        },
+        value,
+    )
+    .is_ok()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -691,12 +824,14 @@ fn validate_consultation(
             );
         }
     }
-    if !(1..=64).contains(&consultation.outputs.len()) {
+    if !(1..=MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1).contains(&consultation.outputs.len()) {
         return invalid_claim_evidence_mode(
             claim,
-            "consultation outputs must contain one to 64 entries",
+            "consultation outputs must contain one to 32 entries",
         );
     }
+    let mut schema_nodes = RELAY_RESULT_ENVELOPE_NODES_V1;
+    let mut expanded_nodes = RELAY_RESULT_ENVELOPE_NODES_V1;
     for (output_name, output) in &consultation.outputs {
         if !is_input_name(output_name) || matches!(output_name.as_str(), "matched" | "outcome") {
             return invalid_claim_evidence_mode(
@@ -704,24 +839,100 @@ fn validate_consultation(
                 "consultation output names must match [a-z][a-z0-9_]{0,95} and cannot be matched or outcome",
             );
         }
-        let valid = match output {
-            RelayOutputContract::String { max_bytes, .. } => (1..=64 * 1024).contains(max_bytes),
-            RelayOutputContract::Integer {
-                minimum, maximum, ..
-            } => {
-                const MAX_SAFE_INTEGER: i64 = (1_i64 << 53) - 1;
-                minimum <= maximum && *minimum >= -MAX_SAFE_INTEGER && *maximum <= MAX_SAFE_INTEGER
+        let expanded = validate_relay_output_schema(
+            output,
+            RELAY_OUTPUT_ROOT_DEPTH_V1,
+            &mut schema_nodes,
+        )
+        .ok_or_else(|| EvidenceConfigError::InvalidClaimEvidenceMode {
+            claim: claim.id.clone(),
+            reason: "consultation output schema must be closed and remain within platform depth, field, item, node, name, numeric, and byte bounds".to_string(),
+        })?;
+        expanded_nodes = expanded_nodes.checked_add(expanded).ok_or_else(|| {
+            EvidenceConfigError::InvalidClaimEvidenceMode {
+                claim: claim.id.clone(),
+                reason: "consultation output schema exceeds the platform expanded-node bound"
+                    .to_string(),
             }
-            RelayOutputContract::Boolean { .. } | RelayOutputContract::Date { .. } => true,
-        };
-        if !valid {
+        })?;
+        if expanded_nodes > MAX_RELAY_OUTPUT_EXPANDED_NODES_V1 {
             return invalid_claim_evidence_mode(
                 claim,
-                "consultation output bounds must be positive and JSON-interoperable",
+                "consultation output schema exceeds the platform expanded-node bound",
             );
         }
     }
     Ok(())
+}
+
+fn validate_relay_output_schema(
+    schema: &RelayOutputContract,
+    depth: usize,
+    nodes: &mut usize,
+) -> Option<usize> {
+    *nodes = nodes.checked_add(1)?;
+    if depth > MAX_RELAY_OUTPUT_SCHEMA_DEPTH_V1 || *nodes > MAX_RELAY_OUTPUT_SCHEMA_NODES_V1 {
+        return None;
+    }
+    match schema {
+        RelayOutputContract::Boolean { .. } | RelayOutputContract::Date { .. } => Some(1),
+        RelayOutputContract::Integer {
+            minimum, maximum, ..
+        } if valid_json_integer_bounds(*minimum, *maximum) => Some(1),
+        RelayOutputContract::String { max_bytes, .. }
+            if (1..=MAX_RELAY_OUTPUT_VALUE_BYTES_V1).contains(max_bytes) =>
+        {
+            Some(1)
+        }
+        RelayOutputContract::Object {
+            max_bytes, fields, ..
+        } => {
+            if !(1..=MAX_RELAY_OUTPUT_VALUE_BYTES_V1).contains(max_bytes)
+                || !(1..=MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1).contains(&fields.len())
+            {
+                return None;
+            }
+            let mut expanded = 1_usize;
+            for (name, field) in fields {
+                if !valid_relay_output_name(name) {
+                    return None;
+                }
+                expanded = expanded.checked_add(validate_relay_output_schema(
+                    &field.schema,
+                    depth + 1,
+                    nodes,
+                )?)?;
+            }
+            Some(expanded)
+        }
+        RelayOutputContract::Array {
+            max_bytes,
+            max_items,
+            items,
+            ..
+        } => {
+            if !(1..=MAX_RELAY_OUTPUT_VALUE_BYTES_V1).contains(max_bytes)
+                || !(1..=MAX_RELAY_OUTPUT_ARRAY_ITEMS_V1).contains(max_items)
+            {
+                return None;
+            }
+            validate_relay_output_schema(items, depth + 1, nodes)?
+                .checked_mul(usize::from(*max_items))
+                .and_then(|expanded| expanded.checked_add(1))
+        }
+        RelayOutputContract::Integer { .. } | RelayOutputContract::String { .. } => None,
+    }
+}
+
+fn valid_json_integer_bounds(minimum: i64, maximum: i64) -> bool {
+    const MAX_SAFE_INTEGER: i64 = (1_i64 << 53) - 1;
+    minimum <= maximum && minimum >= -MAX_SAFE_INTEGER && maximum <= MAX_SAFE_INTEGER
+}
+
+fn valid_relay_output_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_RELAY_OUTPUT_NAME_BYTES_V1
+        && !value.chars().any(char::is_control)
 }
 
 fn is_request_identifier_name(value: &str) -> bool {
