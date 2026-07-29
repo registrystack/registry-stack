@@ -1,9 +1,0 @@
-{
-  "blocker": "A real candidate run has not yet recorded peak per-runner storage. The first measurement run must produce that evidence before an enforced numeric budget can be set.",
-  "measurement": null,
-  "required_available_bytes": null,
-  "runner_scope": "per-job",
-  "safety_margin_ratio": 0.25,
-  "schema_version": "registry-stack.release-storage-budget.v1",
-  "status": "measurement_required"
-}

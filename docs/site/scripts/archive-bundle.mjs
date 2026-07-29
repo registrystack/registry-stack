@@ -15,7 +15,8 @@ import { dirname, posix, relative, resolve, sep } from 'node:path';
 
 import * as tar from 'tar';
 
-export const ARCHIVE_BUNDLE_SCHEMA = 'registry-docs.archive-bundle.v1';
+export const ARCHIVE_BUNDLE_SCHEMA = 'registry-docs.archive-bundle.v2';
+export const LEGACY_ARCHIVE_BUNDLE_SCHEMA = 'registry-docs.archive-bundle.v1';
 export const ARCHIVE_LOCK_SCHEMA = 'registry-docs.archive-lock.v1';
 
 const sha256Pattern = /^[0-9a-f]{64}$/;
@@ -223,11 +224,7 @@ export function archiveMetadata(docset, outputDigest) {
   archiveRelativePath(docset);
   return {
     schema_version: ARCHIVE_BUNDLE_SCHEMA,
-    docset_id: docset.id,
-    archive_path: docset.path,
-    source: docset.source,
-    published_at: docset.published_at,
-    source_refs: archiveSourceRefs(docset),
+    release_tag: docset.id,
     tree_sha256: outputDigest,
   };
 }
@@ -324,16 +321,22 @@ function validateTarEntry(path, entry) {
   return true;
 }
 
-function assertMetadataMatchesDocset(metadata, docset) {
-  const expected = {
-    schema_version: ARCHIVE_BUNDLE_SCHEMA,
-    docset_id: docset.id,
-    archive_path: docset.path,
-    source: docset.source,
-    published_at: docset.published_at,
-    source_refs: archiveSourceRefs(docset),
-    tree_sha256: metadata.tree_sha256,
-  };
+export function assertArchiveMetadataMatchesDocset(metadata, docset) {
+  const expected = metadata.schema_version === LEGACY_ARCHIVE_BUNDLE_SCHEMA
+    ? {
+        schema_version: LEGACY_ARCHIVE_BUNDLE_SCHEMA,
+        docset_id: docset.id,
+        archive_path: docset.path,
+        source: docset.source,
+        published_at: docset.published_at,
+        source_refs: archiveSourceRefs(docset),
+        tree_sha256: metadata.tree_sha256,
+      }
+    : {
+        schema_version: ARCHIVE_BUNDLE_SCHEMA,
+        release_tag: docset.id,
+        tree_sha256: metadata.tree_sha256,
+      };
   if (canonicalJson(metadata) !== canonicalJson(expected)) {
     throw new Error(`archive bundle metadata does not match docset ${docset.id}`);
   }
@@ -351,7 +354,8 @@ export async function inspectArchiveBundle({
   if (!sha256Pattern.test(expectedBundleSha256)) {
     throw new Error(`archive bundle ${docset.id} has no valid locked bundle digest`);
   }
-  if (!sha256Pattern.test(expectedTreeSha256)) {
+  if (expectedTreeSha256 !== null && expectedTreeSha256 !== undefined &&
+      !sha256Pattern.test(expectedTreeSha256)) {
     throw new Error(`archive bundle ${docset.id} has no valid locked tree digest`);
   }
   const { contents: bundleContents } = await readRegularFile(
@@ -405,11 +409,11 @@ export async function inspectArchiveBundle({
     );
     await requireRealDirectory(resolve(extraction, 'site'), `archive bundle ${docset.id} site`);
     const metadata = JSON.parse(metadataContents.toString('utf8'));
-    assertMetadataMatchesDocset(metadata, docset);
+    assertArchiveMetadataMatchesDocset(metadata, docset);
     const actualTreeDigest = await treeDigest(resolve(extraction, 'site'));
     if (
       actualTreeDigest !== metadata.tree_sha256 ||
-      actualTreeDigest !== expectedTreeSha256
+      (expectedTreeSha256 && actualTreeDigest !== expectedTreeSha256)
     ) {
       throw new Error(
         `archive bundle ${docset.id} tree digest ${actualTreeDigest} does not match its lock`,

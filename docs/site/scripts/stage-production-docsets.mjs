@@ -1,53 +1,42 @@
-import { constants } from 'node:fs';
 import {
-  copyFile,
+  cp,
   lstat,
   mkdir,
   readFile,
   readdir,
+  rm,
   writeFile,
 } from 'node:fs/promises';
-import { dirname, extname, relative, resolve, sep } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parse, serialize } from 'parse5';
-import TurndownService from 'turndown';
-import turndownPluginGfm from 'turndown-plugin-gfm';
-
-import { archiveOutputDirectory, treeDigest } from './archive-bundle.mjs';
-import { loadArchiveLock, validateArchiveLock } from './archive-lock.mjs';
-import { getDocset, loadDocsets } from './docsets.mjs';
+import {
+  inspectArchiveBundle,
+  treeDigest,
+} from './archive-bundle.mjs';
 import { CURRENT_PRODUCTION_DOCSET_PATH } from '../src/lib/docset-path.mjs';
 
-const productionCurrentPath = CURRENT_PRODUCTION_DOCSET_PATH;
-const legacyPreviewPath = '/preview/';
-const discoveryFiles = ['llms.txt', 'llms-full.txt', 'llms-small.txt'];
-const reservedRootDirectories = new Set([
+const releaseTagPattern =
+  /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+const sha256Pattern = /^[0-9a-f]{64}$/;
+const reservedReleaseEntries = new Set([
   '_archive-bundles',
-  'dev',
-  'pagefind',
+  CURRENT_PRODUCTION_DOCSET_PATH.slice(1, -1),
   'preview',
   'v',
 ]);
-const generatedRootFiles = new Set([
-  'CNAME',
-  ...discoveryFiles,
+const discoveryFiles = new Set([
+  'llms.txt',
+  'llms-full.txt',
+  'llms-small.txt',
   'robots.txt',
+]);
+const discoveryRoutes = [
+  'llms.txt',
+  'llms-full.txt',
+  'llms-small.txt',
   'sitemap-index.xml',
-  'sitemap-0.xml',
-]);
-const textExtensions = new Set([
-  '.css',
-  '.html',
-  '.js',
-  '.json',
-  '.md',
-  '.mjs',
-  '.svg',
-  '.txt',
-  '.webmanifest',
-  '.xml',
-]);
+];
 
 async function existingInfo(path) {
   try {
@@ -72,24 +61,6 @@ async function requireRegularFile(path, label) {
   }
 }
 
-async function collectFiles(root, current = root) {
-  const entries = await readdir(current, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    const path = resolve(current, entry.name);
-    const info = await lstat(path);
-    if (info.isSymbolicLink()) {
-      throw new Error(`released archive cannot contain symlinks: ${path}`);
-    }
-    if (info.isDirectory()) {
-      files.push(...await collectFiles(root, path));
-    } else if (info.isFile()) {
-      files.push(path);
-    }
-  }
-  return files;
-}
-
 function isWithin(parent, child) {
   const rel = relative(parent, child);
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !rel.startsWith(sep));
@@ -103,15 +74,14 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;');
 }
 
-function legacyRedirectDocument(docset, target) {
+function legacyPreviewRedirect(releasedTag, target) {
   const escapedTarget = escapeHtml(target);
-  const escapedId = escapeHtml(docset.id);
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="robots" content="noindex,follow">
-    <meta name="registry-legacy-preview-redirect" content="${escapedId}">
+    <meta name="registry-legacy-preview-redirect" content="${releasedTag}">
     <meta http-equiv="refresh" content="0;url=${escapedTarget}">
     <link rel="canonical" href="https://docs.registrystack.org${escapedTarget}">
     <title>Registry Stack documentation</title>
@@ -122,513 +92,236 @@ function legacyRedirectDocument(docset, target) {
 `;
 }
 
-function canonicalReleaseBanner(docset) {
-  const label = escapeHtml(docset.label);
-  const archivePath = escapeHtml(docset.path);
-  return `<aside class="registry-preview-banner" role="note" aria-label="Site status"><p><strong>Latest release.</strong> You are viewing ${label}. For an immutable URL, use <a href="${archivePath}">${label}</a>.</p></aside>`;
-}
-
-function canonicalSearchMarkup() {
-  return `<div class="registry-search registry-canonical-search" data-registry-canonical-search>
-        <span class="registry-search-label">Search</span>
-        <div id="registry-canonical-search-results"></div>
-      </div>
-      `;
-}
-
-function addCanonicalSearch(html) {
-  if (/<meta\s+http-equiv=["']refresh["']/i.test(html)) return html;
-  if (/class=["'][^"']*\bregistry-search\b/i.test(html)) return html;
-  const utility = /<nav class=["']registry-utility["']/i;
-  if (!utility.test(html)) {
-    throw new Error('released content page has no registry utility navigation for canonical search');
+export function validatePromotionInputs({ releasedTag, docsSha256 }) {
+  const errors = [];
+  if (!releaseTagPattern.test(releasedTag ?? '')) {
+    errors.push('released tag must be canonical v<major>.<minor>.<patch> text');
   }
-  if (!html.includes('</head>')) {
-    throw new Error('released content page has no document head for canonical search assets');
+  if (!sha256Pattern.test(docsSha256 ?? '')) {
+    errors.push('docs SHA-256 must be 64 lowercase hexadecimal characters');
   }
-  return html
-    .replace(
-      '</head>',
-      `<link rel="stylesheet" href="/pagefind/pagefind-ui.css"><script src="/pagefind/pagefind-ui.js" defer></script><script>
-document.addEventListener("DOMContentLoaded", () => {
-  if (!window.PagefindUI) return;
-  new window.PagefindUI({ element: "#registry-canonical-search-results", bundlePath: "/pagefind/", showSubResults: true, resetStyles: false });
-  document.addEventListener("keydown", (event) => {
-    if (event.key.toLowerCase() === "k" && (event.ctrlKey || event.metaKey)) {
-      event.preventDefault();
-      document.querySelector("#registry-canonical-search-results input")?.focus();
-    }
-  });
-});
-</script></head>`,
-    )
-    .replace(utility, `${canonicalSearchMarkup()}<nav class="registry-utility"`);
-}
-
-function removeNoindex(html) {
-  return html.replace(
-    /\s*<meta\s+name=["']robots["']\s+content=["']noindex,follow["']\s*\/?>/gi,
-    '',
-  );
-}
-
-function removeSitemapLinks(html) {
-  return html.replace(/\s*<link\b(?=[^>]*\brel=["']sitemap["'])[^>]*>/gi, '');
-}
-
-function addRootSitemapLink(html) {
-  if (!html.includes('</head>')) return html;
-  return html.replace(
-    '</head>',
-    '<link rel="sitemap" href="https://docs.registrystack.org/sitemap-index.xml"></head>',
-  );
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function rewriteMountedPath(contents, fromPath, toPath) {
-  const origin = 'https://docs.registrystack.org';
-  const fromWithoutSlash = fromPath.replace(/\/$/, '');
-  const toWithoutSlash = toPath === '/' ? '' : toPath.replace(/\/$/, '');
-  const escapedFrom = fromPath.replaceAll('/', '\\/');
-  const escapedTo = toPath.replaceAll('/', '\\/');
-  const escapedFromWithoutSlash = fromWithoutSlash.replaceAll('/', '\\/');
-  const escapedToWithoutSlash = toWithoutSlash.replaceAll('/', '\\/');
-  const boundary = '(^|[\\s"\'(=,:>])';
-  return contents
-    .replaceAll(`${origin}${fromPath}`, `${origin}${toPath}`)
-    .replaceAll(`${origin}${fromWithoutSlash}`, `${origin}${toWithoutSlash}`)
-    .replace(
-      new RegExp(`${boundary}${escapeRegExp(fromPath)}`, 'g'),
-      `$1${toPath}`,
-    )
-    .replace(
-      new RegExp(`${boundary}${escapeRegExp(fromWithoutSlash)}(?=[\\s"'?#),<]|$)`, 'g'),
-      `$1${toWithoutSlash}`,
-    )
-    .replace(
-      new RegExp(`${boundary}${escapeRegExp(escapedFrom)}`, 'g'),
-      `$1${escapedTo}`,
-    )
-    .replace(
-      new RegExp(
-        `${boundary}${escapeRegExp(escapedFromWithoutSlash)}(?=[\\s"'?#),<]|$)`,
-        'g',
-      ),
-      `$1${escapedToWithoutSlash}`,
-    );
-}
-
-function rewriteReleasedText(contents, released, file) {
-  let rewritten = rewriteMountedPath(contents, released.path, '/');
-  rewritten = rewriteMountedPath(rewritten, legacyPreviewPath, productionCurrentPath);
-  if (file.endsWith('.html')) {
-    rewritten = removeNoindex(removeSitemapLinks(rewritten));
-    rewritten = rewritten.replace(
-      /<aside class=["']registry-preview-banner["'][\s\S]*?<\/aside>/i,
-      canonicalReleaseBanner(released),
-    );
-    rewritten = addRootSitemapLink(rewritten);
-    rewritten = addCanonicalSearch(rewritten);
-  }
-  return rewritten;
-}
-
-function canonicalRouteForIndex(archiveRoot, file) {
-  const rel = relative(archiveRoot, file).replaceAll(sep, '/');
-  if (rel === 'index.html') return '/';
-  if (!rel.endsWith('/index.html')) return null;
-  return `/${rel.slice(0, -'index.html'.length)}`;
-}
-
-function sitemapDocuments(routes) {
-  const urls = routes
-    .map((route) => `  <url><loc>https://docs.registrystack.org${route}</loc></url>`)
-    .join('\n');
+  if (errors.length > 0) throw new Error(errors.join('\n'));
   return {
-    index: `<?xml version="1.0" encoding="UTF-8"?>
-<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <sitemap><loc>https://docs.registrystack.org/sitemap-0.xml</loc></sitemap>
-</sitemapindex>
-`,
-    pages: `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${urls}
-</urlset>
-`,
+    releasedTag,
+    version: releasedTag.slice(1),
+    docsSha256,
   };
 }
 
-function rootRobots() {
-  return `User-agent: *
-Allow: /
-
-Sitemap: https://docs.registrystack.org/sitemap-index.xml
-`;
-}
-
-function rewriteDevelopmentDiscoveryUrls(contents) {
-  let rewritten = contents;
-  for (const file of discoveryFiles) {
-    rewritten = rewritten.replaceAll(
-      `https://docs.registrystack.org/${file}`,
-      `https://docs.registrystack.org${productionCurrentPath}${file}`,
-    );
+async function collectFiles(root, current = root) {
+  const files = [];
+  for (const entry of await readdir(current, { withFileTypes: true })) {
+    const path = resolve(current, entry.name);
+    const info = await lstat(path);
+    if (info.isSymbolicLink()) {
+      throw new Error(`documentation tree cannot contain symlinks: ${path}`);
+    }
+    if (info.isDirectory()) files.push(...await collectFiles(root, path));
+    else if (info.isFile()) files.push(path);
+    else throw new Error(`documentation tree contains an unsupported entry: ${path}`);
   }
-  return rewritten;
+  return files;
 }
 
-async function rewriteDevelopmentDiscoveryFiles(currentRoot) {
-  for (const file of await collectFiles(currentRoot)) {
-    const rel = relative(currentRoot, file).replaceAll(sep, '/');
-    if (!rel.endsWith('.md') && !discoveryFiles.includes(rel)) continue;
-    const contents = await readFile(file, 'utf8');
-    const rewritten = rewriteDevelopmentDiscoveryUrls(contents);
-    if (rewritten !== contents) await writeFile(file, rewritten, 'utf8');
-  }
-}
-
-function nodeAttribute(node, name) {
-  return node.attrs?.find((attribute) => attribute.name === name)?.value;
-}
-
-function nodeHasClass(node, className) {
-  return (nodeAttribute(node, 'class') ?? '').split(/\s+/).includes(className);
-}
-
-function findNode(node, predicate) {
-  if (predicate(node)) return node;
-  for (const child of node.childNodes ?? []) {
-    const match = findNode(child, predicate);
-    if (match) return match;
-  }
-  return null;
-}
-
-function skipCorpusNode(node, minify) {
-  if (nodeAttribute(node, 'data-pagefind-ignore') !== undefined) return true;
-  if (
-    ['script', 'style', 'svg', 'button', 'template'].includes(node.tagName) ||
-    nodeHasClass(node, 'registry-preview-banner') ||
-    nodeHasClass(node, 'sl-anchor-link') ||
-    nodeHasClass(node, 'sr-only')
-  ) {
-    return true;
-  }
-  return minify && (
-    node.tagName === 'details' ||
-    nodeHasClass(node, 'starlight-aside--note') ||
-    nodeHasClass(node, 'starlight-aside--tip')
-  );
-}
-
-function pruneCorpusNodes(node, minify) {
-  if (!node.childNodes) return;
-  node.childNodes = node.childNodes.filter((child) => !skipCorpusNode(child, minify));
-  for (const child of node.childNodes) {
-    pruneCorpusNodes(child, minify);
+async function rewriteDevelopmentDiscovery(devRoot) {
+  for (const path of await collectFiles(devRoot)) {
+    const name = path.slice(path.lastIndexOf(sep) + 1);
+    if (!name.endsWith('.md') && !discoveryFiles.has(name)) continue;
+    const contents = await readFile(path, 'utf8');
+    let rewritten = contents;
+    for (const route of discoveryRoutes) {
+      rewritten = rewritten.replaceAll(
+        `https://docs.registrystack.org/${route}`,
+        `https://docs.registrystack.org${CURRENT_PRODUCTION_DOCSET_PATH}${route}`,
+      );
+    }
+    if (rewritten !== contents) await writeFile(path, rewritten, 'utf8');
   }
 }
 
-const corpusMarkdown = new TurndownService({
-  bulletListMarker: '-',
-  codeBlockStyle: 'fenced',
-  headingStyle: 'atx',
-});
-corpusMarkdown.use(turndownPluginGfm.gfm);
-
-function renderedCorpusPage(html, file, minify) {
-  const document = parse(html);
-  const main = findNode(
-    document,
-    (node) => node.tagName === 'main' && nodeAttribute(node, 'data-pagefind-body') !== undefined,
-  );
-  if (!main) throw new Error(`released content page has no data-pagefind-body: ${file}`);
-  pruneCorpusNodes(main, minify);
-  return corpusMarkdown.turndown(serialize(main))
-    .replace(/\u00a0/g, ' ')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function corpusOrder(relativePath) {
-  const id = relativePath === 'index.html'
-    ? 'index'
-    : relativePath.replace(/\/index\.html$/, '').replace(/\.html$/, '');
-  if (id === 'index') return [0, id];
-  if (id.startsWith('explanation/')) return [1, id];
-  if (id.startsWith('reference/') || id.startsWith('decisions/')) return [3, id];
-  return [2, id];
-}
-
-function canonicalCorpusIndex(discoveryHeader) {
-  return `# Registry stack docs
-
-> Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Registry Notary.
-
-${discoveryHeader}
-
-## Documentation Sets
-
-- [Abridged documentation](https://docs.registrystack.org/llms-small.txt): a compact version of the released documentation
-- [Complete documentation](https://docs.registrystack.org/llms-full.txt): the full released documentation
-
-## Notes
-
-- Both corpora are generated from the same locked release pages served at the canonical root.
-- Immutable versioned archives remain unchanged.
-`;
-}
-
-function canonicalCorpusDocument(kind, released, pages) {
-  return `<SYSTEM>This is the ${kind} developer documentation for Registry stack docs ${released.label}</SYSTEM>
-
-${pages.join('\n\n')}
-`;
-}
-
-async function writeCanonicalCorpora(distRoot, promotedFiles, released) {
-  const index = promotedFiles.find((entry) => entry.relative === 'index.md');
-  if (!index) {
-    throw new Error(`released archive ${released.id} contains no index.md`);
-  }
-
-  const indexContents = await readFile(index.destination, 'utf8');
-  const firstHeading = indexContents.indexOf('\n\n# ');
-  if (firstHeading === -1) {
-    throw new Error(`released archive ${released.id} index.md has no discovery header`);
-  }
-  const discoveryHeader = indexContents.slice(0, firstHeading).trim();
-  for (const file of ['llms.txt', 'llms-full.txt']) {
-    if (!discoveryHeader.includes(`https://docs.registrystack.org/${file}`)) {
+async function rejectReleaseTreeCollisions(siteRoot) {
+  for (const entry of await readdir(siteRoot, { withFileTypes: true })) {
+    if (reservedReleaseEntries.has(entry.name)) {
       throw new Error(
-        `released archive ${released.id} index.md discovery header is missing ${file}`,
+        `released archive collides with reserved production path /${entry.name}/`,
       );
     }
   }
-
-  const htmlFiles = promotedFiles
-    .filter((entry) => entry.relative.endsWith('.html'))
-    .sort((left, right) => {
-      const [leftRank, leftId] = corpusOrder(left.relative);
-      const [rightRank, rightId] = corpusOrder(right.relative);
-      return leftRank - rightRank || leftId.localeCompare(rightId);
-    });
-  const pages = [];
-  for (const entry of htmlFiles) {
-    const html = await readFile(entry.destination, 'utf8');
-    if (/<meta\s+http-equiv=["']refresh["']/i.test(html)) continue;
-    if (!html.includes('data-pagefind-body')) continue;
-    pages.push({
-      relative: entry.relative,
-      full: renderedCorpusPage(html, entry.relative, false),
-      small: renderedCorpusPage(html, entry.relative, true),
-    });
-  }
-  if (pages.length === 0) {
-    throw new Error(`released archive ${released.id} contains no rendered corpus pages`);
-  }
-  const abridgedPages = pages.filter(
-    (page) => !page.relative.startsWith('reference/apis/'),
-  );
-  await writeFile(
-    resolve(distRoot, 'llms.txt'),
-    canonicalCorpusIndex(discoveryHeader),
-    { encoding: 'utf8', flag: 'wx' },
-  );
-  await writeFile(
-    resolve(distRoot, 'llms-full.txt'),
-    canonicalCorpusDocument(
-      'full',
-      released,
-      pages.map((page) => page.full),
-    ),
-    { encoding: 'utf8', flag: 'wx' },
-  );
-  await writeFile(
-    resolve(distRoot, 'llms-small.txt'),
-    canonicalCorpusDocument(
-      'abridged',
-      released,
-      abridgedPages.map((page) => page.small),
-    ),
-    { encoding: 'utf8', flag: 'wx' },
-  );
-  return discoveryFiles.length;
 }
 
-async function rejectDestinationCollisions(distRoot, destinations) {
-  for (const destination of destinations) {
+async function copyReleaseToRoot(siteRoot, distRoot) {
+  const copied = [];
+  for (const entry of await readdir(siteRoot, { withFileTypes: true })) {
+    const source = resolve(siteRoot, entry.name);
+    const destination = resolve(distRoot, entry.name);
     if (!isWithin(distRoot, destination)) {
-      throw new Error(`production destination resolves outside dist: ${destination}`);
+      throw new Error(`released archive entry resolves outside production dist: ${entry.name}`);
     }
     if (await existingInfo(destination)) {
-      throw new Error(`production destination already exists: ${destination}`);
+      throw new Error(`released root destination already exists: ${destination}`);
     }
-    let parent = dirname(destination);
-    while (parent !== distRoot) {
-      const info = await existingInfo(parent);
-      if (info && (info.isSymbolicLink() || !info.isDirectory())) {
-        throw new Error(`production destination parent is not a real directory: ${parent}`);
-      }
-      parent = dirname(parent);
-    }
+    await cp(source, destination, {
+      recursive: entry.isDirectory(),
+      dereference: false,
+      force: false,
+      errorOnExist: true,
+      preserveTimestamps: false,
+    });
+    copied.push(entry.name);
   }
+  return copied;
+}
+
+async function stageLegacyPreviewRedirects(siteRoot, distRoot, releasedTag) {
+  let count = 0;
+  for (const source of await collectFiles(siteRoot)) {
+    const rel = relative(siteRoot, source).replaceAll(sep, '/');
+    if (rel !== 'index.html' && !rel.endsWith('/index.html')) continue;
+    const route = rel === 'index.html'
+      ? '/'
+      : `/${rel.slice(0, -'index.html'.length)}`;
+    const destination = resolve(distRoot, 'preview', rel);
+    if (!isWithin(resolve(distRoot, 'preview'), destination)) {
+      throw new Error(`legacy preview redirect resolves outside /preview/: ${rel}`);
+    }
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, legacyPreviewRedirect(releasedTag, route), {
+      encoding: 'utf8',
+      flag: 'wx',
+    });
+    count += 1;
+  }
+  return count;
 }
 
 export async function stageProductionDocsets({
   docsRoot = process.cwd(),
-  dataDir = resolve(docsRoot, 'src/data'),
-  lockPath = resolve(dataDir, 'archive-lock.yaml'),
+  releasedTag,
+  docsSha256,
+  bundlePath,
 } = {}) {
+  const inputs = validatePromotionInputs({ releasedTag, docsSha256 });
+  if (!bundlePath) throw new Error('released docs bundle path is required');
+
   const distRoot = resolve(docsRoot, 'dist');
-  const currentRoot = resolve(distRoot, productionCurrentPath.slice(1, -1));
+  const devRoot = resolve(distRoot, CURRENT_PRODUCTION_DOCSET_PATH.slice(1, -1));
   await requireRealDirectory(distRoot, 'production dist root');
-  await requireRealDirectory(currentRoot, 'unreleased Main documentation');
+  await requireRealDirectory(devRoot, 'protected-main development docs');
   await requireRegularFile(
-    resolve(currentRoot, 'index.html'),
-    'unreleased Main documentation entrypoint',
+    resolve(devRoot, 'index.html'),
+    'protected-main development docs entrypoint',
   );
-  const cnameSource = resolve(currentRoot, 'CNAME');
-  await requireRegularFile(cnameSource, 'GitHub Pages custom-domain declaration');
+  await rewriteDevelopmentDiscovery(devRoot);
 
-  const docsets = await loadDocsets({ dataDir });
-  const released = getDocset(docsets, docsets.released);
-  const lock = await loadArchiveLock({ lockPath });
-  const lockErrors = validateArchiveLock(lock, docsets);
-  if (lockErrors.length > 0) throw new Error(lockErrors.join('\n'));
-
-  const archiveRoot = archiveOutputDirectory(docsRoot, released);
-  const lockedDigest = lock.archives[released.id].tree_sha256;
-  const beforeDigest = await treeDigest(archiveRoot);
-  if (beforeDigest !== lockedDigest) {
-    throw new Error(
-      `released archive ${released.id} does not match its immutable tree lock`,
-    );
-  }
-
-  const archiveFiles = await collectFiles(archiveRoot);
-  const rootRouteEntries = [];
-  for (const file of archiveFiles) {
-    const route = canonicalRouteForIndex(archiveRoot, file);
-    if (!route) continue;
-    const html = await readFile(file, 'utf8');
-    rootRouteEntries.push({
-      route,
-      isRedirect: /<meta\s+http-equiv=["']refresh["']/i.test(html),
-    });
-  }
-  rootRouteEntries.sort((left, right) => left.route.localeCompare(right.route));
-  if (rootRouteEntries.length === 0) {
-    throw new Error(`released archive ${released.id} contains no index.html routes`);
-  }
-  const canonicalRoutes = rootRouteEntries
-    .filter((entry) => !entry.isRedirect)
-    .map((entry) => entry.route);
-  if (canonicalRoutes.length === 0) {
-    throw new Error(`released archive ${released.id} contains no canonical content routes`);
-  }
-
-  const promotedFiles = [];
-  for (const source of archiveFiles) {
-    const rel = relative(archiveRoot, source).replaceAll(sep, '/');
-    const top = rel.split('/')[0];
-    if (reservedRootDirectories.has(top)) {
-      throw new Error(`released route collides with reserved production path /${top}/`);
-    }
-    if (generatedRootFiles.has(rel)) continue;
-    promotedFiles.push({
-      source,
-      relative: rel,
-      destination: resolve(distRoot, rel),
-    });
-  }
-
-  const legacyRedirects = rootRouteEntries.map((entry) => {
-    const relativeIndex = entry.route === '/'
-      ? 'index.html'
-      : `${entry.route.slice(1)}index.html`;
-    return {
-      destination: resolve(distRoot, legacyPreviewPath.slice(1), relativeIndex),
-      target: entry.route,
-    };
-  });
-  const cnameDestination = resolve(distRoot, 'CNAME');
-  const robotsDestination = resolve(distRoot, 'robots.txt');
-  const sitemapIndexDestination = resolve(distRoot, 'sitemap-index.xml');
-  const sitemapPagesDestination = resolve(distRoot, 'sitemap-0.xml');
-  const corpusDestinations = discoveryFiles.map((file) => resolve(distRoot, file));
-
-  await rejectDestinationCollisions(
-    distRoot,
-    [
-      cnameDestination,
-      robotsDestination,
-      sitemapIndexDestination,
-      sitemapPagesDestination,
-      ...corpusDestinations,
-      ...promotedFiles.map((entry) => entry.destination),
-      ...legacyRedirects.map((entry) => entry.destination),
-    ],
-  );
-
-  await rewriteDevelopmentDiscoveryFiles(currentRoot);
-  await writeFile(cnameDestination, await readFile(cnameSource), { flag: 'wx' });
-  await writeFile(robotsDestination, rootRobots(), { encoding: 'utf8', flag: 'wx' });
-  const sitemap = sitemapDocuments(canonicalRoutes);
-  await writeFile(sitemapIndexDestination, sitemap.index, { encoding: 'utf8', flag: 'wx' });
-  await writeFile(sitemapPagesDestination, sitemap.pages, { encoding: 'utf8', flag: 'wx' });
-
-  for (const promoted of promotedFiles) {
-    await mkdir(dirname(promoted.destination), { recursive: true });
-    if (textExtensions.has(extname(promoted.relative))) {
-      const contents = await readFile(promoted.source, 'utf8');
-      await writeFile(
-        promoted.destination,
-        rewriteReleasedText(contents, released, promoted.relative),
-        { encoding: 'utf8', flag: 'wx' },
-      );
-    } else {
-      await copyFile(promoted.source, promoted.destination, constants.COPYFILE_EXCL);
-    }
-  }
-
-  const corpusFiles = await writeCanonicalCorpora(distRoot, promotedFiles, released);
-
-  for (const redirect of legacyRedirects) {
-    await mkdir(dirname(redirect.destination), { recursive: true });
-    await writeFile(
-      redirect.destination,
-      legacyRedirectDocument(released, redirect.target),
-      { encoding: 'utf8', flag: 'wx' },
-    );
-  }
-
-  const afterDigest = await treeDigest(archiveRoot);
-  if (afterDigest !== beforeDigest) {
-    throw new Error(`released archive ${released.id} changed during production staging`);
-  }
-  return {
-    released: released.id,
-    promotedFiles: promotedFiles.length,
-    canonicalRoutes: canonicalRoutes.length,
-    corpusFiles,
-    legacyRedirects: legacyRedirects.length,
+  const docset = {
+    id: inputs.releasedTag,
+    path: `/v/${inputs.version}/`,
+    status: 'archived',
   };
+  const inspected = await inspectArchiveBundle({
+    bundlePath: resolve(bundlePath),
+    docset,
+    expectedBundleSha256: inputs.docsSha256,
+    expectedTreeSha256: null,
+  });
+  try {
+    const siteRoot = resolve(inspected.extraction, 'site');
+    await rejectReleaseTreeCollisions(siteRoot);
+    for (const required of [
+      'index.html',
+      'index.md',
+      'llms.txt',
+      'sitemap-index.xml',
+      'pagefind/pagefind.js',
+    ]) {
+      await requireRegularFile(
+        resolve(siteRoot, required),
+        `released archive ${required}`,
+      );
+    }
+
+    const versionRoot = resolve(distRoot, `v/${inputs.version}`);
+    const versionParent = resolve(distRoot, 'v');
+    if (!isWithin(versionParent, versionRoot)) {
+      throw new Error(`released version route resolves outside production dist: ${versionRoot}`);
+    }
+    await rm(versionRoot, { recursive: true, force: true });
+    await mkdir(dirname(versionRoot), { recursive: true });
+    await requireRealDirectory(versionParent, 'archive version root');
+    await cp(siteRoot, versionRoot, {
+      recursive: true,
+      dereference: false,
+      force: false,
+      errorOnExist: true,
+      preserveTimestamps: false,
+    });
+    if (await treeDigest(versionRoot) !== inspected.tree_sha256) {
+      throw new Error(`versioned release copy ${inputs.releasedTag} changed during staging`);
+    }
+
+    const rootEntries = await copyReleaseToRoot(siteRoot, distRoot);
+    for (const source of await collectFiles(siteRoot)) {
+      const rel = relative(siteRoot, source);
+      const destination = resolve(distRoot, rel);
+      const [sourceContents, destinationContents] = await Promise.all([
+        readFile(source),
+        readFile(destination),
+      ]);
+      if (!sourceContents.equals(destinationContents)) {
+        throw new Error(`released root file changed during staging: ${rel}`);
+      }
+    }
+    const legacyPreviewRedirects = await stageLegacyPreviewRedirects(
+      siteRoot,
+      distRoot,
+      inputs.releasedTag,
+    );
+    return {
+      legacyPreviewRedirects,
+      released: inputs.releasedTag,
+      rootEntries: rootEntries.length,
+      treeSha256: inspected.tree_sha256,
+      versionPath: `/v/${inputs.version}/`,
+    };
+  } finally {
+    await rm(inspected.temporary, { recursive: true, force: true });
+  }
 }
 
-async function main() {
-  const result = await stageProductionDocsets();
+export function parsePromotionArgs(args) {
+  const parsed = {};
+  while (args.length > 0) {
+    const option = args.shift();
+    if (option === '--released-tag' && args[0]) parsed.releasedTag = args.shift();
+    else if (option === '--docs-sha256' && args[0]) parsed.docsSha256 = args.shift();
+    else if (option === '--bundle' && args[0]) parsed.bundlePath = resolve(args.shift());
+    else {
+      throw new Error(
+        'usage: stage-production-docsets.mjs --released-tag <tag> ' +
+          '--docs-sha256 <sha256> --bundle <path>',
+      );
+    }
+  }
+  validatePromotionInputs(parsed);
+  if (!parsed.bundlePath) {
+    throw new Error(
+      'usage: stage-production-docsets.mjs --released-tag <tag> ' +
+        '--docs-sha256 <sha256> --bundle <path>',
+    );
+  }
+  return parsed;
+}
+
+async function main(args) {
+  const result = await stageProductionDocsets(parsePromotionArgs([...args]));
   console.log(
-    `Promoted ${result.promotedFiles} file(s) across ${result.canonicalRoutes} canonical content route(s) and generated ${result.corpusFiles} corpus file(s) for released docset ${result.released}; staged ${result.legacyRedirects} legacy /preview/ redirect(s); Main remains under ${productionCurrentPath}.`,
+    `Promoted unchanged ${result.released} docs to / and ${result.versionPath}; ` +
+      `protected main remains at ${CURRENT_PRODUCTION_DOCSET_PATH}.`,
   );
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  main().catch((error) => {
+  main(process.argv.slice(2)).catch((error) => {
     console.error(error.message);
     process.exitCode = 1;
   });

@@ -60,10 +60,9 @@ Software guarantees include:
 - Credential issuance for configured Notary surfaces, including SD-JWT VC
   issuance where configured.
 - Hash-chained audit records emitted by runtime services.
-- Release workflow support for public checksums, keyless cosign signatures for
-  GitHub Release assets, image digests, image SBOMs, Grype vulnerability
-  reports, and generated release capsules after the first capsule-producing
-  release run.
+- Release workflow support for an authenticated checksum chain, exact image
+  digests, a consolidated SPDX SBOM, image-specific SBOM and Grype evidence,
+  and tag-bound release provenance.
 
 Operator responsibilities include:
 
@@ -87,16 +86,14 @@ Development evidence:
 
 - CI runs Rust format, workspace checks, workspace tests, release-tool tests, lab
   source-model checks, and docs checks.
-- OpenSSF Scorecard runs on the root workflow and publishes default-branch
-  results as hygiene signals.
+- OpenSSF Scorecard runs on its schedule or by manual dispatch and publishes
+  posture results as hygiene signals.
 - Release manifests pin source refs and external inputs.
 - Release validation checks source tag matching, source-ref ancestry, default
   branch reachability, and manifest consistency.
-- Release capsules are generated from workflow evidence rather than hand-written
-  prose.
-- GitHub Release assets are signed by the root release workflow with keyless
-  cosign. Tag-triggered releases produced by the current workflow also publish
-  release-level SLSA provenance. The public verification process is documented in
+- Current GitHub Release payloads are covered by one keyless Sigstore-signed
+  `SHA256SUMS` file. Tag-triggered releases also publish release-level SLSA
+  provenance. The public verification process is documented in
   [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
 
 Known release-integrity gaps:
@@ -124,6 +121,6 @@ Primary public evidence:
 - [OpenSSF evidence](../openssf-evidence/)
 - [Registry Notary API reference](../../reference/apis/registry-notary/)
 - [Registry Relay API reference](../../reference/apis/registry-relay/)
-- GitHub Release assets, with generated release capsules after the first
-  capsule-producing release run
+- GitHub Release assets, with signed checksums, consolidated SPDX SBOM,
+  security evidence, image lock, release manifest, and provenance
 - [Release verification](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)

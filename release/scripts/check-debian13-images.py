@@ -38,6 +38,7 @@ DOCKERFILES = (
 # These are the maintained image and image-policy surfaces. Historical release
 # notes are immutable evidence and intentionally are not rewritten by this gate.
 MAINTAINED_TEXT_PATHS = DOCKERFILES + (
+    Path(".github/workflows/release-candidate.yml"),
     Path(".github/workflows/release.yml"),
     Path("release/scripts/build-release-binaries.sh"),
     Path("crates/registry-relay/docs/ops.md"),
@@ -247,15 +248,28 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 f"{relative}: vendor PKCS#11 modules must remain external read-only mounts"
             )
 
-    workflow = texts[Path(".github/workflows/release.yml")]
+    candidate_workflow = texts[Path(".github/workflows/release-candidate.yml")]
+    release_workflow = texts[Path(".github/workflows/release.yml")]
     binary_recipe = texts[Path("release/scripts/build-release-binaries.sh")]
     require(
-        workflow,
+        candidate_workflow,
         f"RELEASE_BUILDER_IMAGE: {RUST_BUILDER}",
-        Path(".github/workflows/release.yml"),
+        Path(".github/workflows/release-candidate.yml"),
         "pinned Debian 13 release builder",
         failures,
     )
+    for forbidden in (
+        "RELEASE_BUILDER_IMAGE:",
+        "release/scripts/build-release-binaries.sh",
+        "release/scripts/build-release-image.sh",
+        "cargo build",
+        "docker buildx build",
+    ):
+        if forbidden in release_workflow:
+            failures.append(
+                ".github/workflows/release.yml: promotion workflow must not "
+                f"rebuild candidate artifacts: {forbidden!r}"
+            )
     require(
         binary_recipe,
         "--features registry-notary/registry-notary-cel,registry-notary/pkcs11",

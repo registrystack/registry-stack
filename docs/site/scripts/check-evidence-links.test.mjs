@@ -225,36 +225,39 @@ test('extracts only policy-owned YAML fields', () => {
   ]);
 });
 
-test('release verification uses the resolved tag target without installing the docs tree', () => {
+test('release verification resolves the exact annotated tag without installing the docs tree', () => {
   const workflow = readFileSync(resolve(repositoryRoot, '.github/workflows/release.yml'), 'utf8');
   const verifyJob = workflow.slice(
     workflow.indexOf('  verify:\n'),
-    workflow.indexOf('  docs-archive:\n'),
+    workflow.indexOf('  stage-draft:\n'),
   );
-  assert.match(
-    verifyJob,
-    /npm run check:evidence-links --\s+--source-ref "\$\{\{ steps\.release\.outputs\.tag_target \}\}"/,
-  );
+  assert.match(verifyJob, /git rev-parse --verify "refs\/tags\/\$\{tag\}\^\{\}"/);
+  assert.match(verifyJob, /git merge-base --is-ancestor/);
   assert.doesNotMatch(verifyJob, /npm ci/);
 });
 
-test('Pages promotes the released root before checking the mounted Main corpus', () => {
+test('Pages authenticates an exact release before build and smokes one assembled artifact', () => {
   const workflow = readFileSync(
     resolve(repositoryRoot, '.github/workflows/docs-pages.yml'),
     'utf8',
   );
-  const llmsCheck = workflow.indexOf('npm run check:llms:built');
+  const dispatchValidation = workflow.indexOf('Validate exact dispatch before build');
+  const docsBuild = workflow.indexOf('Build protected main at /dev/');
   const archiveAssembly = workflow.indexOf('npm run assemble:archives');
   const rootStaging = workflow.indexOf('npm run stage:production-docsets');
-  const rootSearch = workflow.indexOf('npm run build:production-search');
-  const productionVerification = workflow.indexOf('npm run check:seo:built');
-  assert.ok(llmsCheck >= 0);
+  const localSmoke = workflow.indexOf('npm run smoke:deployment');
+  const upload = workflow.indexOf('actions/upload-pages-artifact');
+  const liveSmoke = workflow.lastIndexOf('smoke-docs-deployment.mjs');
+  assert.ok(dispatchValidation >= 0);
+  assert.ok(dispatchValidation < docsBuild);
   assert.ok(rootStaging > archiveAssembly);
-  assert.ok(rootSearch > rootStaging);
-  assert.ok(llmsCheck > rootStaging);
-  assert.ok(productionVerification > rootSearch);
-  assert.match(workflow, /node scripts\/apply-archive-seo\.mjs dist\/dev/);
-  assert.match(workflow, /DOCS_DIST_DIR: \$\{\{ github\.workspace \}\}\/docs\/site\/dist\/dev/);
-  assert.match(workflow, /DOCS_PUBLIC_BASE: \/dev\//);
-  assert.equal(workflow.indexOf('npm run check:llms:built', llmsCheck + 1), -1);
+  assert.ok(localSmoke > rootStaging);
+  assert.ok(upload > localSmoke);
+  assert.ok(liveSmoke > upload);
+  assert.match(workflow, /released_tag:/);
+  assert.match(workflow, /docs_sha256:/);
+  assert.match(workflow, /registry-stack-\$\{RELEASED_TAG\}-SHA256SUMS\.sigstore\.json/);
+  assert.match(workflow, /DOCS_BASE=\/dev\//);
+  assert.match(workflow, /--exclude-docset "\$\{RELEASED_TAG\}"/);
+  assert.doesNotMatch(workflow, /--bootstrap|registry-docset-redirect/);
 });

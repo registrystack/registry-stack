@@ -29,11 +29,12 @@ test('current docset without a base keeps current-only redirects internal', () =
 
   assert.equal(context.base, undefined);
   assert.equal(context.isArchivedBuild, false);
+  assert.equal(context.isHistoricalArchiveBuild, false);
   assert.equal(context.isSearchExcludedBuild, true);
   assert.equal(context.currentDocsetRedirect(currentOnlyPath), currentOnlyPath);
 });
 
-test('current docset with the development base remains current', () => {
+test('current docset with a development base remains current', () => {
   const context = resolveDocsetBuildContext(docsets, {
     DOCS_DOCSET: 'latest',
     DOCS_BASE: '/dev',
@@ -46,14 +47,14 @@ test('current docset with the development base remains current', () => {
   );
 });
 
-test('archived docset redirects current-only pages to unreleased Main', () => {
+test('archived docset redirects current-only pages to protected main', () => {
   const context = resolveDocsetBuildContext(docsets, {
     DOCS_DOCSET: 'v0.8.4',
     DOCS_BASE: '/v/0.8.4/',
   });
 
   assert.equal(context.isArchivedBuild, true);
-  assert.equal(context.isSearchExcludedBuild, true);
+  assert.equal(context.isHistoricalArchiveBuild, false);
   assert.equal(
     context.currentDocsetRedirect(currentOnlyPath),
     `https://docs.registrystack.org/dev${currentOnlyPath}`,
@@ -71,11 +72,23 @@ test('unsupported archive flags cannot make current components and config disagr
   assert.equal(context.currentDocsetRedirect(currentOnlyPath), `/snapshot${currentOnlyPath}`);
 });
 
-test('archived builds disable platform-dependent Pagefind output', () => {
-  assert.match(configSource, /pagefind:\s*!isArchivedBuild/);
+test('only search-excluded builds disable Pagefind output', () => {
+  assert.match(configSource, /pagefind:\s*!isSearchExcludedBuild/);
 });
 
-test('all search-excluded builds disable sitemap output', () => {
+test('released archive builds ignore the mutable released pointer', () => {
+  const context = resolveDocsetBuildContext(docsets, {
+    DOCS_DOCSET: 'v0.8.4',
+    DOCS_BASE: '/',
+    DOCS_RELEASED_ARCHIVE: 'true',
+  });
+
+  assert.equal(context.isReleasedArchiveBuild, true);
+  assert.equal(context.isHistoricalArchiveBuild, false);
+  assert.equal(context.isSearchExcludedBuild, false);
+});
+
+test('historical archives and unreleased development builds disable sitemap output', () => {
   assert.match(
     configSource,
     /isSearchExcludedBuild\s*\?\s*\[disabledSitemap\]\s*:\s*\[sitemap\(\)\]/,

@@ -39,8 +39,9 @@ npm run check:archives
 docset to the SHA-256 of its deterministic bundle and extracted site tree.
 Existing entries must never be edited or removed. `npm run
 check:archive-lock -- --base-ref origin/main` enforces that invariant.
-Archived builds omit Pagefind because its generated index differs by host
-platform; current documentation keeps search enabled.
+Historical archives retain their sealed search output. New release archives
+carry Pagefind and machine-readable discovery files built once by the release
+workflow.
 
 To publish a new archived docset, build only that docset and create its bundle:
 
@@ -54,6 +55,9 @@ npm run check:archive-lock -- --base-ref origin/main
 The release workflow repeats those steps from the exact annotated tag and
 publishes `registry-docs-vX.Y.Z.tar.gz` with the other signed, SBOM-covered,
 SLSA-provenanced release files.
+The archive metadata binds the release tag and tree digest, not a future merge
+commit. The Pages workflow authenticates that public asset and promotes its
+unchanged files to `/` and `/v/X.Y.Z/`; protected `main` is built at `/dev/`.
 
 ## Published layout
 

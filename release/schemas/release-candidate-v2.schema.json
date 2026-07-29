@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.org/schemas/release-candidate-v2.schema.json",
+  "title": "Registry Stack release candidate v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "release",
+    "workflow",
+    "validity",
+    "payloads",
+    "images",
+    "docs",
+    "sbom",
+    "scans",
+    "advisory",
+    "bundle"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "registry-stack.release-candidate.v2"
+    },
+    "repository": {
+      "const": "registrystack/registry-stack"
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "release_id", "tag", "source_sha"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        },
+        "release_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "source_sha": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "revision", "run_id", "run_attempt"],
+      "properties": {
+        "path": {
+          "const": ".github/workflows/release-candidate.yml"
+        },
+        "revision": {
+          "$ref": "#/$defs/sha"
+        },
+        "run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "run_attempt": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "validity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["created_at", "expires_at"],
+      "properties": {
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "payloads": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "kind", "size", "sha256"],
+        "properties": {
+          "name": {
+            "$ref": "#/$defs/path"
+          },
+          "kind": {
+            "enum": [
+              "binary",
+              "installer",
+              "image-lock",
+              "docs",
+              "sbom",
+              "security-evidence"
+            ]
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        }
+      }
+    },
+    "images": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "candidate_ref", "digest", "final_ref"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "candidate_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "digest": {
+            "$ref": "#/$defs/digest"
+          },
+          "final_ref": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "docs": {
+      "$ref": "#/$defs/fileReference"
+    },
+    "sbom": {
+      "$ref": "#/$defs/fileReference"
+    },
+    "scans": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["image", "name", "sha256", "status"],
+        "properties": {
+          "image": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "$ref": "#/$defs/path"
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "status": {
+            "const": "passed"
+          }
+        }
+      }
+    },
+    "advisory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256", "verdict"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/path"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "verdict": {
+          "const": "passed"
+        }
+      }
+    },
+    "bundle": {
+      "$ref": "#/$defs/sizedFile"
+    }
+  },
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fileReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/path"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "sizedFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "size", "sha256"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/path"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

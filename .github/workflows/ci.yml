@@ -701,6 +701,9 @@ jobs:
       - name: Test release repeatability workflow
         run: python3 -m unittest release/scripts/test_release_repeatability_workflow.py
 
+      - name: Test release workflow structure
+        run: python3 -m unittest release/scripts/test_release_workflow_structure.py
+
       - name: Test release image OCI label checker
         run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py
 

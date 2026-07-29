@@ -46,6 +46,14 @@ class AdvisoryCheckerCopiesTest(unittest.TestCase):
             self.module.check_identical(self.left, self.right),
         )
 
+    def test_repository_checker_copies_match(self):
+        self.assertIsNone(
+            self.module.check_identical(
+                self.module.NOTARY_CHECKER,
+                self.module.RELAY_CHECKER,
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

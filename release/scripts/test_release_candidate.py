@@ -5,10 +5,13 @@ import base64
 import copy
 import hashlib
 import importlib.util
+import io
 import json
+import tarfile
 import tempfile
 import unittest
 import zipfile
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -632,6 +635,17 @@ class ReleaseCandidateTest(unittest.TestCase):
         with self.assertRaisesRegex(self.module.CandidateError, "future-dated"):
             self.verify(future)
 
+    def test_stale_scan_database_fails(self) -> None:
+        stale = copy.deepcopy(self.receipt)
+        stale["images"][0]["scan"]["database"]["built"] = (
+            self.now - timedelta(days=1)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        stale["images"][0]["scan"]["database"]["fresh_until"] = (
+            self.now - timedelta(seconds=1)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self.assertRaisesRegex(self.module.CandidateError, "database is stale"):
+            self.verify(stale)
+
     def test_mutation_matrix_fails_closed(self) -> None:
         mutations = {
             "source sha": lambda r: r["release"].__setitem__("source_sha", "9" * 40),
@@ -788,16 +802,17 @@ class ReleaseCandidateTest(unittest.TestCase):
         with self.assertRaisesRegex(self.module.CandidateError, "predates"):
             self.verify(substituted)
 
-    def test_tag_binding_is_closed_and_binds_exact_receipt(self) -> None:
+    def test_tag_binding_is_closed_and_binds_exact_manifest(self) -> None:
         receipt_path = self.root.parent / "receipt.json"
         receipt_path.write_bytes(self.module.canonical_json(self.receipt))
         receipt_sha = self.module.sha256_file(receipt_path)
         message = self.module.render_tag_binding(123, 2, receipt_sha)
         self.assertEqual(
             {
+                "schema_version": "registry-stack.release-candidate.v2",
                 "run_id": 123,
                 "run_attempt": 2,
-                "receipt_sha256": receipt_sha,
+                "manifest_sha256": receipt_sha,
             },
             self.module.parse_tag_binding(message),
         )
@@ -810,7 +825,7 @@ class ReleaseCandidateTest(unittest.TestCase):
             message + "extra: accepted\n",
             message.replace("run_attempt: 2", "run_attempt: 3"),
             message.replace(
-                TAG_LINE := f"receipt_sha256: {receipt_sha}", TAG_LINE.upper()
+                TAG_LINE := f"manifest_sha256: {receipt_sha}", TAG_LINE.upper()
             ),
         ):
             if "run_attempt: 3" in tampered:
@@ -820,14 +835,410 @@ class ReleaseCandidateTest(unittest.TestCase):
                 with self.assertRaises(self.module.CandidateError):
                     self.module.parse_tag_binding(tampered)
 
+        legacy = self.module.render_legacy_tag_binding(123, 2, receipt_sha)
+        self.assertEqual(
+            {
+                "schema_version": "registry-stack.release-candidate-receipt.v1",
+                "run_id": 123,
+                "run_attempt": 2,
+                "receipt_sha256": receipt_sha,
+            },
+            self.module.parse_tag_binding(legacy),
+        )
+
+    def make_v2_candidate(self) -> tuple[dict, Path, Path, dict]:
+        bundle_root = self.root.parent / "v2-bundle"
+        files = {
+            "registryctl-v1.2.3-linux-amd64": b"registryctl",
+            "registry-docs-v1.2.3.tar.gz": b"docs",
+            "registry-stack-v1.2.3.sbom.spdx.json": b"sbom",
+            "security/registry-notary.grype.json": b"notary scan",
+            "security/registry-relay.grype.json": b"relay scan",
+            "security/advisory-verdict.json": b"advisory",
+        }
+        for name, payload in files.items():
+            path = bundle_root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+        bundle_path = self.root.parent / "registry-stack-v1.2.3-candidate.tar.gz"
+        with tarfile.open(bundle_path, "w:gz") as archive:
+            for name in sorted(files):
+                archive.add(bundle_root / name, arcname=name)
+        workflow_revision = "b" * 40
+        created = self.now - timedelta(hours=1)
+        candidate = {
+            "schema_version": "registry-stack.release-candidate.v2",
+            "repository": "registrystack/registry-stack",
+            "release": {
+                "version": "1.2.3",
+                "release_id": "beta-20",
+                "tag": "v1.2.3",
+                "source_sha": SOURCE_SHA,
+            },
+            "workflow": {
+                "path": ".github/workflows/release-candidate.yml",
+                "revision": workflow_revision,
+                "run_id": 123,
+                "run_attempt": 2,
+            },
+            "validity": {
+                "created_at": created.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "expires_at": (created + timedelta(hours=24)).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+            },
+            "payloads": [
+                {
+                    "name": name,
+                    "kind": kind,
+                    "size": len(files[name]),
+                    "sha256": sha256(files[name]),
+                }
+                for name, kind in (
+                    ("registryctl-v1.2.3-linux-amd64", "binary"),
+                    ("registry-docs-v1.2.3.tar.gz", "docs"),
+                    ("registry-stack-v1.2.3.sbom.spdx.json", "sbom"),
+                )
+            ],
+            "images": [
+                {
+                    "name": name,
+                    "candidate_ref": (
+                        f"ghcr.io/registrystack/{name}-candidate@{IMAGE_DIGEST}"
+                    ),
+                    "digest": IMAGE_DIGEST,
+                    "final_ref": f"ghcr.io/registrystack/{name}:v1.2.3",
+                }
+                for name in ("registry-notary", "registry-relay")
+            ],
+            "docs": {
+                "name": "registry-docs-v1.2.3.tar.gz",
+                "sha256": sha256(files["registry-docs-v1.2.3.tar.gz"]),
+            },
+            "sbom": {
+                "name": "registry-stack-v1.2.3.sbom.spdx.json",
+                "sha256": sha256(
+                    files["registry-stack-v1.2.3.sbom.spdx.json"]
+                ),
+            },
+            "scans": [
+                {
+                    "image": name,
+                    "name": f"security/{name}.grype.json",
+                    "sha256": sha256(files[f"security/{name}.grype.json"]),
+                    "status": "passed",
+                }
+                for name in ("registry-notary", "registry-relay")
+            ],
+            "advisory": {
+                "name": "security/advisory-verdict.json",
+                "sha256": sha256(files["security/advisory-verdict.json"]),
+                "verdict": "passed",
+            },
+            "bundle": {
+                "name": bundle_path.name,
+                "size": bundle_path.stat().st_size,
+                "sha256": sha256(bundle_path.read_bytes()),
+            },
+        }
+        run = {
+            "id": 123,
+            "run_attempt": 2,
+            "event": "repository_dispatch",
+            "head_sha": workflow_revision,
+            "path": ".github/workflows/release-candidate.yml",
+            "conclusion": "success",
+            "created_at": (self.now - timedelta(hours=2)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        }
+        return candidate, bundle_path, bundle_root, run
+
+    def test_v2_candidate_verifies_exact_bundle_and_separate_revisions(self) -> None:
+        candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
+        validated = self.module.validate_candidate_manifest(
+            candidate,
+            bundle_path=bundle_path,
+            bundle_root=bundle_root,
+            expected_source_sha=SOURCE_SHA,
+            expected_workflow_revision="b" * 40,
+            now=self.now,
+            promotion=True,
+            workflow_run_metadata=run,
+        )
+        self.assertNotEqual(
+            validated["release"]["source_sha"],
+            validated["workflow"]["revision"],
+        )
+
+    def test_verify_candidate_cli_accepts_trusted_run_metadata(self) -> None:
+        candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
+        current = datetime.now(timezone.utc).replace(microsecond=0)
+        candidate["validity"] = {
+            "created_at": (current - timedelta(hours=1)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+            "expires_at": (current + timedelta(hours=23)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        }
+        run["created_at"] = (current - timedelta(hours=2)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        manifest_path = self.root.parent / "release-candidate-manifest.json"
+        metadata_path = self.root.parent / "trusted-run.json"
+        manifest_path.write_bytes(self.module.canonical_json(candidate))
+        metadata_path.write_text(json.dumps(run), encoding="utf-8")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            result = self.module.main(
+                [
+                    "verify-candidate",
+                    "--manifest",
+                    str(manifest_path),
+                    "--bundle",
+                    str(bundle_path),
+                    "--bundle-root",
+                    str(bundle_root),
+                    "--source-sha",
+                    SOURCE_SHA,
+                    "--workflow-revision",
+                    "b" * 40,
+                    "--version",
+                    "1.2.3",
+                    "--release-id",
+                    "beta-20",
+                    "--run-id",
+                    "123",
+                    "--run-attempt",
+                    "2",
+                    "--trusted-run-metadata",
+                    str(metadata_path),
+                ]
+            )
+        self.assertEqual(0, result)
+
+    def test_v2_candidate_attempt_has_exactly_one_unexpired_artifact(self) -> None:
+        artifact = {
+            "id": 987,
+            "name": "registry-stack-release-candidate-123-2",
+            "digest": "sha256:" + "9" * 64,
+            "expired": False,
+            "workflow_run": {"id": 123},
+        }
+        self.assertEqual(
+            artifact["name"],
+            self.module.validate_candidate_artifact_inventory(
+                {"artifacts": [artifact]},
+                run_id=123,
+                run_attempt=2,
+            )["name"],
+        )
+        for changed, message in (
+            ({**artifact, "expired": True}, "expired"),
+            ({**artifact, "name": artifact["name"] + "-extra"}, "exactly one"),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(self.module.CandidateError, message):
+                    self.module.validate_candidate_artifact_inventory(
+                        {"artifacts": [changed]},
+                        run_id=123,
+                        run_attempt=2,
+                    )
+
+    def test_v2_candidate_rejects_expiry_open_fields_and_hash_mutation(self) -> None:
+        candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
+        too_long = copy.deepcopy(candidate)
+        too_long["validity"]["expires_at"] = (
+            self.now + timedelta(hours=24, minutes=1)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self.assertRaisesRegex(self.module.CandidateError, "24 hours"):
+            self.module.validate_candidate_manifest(too_long, now=self.now)
+
+        expired = copy.deepcopy(candidate)
+        expired["validity"]["expires_at"] = (
+            self.now - timedelta(seconds=1)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self.assertRaisesRegex(self.module.CandidateError, "expired"):
+            self.module.validate_candidate_manifest(
+                expired,
+                now=self.now,
+            )
+
+        opened = copy.deepcopy(candidate)
+        opened["status"] = "candidate"
+        with self.assertRaisesRegex(self.module.CandidateError, "non-closed"):
+            self.module.validate_candidate_manifest(opened, now=self.now)
+
+        (bundle_root / candidate["docs"]["name"]).write_bytes(b"mutated")
+        with self.assertRaisesRegex(self.module.CandidateError, "sha256 mismatch"):
+            self.module.validate_candidate_manifest(
+                candidate,
+                bundle_path=bundle_path,
+                bundle_root=bundle_root,
+                now=self.now,
+            )
+
+    def test_v2_candidate_rejects_scan_advisory_image_and_bundle_substitution(
+        self,
+    ) -> None:
+        candidate, bundle_path, bundle_root, _ = self.make_v2_candidate()
+        for pointer, replacement, message in (
+            (("scans", 0, "status"), "incomplete", "status must be passed"),
+            (("advisory", "verdict"), "failed", "verdict must be passed"),
+            (
+                ("images", 0, "final_ref"),
+                "ghcr.io/registrystack/registry-notary:v9.9.9",
+                "final_ref",
+            ),
+            (("bundle", "sha256"), "9" * 64, "bundle sha256 mismatch"),
+        ):
+            changed = copy.deepcopy(candidate)
+            target = changed
+            for key in pointer[:-1]:
+                target = target[key]
+            target[pointer[-1]] = replacement
+            with self.subTest(pointer=pointer):
+                with self.assertRaisesRegex(self.module.CandidateError, message):
+                    self.module.validate_candidate_manifest(
+                        changed,
+                        bundle_path=bundle_path,
+                        bundle_root=bundle_root,
+                        now=self.now,
+                    )
+
+    def test_canary_requires_exact_revision_success_and_24_hour_recency(self) -> None:
+        run = {
+            "id": 456,
+            "run_attempt": 1,
+            "event": "workflow_dispatch",
+            "head_sha": "b" * 40,
+            "path": ".github/workflows/release-canary.yml",
+            "conclusion": "success",
+            "completed_at": (self.now - timedelta(hours=23)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        }
+        self.module.validate_canary_run(
+            run, workflow_revision="b" * 40, now=self.now
+        )
+        for field, value, message in (
+            ("head_sha", "c" * 40, "workflow revision"),
+            ("conclusion", "failure", "did not succeed"),
+            (
+                "completed_at",
+                (self.now - timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "older than 24 hours",
+            ),
+        ):
+            changed = dict(run)
+            changed[field] = value
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(self.module.CandidateError, message):
+                    self.module.validate_canary_run(
+                        changed, workflow_revision="b" * 40, now=self.now
+                    )
+
+    def test_verify_tag_binding_cli_rechecks_expiry_before_public_write(
+        self,
+    ) -> None:
+        candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
+        current = datetime.now(timezone.utc).replace(microsecond=0)
+        candidate["validity"] = {
+            "created_at": (current - timedelta(hours=2)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+            "expires_at": (current + timedelta(hours=22)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        }
+        run["created_at"] = (current - timedelta(hours=3)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        manifest_path = self.root.parent / "release-candidate-manifest.json"
+        metadata_path = self.root.parent / "candidate-run.json"
+        message_path = self.root.parent / "tag-message.txt"
+        metadata_path.write_text(json.dumps(run), encoding="utf-8")
+
+        def invoke(document: dict) -> int:
+            manifest_path.write_bytes(self.module.canonical_json(document))
+            message_path.write_text(
+                self.module.render_tag_binding(
+                    123,
+                    2,
+                    self.module.sha256_file(manifest_path),
+                ),
+                encoding="utf-8",
+            )
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                return self.module.main(
+                    [
+                        "verify-tag-binding",
+                        "--message",
+                        str(message_path),
+                        "--manifest",
+                        str(manifest_path),
+                        "--bundle",
+                        str(bundle_path),
+                        "--bundle-root",
+                        str(bundle_root),
+                        "--trusted-run-metadata",
+                        str(metadata_path),
+                        "--tag-target",
+                        SOURCE_SHA,
+                        "--workflow-revision",
+                        "b" * 40,
+                        "--version",
+                        "1.2.3",
+                        "--release-id",
+                        "beta-20",
+                    ]
+                )
+
+        self.assertEqual(0, invoke(candidate))
+        expired = copy.deepcopy(candidate)
+        expired["validity"] = {
+            "created_at": (current - timedelta(hours=24)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+            "expires_at": (current - timedelta(seconds=1)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        }
+        self.assertEqual(1, invoke(expired))
+
+        manifest_path.write_bytes(self.module.canonical_json(candidate))
+        message_path.write_text(
+            self.module.render_tag_binding(
+                123, 2, self.module.sha256_file(manifest_path)
+            ),
+            encoding="utf-8",
+        )
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            missing_identity = self.module.main(
+                [
+                    "verify-tag-binding",
+                    "--message",
+                    str(message_path),
+                    "--manifest",
+                    str(manifest_path),
+                    "--trusted-run-metadata",
+                    str(metadata_path),
+                ]
+            )
+        self.assertEqual(1, missing_identity)
+
     def test_seal_writes_canonical_bytes_and_refuses_open_draft(self) -> None:
         draft = self.root.parent / "draft.json"
         output = self.root.parent / "sealed.json"
-        draft.write_text(json.dumps(self.receipt), encoding="utf-8")
+        receipt = fixture(
+            self.root,
+            now=datetime.now(timezone.utc).replace(microsecond=0),
+        )
+        draft.write_text(json.dumps(receipt), encoding="utf-8")
         self.module.write_closed_receipt(draft, output)
-        self.assertEqual(self.module.canonical_json(self.receipt), output.read_bytes())
-        self.receipt["unknown"] = True
-        draft.write_text(json.dumps(self.receipt), encoding="utf-8")
+        self.assertEqual(self.module.canonical_json(receipt), output.read_bytes())
+        receipt["unknown"] = True
+        draft.write_text(json.dumps(receipt), encoding="utf-8")
         with self.assertRaisesRegex(self.module.CandidateError, "non-closed schema"):
             self.module.write_closed_receipt(draft, output)
 

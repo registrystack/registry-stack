@@ -167,6 +167,7 @@ async function restoreCurrentGeneratedData(docsRoot, currentDocsetId) {
 export async function assembleArchives({
   docsRoot = process.cwd(),
   bootstrap = false,
+  excludeDocsetId = null,
   fetchImpl = fetch,
   buildArchive = buildDocsetArchive,
   restoreGeneratedData = restoreCurrentGeneratedData,
@@ -178,11 +179,22 @@ export async function assembleArchives({
   });
   const errors = validateArchiveLock(lock, docsets);
   if (errors.length > 0) throw new Error(errors.join('\n'));
+  if (excludeDocsetId) {
+    const excluded = docsets.docsets.find((docset) => docset.id === excludeDocsetId);
+    if (!excluded || excluded.status !== 'archived') {
+      throw new Error(
+        `excluded docset must name a declared archived docset: ${excludeDocsetId}`,
+      );
+    }
+  }
 
   let bootstrapped = 0;
   let restored = 0;
   const sources = {};
-  for (const docset of docsets.docsets.filter((entry) => entry.status === 'archived')) {
+  const archived = docsets.docsets.filter(
+    (entry) => entry.status === 'archived' && entry.id !== excludeDocsetId,
+  );
+  for (const docset of archived) {
     const lockEntry = lock.archives[docset.id];
     if (await restoreLocalBundle({ docsRoot, docset, lockEntry })) {
       restored += 1;
@@ -213,16 +225,29 @@ export async function assembleArchives({
   if (bootstrapped > 0) {
     await restoreGeneratedData(docsRoot, docsets.current);
   }
-  return { bootstrapped, restored, sources };
+  return {
+    bootstrapped,
+    restored,
+    skipped: excludeDocsetId ? [excludeDocsetId] : [],
+    sources,
+  };
 }
 
-function parseArgs(args) {
+export function parseArgs(args) {
   let bootstrap = false;
-  for (const arg of args) {
-    if (arg === '--bootstrap') bootstrap = true;
-    else throw new Error('usage: assemble-archives.mjs [--bootstrap]');
+  let excludeDocsetId = null;
+  while (args.length > 0) {
+    const option = args.shift();
+    if (option === '--bootstrap') bootstrap = true;
+    else if (option === '--exclude-docset' && args[0]) {
+      excludeDocsetId = args.shift();
+    } else {
+      throw new Error(
+        'usage: assemble-archives.mjs [--bootstrap] [--exclude-docset <id>]',
+      );
+    }
   }
-  return { bootstrap };
+  return { bootstrap, excludeDocsetId };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
@@ -230,7 +255,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     const result = await assembleArchives(parseArgs(process.argv.slice(2)));
     console.log(
       `Assembled ${result.restored + result.bootstrapped} immutable archive(s): ` +
-        `${result.restored} restored, ${result.bootstrapped} bootstrapped.`,
+        `${result.restored} restored, ${result.bootstrapped} bootstrapped, ` +
+        `${result.skipped.length} supplied separately.`,
     );
   } catch (error) {
     console.error(error.message);

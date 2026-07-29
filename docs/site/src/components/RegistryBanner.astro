@@ -1,5 +1,6 @@
 ---
 import docsetsManifest from '../data/generated/docsets.json';
+import { CURRENT_PRODUCTION_DOCSET_PATH } from '../lib/docset-path.mjs';
 
 const repoUrl = 'https://github.com/registrystack/registry-stack/tree/main/docs/site';
 const activeDocsetId = process.env.DOCS_DOCSET || docsetsManifest.current;
@@ -7,13 +8,21 @@ const activeDocset =
   docsetsManifest.docsets.find((docset) => docset.id === activeDocsetId) ??
   docsetsManifest.docsets.find((docset) => docset.id === docsetsManifest.current);
 const isArchived = activeDocset?.status === 'archived';
+const isReleasedArchiveBuild =
+  isArchived && process.env.DOCS_RELEASED_ARCHIVE === 'true';
 const releasedDocset = docsetsManifest.docsets.find(
   (docset) => docset.id === docsetsManifest.released,
 );
 ---
 
 <aside class="registry-preview-banner" role="note" aria-label="Site status">
-  {isArchived ? (
+  {isReleasedArchiveBuild ? (
+    <p>
+      <strong>Released docs.</strong>{' '}
+      You are viewing the documentation published with {activeDocset.label}. Development
+      docs are available at <a href={CURRENT_PRODUCTION_DOCSET_PATH}>Latest</a>.
+    </p>
+  ) : isArchived ? (
     <p>
       <strong>Versioned archive.</strong>{' '}
       You are viewing {activeDocset.label}. For the latest released guidance, use{' '}

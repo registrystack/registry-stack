@@ -83,9 +83,6 @@ OPENAPI_RELEASE_SURFACE_GLOBS = (
     "crates/*/openapi/*.openapi.json",
 )
 RELEASE_CANDIDATE_WORKFLOW = ".github/workflows/release-candidate.yml"
-RELEASE_CANDIDATE_RECEIPT_ARTIFACT = (
-    "registry-stack-release-candidate-receipt"
-)
 RELEASE_BUILDER_IMAGE = (
     "rust:1.95-trixie@sha256:"
     "f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3"
@@ -461,8 +458,10 @@ def validate(manifest_path: Path) -> int:
     artifacts = manifest.get("artifacts", {}) if isinstance(manifest, dict) else {}
     external = manifest.get("external", {}) if isinstance(manifest, dict) else {}
     version = str(stack.get("version", ""))
-    source_ref = str(stack.get("source_ref", ""))
     source_tag = str(stack.get("source_tag", ""))
+    has_source_ref = "source_ref" in stack
+    has_status = "status" in stack
+    source_ref = str(stack.get("source_ref", ""))
     status = str(stack.get("status", ""))
 
     if stack.get("source_repo") != "registrystack/registry-stack":
@@ -471,10 +470,20 @@ def validate(manifest_path: Path) -> int:
         errors.append("stack.version is required")
     if source_tag != f"v{version}":
         errors.append(f"stack.source_tag must be v{version}")
-    if source_ref != "HEAD" and not HEX40.fullmatch(source_ref):
-        errors.append("stack.source_ref must be HEAD for a draft or a 40-character commit")
-    if source_ref == "HEAD" and status != "draft":
-        errors.append("stack.source_ref may be HEAD only when stack.status is draft")
+    if has_source_ref != has_status:
+        errors.append(
+            "stack.source_ref and stack.status must both be present for a "
+            "historical manifest or both omitted for an active manifest"
+        )
+    elif has_source_ref:
+        if source_ref != "HEAD" and not HEX40.fullmatch(source_ref):
+            errors.append(
+                "stack.source_ref must be HEAD for a draft or a 40-character commit"
+            )
+        if source_ref == "HEAD" and status != "draft":
+            errors.append(
+                "stack.source_ref may be HEAD only when stack.status is draft"
+            )
     errors.extend(artifact_inventory_errors(version, artifacts))
     for name, artifact_version in sorted(artifacts.items()):
         if str(artifact_version) != version:
@@ -1429,6 +1438,25 @@ def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
     raise ReleasePlanError(f"git ancestry check failed: {detail}")
 
 
+def validate_candidate_ancestry(
+    repo: Path,
+    *,
+    source_sha: str,
+    workflow_revision: str,
+    protected_main_sha: str,
+) -> None:
+    if not is_ancestor(repo, source_sha, protected_main_sha):
+        raise ReleasePlanError(
+            f"candidate source {source_sha} is not reachable from protected main "
+            f"{protected_main_sha}"
+        )
+    if not is_ancestor(repo, workflow_revision, protected_main_sha):
+        raise ReleasePlanError(
+            f"candidate workflow revision {workflow_revision} is not reachable "
+            f"from protected main {protected_main_sha}"
+        )
+
+
 def release_tags(repo: Path) -> dict[str, list[str]]:
     tags_by_version: dict[str, list[str]] = {}
     output = git_plan_output(repo, "tag", "--list")
@@ -1623,27 +1651,32 @@ def validate_selected_manifest(repo: Path, record: dict[str, Any]) -> None:
         )
     source_ref = stack.get("source_ref")
     status = stack.get("status")
-    if source_ref == "HEAD":
-        if status != "draft":
-            raise ReleasePlanError(
-                "selected manifest stack.source_ref may be HEAD only for draft status"
-            )
-    elif not isinstance(source_ref, str) or HEX40.fullmatch(source_ref) is None:
+    if (source_ref is None) != (status is None):
         raise ReleasePlanError(
-            "selected manifest stack.source_ref must be HEAD or one exact lowercase commit SHA"
+            "selected manifest must omit both legacy stack.source_ref and stack.status"
         )
-    if not isinstance(status, str) or not status:
-        raise ReleasePlanError("selected manifest stack.status is required")
-    if status != "draft":
-        resolved_source_ref = resolve_commit(
-            repo,
-            source_ref,
-            "selected manifest stack.source_ref",
-        )
-        if resolved_source_ref != source_ref:
+    if source_ref is not None:
+        if source_ref == "HEAD":
+            if status != "draft":
+                raise ReleasePlanError(
+                    "selected manifest stack.source_ref may be HEAD only for draft status"
+                )
+        elif not isinstance(source_ref, str) or HEX40.fullmatch(source_ref) is None:
             raise ReleasePlanError(
-                "selected manifest stack.source_ref must resolve to its exact recorded commit"
+                "selected manifest stack.source_ref must be HEAD or one exact lowercase commit SHA"
             )
+        if not isinstance(status, str) or not status:
+            raise ReleasePlanError("selected manifest stack.status is required")
+        if status != "draft":
+            resolved_source_ref = resolve_commit(
+                repo,
+                source_ref,
+                "selected manifest stack.source_ref",
+            )
+            if resolved_source_ref != source_ref:
+                raise ReleasePlanError(
+                    "selected manifest stack.source_ref must resolve to its exact recorded commit"
+                )
     artifacts = data.get("artifacts")
     if not isinstance(artifacts, dict) or not artifacts:
         raise ReleasePlanError("selected manifest artifacts must be a non-empty object")
@@ -1718,7 +1751,7 @@ def selected_docsets(
 ) -> tuple[dict[str, Any], dict[str, Any], int]:
     version = record["version"]
     tag = f"v{version}"
-    source_ref = record["data"]["stack"].get("source_ref")
+    source_ref = record["data"]["stack"].get("source_ref", tag)
     external = record["data"].get("external")
     if not isinstance(external, dict):
         raise ReleasePlanError("selected manifest external must be an object")
@@ -1762,7 +1795,11 @@ def selected_docsets(
     selected_index = ids[tag][0]
     selected = docsets[selected_index]
     manifest_status = record["data"]["stack"].get("status")
-    allowed_statuses = DOCSET_STATUSES_BY_MANIFEST_STATUS.get(manifest_status)
+    allowed_statuses = (
+        {"draft", "archived"}
+        if manifest_status is None
+        else DOCSET_STATUSES_BY_MANIFEST_STATUS.get(manifest_status)
+    )
     if allowed_statuses is None:
         raise ReleasePlanError(
             f"selected manifest status {manifest_status!r} has no docset status mapping"
@@ -1773,8 +1810,10 @@ def selected_docsets(
             f"docset {tag} status must be {expected} "
             f"for manifest status {manifest_status!r}"
         )
-    expected_availability = DOCSET_AVAILABILITY_BY_MANIFEST_STATUS.get(
-        manifest_status
+    expected_availability = (
+        "candidate"
+        if manifest_status is None
+        else DOCSET_AVAILABILITY_BY_MANIFEST_STATUS.get(manifest_status)
     )
     if expected_availability is None:
         raise ReleasePlanError(
@@ -2081,14 +2120,11 @@ def prepare_release_context(repo: Path, version: str, release_id: str) -> dict[s
 
 
 def manifest_plan_identity(repo: Path, record: dict[str, Any]) -> dict[str, Any]:
-    stack = record["data"]["stack"]
     return {
         "manifest": relative_path(repo, record["path"]),
         "version": record["version"],
         "release_id": record["release_id"],
         "source_tag": record["source_tag"],
-        "source_ref": stack.get("source_ref"),
-        "status": stack.get("status"),
     }
 
 
@@ -2479,9 +2515,6 @@ def request_release_candidate(
     release_id: str,
     source_sha: str,
     default_branch: str,
-    proof_level: str,
-    milestone: str,
-    measurement_bootstrap: bool,
     repository: str,
     *,
     print_request: bool,
@@ -2494,29 +2527,24 @@ def request_release_candidate(
         resolved_default = resolve_commit(
             context["repo"], default_branch, "protected default branch"
         )
-        if resolved_source != remote_default or resolved_default != remote_default:
+        if resolved_default != remote_default:
             raise ReleasePlanError(
-                f"candidate source {resolved_source} must equal the current protected "
-                f"default-branch commit {remote_default}"
+                f"trusted {default_branch} does not match protected default branch "
+                f"{remote_default}"
             )
-        if selected_stack.get("status") != "release-candidate":
+        if not is_ancestor(context["repo"], resolved_source, remote_default):
             raise ReleasePlanError(
-                "candidate dispatch requires the selected manifest to have "
-                "release-candidate status"
+                f"candidate source {resolved_source} is not reachable from protected "
+                f"default branch {remote_default}"
             )
-        manifest_source = selected_stack.get("source_ref")
         if (
-            not isinstance(manifest_source, str)
-            or HEX40.fullmatch(manifest_source) is None
-            or not is_ancestor(context["repo"], manifest_source, resolved_source)
+            "source_ref" in selected_stack
+            or "status" in selected_stack
         ):
             raise ReleasePlanError(
-                "candidate dispatch source must descend from the selected manifest source_ref"
+                "active candidate preparation must omit legacy stack.source_ref "
+                "and stack.status"
             )
-        if proof_level not in {"auto", "extended"}:
-            raise ReleasePlanError("candidate proof level request must be auto or extended")
-        if milestone not in {"beta", "stable", "audit"}:
-            raise ReleasePlanError("candidate milestone must be beta, stable, or audit")
         command = [
             "gh",
             "api",
@@ -2531,20 +2559,13 @@ def request_release_candidate(
             f"client_payload[release_id]={release_id}",
             "-F",
             f"client_payload[source_sha]={resolved_source}",
-            "-F",
-            f"client_payload[proof_level]={proof_level}",
-            "-F",
-            f"client_payload[milestone]={milestone}",
-            "-F",
-            "client_payload[measurement_bootstrap]="
-            + ("true" if measurement_bootstrap else "false"),
         ]
         if print_request:
             print(" ".join(shlex.quote(part) for part in command))
         else:
             run_checked(command, cwd=context["repo"])
             print(
-                f"requested {proof_level} release candidate {release_id} "
+                f"requested release candidate {release_id} "
                 f"v{version} at {resolved_source}"
             )
     except (OSError, UnicodeError, ReleasePlanError) as exc:
@@ -2578,6 +2599,241 @@ def download_candidate_artifact(
         ) from exc
     finally:
         archive.unlink(missing_ok=True)
+
+
+def verify_absent_tag_and_release(
+    repo: Path,
+    *,
+    repository: str,
+    tag: str,
+) -> None:
+    local_tag = subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", f"refs/tags/{tag}"],
+        cwd=repo,
+        check=False,
+    )
+    if local_tag.returncode == 0:
+        raise ReleasePlanError(f"local tag {tag} already exists")
+    if local_tag.returncode != 1:
+        raise ReleasePlanError(f"could not prove local tag {tag} is absent")
+    remote_tag = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "--tags", "origin", f"refs/tags/{tag}"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if remote_tag.returncode == 0:
+        raise ReleasePlanError(f"remote tag {tag} already exists")
+    if remote_tag.returncode != 2:
+        raise ReleasePlanError(
+            f"could not prove remote tag {tag} is absent: "
+            f"{remote_tag.stderr.strip()}"
+        )
+    release_pages = json.loads(
+        run_checked(
+            [
+                "gh",
+                "api",
+                f"repos/{repository}/releases?per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+    )
+    if not isinstance(release_pages, list) or any(
+        not isinstance(page, list) for page in release_pages
+    ):
+        raise ReleasePlanError("GitHub Releases response is malformed")
+    matches = [
+        release
+        for page in release_pages
+        for release in page
+        if isinstance(release, dict) and release.get("tag_name") == tag
+    ]
+    if matches:
+        raise ReleasePlanError(
+            f"GitHub Release destination {tag} already exists or is ambiguous"
+        )
+
+
+def verify_absent_image_destinations(images: list[dict[str, Any]]) -> None:
+    for image in images:
+        final_ref = image["final_ref"]
+        result = subprocess.run(
+            ["docker", "buildx", "imagetools", "inspect", final_ref],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            raise ReleasePlanError(
+                f"final image destination already exists: {final_ref}"
+            )
+        diagnostic = f"{result.stdout}\n{result.stderr}".lower()
+        if not any(
+            marker in diagnostic
+            for marker in ("not found", "manifest unknown", "name unknown")
+        ):
+            raise ReleasePlanError(
+                f"could not prove final image destination is absent: {final_ref}"
+            )
+
+
+def recent_canary_for_revision(
+    *,
+    repository: str,
+    workflow_revision: str,
+) -> dict[str, Any]:
+    document = json.loads(
+        run_checked(
+            [
+                "gh",
+                "api",
+                f"repos/{repository}/actions/workflows/"
+                f"{release_candidate.CANARY_WORKFLOW_PATH}/runs"
+                "?branch=main&status=success&per_page=100",
+            ]
+        )
+    )
+    runs = document.get("workflow_runs") if isinstance(document, dict) else None
+    if not isinstance(runs, list):
+        raise ReleasePlanError("release canary workflow-run response is malformed")
+    candidates: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for value in runs:
+        if not isinstance(value, dict) or value.get("head_sha") != workflow_revision:
+            continue
+        try:
+            run = release_candidate.canary_run_from_json(value)
+            release_candidate.validate_canary_run(
+                run,
+                workflow_revision=workflow_revision,
+            )
+            candidates.append(run)
+        except release_candidate.CandidateError as exc:
+            errors.append(str(exc))
+    if not candidates:
+        detail = f": {'; '.join(errors)}" if errors else ""
+        raise ReleasePlanError(
+            "no successful release canary for the exact workflow revision "
+            f"within the preceding 24 hours{detail}"
+        )
+    return max(
+        candidates,
+        key=lambda run: release_candidate.parse_timestamp(
+            run["completed_at"], "canary completed_at"
+        ),
+    )
+
+
+def verify_candidate_run(
+    repo: Path,
+    *,
+    repository: str,
+    candidate_run: int,
+    version: str,
+    release_id: str,
+    source_sha: str | None,
+) -> tuple[dict[str, Any], str]:
+    with tempfile.TemporaryDirectory(prefix="registry-candidate-") as directory:
+        temporary = Path(directory)
+        run_document = json.loads(
+            run_checked(
+                ["gh", "api", f"repos/{repository}/actions/runs/{candidate_run}"]
+            )
+        )
+        artifacts_document = json.loads(
+            run_checked(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{repository}/actions/runs/{candidate_run}/artifacts?per_page=100",
+                ]
+            )
+        )
+        workflow_run = release_candidate.workflow_run_from_json(run_document)
+        run_attempt = workflow_run["run_attempt"]
+        try:
+            artifact = release_candidate.validate_candidate_artifact_inventory(
+                artifacts_document,
+                run_id=candidate_run,
+                run_attempt=run_attempt,
+            )
+        except release_candidate.CandidateError as exc:
+            raise ReleasePlanError(
+                f"candidate attempt artifact inventory is invalid: {exc}"
+            ) from exc
+        artifact_root = temporary / "candidate"
+        download_candidate_artifact(
+            repository,
+            artifact["id"],
+            artifact_root,
+            expected_archive_sha256=artifact["archive_sha256"],
+        )
+        expected_bundle_name = f"registry-stack-v{version}-candidate.tar.gz"
+        expected_names = {
+            "release-candidate-manifest.json",
+            expected_bundle_name,
+        }
+        actual_names = {
+            path.relative_to(artifact_root).as_posix()
+            for path in artifact_root.rglob("*")
+            if path.is_file() or path.is_symlink()
+        }
+        if actual_names != expected_names:
+            raise ReleasePlanError(
+                "candidate artifact file inventory mismatch: "
+                f"missing={sorted(expected_names - actual_names)!r} "
+                f"unexpected={sorted(actual_names - expected_names)!r}"
+            )
+        manifest_path = artifact_root / "release-candidate-manifest.json"
+        bundle_path = artifact_root / expected_bundle_name
+        bundle_root = temporary / "bundle"
+        release_candidate.extract_candidate_bundle(bundle_path, bundle_root)
+        manifest_document = release_candidate.read_json(manifest_path)
+        try:
+            manifest = release_candidate.validate_candidate_manifest(
+                manifest_document,
+                bundle_path=bundle_path,
+                bundle_root=bundle_root,
+                expected_source_sha=source_sha,
+                expected_version=version,
+                expected_release_id=release_id,
+                expected_run_id=candidate_run,
+                expected_run_attempt=run_attempt,
+                promotion=True,
+                workflow_run_metadata=workflow_run,
+            )
+        except release_candidate.CandidateError as exc:
+            raise ReleasePlanError(f"candidate verification failed: {exc}") from exc
+        workflow_revision = manifest["workflow"]["revision"]
+        signer = f"{repository}/{RELEASE_CANDIDATE_WORKFLOW}"
+        for path in (manifest_path, bundle_path):
+            run_checked(
+                [
+                    "gh",
+                    "attestation",
+                    "verify",
+                    str(path),
+                    "--repo",
+                    repository,
+                    "--signer-workflow",
+                    signer,
+                    "--signer-digest",
+                    workflow_revision,
+                    "--source-ref",
+                    "refs/heads/main",
+                    "--source-digest",
+                    workflow_revision,
+                    "--deny-self-hosted-runners",
+                ]
+            )
+        manifest_sha = release_candidate.sha256_file(manifest_path)
+        binding = release_candidate.render_tag_binding(
+            candidate_run, run_attempt, manifest_sha
+        )
+        return manifest, binding
 
 
 def verify_candidate_run_for_finalize(
@@ -2937,6 +3193,122 @@ def finalize_with_candidate(
     return 0
 
 
+def verify_candidate_for_tag(
+    repo: Path,
+    *,
+    version: str,
+    release_id: str,
+    candidate_run: int,
+    default_branch: str,
+    repository: str,
+    plan_output: Path | None,
+) -> int:
+    try:
+        context = prepare_release_context(repo, version, release_id)
+        stack = context["selected"]["data"]["stack"]
+        if "source_ref" in stack or "status" in stack:
+            raise ReleasePlanError(
+                "active release manifest must omit legacy stack.source_ref and "
+                "stack.status"
+            )
+        remote_main = refresh_protected_main(context["repo"], repository)
+        manifest, binding = verify_candidate_run(
+            context["repo"],
+            repository=repository,
+            candidate_run=candidate_run,
+            version=version,
+            release_id=release_id,
+            source_sha=None,
+        )
+        release = manifest["release"]
+        workflow = manifest["workflow"]
+        source_sha = resolve_commit(
+            context["repo"], release["source_sha"], "candidate source"
+        )
+        workflow_revision = resolve_commit(
+            context["repo"], workflow["revision"], "candidate workflow revision"
+        )
+        validate_candidate_ancestry(
+            context["repo"],
+            source_sha=source_sha,
+            workflow_revision=workflow_revision,
+            protected_main_sha=remote_main,
+        )
+        canary = recent_canary_for_revision(
+            repository=repository,
+            workflow_revision=workflow_revision,
+        )
+        tag = release["tag"]
+        verify_absent_tag_and_release(
+            context["repo"],
+            repository=repository,
+            tag=tag,
+        )
+        verify_absent_image_destinations(manifest["images"])
+        command = (
+            f"git tag -a {shlex.quote(tag)} {shlex.quote(source_sha)} "
+            f"-m {shlex.quote(binding.rstrip())}"
+        )
+        plan = {
+            "schema_version": "registry-release.candidate-verification.v2",
+            "operation": "verify-candidate",
+            "status": "ready",
+            "release": {
+                "version": version,
+                "release_id": release_id,
+                "tag": tag,
+                "source_sha": source_sha,
+            },
+            "candidate": {
+                "run_id": workflow["run_id"],
+                "run_attempt": workflow["run_attempt"],
+                "workflow_revision": workflow_revision,
+                "manifest_sha256": release_candidate.parse_tag_binding(binding)[
+                    "manifest_sha256"
+                ],
+            },
+            "canary": {
+                "run_id": canary["id"],
+                "run_attempt": canary["run_attempt"],
+                "completed_at": canary["completed_at"],
+            },
+            "checks": [
+                passed_check(
+                    "source-ancestry",
+                    f"candidate source {source_sha} is reachable from protected main "
+                    f"{remote_main}",
+                ),
+                passed_check(
+                    "workflow-canary",
+                    f"workflow revision {workflow_revision} passed canary run "
+                    f"{canary['id']}/{canary['run_attempt']} within 24 hours",
+                ),
+                passed_check(
+                    "public-destinations",
+                    f"tag, GitHub Release, and {len(manifest['images'])} image "
+                    "destinations are absent",
+                ),
+            ],
+            "tag_command": command,
+        }
+        emit_release_plan(plan, plan_output)
+        print(
+            "Candidate verification passed. Run this exact annotated-tag command:\n"
+            f"{command}",
+            file=sys.stderr,
+        )
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        ReleasePlanError,
+        release_candidate.CandidateError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="registry-release")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2955,11 +3327,6 @@ def main() -> int:
     source_parser.add_argument("--default-branch", default="origin/main")
     audit_parser = subparsers.add_parser("audit")
     audit_parser.add_argument("import_map", type=Path)
-    stage_parser = subparsers.add_parser("stage-capsule-backfill-assets")
-    stage_parser.add_argument("asset_dir", type=Path)
-    stage_parser.add_argument("--tag", required=True)
-    stage_parser.add_argument("--binary-dir", type=Path, required=True)
-    stage_parser.add_argument("--image-evidence-dir", type=Path, required=True)
     bind_spdx_parser = subparsers.add_parser("bind-spdx-subject")
     bind_spdx_parser.add_argument("spdx", type=Path)
     bind_spdx_parser.add_argument("--image-name", required=True)
@@ -2982,24 +3349,6 @@ def main() -> int:
     binary_version_parser = subparsers.add_parser("verify-registryctl-binary-version")
     binary_version_parser.add_argument("binary", type=Path)
     binary_version_parser.add_argument("--version", required=True)
-    capsule_parser = subparsers.add_parser("render-capsule")
-    capsule_parser.add_argument("manifest", type=Path)
-    capsule_parser.add_argument("--tag", required=True)
-    capsule_parser.add_argument("--version", required=True)
-    capsule_parser.add_argument("--binary-dir", type=Path, required=True)
-    capsule_parser.add_argument("--binary-sbom-dir", type=Path, required=True)
-    capsule_parser.add_argument("--image-evidence-dir", type=Path, required=True)
-    capsule_parser.add_argument("--output-json", type=Path, required=True)
-    capsule_parser.add_argument("--output-markdown", type=Path, required=True)
-    capsule_parser.add_argument("--workflow-name", default="RegistryStack Release")
-    capsule_parser.add_argument("--workflow-run-url", required=True)
-    capsule_parser.add_argument("--workflow-run-id", default="not-recorded")
-    capsule_parser.add_argument("--default-branch-protection", default="unverified")
-    capsule_parser.add_argument("--repo", type=Path, default=ROOT)
-    capsule_parser.add_argument("--default-branch", default="origin/main")
-    capsule_parser.add_argument("--require-registryctl-image-lock", action="store_true")
-    capsule_parser.add_argument("--require-registry-docs-archive", action="store_true")
-    capsule_parser.add_argument("--require-registryctl-installer", action="store_true")
     prepare_parser = subparsers.add_parser("prepare")
     prepare_parser.add_argument("--version", required=True)
     prepare_parser.add_argument("--release-id", required=True)
@@ -3009,28 +3358,20 @@ def main() -> int:
     candidate_parser.add_argument("--version", required=True)
     candidate_parser.add_argument("--release-id", required=True)
     candidate_parser.add_argument("--source-sha", required=True)
-    candidate_parser.add_argument(
-        "--proof-level", choices=("auto", "extended"), default="auto"
-    )
-    candidate_parser.add_argument(
-        "--milestone", choices=("beta", "stable", "audit"), default="beta"
-    )
-    candidate_parser.add_argument("--measurement-bootstrap", action="store_true")
     candidate_parser.add_argument("--default-branch", default="origin/main")
     candidate_parser.add_argument(
         "--repository", default="registrystack/registry-stack"
     )
     candidate_parser.add_argument("--repo", type=Path, default=ROOT)
     candidate_parser.add_argument("--print-request", action="store_true")
-    finalize_parser = subparsers.add_parser("finalize")
-    finalize_parser.add_argument("--version", required=True)
-    finalize_parser.add_argument("--release-id", required=True)
-    finalize_parser.add_argument("--promotion-commit", required=True)
-    finalize_parser.add_argument("--default-branch", default="origin/main")
-    finalize_parser.add_argument("--repo", type=Path, default=ROOT)
-    finalize_parser.add_argument("--plan-output", type=Path)
-    finalize_parser.add_argument("--candidate-run", type=int)
-    finalize_parser.add_argument(
+    verify_candidate_parser = subparsers.add_parser("verify-candidate")
+    verify_candidate_parser.add_argument("--version", required=True)
+    verify_candidate_parser.add_argument("--release-id", required=True)
+    verify_candidate_parser.add_argument("--candidate-run", type=int, required=True)
+    verify_candidate_parser.add_argument("--default-branch", default="origin/main")
+    verify_candidate_parser.add_argument("--repo", type=Path, default=ROOT)
+    verify_candidate_parser.add_argument("--plan-output", type=Path)
+    verify_candidate_parser.add_argument(
         "--repository", default="registrystack/registry-stack"
     )
     args = parser.parse_args()
@@ -3043,8 +3384,6 @@ def main() -> int:
         return validate_source(args.manifest, args.tag, args.repo, args.default_branch)
     if args.command == "audit":
         return audit(args.import_map)
-    if args.command == "stage-capsule-backfill-assets":
-        return stage_capsule_backfill_assets(args.asset_dir, args.tag, args.binary_dir, args.image_evidence_dir)
     if args.command == "bind-spdx-subject":
         return bind_spdx_subject(args.spdx, args.image_name, args.digest_ref)
     if args.command == "bind-spdx-file-subject":
@@ -3062,26 +3401,6 @@ def main() -> int:
         return verify_registryctl_image_lock_release_version(args.version)
     if args.command == "verify-registryctl-binary-version":
         return verify_registryctl_binary_version(args.binary, args.version)
-    if args.command == "render-capsule":
-        return render_capsule(
-            args.manifest,
-            args.tag,
-            args.version,
-            args.binary_dir,
-            args.binary_sbom_dir,
-            args.image_evidence_dir,
-            args.output_json,
-            args.output_markdown,
-            args.workflow_name,
-            args.workflow_run_url,
-            args.workflow_run_id,
-            args.default_branch_protection,
-            args.repo,
-            args.default_branch,
-            args.require_registryctl_image_lock,
-            args.require_registry_docs_archive,
-            args.require_registryctl_installer,
-        )
     if args.command == "prepare":
         return run_release_plan(
             "prepare",
@@ -3097,32 +3416,18 @@ def main() -> int:
             args.release_id,
             args.source_sha,
             args.default_branch,
-            args.proof_level,
-            args.milestone,
-            args.measurement_bootstrap,
             args.repository,
             print_request=args.print_request,
         )
-    if args.command == "finalize":
-        if args.candidate_run is not None:
-            return finalize_with_candidate(
-                args.repo,
-                args.version,
-                args.release_id,
-                args.promotion_commit,
-                args.default_branch,
-                args.candidate_run,
-                args.repository,
-                args.plan_output,
-            )
-        return run_release_plan(
-            "finalize",
+    if args.command == "verify-candidate":
+        return verify_candidate_for_tag(
             args.repo,
-            args.version,
-            args.release_id,
-            args.plan_output,
-            promotion_commit=args.promotion_commit,
+            version=args.version,
+            release_id=args.release_id,
+            candidate_run=args.candidate_run,
             default_branch=args.default_branch,
+            repository=args.repository,
+            plan_output=args.plan_output,
         )
     raise AssertionError(args.command)
 

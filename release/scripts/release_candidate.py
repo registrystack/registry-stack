@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Create and verify closed RegistryStack release-candidate receipts."""
+"""Create and verify RegistryStack release-candidate manifests.
+
+The compact v2 manifest is the active promotion contract.  The v1 receipt
+validator remains available so historical releases can still be verified.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ import json
 import re
 import stat
 import sys
+import tarfile
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,11 +23,16 @@ from typing import Any, Iterable
 
 
 SCHEMA_VERSION = "registry-stack.release-candidate-receipt.v1"
-TAG_BINDING_HEADER = "registry-stack-release-candidate-v1"
+V2_SCHEMA_VERSION = "registry-stack.release-candidate.v2"
+LEGACY_TAG_BINDING_HEADER = "registry-stack-release-candidate-v1"
+TAG_BINDING_HEADER = "registry-stack-release-candidate-v2"
 REPOSITORY = "registrystack/registry-stack"
 WORKFLOW_PATH = ".github/workflows/release-candidate.yml"
+CANARY_WORKFLOW_PATH = ".github/workflows/release-canary.yml"
 WORKFLOW_REF = "refs/heads/main"
 MAX_PROMOTION_AGE = timedelta(hours=72)
+V2_MAX_PROMOTION_AGE = timedelta(hours=24)
+MAX_CANARY_AGE = timedelta(hours=24)
 MAX_RETENTION = timedelta(days=7)
 GRYPE_VERSION = "0.114.0"
 GRYPE_LINUX_AMD64_BINARY_SHA256 = (
@@ -62,6 +72,28 @@ TOP_LEVEL_FIELDS = {
     "storage",
     "attestation",
     "promotion",
+}
+V2_TOP_LEVEL_FIELDS = {
+    "schema_version",
+    "repository",
+    "release",
+    "workflow",
+    "validity",
+    "payloads",
+    "images",
+    "docs",
+    "sbom",
+    "scans",
+    "advisory",
+    "bundle",
+}
+PAYLOAD_KINDS = {
+    "binary",
+    "installer",
+    "image-lock",
+    "docs",
+    "sbom",
+    "security-evidence",
 }
 
 
@@ -254,6 +286,53 @@ def extract_artifact_archive(
         ) from exc
 
 
+def extract_candidate_bundle(bundle_path: Path, destination: Path) -> Path:
+    """Extract a regular-file-only candidate tarball without path traversal."""
+
+    if destination.is_symlink() or (
+        destination.exists()
+        and (not destination.is_dir() or any(destination.iterdir()))
+    ):
+        raise CandidateError(
+            f"candidate bundle destination must be an empty directory: {destination}"
+        )
+    destination.mkdir(parents=True, exist_ok=True)
+    seen: set[str] = set()
+    try:
+        with tarfile.open(bundle_path, mode="r:gz") as archive:
+            for member in archive:
+                raw_name = member.name
+                if raw_name == "." and member.isdir():
+                    continue
+                if raw_name.startswith("./"):
+                    raw_name = raw_name[2:]
+                name = safe_relative_path(raw_name, "candidate bundle member")
+                if member.isdir():
+                    continue
+                if not member.isfile():
+                    raise CandidateError(
+                        f"candidate bundle has non-regular entry {name!r}"
+                    )
+                if name in seen:
+                    raise CandidateError(
+                        f"candidate bundle has duplicate path {name!r}"
+                    )
+                seen.add(name)
+                source = archive.extractfile(member)
+                if source is None:
+                    raise CandidateError(
+                        f"candidate bundle cannot read member {name!r}"
+                    )
+                target = destination / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(source.read())
+    except (OSError, tarfile.TarError) as exc:
+        raise CandidateError(f"cannot extract candidate bundle: {exc}") from exc
+    if not seen:
+        raise CandidateError("candidate bundle is empty")
+    return destination
+
+
 def expected_attempt_artifact_names(run_id: int, run_attempt: int) -> set[str]:
     require_positive_integer(run_id, "run_id")
     require_positive_integer(run_attempt, "run_attempt")
@@ -315,6 +394,69 @@ def validate_attempt_artifact_inventory(
             f"missing={sorted(expected - set(selected))!r}"
         )
     return selected
+
+
+def validate_candidate_artifact_inventory(
+    document: Any,
+    *,
+    run_id: int,
+    run_attempt: int,
+) -> dict[str, Any]:
+    """Require exactly one unexpired v2 candidate artifact for the attempt."""
+
+    require_positive_integer(run_id, "run_id")
+    require_positive_integer(run_attempt, "run_attempt")
+    if not isinstance(document, dict):
+        raise CandidateError("artifact metadata must be an object")
+    artifacts = require_list(document.get("artifacts"), "artifact metadata.artifacts")
+    expected_name = f"registry-stack-release-candidate-{run_id}-{run_attempt}"
+    matching: list[dict[str, Any]] = []
+    suffix = f"-{run_id}-{run_attempt}"
+    for index, value in enumerate(artifacts):
+        label = f"artifact metadata.artifacts[{index}]"
+        if not isinstance(value, dict):
+            raise CandidateError(f"{label} must be an object")
+        name = value.get("name")
+        if not isinstance(name, str):
+            raise CandidateError(f"{label}.name must be text")
+        if name == expected_name:
+            matching.append(value)
+        elif name.startswith("registry-stack-release-candidate-") and name.endswith(
+            suffix
+        ):
+            raise CandidateError(
+                f"unexpected candidate artifact in current attempt: {name!r}"
+            )
+    if len(matching) != 1:
+        raise CandidateError(
+            f"candidate attempt must contain exactly one artifact {expected_name!r}"
+        )
+    item = matching[0]
+    if item.get("expired") is not False:
+        raise CandidateError(f"candidate artifact is expired: {expected_name}")
+    artifact_id = require_positive_integer(item.get("id"), "candidate artifact.id")
+    digest_text = require_nonempty_string(
+        item.get("digest"), "candidate artifact.digest"
+    )
+    if not digest_text.startswith("sha256:"):
+        raise CandidateError("candidate artifact.digest must use sha256")
+    archive_sha256 = require_sha256(
+        digest_text.removeprefix("sha256:"), "candidate artifact.digest"
+    )
+    workflow_run = item.get("workflow_run")
+    if (
+        workflow_run is not None
+        and (
+            not isinstance(workflow_run, dict)
+            or workflow_run.get("id") != run_id
+        )
+    ):
+        raise CandidateError("candidate artifact workflow_run does not match run")
+    return {
+        "id": artifact_id,
+        "name": expected_name,
+        "archive_sha256": archive_sha256,
+    }
 
 
 def require_object(value: Any, label: str, fields: set[str]) -> dict[str, Any]:
@@ -395,6 +537,382 @@ def safe_relative_path(value: Any, label: str) -> str:
     if path.as_posix() != text:
         raise CandidateError(f"{label} must use canonical POSIX separators")
     return text
+
+
+def require_nonnegative_integer(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise CandidateError(f"{label} must be a non-negative integer")
+    return value
+
+
+def _validate_file_record(
+    value: Any,
+    label: str,
+    *,
+    fields: set[str],
+) -> tuple[dict[str, Any], str, str]:
+    record = require_object(value, label, fields)
+    name = safe_relative_path(record["name"], f"{label}.name")
+    digest = require_sha256(record["sha256"], f"{label}.sha256")
+    if "size" in fields:
+        require_nonnegative_integer(record["size"], f"{label}.size")
+    return record, name, digest
+
+
+def _verify_candidate_files(
+    records: dict[str, tuple[str, int | None]],
+    *,
+    bundle_root: Path | None,
+) -> None:
+    if bundle_root is None:
+        return
+    if not bundle_root.is_dir():
+        raise CandidateError(f"candidate bundle root does not exist: {bundle_root}")
+    actual = {
+        path.relative_to(bundle_root).as_posix()
+        for path in iter_files(bundle_root)
+    }
+    expected = set(records)
+    if actual != expected:
+        raise CandidateError(
+            "candidate bundle file inventory mismatch: "
+            f"missing={sorted(expected - actual)!r} "
+            f"unexpected={sorted(actual - expected)!r}"
+        )
+    for name, (digest, size) in records.items():
+        path = bundle_root / name
+        if sha256_file(path) != digest:
+            raise CandidateError(f"candidate bundle file sha256 mismatch: {name}")
+        if size is not None and path.stat().st_size != size:
+            raise CandidateError(f"candidate bundle file size mismatch: {name}")
+
+
+def validate_candidate_manifest(
+    document: Any,
+    *,
+    bundle_path: Path | None = None,
+    bundle_root: Path | None = None,
+    expected_source_sha: str | None = None,
+    expected_workflow_revision: str | None = None,
+    expected_version: str | None = None,
+    expected_release_id: str | None = None,
+    expected_run_id: int | None = None,
+    expected_run_attempt: int | None = None,
+    now: datetime | None = None,
+    promotion: bool = False,
+    workflow_run_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate the closed, promotion-only v2 candidate manifest."""
+
+    manifest = require_object(document, "manifest", V2_TOP_LEVEL_FIELDS)
+    if manifest["schema_version"] != V2_SCHEMA_VERSION:
+        raise CandidateError(
+            f"manifest.schema_version must be {V2_SCHEMA_VERSION}"
+        )
+    if manifest["repository"] != REPOSITORY:
+        raise CandidateError(f"manifest.repository must be {REPOSITORY}")
+
+    release = require_object(
+        manifest["release"],
+        "release",
+        {"version", "release_id", "tag", "source_sha"},
+    )
+    version = require_nonempty_string(release["version"], "release.version")
+    if VERSION.fullmatch(version) is None:
+        raise CandidateError("release.version must be canonical semantic version text")
+    release_id = require_nonempty_string(release["release_id"], "release.release_id")
+    if RELEASE_ID.fullmatch(release_id) is None:
+        raise CandidateError("release.release_id is invalid")
+    source_sha = require_sha(release["source_sha"], "release.source_sha")
+    if release["tag"] != f"v{version}":
+        raise CandidateError("release.tag must exactly match release.version")
+
+    workflow = require_object(
+        manifest["workflow"],
+        "workflow",
+        {"path", "revision", "run_id", "run_attempt"},
+    )
+    if workflow["path"] != WORKFLOW_PATH:
+        raise CandidateError(f"workflow.path must be {WORKFLOW_PATH}")
+    workflow_revision = require_sha(
+        workflow["revision"], "workflow.revision"
+    )
+    run_id = require_positive_integer(workflow["run_id"], "workflow.run_id")
+    run_attempt = require_positive_integer(
+        workflow["run_attempt"], "workflow.run_attempt"
+    )
+
+    validity = require_object(
+        manifest["validity"], "validity", {"created_at", "expires_at"}
+    )
+    created_at = parse_timestamp(validity["created_at"], "validity.created_at")
+    expires_at = parse_timestamp(validity["expires_at"], "validity.expires_at")
+    lifetime = expires_at - created_at
+    if lifetime <= timedelta(0) or lifetime > V2_MAX_PROMOTION_AGE:
+        raise CandidateError(
+            "candidate validity must be positive and no longer than 24 hours"
+        )
+    current = now or datetime.now(timezone.utc)
+    if created_at > current + timedelta(minutes=5):
+        raise CandidateError("candidate creation timestamp is future-dated")
+    if current >= expires_at:
+        raise CandidateError("candidate is expired")
+
+    if promotion or workflow_run_metadata is not None:
+        if workflow_run_metadata is None:
+            raise CandidateError(
+                "promotion requires independently fetched trusted workflow-run metadata"
+            )
+        trusted_run = require_object(
+            workflow_run_metadata,
+            "trusted workflow run",
+            {
+                "id",
+                "run_attempt",
+                "event",
+                "head_sha",
+                "path",
+                "conclusion",
+                "created_at",
+            },
+        )
+        trusted_created = parse_timestamp(
+            trusted_run["created_at"], "trusted workflow run.created_at"
+        )
+        expectations = {
+            "id": run_id,
+            "run_attempt": run_attempt,
+            "event": "repository_dispatch",
+            "head_sha": workflow_revision,
+            "path": WORKFLOW_PATH,
+            "conclusion": "success",
+        }
+        for field, expected in expectations.items():
+            if trusted_run[field] != expected:
+                raise CandidateError(
+                    f"trusted workflow run {field} mismatch: "
+                    f"expected {expected!r}, got {trusted_run[field]!r}"
+                )
+        if created_at < trusted_created:
+            raise CandidateError(
+                "manifest creation timestamp predates the trusted workflow run"
+            )
+
+    files: dict[str, tuple[str, int | None]] = {}
+    payloads = require_list(manifest["payloads"], "payloads")
+    if not payloads:
+        raise CandidateError("payloads must not be empty")
+    payload_by_name: dict[str, dict[str, Any]] = {}
+    for index, value in enumerate(payloads):
+        label = f"payloads[{index}]"
+        record, name, digest = _validate_file_record(
+            value,
+            label,
+            fields={"name", "kind", "size", "sha256"},
+        )
+        if Path(name).name != name:
+            raise CandidateError(f"{label}.name must be a public asset basename")
+        if record["kind"] not in PAYLOAD_KINDS:
+            raise CandidateError(f"{label}.kind is unsupported")
+        if name in files:
+            raise CandidateError(f"candidate file name is duplicated: {name}")
+        files[name] = (digest, record["size"])
+        payload_by_name[name] = record
+    for singleton_kind in ("docs", "sbom"):
+        matches = [
+            record for record in payloads if record["kind"] == singleton_kind
+        ]
+        if len(matches) != 1:
+            raise CandidateError(
+                f"payloads must contain exactly one {singleton_kind} payload"
+            )
+
+    images = require_list(manifest["images"], "images")
+    if not images:
+        raise CandidateError("images must not be empty")
+    image_names: set[str] = set()
+    final_refs: set[str] = set()
+    candidate_refs: set[str] = set()
+    for index, value in enumerate(images):
+        label = f"images[{index}]"
+        image = require_object(
+            value,
+            label,
+            {"name", "candidate_ref", "digest", "final_ref"},
+        )
+        name = require_nonempty_string(image["name"], f"{label}.name")
+        if name in image_names:
+            raise CandidateError(f"duplicate candidate image name {name!r}")
+        image_names.add(name)
+        digest = require_digest(image["digest"], f"{label}.digest")
+        candidate_ref = require_nonempty_string(
+            image["candidate_ref"], f"{label}.candidate_ref"
+        )
+        final_ref = require_nonempty_string(image["final_ref"], f"{label}.final_ref")
+        expected_candidate = f"ghcr.io/registrystack/{name}-candidate@{digest}"
+        expected_final = f"ghcr.io/registrystack/{name}:v{version}"
+        if candidate_ref != expected_candidate:
+            raise CandidateError(
+                f"{label}.candidate_ref must be {expected_candidate}"
+            )
+        if final_ref != expected_final:
+            raise CandidateError(f"{label}.final_ref must be {expected_final}")
+        if candidate_ref in candidate_refs or final_ref in final_refs:
+            raise CandidateError("candidate and final image refs must be unique")
+        candidate_refs.add(candidate_ref)
+        final_refs.add(final_ref)
+    if image_names != IMAGE_NAMES:
+        raise CandidateError(
+            f"image inventory must be exactly {sorted(IMAGE_NAMES)!r}"
+        )
+
+    for kind in ("docs", "sbom"):
+        record, name, digest = _validate_file_record(
+            manifest[kind],
+            kind,
+            fields={"name", "sha256"},
+        )
+        payload = payload_by_name.get(name)
+        if payload is None or payload["kind"] != kind:
+            raise CandidateError(f"{kind}.name must reference one {kind} payload")
+        if payload["sha256"] != digest:
+            raise CandidateError(f"{kind}.sha256 must match its payload hash")
+
+    scan_images: set[str] = set()
+    for index, value in enumerate(require_list(manifest["scans"], "scans")):
+        label = f"scans[{index}]"
+        record, name, digest = _validate_file_record(
+            value,
+            label,
+            fields={"image", "name", "sha256", "status"},
+        )
+        image = require_nonempty_string(record["image"], f"{label}.image")
+        if image not in image_names or image in scan_images:
+            raise CandidateError(f"{label}.image is unexpected or duplicated")
+        scan_images.add(image)
+        if record["status"] != "passed":
+            raise CandidateError(f"{label}.status must be passed")
+        if name in files:
+            raise CandidateError(f"candidate file name is duplicated: {name}")
+        files[name] = (digest, None)
+    if scan_images != image_names:
+        raise CandidateError("every candidate image must have exactly one passed scan")
+
+    advisory, advisory_name, advisory_digest = _validate_file_record(
+        manifest["advisory"],
+        "advisory",
+        fields={"name", "sha256", "verdict"},
+    )
+    if advisory["verdict"] != "passed":
+        raise CandidateError("advisory.verdict must be passed")
+    if advisory_name in files:
+        raise CandidateError(
+            f"candidate file name is duplicated: {advisory_name}"
+        )
+    files[advisory_name] = (advisory_digest, None)
+
+    bundle, _, bundle_digest = _validate_file_record(
+        manifest["bundle"],
+        "bundle",
+        fields={"name", "size", "sha256"},
+    )
+    if Path(bundle["name"]).name != bundle["name"]:
+        raise CandidateError("bundle.name must be a basename")
+    expected_bundle_name = f"registry-stack-v{version}-candidate.tar.gz"
+    if bundle["name"] != expected_bundle_name:
+        raise CandidateError(f"bundle.name must be {expected_bundle_name}")
+    if bundle_path is not None:
+        if bundle_path.name != bundle["name"]:
+            raise CandidateError("candidate bundle filename mismatch")
+        if sha256_file(bundle_path) != bundle_digest:
+            raise CandidateError("candidate bundle sha256 mismatch")
+        if bundle_path.stat().st_size != bundle["size"]:
+            raise CandidateError("candidate bundle size mismatch")
+    _verify_candidate_files(files, bundle_root=bundle_root)
+
+    expectations = (
+        ("source SHA", expected_source_sha, source_sha),
+        ("workflow revision", expected_workflow_revision, workflow_revision),
+        ("version", expected_version, version),
+        ("release ID", expected_release_id, release_id),
+        ("run ID", expected_run_id, run_id),
+        ("run attempt", expected_run_attempt, run_attempt),
+    )
+    for label, expected, actual in expectations:
+        if expected is not None and expected != actual:
+            raise CandidateError(
+                f"candidate {label} mismatch: expected {expected!r}, got {actual!r}"
+            )
+    return manifest
+
+
+def canary_run_from_json(document: Any) -> dict[str, Any]:
+    if not isinstance(document, dict):
+        raise CandidateError("trusted canary workflow-run metadata must be an object")
+    normalized = {
+        "id": document.get("id"),
+        "run_attempt": document.get("run_attempt"),
+        "event": document.get("event"),
+        "head_sha": document.get("head_sha"),
+        "path": document.get("path"),
+        "conclusion": document.get("conclusion"),
+        "completed_at": document.get("completed_at", document.get("updated_at")),
+    }
+    missing = [field for field, value in normalized.items() if value is None]
+    if missing:
+        raise CandidateError(
+            "trusted canary workflow-run metadata is missing "
+            + ", ".join(missing)
+        )
+    return normalized
+
+
+def validate_canary_run(
+    document: Any,
+    *,
+    workflow_revision: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    revision = require_sha(workflow_revision, "workflow revision")
+    run = require_object(
+        document,
+        "trusted canary workflow run",
+        {
+            "id",
+            "run_attempt",
+            "event",
+            "head_sha",
+            "path",
+            "conclusion",
+            "completed_at",
+        },
+    )
+    require_positive_integer(run["id"], "trusted canary workflow run.id")
+    require_positive_integer(
+        run["run_attempt"], "trusted canary workflow run.run_attempt"
+    )
+    if run["event"] not in {"schedule", "workflow_dispatch"}:
+        raise CandidateError("trusted canary workflow run event is unexpected")
+    if run["path"] != CANARY_WORKFLOW_PATH:
+        raise CandidateError(
+            f"trusted canary workflow run path must be {CANARY_WORKFLOW_PATH}"
+        )
+    if run["head_sha"] != revision:
+        raise CandidateError(
+            "trusted canary workflow run does not match the candidate workflow revision"
+        )
+    if run["conclusion"] != "success":
+        raise CandidateError("trusted canary workflow run did not succeed")
+    completed_at = parse_timestamp(
+        run["completed_at"], "trusted canary workflow run.completed_at"
+    )
+    current = now or datetime.now(timezone.utc)
+    age = current - completed_at
+    if age < -timedelta(minutes=5):
+        raise CandidateError("trusted canary workflow run is future-dated")
+    if age > MAX_CANARY_AGE:
+        raise CandidateError("trusted canary workflow run is older than 24 hours")
+    return run
 
 
 def _validate_builds(builds_value: Any) -> bool:
@@ -1188,12 +1706,37 @@ def write_closed_receipt(draft_path: Path, output_path: Path) -> None:
     output_path.write_bytes(canonical_json(document))
 
 
-def render_tag_binding(run_id: int, run_attempt: int, receipt_sha256: str) -> str:
+def write_candidate_manifest(draft_path: Path, output_path: Path) -> None:
+    document = read_json(draft_path)
+    validate_candidate_manifest(document)
+    if output_path.is_symlink() or (output_path.exists() and not output_path.is_file()):
+        raise CandidateError(
+            f"manifest output must be a regular non-symlink path: {output_path}"
+        )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(canonical_json(document))
+
+
+def render_tag_binding(run_id: int, run_attempt: int, manifest_sha256: str) -> str:
+    require_positive_integer(run_id, "run_id")
+    require_positive_integer(run_attempt, "run_attempt")
+    require_sha256(manifest_sha256, "manifest_sha256")
+    return (
+        f"{TAG_BINDING_HEADER}\n"
+        f"run_id: {run_id}\n"
+        f"run_attempt: {run_attempt}\n"
+        f"manifest_sha256: {manifest_sha256}\n"
+    )
+
+
+def render_legacy_tag_binding(
+    run_id: int, run_attempt: int, receipt_sha256: str
+) -> str:
     require_positive_integer(run_id, "run_id")
     require_positive_integer(run_attempt, "run_attempt")
     require_sha256(receipt_sha256, "receipt_sha256")
     return (
-        f"{TAG_BINDING_HEADER}\n"
+        f"{LEGACY_TAG_BINDING_HEADER}\n"
         f"run_id: {run_id}\n"
         f"run_attempt: {run_attempt}\n"
         f"receipt_sha256: {receipt_sha256}\n"
@@ -1203,22 +1746,33 @@ def render_tag_binding(run_id: int, run_attempt: int, receipt_sha256: str) -> st
 def parse_tag_binding(message: str) -> dict[str, Any]:
     if "\r" in message:
         raise CandidateError("annotated tag binding must use LF line endings")
-    match = re.fullmatch(
-        re.escape(TAG_BINDING_HEADER)
-        + r"\nrun_id: ([1-9][0-9]*)"
-        + r"\nrun_attempt: ([1-9][0-9]*)"
-        + r"\nreceipt_sha256: ([0-9a-f]{64})\n{0,2}",
-        message,
+    formats = (
+        (TAG_BINDING_HEADER, "manifest_sha256"),
+        (LEGACY_TAG_BINDING_HEADER, "receipt_sha256"),
     )
-    if match is None:
-        raise CandidateError(
-            "annotated tag message must use the exact closed release-candidate binding format"
+    for header, digest_field in formats:
+        match = re.fullmatch(
+            re.escape(header)
+            + r"\nrun_id: ([1-9][0-9]*)"
+            + r"\nrun_attempt: ([1-9][0-9]*)"
+            + rf"\n{digest_field}: ([0-9a-f]{{64}})\n{{0,2}}",
+            message,
         )
-    return {
-        "run_id": int(match.group(1)),
-        "run_attempt": int(match.group(2)),
-        "receipt_sha256": match.group(3),
-    }
+        if match is not None:
+            return {
+                "schema_version": (
+                    V2_SCHEMA_VERSION
+                    if digest_field == "manifest_sha256"
+                    else SCHEMA_VERSION
+                ),
+                "run_id": int(match.group(1)),
+                "run_attempt": int(match.group(2)),
+                digest_field: match.group(3),
+            }
+    raise CandidateError(
+        "annotated tag message must use an exact supported release-candidate "
+        "binding format"
+    )
 
 
 def iter_files(root: Path) -> Iterable[Path]:
@@ -1252,6 +1806,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     seal.add_argument("--draft", type=Path, required=True)
     seal.add_argument("--output", type=Path, required=True)
 
+    seal_candidate = subparsers.add_parser("seal-candidate")
+    seal_candidate.add_argument("--draft", type=Path, required=True)
+    seal_candidate.add_argument("--output", type=Path, required=True)
+
     verify = subparsers.add_parser("verify")
     verify.add_argument("--receipt", type=Path, required=True)
     verify.add_argument("--artifact-root", type=Path)
@@ -1267,6 +1825,25 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     verify.add_argument("--expected-builders", type=Path)
     verify.add_argument("--promoted-identities", type=Path)
+
+    verify_candidate = subparsers.add_parser("verify-candidate")
+    verify_candidate.add_argument("--manifest", type=Path, required=True)
+    verify_candidate.add_argument("--bundle", type=Path)
+    verify_candidate.add_argument("--bundle-root", type=Path)
+    verify_candidate.add_argument("--source-sha")
+    verify_candidate.add_argument("--workflow-revision")
+    verify_candidate.add_argument("--version")
+    verify_candidate.add_argument("--release-id")
+    verify_candidate.add_argument("--run-id", type=int)
+    verify_candidate.add_argument("--run-attempt", type=int)
+    verify_candidate.add_argument("--promotion", action="store_true")
+    verify_candidate.add_argument(
+        "--trusted-run-metadata", dest="workflow_run_metadata", type=Path
+    )
+
+    verify_canary = subparsers.add_parser("verify-canary")
+    verify_canary.add_argument("--metadata", type=Path, required=True)
+    verify_canary.add_argument("--workflow-revision", required=True)
 
     inventory = subparsers.add_parser("inventory")
     inventory.add_argument("--root", type=Path, required=True)
@@ -1284,18 +1861,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     binding = subparsers.add_parser("render-tag-binding")
     binding.add_argument("--run-id", type=int, required=True)
     binding.add_argument("--run-attempt", type=int, required=True)
-    binding.add_argument("--receipt-sha256", required=True)
+    binding.add_argument("--manifest-sha256", required=True)
 
     verify_binding = subparsers.add_parser("verify-tag-binding")
     verify_binding.add_argument("--message", type=Path, required=True)
-    verify_binding.add_argument("--receipt", type=Path, required=True)
+    candidate_document = verify_binding.add_mutually_exclusive_group(required=True)
+    candidate_document.add_argument("--manifest", type=Path)
+    candidate_document.add_argument("--receipt", type=Path)
+    verify_binding.add_argument("--bundle", type=Path)
+    verify_binding.add_argument("--bundle-root", type=Path)
+    verify_binding.add_argument("--tag-target")
+    verify_binding.add_argument("--workflow-revision")
+    verify_binding.add_argument("--version")
+    verify_binding.add_argument("--release-id")
     verify_binding.add_argument(
         "--trusted-run-metadata",
         dest="workflow_run_metadata",
         type=Path,
         required=True,
     )
-    verify_binding.add_argument("--expected-builders", type=Path, required=True)
+    verify_binding.add_argument("--expected-builders", type=Path)
 
     promotion_state = subparsers.add_parser("verify-promotion-state")
     promotion_state.add_argument("--state", type=Path, required=True)
@@ -1320,6 +1905,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "seal":
             write_closed_receipt(args.draft, args.output)
             print(f"sealed closed candidate receipt {args.output}")
+            return 0
+        if args.command == "seal-candidate":
+            write_candidate_manifest(args.draft, args.output)
+            print(f"sealed candidate manifest {args.output}")
             return 0
         if args.command == "verify":
             metadata = (
@@ -1364,6 +1953,45 @@ def main(argv: list[str] | None = None) -> int:
                 f"{receipt['workflow']['run_attempt']}"
             )
             return 0
+        if args.command == "verify-candidate":
+            if args.promotion and args.workflow_run_metadata is None:
+                raise CandidateError(
+                    "--promotion requires --trusted-run-metadata"
+                )
+            manifest = validate_candidate_manifest(
+                read_json(args.manifest),
+                bundle_path=args.bundle,
+                bundle_root=args.bundle_root,
+                expected_source_sha=args.source_sha,
+                expected_workflow_revision=args.workflow_revision,
+                expected_version=args.version,
+                expected_release_id=args.release_id,
+                expected_run_id=args.run_id,
+                expected_run_attempt=args.run_attempt,
+                promotion=args.promotion,
+                workflow_run_metadata=(
+                    workflow_run_from_json(read_json(args.workflow_run_metadata))
+                    if args.workflow_run_metadata
+                    else None
+                ),
+            )
+            print(
+                "verified release candidate "
+                f"{manifest['release']['release_id']} {manifest['release']['tag']} "
+                f"from run {manifest['workflow']['run_id']}/"
+                f"{manifest['workflow']['run_attempt']}"
+            )
+            return 0
+        if args.command == "verify-canary":
+            run = validate_canary_run(
+                canary_run_from_json(read_json(args.metadata)),
+                workflow_revision=args.workflow_revision,
+            )
+            print(
+                "verified recent release canary "
+                f"{run['id']}/{run['run_attempt']} at {run['head_sha']}"
+            )
+            return 0
         if args.command == "inventory":
             print(json.dumps(file_inventory(args.root), indent=2, sort_keys=True))
             return 0
@@ -1385,7 +2013,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "render-tag-binding":
             print(
-                render_tag_binding(args.run_id, args.run_attempt, args.receipt_sha256),
+                render_tag_binding(args.run_id, args.run_attempt, args.manifest_sha256),
                 end="",
             )
             return 0
@@ -1409,24 +2037,66 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "verify-tag-binding":
             binding = parse_tag_binding(args.message.read_text(encoding="utf-8"))
-            receipt_sha = sha256_file(args.receipt)
-            if binding["receipt_sha256"] != receipt_sha:
-                raise CandidateError(
-                    "annotated tag receipt_sha256 does not match receipt bytes"
-                )
-            receipt = validate_receipt(
-                read_json(args.receipt),
-                expected_run_id=binding["run_id"],
-                expected_run_attempt=binding["run_attempt"],
-                promotion=True,
-                workflow_run_metadata=workflow_run_from_json(
-                    read_json(args.workflow_run_metadata)
-                ),
-                expected_builders=read_json(args.expected_builders),
+            run_metadata = workflow_run_from_json(
+                read_json(args.workflow_run_metadata)
             )
+            if args.manifest is not None:
+                required_v2 = {
+                    "--bundle": args.bundle,
+                    "--bundle-root": args.bundle_root,
+                    "--tag-target": args.tag_target,
+                    "--workflow-revision": args.workflow_revision,
+                    "--version": args.version,
+                    "--release-id": args.release_id,
+                }
+                missing = [
+                    option for option, value in required_v2.items() if value is None
+                ]
+                if missing:
+                    raise CandidateError(
+                        "v2 tag verification requires " + ", ".join(missing)
+                    )
+                manifest_sha = sha256_file(args.manifest)
+                if binding.get("manifest_sha256") != manifest_sha:
+                    raise CandidateError(
+                        "annotated tag manifest_sha256 does not match manifest bytes"
+                    )
+                manifest = validate_candidate_manifest(
+                    read_json(args.manifest),
+                    bundle_path=args.bundle,
+                    bundle_root=args.bundle_root,
+                    expected_source_sha=args.tag_target,
+                    expected_workflow_revision=args.workflow_revision,
+                    expected_version=args.version,
+                    expected_release_id=args.release_id,
+                    expected_run_id=binding["run_id"],
+                    expected_run_attempt=binding["run_attempt"],
+                    promotion=True,
+                    workflow_run_metadata=run_metadata,
+                )
+                workflow = manifest["workflow"]
+            else:
+                receipt_sha = sha256_file(args.receipt)
+                if binding.get("receipt_sha256") != receipt_sha:
+                    raise CandidateError(
+                        "annotated tag receipt_sha256 does not match receipt bytes"
+                    )
+                if args.expected_builders is None:
+                    raise CandidateError(
+                        "historical receipt verification requires --expected-builders"
+                    )
+                receipt = validate_receipt(
+                    read_json(args.receipt),
+                    expected_run_id=binding["run_id"],
+                    expected_run_attempt=binding["run_attempt"],
+                    promotion=True,
+                    workflow_run_metadata=run_metadata,
+                    expected_builders=read_json(args.expected_builders),
+                )
+                workflow = receipt["workflow"]
             print(
-                f"verified annotated tag candidate binding for run "
-                f"{receipt['workflow']['run_id']}/{receipt['workflow']['run_attempt']}"
+                "verified annotated tag candidate binding for run "
+                f"{workflow['run_id']}/{workflow['run_attempt']}"
             )
             return 0
         raise AssertionError(args.command)

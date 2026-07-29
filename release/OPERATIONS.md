@@ -1,247 +1,180 @@
-# Operate A Registry Stack Release
+# Operate a Registry Stack release
 
-The hosted release path builds a private pre-tag candidate, verifies that
-candidate, and promotes the same bytes after an operator creates the tag.
-The workflow never creates or pushes Git refs.
+The active release path uses one release PR, one private candidate, and one
+annotated tag. It promotes candidate bytes and image manifests without
+rebuilding them. The workflow never creates or pushes a Git ref.
 
-## Choose The Proof Level
+## Prerequisites
 
-Candidate requests accept `auto` or `extended`.
-There is intentionally no operator-selected `standard` value.
-`auto` selects the standard beta path only when the comparison with the
-authoritative previous promoted receipt or tag is unambiguous and no
-release-system or trust-anchor path changed.
+Start release preparation only when:
 
-The selector requires extended proof when any of these conditions applies:
+- Protected-main CI is green.
+- The intended release source and release-control changes are already on
+  `main`.
+- The exact workflow revision has a successful
+  `.github/workflows/release-canary.yml` run from the preceding 24 hours.
+- The release version, GitHub Release destination, and final image tags are
+  unused.
 
-- Release workflow, build recipe, packaging, signing, provenance, scan policy,
-  builder, BuildKit, runtime base, lockfile, or other trust-anchor code changed
-- Candidate evidence available to the selector is incomplete or records
-  disagreement
-- The release is a stable, audit, or `1.0` or later milestone
-- The previous promoted receipt or tag is missing, conflicting, unreachable, or
-  not an ancestor of the candidate source
-- The operator requests `extended`
-
-A candidate uses one canonical build and fails on incomplete binary inventory,
-invalid immutable image topology, an unreviewed advisory, or any source and
-artifact binding mismatch. Extended proof is additional evidence produced by
-the separate repeatability workflow, not a second build in the blocking
-candidate path.
-Grype process status is not itself the advisory decision. The candidate first
-requires a complete scan report, then the reviewed advisory policy decides
-whether that report is acceptable. Database identity accepts both the legacy
-flat Grype descriptor and the nested descriptor emitted by the pinned Grype
-release.
-
-The selector writes `registry-stack.release-proof-selection.v1` JSON into the
-candidate evidence.
-The previous release's promoted candidate receipt is the preferred comparison
-base.
-The exact previous promoted tag is the fallback and a cross-check when both are
-available.
-
-The candidate path does not claim build determinism from two builds in one
-workflow. The clean rebuild in `.github/workflows/release-repeatability.yml`
-carries that separate claim without delaying publication.
-
-## Check The Storage Gate
-
-Every expensive build runs the storage preflight first.
-`release/storage-budget.json` currently has status `measurement_required`
-because no real candidate run has recorded peak per-runner storage.
-The required byte count is `null`.
-Do not replace it with an estimate.
-
-An ordinary candidate or repeatability run remains blocked in this bootstrap
-state.
-For the first instrumented real candidate only, set
-`client_payload.measurement_bootstrap` to `true`.
-The candidate records periodic filesystem and workspace samples from each
-runner.
-After that run, update the budget with:
-
-- The candidate workflow run URL
-- The measured timestamp
-- The label, baseline filesystem-used bytes, peak filesystem-used bytes, and
-  peak release-workspace bytes from the job with the largest
-  `peak_additional_filesystem_used_bytes`
-- That job's `peak_additional_filesystem_used_bytes`, which must equal its peak
-  filesystem-used bytes minus its baseline filesystem-used bytes
-- `required_available_bytes`, set to
-  `ceil(peak_additional_filesystem_used_bytes * (1 + safety_margin_ratio))`
-
-The budget loader checks both equations and rejects arbitrary thresholds,
-including a one-byte placeholder. Absolute filesystem-used bytes are retained
-as audit evidence; they are not compared with available bytes.
-
-Splitting the canonical, platform, and verification work across separate
-runners limits the budget to per-job peak pressure.
-The gate is preventive; no prior hosted candidate disk exhaustion is recorded.
-
-## Request A Candidate
-
-The release-prep PR keeps the new docset in `draft` status because the
-protected-main squash commit does not exist yet. In the source-ref
-finalization PR, pin the docset and release manifest to the release-prep merge
-commit, change the docset status to `archived`, build it, and append its bundle
-and tree digests to the immutable lock:
+The canary runs nightly and supports manual dispatch:
 
 ```sh
-cd docs/site
-npm ci
-DOCS_DOCSET=vX.Y.Z npm run build:archive
-npm run archive:snapshot -- vX.Y.Z --write-lock
-npm run generate
-npm run check:archive-lock -- --base-ref origin/main
-cd ../..
+gh workflow run release-canary.yml \
+  --repo registrystack/registry-stack \
+  --ref main
 ```
 
-Commit the new lock entry in that source-ref finalization PR. Existing entries
-cannot be changed or removed. Merge the finalization PR before requesting the
-candidate. The candidate, tag workflow, and Pages deployment all verify the
-same bytes.
+A workflow, build recipe, packaging, scanner policy, signing, provenance, or
+trust-anchor change invalidates the previous canary. Run the revised canary and
+wait for it to pass before opening the release PR.
 
-Then start from a clean local checkout with current `origin/main`.
-Resolve the exact protected-main commit and choose an unused release ID.
+## Release clock
+
+The release clock starts when the release PR opens from a branch whose
+prerequisites are green. The hard service-level objective is 120 minutes
+through successful production documentation smoke.
+
+Do not change the release system after the clock starts. Stop the train if a
+release-system defect appears. Fix and canary the release system outside the
+release PR, then prepare a new release attempt.
+
+## Prepare one release PR
+
+Start from current protected `main`:
+
+```sh
+git fetch origin main
+git switch -c release/v<version> origin/main
+
+release/scripts/registry-release prepare \
+  --version <version> \
+  --release-id <release-id>
+```
+
+Review and commit the generated version, lockfile, changelog, release-note,
+manifest, and docs metadata changes. The manifest and docs metadata use the
+stable release identity, not a future merge commit.
+
+The release PR contains no release-workflow or release-tool implementation
+changes. Merge the release PR after its protected checks pass. Its squash
+commit is the candidate source and future tag target. There is no finalization
+or closeout PR.
+
+## Request and verify one candidate
+
+Resolve the release PR's merge commit and request the candidate:
 
 ```sh
 git fetch origin main
 source_sha="$(git rev-parse origin/main)"
 
 release/scripts/registry-release request-candidate \
-  --version 0.15.2 \
-  --release-id beta-22 \
-  --source-sha "${source_sha}" \
-  --proof-level auto
+  --version <version> \
+  --release-id <release-id> \
+  --source-sha "${source_sha}"
 ```
 
-The command sends the `release_candidate` repository dispatch with exact
-`version`, `release_id`, `source_sha`, and `proof_level` fields.
-Use `--proof-level extended` for an explicit audit request.
-The workflow rejects any source that is not the current protected-main commit.
+The candidate workflow rejects malformed identity, failed source CI, missing
+or stale canary evidence, invalid manifests or pins, and occupied destinations
+before build work starts.
 
-While the storage budget is still in its documented bootstrap state, request
-the one instrumented measurement run through the supported release command:
+The successful candidate:
+
+- Builds each Linux payload, additional Registryctl platform, OCI image, and
+  docs archive once.
+- Publishes candidate images only to the private
+  `registry-notary-candidate` and `registry-relay-candidate` packages.
+- Scans exact candidate digests and enforces the advisory decision.
+- Runs install and authoring smoke.
+- Seals one 24-hour candidate bundle and one
+  `registry-stack.release-candidate.v2` manifest.
+- Attests both candidate files after an independent byte recheck.
+
+Use the successful candidate run ID for local verification:
 
 ```sh
-release/scripts/registry-release request-candidate \
-  --version 0.15.2 \
-  --release-id beta-22 \
-  --source-sha "${source_sha}" \
-  --proof-level extended \
-  --milestone beta \
-  --measurement-bootstrap
+release/scripts/registry-release verify-candidate \
+  --version <version> \
+  --release-id <release-id> \
+  --candidate-run <run-id>
 ```
 
-This flag bypasses the unavailable measured threshold exactly once so the
-workflow can collect the real peak. Do not use it after a measured budget is
-committed.
+The command verifies source ancestry, workflow and canary identity,
+attestations, bundle contents, payload hashes, image digests, docs, Software
+Package Data Exchange (SPDX) software bill of materials (SBOM), scans, and the
+advisory verdict. It also checks that public destinations remain absent.
 
-## Finalize And Tag A Candidate
-
-Wait for the candidate run to finish and record its run ID.
-The finalization command resolves the run attempt from the trusted GitHub API;
-the operator does not supply an attempt number.
-The candidate must be less than 72 hours old when promotion starts.
-
-Run the local verifier before creating a tag:
+On success, the command prints the exact annotated tag command. Run that
+command without editing its message, inspect the tag, and push only that ref:
 
 ```sh
-candidate_run="${CANDIDATE_RUN_ID:?set CANDIDATE_RUN_ID to the exact run}"
-
-release/scripts/registry-release finalize \
-  --version 0.15.2 \
-  --release-id beta-22 \
-  --promotion-commit "$(git rev-parse origin/main)" \
-  --candidate-run "${candidate_run}"
-```
-
-The verifier fetches the exact candidate artifact IDs, verifies the closed
-receipt, run attempt, workflow identity, GitHub attestations, artifact bytes,
-image digests, scans, whether same-run comparisons were performed, and release
-identity.
-On success, it prints one exact annotated `git tag -a` command whose message
-binds the run ID, run attempt, and receipt SHA-256.
-Run that printed command, inspect the tag, and push only that exact ref:
-
-```sh
-tag=v0.15.2
-git show --show-signature "${tag}"
+tag=v<version>
+git show "${tag}"
 git push origin "refs/tags/${tag}"
 ```
 
-Git tag objects are not cryptographically signed.
-The annotated candidate binding, receipt attestation, asset signatures, and
-tag-bound release provenance do not change that OpenSSF status.
+The annotation binds the candidate run, attempt, and manifest SHA-256. The tag
+object is annotated but is not cryptographically signed.
 
-## Handle Failures
+## Public promotion
 
-A failure before any public image or GitHub Release write is retry-safe from
-the same unexpired candidate.
-A tag without a published release burns that version.
-Any failure after the first public write also burns the version.
-Fix forward with a new patch version.
+The tag-triggered workflow:
 
-Never delete or replace a public release asset, public image tag, or completed
-promotion to retry.
-The promotion state check rejects reuse of a promoted identity and candidate.
+1. Revalidates the tag, candidate, source ancestry, attestation, expiry, and
+   canary.
+2. Creates a nonpublic draft GitHub Release and uploads exact candidate
+   payloads.
+3. Generates `SHA256SUMS`, one Sigstore checksum bundle, consolidated SPDX
+   SBOM, security-evidence archive, image lock, and tag-bound SLSA provenance.
+4. Downloads and reconciles the complete draft inventory before a public
+   write.
+5. Rechecks candidate expiry and final image destinations.
+6. Promotes each private candidate image manifest to its final tag at the same
+   digest.
+7. Publishes the reconciled draft.
+8. Dispatches `docs-pages.yml` with the exact release tag and docs SHA-256.
 
-## Retain And Clean Candidate Evidence
+The docs workflow authenticates the published archive, promotes it to `/` and
+`/v/<version>/`, builds `/dev/` from protected `main`, deploys one Pages
+artifact, and runs production smoke.
 
-Actions candidate artifacts use a seven-day retention period.
-The private staging packages are exactly:
+Release completion requires the GitHub Release, exact final image digests, and
+live smoke for `/`, a deep canonical route, `/dev/`, `/v/<version>/`, search,
+`sitemap.xml`, `llms.txt`, and current machine-readable docs.
 
-- `registry-notary-candidate`
-- `registry-relay-candidate`
+## Failure handling
 
-The daily cleanup workflow deletes versions older than seven days using GitHub
-server timestamps.
-Its script has a closed allowlist and refuses the public `registry-notary` and
-`registry-relay` package names.
-Manual cleanup uses `repository_dispatch`, keeping package-write workflow code
-on the default branch.
+| Failure state | Response |
+| --- | --- |
+| Pure validation failure | Fix source or metadata, then request a new candidate |
+| Candidate infrastructure failure before sealing | Rerun the candidate workflow |
+| Candidate byte, recipe, scan, or advisory change | Build a new candidate |
+| Unchanged candidate, draft-stage failure, and candidate remains unexpired | Retry the tag workflow against the same nonpublic draft or recreate that exact draft |
+| Release-system defect | Stop, fix outside the release PR, pass a new canary, and restart |
+| Any failure after a final image tag or GitHub Release becomes public | Burn the version and patch forward |
+| Pages failure with the same authenticated docs bundle | Retry Pages for the same released tag |
+| Repeatability, Scorecard, telemetry, hosted, or announcement failure | Record follow-up work; do not change the public release result |
 
-Run a dry run:
+Never retag, replace a public asset, overwrite a final image tag, or delete a
+published release to retry.
 
-```sh
-gh api --method POST repos/registrystack/registry-stack/dispatches \
-  -f event_type=release-candidate-cleanup \
-  -F 'client_payload[apply]=false'
-```
+## Asynchronous controls
 
-Apply the same exact retention policy:
+The following controls run outside ordinary publication:
 
-```sh
-gh api --method POST repos/registrystack/registry-stack/dispatches \
-  -f event_type=release-candidate-cleanup \
-  -F 'client_payload[apply]=true'
-```
+- Weekly or manually dispatched clean repeatability proof.
+- Scheduled OpenSSF Scorecard.
+- CodeQL, dependency, and image monitoring.
+- Extended provenance review.
+- Historical docs sweeps.
+- Solmara or hosted proof unless the release announcement advertises that
+  environment.
+- Storage telemetry, retrospective, and announcement work.
 
-The hosted standard path does not require a multi-gigabyte local evidence
-cache.
-Download a candidate locally only for incident review or the pre-tag finalize
-check, then remove that local copy under the operator's normal workstation
-retention policy.
+Reactivate an asynchronous control as a release blocker only for a named
+threat or consumer. Record the invariant, owner, duration, and removal
+condition before adding it to the release clock.
 
-## Run The Later Clean Proof
-
-The repeatability workflow runs weekly against the newest published release
-that carries a candidate receipt.
-Dispatch an exact published tag manually when extended proof or external audit
-requires it:
-
-```sh
-gh api --method POST repos/registrystack/registry-stack/dispatches \
-  -f event_type=release-repeatability \
-  -f 'client_payload[tag]=v0.15.2'
-```
-
-The job compares the clean rebuild with published hashes and image digests,
-attests its receipt, retains supporting artifacts for seven days, and refreshes
-the durable evidence comment on
-[GH#127](https://github.com/registrystack/registry-stack/issues/127).
-
-The first real extended proof and the enforced numeric storage budget cannot be
-completed before a candidate-based release runs.
-Those are live operational blockers, not locally generated evidence.
+Candidate Actions artifacts are retained for seven days, but candidate
+promotion validity is 24 hours. The daily cleanup workflow removes older
+private candidate package versions. It cannot target public package names.

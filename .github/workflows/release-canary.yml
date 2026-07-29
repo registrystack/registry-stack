@@ -1,0 +1,323 @@
+name: RegistryStack Release Canary
+
+on:
+  schedule:
+    - cron: "19 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: registry-stack-release-canary
+  cancel-in-progress: true
+
+jobs:
+  control-plane:
+    name: Exercise release control plane without public writes
+    runs-on: ubuntu-24.04
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout exact workflow revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Exercise dispatch, candidate, advisory, draft, and docs contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != "schedule" &&
+                "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            echo "Canary accepts only schedule or workflow_dispatch" >&2
+            exit 1
+          fi
+          source_sha="${GITHUB_SHA}"
+          workflow_revision="${GITHUB_SHA}"
+          version=1.2.3
+          release_id=canary
+          tag="v${version}"
+          created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          expires_at="$(date -u -d "${created_at} + 24 hours" +%Y-%m-%dT%H:%M:%SZ)"
+          mkdir -p canary/bundle-root/security
+          printf 'canary payload\n' > canary/bundle-root/registryctl-${tag}-linux-amd64
+          printf 'canary docs\n' > canary/bundle-root/registry-docs-${tag}.tar.gz
+          printf '{"spdxVersion":"SPDX-2.3","name":"release-canary"}\n' \
+            > canary/bundle-root/registry-stack-${tag}.sbom.spdx.json
+          printf '{"matches":[],"descriptor":{"db":{"built":"2026-07-29T00:00:00Z","checksum":"sha256:%064d"}}}\n' 0 \
+            > canary/bundle-root/security/registry-relay.grype.json
+          cp canary/bundle-root/security/registry-relay.grype.json \
+            canary/bundle-root/security/registry-notary.grype.json
+          printf '{"schema_version":"registry-stack.advisory-verdict.v2","verdict":"passed"}\n' \
+            > canary/bundle-root/security/advisory-verdict.json
+          payload_sha="$(sha256sum canary/bundle-root/registryctl-${tag}-linux-amd64 | awk '{print $1}')"
+          docs_sha="$(sha256sum canary/bundle-root/registry-docs-${tag}.tar.gz | awk '{print $1}')"
+          sbom_sha="$(sha256sum canary/bundle-root/registry-stack-${tag}.sbom.spdx.json | awk '{print $1}')"
+          relay_scan_sha="$(sha256sum canary/bundle-root/security/registry-relay.grype.json | awk '{print $1}')"
+          notary_scan_sha="$(sha256sum canary/bundle-root/security/registry-notary.grype.json | awk '{print $1}')"
+          advisory_sha="$(sha256sum canary/bundle-root/security/advisory-verdict.json | awk '{print $1}')"
+          payload_size="$(stat -c %s canary/bundle-root/registryctl-${tag}-linux-amd64)"
+          docs_size="$(stat -c %s canary/bundle-root/registry-docs-${tag}.tar.gz)"
+          sbom_size="$(stat -c %s canary/bundle-root/registry-stack-${tag}.sbom.spdx.json)"
+          tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
+            --numeric-owner -czf canary/registry-stack-${tag}-candidate.tar.gz \
+            -C canary/bundle-root .
+          bundle_sha="$(sha256sum canary/registry-stack-${tag}-candidate.tar.gz | awk '{print $1}')"
+          bundle_size="$(stat -c %s canary/registry-stack-${tag}-candidate.tar.gz)"
+          jq -n \
+            --arg repository "${GITHUB_REPOSITORY}" \
+            --arg version "${version}" \
+            --arg release_id "${release_id}" \
+            --arg tag "${tag}" \
+            --arg source_sha "${source_sha}" \
+            --arg workflow_revision "${workflow_revision}" \
+            --argjson run_id "${GITHUB_RUN_ID}" \
+            --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg created_at "${created_at}" \
+            --arg expires_at "${expires_at}" \
+            --arg payload_sha "${payload_sha}" \
+            --argjson payload_size "${payload_size}" \
+            --arg docs_sha "${docs_sha}" \
+            --argjson docs_size "${docs_size}" \
+            --arg sbom_sha "${sbom_sha}" \
+            --argjson sbom_size "${sbom_size}" \
+            --arg relay_scan_sha "${relay_scan_sha}" \
+            --arg notary_scan_sha "${notary_scan_sha}" \
+            --arg advisory_sha "${advisory_sha}" \
+            --arg bundle_sha "${bundle_sha}" \
+            --argjson bundle_size "${bundle_size}" \
+            '{
+              schema_version: "registry-stack.release-candidate.v2",
+              repository: $repository,
+              release: {
+                version: $version,
+                release_id: $release_id,
+                tag: $tag,
+                source_sha: $source_sha
+              },
+              workflow: {
+                path: ".github/workflows/release-candidate.yml",
+                revision: $workflow_revision,
+                run_id: $run_id,
+                run_attempt: $run_attempt
+              },
+              validity: {
+                created_at: $created_at,
+                expires_at: $expires_at
+              },
+              payloads: [
+                {
+                  name: ("registryctl-" + $tag + "-linux-amd64"),
+                  kind: "binary",
+                  size: $payload_size,
+                  sha256: $payload_sha
+                },
+                {
+                  name: ("registry-docs-" + $tag + ".tar.gz"),
+                  kind: "docs",
+                  size: $docs_size,
+                  sha256: $docs_sha
+                },
+                {
+                  name: ("registry-stack-" + $tag + ".sbom.spdx.json"),
+                  kind: "sbom",
+                  size: $sbom_size,
+                  sha256: $sbom_sha
+                }
+              ],
+              images: [
+                {
+                  name: "registry-notary",
+                  candidate_ref:
+                    "ghcr.io/registrystack/registry-notary-candidate@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  digest:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                  final_ref: ("ghcr.io/registrystack/registry-notary:" + $tag)
+                },
+                {
+                  name: "registry-relay",
+                  candidate_ref:
+                    "ghcr.io/registrystack/registry-relay-candidate@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  digest:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  final_ref: ("ghcr.io/registrystack/registry-relay:" + $tag)
+                }
+              ],
+              docs: {
+                name: ("registry-docs-" + $tag + ".tar.gz"),
+                sha256: $docs_sha
+              },
+              sbom: {
+                name: ("registry-stack-" + $tag + ".sbom.spdx.json"),
+                sha256: $sbom_sha
+              },
+              scans: [
+                {
+                  image: "registry-notary",
+                  name: "security/registry-notary.grype.json",
+                  sha256: $notary_scan_sha,
+                  status: "passed"
+                },
+                {
+                  image: "registry-relay",
+                  name: "security/registry-relay.grype.json",
+                  sha256: $relay_scan_sha,
+                  status: "passed"
+                }
+              ],
+              advisory: {
+                name: "security/advisory-verdict.json",
+                sha256: $advisory_sha,
+                verdict: "passed"
+              },
+              bundle: {
+                name: ("registry-stack-" + $tag + "-candidate.tar.gz"),
+                size: $bundle_size,
+                sha256: $bundle_sha
+              }
+            }' > canary/candidate-manifest.draft.json
+          python3 release/scripts/release_candidate.py seal-candidate \
+            --draft canary/candidate-manifest.draft.json \
+            --output canary/release-candidate-manifest.json
+          jq -n \
+            --argjson id "${GITHUB_RUN_ID}" \
+            --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg head_sha "${GITHUB_SHA}" \
+            --arg created_at "${created_at}" \
+            '{
+              id: $id,
+              run_attempt: $run_attempt,
+              event: "repository_dispatch",
+              head_sha: $head_sha,
+              path: ".github/workflows/release-candidate.yml",
+              conclusion: "success",
+              created_at: $created_at
+            }' > canary/trusted-candidate-run.json
+          jq -n \
+            --argjson id "${GITHUB_RUN_ID}" \
+            --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
+            --arg event "${GITHUB_EVENT_NAME}" \
+            --arg head_sha "${GITHUB_SHA}" \
+            '{
+              id: $id,
+              run_attempt: $run_attempt,
+              event: $event,
+              head_sha: $head_sha,
+              path: ".github/workflows/release-canary.yml",
+              conclusion: "success",
+              completed_at: (now | todateiso8601)
+            }' > canary/trusted-canary-run.json
+          python3 release/scripts/release_candidate.py verify-candidate \
+            --manifest canary/release-candidate-manifest.json \
+            --bundle canary/registry-stack-${tag}-candidate.tar.gz \
+            --bundle-root canary/bundle-root \
+            --source-sha "${source_sha}" \
+            --workflow-revision "${workflow_revision}" \
+            --version "${version}" \
+            --release-id "${release_id}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --trusted-run-metadata canary/trusted-candidate-run.json
+          python3 release/scripts/release_candidate.py verify-canary \
+            --metadata canary/trusted-canary-run.json \
+            --workflow-revision "${workflow_revision}"
+          python3 products/notary/tests/advisory_baseline_check_test.py
+          python3 crates/registry-relay/tests/advisory_baseline_check_test.py
+          jq -n \
+            --arg tag "${tag}" \
+            --argjson isDraft true \
+            --arg name "release-canary-${GITHUB_RUN_ID}" \
+            '{tag_name:$tag,name:$name,draft:$isDraft,assets:[]}' \
+            > canary/draft-release-api-fixture.json
+          jq -e \
+            --arg expected "release-canary-${GITHUB_RUN_ID}" \
+            '.draft == true and .name == $expected and (.assets | length == 0)' \
+            canary/draft-release-api-fixture.json >/dev/null
+          jq -n \
+            --arg released_tag "${tag}" \
+            --arg docs_sha256 "${docs_sha}" \
+            '{
+              released_tag: $released_tag,
+              docs_sha256: $docs_sha256
+            } | select(
+              .released_tag | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")
+            ) | select(
+              .docs_sha256 | test("^[0-9a-f]{64}$")
+            )' > canary/docs-dispatch.json
+          (
+            cd canary/bundle-root
+            find . -type f -print0 | sort -z | xargs -0 sha256sum
+          ) > canary/provenance-subjects.sha256
+          test -s canary/provenance-subjects.sha256
+
+      - name: Upload canary candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-canary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            canary/release-candidate-manifest.json
+            canary/registry-stack-v1.2.3-candidate.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Attest canary only after all local checks pass
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: |
+            canary/release-candidate-manifest.json
+            canary/registry-stack-v1.2.3-candidate.tar.gz
+
+      - name: Download and authenticate canary candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-canary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: canary/downloaded
+
+      - name: Verify canary attestation bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for subject in \
+            canary/downloaded/release-candidate-manifest.json \
+            canary/downloaded/registry-stack-v1.2.3-candidate.tar.gz
+          do
+            gh attestation verify "${subject}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow \
+                "${GITHUB_REPOSITORY}/.github/workflows/release-canary.yml" \
+              --signer-digest "${GITHUB_SHA}" \
+              --source-ref refs/heads/main \
+              --source-digest "${GITHUB_SHA}" \
+              --deny-self-hosted-runners
+          done
+
+  macos-contract:
+    name: macOS release-tool contract
+    runs-on: macos-14
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact workflow revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Run platform-specific release-tool contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 release/scripts/release_candidate.py --help >/dev/null
+          release/scripts/registry-release --help >/dev/null
+          bash -n release/scripts/build-release-binaries.sh
+          bash -n release/scripts/build-release-image.sh

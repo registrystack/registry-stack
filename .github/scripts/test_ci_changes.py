@@ -192,13 +192,28 @@ class CiChangesTest(unittest.TestCase):
                 without_project_authoring_schemas,
             )
 
-    def test_docs_pages_watches_authoring_reference_inputs(self) -> None:
+    def test_docs_pages_is_exact_dispatch_only(self) -> None:
         workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
-        for watched_path, _ in AUTHORING_REFERENCE_INPUTS:
-            with self.subTest(path=watched_path):
-                self.assertIn(f'"{watched_path}"', workflow)
+        trigger_block = workflow.split("\npermissions:", 1)[0].rstrip()
+        self.assertEqual(
+            trigger_block,
+            """name: Deploy RegistryStack Docs
 
-    def test_public_project_authoring_modules_run_docs_and_are_watched(self) -> None:
+on:
+  workflow_dispatch:
+    inputs:
+      released_tag:
+        description: Exact public Registry Stack release tag
+        required: true
+        type: string
+      docs_sha256:
+        description: SHA-256 of the released documentation archive
+        required: true
+        type: string
+""".rstrip(),
+        )
+
+    def test_public_project_authoring_modules_run_docs(self) -> None:
         project_authoring = Path("crates/registryctl/src/project_authoring.rs").read_text(
             encoding="utf-8"
         )
@@ -209,33 +224,20 @@ class CiChangesTest(unittest.TestCase):
         )
         self.assertTrue(public_modules)
 
-        workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
-        push_paths = re.findall(
-            r'^\s+- "([^"]+)"$',
-            workflow.split("  workflow_dispatch:", 1)[0],
-            flags=re.MULTILINE,
-        )
         for module in public_modules:
             source = f"crates/registryctl/src/project_authoring/{module}.rs"
             with self.subTest(source=source):
                 self.assertTrue(classify(self.workspace, (source,))["docs"])
-                self.assertTrue(
-                    any(fnmatch.fnmatchcase(source, pattern) for pattern in push_paths),
-                    f"{source} is not watched by docs-pages.yml",
-                )
         self.assertFalse(
-            any(
-                fnmatch.fnmatchcase(
-                    "crates/registryctl/src/project_authoring/project.rs",
-                    pattern,
-                )
-                for pattern in push_paths
-            ),
-            "implementation-only project.rs should not rebuild Pages",
+            classify(
+                self.workspace,
+                ("crates/registryctl/src/project_authoring/project.rs",),
+            )["docs"],
+            "implementation-only project.rs should not rebuild docs",
         )
 
-    def test_diagnostic_reference_inputs_run_docs_and_are_watched(self) -> None:
-        watched_paths = (
+    def test_diagnostic_reference_inputs_run_docs(self) -> None:
+        inputs = (
             "crates/registry-notary-server/src/standalone/activation.rs",
             "crates/registry-platform-ops/src/lib.rs",
             "crates/registry-relay/src/consultation/**",
@@ -247,12 +249,10 @@ class CiChangesTest(unittest.TestCase):
             "crates/registryctl/src/project_authoring/preflight.rs",
             "crates/registryctl/tests/fixtures/project-reports/**",
         )
-        workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
-        for watched_path in watched_paths:
-            with self.subTest(path=watched_path):
-                classifier_path = watched_path.replace("**", "service.rs")
+        for path in inputs:
+            with self.subTest(path=path):
+                classifier_path = path.replace("**", "service.rs")
                 self.assertTrue(classify(self.workspace, (classifier_path,))["docs"])
-                self.assertIn(f'"{watched_path}"', workflow)
 
     def test_first_country_docs_and_journey_routing_matrix(self) -> None:
         cases = (
@@ -513,9 +513,8 @@ class CiChangesTest(unittest.TestCase):
                 for output, value in expected.items():
                     self.assertEqual(outputs[output], value, output)
 
-    def test_docs_pages_watches_first_country_generation_inputs(self) -> None:
-        workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
-        watched_paths = (
+    def test_first_country_generation_inputs_run_docs(self) -> None:
+        inputs = (
             "crates/registryctl/assets/project-starters/**",
             "crates/registryctl/src/main.rs",
             "crates/registryctl/src/project_authoring/compiler/relay.rs",
@@ -530,13 +529,10 @@ class CiChangesTest(unittest.TestCase):
             "crates/registry-relay/src/server.rs",
         )
 
-        for watched_path in watched_paths:
-            with self.subTest(path=watched_path):
-                self.assertIn(f'"{watched_path}"', workflow)
-        self.assertIn(
-            "node scripts/generate-standard-journeys.mjs --check",
-            workflow,
-        )
+        for path in inputs:
+            with self.subTest(path=path):
+                classifier_path = path.replace("**", "example.yaml")
+                self.assertTrue(classify(self.workspace, (classifier_path,))["docs"])
 
     def test_docs_job_fetches_ignored_openapi_inputs_before_script_tests(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -547,21 +543,10 @@ class CiChangesTest(unittest.TestCase):
         self.assertIn(fetch, docs_job)
         self.assertLess(docs_job.index(fetch), docs_job.index(test_scripts))
 
-    def test_every_standard_journey_source_routes_to_docs_and_pages(self) -> None:
-        workflow = Path(".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
-        push_paths = re.findall(
-            r'^\s+- "([^"]+)"$',
-            workflow.split("  workflow_dispatch:", 1)[0],
-            flags=re.MULTILINE,
-        )
-
+    def test_every_standard_journey_source_routes_to_docs(self) -> None:
         for source in sorted(STANDARD_JOURNEY_SOURCES):
             with self.subTest(source=source):
                 self.assertTrue(classify(self.workspace, (source,))["docs"])
-                self.assertTrue(
-                    any(fnmatch.fnmatchcase(source, pattern) for pattern in push_paths),
-                    f"{source} is not watched by docs-pages.yml",
-                )
 
     def test_other_workflow_changes_do_not_select_the_full_matrix(self) -> None:
         for workflow in sorted(RELEASE_SECURITY_WORKFLOWS):

@@ -559,6 +559,7 @@ def validate_candidate_assets(
         raise LifecycleError("candidate receipt workflow identity is invalid")
     binding = load_candidate_tag_binding(root, version)
     expected_binding = {
+        "schema_version": "registry-stack.release-candidate-receipt.v1",
         "run_id": workflow.get("run_id"),
         "run_attempt": workflow.get("run_attempt"),
         "receipt_sha256": candidate["candidate_receipt_sha256"].removeprefix("sha256:"),

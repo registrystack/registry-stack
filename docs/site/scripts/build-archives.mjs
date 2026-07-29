@@ -152,6 +152,7 @@ export async function buildDocsetArchive(docset, {
   runCommand = run,
   applySeo = applyArchiveSeo,
   stageGeneratedArtifacts = stagePinnedGeneratedArtifacts,
+  indexable = false,
 } = {}) {
   if (docset.status !== 'archived') {
     throw new Error(`Docset "${docset.id}" is not archived`);
@@ -160,7 +161,8 @@ export async function buildDocsetArchive(docset, {
   const env = {
     ...process.env,
     DOCS_DOCSET: docset.id,
-    DOCS_BASE: docset.path,
+    DOCS_BASE: '/',
+    DOCS_RELEASED_ARCHIVE: indexable ? 'true' : '',
     TZ: 'UTC',
     // Archives are immutable release files, so their bytes cannot depend on
     // mutable deployment analytics configuration.
@@ -173,7 +175,9 @@ export async function buildDocsetArchive(docset, {
   // Current-source generators consume the checked-out registryctl contracts
   // and label their output as unreleased. Release archives instead stage those
   // generated artifacts from the docset's pinned source ref and refresh only
-  // inputs whose generators honor DOCS_DOCSET.
+  // inputs whose generators honor DOCS_DOCSET. Released archives are built at
+  // the canonical root so Pages can promote their bytes without rewriting
+  // links or canonical metadata.
   const restoreGeneratedArtifacts = await stageGeneratedArtifacts(docset, { docsRoot });
   try {
     await runCommand('npm', ['run', 'generate:archive'], env);
@@ -183,7 +187,7 @@ export async function buildDocsetArchive(docset, {
       ['astro', 'build', '--outDir', archiveOutputDirectory(docsRoot, docset)],
       env,
     );
-    await applySeo(outDir);
+    await applySeo(outDir, { indexable });
   } finally {
     await restoreGeneratedArtifacts();
   }
@@ -202,7 +206,9 @@ export async function buildArchivedDocsets({
   }
 
   for (const docset of archived) {
-    await buildDocsetArchive(docset);
+    await buildDocsetArchive(docset, {
+      indexable: docset.id === manifest.released,
+    });
   }
 
   // Return generated files to the current docset so local worktrees stay sane.

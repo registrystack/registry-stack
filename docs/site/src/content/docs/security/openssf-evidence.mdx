@@ -12,116 +12,100 @@ standards_referenced: []
 ---
 
 This page records which Registry Stack release-trust checks you can verify, and
-which Open Source Security Foundation (OpenSSF) answers remain incomplete.
+which Open Source Security Foundation (OpenSSF) answers have a narrower scope.
 
-For release signature and provenance verification commands, use
-[`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md).
+Use the public
+[`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
+procedure to authenticate a current release.
 
 ## Release trust status
 
 | Question | Current answer | Verification source |
 | --- | --- | --- |
-| Are GitHub Release assets signed? | Yes, for release assets produced after keyless cosign signing landed. Each signed asset has a matching `.sig` and `.pem` file. | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) and [release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
-| Is `v0.8.0` signed? | No. The `v0.8.0` prerelease was published before release-asset signing was added and has not been backfilled with `.sig` and `.pem` assets. | [GitHub Release assets](https://github.com/registrystack/registry-stack/releases/tag/v0.8.0) |
-| Are release Git tags signed? | No. The release workflow checks source-tag consistency, but Git tag objects are not GPG-, SSH-, or Sigstore-signed. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
-| Are provenance attestations published? | Yes, for tag-triggered releases produced by the current workflow. `v0.13.0` includes tag-bound release provenance. | [`v0.13.0` assets](https://github.com/registrystack/registry-stack/releases/tag/v0.13.0) and [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) |
-| Are published builds repeatable? | The canonical Linux amd64 binaries, image config, and ordered image layers have repeated exactly for `v0.13.0`. The documented scope excludes environment independence and generated evidence bytes. | [`release/REPEATABLE-BUILDS.md`](https://github.com/registrystack/registry-stack/blob/main/release/REPEATABLE-BUILDS.md) |
+| Are current release payloads signed? | Yes. One keyless Sigstore bundle authenticates `SHA256SUMS`, which covers every public payload. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
+| Are release Git tags signed? | No. The annotated tag binds a candidate run, attempt, and manifest hash, but the Git tag object is not cryptographically signed. | [Release operations](https://github.com/registrystack/registry-stack/blob/main/release/OPERATIONS.md) |
+| Is release provenance published? | Yes. The tag workflow publishes a SLSA provenance envelope for the checksum-covered payload subject set. | [Release verification](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) |
+| Are published builds repeatable? | A weekly clean proof covers canonical Linux amd64 binaries plus image configuration and ordered layers. The OpenSSF justification is current only while an applicable successful proof is no older than 30 days. | [Repeatable build evidence](https://github.com/registrystack/registry-stack/blob/main/release/REPEATABLE-BUILDS.md) |
 
 ## Current release evidence chain
 
-The candidate release path builds and scans private candidate packages before
-the operator creates the release tag.
-Promotion verifies the exact candidate run and attempt, publishes the same
-candidate bytes and image digests, and includes the signed candidate receipt as
-a GitHub Release asset.
-The receipt records the build run identity.
+The candidate workflow builds each shipped artifact once, publishes candidate
+images only to private packages, scans exact image digests, and seals one
+24-hour candidate manifest and bundle.
+The annotated tag binds that manifest to the candidate run and attempt.
 
-Release provenance binds the tagged source to the published release bytes.
-The candidate receipt connects those bytes to the workflow run that compiled
-them.
-Two builds in one candidate run demonstrate build determinism, not environment
-independence.
-The scheduled clean rebuild provides later-host evidence for the narrower
-repeatability claim tracked in
-[`release/REPEATABLE-BUILDS.md`](https://github.com/registrystack/registry-stack/blob/main/release/REPEATABLE-BUILDS.md).
+The tag workflow verifies the candidate and reconciles the complete draft
+GitHub Release before a public write.
+It promotes image manifests at the same digests, publishes the draft, and
+dispatches authenticated documentation promotion.
 
-`v0.13.0` predates candidate promotion, but it has public exact rebuild evidence
-for the same canonical Linux amd64 binary and image scope.
+Current public security assets include:
+
+- `SHA256SUMS`.
+- One `registry-stack-vX.Y.Z-SHA256SUMS.sigstore.json` bundle.
+- One tag-bound release provenance envelope.
+- One consolidated SPDX JSON software bill of materials (SBOM).
+- One checksum-covered security-evidence archive.
+- One checksum-covered Registryctl image lock.
+- One compact release manifest recording candidate and promotion identity.
+
+Current releases do not publish per-file signature and certificate pairs,
+release capsules, candidate telemetry, or intermediate receipt parts.
 
 ## Scorecard
 
-Registry Stack configures OpenSSF Scorecard in
-`.github/workflows/scorecard.yml`. The workflow is scheduled and runs on
-default-branch changes.
-
-Current public evidence:
+Registry Stack runs OpenSSF Scorecard on its normal schedule and by manual
+dispatch.
+Scorecard is posture telemetry and cannot change an ordinary release result.
 
 - [Latest public Scorecard viewer](https://scorecard.dev/viewer/?uri=github.com/registrystack/registry-stack)
-- [Scorecard workflow run history](https://github.com/registrystack/registry-stack/actions/workflows/scorecard.yml)
+- [Scorecard workflow history](https://github.com/registrystack/registry-stack/actions/workflows/scorecard.yml)
 
-Read the check-level results, not the aggregate score.
-The aggregate score can hide important details, so release-integrity findings
-such as unsigned Git tags remain explicit caveats.
-
-Known caveats include older releases without provenance, branch-protection
-visibility, SAST coverage, unpinned lab images, and existing dependency
-vulnerability findings. Check-level Scorecard results are signals, not a
+Read the check-level results rather than treating the aggregate score as a
 certification.
+Known caveats include unsigned Git tag objects and older releases with
+different evidence inventories.
 
 ## Best practices badge
 
 The OpenSSF Best Practices Badge is self-attested.
 Registry Stack records an answer only when a public source file, workflow,
 release artifact, or docs page supports that answer.
-The exact in-tree answer source is
+The in-tree answer source is
 [`release/openssf-best-practices-silver.yaml`](https://github.com/registrystack/registry-stack/blob/main/release/openssf-best-practices-silver.yaml).
-The answers mirror the selected criteria on the
-[Registry Stack Best Practices project page](https://www.bestpractices.dev/en/projects/13372/silver),
-checked on 2026-07-25.
-The authoritative project page reports the Silver badge; the in-tree file
-makes the selected answers and evidence links reviewable with the code.
+The authoritative project page is the
+[Registry Stack Best Practices project](https://www.bestpractices.dev/en/projects/13372/silver).
 
-| Criterion | Status | Public evidence |
+| Criterion | Status boundary | Public evidence |
 | --- | --- | --- |
-| `build_repeatable` | Met | [Project answer](https://www.bestpractices.dev/en/projects/13372/silver#build_repeatable) and [`v0.13.0` repeatable-build evidence](https://github.com/registrystack/registry-stack/blob/main/release/REPEATABLE-BUILDS.md) |
-| `signed_releases` | Met | [Project answer](https://www.bestpractices.dev/en/projects/13372/silver#signed_releases) and [release verification commands](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) |
-| `version_tags_signed` | Unmet | [Project answer](https://www.bestpractices.dev/en/projects/13372/silver#version_tags_signed) and [release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
+| `build_repeatable` | Met only while the latest applicable clean proof is successful and no older than 30 days | [Repeatable build evidence](https://github.com/registrystack/registry-stack/blob/main/release/REPEATABLE-BUILDS.md) |
+| `signed_releases` | Met for releases using the authenticated `SHA256SUMS` chain | [Release verification](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) |
+| `version_tags_signed` | Unmet because Git tag objects are not cryptographically signed | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
 
-Current user-visible status:
-
-| Area | Current status | Public evidence |
-| --- | --- | --- |
-| Vulnerability reporting | Private reporting policy is published. | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) |
-| CI and tests | CI runs on the public repository. | [CI workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/ci.yml) |
-| Release process | Current releases promote a verified pre-tag candidate. Historical releases, including `v0.13.0`, used the tag-driven build workflow. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) and [release manifests](https://github.com/registrystack/registry-stack/tree/main/release/manifests) |
-| Signed releases | Current release assets are signed. `v0.13.0` carries keyless cosign signatures, certificates, and tag-bound provenance. `v0.8.0` remains unsigned. | [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md) and [`v0.13.0` assets](https://github.com/registrystack/registry-stack/releases/tag/v0.13.0) |
-| Signed version tags | Not implemented. Git tag objects are not yet cryptographically signed. | [Release workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/release.yml) |
-| Dependency policy | Dependency advisories are enforced through `cargo deny check` in the CI `rust` job, which runs on every push that touches Rust code (the job is path-filtered). An advisory without an upstream fix carries a scoped, documented ignore in `deny.toml` with a review trigger. | [`deny.toml`](https://github.com/registrystack/registry-stack/blob/main/deny.toml) and [CI workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/ci.yml) |
-| Source release evidence | Releases include release assets and generated release capsules. Later signed releases add signature assets, and tag-triggered releases produced after the provenance workflow change add `.intoto.jsonl` provenance. | [GitHub Releases](https://github.com/registrystack/registry-stack/releases) |
-
-Newly produced release assets are signed with keyless cosign and include `.sig`
-and `.pem` files.
-Tag-triggered promotion also publishes release-level SLSA provenance.
+A failed or stale repeatability result changes the badge justification.
+The result does not retroactively fail a published release and does not become
+an ordinary publication blocker.
 
 ## OSPS baseline
 
 Registry Stack targets OpenSSF OSPS Baseline 2026-02-19, Level 1 as the first
-version-pinned baseline map. The map distinguishes root monorepo controls from
-legacy imported product controls.
+version-pinned baseline map.
 
 | Control area | Public evidence | Status |
 | --- | --- | --- |
 | Public source repository | [`registry-stack`](https://github.com/registrystack/registry-stack) | Implemented |
 | Vulnerability disclosure | [`SECURITY.md`](https://github.com/registrystack/registry-stack/blob/main/SECURITY.md) | Implemented |
 | Automated tests | [CI workflow](https://github.com/registrystack/registry-stack/blob/main/.github/workflows/ci.yml) | Implemented |
-| Token permissions | CI uses read-only permissions; release write permissions are scoped to publishing jobs | Implemented |
-| Release artifacts | Checksums, image digests, image SBOMs, vulnerability scans, release capsules | Published for every GitHub Release from `v0.8.0` onward (`v0.8.1` was a release candidate with no GitHub Release); current promotion also publishes its candidate receipt |
-| Signed releases | Keyless cosign signing for GitHub Release assets with `.sig` and `.pem` verification material | Implemented for newly produced release assets |
+| Token permissions | Read-only build and verification jobs; package, release, signing, and Pages permissions are separated | Implemented |
+| Release artifacts | Signed checksums, consolidated SPDX SBOM, security archive, image lock, and release manifest | Implemented by the current workflow |
 | Signed version tags | Cryptographic Git tag signatures | Not implemented |
-| Provenance attestations | Candidate build attestation plus release-level SLSA provenance for non-signature GitHub Release assets | Workflow enabled; `v0.13.0` provides current public tag-bound release provenance, while the candidate receipt chain applies to releases produced by the candidate workflow |
+| Provenance | Candidate build attestations and tag-bound release payload provenance | Implemented by the current workflow |
 
-## Legacy product controls
+## Historical releases
 
-Imported product docs may describe older product-local release flows. They are
-not cited as active root monorepo controls unless the root workflow implements
-the same behavior or the claim is explicitly product-scoped.
+Historical release assets remain immutable.
+Earlier releases may contain per-file `.sig` and `.pem` pairs, capsules,
+candidate receipts, separate digest files, multiple SBOMs, or no provenance.
+Use the verification document committed at the selected tag and do not infer
+current guarantees from an older inventory.
+`v0.8.0` remains unsigned.

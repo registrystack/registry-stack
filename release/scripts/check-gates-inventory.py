@@ -202,6 +202,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: python3 -m unittest release/scripts/test_release_repeatability_workflow.py",
     ),
     (
+        "Release workflow structure tests",
+        "run: python3 -m unittest release/scripts/test_release_workflow_structure.py",
+    ),
+    (
         "Release image OCI label checker tests",
         "run: python3 -m unittest release/scripts/test_check_release_image_oci_labels.py",
     ),
@@ -363,6 +367,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
 RELEASE_SECURITY_POLICY_PATHS = (
     ".github/workflows/release.yml",
     ".github/workflows/release-candidate.yml",
+    ".github/workflows/release-canary.yml",
     ".github/workflows/release-repeatability.yml",
     ".github/workflows/release-candidate-cleanup.yml",
     "release/scripts/release_candidate.py",
@@ -900,6 +905,344 @@ FORBIDDEN_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] =
     ),
 )
 
+# The compact v2 release contract replaced the receipt, capsule, telemetry, and
+# post-publication reconciliation model above. Keep the active inventory close
+# to the generic checkers so CI evaluates the current workflow boundary.
+REQUIRED_RELEASE_SECURITY_GATES = (
+    (
+        "Candidate-bound annotated tag promotion",
+        ".github/workflows/release.yml",
+        (
+            'push:\n    tags:\n      - "v*"',
+            "name: Resolve exact tag identity",
+            'if [[ "$(git cat-file -t "refs/tags/${tag}")" != tag ]]; then',
+            "name: Parse compact candidate binding",
+            'for field in ("run_id", "run_attempt", "manifest_sha256"):',
+        ),
+    ),
+    (
+        "Exact candidate attempt authentication",
+        ".github/workflows/release.yml",
+        (
+            "name: Download exact candidate attempt",
+            'artifact_name="registry-stack-release-candidate-${RUN_ID}-${RUN_ATTEMPT}"',
+            "expected_archive_digest=",
+            "release-candidate-manifest.json",
+            "name: Verify binding, candidate, attestations, and recent canary",
+            "verify-tag-binding",
+            "gh attestation verify",
+        ),
+    ),
+    (
+        "Draft-first signed checksum publication",
+        ".github/workflows/release.yml",
+        (
+            "stage-draft:\n    name: Create and sign fully staged draft release",
+            "name: Reverify and stage exact public payloads before OIDC",
+            "name: Sign one checksum chain",
+            "SHA256SUMS.sigstore.json",
+            "gh release create",
+            "--draft",
+            "name: Upload draft reconciliation contract",
+        ),
+    ),
+    (
+        "Tag-bound release provenance",
+        ".github/workflows/release.yml",
+        (
+            "release-provenance:",
+            "uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@",
+            "upload-assets: true",
+        ),
+    ),
+    (
+        "Draft reconciliation and exact image promotion",
+        ".github/workflows/release.yml",
+        (
+            "promote-images:\n    name: Reconcile draft, then promote exact image manifests",
+            "name: Reconcile complete draft before first public write",
+            "diff -u contract/expected-assets contract/actual-assets",
+            "name: Reverify candidate expiry immediately before registry login",
+            "name: Recheck all destinations before exact digest promotion",
+            'crane copy "${candidate_ref}" "${final_ref}"',
+            'test "$(crane digest "${final_ref}")" = "${digest}"',
+        ),
+    ),
+    (
+        "Release publication and authenticated docs dispatch",
+        ".github/workflows/release.yml",
+        (
+            "name: Recheck reconciled draft and exact public images",
+            "name: Publish immutable release",
+            "-F draft=false",
+            "-F prerelease=false",
+            "name: Dispatch authenticated docs promotion",
+            '-f "released_tag=${{ needs.verify.outputs.tag }}"',
+            '-f "docs_sha256=${{ needs.verify.outputs.docs_sha256 }}"',
+        ),
+    ),
+    (
+        "Protected candidate request and pure validation",
+        ".github/workflows/release-candidate.yml",
+        (
+            "repository_dispatch:\n    types: [release_candidate]",
+            "name: Validate request, source, CI, canary, and destinations",
+            "git merge-base --is-ancestor",
+            "verify-canary",
+            "name: Validate manifests, pins, recipes, and scanner policy fixtures",
+        ),
+    ),
+    (
+        "Single canonical candidate build",
+        ".github/workflows/release-candidate.yml",
+        (
+            "build-canonical:\n    name: Build Linux payload, private images, and docs once",
+            "name: Restore exact-key Cargo cache",
+            "name: Build canonical Linux payload once",
+            "name: Build private candidate image layouts once",
+            "name: Package exact release docs archive",
+        ),
+    ),
+    (
+        "Private exact candidate images and advisory gate",
+        ".github/workflows/release-candidate.yml",
+        (
+            "name: Verify local image layouts before package credentials are used",
+            "name: Publish exact layouts to private candidate packages",
+            "--from-oci-layout",
+            "--jq .visibility",
+            ")\" = private",
+            "name: Verify and scan exact candidate images",
+            "grype \"${candidate_ref}\"",
+            "check_advisory_baselines.py",
+        ),
+    ),
+    (
+        "Compact candidate manifest and bundle",
+        ".github/workflows/release-candidate.yml",
+        (
+            "name: Seal compact candidate manifest and bundle",
+            "seal-candidate",
+            "name: Upload one candidate manifest and bundle",
+            "registry-stack-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}",
+            "candidate/release-candidate-manifest.json",
+            "candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz",
+            "retention-days: 7",
+        ),
+    ),
+    (
+        "Candidate verifier and OIDC isolation",
+        ".github/workflows/release-candidate.yml",
+        (
+            "attest:\n    name: Reverify and attest candidate",
+            "name: Reverify all bytes before requesting OIDC",
+            "verify-candidate",
+            "name: Attest manifest and bundle after re-verification",
+            "uses: actions/attest-build-provenance@",
+        ),
+    ),
+    (
+        "Nightly protected release canary",
+        ".github/workflows/release-canary.yml",
+        (
+            "schedule:",
+            "workflow_dispatch:",
+            "name: Exercise dispatch, candidate, advisory, draft, and docs contracts",
+            "verify-canary",
+            "name: Attest canary only after all local checks pass",
+            "name: Run platform-specific release-tool contract",
+        ),
+    ),
+    (
+        "Scheduled 30-day repeatability boundary",
+        ".github/workflows/release-repeatability.yml",
+        (
+            "schedule:",
+            "workflow_dispatch:",
+            "name: Resolve exact published tag",
+            "name: Build canonical Linux payload from clean state",
+            "name: Compare published binary hashes",
+            "name: Compare published image config and layers",
+            "name: Record successful 30-day proof",
+            "silver_claim_valid_through:",
+            "name: Upload 30-day repeatability evidence",
+            "retention-days: 30",
+        ),
+    ),
+    (
+        "Scheduled protected candidate cleanup trigger",
+        ".github/workflows/release-candidate-cleanup.yml",
+        (
+            "schedule:",
+            "repository_dispatch:\n    types: [release-candidate-cleanup]",
+            "name: Delete candidate versions older than seven days",
+        ),
+    ),
+    (
+        "Candidate cleanup exact package allowlist",
+        "release/scripts/cleanup-release-candidates.py",
+        (
+            'CANDIDATE_PACKAGES = (\n    "registry-notary-candidate",\n'
+            '    "registry-relay-candidate",\n)',
+            "if package in PUBLIC_PACKAGES:",
+            "if package not in CANDIDATE_PACKAGES:",
+        ),
+    ),
+)
+
+ORDERED_RELEASE_SECURITY_GATES = (
+    (
+        "Promotion binding before candidate verification",
+        ".github/workflows/release.yml",
+        "name: Parse compact candidate binding",
+        "name: Verify binding, candidate, attestations, and recent canary",
+    ),
+    (
+        "Candidate verification before draft creation",
+        ".github/workflows/release.yml",
+        "name: Reverify and stage exact public payloads before OIDC",
+        "name: Recreate resumable draft and upload exact pre-provenance inventory",
+    ),
+    (
+        "Draft before release provenance",
+        ".github/workflows/release.yml",
+        "stage-draft:\n    name: Create and sign fully staged draft release",
+        "release-provenance:",
+    ),
+    (
+        "Provenance before draft reconciliation",
+        ".github/workflows/release.yml",
+        "release-provenance:",
+        "name: Reconcile complete draft before first public write",
+    ),
+    (
+        "Draft reconciliation before image promotion",
+        ".github/workflows/release.yml",
+        "name: Reconcile complete draft before first public write",
+        "name: Recheck all destinations before exact digest promotion",
+    ),
+    (
+        "Candidate expiry immediately before registry login",
+        ".github/workflows/release.yml",
+        "name: Reverify candidate expiry immediately before registry login",
+        "name: Log in for exact candidate promotion",
+    ),
+    (
+        "Exact image promotion before release publication",
+        ".github/workflows/release.yml",
+        "name: Recheck all destinations before exact digest promotion",
+        "name: Publish immutable release",
+    ),
+    (
+        "Release publication before docs dispatch",
+        ".github/workflows/release.yml",
+        "name: Publish immutable release",
+        "name: Dispatch authenticated docs promotion",
+    ),
+    (
+        "Candidate validation before build",
+        ".github/workflows/release-candidate.yml",
+        "name: Validate manifests, pins, recipes, and scanner policy fixtures",
+        "build-canonical:\n    name: Build Linux payload, private images, and docs once",
+    ),
+    (
+        "Local layout verification before package credentials",
+        ".github/workflows/release-candidate.yml",
+        "name: Verify local image layouts before package credentials are used",
+        "name: Publish exact layouts to private candidate packages",
+    ),
+    (
+        "Candidate scan before compact seal",
+        ".github/workflows/release-candidate.yml",
+        "name: Verify and scan exact candidate images",
+        "name: Seal compact candidate manifest and bundle",
+    ),
+    (
+        "Compact candidate before attestation",
+        ".github/workflows/release-candidate.yml",
+        "name: Upload one candidate manifest and bundle",
+        "name: Reverify all bytes before requesting OIDC",
+    ),
+    (
+        "Repeatability rebuild before comparison",
+        ".github/workflows/release-repeatability.yml",
+        "name: Build canonical Linux payload from clean state",
+        "name: Compare published binary hashes",
+    ),
+)
+
+FORBIDDEN_RELEASE_SECURITY_GATES = (
+    (
+        "Promotion cannot rebuild product bytes, write refs, or use recovery dispatch",
+        ".github/workflows/release.yml",
+        (
+            "workflow_dispatch:",
+            "git push",
+            "git tag ",
+            "git update-ref",
+            "/git/refs",
+            "cargo build",
+            "docker build",
+            "docker push",
+            "docker/build-push-action@",
+            "buildx build",
+            "run: release/scripts/build-release-binaries.sh",
+            "run: release/scripts/build-release-image.sh",
+            "candidate-receipt.json",
+            "release-capsule",
+            "extended-proof:",
+            "release-telemetry:",
+        ),
+    ),
+    (
+        "Candidate cannot select branch-controlled workflow code or publish publicly",
+        ".github/workflows/release-candidate.yml",
+        (
+            "workflow_dispatch:",
+            "contents: write",
+            "git push",
+            "git update-ref",
+            "crane copy",
+            "gh release create",
+            "gh release upload",
+            "candidate-receipt.json",
+            "release-capsule",
+        ),
+    ),
+    (
+        "Canary cannot write public state",
+        ".github/workflows/release-canary.yml",
+        (
+            "contents: write",
+            "packages: write",
+            "git push",
+            "gh release create",
+            "gh release upload",
+            "crane copy",
+            "oras cp",
+        ),
+    ),
+    (
+        "Repeatability cannot write public state",
+        ".github/workflows/release-repeatability.yml",
+        (
+            "contents: write",
+            "packages: write",
+            "id-token: write",
+            "attestations: write",
+            "git push",
+            "gh release create",
+            "gh release upload",
+            "crane copy",
+        ),
+    ),
+    (
+        "Candidate cleanup cannot select branch-controlled workflow code or write refs",
+        ".github/workflows/release-candidate-cleanup.yml",
+        ("workflow_dispatch:", "contents: write", "git push", "git update-ref"),
+    ),
+)
+
 
 def missing_gates(workflow_text: str, classifier_text: str | None = None) -> list[str]:
     if classifier_text is None:
@@ -978,14 +1321,16 @@ def yaml_step_blocks(workflow: str) -> list[str]:
 def candidate_build_isolation_violations(workflow: str | None) -> list[str]:
     if workflow is None:
         return ["Candidate build job isolation"]
-    build_a = yaml_job_block(workflow, "build-a")
+    build_a = yaml_job_block(workflow, "build-canonical")
     build_b = yaml_job_block(workflow, "build-b")
     if build_a is None or build_b is not None:
         return ["Candidate build job isolation"]
     if (
         "needs: validate" not in build_a
         or "actions/cache@" not in build_a
-        or "name: Build canonical Linux payload once" not in build_a
+        or build_a.count("name: Build canonical Linux payload once") != 1
+        or build_a.count("name: Build private candidate image layouts once") != 1
+        or build_a.count("name: Package exact release docs archive") != 1
         or "actions/download-artifact@" in build_a
     ):
         return ["Candidate build job isolation"]
@@ -1000,15 +1345,15 @@ def candidate_attestation_isolation_violations(
     gate = "Candidate verification and attestation permission isolation"
     if workflow is None:
         return [gate]
-    verify = yaml_job_block(workflow, "verify-candidate")
-    attest = yaml_job_block(workflow, "attest-candidate")
+    verify = yaml_job_block(workflow, "assemble")
+    attest = yaml_job_block(workflow, "attest")
     if verify is None or attest is None:
         return [gate]
     verify_permissions = (
         "    permissions:\n"
         "      actions: read\n"
         "      contents: read\n"
-        "      packages: read"
+        "      packages: write"
     )
     attest_permissions = (
         "    permissions:\n"
@@ -1022,16 +1367,14 @@ def candidate_attestation_isolation_violations(
         verify_permissions not in verify
         or "id-token: write" in verify
         or "attestations: write" in verify
-        or "packages: write" in verify
-        or "needs:\n      - validate\n      - verify-candidate" not in attest
+        or "needs:\n      - validate\n      - assemble" not in attest
         or attest_permissions not in attest
         or "packages: write" in attest
-        or "name: Upload prior-verified immutable attestation bundle" not in verify
+        or "name: Upload one candidate manifest and bundle" not in verify
         or verify.rfind("python3 release/scripts/release_candidate.py verify")
-        >= verify.find("name: Upload prior-verified immutable attestation bundle")
-        or "name: Download prior-verified immutable attestation bundle" not in attest
-        or "name: Reverify every hash-bound subject before requesting OIDC"
-        not in attest
+        >= verify.find("name: Upload one candidate manifest and bundle")
+        or "name: Download compact candidate" not in attest
+        or "name: Reverify all bytes before requesting OIDC" not in attest
         or attest.rfind("python3 release/scripts/release_candidate.py verify")
         >= attest.find(attestation_action)
         or attestation_action not in attest
@@ -1051,33 +1394,31 @@ def promotion_first_write_barrier_violations(
     gate = "Promotion first-write destination barrier"
     if workflow is None:
         return [gate]
-    publish = yaml_job_block(workflow, "publish-images")
+    publish = yaml_job_block(workflow, "promote-images")
     if publish is None:
         return [gate]
     barrier_steps = [
         step
         for step in yaml_step_blocks(publish)
-        if "name: Recheck all public destinations immediately before first write"
-        in step
+        if "name: Recheck all destinations before exact digest promotion" in step
     ]
     if len(barrier_steps) != 1:
         return [gate]
     barrier_step = barrier_steps[0]
     barrier_required = (
-        "name: Recheck all public destinations immediately before first write",
-        '"repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"',
-        'if [[ "${release_status}" != "404" ]]; then',
-        "Cannot prove GitHub Release is absent at the first-write barrier",
-        "for name in registry-notary registry-relay; do",
-        "Public image ${public} already exists; fix forward",
-        "Cannot prove public image ${public} is absent",
+        "name: Recheck all destinations before exact digest promotion",
+        "while IFS= read -r final_ref; do",
+        'crane digest "${final_ref}"',
+        "Final image destination ${final_ref} is no longer absent",
+        "done < <(jq -r '.images[].final_ref' \"${manifest}\")",
     )
     publish_required = (
-        "name: Promote provenance-bearing candidate indexes without rewriting",
-        'crane copy "${staging}" "${public}"',
+        "name: Reconcile complete draft before first public write",
+        "name: Reverify candidate expiry immediately before registry login",
+        'crane copy "${candidate_ref}" "${final_ref}"',
     )
-    barrier = "name: Recheck all public destinations immediately before first write"
-    first_write = 'crane copy "${staging}" "${public}"'
+    barrier = "done < <(jq -r '.images[].final_ref' \"${manifest}\")"
+    first_write = 'crane copy "${candidate_ref}" "${final_ref}"'
     if (
         any(marker not in barrier_step for marker in barrier_required)
         or any(marker not in publish for marker in publish_required)
@@ -1087,19 +1428,27 @@ def promotion_first_write_barrier_violations(
     return []
 
 
-def artifact_retention_violations(
-    workflow: str | None, *, expected_days: int = 7
-) -> list[str]:
+def artifact_retention_violations(workflow: str | None) -> list[str]:
     if workflow is None:
-        return ["Candidate artifact seven-day retention"]
+        return ["Candidate artifact retention"]
     upload_steps = [
         block
         for block in yaml_step_blocks(workflow)
         if "actions/upload-artifact@" in block
     ]
-    marker = f"retention-days: {expected_days}"
-    if not upload_steps or any(marker not in block for block in upload_steps):
-        return ["Candidate artifact seven-day retention"]
+    final_steps = [
+        block
+        for block in upload_steps
+        if "name: Upload one candidate manifest and bundle" in block
+    ]
+    intermediate_steps = [block for block in upload_steps if block not in final_steps]
+    if (
+        len(final_steps) != 1
+        or "retention-days: 7" not in final_steps[0]
+        or not intermediate_steps
+        or any("retention-days: 2" not in block for block in intermediate_steps)
+    ):
+        return ["Candidate artifact retention"]
     return []
 
 
