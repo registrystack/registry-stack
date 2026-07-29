@@ -14,6 +14,10 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 
 import {
+  ARCHIVE_BUNDLE_SCHEMA,
+  LEGACY_ARCHIVE_BUNDLE_SCHEMA,
+  archiveMetadata,
+  assertArchiveMetadataMatchesDocset,
   createArchiveBundle,
   inspectArchiveBundle,
   restoreArchiveBundle,
@@ -109,18 +113,45 @@ test('rejects symlinks in immutable archive trees', async (t) => {
   await assert.rejects(treeDigest(output), /cannot contain symlinks/);
 });
 
-test('rejects docset metadata drift even when given a valid bundle digest', async (t) => {
+test('future metadata binds the release tag without source SHA sensitivity', async (t) => {
   const { root } = await fixture(t);
   const bundlePath = resolve(root, 'archive.tar.gz');
   const result = await createArchiveBundle({ docsRoot: root, docset, bundlePath });
 
+  assert.deepEqual(archiveMetadata(docset, result.tree_sha256), {
+    schema_version: ARCHIVE_BUNDLE_SCHEMA,
+    release_tag: 'v1.2.3',
+    tree_sha256: result.tree_sha256,
+  });
+  await inspectArchiveBundle({
+    bundlePath,
+    docset: { ...docset, source: 'different-source', products: {} },
+    expectedBundleSha256: result.bundle_sha256,
+    expectedTreeSha256: result.tree_sha256,
+  });
   await assert.rejects(
     inspectArchiveBundle({
       bundlePath,
-      docset: { ...docset, source: 'different-source' },
+      docset: { ...docset, id: 'v1.2.4', path: '/v/1.2.4/' },
       expectedBundleSha256: result.bundle_sha256,
       expectedTreeSha256: result.tree_sha256,
     }),
     /metadata does not match/,
   );
+});
+
+test('historical v1 metadata remains parseable with its source refs', () => {
+  assert.doesNotThrow(() => assertArchiveMetadataMatchesDocset({
+    schema_version: LEGACY_ARCHIVE_BUNDLE_SCHEMA,
+    docset_id: docset.id,
+    archive_path: docset.path,
+    source: docset.source,
+    published_at: docset.published_at,
+    source_refs: [{
+      name: 'registry-stack',
+      version: 'v1.2.3',
+      ref: 'a'.repeat(40),
+    }],
+    tree_sha256: 'b'.repeat(64),
+  }, docset));
 });

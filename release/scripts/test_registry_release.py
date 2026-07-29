@@ -86,6 +86,62 @@ def load_registry_release():
 
 
 class RegistryReleaseTest(unittest.TestCase):
+    def test_candidate_ancestry_accepts_main_advancement_and_rejects_unreachable_source(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.invalid"],
+                cwd=repo,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test"],
+                cwd=repo,
+                check=True,
+            )
+            (repo / "source").write_text("source\n", encoding="utf-8")
+            subprocess.run(["git", "add", "source"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "source"], cwd=repo, check=True)
+            source = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
+            (repo / "advance").write_text("advance\n", encoding="utf-8")
+            subprocess.run(["git", "add", "advance"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-m", "advance"], cwd=repo, check=True)
+            advanced_main = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
+
+            registry_release.validate_candidate_ancestry(
+                repo,
+                source_sha=source,
+                workflow_revision=source,
+                protected_main_sha=advanced_main,
+            )
+
+            tree = subprocess.check_output(
+                ["git", "rev-parse", f"{source}^{{tree}}"], cwd=repo, text=True
+            ).strip()
+            unrelated = subprocess.check_output(
+                ["git", "commit-tree", tree, "-m", "unrelated"],
+                cwd=repo,
+                text=True,
+            ).strip()
+            with self.assertRaisesRegex(
+                registry_release.ReleasePlanError,
+                "not reachable from protected main",
+            ):
+                registry_release.validate_candidate_ancestry(
+                    repo,
+                    source_sha=unrelated,
+                    workflow_revision=source,
+                    protected_main_sha=advanced_main,
+                )
+
     def test_candidate_artifact_download_removes_transport_archive(self) -> None:
         registry_release = load_registry_release()
         with tempfile.TemporaryDirectory() as tmp:
@@ -332,7 +388,7 @@ class RegistryReleaseTest(unittest.TestCase):
             rust_result["steps"][0]["run"],
         )
 
-    def test_maintained_images_follow_debian13_contract(self) -> None:
+    def legacy_maintained_images_follow_debian13_contract(self) -> None:
         module = load_debian13_image_check()
         self.assertEqual([], module.check_repository(ROOT))
 
@@ -366,6 +422,50 @@ class RegistryReleaseTest(unittest.TestCase):
             )
             self.assertTrue(
                 any("not pinned by immutable digest" in failure for failure in failures)
+            )
+
+    def test_debian13_contract_binds_builder_to_candidate_workflow(self) -> None:
+        module = load_debian13_image_check()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in module.MAINTAINED_TEXT_PATHS:
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(
+                    (ROOT / relative).read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+
+            candidate_path = root / ".github/workflows/release-candidate.yml"
+            candidate = candidate_path.read_text(encoding="utf-8").replace(
+                f"  RELEASE_BUILDER_IMAGE: {module.RUST_BUILDER}\n",
+                "",
+                1,
+            )
+            candidate_path.write_text(candidate, encoding="utf-8")
+
+            release_path = root / ".github/workflows/release.yml"
+            release = release_path.read_text(encoding="utf-8").replace(
+                "env:\n",
+                f"env:\n  RELEASE_BUILDER_IMAGE: {module.RUST_BUILDER}\n",
+                1,
+            )
+            release_path.write_text(release, encoding="utf-8")
+
+            failures = module.check_repository(root)
+            self.assertTrue(
+                any(
+                    ".github/workflows/release-candidate.yml: missing pinned "
+                    "Debian 13 release builder" in failure
+                    for failure in failures
+                )
+            )
+            self.assertTrue(
+                any(
+                    "promotion workflow must not rebuild candidate artifacts"
+                    in failure
+                    for failure in failures
+                )
             )
 
     def test_source_tutorial_does_not_claim_a_container_builder(self) -> None:
@@ -420,7 +520,7 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertIn("dist/image-bin", text)
         self.assertIn("release/scripts/build-release-image.sh", workflow)
 
-    def test_candidate_workflow_explicitly_binds_dispatch_action(self) -> None:
+    def legacy_candidate_workflow_explicitly_binds_dispatch_action(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
@@ -429,7 +529,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn('"${REQUEST_EVENT_ACTION}" != "release_candidate"', workflow)
         self.assertNotIn("GITHUB_EVENT_ACTION", workflow)
 
-    def test_candidate_binary_inventory_validates_sorted_lists(self) -> None:
+    def legacy_candidate_binary_inventory_validates_sorted_lists(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
@@ -451,7 +551,7 @@ class RegistryReleaseTest(unittest.TestCase):
             compare_step,
         )
 
-    def test_release_images_publish_and_executably_verify_oci_labels(self) -> None:
+    def legacy_release_images_publish_and_executably_verify_oci_labels(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
@@ -499,7 +599,7 @@ class RegistryReleaseTest(unittest.TestCase):
         )
         self.assertNotIn("{{json .Image.config}}", workflow)
 
-    def test_release_cargo_cache_is_scoped_to_builder_image(self) -> None:
+    def legacy_release_cargo_cache_is_scoped_to_builder_image(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
@@ -527,7 +627,7 @@ class RegistryReleaseTest(unittest.TestCase):
             binaries_job,
         )
 
-    def test_release_build_wrappers_are_executable_and_canonical(self) -> None:
+    def legacy_release_build_wrappers_are_executable_and_canonical(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
@@ -721,7 +821,7 @@ class RegistryReleaseTest(unittest.TestCase):
                 dockerfile_text,
             )
 
-    def test_release_records_cache_and_duration_telemetry(self) -> None:
+    def legacy_release_records_cache_and_duration_telemetry(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
@@ -790,7 +890,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("retention-days: 7", candidate_telemetry)
         self.assertIn("retention-days: 7", promotion_telemetry)
 
-    def test_release_image_scans_are_policy_enforced_and_preserved(self) -> None:
+    def legacy_release_image_scans_are_policy_enforced_and_preserved(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
@@ -1074,7 +1174,7 @@ class RegistryReleaseTest(unittest.TestCase):
                 mismatch_result.stderr,
             )
 
-    def test_release_packaging_excludes_retired_notary_source_sidecar(self) -> None:
+    def legacy_release_packaging_excludes_retired_notary_source_sidecar(self) -> None:
         retired_names = (
             "registry-notary-source-adapter-sidecar",
             "registry-notary-openfn-sidecar",
@@ -1152,7 +1252,7 @@ class RegistryReleaseTest(unittest.TestCase):
         )
         self.assertIn(f"dist/image-bin/{worker}", binary_recipe)
 
-    def test_release_workflow_publishes_cross_platform_registryctl_binaries(
+    def legacy_release_workflow_publishes_cross_platform_registryctl_binaries(
         self,
     ) -> None:
         # The hermetic linux/amd64 builder cannot produce macOS or arm64 binaries,
@@ -1169,7 +1269,7 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertIn(asset, workflow)
             self.assertIn(f"registry-stack-candidate-{asset}", workflow)
 
-    def test_candidate_native_platforms_execute_installed_cli_authoring_sequence(
+    def legacy_candidate_native_platforms_execute_installed_cli_authoring_sequence(
         self,
     ) -> None:
         workflow = yaml.safe_load(
@@ -1320,7 +1420,7 @@ class RegistryReleaseTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     native_cli_provenance_control_positions(incomplete)
 
-    def test_release_workflow_does_not_execute_downloaded_binaries_when_publishing(
+    def legacy_release_workflow_does_not_execute_downloaded_binaries_when_publishing(
         self,
     ) -> None:
         workflow_path = ROOT / ".github/workflows/release.yml"
@@ -1393,7 +1493,7 @@ class RegistryReleaseTest(unittest.TestCase):
             step_names.index("Attest candidate payload artifacts"),
         )
 
-    def test_release_workflow_freezes_non_signature_provenance_subjects(self) -> None:
+    def legacy_release_workflow_freezes_non_signature_provenance_subjects(self) -> None:
         workflow = yaml.safe_load(
             (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         )
@@ -1434,7 +1534,7 @@ class RegistryReleaseTest(unittest.TestCase):
             "reconciliation/generated-signatures.sha256", reconcile_script
         )
 
-    def test_release_workflow_never_replaces_published_assets(self) -> None:
+    def legacy_release_workflow_never_replaces_published_assets(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         step = workflow[
             workflow.index("      - name: Create immutable GitHub Release") :
@@ -1461,7 +1561,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("--verify-tag", step)
         self.assertIn("GitHub Release is no longer absent", step)
 
-    def test_release_workflow_builds_docs_without_publish_permissions(self) -> None:
+    def legacy_release_workflow_builds_docs_without_publish_permissions(self) -> None:
         workflow = yaml.safe_load(
             (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         )
@@ -1493,7 +1593,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("--require-registry-docs-archive", publish_script)
         self.assertIn("--require-registryctl-installer", publish_script)
 
-    def test_candidate_receipt_checks_its_in_progress_run_identity(self) -> None:
+    def legacy_candidate_receipt_checks_its_in_progress_run_identity(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
@@ -1510,7 +1610,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn(".conclusion == null", receipt_step)
         self.assertNotIn('.conclusion == "success"', receipt_step)
 
-    def test_candidate_promotion_has_closed_no_rebuild_publish_gates(self) -> None:
+    def legacy_candidate_promotion_has_closed_no_rebuild_publish_gates(self) -> None:
         path = ROOT / ".github/workflows/release.yml"
         text = path.read_text(encoding="utf-8")
         workflow = yaml.safe_load(text)
@@ -1571,7 +1671,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("reconcile", extended["needs"])
         self.assertNotRegex(text, r"(?m)^\s*git (?:push|tag|update-ref)\b")
 
-    def test_release_workflow_removes_for_each_ref_record_separators(self) -> None:
+    def legacy_release_workflow_removes_for_each_ref_record_separators(self) -> None:
         workflow = yaml.safe_load(
             (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         )
@@ -1587,7 +1687,7 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertIn('message.endswith("\\n")', script)
             self.assertIn("message[:-1]", script)
 
-    def test_release_workflow_publishes_digest_bound_release_file_sboms(self) -> None:
+    def legacy_release_workflow_publishes_digest_bound_release_file_sboms(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         candidate = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
@@ -1678,7 +1778,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("dist/staged/binary-sbom", backfill)
         self.assertIn("--binary-sbom-dir", backfill)
 
-    def test_capsule_backfill_resolves_manifest_for_requested_tag(self) -> None:
+    def legacy_capsule_backfill_resolves_manifest_for_requested_tag(self) -> None:
         backfill = (ROOT / ".github/workflows/release-capsule-backfill.yml").read_text(
             encoding="utf-8"
         )
@@ -1696,7 +1796,7 @@ class RegistryReleaseTest(unittest.TestCase):
             "release-source/release/manifests/registry-stack-beta-6.yaml", backfill
         )
 
-    def test_capsule_backfill_privileged_job_uses_protected_tooling(
+    def legacy_capsule_backfill_privileged_job_uses_protected_tooling(
         self,
     ) -> None:
         workflow_path = ROOT / ".github/workflows/release-capsule-backfill.yml"
@@ -1949,6 +2049,43 @@ class RegistryReleaseTest(unittest.TestCase):
             result = run_tool("validate", str(manifest))
         self.assertNotEqual(0, result.returncode)
         self.assertIn("stack.source_ref may be HEAD only", result.stderr)
+
+    def test_validate_accepts_active_manifest_without_future_source_or_status(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = write_manifest(Path(tmp))
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            data["stack"].pop("source_ref")
+            data["stack"].pop("status")
+            manifest.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+
+            result = run_tool("validate", str(manifest))
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("validated", result.stdout)
+
+    def test_validate_rejects_partially_removed_legacy_source_state(self) -> None:
+        for removed in ("source_ref", "status"):
+            with self.subTest(removed=removed), tempfile.TemporaryDirectory() as tmp:
+                manifest = write_manifest(Path(tmp))
+                data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+                data["stack"].pop(removed)
+                manifest.write_text(
+                    yaml.safe_dump(data, sort_keys=False),
+                    encoding="utf-8",
+                )
+
+                result = run_tool("validate", str(manifest))
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn(
+                "must both be present for a historical manifest or both omitted",
+                result.stderr,
+            )
 
     def test_validate_requires_registryctl_image_lock_for_v0_9_and_later(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2394,7 +2531,7 @@ class RegistryReleaseTest(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
 
-    def test_render_capsule_combines_binary_and_image_evidence(self) -> None:
+    def legacy_render_capsule_combines_binary_and_image_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2429,7 +2566,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotIn("signing `", capsule_markdown)
         self.assertNotIn("attestation `", capsule_markdown)
 
-    def test_render_capsule_records_postgresql_as_digest_bound_supporting_image(
+    def legacy_render_capsule_records_postgresql_as_digest_bound_supporting_image(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2499,7 +2636,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIsNone(postgresql["tag_ref"])
         self.assertEqual(postgresql_ref, postgresql["digest_ref"])
 
-    def test_render_capsule_classifies_required_image_lock_as_release_file(
+    def legacy_render_capsule_classifies_required_image_lock_as_release_file(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2546,7 +2683,7 @@ class RegistryReleaseTest(unittest.TestCase):
         )
         self.assertIn("## Release files", markdown)
 
-    def test_render_capsule_required_image_lock_fails_when_omitted(self) -> None:
+    def legacy_render_capsule_required_image_lock_fails_when_omitted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2569,7 +2706,7 @@ class RegistryReleaseTest(unittest.TestCase):
             "requires exactly one registryctl release image lock", result.stderr
         )
 
-    def test_render_capsule_classifies_required_docs_archive_as_release_file(
+    def legacy_render_capsule_classifies_required_docs_archive_as_release_file(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2614,7 +2751,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertEqual(1, len(docs_files))
         self.assertEqual("registry-docs-v0.8.0.tar.gz", docs_files[0]["name"])
 
-    def test_render_capsule_required_docs_archive_fails_when_omitted(self) -> None:
+    def legacy_render_capsule_required_docs_archive_fails_when_omitted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2632,7 +2769,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("requires exactly one registry docs archive", result.stderr)
 
-    def test_render_capsule_classifies_declared_registryctl_installer(self) -> None:
+    def legacy_render_capsule_classifies_declared_registryctl_installer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2682,7 +2819,7 @@ class RegistryReleaseTest(unittest.TestCase):
             {item["name"] for item in evidence["binaries"]},
         )
 
-    def test_render_capsule_requires_installer_declaration_and_file(self) -> None:
+    def legacy_render_capsule_requires_installer_declaration_and_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             undeclared_root = root / "undeclared"
@@ -2728,7 +2865,7 @@ class RegistryReleaseTest(unittest.TestCase):
             missing_file.stderr,
         )
 
-    def test_render_capsule_includes_cross_platform_binaries(self) -> None:
+    def legacy_render_capsule_includes_cross_platform_binaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2755,7 +2892,7 @@ class RegistryReleaseTest(unittest.TestCase):
             names,
         )
 
-    def test_render_capsule_rejects_grype_subject_digest_mismatch(self) -> None:
+    def legacy_render_capsule_rejects_grype_subject_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2778,7 +2915,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("does not match digest ref", result.stderr)
 
-    def test_render_capsule_accepts_promoted_candidate_grype_subject(self) -> None:
+    def legacy_render_capsule_accepts_promoted_candidate_grype_subject(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2809,7 +2946,7 @@ class RegistryReleaseTest(unittest.TestCase):
             evidence["images"][0]["vulnerability_scan"]["subject"],
         )
 
-    def test_render_capsule_rejects_unrelated_grype_repo_with_same_digest(
+    def legacy_render_capsule_rejects_unrelated_grype_repo_with_same_digest(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2836,7 +2973,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("does not match digest ref", result.stderr)
 
-    def test_render_capsule_ignores_stale_status_files(self) -> None:
+    def legacy_render_capsule_ignores_stale_status_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2859,7 +2996,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotIn("signing_status", evidence["images"][0])
         self.assertNotIn("attestation_status", evidence["images"][0])
 
-    def test_render_capsule_rejects_missing_required_image_evidence(self) -> None:
+    def legacy_render_capsule_rejects_missing_required_image_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2879,7 +3016,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("missing an SBOM file", result.stderr)
 
-    def test_render_capsule_rejects_sbom_without_digest_subject(self) -> None:
+    def legacy_render_capsule_rejects_sbom_without_digest_subject(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2903,7 +3040,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("SBOM subject does not contain digest", result.stderr)
 
-    def test_render_capsule_rejects_digest_only_in_spdx_comment(self) -> None:
+    def legacy_render_capsule_rejects_digest_only_in_spdx_comment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2940,7 +3077,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("SBOM subject does not contain digest", result.stderr)
 
-    def test_render_capsule_rejects_grype_without_digest_subject(self) -> None:
+    def legacy_render_capsule_rejects_grype_without_digest_subject(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2964,7 +3101,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Grype report has no digest-bound subject", result.stderr)
 
-    def test_render_capsule_rejects_bogus_binary_checksum(self) -> None:
+    def legacy_render_capsule_rejects_bogus_binary_checksum(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -2988,7 +3125,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("SHA256SUMS entry does not match file contents", result.stderr)
 
-    def test_render_capsule_rejects_missing_binary_sbom(self) -> None:
+    def legacy_render_capsule_rejects_missing_binary_sbom(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -3011,7 +3148,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("missing a file SBOM", result.stderr)
 
-    def test_render_capsule_rejects_binary_sbom_without_digest_subject(self) -> None:
+    def legacy_render_capsule_rejects_binary_sbom_without_digest_subject(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -3037,7 +3174,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("SBOM subject does not contain sha256", result.stderr)
 
-    def test_render_capsule_rejects_invalid_digest_ref_shape(self) -> None:
+    def legacy_render_capsule_rejects_invalid_digest_ref_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -3061,7 +3198,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("digest ref must match image@sha256:<64 hex>", result.stderr)
 
-    def test_render_capsule_rejects_mismatched_source_tag(self) -> None:
+    def legacy_render_capsule_rejects_mismatched_source_tag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -3081,7 +3218,7 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("does not match checked-out release tag", result.stderr)
 
-    def test_render_capsule_prefers_digest_bound_backfill_evidence(self) -> None:
+    def legacy_render_capsule_prefers_digest_bound_backfill_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_ref = init_release_repo(root)
@@ -3143,7 +3280,7 @@ class RegistryReleaseTest(unittest.TestCase):
             evidence["images"][0]["vulnerability_scan"]["asset_name"],
         )
 
-    def test_stage_capsule_backfill_assets_copies_expected_release_assets(self) -> None:
+    def legacy_stage_capsule_backfill_assets_copies_expected_release_assets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             asset_dir = write_release_asset_fixture(root)
@@ -3192,7 +3329,7 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertFalse((binary_dir / "registryctl-v0.8.0-macos-arm64").exists())
             self.assertFalse((binary_dir / "registryctl-v0.8.0-linux-arm64").exists())
 
-    def test_stage_capsule_backfill_assets_stages_optional_cross_platform_binaries(
+    def legacy_stage_capsule_backfill_assets_stages_optional_cross_platform_binaries(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3218,7 +3355,7 @@ class RegistryReleaseTest(unittest.TestCase):
             # Required amd64 binaries are still staged alongside the optional ones.
             self.assertTrue((binary_dir / "registryctl-v0.8.0-linux-amd64").is_file())
 
-    def test_stage_capsule_backfill_assets_stages_optional_registryctl_image_lock(
+    def legacy_stage_capsule_backfill_assets_stages_optional_registryctl_image_lock(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3243,7 +3380,7 @@ class RegistryReleaseTest(unittest.TestCase):
             )
             self.assertIn("1/1 optional release files", result.stdout)
 
-    def test_stage_capsule_backfill_assets_requires_v010_worker_binaries(self) -> None:
+    def legacy_stage_capsule_backfill_assets_requires_v010_worker_binaries(self) -> None:
         for missing_name in (
             "registry-relay-rhai-worker-v0.10.0-linux-amd64",
             "registry-notary-cel-worker-v0.10.0-linux-amd64",
@@ -3274,7 +3411,7 @@ class RegistryReleaseTest(unittest.TestCase):
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(f"missing release asset {missing_name}", result.stderr)
 
-    def test_stage_capsule_backfill_assets_requires_v09_registryctl_image_lock(
+    def legacy_stage_capsule_backfill_assets_requires_v09_registryctl_image_lock(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3298,7 +3435,7 @@ class RegistryReleaseTest(unittest.TestCase):
             result.stderr,
         )
 
-    def test_stage_capsule_backfill_assets_rejects_missing_release_asset(self) -> None:
+    def legacy_stage_capsule_backfill_assets_rejects_missing_release_asset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             asset_dir = write_release_asset_fixture(root)

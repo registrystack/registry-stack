@@ -1,66 +1,19 @@
 name: Deploy RegistryStack Docs
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/docs-pages.yml"
-      - "docs/site/**"
-      - "crates/registryctl/assets/project-starters/**"
-      - "crates/registryctl/schemas/project-authoring/**"
-      - "crates/registryctl/schemas/project-documentation/**"
-      - "crates/registryctl/schemas/project-reports/**"
-      - "crates/registryctl/src/lib.rs"
-      - "crates/registryctl/src/main.rs"
-      - "crates/registryctl/src/project_authoring/capability_inventory.rs"
-      - "crates/registryctl/src/project_authoring/compiler/relay.rs"
-      - "crates/registryctl/src/project_authoring/diagnostic_reference.rs"
-      - "crates/registryctl/src/project_authoring/diagnostics.rs"
-      - "crates/registryctl/src/project_authoring/documentation.rs"
-      - "crates/registryctl/src/project_authoring/fixture_diagnostics.rs"
-      - "crates/registryctl/src/project_authoring/fixture_coverage.rs"
-      - "crates/registryctl/src/project_authoring/knowledge.rs"
-      - "crates/registryctl/src/project_authoring/migration.rs"
-      - "crates/registryctl/src/project_authoring/output.rs"
-      - "crates/registryctl/src/project_authoring/preflight.rs"
-      - "crates/registryctl/src/project_authoring/promotion.rs"
-      - "crates/registryctl/src/project_authoring/report_contract.rs"
-      - "crates/registryctl/src/project_authoring/semantic_comparison.rs"
-      - "crates/registryctl/src/sample.rs"
-      - "crates/registryctl/src/templates/**"
-      - "crates/registryctl/tests/fixtures/project-authoring-journeys.yaml"
-      - "crates/registryctl/tests/fixtures/project-authoring/**"
-      - "crates/registryctl/tests/fixtures/project-reports/**"
-      - "crates/registryctl/tests/init_output.rs"
-      - "crates/registryctl/tests/project_authoring.rs"
-      - "crates/registry-relay/docs/**"
-      - "crates/registry-relay/openapi/**"
-      - "crates/registry-relay/config/documentation-intent.json"
-      - "crates/registry-relay/src/api/openapi.rs"
-      - "crates/registry-relay/src/consultation/**"
-      - "crates/registry-relay/src/config/**"
-      - "crates/registry-relay/src/main.rs"
-      - "crates/registry-relay/src/process_startup.rs"
-      - "crates/registry-relay/src/server.rs"
-      - "crates/registry-relay/tests/api_docs.rs"
-      - "crates/registry-notary-core/config/documentation-intent.json"
-      - "crates/registry-notary-core/src/config.rs"
-      - "crates/registry-notary-core/src/config/**"
-      - "crates/registry-notary-core/src/deployment.rs"
-      - "crates/registry-notary-server/src/standalone/activation.rs"
-      - "crates/registry-platform-ops/src/lib.rs"
-      - "products/notary/docs/**"
-      - "products/notary/openapi/**"
-      - "products/manifest/docs/**"
-      - "schemas/registry-relay.config.schema.json"
-      - "schemas/registry-notary.config.schema.json"
   workflow_dispatch:
+    inputs:
+      released_tag:
+        description: Exact public Registry Stack release tag
+        required: true
+        type: string
+      docs_sha256:
+        description: SHA-256 of the released documentation archive
+        required: true
+        type: string
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: docs-pages
@@ -68,17 +21,99 @@ concurrency:
 
 jobs:
   build:
-    name: Build docs site
+    name: Authenticate and assemble docs site
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Validate exact dispatch before build
+        env:
+          RELEASED_TAG: ${{ inputs.released_tag }}
+          DOCS_SHA256: ${{ inputs.docs_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = "refs/heads/main"
+          if [[ ! "${RELEASED_TAG}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "released_tag must be canonical v<major>.<minor>.<patch> text" >&2
+            exit 1
+          fi
+          if [[ ! "${DOCS_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "docs_sha256 must be 64 lowercase hexadecimal characters" >&2
+            exit 1
+          fi
+
+      - name: Authenticate public release and checksum inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASED_TAG: ${{ inputs.released_tag }}
+          DOCS_SHA256: ${{ inputs.docs_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="registry-docs-${RELEASED_TAG}.tar.gz"
+          checksum_bundle="registry-stack-${RELEASED_TAG}-SHA256SUMS.sigstore.json"
+          release_dir="${RUNNER_TEMP}/released-docs"
+          mkdir "${release_dir}"
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASED_TAG}" \
+            > "${release_dir}/release.json"
+          jq -e \
+            --arg tag "${RELEASED_TAG}" \
+            '.tag_name==$tag and .draft==false and .prerelease==false' \
+            "${release_dir}/release.json" >/dev/null
+          for name in "${archive}" SHA256SUMS "${checksum_bundle}"; do
+            test "$(jq -r --arg name "${name}" \
+              '[.assets[] | select(.name==$name)] | length' \
+              "${release_dir}/release.json")" = 1
+          done
+
+          gh release download "${RELEASED_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --dir "${release_dir}" \
+            --pattern "${archive}" \
+            --pattern "SHA256SUMS" \
+            --pattern "${checksum_bundle}"
+
+          actual="$(sha256sum "${release_dir}/${archive}" | awk '{print $1}')"
+          test "${actual}" = "${DOCS_SHA256}"
+          test "$(jq -er --arg name "${archive}" \
+            '.assets[] | select(.name==$name) | .digest' \
+            "${release_dir}/release.json")" = "sha256:${DOCS_SHA256}"
+          checksum="$(
+            awk -v name="${archive}" '$2 == name {print $1}' \
+              "${release_dir}/SHA256SUMS"
+          )"
+          test "${checksum}" = "${DOCS_SHA256}"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.1
+
+      - name: Verify tag-bound checksum signature
+        env:
+          RELEASED_TAG: ${{ inputs.released_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="${RUNNER_TEMP}/released-docs"
+          cosign verify-blob "${release_dir}/SHA256SUMS" \
+            --bundle \
+              "${release_dir}/registry-stack-${RELEASED_TAG}-SHA256SUMS.sigstore.json" \
+            --certificate-oidc-issuer \
+              "https://token.actions.githubusercontent.com" \
+            --certificate-identity \
+              "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${RELEASED_TAG}"
+
+      - name: Checkout protected main without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
         with:
+          ref: refs/heads/main
           fetch-depth: 0
           submodules: false
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4.4.0
         with:
           node-version: 22.12.0
           cache: npm
@@ -92,9 +127,10 @@ jobs:
         working-directory: docs/site
         run: node scripts/generate-standard-journeys.mjs --check
 
-      - name: Build unreleased Main documentation
+      - name: Build protected main at /dev/
         working-directory: docs/site
         run: |
+          set -euo pipefail
           npm run generate
           DOCS_DOCSET=latest DOCS_BASE=/dev/ npx astro check
           DOCS_DOCSET=latest DOCS_BASE=/dev/ npx astro build --outDir dist/dev
@@ -104,24 +140,31 @@ jobs:
           PUBLIC_UMAMI_SCRIPT_SRC: ${{ vars.PUBLIC_UMAMI_SCRIPT_SRC }}
           PUBLIC_UMAMI_DOMAINS: ${{ vars.PUBLIC_UMAMI_DOMAINS }}
 
-      - name: Assemble immutable archived docs
+      - name: Assemble declared historical archives
         working-directory: docs/site
-        run: npm run assemble:archives -- --bootstrap
+        env:
+          RELEASED_TAG: ${{ inputs.released_tag }}
+        run: |
+          set -euo pipefail
+          npm run assemble:archives -- \
+            --exclude-docset "${RELEASED_TAG}"
 
-      - name: Promote released documentation to the canonical root
+      - name: Promote exact released docs without rewriting archive files
         working-directory: docs/site
-        run: npm run stage:production-docsets
-
-      - name: Build canonical released-documentation search
-        working-directory: docs/site
-        run: npm run build:production-search
+        env:
+          RELEASED_TAG: ${{ inputs.released_tag }}
+          DOCS_SHA256: ${{ inputs.docs_sha256 }}
+          RELEASED_ARCHIVE: ${{ runner.temp }}/released-docs/registry-docs-${{ inputs.released_tag }}.tar.gz
+        run: |
+          set -euo pipefail
+          npm run stage:production-docsets -- \
+            --released-tag "${RELEASED_TAG}" \
+            --docs-sha256 "${DOCS_SHA256}" \
+            --bundle "${RELEASED_ARCHIVE}"
 
       - name: Verify current machine-readable documentation
         working-directory: docs/site
         run: npm run check:llms:built
-        env:
-          DOCS_DIST_DIR: ${{ github.workspace }}/docs/site/dist/dev
-          DOCS_PUBLIC_BASE: /dev/
 
       - name: Verify assembled documentation tree
         working-directory: docs/site
@@ -129,22 +172,49 @@ jobs:
           npm run check:seo:built
           npm run check:links:built
 
-      - name: Configure Pages
-        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
+      - name: Smoke assembled route and discovery tree
+        working-directory: docs/site
+        run: |
+          npm run smoke:deployment -- \
+            --root dist \
+            --released-tag "${{ inputs.released_tag }}"
 
-      - name: Upload Pages artifact
+      - name: Upload one Pages artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: docs/site/dist
 
   deploy:
-    name: Deploy docs site
+    name: Deploy and smoke canonical docs
     needs: build
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
+
+      - name: Checkout smoke helper from protected main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: refs/heads/main
+          sparse-checkout: docs/site/scripts/smoke-docs-deployment.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Smoke live canonical deployment
+        working-directory: docs/site
+        run: |
+          node scripts/smoke-docs-deployment.mjs \
+            --url https://docs.registrystack.org \
+            --released-tag "${{ inputs.released_tag }}" \
+            --attempts 12

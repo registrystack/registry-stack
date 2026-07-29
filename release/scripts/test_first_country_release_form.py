@@ -928,16 +928,17 @@ class FirstCountryReleaseFormTest(TestCase):
         ):
             self.module.verify_report(path, self.assets, self.tag)
 
-    def test_workflow_separates_beginner_runtime_from_additional_cli_assets(
+    def test_workflow_runs_one_linux_install_and_authoring_smoke_after_assembly(
         self,
     ) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(
-            "Run exact first-country release-form journey before sealing", workflow
+            "Assemble public payload and run install and authoring smoke", workflow
         )
         self.assertIn("first-country-release-form.py run", workflow)
-        self.assertIn("Verify candidate CLI install on ${{ matrix.asset }}", workflow)
-        self.assertIn("Install exact candidate CLI and verify authoring path", workflow)
+        self.assertIn("first-country-release-form.py verify", workflow)
+        self.assertIn("> SHA256SUMS", workflow)
+        self.assertIn("rm candidate/bundle-root/SHA256SUMS", workflow)
         self.assertNotIn(
             "Verify candidate beginner journey on ${{ matrix.asset }}", workflow
         )

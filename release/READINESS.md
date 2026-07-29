@@ -91,15 +91,16 @@ what we could not find ourselves.
 
 ## 6. Supply chain and provenance
 
-Release assets are already cosign-signed with SLSA provenance
-([`VERIFY.md`](VERIFY.md)) and repeatable-build evidence exists
-([`REPEATABLE-BUILDS.md`](REPEATABLE-BUILDS.md)); open tracking issues:
+Current release assets use a signed checksum chain and tag-bound SLSA
+provenance ([`VERIFY.md`](VERIFY.md)). Scheduled repeatable-build evidence and
+its 30-day OpenSSF claim boundary are documented in
+[`REPEATABLE-BUILDS.md`](REPEATABLE-BUILDS.md); open tracking issues:
 GH#122, GH#123, GH#127, GH#128, GH#129.
 
 - [x] SBOM published per release. Evidence:
-      [release workflow](../.github/workflows/release.yml) publishes
-      digest-bound SPDX SBOMs for release binaries, image-input binaries
-      including the Notary PKCS#11 variant, and images on the next tag release.
+      [release workflow](../.github/workflows/release.yml) publishes one
+      consolidated SPDX JSON SBOM. The checksum-covered security-evidence
+      archive retains image-specific SBOMs and exact scan reports.
 - [x] Unsafe-code inventory generated and reviewed. Evidence:
       [`unsafe-code-inventory.md`](notes/unsafe-code-inventory.md).
 - [x] Dependency vetting policy documented. Evidence:

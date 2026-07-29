@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import YAML from 'yaml';
 
-import { assembleArchives } from './assemble-archives.mjs';
+import { assembleArchives, parseArgs } from './assemble-archives.mjs';
 import { createArchiveBundle } from './archive-bundle.mjs';
 
 const docset = {
@@ -142,4 +142,27 @@ test('does not fall back after a published bundle fails digest verification', as
     /does not match lock/,
   );
   assert.equal(requests, 1);
+});
+
+test('skips the exact release bundle supplied by authenticated promotion', async (t) => {
+  const { targetRoot } = await fixture(t);
+  const result = await assembleArchives({
+    docsRoot: targetRoot,
+    excludeDocsetId: docset.id,
+    fetchImpl: async () => {
+      throw new Error('excluded release must not be downloaded through historical assembly');
+    },
+    restoreGeneratedData: async () => {},
+  });
+
+  assert.deepEqual(result.skipped, [docset.id]);
+  assert.equal(result.restored, 0);
+  await assert.rejects(
+    readFile(resolve(targetRoot, 'dist/v/1.2.3/index.html')),
+    /ENOENT/,
+  );
+  assert.deepEqual(
+    parseArgs(['--exclude-docset', docset.id]),
+    { bootstrap: false, excludeDocsetId: docset.id },
+  );
 });

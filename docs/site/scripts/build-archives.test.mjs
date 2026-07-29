@@ -90,23 +90,29 @@ test('archive generation excludes current-source generators', async () => {
   );
 });
 
-test('every versioned archive is noindex and has no sitemap', async (t) => {
-  const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-seo-'));
+test('single release archive build does not depend on the mutable released pointer', async () => {
+  const source = await readFile(resolve(docsRoot, 'scripts/build-archive.mjs'), 'utf8');
+  assert.match(source, /buildDocsetArchive\(docset, \{ indexable: true \}\)/);
+  assert.doesNotMatch(source, /docset\.id === docsets\.released/);
+});
+
+test('selected released archive stays indexable and keeps its sitemap', async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-released-seo-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await writeFile(
     resolve(root, 'index.html'),
-    '<html><head><link rel="sitemap" href="sitemap-index.xml"></head></html>',
+    '<html><head><meta name="robots" content="noindex,follow"><link rel="sitemap" href="sitemap-index.xml"></head></html>',
   );
   await writeFile(resolve(root, 'sitemap-index.xml'), '<sitemapindex/>\n');
 
-  await applyArchiveSeo(root);
+  await applyArchiveSeo(root, { indexable: true });
 
   const html = await readFile(resolve(root, 'index.html'), 'utf8');
-  assert.match(html, /noindex,follow/);
-  assert.doesNotMatch(html, /rel="sitemap"/);
-  await assert.rejects(
-    readFile(resolve(root, 'sitemap-index.xml'), 'utf8'),
-    /ENOENT/,
+  assert.doesNotMatch(html, /noindex,follow/);
+  assert.match(html, /rel="sitemap"/);
+  assert.equal(
+    await readFile(resolve(root, 'sitemap-index.xml'), 'utf8'),
+    '<sitemapindex/>\n',
   );
 });
 
@@ -115,6 +121,7 @@ test('archived docset builds use isolated generation with release-bound environm
   t.after(() => rm(root, { recursive: true, force: true }));
   const calls = [];
   let seoPath;
+  let seoOptions;
 
   await buildDocsetArchive(archivedDocset, {
     docsRoot: root,
@@ -122,8 +129,9 @@ test('archived docset builds use isolated generation with release-bound environm
     runCommand: async (command, args, env) => {
       calls.push({ command, args, env });
     },
-    applySeo: async (path) => {
+    applySeo: async (path, options) => {
       seoPath = path;
+      seoOptions = options;
     },
   });
 
@@ -137,13 +145,35 @@ test('archived docset builds use isolated generation with release-bound environm
   );
   for (const { env } of calls) {
     assert.equal(env.DOCS_DOCSET, 'v1.2.3');
-    assert.equal(env.DOCS_BASE, '/v/1.2.3/');
+    assert.equal(env.DOCS_BASE, '/');
+    assert.equal(env.DOCS_RELEASED_ARCHIVE, '');
     assert.equal(env.TZ, 'UTC');
     assert.equal(env.PUBLIC_UMAMI_WEBSITE_ID, '');
     assert.equal(env.PUBLIC_UMAMI_SCRIPT_SRC, '');
     assert.equal(env.PUBLIC_UMAMI_DOMAINS, '');
   }
   assert.equal(seoPath, resolve(root, 'dist/v/1.2.3'));
+  assert.deepEqual(seoOptions, { indexable: false });
+});
+
+test('selected released archive builds at the canonical root with release discovery', async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-released-build-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const calls = [];
+
+  await buildDocsetArchive(archivedDocset, {
+    docsRoot: root,
+    indexable: true,
+    stageGeneratedArtifacts: async () => async () => {},
+    runCommand: async (_command, _args, env) => calls.push(env),
+    applySeo: async () => {},
+  });
+
+  assert.ok(calls.length > 0);
+  for (const env of calls) {
+    assert.equal(env.DOCS_BASE, '/');
+    assert.equal(env.DOCS_RELEASED_ARCHIVE, 'true');
+  }
 });
 
 test('archive output uses pinned generated artifacts and restores current files', async (t) => {

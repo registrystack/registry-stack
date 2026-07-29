@@ -11,4 +11,7 @@ if (docset.id === docsets.current || docset.status !== 'archived') {
   process.exit(1);
 }
 
-await buildDocsetArchive(docset);
+// This command is the release-candidate entrypoint. Its exact output is
+// promoted to the canonical root after publication, independent of the
+// mutable local `released` selector.
+await buildDocsetArchive(docset, { indexable: true });

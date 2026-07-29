@@ -306,23 +306,7 @@ class RegistryReleasePlanTest(unittest.TestCase):
             *extra,
         )
 
-    def finalize(self, *extra: str) -> subprocess.CompletedProcess[str]:
-        return run(
-            "finalize",
-            "--version",
-            "1.1.0",
-            "--release-id",
-            "beta-9",
-            "--repo",
-            str(self.repo.root),
-            "--promotion-commit",
-            self.repo.promotion,
-            "--default-branch",
-            "main",
-            *extra,
-        )
-
-    def test_commands_require_explicit_release_identity_and_promotion(self) -> None:
+    def test_prepare_requires_explicit_release_identity(self) -> None:
         cases = (
             (
                 ("prepare", "--release-id", "beta-9", "--repo", str(self.repo.root)),
@@ -331,18 +315,6 @@ class RegistryReleasePlanTest(unittest.TestCase):
             (
                 ("prepare", "--version", "1.1.0", "--repo", str(self.repo.root)),
                 "--release-id",
-            ),
-            (
-                (
-                    "finalize",
-                    "--version",
-                    "1.1.0",
-                    "--release-id",
-                    "beta-9",
-                    "--repo",
-                    str(self.repo.root),
-                ),
-                "--promotion-commit",
             ),
         )
         for args, missing in cases:
@@ -615,202 +587,58 @@ class RegistryReleasePlanTest(unittest.TestCase):
             result.stderr,
         )
 
-    def test_finalize_lists_only_bounded_candidate_ref_changes(self) -> None:
-        before = self.repo.snapshot()
-        result = self.finalize()
-
-        self.assertEqual(0, result.returncode, result.stderr)
-        plan = json.loads(result.stdout)
-        self.assertEqual("finalize", plan["operation"])
-        self.assertEqual(self.repo.promotion, plan["selected"]["promotion_commit"])
-        keys = [(change["path"], change["pointer"]) for change in plan["changes"]]
-        self.assertEqual(len(keys), len(set(keys)))
-        self.assertEqual(
-            {
-                ("release/manifests/registry-stack-beta-9.yaml", "/stack/source_ref"),
-                ("docs/site/src/data/docsets.yaml", "/docsets/1/products/registry-stack/ref"),
-                (
-                    "docs/site/src/data/generated/docsets.json",
-                    "/docsets/1/products/registry-stack/ref",
-                ),
-                ("docs/site/src/data/contracts.yaml", "/0/source_of_truth/url"),
-                ("docs/site/src/data/generated/contracts.json", "/0/source_of_truth/url"),
-                ("docs/site/src/data/standards.yaml", "/0/evidence_docs/0/url"),
-                (
-                    "docs/site/src/data/generated/standards.json",
-                    "/0/evidence_docs/0/url",
-                ),
-            },
-            set(keys),
-        )
-        self.assertFalse(any("latest" in json.dumps(change) for change in plan["changes"]))
-        self.assertFalse(any("/docsets/2/" in change["pointer"] for change in plan["changes"]))
-        self.assertFalse(any("crosswalk" in change["pointer"] for change in plan["changes"]))
-        self.assertFalse(any("example.invalid" in json.dumps(change) for change in plan["changes"]))
-        self.assertFalse(
-            any("registry-stack-beta-7.yaml" == change["path"] for change in plan["changes"])
-        )
-        url_changes = {
-            change["pointer"]: change
-            for change in plan["changes"]
-            if change["kind"] == "replace" and "url" in change["pointer"]
-        }
-        self.assertTrue(url_changes["/0/source_of_truth/url"]["from"].endswith("#L10"))
-        self.assertTrue(url_changes["/0/source_of_truth/url"]["to"].endswith("#L10"))
-        self.assertTrue(
-            url_changes["/0/evidence_docs/0/url"]["from"].endswith(
-                f"?candidate={self.repo.candidate}&plain=1#L4-L7"
-            )
-        )
-        self.assertTrue(
-            url_changes["/0/evidence_docs/0/url"]["to"].endswith(
-                f"?candidate={self.repo.candidate}&plain=1#L4-L7"
-            )
-        )
-        self.assertEqual(before, self.repo.snapshot())
-
-    def test_finalize_ignores_ambiguous_and_external_candidate_urls(self) -> None:
-        data_dir = self.repo.root / "docs/site/src/data"
-        contracts_path = data_dir / "contracts.yaml"
-        contracts = yaml.safe_load(contracts_path.read_text())
-        contracts.extend(
-            [
-                {
-                    "id": "wrong-owner",
-                    "source_of_truth": {
-                        "url": (
-                            "https://github.com/other/registry-stack/blob/"
-                            f"{self.repo.candidate}/README.md#L1"
-                        )
-                    },
-                },
-                {
-                    "id": "ambiguous-ref-segment",
-                    "source_of_truth": {
-                        "url": (
-                            "https://github.com/registrystack/registry-stack/blob/"
-                            f"{self.repo.candidate}{self.repo.candidate}/README.md"
-                        )
-                    },
-                },
-                {
-                    "id": "missing-path",
-                    "source_of_truth": {
-                        "url": (
-                            "https://github.com/registrystack/registry-stack/blob/"
-                            f"{self.repo.candidate}?plain=1#L1"
-                        )
-                    },
-                },
-            ]
-        )
-        write_yaml(contracts_path, contracts)
-        write_json(data_dir / "generated/contracts.json", contracts)
-
-        result = self.finalize()
-
-        self.assertEqual(0, result.returncode, result.stderr)
-        plan = json.loads(result.stdout)
-        contract_url_changes = [
-            change
-            for change in plan["changes"]
-            if change["path"] == "docs/site/src/data/contracts.yaml"
-            and change["pointer"].endswith("/source_of_truth/url")
-        ]
-        self.assertEqual(
-            ["/0/source_of_truth/url"],
-            [change["pointer"] for change in contract_url_changes],
-        )
-
-    def test_finalize_rejects_non_candidate_manifest(self) -> None:
+    def test_prepare_accepts_stable_tag_identity_without_future_source_or_status(
+        self,
+    ) -> None:
         target = self.repo.root / "release/manifests/registry-stack-beta-9.yaml"
         data = yaml.safe_load(target.read_text())
-        data["stack"]["status"] = "draft"
+        data["stack"].pop("source_ref")
+        data["stack"].pop("status")
         write_yaml(target, data)
         data_dir = self.repo.root / "docs/site/src/data"
         docsets_path = data_dir / "docsets.yaml"
         docsets = yaml.safe_load(docsets_path.read_text())
-        docsets["docsets"][1]["availability"] = "unreleased"
+        for product_name, product in docsets["docsets"][1]["products"].items():
+            if product_name != "crosswalk":
+                product["ref"] = "v1.1.0"
         write_yaml(docsets_path, docsets)
         write_json(data_dir / "generated/docsets.json", docsets)
-        not_candidate = self.finalize()
-        self.assertNotEqual(0, not_candidate.returncode)
-        self.assertIn("release-candidate status", not_candidate.stderr)
-        self.assertEqual("", not_candidate.stdout)
 
-    def test_finalize_enforces_candidate_and_default_branch_lineage(self) -> None:
-        tree = git(self.repo.root, "rev-parse", f"{self.repo.candidate}^{{tree}}")
-        unrelated = git(self.repo.root, "commit-tree", tree, "-m", "unrelated promotion")
-        not_descendant = run(
-            "finalize",
-            "--version",
-            "1.1.0",
-            "--release-id",
-            "beta-9",
-            "--repo",
-            str(self.repo.root),
-            "--promotion-commit",
-            unrelated,
-            "--default-branch",
-            "main",
-        )
-        self.assertEqual(1, not_descendant.returncode)
-        self.assertEqual("", not_descendant.stdout)
-        self.assertIn("is not an ancestor of promotion commit", not_descendant.stderr)
+        result = self.prepare()
 
-        git(self.repo.root, "checkout", "-b", "side", self.repo.candidate)
-        write(self.repo.root / "side", "side promotion\n")
-        git(self.repo.root, "add", "side")
-        git(self.repo.root, "commit", "-m", "side promotion")
-        side = git(self.repo.root, "rev-parse", "HEAD")
-        git(self.repo.root, "checkout", "main")
-        unreachable = run(
-            "finalize",
-            "--version",
-            "1.1.0",
-            "--release-id",
-            "beta-9",
-            "--repo",
-            str(self.repo.root),
-            "--promotion-commit",
-            side,
-            "--default-branch",
-            "main",
-        )
-        self.assertNotEqual(0, unreachable.returncode)
-        self.assertEqual("", unreachable.stdout)
-        self.assertIn("not reachable from default branch", unreachable.stderr)
+        self.assertEqual(0, result.returncode, result.stderr)
+        plan = json.loads(result.stdout)
+        self.assertNotIn("source_ref", plan["selected"])
+        self.assertNotIn("status", plan["selected"])
 
-    def test_finalize_rejects_existing_target_tag(self) -> None:
-        git(self.repo.root, "tag", "--annotate", "v1.1.0", "--message", "release")
+    def test_finalize_and_capsule_commands_are_not_active(self) -> None:
+        help_result = run("--help")
+        self.assertEqual(0, help_result.returncode, help_result.stderr)
+        self.assertNotIn("finalize", help_result.stdout)
+        self.assertNotIn("render-capsule", help_result.stdout)
+        self.assertNotIn("closeout", help_result.stdout)
+        self.assertNotIn("source-ref", help_result.stdout)
+        self.assertIn("verify-candidate", help_result.stdout)
+        request_help = run("request-candidate", "--help")
+        self.assertEqual(0, request_help.returncode, request_help.stderr)
+        self.assertNotIn("--proof-level", request_help.stdout)
+        self.assertNotIn("--milestone", request_help.stdout)
+        self.assertNotIn("--measurement-bootstrap", request_help.stdout)
 
-        result = self.finalize()
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertEqual("", result.stdout)
-        self.assertIn("already represented by release tag", result.stderr)
-
-    def test_prepare_and_finalize_reject_stale_local_tags_when_origin_has_target(
-        self,
-    ) -> None:
+    def test_prepare_rejects_stale_local_tag_when_origin_has_target(self) -> None:
         git(self.repo.root, "tag", "--annotate", "v1.1.0", "--message", "release")
         git(self.repo.root, "push", "origin", "refs/tags/v1.1.0")
         git(self.repo.root, "tag", "--delete", "v1.1.0")
-        self.assertEqual("", git(self.repo.root, "tag", "--list", "v1.1.0"))
         before = self.repo.git_read_state()
 
-        for operation in (self.prepare, self.finalize):
-            with self.subTest(operation=operation.__name__):
-                result = operation()
-                self.assertEqual(1, result.returncode)
-                self.assertEqual("", result.stdout)
-                self.assertIn(
-                    "release tag v1.1.0 on origin",
-                    result.stderr,
-                )
-                self.assertEqual(before, self.repo.git_read_state())
+        result = self.prepare()
 
-    def test_prepare_and_finalize_fail_closed_when_origin_cannot_be_read(self) -> None:
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("", result.stdout)
+        self.assertIn("release tag v1.1.0 on origin", result.stderr)
+        self.assertEqual(before, self.repo.git_read_state())
+
+    def test_prepare_fails_closed_when_origin_cannot_be_read(self) -> None:
         git(
             self.repo.root,
             "remote",
@@ -820,16 +648,15 @@ class RegistryReleasePlanTest(unittest.TestCase):
         )
         before = self.repo.git_read_state()
 
-        for operation in (self.prepare, self.finalize):
-            with self.subTest(operation=operation.__name__):
-                result = operation()
-                self.assertEqual(1, result.returncode)
-                self.assertEqual("", result.stdout)
-                self.assertIn(
-                    "cannot determine whether release tag v1.1.0 exists on origin",
-                    result.stderr,
-                )
-                self.assertEqual(before, self.repo.git_read_state())
+        result = self.prepare()
+
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("", result.stdout)
+        self.assertIn(
+            "cannot determine whether release tag v1.1.0 exists on origin",
+            result.stderr,
+        )
+        self.assertEqual(before, self.repo.git_read_state())
 
 
 if __name__ == "__main__":

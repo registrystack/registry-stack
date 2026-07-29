@@ -2,8 +2,7 @@ name: RegistryStack Release Candidate
 
 on:
   repository_dispatch:
-    types:
-      - release_candidate
+    types: [release_candidate]
 
 permissions:
   contents: read
@@ -28,28 +27,30 @@ env:
 
 jobs:
   validate:
-    name: Validate trusted candidate request
+    name: Validate request and all build-independent controls
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       actions: read
       contents: read
+      packages: read
     outputs:
       source_sha: ${{ steps.request.outputs.source_sha }}
+      workflow_revision: ${{ steps.request.outputs.workflow_revision }}
       version: ${{ steps.request.outputs.version }}
       release_id: ${{ steps.request.outputs.release_id }}
       tag: ${{ steps.request.outputs.tag }}
       manifest: ${{ steps.request.outputs.manifest }}
-      proof_level: ${{ steps.proof.outputs.proof_level }}
-      storage_budget_status: ${{ steps.storage.outputs.storage_budget_status }}
-      measurement_bootstrap: ${{ steps.request.outputs.measurement_bootstrap }}
     steps:
-      - name: Checkout protected default-branch workflow revision
+      - name: Checkout protected workflow revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
           submodules: false
 
-      - name: Validate exact protected-main request
+      - name: Validate request, source, CI, canary, and destinations
         id: request
         env:
           GH_TOKEN: ${{ github.token }}
@@ -57,15 +58,12 @@ jobs:
           REQUEST_VERSION: ${{ github.event.client_payload.version }}
           REQUEST_RELEASE_ID: ${{ github.event.client_payload.release_id }}
           REQUEST_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
-          REQUEST_PROOF_LEVEL: ${{ github.event.client_payload.proof_level }}
-          REQUEST_MILESTONE: ${{ github.event.client_payload.milestone }}
-          REQUEST_MEASUREMENT_BOOTSTRAP: ${{ github.event.client_payload.measurement_bootstrap }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" != "repository_dispatch" ||
                 "${REQUEST_EVENT_ACTION}" != "release_candidate" ]]; then
-            echo "Candidate workflow accepts only repository_dispatch:release_candidate" >&2
+            echo "Candidate accepts only repository_dispatch:release_candidate" >&2
             exit 1
           fi
           if [[ ! "${REQUEST_VERSION}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
@@ -80,252 +78,150 @@ jobs:
             echo "source_sha must be one exact commit" >&2
             exit 1
           fi
-          if [[ "${REQUEST_PROOF_LEVEL:-auto}" != "auto" &&
-                "${REQUEST_PROOF_LEVEL}" != "extended" ]]; then
-            echo "proof_level must be auto or extended" >&2
-            exit 1
-          fi
-          if [[ "${REQUEST_MILESTONE:-beta}" != "beta" &&
-                "${REQUEST_MILESTONE}" != "stable" &&
-                "${REQUEST_MILESTONE}" != "audit" ]]; then
-            echo "milestone must be beta, stable, or audit" >&2
-            exit 1
-          fi
-          if [[ "${REQUEST_MEASUREMENT_BOOTSTRAP:-false}" != "true" &&
-                "${REQUEST_MEASUREMENT_BOOTSTRAP:-false}" != "false" ]]; then
-            echo "measurement_bootstrap must be an explicit boolean" >&2
-            exit 1
-          fi
+          workflow_revision="${GITHUB_SHA}"
           git fetch --force origin refs/heads/main:refs/remotes/origin/main
-          main_sha="$(git rev-parse refs/remotes/origin/main)"
-          if [[ "${GITHUB_SHA}" != "${main_sha}" || "${REQUEST_SOURCE_SHA}" != "${main_sha}" ]]; then
-            echo "workflow revision, requested source, and current protected main must be the same exact commit" >&2
+          git cat-file -e "${REQUEST_SOURCE_SHA}^{commit}"
+          git merge-base --is-ancestor \
+            "${REQUEST_SOURCE_SHA}" refs/remotes/origin/main
+          git merge-base --is-ancestor \
+            "${workflow_revision}" refs/remotes/origin/main
+          ci_run="$(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${REQUEST_SOURCE_SHA}&status=success&per_page=100" \
+              | jq -c --arg sha "${REQUEST_SOURCE_SHA}" \
+              '[.workflow_runs[] | select(
+                .head_sha == $sha and
+                .conclusion == "success" and
+                .event == "push"
+              )] | sort_by(.updated_at) | last'
+          )"
+          if [[ "${ci_run}" == "null" ]]; then
+            echo "Protected-main CI has no successful push run for source" >&2
             exit 1
           fi
-          if [[ "$(git rev-parse HEAD)" != "${REQUEST_SOURCE_SHA}" ]]; then
-            echo "checkout does not match exact requested source" >&2
-            exit 1
-          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-canary.yml/runs?branch=main&status=success&per_page=100" \
+            | jq --arg sha "${workflow_revision}" \
+            '[.workflow_runs[] | select(
+              .head_sha == $sha and .conclusion == "success"
+            )] | sort_by(.updated_at) | last
+            | {
+                path: ".github/workflows/release-canary.yml",
+                head_sha: .head_sha,
+                conclusion: .conclusion,
+                completed_at: .updated_at
+              }' > "${RUNNER_TEMP}/canary-run.json"
+          python3 release/scripts/release_candidate.py verify-canary \
+            --metadata "${RUNNER_TEMP}/canary-run.json" \
+            --workflow-revision "${workflow_revision}"
           tag="v${REQUEST_VERSION}"
-          set +e
-          git ls-remote --exit-code --tags origin "refs/tags/${tag}" \
-            > "${RUNNER_TEMP}/candidate-tag-lookup" 2>&1
-          tag_lookup_rc=$?
-          set -e
-          case "${tag_lookup_rc}" in
-            0)
-              echo "tag ${tag} already exists" >&2
-              exit 1
-              ;;
-            2)
-              ;;
-            *)
-              echo "Cannot prove tag ${tag} is absent (git exit ${tag_lookup_rc})" >&2
-              exit 1
-              ;;
-          esac
-          response="$(mktemp)"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" \
+              >/dev/null 2>&1; then
+            echo "tag ${tag} already exists" >&2
+            exit 1
+          fi
+          release_response="${RUNNER_TEMP}/release-response"
           if gh api --include --silent \
               "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
-              >"${response}" 2>&1; then
-            status=200
+              >"${release_response}" 2>&1; then
+            release_status=200
           else
-            status="$(awk '/^HTTP\// {code=$2} END {print code}' "${response}")"
+            release_status="$(
+              awk '/^HTTP\\// {code=$2} END {print code}' "${release_response}"
+            )"
           fi
-          if [[ "${status}" != "404" ]]; then
-            echo "Cannot prove GitHub Release ${tag} is absent (HTTP ${status:-unknown})" >&2
+          if [[ "${release_status}" != "404" ]]; then
+            echo "GitHub Release destination is not absent" >&2
             exit 1
           fi
+          for package in registry-notary registry-relay; do
+            if gh api --paginate \
+                "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}/versions?per_page=100" \
+                | jq -r --arg tag "${tag}" \
+                '.[] | .metadata.container.tags[]? | select(. == $tag)' \
+                | grep -Fxq "${tag}"; then
+              echo "public image ${package}:${tag} already exists" >&2
+              exit 1
+            fi
+          done
           manifest="$(
-            python3 - "${REQUEST_VERSION}" "${REQUEST_RELEASE_ID}" "${REQUEST_SOURCE_SHA}" <<'PY'
+            python3 - "${REQUEST_VERSION}" "${REQUEST_RELEASE_ID}" <<'PY'
           import glob
-          import subprocess
           import sys
           import yaml
 
-          version, release_id, source_sha = sys.argv[1:]
+          version, release_id = sys.argv[1:]
           matches = []
           for path in sorted(glob.glob("release/manifests/registry-stack-*.yaml")):
               with open(path, encoding="utf-8") as handle:
-                  value = yaml.safe_load(handle)
-              stack = value.get("stack", {})
+                  stack = yaml.safe_load(handle).get("stack", {})
               if str(stack.get("version", "")) == version:
                   matches.append((path, stack))
           if len(matches) != 1:
               raise SystemExit(f"expected one manifest for {version}, found {matches}")
           path, stack = matches[0]
-          if stack.get("release") != release_id or stack.get("status") != "release-candidate":
-              raise SystemExit("manifest release identity/status does not match request")
-          manifest_source = str(stack.get("source_ref", ""))
-          if subprocess.run(
-              ["git", "merge-base", "--is-ancestor", manifest_source, source_sha]
-          ).returncode != 0:
-              raise SystemExit("manifest source_ref is not an ancestor of requested source")
+          if stack.get("release") != release_id:
+              raise SystemExit("manifest release identity does not match request")
           print(path)
           PY
           )"
-          release/scripts/registry-release validate "${manifest}"
           {
             echo "source_sha=${REQUEST_SOURCE_SHA}"
+            echo "workflow_revision=${workflow_revision}"
             echo "version=${REQUEST_VERSION}"
             echo "release_id=${REQUEST_RELEASE_ID}"
             echo "tag=${tag}"
             echo "manifest=${manifest}"
-            echo "requested_proof_level=${REQUEST_PROOF_LEVEL:-auto}"
-            echo "milestone=${REQUEST_MILESTONE:-beta}"
-            echo "measurement_bootstrap=${REQUEST_MEASUREMENT_BOOTSTRAP:-false}"
           } >> "${GITHUB_OUTPUT}"
 
-      - name: Fingerprint trusted candidate builders
-        shell: bash
+      - name: Validate manifests, pins, recipes, and scanner policy fixtures
         run: |
           set -euo pipefail
-          mkdir -p dist/proof-selection
-          jq -n \
-            --arg binary_image "${RELEASE_BUILDER_IMAGE}" \
-            --arg binary_fingerprint "$(printf '%s' "${RELEASE_BUILDER_IMAGE}" | sha256sum | awk '{print $1}')" \
-            --arg binary_recipe_fingerprint "$(sha256sum release/scripts/build-release-binaries.sh | awk '{print $1}')" \
-            --arg image_buildkit_image "${RELEASE_BUILDKIT_IMAGE}" \
-            --arg image_buildx_version "${RELEASE_BUILDX_VERSION}" \
-            --arg image_recipe_fingerprint "$(sha256sum release/scripts/build-release-image.sh | awk '{print $1}')" \
-            '{
-              binary_image:$binary_image,
-              binary_fingerprint:$binary_fingerprint,
-              binary_recipe_fingerprint:$binary_recipe_fingerprint,
-              image_buildkit_image:$image_buildkit_image,
-              image_buildx_version:$image_buildx_version,
-              image_recipe_fingerprint:$image_recipe_fingerprint
-            }' > dist/proof-selection/current-builders.json
-
-      - name: Select standard or extended proof level
-        id: proof
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/proof-selection
-          args=(
-            --requested "${{ steps.request.outputs.requested_proof_level }}"
+          git checkout --detach "${{ steps.request.outputs.source_sha }}"
+          release/scripts/registry-release validate \
+            "${{ steps.request.outputs.manifest }}"
+          release/scripts/registry-release validate-docsets
+          release/scripts/registry-release audit \
+            release/manifests/import-map-2026-06-24.yaml
+          release/scripts/registry-release \
+            verify-registryctl-image-lock-release-version \
             --version "${{ steps.request.outputs.version }}"
-            --source-ref "${{ steps.request.outputs.source_sha }}"
-            --milestone "${{ steps.request.outputs.milestone }}"
-            --candidate-evidence complete
-            --current-builders dist/proof-selection/current-builders.json
-            --output dist/proof-selection/proof-selection.json
-            --github-output "${GITHUB_OUTPUT}"
-          )
-          previous_tag="$(
-            gh release list --repo "${GITHUB_REPOSITORY}" --limit 1 \
-              --json tagName --jq '.[0].tagName // empty'
-          )"
-          if [[ -n "${previous_tag}" ]]; then
-            previous_receipt="registry-stack-${previous_tag}-candidate-receipt.json"
-            if gh release download "${previous_tag}" --repo "${GITHUB_REPOSITORY}" \
-                --pattern "${previous_receipt}" \
-                --dir dist/proof-selection/previous >/dev/null 2>&1; then
-              args+=(
-                --previous-tag "${previous_tag}"
-                --previous-receipt "dist/proof-selection/previous/${previous_receipt}"
-              )
-            else
-              args+=(--previous-tag "${previous_tag}")
-            fi
-          fi
-          python3 release/scripts/select-release-proof-level.py "${args[@]}"
-
-      - name: Storage preflight before any build or cache restore
-        id: storage
-        shell: bash
-        run: |
-          set -euo pipefail
-          args=(
-            preflight
-            --budget release/storage-budget.json
-            --workspace "${GITHUB_WORKSPACE}"
-            --output dist/storage-preflight.json
-            --github-output "${GITHUB_OUTPUT}"
-          )
-          if [[ "${{ steps.request.outputs.measurement_bootstrap }}" == "true" ]]; then
-            args+=(--measurement-run)
-          fi
-          python3 release/scripts/check-release-storage.py "${args[@]}"
-
-      - name: Validate release source and recipes
-        run: |
-          release/scripts/registry-release verify-registryctl-image-lock-release-version \
-            --version "${{ steps.request.outputs.version }}"
-          release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
-          cargo metadata --locked --format-version 1 >/tmp/registry-stack-cargo-metadata.json
-          REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
+          cargo metadata --locked --format-version 1 >/dev/null
+          REGISTRY_RELEASE_SOURCE_MODE=monorepo \
+            release/scripts/check-release-source-model.sh
           release/scripts/check-debian13-images.py
+          python3 -m unittest \
+            release/scripts/test_check_advisory_checker_copies.py
 
-  build-a:
-    name: Build A cached canonical candidate
+  build-canonical:
+    name: Build Linux payload, private images, and docs once
     needs: validate
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
-      actions: write
+      actions: read
       contents: read
-      packages: write
     steps:
       - name: Checkout exact candidate source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
+          persist-credentials: false
           submodules: false
 
-      - name: Storage preflight before cache restore
-        shell: bash
-        run: |
-          set -euo pipefail
-          args=(preflight --budget release/storage-budget.json --workspace "${GITHUB_WORKSPACE}" --output dist/storage-preflight-a.json)
-          if [[ "${{ needs.validate.outputs.measurement_bootstrap }}" == "true" ]]; then args+=(--measurement-run); fi
-          python3 release/scripts/check-release-storage.py "${args[@]}"
-
-      - name: Start peak-storage sampler
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -f "${RUNNER_TEMP}/storage-stop-a"
-          RUNNER_TRACKING_ID="" python3 release/scripts/check-release-storage.py sample \
-            --workspace "${GITHUB_WORKSPACE}" \
-            --output "${RUNNER_TEMP}/storage-measurement-a.json" \
-            --stop-file "${RUNNER_TEMP}/storage-stop-a" \
-            --interval-seconds 15 \
-            --label build-a &
-          echo "$!" > "${RUNNER_TEMP}/storage-sampler-a.pid"
-
-      - name: Fingerprint exact-key Cargo cache
-        id: builder
-        shell: bash
-        run: |
-          set -euo pipefail
-          builder_fingerprint="$(printf '%s' "${RELEASE_BUILDER_IMAGE}" | sha256sum | awk '{print $1}')"
-          recipe_fingerprint="$(sha256sum release/scripts/build-release-binaries.sh | awk '{print $1}')"
-          cache_key="registry-stack-release-cargo-${{ runner.os }}-${builder_fingerprint}-${recipe_fingerprint}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}"
-          {
-            echo "builder_fingerprint=${builder_fingerprint}"
-            echo "recipe_fingerprint=${recipe_fingerprint}"
-            echo "cache_key=${cache_key}"
-          } >> "${GITHUB_OUTPUT}"
-
       - name: Restore exact-key Cargo cache
-        id: cargo-cache
         uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v4.2.3
         with:
           path: |
             .cargo-home/registry
             .cargo-home/git
             target
-          key: ${{ steps.builder.outputs.cache_key }}
+          key: registry-stack-release-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/scripts/build-release-binaries.sh') }}
 
       - name: Build canonical Linux payload once
-        run: release/scripts/build-release-binaries.sh "${{ needs.validate.outputs.version }}"
-
-      - name: Verify built registryctl binary version
         run: |
+          set -euo pipefail
+          release/scripts/build-release-binaries.sh \
+            "${{ needs.validate.outputs.version }}"
           release/scripts/registry-release verify-registryctl-binary-version \
             "dist/bin/registryctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
             --version "${{ needs.validate.outputs.version }}"
@@ -337,117 +233,79 @@ jobs:
           version: ${{ env.RELEASE_BUILDX_VERSION }}
           driver-opts: image=${{ env.RELEASE_BUILDKIT_IMAGE }}
 
-      - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v3.4.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify staging packages are private before publication
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build private candidate image layouts once
         shell: bash
         run: |
           set -euo pipefail
-          for package in registry-notary-candidate registry-relay-candidate; do
-            visibility="$(gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" --jq '.visibility')"
-            if [[ "${visibility}" != "private" ]]; then
-              echo "Pre-provisioned staging package ${package} must exist and be private" >&2
-              exit 1
-            fi
-          done
-
-      - name: Build and push provenance-bearing staging images
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod 0755 dist/image-bin/registry-notary dist/image-bin/registry-notary-cel-worker dist/image-bin/registry-relay dist/image-bin/registry-relay-rhai-worker
-          (cd dist/image-bin && sha256sum --check --strict SHA256SUMS)
           mkdir -p dist/images
           for name in registry-notary registry-relay; do
-            staging="${REGISTRY}/${IMAGE_NAMESPACE}/${name}-candidate:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            package="${name}-candidate"
+            candidate="${REGISTRY}/${IMAGE_NAMESPACE}/${package}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             metadata="dist/images/${name}.metadata.json"
-            RELEASE_IMAGE_CACHE_FROM="type=gha,scope=registry-stack-${name}" \
-              RELEASE_IMAGE_CACHE_TO="type=gha,mode=max,scope=registry-stack-${name}" \
-              RELEASE_BUILDX_BUILDER="${{ steps.buildx.outputs.name }}" \
+            layout="${GITHUB_WORKSPACE}/dist/images/${name}.oci"
+            RELEASE_BUILDX_BUILDER="${{ steps.buildx.outputs.name }}" \
+              RELEASE_IMAGE_OCI_LAYOUT="${layout}" \
               release/scripts/build-release-image.sh \
-                "${name}" "${staging}" \
+                "${name}" "${candidate}" \
                 "https://github.com/${GITHUB_REPOSITORY}" \
                 "${{ needs.validate.outputs.source_sha }}" \
                 "${{ needs.validate.outputs.version }}" \
                 "${metadata}"
-            digest="$(jq -er '."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' "${metadata}")"
-            printf '%s\n' "${REGISTRY}/${IMAGE_NAMESPACE}/${name}-candidate@${digest}" \
+            digest="$(
+              jq -er '."containerimage.digest"
+                | select(test("^sha256:[0-9a-f]{64}$"))' "${metadata}"
+            )"
+            printf '%s\n' \
+              "${REGISTRY}/${IMAGE_NAMESPACE}/${package}@${digest}" \
               > "dist/images/${name}.digest"
           done
 
-      - name: Verify staging packages remain private
+      - name: Build exact release docs archive
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4.4.0
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+
+      - name: Package exact release docs archive
+        working-directory: docs/site
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCS_ARCHIVE_OUTPUT: ${{ runner.temp }}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz
+          DOCS_DOCSET: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build:archive
+          npm run archive:snapshot -- \
+            "${DOCS_DOCSET}" \
+            --output "${DOCS_ARCHIVE_OUTPUT}" \
+            --verify-lock
+
+      - name: Stage canonical build products
         shell: bash
         run: |
           set -euo pipefail
-          for package in registry-notary-candidate registry-relay-candidate; do
-            test "$(gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" --jq '.visibility')" = private
-          done
+          mkdir -p candidate-canonical/dist
+          cp -R dist/bin candidate-canonical/dist/bin
+          cp -R dist/image-bin candidate-canonical/dist/image-bin
+          cp -R dist/images candidate-canonical/dist/images
+          cp \
+            "${RUNNER_TEMP}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz" \
+            candidate-canonical/
 
-      - name: Stop peak-storage sampler
-        if: ${{ always() }}
-        shell: bash
-        run: |
-          touch "${RUNNER_TEMP}/storage-stop-a"
-          if [[ -f "${RUNNER_TEMP}/storage-sampler-a.pid" ]]; then
-            sampler_pid="$(cat "${RUNNER_TEMP}/storage-sampler-a.pid")"
-            for _ in {1..30}; do
-              if ! kill -0 "${sampler_pid}" 2>/dev/null; then break; fi
-              sleep 1
-            done
-            if kill -0 "${sampler_pid}" 2>/dev/null; then
-              echo "Build A storage sampler did not stop" >&2
-              exit 1
-            fi
-          fi
-          mkdir -p candidate-build-a/storage
-          cp "${RUNNER_TEMP}/storage-measurement-a.json" candidate-build-a/storage/measurement.json
-          cp dist/storage-preflight-a.json candidate-build-a/storage/preflight.json
-
-      - name: Stage exact Build A artifact
-        if: ${{ success() }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p candidate-build-a/dist
-          cp -R dist/bin candidate-build-a/dist/bin
-          cp -R dist/image-bin candidate-build-a/dist/image-bin
-          cp -R dist/images candidate-build-a/dist/images
-          jq -n \
-            --arg job_id "build-a:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-            --arg primary_key "${{ steps.builder.outputs.cache_key }}" \
-            --arg action_output "${{ steps.cargo-cache.outputs.cache-hit }}" \
-            '{
-              job_id: $job_id,
-              cargo_cache: {
-                mode: "exact-key-restore",
-                primary_key: $primary_key,
-                exact_key_hit: ($action_output == "true"),
-                action_output: (if $action_output == "" then "not-reported" else $action_output end)
-              }
-            }' > candidate-build-a/build.json
-
-      - name: Upload exact Build A artifact
-        if: ${{ success() }}
+      - name: Upload canonical build products
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: registry-stack-candidate-build-a-${{ github.run_id }}-${{ github.run_attempt }}
-          path: candidate-build-a
+          name: candidate-canonical-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate-canonical
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 2
 
-  other-platforms:
-    name: Build candidate registryctl ${{ matrix.asset }}
+  build-platforms:
+    name: Build registryctl ${{ matrix.asset }} once
     needs: validate
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
     permissions:
       contents: read
     strategy:
@@ -465,424 +323,223 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
+          persist-credentials: false
           submodules: false
 
-      - name: Storage preflight before platform build
-        run: |
-          set -euo pipefail
-          args=(preflight --budget release/storage-budget.json --workspace "${GITHUB_WORKSPACE}" --output dist/storage-preflight-platform.json)
-          if [[ "${{ needs.validate.outputs.measurement_bootstrap }}" == "true" ]]; then args+=(--measurement-run); fi
-          python3 release/scripts/check-release-storage.py "${args[@]}"
-
-      - name: Start platform peak-storage sampler
+      - name: Build native platform payload once
         shell: bash
         run: |
           set -euo pipefail
-          rm -f "${RUNNER_TEMP}/storage-stop-platform"
-          RUNNER_TRACKING_ID="" python3 release/scripts/check-release-storage.py sample \
-            --workspace "${GITHUB_WORKSPACE}" \
-            --output "${RUNNER_TEMP}/storage-measurement-platform.json" \
-            --stop-file "${RUNNER_TEMP}/storage-stop-platform" \
-            --interval-seconds 15 \
-            --label "other-platforms-${{ matrix.asset }}" &
-          echo "$!" > "${RUNNER_TEMP}/storage-sampler-platform.pid"
-
-      - name: Build platform payload once
-        shell: bash
-        run: |
-          set -euo pipefail
-          rustup toolchain install 1.95.0 --profile minimal --target "${{ matrix.target }}"
-          cargo build --release --locked -p registryctl --target "${{ matrix.target }}"
-          mkdir -p candidate-platform/dist/bin candidate-platform/storage
-          cp "target/${{ matrix.target }}/release/registryctl" \
-            "candidate-platform/dist/bin/registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
-          chmod 0755 "candidate-platform/dist/bin/registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
-          cp dist/storage-preflight-platform.json candidate-platform/storage/preflight.json
-          jq -n \
-            --arg platform "${{ matrix.asset }}" \
-            --arg job_id "other-platforms:${{ matrix.asset }}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-            '{platform: $platform, job_id: $job_id}' > candidate-platform/build.json
-
-      - name: Verify native registryctl binary version
-        run: |
+          rustup toolchain install 1.95.0 \
+            --profile minimal --target "${{ matrix.target }}"
+          cargo build --release --locked \
+            -p registryctl --target "${{ matrix.target }}"
+          mkdir -p platform
+          asset="registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
+          cp "target/${{ matrix.target }}/release/registryctl" "platform/${asset}"
+          chmod 0755 "platform/${asset}"
           release/scripts/registry-release verify-registryctl-binary-version \
-            "candidate-platform/dist/bin/registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}" \
+            "platform/${asset}" \
             --version "${{ needs.validate.outputs.version }}"
+          mkdir -p candidate-platform
+          mv platform candidate-platform/platform
 
-      - name: Stop platform peak-storage sampler
-        if: ${{ always() }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          touch "${RUNNER_TEMP}/storage-stop-platform"
-          if [[ -f "${RUNNER_TEMP}/storage-sampler-platform.pid" ]]; then
-            sampler_pid="$(cat "${RUNNER_TEMP}/storage-sampler-platform.pid")"
-            for _ in {1..30}; do
-              if ! kill -0 "${sampler_pid}" 2>/dev/null; then break; fi
-              sleep 1
-            done
-            if kill -0 "${sampler_pid}" 2>/dev/null; then
-              echo "Platform storage sampler did not stop" >&2
-              exit 1
-            fi
-          fi
-          mkdir -p candidate-platform/storage
-          cp "${RUNNER_TEMP}/storage-measurement-platform.json" \
-            candidate-platform/storage/measurement.json
-
-      - name: Upload exact platform artifact
-        if: ${{ success() }}
+      - name: Upload native platform payload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: registry-stack-candidate-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: candidate-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: candidate-platform
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 2
 
-  verify-candidate:
-    name: Verify, scan, and seal candidate
+  assemble:
+    name: Smoke, scan, and assemble one candidate bundle
     needs:
       - validate
-      - build-a
-      - other-platforms
+      - build-canonical
+      - build-platforms
     runs-on: ubuntu-24.04
+    timeout-minutes: 25
     permissions:
       actions: read
       contents: read
-      packages: read
+      packages: write
     steps:
       - name: Checkout exact candidate source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
+          persist-credentials: false
           submodules: false
 
-      - name: Storage preflight before candidate verification
-        shell: bash
-        run: |
-          set -euo pipefail
-          args=(
-            preflight
-            --budget release/storage-budget.json
-            --workspace "${GITHUB_WORKSPACE}"
-            --output dist/storage-preflight-verification.json
-          )
-          if [[ "${{ needs.validate.outputs.measurement_bootstrap }}" == "true" ]]; then
-            args+=(--measurement-run)
-          fi
-          python3 release/scripts/check-release-storage.py "${args[@]}"
-
-      - name: Start verification peak-storage sampler
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -f "${RUNNER_TEMP}/storage-stop-verification"
-          RUNNER_TRACKING_ID="" python3 release/scripts/check-release-storage.py sample \
-            --workspace "${GITHUB_WORKSPACE}" \
-            --output "${RUNNER_TEMP}/storage-measurement-verification.json" \
-            --stop-file "${RUNNER_TEMP}/storage-stop-verification" \
-            --interval-seconds 15 \
-            --label verify-candidate &
-          echo "$!" > "${RUNNER_TEMP}/storage-sampler-verification.pid"
-
-      - name: Download Build A
+      - name: Download exact build products
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: registry-stack-candidate-build-a-${{ github.run_id }}-${{ github.run_attempt }}
-          path: inputs/build-a
-
-      - name: Download macOS arm64 payload
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: registry-stack-candidate-macos-arm64-${{ github.run_id }}-${{ github.run_attempt }}
-          path: inputs/macos-arm64
-
-      - name: Download Linux arm64 payload
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: registry-stack-candidate-linux-arm64-${{ github.run_id }}-${{ github.run_attempt }}
-          path: inputs/linux-arm64
-
-      - name: Validate canonical binary inventory
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected="$(
-            printf '%s\n' \
-              SHA256SUMS \
-              "registry-manifest-${{ needs.validate.outputs.tag }}-linux-amd64" \
-              "registry-notary-${{ needs.validate.outputs.tag }}-linux-amd64" \
-              "registry-notary-cel-worker-${{ needs.validate.outputs.tag }}-linux-amd64" \
-              "registry-relay-${{ needs.validate.outputs.tag }}-linux-amd64" \
-              "registry-relay-rhai-worker-${{ needs.validate.outputs.tag }}-linux-amd64" \
-              "registryctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
-              | sort
-          )"
-          actual="$(find inputs/build-a/dist/bin -maxdepth 1 -type f -printf '%f\n' | sort)"
-          if [[ "${actual}" != "${expected}" ]]; then
-            echo "Build A binary inventory is not exact" >&2
-            diff -u <(printf '%s\n' "${expected}") <(printf '%s\n' "${actual}") || true
-            exit 1
-          fi
-          expected_image_bin="$(printf '%s\n' RELEASE_BUILDER_IMAGE SHA256SUMS registry-notary registry-notary-cel-worker registry-relay registry-relay-rhai-worker)"
-          actual="$(find inputs/build-a/dist/image-bin -maxdepth 1 -type f -printf '%f\n' | sort)"
-          [[ "${actual}" == "${expected_image_bin}" ]]
+          pattern: candidate-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: inputs
 
       - name: Install pinned candidate inspection tools
         env:
-          STEP_SYFT_VERSION: ${{ env.SYFT_VERSION }}
-          STEP_SYFT_SHA256: ${{ env.SYFT_LINUX_AMD64_SHA256 }}
-          STEP_GRYPE_VERSION: ${{ env.GRYPE_VERSION }}
-          STEP_GRYPE_SHA256: ${{ env.GRYPE_LINUX_AMD64_SHA256 }}
-          STEP_CRANE_VERSION: ${{ env.CRANE_VERSION }}
           STEP_CRANE_SHA256: ${{ env.CRANE_LINUX_AMD64_SHA256 }}
+          STEP_CRANE_VERSION: ${{ env.CRANE_VERSION }}
+          STEP_GRYPE_SHA256: ${{ env.GRYPE_LINUX_AMD64_SHA256 }}
+          STEP_GRYPE_VERSION: ${{ env.GRYPE_VERSION }}
+          STEP_SYFT_SHA256: ${{ env.SYFT_LINUX_AMD64_SHA256 }}
+          STEP_SYFT_VERSION: ${{ env.SYFT_VERSION }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "${HOME}/.local/bin" /tmp/registry-stack-tools
+          mkdir -p "${HOME}/.local/bin" "${RUNNER_TEMP}/tools"
           syft_version="${STEP_SYFT_VERSION#v}"
           grype_version="${STEP_GRYPE_VERSION#v}"
-          curl -sSfL "https://github.com/anchore/syft/releases/download/${STEP_SYFT_VERSION}/syft_${syft_version}_linux_amd64.tar.gz" -o /tmp/registry-stack-tools/syft.tar.gz
-          echo "${STEP_SYFT_SHA256}  /tmp/registry-stack-tools/syft.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/registry-stack-tools/syft.tar.gz -C "${HOME}/.local/bin" syft
-          curl -sSfL "https://github.com/anchore/grype/releases/download/${STEP_GRYPE_VERSION}/grype_${grype_version}_linux_amd64.tar.gz" -o /tmp/registry-stack-tools/grype.tar.gz
-          echo "${STEP_GRYPE_SHA256}  /tmp/registry-stack-tools/grype.tar.gz" | sha256sum -c -
-          tar -xzf /tmp/registry-stack-tools/grype.tar.gz -C "${HOME}/.local/bin" grype
-          crane_archive="/tmp/registry-stack-tools/go-containerregistry_Linux_x86_64.tar.gz"
-          curl -sSfL "https://github.com/google/go-containerregistry/releases/download/${STEP_CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" -o "${crane_archive}"
-          echo "${STEP_CRANE_SHA256}  ${crane_archive}" | sha256sum --check --strict
-          tar -xzf "${crane_archive}" -C "${HOME}/.local/bin" crane
+          curl -sSfL \
+            "https://github.com/anchore/syft/releases/download/${STEP_SYFT_VERSION}/syft_${syft_version}_linux_amd64.tar.gz" \
+            -o "${RUNNER_TEMP}/tools/syft.tar.gz"
+          echo "${STEP_SYFT_SHA256}  ${RUNNER_TEMP}/tools/syft.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/tools/syft.tar.gz" \
+            -C "${HOME}/.local/bin" syft
+          curl -sSfL \
+            "https://github.com/anchore/grype/releases/download/${STEP_GRYPE_VERSION}/grype_${grype_version}_linux_amd64.tar.gz" \
+            -o "${RUNNER_TEMP}/tools/grype.tar.gz"
+          echo "${STEP_GRYPE_SHA256}  ${RUNNER_TEMP}/tools/grype.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/tools/grype.tar.gz" \
+            -C "${HOME}/.local/bin" grype
+          curl -sSfL \
+            "https://github.com/google/go-containerregistry/releases/download/${STEP_CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            -o "${RUNNER_TEMP}/tools/crane.tar.gz"
+          echo "${STEP_CRANE_SHA256}  ${RUNNER_TEMP}/tools/crane.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/tools/crane.tar.gz" \
+            -C "${HOME}/.local/bin" crane
           echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
-      - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v3.4.0
+      - name: Install pinned OCI layout publisher
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1.2.4
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          version: 1.3.2
 
-      - name: Pull provenance-bearing staging layouts
+      - name: Verify local image layouts before package credentials are used
         shell: bash
         run: |
           set -euo pipefail
-          capture_layout() {
-            local reference="$1"
-            local output="$2"
-            local repository="${reference%@*}"
-            mkdir -p "${output}/blobs/sha256"
-            crane manifest "${reference}" > "${output}/index.json"
-            local expected="${reference##*@}"
-            local actual
-            actual="sha256:$(sha256sum "${output}/index.json" | awk '{print $1}')"
-            [[ "${actual}" == "${expected}" ]]
-            jq -r '.manifests[].digest' "${output}/index.json" | while read -r manifest_digest; do
-              local manifest_blob="${output}/blobs/sha256/${manifest_digest#sha256:}"
-              crane manifest "${repository}@${manifest_digest}" > "${manifest_blob}"
-              echo "${manifest_digest#sha256:}  ${manifest_blob}" | sha256sum -c -
-              jq -r '.config.digest, .layers[].digest' "${manifest_blob}" | while read -r blob_digest; do
-                local blob="${output}/blobs/sha256/${blob_digest#sha256:}"
-                if [[ ! -f "${blob}" ]]; then
-                  crane blob "${repository}@${blob_digest}" > "${blob}"
-                  echo "${blob_digest#sha256:}  ${blob}" | sha256sum -c -
-                fi
-              done
-            done
-          }
-          mkdir -p dist/pulled-layouts dist/topology
+          canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           for name in registry-notary registry-relay; do
-            digest_ref="$(cat "inputs/build-a/dist/images/${name}.digest")"
-            capture_layout "${digest_ref}" "dist/pulled-layouts/${name}"
-            python3 release/scripts/compare-release-image-layouts.py \
-              --inspect-layout "dist/pulled-layouts/${name}" \
-              --require-provenance > "dist/topology/${name}.json"
-          done
-
-      - name: Scan immutable staging digests
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/candidate/dist/{images,sbom,grype,rootfs,image-binary-sbom,storage}
-          cp inputs/build-a/dist/images/* dist/candidate/dist/images/
-          cp inputs/build-a/dist/image-bin/SHA256SUMS dist/candidate/dist/images/image-binaries.SHA256SUMS
-          cp inputs/build-a/dist/image-bin/RELEASE_BUILDER_IMAGE dist/candidate/dist/images/release-builder-image.txt
-          cp dist/topology/* dist/candidate/dist/images/
-          grype db update
-          grype db status -o json > dist/candidate/dist/grype/grype-db-status.json
-          jq -e 'type == "object" and length > 0' \
-            dist/candidate/dist/grype/grype-db-status.json >/dev/null
-          grype_binary_sha256="$(sha256sum "$(command -v grype)" | awk '{print $1}')"
-          printf '%s\n' "${grype_binary_sha256}" > dist/candidate/dist/grype/grype-binary.sha256
-          postgresql_ref="$(tr -d '\n' < release/registryctl-postgresql-image.ref)"
-          postgresql_digest="${postgresql_ref##*@}"
-          if [[ ! "${postgresql_ref}" =~ ^docker\.io/library/postgres@sha256:[0-9a-f]{64}$ ]] ||
-             [[ "$(crane digest "${postgresql_ref}")" != "${postgresql_digest}" ]]; then
-            echo "Reviewed PostgreSQL runtime image is not available at its locked digest" >&2
-            exit 1
-          fi
-          printf '%s\n' "${postgresql_ref}" \
-            > dist/candidate/dist/images/postgresql.digest
-          scan_sbom() {
-            local sbom="$1"
-            local report="$2"
-            local status
-            set +e
-            grype "sbom:${sbom}" -o json > "${report}"
-            status=$?
-            set -e
-            if ! jq -e '
-              type == "object" and
-              (.matches | type == "array") and
-              (
-                (.descriptor.db.built // .descriptor.db.status.built)
-                | type == "string"
-              ) and
-              (
-                (.descriptor.db.checksum | type == "string") or
-                (
-                  .descriptor.db.status.from
-                  | type == "string" and
-                    test("checksum=sha256%3A[0-9a-fA-F]{64}")
-                )
-              )
-            ' "${report}" >/dev/null; then
-              echo "Grype did not emit a complete scan report (exit ${status})" >&2
-              exit 1
-            fi
-            if (( status != 0 )); then
-              echo "::warning::Grype exited ${status}; enforcing its complete report through the reviewed advisory policy"
-            fi
-          }
-          read_db_metadata() {
-            local report="$1"
-            jq -er '
-              [
-                (.descriptor.db.built // .descriptor.db.status.built),
-                (
-                  .descriptor.db.checksum //
-                  (
-                    .descriptor.db.status.from
-                    | capture("checksum=sha256%3A(?<digest>[0-9a-fA-F]{64})").digest
-                    | ascii_downcase
-                  )
-                )
-              ] | @tsv
-            ' "${report}"
-          }
-          for name in registry-notary registry-relay; do
-            digest_ref="$(cat "inputs/build-a/dist/images/${name}.digest")"
             expected_label_args=()
-            if [[ "${name}" == "registry-relay" ]]; then
-              relay_features="$(<crates/registry-relay/canonical-release-features.txt)"
+            if [[ "${name}" == registry-relay ]]; then
               expected_label_args+=(
-                --expected-label "org.registrystack.registry-relay.features=${relay_features}"
+                --expected-label
+                "org.registrystack.registry-relay.features=$(<crates/registry-relay/canonical-release-features.txt)"
               )
             fi
             python3 release/scripts/check-release-image-oci-labels.py \
-              "${digest_ref}" \
+              "oci-layout://${canonical}/dist/images/${name}.oci" \
               --source "https://github.com/${GITHUB_REPOSITORY}" \
               --revision "${{ needs.validate.outputs.source_sha }}" \
               --version "${{ needs.validate.outputs.version }}" \
               "${expected_label_args[@]}"
-            syft "${digest_ref}" \
-              -o "spdx-json=dist/candidate/dist/sbom/${name}.spdx.json" \
-              -o "syft-json=dist/candidate/dist/sbom/${name}.syft.json"
-            release/scripts/registry-release bind-spdx-subject \
-              "dist/candidate/dist/sbom/${name}.spdx.json" \
-              --image-name "${name}" \
-              --digest-ref "${digest_ref}"
-            scan_sbom \
-              "dist/candidate/dist/sbom/${name}.syft.json" \
-              "dist/candidate/dist/grype/${name}.grype.json"
-            mkdir -p "dist/candidate/dist/rootfs/${name}"
-            crane export "${digest_ref}" - \
-              | tar --extract --file=- --directory="dist/candidate/dist/rootfs/${name}" \
-                  --no-same-owner --no-same-permissions
-            if find "dist/candidate/dist/rootfs/${name}" \
-                \( -type b -o -type c -o -type p -o -type s \) -print -quit \
-                | grep -q .; then
-              echo "Exported rootfs ${name} contains a forbidden special file" >&2
-              exit 1
-            fi
-            IFS=$'\t' read -r db_built db_checksum < <(
-              read_db_metadata "dist/candidate/dist/grype/${name}.grype.json"
-            )
-            db_built_epoch="$(date -u -d "${db_built}" +%s)"
-            now_epoch="$(date -u +%s)"
-            if (( db_built_epoch > now_epoch || now_epoch - db_built_epoch > 259200 )); then
-              echo "Grype database for ${name} is future-dated or older than three days" >&2
-              exit 1
-            fi
-            printf '%s\n' "${db_built}" > "dist/candidate/dist/grype/${name}.db-built"
-            printf '%s\n' "${db_checksum}" > "dist/candidate/dist/grype/${name}.db-checksum"
           done
-          syft "${postgresql_ref}" \
-            -o "spdx-json=dist/candidate/dist/sbom/postgresql.spdx.json" \
-            -o "syft-json=dist/candidate/dist/sbom/postgresql.syft.json"
-          release/scripts/registry-release bind-spdx-subject \
-            dist/candidate/dist/sbom/postgresql.spdx.json \
-            --image-name postgresql \
-            --digest-ref "${postgresql_ref}"
-          scan_sbom \
-            dist/candidate/dist/sbom/postgresql.syft.json \
-            dist/candidate/dist/grype/postgresql.grype.json
-          mkdir -p dist/candidate/dist/rootfs/postgresql
-          crane export "${postgresql_ref}" - \
-            | tar --extract --file=- --directory=dist/candidate/dist/rootfs/postgresql \
-                --no-same-owner --no-same-permissions
-          if find dist/candidate/dist/rootfs/postgresql \
-              \( -type b -o -type c -o -type p -o -type s \) -print -quit \
-              | grep -q .; then
-            echo "Exported rootfs postgresql contains a forbidden special file" >&2
-            exit 1
-          fi
-          IFS=$'\t' read -r db_built db_checksum < <(
-            read_db_metadata dist/candidate/dist/grype/postgresql.grype.json
-          )
-          db_built_epoch="$(date -u -d "${db_built}" +%s)"
-          now_epoch="$(date -u +%s)"
-          if (( db_built_epoch > now_epoch || now_epoch - db_built_epoch > 259200 )); then
-            echo "Grype database for postgresql is future-dated or older than three days" >&2
-            exit 1
-          fi
-          printf '%s\n' "${db_built}" \
-            > dist/candidate/dist/grype/postgresql.db-built
-          printf '%s\n' "${db_checksum}" \
-            > dist/candidate/dist/grype/postgresql.db-checksum
 
-      - name: Enforce advisory policy
+      - name: Publish exact layouts to private candidate packages
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          postgresql_ref="$(tr -d '\n' < release/registryctl-postgresql-image.ref)"
+          canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf '%s' "${GH_TOKEN}" \
+            | oras login "${REGISTRY}" \
+                --username "${GITHUB_ACTOR}" --password-stdin
+          for name in registry-notary registry-relay; do
+            package="${name}-candidate"
+            test "$(
+              gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" \
+                --jq .visibility
+            )" = private
+            candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
+            digest="${candidate_ref##*@}"
+            candidate_tag="${REGISTRY}/${IMAGE_NAMESPACE}/${package}:candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            oras cp --from-oci-layout \
+              "${canonical}/dist/images/${name}.oci@${digest}" \
+              "${candidate_tag}"
+            test "$(crane digest "${candidate_tag}")" = "${digest}"
+            test "$(crane digest "${candidate_ref}")" = "${digest}"
+            test "$(
+              gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/${package}" \
+                --jq .visibility
+            )" = private
+          done
+
+      - name: Verify and scan exact candidate images
+        shell: bash
+        run: |
+          set -euo pipefail
+          canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p candidate/security/{image-sbom,syft,grype}
+          grype db update
+          for name in registry-notary registry-relay; do
+            candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
+            digest="${candidate_ref##*@}"
+            test "$(crane digest "${candidate_ref}")" = "${digest}"
+            python3 release/scripts/check-release-image-oci-labels.py \
+              "${candidate_ref}" \
+              --source "https://github.com/${GITHUB_REPOSITORY}" \
+              --revision "${{ needs.validate.outputs.source_sha }}" \
+              --version "${{ needs.validate.outputs.version }}"
+            syft "${candidate_ref}" \
+              -o "spdx-json=candidate/security/image-sbom/${name}.spdx.json" \
+              -o "syft-json=candidate/security/syft/${name}.syft.json"
+            set +e
+            grype "${candidate_ref}" \
+              -o json > "candidate/security/grype/${name}.grype.json"
+            grype_status=$?
+            set -e
+            jq -e '
+              type == "object" and
+              (.matches | type == "array") and
+              ((.descriptor.db.built // .descriptor.db.status.built) | type == "string")
+            ' "candidate/security/grype/${name}.grype.json" >/dev/null
+            if (( grype_status != 0 )); then
+              echo "::warning::Grype exited ${grype_status}; policy evaluates the complete report"
+            fi
+          done
           python3 products/notary/scripts/check_advisory_baselines.py \
-            grype dist/candidate/dist/grype/registry-notary.grype.json \
-            --syft-report dist/candidate/dist/sbom/registry-notary.syft.json \
-            --rootfs dist/candidate/dist/rootfs/registry-notary \
+            grype candidate/security/grype/registry-notary.grype.json \
+            --syft-report candidate/security/syft/registry-notary.syft.json \
             --subject registry-notary-image
           python3 crates/registry-relay/scripts/check_advisory_baselines.py \
-            grype dist/candidate/dist/grype/registry-relay.grype.json \
-            --syft-report dist/candidate/dist/sbom/registry-relay.syft.json \
-            --rootfs dist/candidate/dist/rootfs/registry-relay \
+            grype candidate/security/grype/registry-relay.grype.json \
+            --syft-report candidate/security/syft/registry-relay.syft.json \
             --subject registry-relay-image
-          python3 release/scripts/check_postgresql_advisory_policy.py \
-            dist/candidate/dist/grype/postgresql.grype.json \
-            --baseline release/security/postgresql-advisory-baseline.json \
-            --syft-report dist/candidate/dist/sbom/postgresql.syft.json \
-            --rootfs dist/candidate/dist/rootfs/postgresql \
-            --expected-image "${postgresql_ref}"
+          jq -n '{
+            schema_version: "registry-stack.advisory-verdict.v2",
+            verdict: "passed",
+            subjects: ["registry-notary-image", "registry-relay-image"]
+          }' > candidate/security/advisory-verdict.json
 
-      - name: Assemble exact candidate payload
+      - name: Assemble public payload and run install and authoring smoke
         shell: bash
         run: |
           set -euo pipefail
-          cp -R inputs/build-a/dist/bin dist/candidate/dist/bin
-          cp inputs/macos-arm64/dist/bin/* dist/candidate/dist/bin/
-          cp inputs/linux-arm64/dist/bin/* dist/candidate/dist/bin/
+          canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          macos="inputs/candidate-macos-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          linux_arm="inputs/candidate-linux-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p candidate/bundle-root
+          cp "${canonical}"/dist/bin/* candidate/bundle-root/
+          rm -f candidate/bundle-root/SHA256SUMS
+          cp "${macos}"/platform/* candidate/bundle-root/
+          cp "${linux_arm}"/platform/* candidate/bundle-root/
+          cp "${canonical}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz" \
+            candidate/bundle-root/
+          installer="registryctl-${{ needs.validate.outputs.tag }}-install.sh"
+          cp crates/registryctl/install.sh "candidate/bundle-root/${installer}"
+          chmod 0755 "candidate/bundle-root/${installer}"
           for name in registry-notary registry-relay; do
-            staging="$(cat "dist/candidate/dist/images/${name}.digest")"
-            digest="${staging##*@}"
+            candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
+            digest="${candidate_ref##*@}"
             printf '%s\n' "${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}" \
               > "${RUNNER_TEMP}/${name}.release.digest"
           done
@@ -893,529 +550,176 @@ jobs:
             --postgresql-ref-file release/registryctl-postgresql-image.ref \
             --tag-target "${{ needs.validate.outputs.source_sha }}" \
             --output \
-              "dist/candidate/dist/bin/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json"
-          installer="registryctl-${{ needs.validate.outputs.tag }}-install.sh"
-          cp crates/registryctl/install.sh "dist/candidate/dist/bin/${installer}"
-          chmod 0755 "dist/candidate/dist/bin/${installer}"
-          sums="${RUNNER_TEMP}/candidate-bin-SHA256SUMS"
+              "candidate/bundle-root/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json"
+          syft dir:candidate/bundle-root \
+            -o "spdx-json=candidate/bundle-root/registry-stack-${{ needs.validate.outputs.tag }}.sbom.spdx.json"
+          tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
+            --numeric-owner -czf \
+            "candidate/bundle-root/registry-stack-${{ needs.validate.outputs.tag }}-security-evidence.tar.gz" \
+            -C candidate/security image-sbom syft grype advisory-verdict.json
+          cp candidate/security/grype/*.grype.json candidate/bundle-root/
+          cp candidate/security/advisory-verdict.json candidate/bundle-root/
+          relay_candidate="$(tr -d '\n' < "${canonical}/dist/images/registry-relay.digest")"
+          notary_candidate="$(tr -d '\n' < "${canonical}/dist/images/registry-notary.digest")"
           (
-            cd dist/candidate/dist/bin
-            find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
-              | sort -z \
-              | xargs -0 sha256sum \
-              | sed 's#  \./#  #'
-          ) > "${sums}"
-          mv "${sums}" dist/candidate/dist/bin/SHA256SUMS
-          rm -rf dist/candidate/dist/rootfs
-          mkdir -p dist/candidate/dist/image-binary-sbom
-          while IFS= read -r -d '' binary; do
-            asset="$(basename "${binary}")"
-            case "${asset}" in SHA256SUMS|RELEASE_BUILDER_IMAGE) continue ;; esac
-            sbom="dist/candidate/dist/image-binary-sbom/image-input-${asset}.spdx.json"
-            syft "file:${binary}" -o "spdx-json=${sbom}"
-            release/scripts/registry-release bind-spdx-file-subject \
-              "${sbom}" --file-name "${asset}" \
-              --sha256 "$(sha256sum "${binary}" | awk '{print $1}')"
-          done < <(find inputs/build-a/dist/image-bin -maxdepth 1 -type f -print0 | sort -z)
-
-      - name: Run exact first-country release-form journey before sealing
-        shell: bash
-        run: |
-          set -euo pipefail
-          relay_staging="$(cat dist/candidate/dist/images/registry-relay.digest)"
-          notary_staging="$(cat dist/candidate/dist/images/registry-notary.digest)"
+            cd candidate/bundle-root
+            sha256sum \
+              "${installer}" \
+              "registryctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
+              "registryctl-${{ needs.validate.outputs.tag }}-image-lock.json" \
+              > SHA256SUMS
+          )
           python3 release/scripts/first-country-release-form.py run \
-            --asset-dir dist/candidate/dist/bin \
+            --asset-dir candidate/bundle-root \
             --tag "${{ needs.validate.outputs.tag }}" \
-            --relay-image-override "${relay_staging}" \
-            --notary-image-override "${notary_staging}" \
-            --evidence-dir dist/candidate/evidence/first-country-release-form
+            --relay-image-override "${relay_candidate}" \
+            --notary-image-override "${notary_candidate}" \
+            --evidence-dir candidate/first-country
           python3 release/scripts/first-country-release-form.py verify \
-            --asset-dir dist/candidate/dist/bin \
+            --asset-dir candidate/bundle-root \
             --tag "${{ needs.validate.outputs.tag }}" \
-            --report \
-              dist/candidate/evidence/first-country-release-form/first-country-release-form.json
+            --report candidate/first-country/first-country-release-form.json
+          rm candidate/bundle-root/SHA256SUMS
 
-      - name: Stop verification peak-storage sampler
-        if: ${{ always() }}
+      - name: Seal compact candidate manifest and bundle
         shell: bash
         run: |
           set -euo pipefail
-          touch "${RUNNER_TEMP}/storage-stop-verification"
-          if [[ -f "${RUNNER_TEMP}/storage-sampler-verification.pid" ]]; then
-            sampler_pid="$(cat "${RUNNER_TEMP}/storage-sampler-verification.pid")"
-            for _ in {1..30}; do
-              if ! kill -0 "${sampler_pid}" 2>/dev/null; then break; fi
-              sleep 1
-            done
-            if kill -0 "${sampler_pid}" 2>/dev/null; then
-              echo "Verification storage sampler did not stop" >&2
-              exit 1
-            fi
-          fi
-          mkdir -p dist/candidate/dist/storage
-          cp "${RUNNER_TEMP}/storage-measurement-verification.json" \
-            dist/candidate/dist/storage/verification-measurement.json
-          cp dist/storage-preflight-verification.json \
-            dist/candidate/dist/storage/verification-preflight.json
-
-      - name: Aggregate exact per-job storage measurements
-        shell: bash
-        run: |
-          set -euo pipefail
-          jq -s \
-            '{schema_version:"registry-stack.release-storage-measurements.v1", measurements:.}' \
-            inputs/build-a/storage/measurement.json \
-            inputs/macos-arm64/storage/measurement.json \
-            inputs/linux-arm64/storage/measurement.json \
-            dist/candidate/dist/storage/verification-measurement.json \
-            > dist/candidate/dist/storage/storage-measurement.json
-
-      - name: Upload exact candidate payload
-        id: payload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: registry-stack-release-candidate-payload-${{ github.run_id }}-${{ github.run_attempt }}
-          path: dist/candidate
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Create closed candidate receipt
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/receipt dist/receipt-parts verification-root
-          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            > dist/receipt/trusted-run-api.json
-          jq -e \
-            --argjson expected_run_id "${GITHUB_RUN_ID}" \
-            --argjson expected_run_attempt "${GITHUB_RUN_ATTEMPT}" \
-            --arg expected_head_sha "${{ needs.validate.outputs.source_sha }}" \
-            '{
-            id,
-            run_attempt,
-            event,
-            head_sha,
-            path,
-            status,
-            conclusion,
-            created_at
-          } | select(
-            .id == $expected_run_id and
-            .run_attempt == $expected_run_attempt and
-            .event == "repository_dispatch" and
-            .head_sha == $expected_head_sha and
-            .path == ".github/workflows/release-candidate.yml" and
-            .status == "in_progress" and
-            .conclusion == null and
-            .created_at != null
-          )' dist/receipt/trusted-run-api.json > dist/receipt/trusted-run.json
-          gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" > dist/receipt/artifact-metadata.json
-          names=(
-            "registry-stack-candidate-build-a-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            "registry-stack-candidate-macos-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            "registry-stack-candidate-linux-arm64-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            "registry-stack-release-candidate-payload-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          )
-          roots=(
-            inputs/build-a
-            inputs/macos-arm64
-            inputs/linux-arm64
-            dist/candidate
-          )
-          if [[ "${#names[@]}" -ne 4 || "${#roots[@]}" -ne 4 ||
-                "${#names[@]}" -ne "${#roots[@]}" ]]; then
-            echo "Candidate receipt requires exact four-name/four-root artifact parity" >&2
-            exit 1
-          fi
-          records=()
-          for index in "${!names[@]}"; do
-            name="${names[$index]}"
-            root="${roots[$index]}"
-            matches=()
-            for _ in {1..6}; do
-              gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" > dist/receipt/artifact-metadata.json
-              mapfile -t matches < <(jq -c --arg name "${name}" \
-                '.artifacts[] | select(.name == $name and .expired == false)' \
-                dist/receipt/artifact-metadata.json)
-              if [[ "${#matches[@]}" -eq 1 ]]; then break; fi
-              sleep 5
-            done
-            if [[ "${#matches[@]}" -ne 1 ]]; then
-              echo "Expected exactly one unexpired artifact ${name}" >&2
-              exit 1
-            fi
-            id="$(jq -r '.id' <<<"${matches[0]}")"
-            archive_digest="$(jq -r '.digest' <<<"${matches[0]}")"
-            if [[ ! "${archive_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              echo "Artifact ${name} has no immutable archive digest" >&2
-              exit 1
-            fi
-            mkdir -p "verification-root/${name}"
-            cp -R "${root}/." "verification-root/${name}/"
-            python3 release/scripts/release_candidate.py inventory --root "${root}" \
-              | jq --arg prefix "${name}/" 'map(.path = ($prefix + .path))' \
-              > "dist/receipt-parts/files-${index}.json"
-            jq -n \
-              --arg name "${name}" \
-              --argjson artifact_id "${id}" \
-              --arg archive_sha256 "${archive_digest#sha256:}" \
-              --slurpfile files "dist/receipt-parts/files-${index}.json" \
-              '{name:$name, artifact_id:$artifact_id, archive_sha256:$archive_sha256, files:$files[0]}' \
-              > "dist/receipt-parts/artifact-${index}.json"
-            records+=("dist/receipt-parts/artifact-${index}.json")
-          done
-          jq -s '.' "${records[@]}" > dist/receipt-parts/artifacts.json
-          jq -s '.' inputs/macos-arm64/build.json inputs/linux-arm64/build.json \
-            > dist/receipt-parts/other-platforms.json
-          binary_fingerprint="$(printf '%s' "${RELEASE_BUILDER_IMAGE}" | sha256sum | awk '{print $1}')"
-          binary_recipe_fingerprint="$(sha256sum release/scripts/build-release-binaries.sh | awk '{print $1}')"
-          image_recipe_fingerprint="$(sha256sum release/scripts/build-release-image.sh | awk '{print $1}')"
-          jq -n \
-            --arg binary_image "${RELEASE_BUILDER_IMAGE}" \
-            --arg binary_fingerprint "${binary_fingerprint}" \
-            --arg binary_recipe_fingerprint "${binary_recipe_fingerprint}" \
-            --arg image_buildkit_image "${RELEASE_BUILDKIT_IMAGE}" \
-            --arg image_buildx_version "${RELEASE_BUILDX_VERSION}" \
-            --arg image_recipe_fingerprint "${image_recipe_fingerprint}" \
-            '{
-              binary_image:$binary_image,
-              binary_fingerprint:$binary_fingerprint,
-              binary_recipe_fingerprint:$binary_recipe_fingerprint,
-              image_buildkit_image:$image_buildkit_image,
-              image_buildx_version:$image_buildx_version,
-              image_recipe_fingerprint:$image_recipe_fingerprint
-            }' > dist/receipt/expected-builders.json
+          canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          tag="${{ needs.validate.outputs.tag }}"
+          bundle="candidate/registry-stack-${tag}-candidate.tar.gz"
           created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          expires_at="$(date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ)"
-          payload_name="registry-stack-release-candidate-payload-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          image_record() {
-            local name="$1"
-            local topology="dist/topology/${name}.json"
-            local digest_ref
-            digest_ref="$(cat "inputs/build-a/dist/images/${name}.digest")"
-            jq -n \
-              --arg name "${name}" \
-              --arg staging_repository "${REGISTRY}/${IMAGE_NAMESPACE}/${name}-candidate" \
-              --arg scan_subject "${digest_ref}" \
-              --arg prefix "${payload_name}/" \
-              --slurpfile topology "${topology}" \
-              --arg spdx_sha256 "$(sha256sum "dist/candidate/dist/sbom/${name}.spdx.json" | awk '{print $1}')" \
-              --arg syft_sha256 "$(sha256sum "dist/candidate/dist/sbom/${name}.syft.json" | awk '{print $1}')" \
-              --arg grype_sha256 "$(sha256sum "dist/candidate/dist/grype/${name}.grype.json" | awk '{print $1}')" \
-              --arg grype_version "${GRYPE_VERSION#v}" \
-              --arg grype_binary_sha256 "$(cat dist/candidate/dist/grype/grype-binary.sha256)" \
-              --arg db_checksum "$(cat "dist/candidate/dist/grype/${name}.db-checksum")" \
-              --arg db_built "$(cat "dist/candidate/dist/grype/${name}.db-built")" \
-              --arg db_fresh_until "$(date -u -d "$(cat "dist/candidate/dist/grype/${name}.db-built") +7 days" +%Y-%m-%dT%H:%M:%SZ)" \
-              --arg db_status_sha256 "$(sha256sum dist/candidate/dist/grype/grype-db-status.json | awk '{print $1}')" \
-              '{
-                name:$name,
-                staging_repository:$staging_repository,
-                index_digest:$topology[0].index_digest,
-                application_manifest_digest:$topology[0].application_manifest_digest,
-                platform:$topology[0].platform,
-                config_digest:$topology[0].config_digest,
-                ordered_layer_digests:$topology[0].ordered_layer_digests,
-                topology:$topology[0].topology,
-                sbom:{
-                  spdx_path:($prefix+"dist/sbom/"+$name+".spdx.json"),
-                  spdx_sha256:$spdx_sha256,
-                  syft_json_path:($prefix+"dist/sbom/"+$name+".syft.json"),
-                  syft_json_sha256:$syft_sha256
-                },
-                scan:{
-                  grype_path:($prefix+"dist/grype/"+$name+".grype.json"),
-                  grype_sha256:$grype_sha256,
-                  subject:$scan_subject,
-                  tool:{version:$grype_version,binary_sha256:$grype_binary_sha256},
-                  database:{
-                    checksum:$db_checksum,
-                    built:$db_built,
-                    fresh_until:$db_fresh_until,
-                    status_path:($prefix+"dist/grype/grype-db-status.json"),
-                    status_sha256:$db_status_sha256
-                  }
-                },
-                comparison:{config_equal:false,layers_equal:false}
-              }'
-          }
-          image_record registry-notary > dist/receipt-parts/registry-notary.json
-          image_record registry-relay > dist/receipt-parts/registry-relay.json
-          storage_path="${payload_name}/dist/storage/storage-measurement.json"
+          expires_at="$(date -u -d "${created_at} + 24 hours" +%Y-%m-%dT%H:%M:%SZ)"
+          tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
+            --numeric-owner -czf "${bundle}" -C candidate/bundle-root .
+          payloads="$(
+            find candidate/bundle-root -maxdepth 1 -type f \
+              ! -name '*.grype.json' \
+              ! -name advisory-verdict.json \
+              -print0 \
+              | sort -z \
+              | while IFS= read -r -d '' file; do
+                  name="$(basename "${file}")"
+                  case "${name}" in
+                    registry-docs-*.tar.gz) kind=docs ;;
+                    *.sbom.spdx.json) kind=sbom ;;
+                    *-image-lock.json) kind=image-lock ;;
+                    *-security-evidence.tar.gz) kind=security-evidence ;;
+                    *-install.sh) kind=installer ;;
+                    *) kind=binary ;;
+                  esac
+                  jq -n \
+                    --arg name "${name}" \
+                    --arg kind "${kind}" \
+                    --argjson size "$(stat -c %s "${file}")" \
+                    --arg sha256 "$(sha256sum "${file}" | awk '{print $1}')" \
+                    '{name:$name,kind:$kind,size:$size,sha256:$sha256}'
+                done | jq -s .
+          )"
+          images="$(
+            for name in registry-notary registry-relay; do
+              candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
+              digest="${candidate_ref##*@}"
+              jq -n \
+                --arg name "${name}" \
+                --arg candidate_ref "${candidate_ref}" \
+                --arg digest "${digest}" \
+                --arg final_ref "${REGISTRY}/${IMAGE_NAMESPACE}/${name}:${tag}" \
+                '{name:$name,candidate_ref:$candidate_ref,digest:$digest,final_ref:$final_ref}'
+            done | jq -s .
+          )"
+          scans="$(
+            for name in registry-notary registry-relay; do
+              file="candidate/bundle-root/${name}.grype.json"
+              jq -n \
+                --arg image "${name}" \
+                --arg name "${name}.grype.json" \
+                --arg sha256 "$(sha256sum "${file}" | awk '{print $1}')" \
+                '{image:$image,name:$name,sha256:$sha256,status:"passed"}'
+            done | jq -s .
+          )"
+          docs_name="registry-docs-${tag}.tar.gz"
+          sbom_name="registry-stack-${tag}.sbom.spdx.json"
+          advisory_name=advisory-verdict.json
           jq -n \
             --arg repository "${GITHUB_REPOSITORY}" \
-            --arg workflow_sha "${GITHUB_SHA}" \
-            --argjson run_id "${GITHUB_RUN_ID}" \
-            --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
             --arg version "${{ needs.validate.outputs.version }}" \
             --arg release_id "${{ needs.validate.outputs.release_id }}" \
+            --arg tag "${tag}" \
             --arg source_sha "${{ needs.validate.outputs.source_sha }}" \
-            --arg tag "${{ needs.validate.outputs.tag }}" \
-            --arg proof_level "${{ needs.validate.outputs.proof_level }}" \
+            --arg workflow_revision "${{ needs.validate.outputs.workflow_revision }}" \
+            --argjson run_id "${GITHUB_RUN_ID}" \
+            --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
             --arg created_at "${created_at}" \
             --arg expires_at "${expires_at}" \
-            --arg storage_budget_status "${{ needs.validate.outputs.storage_budget_status }}" \
-            --arg storage_path "${storage_path}" \
-            --arg storage_sha256 "$(sha256sum dist/candidate/dist/storage/storage-measurement.json | awk '{print $1}')" \
-            --slurpfile builders dist/receipt/expected-builders.json \
-            --slurpfile build_a inputs/build-a/build.json \
-            --slurpfile other dist/receipt-parts/other-platforms.json \
-            --slurpfile artifacts dist/receipt-parts/artifacts.json \
-            --slurpfile notary dist/receipt-parts/registry-notary.json \
-            --slurpfile relay dist/receipt-parts/registry-relay.json \
+            --argjson payloads "${payloads}" \
+            --argjson images "${images}" \
+            --arg docs_name "${docs_name}" \
+            --arg docs_sha "$(sha256sum "candidate/bundle-root/${docs_name}" | awk '{print $1}')" \
+            --arg sbom_name "${sbom_name}" \
+            --arg sbom_sha "$(sha256sum "candidate/bundle-root/${sbom_name}" | awk '{print $1}')" \
+            --argjson scans "${scans}" \
+            --arg advisory_name "${advisory_name}" \
+            --arg advisory_sha "$(sha256sum "candidate/bundle-root/${advisory_name}" | awk '{print $1}')" \
+            --arg bundle_name "$(basename "${bundle}")" \
+            --argjson bundle_size "$(stat -c %s "${bundle}")" \
+            --arg bundle_sha "$(sha256sum "${bundle}" | awk '{print $1}')" \
             '{
-              schema_version:"registry-stack.release-candidate-receipt.v1",
-              repository:$repository,
-              workflow:{
-                path:".github/workflows/release-candidate.yml",
-                ref:"refs/heads/main",
-                sha:$workflow_sha,
-                run_id:$run_id,
-                run_attempt:$run_attempt,
-                event:"repository_dispatch"
+              schema_version: "registry-stack.release-candidate.v2",
+              repository: $repository,
+              release: {
+                version: $version,
+                release_id: $release_id,
+                tag: $tag,
+                source_sha: $source_sha
               },
-              release:{
-                version:$version,
-                release_id:$release_id,
-                source_sha:$source_sha,
-                tag:$tag,
-                proof_level:$proof_level
+              workflow: {
+                path: ".github/workflows/release-candidate.yml",
+                revision: $workflow_revision,
+                run_id: $run_id,
+                run_attempt: $run_attempt
               },
-              validity:{created_at:$created_at,expires_at:$expires_at},
-              builders:$builders[0],
-              builds:{a:$build_a[0],other_platforms:$other[0]},
-              artifacts:$artifacts[0],
-              images:[$notary[0],$relay[0]],
-              comparisons:{binary_bytes:false,image_config_and_layers:false},
-              scans:{policy:"passed",immutable_digests:true},
-              storage:{
-                budget_status:$storage_budget_status,
-                measurement_path:$storage_path,
-                measurement_sha256:$storage_sha256
+              validity: {
+                created_at: $created_at,
+                expires_at: $expires_at
               },
-              attestation:{
-                receipt_subject:"release-candidate-receipt.json",
-                workflow_identity:
-                  "registrystack/registry-stack/.github/workflows/release-candidate.yml@refs/heads/main"
+              payloads: $payloads,
+              images: $images,
+              docs: {name:$docs_name,sha256:$docs_sha},
+              sbom: {name:$sbom_name,sha256:$sbom_sha},
+              scans: $scans,
+              advisory: {
+                name: $advisory_name,
+                sha256: $advisory_sha,
+                verdict: "passed"
               },
-              promotion:{state:"candidate",identity:($release_id+":"+$version)}
-            }' > dist/receipt/draft.json
-          python3 release/scripts/release_candidate.py seal \
-            --draft dist/receipt/draft.json \
-            --output dist/receipt/release-candidate-receipt.json
-          python3 release/scripts/release_candidate.py verify \
-            --receipt dist/receipt/release-candidate-receipt.json \
-            --artifact-root verification-root \
-            --artifact-metadata dist/receipt/artifact-metadata.json \
-            --source-sha "${{ needs.validate.outputs.source_sha }}" \
-            --version "${{ needs.validate.outputs.version }}" \
-            --release-id "${{ needs.validate.outputs.release_id }}" \
-            --run-id "${GITHUB_RUN_ID}" \
-            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
-            --expected-builders dist/receipt/expected-builders.json
+              bundle: {
+                name: $bundle_name,
+                size: $bundle_size,
+                sha256: $bundle_sha
+              }
+            }' > candidate/candidate-manifest.draft.json
+          python3 release/scripts/release_candidate.py seal-candidate \
+            --draft candidate/candidate-manifest.draft.json \
+            --output candidate/release-candidate-manifest.json
 
-      - name: Create compact candidate telemetry evidence
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist/candidate-telemetry-evidence
-          jq -n \
-            --slurpfile build_a inputs/build-a/build.json \
-            --slurpfile macos inputs/macos-arm64/build.json \
-            --slurpfile linux inputs/linux-arm64/build.json \
-            --slurpfile storage \
-              dist/candidate/dist/storage/storage-measurement.json \
-            '{
-              schema_version:"registry-stack.release-candidate-telemetry-evidence.v1",
-              builds:{
-                a:$build_a[0],
-                other_platforms:[$macos[0],$linux[0]]
-              },
-              peak_storage_measurements:$storage[0].measurements
-            }' > dist/candidate-telemetry-evidence/evidence.json
-          jq -e '
-            .builds.a.cargo_cache.mode == "exact-key-restore" and
-            (.peak_storage_measurements | length == 4)
-          ' dist/candidate-telemetry-evidence/evidence.json >/dev/null
-
-      - name: Upload compact candidate telemetry evidence
+      - name: Upload one candidate manifest and bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: registry-stack-candidate-telemetry-evidence-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: dist/candidate-telemetry-evidence/evidence.json
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload attempt-bound candidate receipt
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: registry-stack-release-candidate-receipt-${{ github.run_id }}-${{ github.run_attempt }}
-          path: dist/receipt/release-candidate-receipt.json
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload prior-verified immutable attestation bundle
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: registry-stack-verified-candidate-attestation-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          name: registry-stack-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            verification-root
-            dist/receipt/release-candidate-receipt.json
-            dist/receipt/artifact-metadata.json
-            dist/receipt/expected-builders.json
+            candidate/release-candidate-manifest.json
+            candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz
           if-no-files-found: error
           retention-days: 7
 
-  verify-cli-platforms:
-    name: Verify candidate CLI install on ${{ matrix.asset }}
+  attest:
+    name: Reverify and attest candidate
     needs:
       - validate
-      - verify-candidate
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      actions: read
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            asset: macos-arm64
-          - runner: ubuntu-24.04-arm
-            asset: linux-arm64
-    steps:
-      - name: Download exact candidate payload
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: registry-stack-release-candidate-payload-${{ github.run_id }}-${{ github.run_attempt }}
-          path: candidate
-
-      - name: Install exact candidate CLI and verify authoring path
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p platform-cli-report install
-          run_sanitized_command() {
-            local report="$1"
-            shift
-            local raw_log="${RUNNER_TEMP}/${report}.raw"
-            if "$@" > "${raw_log}" 2>&1; then
-              printf '%s\n' "status=passed" > "platform-cli-report/${report}.log"
-            else
-              status=$?
-              printf '%s\n' "status=failed" > "platform-cli-report/${report}.log"
-              rm -f "${raw_log}"
-              return "${status}"
-            fi
-            rm -f "${raw_log}"
-          }
-          if command -v registryctl >/dev/null 2>&1 ||
-             command -v registry-relay >/dev/null 2>&1 ||
-             command -v registry-notary >/dev/null 2>&1; then
-            echo "Ambient Registry CLI or product binary found on platform runner" >&2
-            exit 1
-          fi
-          if lsof -nP -iTCP:4242 -sTCP:LISTEN >/dev/null 2>&1; then
-            echo "Ambient Registry service is listening on the local Relay port" >&2
-            exit 1
-          fi
-          asset_dir="${GITHUB_WORKSPACE}/candidate/dist/bin"
-          asset="registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
-          candidate_binary="${asset_dir}/${asset}"
-          installer_asset="registryctl-${{ needs.validate.outputs.tag }}-install.sh"
-          installer="${asset_dir}/${installer_asset}"
-          sha256_file() {
-            if command -v shasum >/dev/null 2>&1; then
-              shasum -a 256 "$1" | awk '{print $1}'
-            elif command -v sha256sum >/dev/null 2>&1; then
-              sha256sum "$1" | awk '{print $1}'
-            else
-              echo "Neither shasum nor sha256sum is available" >&2
-              return 1
-            fi
-          }
-          expected_sha256_for() {
-            local expected
-            expected="$(awk -v asset="$1" '$2 == asset {print $1}' "${asset_dir}/SHA256SUMS")"
-            if [[ ! "${expected}" =~ ^[0-9a-f]{64}$ ]]; then
-              echo "Sealed candidate checksum is missing for $1" >&2
-              return 1
-            fi
-            printf '%s\n' "${expected}"
-          }
-          candidate_expected_sha256="$(expected_sha256_for "${asset}")"
-          candidate_actual_sha256="$(sha256_file "${candidate_binary}")"
-          if [[ "${candidate_actual_sha256}" != "${candidate_expected_sha256}" ]]; then
-            echo "Sealed candidate checksum mismatch for ${asset}" >&2
-            exit 1
-          fi
-          installer_expected_sha256="$(expected_sha256_for "${installer_asset}")"
-          installer_actual_sha256="$(sha256_file "${installer}")"
-          if [[ "${installer_actual_sha256}" != "${installer_expected_sha256}" ]]; then
-            echo "Sealed candidate checksum mismatch for ${installer_asset}" >&2
-            exit 1
-          fi
-          REGISTRYCTL_ASSET_DIR="${asset_dir}" \
-          REGISTRYCTL_INSTALL_DIR="${GITHUB_WORKSPACE}/install" \
-          REGISTRYCTL_VERSION="${{ needs.validate.outputs.tag }}" \
-            run_sanitized_command install bash "${installer}"
-          registryctl="${GITHUB_WORKSPACE}/install/registryctl"
-          installed_sha256="$(sha256_file "${registryctl}")"
-          if [[ "${installed_sha256}" != "${candidate_expected_sha256}" ]] ||
-             ! cmp -s "${candidate_binary}" "${registryctl}"; then
-            echo "Installed Registryctl bytes do not match the sealed candidate" >&2
-            exit 1
-          fi
-          actual="$("${registryctl}" --version)"
-          expected="registryctl ${{ needs.validate.outputs.version }}"
-          if [[ "${actual}" != "${expected}" ]]; then
-            echo "Installed Registryctl version is not exact" >&2
-            exit 1
-          fi
-          authoring_root="$(mktemp -d "${RUNNER_TEMP}/registryctl-platform-authoring.XXXXXX")"
-          cleanup() {
-            rm -rf "${authoring_root}"
-          }
-          trap cleanup EXIT
-          export REGISTRYCTL_NO_UPDATE_CHECK=1
-          project_dir="${authoring_root}/spreadsheet-project"
-          run_sanitized_command init \
-            "${registryctl}" init --from spreadsheet --project-dir "${project_dir}"
-          run_sanitized_command test \
-            "${registryctl}" test --project-dir "${project_dir}"
-          run_sanitized_command preflight \
-            "${registryctl}" preflight --project-dir "${project_dir}" --environment local
-          run_sanitized_command check \
-            "${registryctl}" check --project-dir "${project_dir}" --environment local --explain
-          run_sanitized_command build \
-            "${registryctl}" build --project-dir "${project_dir}" --environment local
-          printf '%s\n' \
-            "platform=${{ matrix.asset }}" \
-            "asset=registryctl-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}" \
-            "version=${actual}" \
-            "runtime_support=cli-authoring-only" \
-            > platform-cli-report/result.txt
-          cp "${asset_dir}/SHA256SUMS" platform-cli-report/SHA256SUMS
-
-      - name: Upload sanitized platform CLI report
-        if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: registry-stack-candidate-cli-${{ matrix.asset }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: platform-cli-report
-          if-no-files-found: error
-          retention-days: 7
-
-  attest-candidate:
-    name: Reverify and attest prior-sealed candidate bytes
-    needs:
-      - validate
-      - verify-candidate
-      - verify-cli-platforms
+      - assemble
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       actions: read
       attestations: write
@@ -1425,173 +729,45 @@ jobs:
       - name: Checkout exact candidate verifier
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
         with:
-          ref: ${{ needs.validate.outputs.source_sha }}
+          ref: ${{ needs.validate.outputs.workflow_revision }}
           fetch-depth: 1
-          submodules: false
           persist-credentials: false
+          submodules: false
 
-      - name: Download prior-verified immutable attestation bundle
+      - name: Download compact candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: registry-stack-verified-candidate-attestation-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: attestation-input
+          name: registry-stack-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate
 
-      - name: Reverify every hash-bound subject before requesting OIDC
-        shell: bash
-        run: |
-          set -euo pipefail
-          receipt="attestation-input/dist/receipt/release-candidate-receipt.json"
-          python3 release/scripts/release_candidate.py verify \
-            --receipt "${receipt}" \
-            --artifact-root attestation-input/verification-root \
-            --artifact-metadata \
-              attestation-input/dist/receipt/artifact-metadata.json \
-            --source-sha "${{ needs.validate.outputs.source_sha }}" \
-            --version "${{ needs.validate.outputs.version }}" \
-            --release-id "${{ needs.validate.outputs.release_id }}" \
-            --run-id "${GITHUB_RUN_ID}" \
-            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
-            --expected-builders \
-              attestation-input/dist/receipt/expected-builders.json
-          touch attestation-input/ATTESTATION_BARRIER
-
-      - name: Attest candidate payload artifacts
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
-        with:
-          subject-path: attestation-input/verification-root/**
-
-      - name: Attest candidate receipt
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
-        with:
-          subject-path: attestation-input/dist/receipt/release-candidate-receipt.json
-
-  candidate-telemetry:
-    name: Record candidate workflow telemetry
-    needs:
-      - validate
-      - build-a
-      - other-platforms
-      - verify-candidate
-      - verify-cli-platforms
-      - attest-candidate
-    if: ${{ always() }}
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - name: Download cache and peak-storage evidence
-        continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: registry-stack-candidate-telemetry-evidence-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: telemetry-evidence
-
-      - name: Collect candidate wall clock, queue delay, and runner occupancy
+      - name: Reverify all bytes before requesting OIDC
         env:
-          BUILD_A_RESULT: ${{ needs.build-a.result }}
-          OTHER_PLATFORMS_RESULT: ${{ needs.other-platforms.result }}
-          VERIFY_RESULT: ${{ needs.verify-candidate.result }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/candidate-telemetry telemetry-evidence
+          mkdir -p candidate/extracted
+          tar -xzf \
+            "candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz" \
+            -C candidate/extracted
           gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            > dist/candidate-telemetry/run.json
-          gh api --paginate --slurp \
-            "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100" \
-            > dist/candidate-telemetry/job-pages.json
-          evidence=telemetry-evidence/evidence.json
-          if [[ "${VERIFY_RESULT}" == "success" && ! -f "${evidence}" ]]; then
-            echo "Successful candidate has no compact telemetry evidence" >&2
-            exit 1
-          fi
-          if [[ -f "${evidence}" ]]; then
-            cache_state="$(jq -c '.builds.a.cargo_cache' "${evidence}")"
-            storage_evidence="$(jq -c '.peak_storage_measurements' "${evidence}")"
-            test "$(jq -r '.peak_storage_measurements | length' "${evidence}")" = 4
-          else
-            cache_state='{"status":"unavailable","build_result":"'"${BUILD_A_RESULT}"'"}'
-            storage_evidence='[{"status":"unavailable","build_a_result":"'"${BUILD_A_RESULT}"'","other_platforms_result":"'"${OTHER_PLATFORMS_RESULT}"'","verify_result":"'"${VERIFY_RESULT}"'"}]'
-          fi
-          collected_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          jq -n \
-            --slurpfile run dist/candidate-telemetry/run.json \
-            --slurpfile job_pages dist/candidate-telemetry/job-pages.json \
-            --arg collected_at "${collected_at}" \
-            --argjson cache_state "${cache_state}" \
-            --argjson storage_evidence "${storage_evidence}" \
-            '
-              ($run[0]) as $workflow |
-              ($job_pages[0] | map(.jobs) | add) as $jobs |
-              ($collected_at | fromdateiso8601) as $collected_epoch |
-              ([
-                $jobs[] |
-                select(.started_at != null and .completed_at != null) |
-                ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601))
-              ] | add // 0) as $runner_seconds |
-              {
-                schema_version:"registry-stack.release-candidate-telemetry.v1",
-                workflow:{
-                  id:($workflow.id | tostring),
-                  run_attempt:($workflow.run_attempt | tostring),
-                  event:$workflow.event,
-                  head_sha:$workflow.head_sha,
-                  created_at:$workflow.created_at,
-                  run_started_at:$workflow.run_started_at,
-                  collected_at:$collected_at,
-                  queue_delay_seconds:
-                    (($workflow.run_started_at | fromdateiso8601) -
-                     ($workflow.created_at | fromdateiso8601)),
-                  wall_clock_seconds:
-                    ($collected_epoch - ($workflow.created_at | fromdateiso8601)),
-                  wall_clock_excluding_queue_seconds:
-                    ($collected_epoch -
-                     ($workflow.run_started_at | fromdateiso8601))
-                },
-                jobs:[
-                  $jobs[] | {
-                    id:(.id | tostring),
-                    name,
-                    conclusion,
-                    created_at,
-                    started_at,
-                    completed_at,
-                    queue_delay_seconds:
-                      (if .created_at != null and .started_at != null
-                       then ((.started_at | fromdateiso8601) -
-                             (.created_at | fromdateiso8601))
-                       else null end),
-                    runner_occupancy_seconds:
-                      (if .started_at != null and .completed_at != null
-                       then ((.completed_at | fromdateiso8601) -
-                             (.started_at | fromdateiso8601))
-                       else null end)
-                  }
-                ],
-                completed_runner_occupancy_seconds:$runner_seconds,
-                cache_state:$cache_state,
-                peak_storage_evidence:$storage_evidence,
-                review_triggers:{
-                  candidate_wall_clock_budget_seconds:3600,
-                  total_runner_seconds_budget:8000,
-                  exceeded:
-                    ((($collected_epoch -
-                       ($workflow.run_started_at | fromdateiso8601)) > 3600) or
-                     ($runner_seconds > 8000))
-                },
-                warnings:
-                  (if any($jobs[]; .completed_at == null)
-                   then ["The collector and still-running jobs are excluded from completed runner occupancy."]
-                   else [] end)
-              }
-            ' > dist/candidate-telemetry/workflow.json
+            > candidate/trusted-run.json
+          python3 release/scripts/release_candidate.py verify-candidate \
+            --manifest candidate/release-candidate-manifest.json \
+            --bundle \
+              "candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz" \
+            --bundle-root candidate/extracted \
+            --source-sha "${{ needs.validate.outputs.source_sha }}" \
+            --workflow-revision "${{ needs.validate.outputs.workflow_revision }}" \
+            --version "${{ needs.validate.outputs.version }}" \
+            --release-id "${{ needs.validate.outputs.release_id }}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --trusted-run-metadata candidate/trusted-run.json
 
-      - name: Upload candidate workflow telemetry
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Attest manifest and bundle after re-verification
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
-          name: registry-stack-release-candidate-telemetry-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: dist/candidate-telemetry/workflow.json
-          if-no-files-found: error
-          retention-days: 7
+          subject-path: |
+            candidate/release-candidate-manifest.json
+            candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz

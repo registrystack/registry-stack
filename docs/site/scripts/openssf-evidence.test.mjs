@@ -58,14 +58,23 @@ test("OpenSSF Silver public status matches the in-tree answer set", async () => 
     assert.ok(
       criterion.evidence_urls.every((url) => url.startsWith("https://")),
     );
-    assert.match(page, new RegExp(`\\| \\\`${id}\\\` \\| ${criterion.status} \\|`));
+    assert.match(
+      page,
+      new RegExp(`\\| \\\`${id}\\\` \\| ${criterion.status}(?: | \\|)`),
+    );
   }
 });
 
-test("public evidence names the current release and candidate receipt chain", async () => {
+test("public evidence describes conditional repeatability and the compact release chain", async () => {
   const page = await readFile(evidencePath, "utf8");
-  assert.match(page, /\bv0\.13\.0\b/);
-  assert.match(page, /candidate receipt/i);
-  assert.match(page, /build run identity/i);
-  assert.match(page, /not environment\s+independence/i);
+  assert.match(
+    page,
+    /\| `build_repeatable` \| Met only while the latest applicable clean proof is successful and no older than 30 days \|/,
+  );
+  assert.match(page, /24-hour candidate manifest and bundle/i);
+  assert.match(page, /one keyless Sigstore bundle authenticates `SHA256SUMS`/i);
+  assert.match(
+    page,
+    /one compact release manifest recording candidate and promotion identity/i,
+  );
 });

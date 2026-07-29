@@ -247,19 +247,20 @@ class GateInventoryTest(unittest.TestCase):
         build_b = self.module.yaml_job_block(workflow, "build-b")
         self.assertIsNone(build_b)
         duplicate = workflow.replace(
-            "  other-platforms:",
+            "  build-platforms:",
             "  build-b:\n"
             "    name: Duplicate canonical build\n"
             "    needs: validate\n"
             "\n"
-            "  other-platforms:",
+            "  build-platforms:",
         )
         reused = workflow.replace(
-            "  other-platforms:",
+            "      - name: Build canonical Linux payload once",
             "      - name: Unsafe reuse\n"
             "        uses: actions/download-artifact@fake\n"
             "\n"
-            "  other-platforms:",
+            "      - name: Build canonical Linux payload once",
+            1,
         )
         for mutated in (duplicate, reused):
             self.assertEqual(
@@ -277,8 +278,8 @@ class GateInventoryTest(unittest.TestCase):
         for marker in ("      id-token: write\n", "      attestations: write\n"):
             with self.subTest(marker=marker.strip()):
                 mutated = workflow.replace(
-                    "      packages: read\n",
-                    f"      packages: read\n{marker}",
+                    "      packages: write\n",
+                    f"      packages: write\n{marker}",
                     1,
                 )
                 self.assertEqual(
@@ -292,9 +293,9 @@ class GateInventoryTest(unittest.TestCase):
             self.module.RELEASE_SECURITY_POLICY_PATHS,
         )[".github/workflows/release-candidate.yml"]
         for marker in (
-            "name: Upload prior-verified immutable attestation bundle",
-            "name: Download prior-verified immutable attestation bundle",
-            "name: Reverify every hash-bound subject before requesting OIDC",
+            "name: Upload one candidate manifest and bundle",
+            "name: Download compact candidate",
+            "name: Reverify all bytes before requesting OIDC",
         ):
             with self.subTest(marker=marker):
                 mutated = workflow.replace(marker, "removed-attestation-barrier")
@@ -303,25 +304,39 @@ class GateInventoryTest(unittest.TestCase):
                     self.module.candidate_attestation_isolation_violations(mutated),
                 )
 
-    def test_candidate_receipt_accepts_only_in_progress_self_observation(self) -> None:
+    def test_candidate_artifact_contains_only_manifest_and_bundle(self) -> None:
         workflow = self.module.policy_file_texts(
             ROOT,
             self.module.RELEASE_SECURITY_POLICY_PATHS,
         )[".github/workflows/release-candidate.yml"]
-        receipt_job = self.module.yaml_job_block(workflow, "verify-candidate")
-        self.assertIsNotNone(receipt_job)
-        self.assertIn('.status == "in_progress" and', receipt_job)
-        self.assertIn(".conclusion == null and", receipt_job)
-        self.assertNotIn(".conclusion != null and", receipt_job)
+        assemble = self.module.yaml_job_block(workflow, "assemble")
+        self.assertIsNotNone(assemble)
+        assert assemble is not None
+        upload = next(
+            block
+            for block in self.module.yaml_step_blocks(assemble)
+            if "name: Upload one candidate manifest and bundle" in block
+        )
+        self.assertIn("candidate/release-candidate-manifest.json", upload)
+        self.assertIn(
+            "candidate/registry-stack-${{ needs.validate.outputs.tag }}-candidate.tar.gz",
+            upload,
+        )
+        self.assertNotIn("candidate-receipt", upload)
 
-    def test_every_candidate_artifact_requires_seven_day_retention(self) -> None:
+    def test_candidate_artifacts_use_scoped_retention(self) -> None:
         workflow = self.module.policy_file_texts(
             ROOT,
             self.module.RELEASE_SECURITY_POLICY_PATHS,
         )[".github/workflows/release-candidate.yml"]
         mutated = workflow.replace("retention-days: 7", "retention-days: 8", 1)
         self.assertEqual(
-            ["Candidate artifact seven-day retention"],
+            ["Candidate artifact retention"],
+            self.module.artifact_retention_violations(mutated),
+        )
+        mutated = workflow.replace("retention-days: 2", "retention-days: 8", 1)
+        self.assertEqual(
+            ["Candidate artifact retention"],
             self.module.artifact_retention_violations(mutated),
         )
 
@@ -346,12 +361,12 @@ class GateInventoryTest(unittest.TestCase):
             ROOT,
             self.module.RELEASE_SECURITY_POLICY_PATHS,
         )[".github/workflows/release.yml"]
-        publish = self.module.yaml_job_block(workflow, "publish-images")
+        publish = self.module.yaml_job_block(workflow, "promote-images")
         self.assertIsNotNone(publish)
         for marker in (
-            '"repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"',
-            "for name in registry-notary registry-relay; do",
-            "Cannot prove public image ${public} is absent",
+            "name: Reconcile complete draft before first public write",
+            "while IFS= read -r final_ref; do",
+            "Final image destination ${final_ref} is no longer absent",
         ):
             with self.subTest(marker=marker):
                 mutated_publish = publish.replace(marker, "removed-prewrite-proof", 1)

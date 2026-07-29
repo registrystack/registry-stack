@@ -54,8 +54,12 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const base = env.DOCS_BASE || undefined;
   const basePath = base?.replace(/\/$/, '');
   const isArchivedBuild = selectedDocset.status === 'archived';
+  const isReleasedArchiveBuild =
+    isArchivedBuild && env.DOCS_RELEASED_ARCHIVE === 'true';
+  const isHistoricalArchiveBuild =
+    isArchivedBuild && !isReleasedArchiveBuild && selectedDocset.id !== docsets.released;
   const isSearchExcludedBuild =
-    isArchivedBuild || selectedDocset.availability === 'unreleased';
+    isHistoricalArchiveBuild || selectedDocset.availability === 'unreleased';
   const currentDocset = docsets.docsets.find((entry) => entry.id === docsets.current);
   if (!currentDocset) throw new Error(`current docs docset "${docsets.current}" not found`);
   /** @param {string} path */
@@ -70,6 +74,8 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     base,
     basePath,
     isArchivedBuild,
+    isReleasedArchiveBuild,
+    isHistoricalArchiveBuild,
     isSearchExcludedBuild,
     internalRedirect,
     currentDocsetRedirect,
@@ -80,6 +86,7 @@ const docsetsManifest = loadDocsetsManifest();
 const {
   base,
   isArchivedBuild,
+  isHistoricalArchiveBuild,
   isSearchExcludedBuild,
   internalRedirect,
   currentDocsetRedirect,
@@ -214,10 +221,10 @@ export default defineConfig({
     starlight({
       title: 'Registry stack docs',
       description: 'Documentation for Registry Stack: Registry Relay and Registry Notary, the runtime services that publish registry metadata, serve protected registry data, and issue evidence credentials.',
-      // Pagefind's generated index is platform-dependent. Archives are release
-      // artifacts, so disable their local search instead of allowing the same
-      // source release to produce different immutable bytes on macOS and Linux.
-      pagefind: !isArchivedBuild,
+      // Historical archives keep their sealed search posture. A new released
+      // archive is built once on the release runner and carries its exact
+      // Pagefind output into production.
+      pagefind: !isSearchExcludedBuild,
       plugins: [
         // Generates /llms.txt, /llms-full.txt, and /llms-small.txt for
         // machine consumption. The `details` field carries the discovery
@@ -225,9 +232,9 @@ export default defineConfig({
         // API reference pages (reference/apis/*) are Redoc HTML embeds with
         // minimal prose; they are excluded from llms-small.txt to keep the
         // compact version useful, but remain in llms-full.txt.
-        // Only registered for current builds. Archived docsets do not publish
-        // a separate machine-readable corpus; the /dev/ build remains current.
-        ...(isArchivedBuild ? [] : [starlightLlmsTxt({
+        // Released archives carry their machine-readable corpus into the
+        // canonical root. Historical archives retain their sealed output.
+        ...(isHistoricalArchiveBuild ? [] : [starlightLlmsTxt({
           description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Registry Notary.',
           details: DISCOVERY_HEADER,
           exclude: ['reference/apis/**'],

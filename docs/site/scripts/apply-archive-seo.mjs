@@ -26,15 +26,26 @@ function addNoindex(html) {
   return html.replace('</head>', `${robotsMeta}</head>`);
 }
 
-export async function applyArchiveSeo(outDir) {
+function removeNoindex(html) {
+  return html.replace(
+    /\s*<meta\s+name=["']robots["']\s+content=["']noindex,follow["']\s*\/?>/gi,
+    '',
+  );
+}
+
+export async function applyArchiveSeo(outDir, { indexable = false } = {}) {
   for (const file of await htmlFiles(outDir)) {
     const html = await readFile(file, 'utf8');
-    const updated = addNoindex(removeSitemapLinks(html));
+    const updated = indexable
+      ? removeNoindex(html)
+      : addNoindex(removeSitemapLinks(html));
     if (updated !== html) await writeFile(file, updated);
   }
 
-  await rm(join(outDir, 'sitemap-index.xml'), { force: true });
-  await rm(join(outDir, 'sitemap-0.xml'), { force: true });
+  if (!indexable) {
+    await rm(join(outDir, 'sitemap-index.xml'), { force: true });
+    await rm(join(outDir, 'sitemap-0.xml'), { force: true });
+  }
 }
 
 async function main() {
