@@ -53,8 +53,14 @@ function canonicalFromHtml(html) {
 }
 
 function isCanonicalRootUrl(value) {
-  if (!value?.startsWith(docsOrigin)) return false;
-  const path = value.slice(docsOrigin.length) || '/';
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.origin !== docsOrigin) return false;
+  const path = url.pathname || '/';
   return ![
     CURRENT_PRODUCTION_DOCSET_PATH,
     legacyPreviewPath,

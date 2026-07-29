@@ -172,9 +172,9 @@ test('promotes the locked release to canonical root without changing its archive
     await readFile(resolve(fixture.docsRoot, 'dist/CNAME'), 'utf8'),
     'docs.example.test\n',
   );
-  assert.match(
-    await readFile(resolve(fixture.docsRoot, 'dist/robots.txt'), 'utf8'),
-    /https:\/\/docs\.registrystack\.org\/sitemap-index\.xml/,
+  assert.ok(
+    (await readFile(resolve(fixture.docsRoot, 'dist/robots.txt'), 'utf8'))
+      .includes('https://docs.registrystack.org/sitemap-index.xml'),
   );
   const sitemap = await readFile(resolve(fixture.docsRoot, 'dist/sitemap-0.xml'), 'utf8');
   assert.match(sitemap, /<loc>https:\/\/docs\.registrystack\.org\/<\/loc>/);
