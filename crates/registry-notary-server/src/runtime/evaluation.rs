@@ -501,7 +501,10 @@ impl RegistryNotaryRuntime {
         let context = request
             .request_context()
             .ok_or(EvidenceError::InvalidRequest)?;
-        let levels = build_claim_levels(&evidence, &request.claims, &claim_versions)?;
+        let levels = delegated_proof_first_levels(
+            build_claim_levels(&evidence, &request.claims, &claim_versions)?,
+            &evaluation_capability,
+        )?;
         validate_request_variables_before_relay(&evidence, &context, &claim_versions, &levels)?;
         preflight_claim_closure(
             &evidence,
@@ -1483,6 +1486,28 @@ impl RegistryNotaryRuntime {
         }
         render_results(evidence, &evaluation.results, &request.format)
     }
+}
+
+fn delegated_proof_first_levels(
+    mut levels: Vec<Vec<String>>,
+    capability: &EvaluationCapability,
+) -> Result<Vec<Vec<String>>, EvidenceError> {
+    let EvaluationCapability::DelegatedAttestation { proof_claim_id, .. } = capability else {
+        return Ok(levels);
+    };
+    let proof_claim_id = proof_claim_id.as_str();
+    let mut found = false;
+    for level in &mut levels {
+        let previous_len = level.len();
+        level.retain(|claim_id| claim_id != proof_claim_id);
+        found |= level.len() != previous_len;
+    }
+    if !found {
+        return Err(delegated_proof_denied());
+    }
+    levels.retain(|level| !level.is_empty());
+    levels.insert(0, vec![proof_claim_id.to_string()]);
+    Ok(levels)
 }
 
 fn validate_request_variables_before_relay(

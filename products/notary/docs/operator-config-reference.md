@@ -504,6 +504,9 @@ oid4vci.credential_configurations.*.display_name
 oid4vci.credential_configurations.*.format
 oid4vci.credential_configurations.*.proof_signing_alg_values_supported
 oid4vci.credential_configurations.*.proof_signing_alg_values_supported[]
+oid4vci.credential_configurations.*.representative_issuance
+oid4vci.credential_configurations.*.representative_issuance.ceremony
+oid4vci.credential_configurations.*.representative_issuance.relationship
 oid4vci.credential_configurations.*.scope
 oid4vci.credential_configurations.*.vct
 oid4vci.credential_endpoint
@@ -603,8 +606,7 @@ subject_access.delegation.allowed_relationships[].allowed_formats
 subject_access.delegation.allowed_relationships[].allowed_formats[]
 subject_access.delegation.allowed_relationships[].allowed_purposes
 subject_access.delegation.allowed_relationships[].allowed_purposes[]
-subject_access.delegation.allowed_relationships[].credential_profiles
-subject_access.delegation.allowed_relationships[].credential_profiles[]
+subject_access.delegation.allowed_relationships[].max_proof_age_seconds
 subject_access.delegation.allowed_relationships[].proof_claim
 subject_access.delegation.allowed_relationships[].relationship_type
 subject_access.delegation.allowed_relationships[].target_id_type
@@ -809,6 +811,17 @@ Delegated access must bind requester, target, relationship, purpose, and
 authorization details before evaluation. A delegated Relay proof consultation
 proves only its exact compiled edge and does not grant scopes.
 
+An OID4VCI credential configuration can opt into representative issuance with
+`representative_issuance.ceremony:
+digitally_authenticated_representative` and one relationship name. The
+credential root must depend directly on that relationship's registry-backed
+proof claim. The committed delegated capability carries the exact proof and
+dependency closure; evaluation does not recover that closure from mutable
+configuration. Credential status must be enabled. Prefer the compact
+Registryctl authoring surface documented in
+[representative credential issuance](representative-credential-issuance.md)
+over hand-authoring these coupled runtime fields.
+
 Credential issuance additionally requires the stored evaluation to contain one
 exact compiler pin for every registry-backed claim in each selected root's
 dependency closure, plus one normalized execution record for every unique Relay
@@ -823,8 +836,9 @@ mutation. OID4VCI rejects a source-free credential configuration, creates and
 evaluates the registry transaction before rendering an offer, consumes the
 transaction-bound proof nonce at the credential endpoint, and checks stored
 provenance before signer access. Delegated self-attestation is
-evaluation-only; delegated relationship and claim credential-profile bindings
-are rejected at configuration load.
+evaluation-only unless one credential configuration explicitly selects the
+digitally authenticated representative ceremony. Direct issuance and other
+OID4VCI configurations continue to reject delegated evaluations.
 
 Notary persists these private Relay identifiers only when every selected root
 shares a mutually validated credential profile. Registry-backed

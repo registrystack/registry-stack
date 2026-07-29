@@ -5016,6 +5016,11 @@ fn environment_schema_types_the_closed_oid4vci_authority_binding() {
             },
             "redirect_uri": "https://notary.example.invalid/oid4vci/offer/callback",
             "allowed_wallet_origins": ["https://wallet.example.invalid"],
+            "representative_issuance": {
+                "relationship": "parent",
+                "proof_claim": "parent-link",
+                "target_id_type": "solmara_uin",
+            },
         },
         "deployment": {
             "profile": "hosted_lab",
@@ -5055,6 +5060,11 @@ fn environment_schema_types_the_closed_oid4vci_authority_binding() {
     let mut hosted_loopback = environment.clone();
     hosted_loopback["oid4vci"]["public_base_url"] = serde_json::json!("http://127.0.0.1:8081");
     assert!(!schema.is_valid(&hosted_loopback));
+
+    let mut stale_relationship_proof = environment.clone();
+    stale_relationship_proof["oid4vci"]["representative_issuance"]["max_proof_age_seconds"] =
+        serde_json::json!(0);
+    assert!(!schema.is_valid(&stale_relationship_proof));
 
     let mut unknown_key_field = environment;
     unknown_key_field["oid4vci"]["access_token"]["value"] = serde_json::json!("secret-material");
@@ -7147,6 +7157,250 @@ fn authored_oid4vci_walt_profile_is_explicit_and_keeps_the_bearer_window_bounded
 }
 
 #[test]
+fn authored_representative_oid4vci_builds_the_exact_status_enabled_policy() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    author_oid4vci_binding(
+        &project,
+        "household-eligibility",
+        "household-eligibility",
+        "representative_reference",
+    );
+    author_representative_oid4vci_binding(&project, "representative_reference");
+    merge_environment_yaml(
+        &project.join("environments/local.yaml"),
+        "oid4vci:\n  representative_issuance:\n    max_proof_age_seconds: 180\n",
+    );
+
+    let tested = test_registry_project(&ProjectTestOptions {
+        project_directory: project.clone(),
+        environment: Some("local".to_string()),
+        live: false,
+    })
+    .expect("representative requester fixture passes the offline developer journey");
+    assert_eq!(tested.status, "passed");
+
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("representative OID4VCI golden project builds through the production validator");
+    let output = resolve_build_output(&project, build.output.expect("build output"));
+    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
+    let relationship = &notary["subject_access"]["delegation"]["allowed_relationships"][0];
+    assert!(
+        notary["subject_access"]["allowed_claims"]
+            .as_sequence()
+            .is_some_and(Vec::is_empty),
+        "a representative-only root must not become subject-bound authority"
+    );
+    assert_eq!(
+        relationship["relationship_type"].as_str(),
+        Some("authorized-representative")
+    );
+    assert_eq!(
+        relationship["proof_claim"].as_str(),
+        Some("household-record-exists")
+    );
+    assert_eq!(
+        relationship["target_id_type"].as_str(),
+        Some("household_reference")
+    );
+    assert_eq!(relationship["max_proof_age_seconds"].as_u64(), Some(180));
+    assert_eq!(
+        notary["subject_access"]["token_policy"]["max_evaluation_age_seconds"].as_u64(),
+        Some(300),
+        "a narrower relationship-proof window must not narrow unrelated evaluation policy"
+    );
+    assert_eq!(
+        notary["subject_access"]["allowed_operations"]["evaluate"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        notary["oid4vci"]["credential_configurations"]
+            ["household-eligibility.household-eligibility"]["representative_issuance"]["ceremony"]
+            .as_str(),
+        Some("digitally_authenticated_representative")
+    );
+    assert_eq!(
+        notary["oid4vci"]["credential_configurations"]
+            ["household-eligibility.household-eligibility"]["representative_issuance"]
+            ["relationship"]
+            .as_str(),
+        Some("authorized-representative")
+    );
+    assert_eq!(notary["credential_status"]["enabled"].as_bool(), Some(true));
+    assert_eq!(
+        notary["credential_status"]["base_url"].as_str(),
+        Some("https://notary.example.invalid")
+    );
+    let root = notary["evidence"]["claims"]
+        .as_sequence()
+        .expect("generated claims")
+        .iter()
+        .find(|claim| claim["id"].as_str() == Some("source-household-approval-decision"))
+        .expect("representative credential root");
+    assert_eq!(
+        root["depends_on"],
+        serde_norway::from_str::<serde_norway::Value>("[household-record-exists]")
+            .expect("claim dependency parses")
+    );
+}
+
+#[test]
+fn representative_oid4vci_diagnostics_name_the_invalid_authoring_field_and_fix() {
+    let prepare = || {
+        let temporary = tempfile::tempdir().expect("representative diagnostic directory");
+        let project = copy_project("custom-system", temporary.path());
+        author_oid4vci_binding(
+            &project,
+            "household-eligibility",
+            "household-eligibility",
+            "household_reference",
+        );
+        author_representative_oid4vci_binding(&project, "household_reference");
+        (temporary, project)
+    };
+
+    let (unknown_root, unknown_project) = prepare();
+    let environment_path = unknown_project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["oid4vci"]["representative_issuance"]["proof_claim"] =
+        serde_norway::Value::String("missing-relationship-proof".to_string());
+    write_yaml(&environment_path, &environment);
+    let report = authoring_diagnostics(&unknown_project);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.cause
+                == "The representative proof claim does not exist in the selected credential service."
+        })
+        .unwrap_or_else(|| panic!("missing proof-claim diagnostic: {report:#?}"));
+    assert_eq!(
+        diagnostic.remediation,
+        "Set proof_claim to a registry-backed claim in the same service as the credential profile."
+    );
+    assert!(diagnostic.addresses.iter().any(|address| {
+        address.file == "environments/local.yaml"
+            && address.pointer == "/oid4vci/representative_issuance/proof_claim"
+    }));
+    drop(unknown_root);
+
+    let (_mapping_root, mapping_project) = prepare();
+    let project_path = mapping_project.join("registry-stack.yaml");
+    let mut project = read_yaml(&project_path);
+    project["services"]["household-eligibility"]["consultations"]["household"]["input"]
+        .as_mapping_mut()
+        .expect("consultation input")
+        .remove(serde_norway::Value::String(
+            "representative_reference".to_string(),
+        ));
+    write_yaml(&project_path, &project);
+    let report = authoring_diagnostics(&mapping_project);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.cause
+                == "The relationship-proof consultation does not bind the authenticated representative."
+        })
+        .unwrap_or_else(|| panic!("missing requester-binding diagnostic: {report:#?}"));
+    assert!(diagnostic
+        .remediation
+        .contains("request.requester.identifiers.<oid4vci subject id_type>"));
+    assert!(diagnostic.addresses.iter().any(|address| {
+        address.file == "registry-stack.yaml"
+            && address.pointer == "/services/household-eligibility/consultations/household/input"
+    }));
+
+    let (_target_root, target_project) = prepare();
+    let project_path = target_project.join("registry-stack.yaml");
+    let mut project = read_yaml(&project_path);
+    project["services"]["household-eligibility"]["consultations"]["household"]["input"]
+        .as_mapping_mut()
+        .expect("consultation input")
+        .remove(serde_norway::Value::String(
+            "household_reference".to_string(),
+        ));
+    write_yaml(&project_path, &project);
+    let report = authoring_diagnostics(&target_project);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.cause
+                == "The relationship-proof consultation does not bind the represented subject."
+        })
+        .unwrap_or_else(|| panic!("missing target-binding diagnostic: {report:#?}"));
+    assert!(diagnostic
+        .remediation
+        .contains("request.target.identifiers.<representative_issuance target_id_type>"));
+    assert!(diagnostic.addresses.iter().any(|address| {
+        address.file == "environments/local.yaml"
+            && address.pointer == "/oid4vci/representative_issuance/target_id_type"
+    }));
+
+    let (_extra_input_root, extra_input_project) = prepare();
+    let project_path = extra_input_project.join("registry-stack.yaml");
+    let mut project = read_yaml(&project_path);
+    project["services"]["household-eligibility"]["consultations"]["household"]["input"]
+        ["relationship_kind"] =
+        serde_norway::Value::String("request.target.attributes.relationship_kind".to_string());
+    write_yaml(&project_path, &project);
+    let report = authoring_diagnostics(&extra_input_project);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.cause
+                == "The relationship-proof consultation requires an input that the target-selection ceremony cannot supply."
+        })
+        .unwrap_or_else(|| panic!("unavailable ceremony-input diagnostic: {report:#?}"));
+    assert!(diagnostic.remediation.contains("exactly two"));
+    assert!(diagnostic.addresses.iter().any(|address| {
+        address.file == "registry-stack.yaml"
+            && address.pointer
+                == "/services/household-eligibility/consultations/household/input/relationship_kind"
+    }));
+
+    let (_shared_root, shared_project) = prepare();
+    let project_path = shared_project.join("registry-stack.yaml");
+    let mut project = read_yaml(&project_path);
+    project["services"]["household-eligibility"]["credential_profiles"]["ordinary-household"] =
+        serde_norway::from_str(
+            r#"format: dc+sd-jwt
+type: https://notary.example.invalid/credentials/ordinary-household/v1
+validity: 5m
+claims: [source-household-approval-decision]
+"#,
+        )
+        .expect("shared credential profile");
+    write_yaml(&project_path, &project);
+    let report = authoring_diagnostics(&shared_project);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.cause
+                == "The representative credential claim is shared by another credential profile."
+        })
+        .unwrap_or_else(|| panic!("shared representative-root diagnostic: {report:#?}"));
+    assert!(diagnostic.remediation.contains("exclusive"));
+    assert!(diagnostic.addresses.iter().any(|address| {
+        address.file == "environments/local.yaml"
+            && address.pointer == "/oid4vci/credential/profile"
+    }));
+    assert!(diagnostic.addresses.iter().any(|address| {
+        address.file == "registry-stack.yaml"
+            && address.pointer
+                == "/services/household-eligibility/credential_profiles/ordinary-household/claims"
+    }));
+}
+
+#[test]
 fn authored_oid4vci_binding_rejects_open_or_incoherent_trust_topologies() {
     for (name, mutate, expected) in [
         (
@@ -9105,6 +9359,69 @@ allowed_wallet_origins: [https://wallet.example.invalid]
 "#
     ))
     .expect("OID4VCI binding");
+    write_yaml(&environment_path, &environment);
+}
+
+fn author_representative_oid4vci_binding(project: &Path, requester_id_type: &str) {
+    let project_path = project.join("registry-stack.yaml");
+    let mut authored_project = read_yaml(&project_path);
+    let service = &mut authored_project["services"]["household-eligibility"];
+    service["consultations"]["household"]["input"]["representative_reference"] =
+        serde_norway::Value::String(format!("request.requester.identifiers.{requester_id_type}"));
+    service["credential_profiles"]["household-eligibility"]["claims"] =
+        serde_norway::from_str("[source-household-approval-decision]")
+            .expect("single representative credential root");
+    write_yaml(&project_path, &authored_project);
+
+    let integration_path = project.join("integrations/eligibility/integration.yaml");
+    let mut integration = read_yaml(&integration_path);
+    integration["input"]["representative_reference"] = serde_norway::from_str(
+        r#"role: selector
+type: string
+maxLength: 18
+pattern: "^HH-[A-Z0-9]{8}$"
+"#,
+    )
+    .expect("representative selector input");
+    integration["capability"]["http"]["request"]["query"]["representative"] =
+        serde_norway::from_str("{ input: representative_reference }")
+            .expect("representative query binding");
+    write_yaml(&integration_path, &integration);
+
+    for entry in std::fs::read_dir(project.join("integrations/eligibility/fixtures"))
+        .expect("fixture directory reads")
+    {
+        let path = entry.expect("fixture entry").path();
+        let mut fixture = read_yaml(&path);
+        fixture["input"]["representative_reference"] =
+            serde_norway::Value::String("HH-ZZ99YY88".to_string());
+        fixture["interactions"][0]["expect"]["query"]["representative"] =
+            serde_norway::Value::String("HH-ZZ99YY88".to_string());
+        if fixture.get("request").is_some() {
+            fixture["request"]["requester"] = serde_norway::from_str(&format!(
+                r#"type: Person
+identifiers:
+  - scheme: {requester_id_type}
+    value: HH-ZZ99YY88
+"#
+            ))
+            .expect("fixture requester");
+            fixture["request"]["claims"] =
+                serde_norway::from_str("[source-household-approval-decision]")
+                    .expect("fixture representative claim");
+        }
+        write_yaml(&path, &fixture);
+    }
+
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["oid4vci"]["representative_issuance"] = serde_norway::from_str(
+        r#"relationship: authorized-representative
+proof_claim: household-record-exists
+target_id_type: household_reference
+"#,
+    )
+    .expect("representative issuance binding");
     write_yaml(&environment_path, &environment);
 }
 

@@ -45,6 +45,7 @@ impl Oid4vciConfig {
         &self,
         subject_access: &SubjectAccessConfig,
         evidence: &EvidenceConfig,
+        credential_status: &CredentialStatusConfig,
     ) -> Result<(), EvidenceConfigError> {
         // The pre-authorized-code block is validated regardless of the oid4vci
         // enable toggle so a partially-configured flow is rejected, but the
@@ -176,15 +177,17 @@ impl Oid4vciConfig {
             .collect();
 
         let mut configured_vcts = HashSet::new();
+        let validation = Oid4vciCredentialValidationContext {
+            credential_issuer: &self.credential_issuer,
+            subject_access,
+            evidence,
+            credential_status,
+            claim_ids: &claim_ids,
+            allowed_claim_ids: &allowed_claim_ids,
+            allowed_profiles: &allowed_profiles,
+        };
         for (configuration_id, configuration) in &self.credential_configurations {
-            configuration.validate(
-                configuration_id,
-                &self.credential_issuer,
-                evidence,
-                &claim_ids,
-                &allowed_claim_ids,
-                &allowed_profiles,
-            )?;
+            configuration.validate(configuration_id, &validation)?;
             if !configured_vcts.insert(configuration.vct.as_str()) {
                 return invalid_oid4vci(format!(
                     "credential configuration '{configuration_id}' vct must be unique"
@@ -509,6 +512,21 @@ pub struct Oid4vciCredentialConfigurationConfig {
     pub proof_signing_alg_values_supported: Vec<String>,
     #[serde(default = "default_oid4vci_cryptographic_binding_methods_supported")]
     pub cryptographic_binding_methods_supported: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub representative_issuance: Option<Oid4vciRepresentativeIssuanceConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vciRepresentativeIssuanceConfig {
+    pub ceremony: Oid4vciRepresentativeIssuanceCeremony,
+    pub relationship: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Oid4vciRepresentativeIssuanceCeremony {
+    DigitallyAuthenticatedRepresentative,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -564,12 +582,17 @@ impl Oid4vciCredentialConfigurationConfig {
     fn validate(
         &self,
         configuration_id: &str,
-        credential_issuer: &str,
-        evidence: &EvidenceConfig,
-        claim_ids: &HashSet<&str>,
-        allowed_claim_ids: &HashSet<&str>,
-        allowed_profiles: &HashSet<&str>,
+        context: &Oid4vciCredentialValidationContext<'_>,
     ) -> Result<(), EvidenceConfigError> {
+        let Oid4vciCredentialValidationContext {
+            credential_issuer,
+            subject_access,
+            evidence,
+            credential_status,
+            claim_ids,
+            allowed_claim_ids,
+            allowed_profiles,
+        } = context;
         if configuration_id.trim().is_empty() {
             return invalid_oid4vci("credential_configurations must not contain a blank id");
         }
@@ -619,7 +642,9 @@ impl Oid4vciCredentialConfigurationConfig {
                 evidence,
                 profile,
                 claim_ids,
-                allowed_claim_ids,
+                self.representative_issuance
+                    .is_none()
+                    .then_some(*allowed_claim_ids),
             )?;
             if claim_mode.is_field_projection() {
                 let purpose = claim.purpose.as_deref().ok_or_else(|| {
@@ -690,6 +715,150 @@ impl Oid4vciCredentialConfigurationConfig {
                 ));
             }
         }
+        self.validate_representative_issuance(
+            configuration_id,
+            subject_access,
+            evidence,
+            credential_status,
+        )?;
+        Ok(())
+    }
+
+    fn validate_representative_issuance(
+        &self,
+        configuration_id: &str,
+        subject_access: &SubjectAccessConfig,
+        evidence: &EvidenceConfig,
+        credential_status: &CredentialStatusConfig,
+    ) -> Result<(), EvidenceConfigError> {
+        let Some(representative) = self.representative_issuance.as_ref() else {
+            return Ok(());
+        };
+        if !subject_access.delegation.enabled {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance requires subject_access.delegation.enabled = true"
+            ));
+        }
+        if !subject_access.allowed_operations.evaluate {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance requires subject_access.allowed_operations.evaluate = true"
+            ));
+        }
+        if !credential_status.enabled {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance requires credential_status.enabled = true"
+            ));
+        }
+        if representative.relationship.trim().is_empty() {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance.relationship must not be empty"
+            ));
+        }
+        let relationship = subject_access
+            .delegation
+            .relationship(&representative.relationship)
+            .ok_or_else(|| EvidenceConfigError::InvalidOid4vciConfig {
+                reason: format!(
+                    "credential configuration '{configuration_id}' representative_issuance references unknown relationship '{}'",
+                    representative.relationship
+                ),
+            })?;
+        let claim_ids = self.credential_claim_ids();
+        let [claim_id] = claim_ids.as_slice() else {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance requires exactly one credential claim root"
+            ));
+        };
+        if subject_access
+            .allowed_claims
+            .iter()
+            .any(|allowed| allowed == claim_id)
+        {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance claim '{claim_id}' must not appear in subject_access.allowed_claims; representative roots are delegated-only"
+            ));
+        }
+        if !relationship
+            .allowed_claims
+            .iter()
+            .any(|allowed| allowed == claim_id)
+        {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance claim '{claim_id}' is not allowed by relationship '{}'",
+                relationship.relationship_type
+            ));
+        }
+        let claim = evidence
+            .claims
+            .iter()
+            .find(|claim| claim.id == *claim_id)
+            .ok_or_else(|| EvidenceConfigError::InvalidOid4vciConfig {
+                reason: format!(
+                    "credential configuration '{configuration_id}' representative_issuance references unknown claim '{claim_id}'"
+                ),
+            })?;
+        if !claim
+            .depends_on
+            .iter()
+            .any(|dependency| dependency == &relationship.proof_claim)
+        {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance claim '{claim_id}' must depend_on proof claim '{}'",
+                relationship.proof_claim
+            ));
+        }
+        let requester_id_type = subject_access.subject_binding.id_type.as_str();
+        let target_id_type = relationship
+            .target_id_type
+            .as_deref()
+            .unwrap_or(requester_id_type);
+        let requester_path = format!("requester.identifiers.{requester_id_type}");
+        let target_path = format!("target.identifiers.{target_id_type}");
+        validate_representative_credential_closure_inputs(
+            configuration_id,
+            claim,
+            &relationship.proof_claim,
+            evidence,
+            &requester_path,
+            &target_path,
+        )?;
+        let proof_claim = evidence
+            .claims
+            .iter()
+            .find(|candidate| candidate.id == relationship.proof_claim)
+            .ok_or_else(|| EvidenceConfigError::InvalidOid4vciConfig {
+                reason: format!(
+                    "credential configuration '{configuration_id}' representative_issuance references unknown proof claim '{}'",
+                    relationship.proof_claim
+                ),
+            })?;
+        let ClaimEvidenceMode::RegistryBacked { consultations } = &proof_claim.evidence_mode else {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance proof claim '{}' must be registry_backed",
+                relationship.proof_claim
+            ));
+        };
+        let Some((_, consultation)) = consultations
+            .first_key_value()
+            .filter(|_| consultations.len() == 1)
+        else {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance proof claim '{}' must declare exactly one Relay consultation",
+                relationship.proof_claim
+            ));
+        };
+        let expected_inputs = BTreeSet::from([requester_path, target_path]);
+        let actual_inputs = consultation
+            .inputs
+            .values()
+            .map(|input| input.request_context_path().to_string())
+            .collect::<BTreeSet<_>>();
+        if actual_inputs != expected_inputs {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance proof claim '{}' consultation must map exactly the authenticated requester identifier and selected target identifier",
+                relationship.proof_claim
+            ));
+        }
         Ok(())
     }
 
@@ -716,6 +885,54 @@ impl Oid4vciCredentialConfigurationConfig {
             )),
         }
     }
+}
+
+fn validate_representative_credential_closure_inputs(
+    configuration_id: &str,
+    root: &ClaimDefinition,
+    proof_claim_id: &str,
+    evidence: &EvidenceConfig,
+    requester_path: &str,
+    target_path: &str,
+) -> Result<(), EvidenceConfigError> {
+    let mut pending = vec![root];
+    let mut visited = BTreeSet::new();
+    while let Some(claim) = pending.pop() {
+        if !visited.insert(claim.id.as_str()) || claim.id == proof_claim_id {
+            continue;
+        }
+        let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+            return invalid_oid4vci(format!(
+                "credential configuration '{configuration_id}' representative_issuance claim '{}' must be registry_backed",
+                claim.id
+            ));
+        };
+        for (consultation_name, consultation) in consultations {
+            for (input_name, input) in &consultation.inputs {
+                let path = input.request_context_path();
+                if path != requester_path && path != target_path {
+                    return invalid_oid4vci(format!(
+                        "credential configuration '{configuration_id}' representative_issuance claim '{}' consultation '{consultation_name}' input '{input_name}' maps '{path}' outside the representative ceremony; expected '{requester_path}' or '{target_path}'",
+                        claim.id
+                    ));
+                }
+            }
+        }
+        for dependency_id in &claim.depends_on {
+            let dependency = evidence
+                .claims
+                .iter()
+                .find(|candidate| candidate.id == *dependency_id)
+                .ok_or_else(|| EvidenceConfigError::InvalidOid4vciConfig {
+                    reason: format!(
+                        "credential configuration '{configuration_id}' representative_issuance claim '{}' dependency closure references unknown claim '{dependency_id}'",
+                        root.id
+                    ),
+                })?;
+            pending.push(dependency);
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn validate_oid4vci_projection_claims(
@@ -770,6 +987,16 @@ pub(super) fn validate_oid4vci_projection_claims(
     Ok(())
 }
 
+struct Oid4vciCredentialValidationContext<'a> {
+    credential_issuer: &'a str,
+    subject_access: &'a SubjectAccessConfig,
+    evidence: &'a EvidenceConfig,
+    credential_status: &'a CredentialStatusConfig,
+    claim_ids: &'a HashSet<&'a str>,
+    allowed_claim_ids: &'a HashSet<&'a str>,
+    allowed_profiles: &'a HashSet<&'a str>,
+}
+
 pub(super) fn validate_oid4vci_credential_claim_reference<'a>(
     configuration_id: &str,
     claim_id: &str,
@@ -777,14 +1004,14 @@ pub(super) fn validate_oid4vci_credential_claim_reference<'a>(
     evidence: &'a EvidenceConfig,
     profile: &CredentialProfileConfig,
     claim_ids: &HashSet<&str>,
-    allowed_claim_ids: &HashSet<&str>,
+    allowed_claim_ids: Option<&HashSet<&str>>,
 ) -> Result<&'a ClaimDefinition, EvidenceConfigError> {
     if !claim_ids.contains(claim_id) {
         return invalid_oid4vci(format!(
             "credential configuration '{configuration_id}' references unknown claim '{claim_id}'"
         ));
     }
-    if !allowed_claim_ids.contains(claim_id) {
+    if allowed_claim_ids.is_some_and(|allowed| !allowed.contains(claim_id)) {
         return invalid_oid4vci(format!(
             "credential configuration '{configuration_id}' references claim '{claim_id}' outside subject_access.allowed_claims"
         ));

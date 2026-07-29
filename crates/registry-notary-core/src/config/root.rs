@@ -579,7 +579,11 @@ impl StandaloneRegistryNotaryConfig {
     }
 
     fn validate_oid4vci_cross_block(&self) -> Result<(), EvidenceConfigError> {
-        self.oid4vci.validate(&self.subject_access, &self.evidence)
+        self.oid4vci.validate(
+            &self.subject_access,
+            &self.evidence,
+            &self.credential_status,
+        )
     }
 
     fn validate_access_token_signing_cross_block(&self) -> Result<(), EvidenceConfigError> {

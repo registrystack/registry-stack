@@ -1342,9 +1342,32 @@ fn validate_governed_request(
         }
     }
     let subject_type = selected_claim_subject_type(&selected_claims)?;
+    let mut input_claims = selected_claims.clone();
+    let representative_binding = loaded
+        .environment
+        .as_ref()
+        .and_then(|environment| environment.oid4vci.as_ref())
+        .and_then(|binding| {
+            binding
+                .representative_issuance
+                .as_ref()
+                .map(|representative| (binding, representative))
+        });
+    if let Some((binding, representative)) = representative_binding {
+        if let Some(proof_claim) = representative_proof_claim_for_selected_ids(
+            &loaded.project,
+            &binding.credential.service,
+            &binding.credential.profile,
+            &representative.proof_claim,
+            &ids,
+        )? {
+            input_claims.push(proof_claim);
+        }
+    }
     validate_governed_live_target(
         loaded,
-        &selected_claims,
+        &input_claims,
+        outbound.requester.as_ref(),
         &outbound.target,
         &outbound.variables,
         subject_type,
@@ -1355,6 +1378,39 @@ fn validate_governed_request(
         notary_service_id,
         subject_type: subject_type.to_string(),
     })
+}
+
+fn representative_proof_claim_for_selected_ids<'a>(
+    project: &'a RegistryProject,
+    service_id: &str,
+    profile_id: &str,
+    proof_claim_id: &str,
+    selected_claim_ids: &[String],
+) -> Result<Option<(&'a ServiceDeclaration, &'a ClaimDeclaration)>> {
+    let service = project
+        .services
+        .get(service_id)
+        .ok_or_else(|| anyhow!("representative credential service is absent"))?;
+    let credential = service
+        .credential_profiles
+        .get(profile_id)
+        .ok_or_else(|| anyhow!("representative credential profile is absent"))?;
+    let selected_root = credential
+        .claims
+        .first()
+        .is_some_and(|root| selected_claim_ids.iter().any(|selected| selected == root));
+    if !selected_root
+        || selected_claim_ids
+            .iter()
+            .any(|selected| selected == proof_claim_id)
+    {
+        return Ok(None);
+    }
+    let proof_claim = service
+        .claims
+        .get(proof_claim_id)
+        .ok_or_else(|| anyhow!("representative proof claim is absent"))?;
+    Ok(Some((service, proof_claim)))
 }
 
 fn selected_claim_subject_type(
@@ -1376,6 +1432,7 @@ fn selected_claim_subject_type(
 fn validate_governed_live_target(
     loaded: &LoadedRegistryProject,
     selected_claims: &[(&ServiceDeclaration, &ClaimDeclaration)],
+    requester: Option<&GovernedLiveTarget>,
     target: &GovernedLiveTarget,
     variables: &registry_notary_core::RequestVariables,
     subject_type: &str,
@@ -1386,6 +1443,8 @@ fn validate_governed_live_target(
 
     let mut id_contracts = Vec::new();
     let mut identifier_contracts = BTreeMap::<String, Vec<GovernedLiveInputContract<'_>>>::new();
+    let mut requester_identifier_contracts =
+        BTreeMap::<String, Vec<GovernedLiveInputContract<'_>>>::new();
     let mut attribute_contracts = BTreeMap::<String, Vec<GovernedLiveInputContract<'_>>>::new();
     let mut variable_contracts = BTreeMap::<String, Vec<GovernedLiveInputContract<'_>>>::new();
     for (service, claim) in selected_claims {
@@ -1413,6 +1472,11 @@ fn validate_governed_live_target(
                     .entry(scheme.to_string())
                     .or_default()
                     .push(contract);
+            } else if let Some(scheme) = mapping.strip_prefix("request.requester.identifiers.") {
+                requester_identifier_contracts
+                    .entry(scheme.to_string())
+                    .or_default()
+                    .push(contract);
             } else if let Some(name) = mapping.strip_prefix("request.target.attributes.") {
                 attribute_contracts
                     .entry(name.to_string())
@@ -1431,6 +1495,11 @@ fn validate_governed_live_target(
 
     if id_contracts.is_empty() != target.id.is_none() {
         bail!("live request target fields do not exactly match the selected authored inputs");
+    }
+    if requester_identifier_contracts.is_empty() != requester.is_none() {
+        bail!(
+            "live request requester must be present exactly when selected claims bind authenticated requester identifiers"
+        );
     }
     let mut identifiers = BTreeMap::new();
     for identifier in &target.identifiers {
@@ -1457,6 +1526,44 @@ fn validate_governed_live_target(
                 .collect::<BTreeSet<_>>()
     {
         bail!("live request target fields do not exactly match the selected authored inputs");
+    }
+    if let Some(requester) = requester {
+        if requester.id.is_some() || !requester.attributes.is_empty() {
+            bail!(
+                "live request requester must contain only the required authenticated identifiers"
+            );
+        }
+        let mut requester_identifiers = BTreeMap::new();
+        for identifier in &requester.identifiers {
+            if requester_identifiers
+                .insert(identifier.scheme.as_str(), identifier.value.as_str())
+                .is_some()
+            {
+                bail!("live request requester contains a duplicate identifier scheme");
+            }
+        }
+        if requester_identifiers.keys().copied().collect::<BTreeSet<_>>()
+            != requester_identifier_contracts
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>()
+        {
+            bail!(
+                "live request requester identifiers do not exactly match the selected authored inputs"
+            );
+        }
+        for (scheme, contracts) in &requester_identifier_contracts {
+            let value = requester_identifiers.get(scheme.as_str()).ok_or_else(|| {
+                anyhow!(
+                    "live request requester identifier is absent after exact-shape validation"
+                )
+            })?;
+            validate_governed_live_input(
+                &format!("requester.identifiers.{scheme}"),
+                contracts,
+                &Value::String((*value).to_string()),
+            )?;
+        }
     }
 
     if let Some(id) = &target.id {
@@ -1545,6 +1652,40 @@ mod governed_live_request_boundary_tests {
             "format": registry_notary_core::FORMAT_CLAIM_RESULT_JSON,
             "purpose": "social-programme-verification",
         })
+    }
+
+    #[test]
+    fn representative_root_adds_its_derived_proof_to_input_validation() {
+        let loaded = loaded_project("custom-system");
+        let selected = vec!["household-record-exists".to_string()];
+        let (service, proof) = representative_proof_claim_for_selected_ids(
+            &loaded.project,
+            "household-eligibility",
+            "household-eligibility",
+            "source-household-approval-decision",
+            &selected,
+        )
+        .expect("representative proof selection validates")
+        .expect("selected representative root adds its proof");
+        assert_eq!(
+            claim_consultation_name(service, proof).expect("proof consultation resolves"),
+            "household"
+        );
+        assert!(
+            representative_proof_claim_for_selected_ids(
+                &loaded.project,
+                "household-eligibility",
+                "household-eligibility",
+                "source-household-approval-decision",
+                &[
+                    "household-record-exists".to_string(),
+                    "source-household-approval-decision".to_string(),
+                ],
+            )
+            .expect("explicit proof selection validates")
+            .is_none(),
+            "an explicitly selected proof is not added twice"
+        );
     }
 
     fn assert_rejected_before_outbound_body(

@@ -41,6 +41,13 @@ Do not enable status only because it is familiar from other credential systems.
 It adds an online dependency for verifiers and creates an operational store that
 must be kept available for the retention window.
 
+Representative OID4VCI issuance requires status because Registry Notary does
+not re-run relationship evidence during wallet redemption. Status is the
+compensating control for relationship changes after issuance. Operators can
+revoke a credential now; automatic source relationship change delivery is
+tracked by [GH#568](https://github.com/registrystack/registry-stack/issues/568).
+Status configuration alone does not create that delivery path.
+
 ## Configuration
 
 ```yaml

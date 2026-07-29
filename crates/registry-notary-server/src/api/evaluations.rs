@@ -92,6 +92,7 @@ pub(super) async fn evaluate(
         let context_result = if attestation_access_mode == AccessMode::DelegatedAttestation {
             derive_delegated_attestation_request_context(
                 &state.subject_access,
+                evidence,
                 &state.subject_access_rate_keys,
                 &principal,
                 &mut request,

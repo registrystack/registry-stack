@@ -1104,6 +1104,11 @@
     },
     {
       "schema": "environment",
+      "pointer": "/allOf/6/else/properties/oid4vci/properties/representative_issuance",
+      "purpose": "Applies non-local HTTPS constraints to representative issuance."
+    },
+    {
+      "schema": "environment",
       "pointer": "/allOf/6/else/properties/oid4vci/properties/authorization_server",
       "purpose": "Applies non-local HTTPS constraints to all configured OID4VCI authorization-server endpoints."
     },

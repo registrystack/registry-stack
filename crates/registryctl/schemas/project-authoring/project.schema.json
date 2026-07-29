@@ -482,7 +482,12 @@
             "type": "object",
             "additionalProperties": false,
             "required": ["disclosure"],
-            "properties": { "output": {"x-registry-field": "property", "type": "string" }, "cel": {"x-registry-field": "property", "type": "string", "minLength": 1 }, "value": {"x-registry-field": "property", "$ref": "#/$defs/claimValue" }, "disclosure": {"x-registry-field": "property", "$ref": "#/$defs/disclosure" } },
+            "properties": {
+              "output": {"x-registry-field": "property", "type": "string" },
+              "cel": {"x-registry-field": "property", "type": "string", "minLength": 1 },
+              "value": {"x-registry-field": "property", "$ref": "#/$defs/claimValue" },
+              "disclosure": {"x-registry-field": "property", "$ref": "#/$defs/disclosure" }
+            },
             "oneOf": [{"x-registry-field": "branch", "required": ["output"] }, {"x-registry-field": "branch", "required": ["cel"] }]
           }
         },
@@ -520,13 +525,13 @@
     "consultations": {
       "description": "Relay consultations and their closed bindings to target request identifiers or caller-supplied target attributes.",
       "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" },
-      "additionalProperties": {"x-registry-field": "map_value", "type": "object", "additionalProperties": false, "required": ["integration", "input"], "properties": { "integration": {"x-registry-field": "property", "$ref": "#/$defs/stableId" }, "input": {"x-registry-field": "property", "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" }, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/targetRequestMapping" } } } }
+      "additionalProperties": {"x-registry-field": "map_value", "type": "object", "additionalProperties": false, "required": ["integration", "input"], "properties": { "integration": {"x-registry-field": "property", "$ref": "#/$defs/stableId" }, "input": {"x-registry-field": "property", "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": {"x-registry-field": "map_key", "$ref": "#/$defs/stableId" }, "additionalProperties": {"x-registry-field": "map_value", "$ref": "#/$defs/requestMapping" } } } }
     },
-    "targetRequestMapping": {
-      "description": "Closed target request binding. Attribute values are bounded typed caller-supplied context, not authenticated identifiers.",
+    "requestMapping": {
+      "description": "Closed request binding. Ordinary consultations use the target; representative relationship proofs may additionally bind an authenticated requester identifier.",
       "type": "string",
       "maxLength": 128,
-      "pattern": "^request\\.target\\.(?:id|identifiers\\.[A-Za-z][A-Za-z0-9._-]{0,95}|attributes\\.[a-z][a-z0-9_]{0,63})$"
+      "pattern": "^request\\.(?:target\\.(?:id|identifiers\\.[A-Za-z][A-Za-z0-9._-]{0,95}|attributes\\.[a-z][a-z0-9_]{0,63})|requester\\.identifiers\\.[A-Za-z][A-Za-z0-9._-]{0,95})$"
     },
     "claimValue": {
       "description": "Explicit claim value type, nullability, and encoded-size bound for source-free evaluation. A source-free claim cannot be selected by a credential profile.",

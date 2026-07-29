@@ -34,6 +34,10 @@ allowed:
     reason: Public OID4VCI pre-authorized-code IdP callback endpoint with route-local state validation.
   - listener: public
     method: POST
+    path: /oid4vci/offer/representative
+    reason: Public OID4VCI representative target-selection endpoint with single-use state, CSRF, relationship-proof, and rate-limit controls.
+  - listener: public
+    method: POST
     path: /oid4vci/token
     reason: Public OID4VCI pre-authorized-code token endpoint with code, PIN, and route-local replay controls.
   - listener: public

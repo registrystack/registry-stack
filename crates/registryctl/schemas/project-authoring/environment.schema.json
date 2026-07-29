@@ -153,7 +153,8 @@
                   "authorize_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/httpsResource" },
                   "token_url": {"x-registry-field": "sensitive_property", "$ref": "#/$defs/httpsResource" }
                 }
-              }
+              },
+              "representative_issuance": {"x-registry-field": "property" }
             }
           }
         }
@@ -255,6 +256,26 @@
           "description": "Transaction-code policy. Omit for the secure required-PIN default. Set required=false only for a bounded bearer-offer interoperability profile; the compiler fixes the offer lifetime at 300 seconds.",
           "type": "object", "additionalProperties": false,
           "properties": { "required": {"x-registry-field": "property", "type": "boolean", "default": true } }
+        },
+        "representative_issuance": {
+          "x-registry-field": "property",
+          "description": "One digitally authenticated representative ceremony bound to an exact relationship proof. Registryctl derives the credential dependency, status endpoint, and secure proof-freshness default.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["relationship", "proof_claim", "target_id_type"],
+          "properties": {
+            "relationship": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+            "proof_claim": {"x-registry-field": "property", "$ref": "#/$defs/stableId" },
+            "target_id_type": {"x-registry-field": "property", "$ref": "#/$defs/token256" },
+            "max_proof_age_seconds": {
+              "x-registry-field": "property",
+              "description": "Maximum age of the relationship proof. Omit for the secure 300-second default.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600,
+              "default": 300
+            }
+          }
         }
       }
     },

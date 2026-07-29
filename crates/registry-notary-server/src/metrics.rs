@@ -312,6 +312,7 @@ fn endpoint_kind_from_route(route: &str) -> &'static str {
         "/oid4vci/offer/start"
         | "/oid4vci/offer/callback"
         | "/oid4vci/offers"
+        | "/oid4vci/offer/representative"
         | "/oid4vci/token"
         | "/oid4vci/credential" => "oid4vci",
         "/v1/claims" | "/v1/claims/{claim_id}" | "/v1/formats" => "catalog",

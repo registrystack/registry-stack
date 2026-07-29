@@ -17,6 +17,12 @@
   upgrades only the immediately preceding attested v1 catalog; older or
   drifted schemas require a sequential upgrade, a matching backup and binary,
   or a fresh installation.
+- Registry Notary can issue one OID4VCI credential for a represented subject
+  after authenticating the representative and proving the configured
+  relationship through Registry Relay. The offer, token, and credential reuse
+  one committed proof-bounded transaction, and representative credentials
+  require live status. Wallet-visible tokens carry HMAC handles instead of the
+  representative's raw identifiers.
 
 ## 0.15.2
 

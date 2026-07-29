@@ -66,6 +66,11 @@
       "additionalProperties": false,
       "required": ["target", "claims", "purpose"],
       "properties": {
+        "requester": {
+          "x-registry-field": "redacted_fixture_property",
+          "$ref": "#/$defs/governedTarget",
+          "description": "Supplies a synthetic authenticated requester when selected consultation mappings read requester identifiers."
+        },
         "target": {"x-registry-field": "redacted_fixture_property", "$ref": "#/$defs/governedTarget" },
         "variables": {
           "x-registry-field": "redacted_fixture_property",

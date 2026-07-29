@@ -390,11 +390,11 @@ fn escape_json_pointer_segment(segment: &str) -> String {
     segment.replace('~', "~0").replace('/', "~1")
 }
 
-fn project_target_request_mapping_validation_instance_path(
+fn project_request_mapping_validation_instance_path(
     services: &serde_json::Map<String, Value>,
     definitions: &Value,
 ) -> Option<String> {
-    let mut mapping_schema = definitions.get("targetRequestMapping")?.clone();
+    let mut mapping_schema = definitions.get("requestMapping")?.clone();
     let mapping_schema_object = mapping_schema.as_object_mut()?;
     mapping_schema_object.insert(
         "$schema".to_string(),
@@ -434,7 +434,7 @@ fn project_service_validation_instance_path(document: &Value) -> Option<String> 
     let root_schema: Value = serde_json::from_str(ProjectSchemaKind::Project.document()).ok()?;
     let definitions = root_schema.get("$defs")?.clone();
     if let Some(pointer) =
-        project_target_request_mapping_validation_instance_path(services, &definitions)
+        project_request_mapping_validation_instance_path(services, &definitions)
     {
         return Some(pointer);
     }
@@ -1981,6 +1981,7 @@ mod schema_authority_tests {
                 "/$defs/integrationResponseByteSize",
                 "/$defs/integrationSourceByteSize",
                 "/$defs/oid4vci/properties/registrar_clients",
+                "/$defs/oid4vci/properties/representative_issuance/properties/max_proof_age_seconds",
                 "/$defs/oid4vci/properties/tx_code/properties/required",
                 "/properties/issuance/properties/algorithm",
             ]

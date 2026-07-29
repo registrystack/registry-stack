@@ -134,6 +134,14 @@
     },
     {
       "listener": "public",
+      "path": "/oid4vci/offer/representative",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs"
+    },
+    {
+      "listener": "public",
       "path": "/oid4vci/token",
       "methods": [
         "POST"

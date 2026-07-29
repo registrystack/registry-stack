@@ -252,7 +252,7 @@ fn build_openapi_document() -> Value {
                 "post": {
                     "summary": "Issue a credential through OpenID4VCI",
                     "operationId": "issueOid4vciCredential",
-                    "description": "Materializes at most one dc+sd-jwt credential from the immutable registry-backed evaluation transaction authorized before the issuer-initiated offer. The access token supplies the transaction nonce, holder proof must use EdDSA with did:jwk, and an exact retry returns the cached response without another Relay call or signature. Source-free, delegated, and legacy evaluations are not issuable. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+                    "description": "Materializes at most one dc+sd-jwt credential from the immutable registry-backed evaluation transaction authorized before the issuer-initiated offer. The access token supplies the transaction nonce, holder proof must use EdDSA with did:jwk, and an exact retry returns the cached response without another Relay call or signature. Source-free and legacy evaluations are not issuable. Delegated issuance is accepted only for a credential configuration using the digitally authenticated representative ceremony. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
                     "security": [
                         { "bearerAuth": [] }
                     ],
@@ -457,9 +457,9 @@ fn build_openapi_document() -> Value {
             },
             "/oid4vci/offer/callback": {
                 "get": {
-                    "summary": "Complete eSignet login and render a pre-authorized-code offer",
+                    "summary": "Complete eSignet login for a pre-authorized-code offer",
                     "operationId": "completeOid4vciOffer",
-                    "description": "Public and unauthenticated. Consumes the login state, exchanges the eSignet code with private_key_jwt, validates the id_token, completes the exact registry-backed Relay evaluation, and only then mints one single-use pre-authorized_code bound to that immutable transaction. Denied, unavailable, malformed, source-free, or provenance-invalid evaluations produce no offer. When configured, the offer also includes one numeric tx_code (PIN) shown out-of-band from the QR. Returns 404 when the pre-authorized-code flow is disabled.",
+                    "description": "Public and unauthenticated. Consumes the login state, exchanges the eSignet code with private_key_jwt, and validates the id_token. For an ordinary credential configuration, it completes the exact registry-backed Relay evaluation and only then mints one single-use pre-authorized_code bound to that immutable transaction. For a representative configuration, it reserves a fresh single-use target-selection state and returns a no-store form; POST /oid4vci/offer/representative completes the proof-bounded evaluation. Denied, unavailable, malformed, source-free, or provenance-invalid evaluations produce no offer. When configured, the offer also includes one numeric tx_code (PIN) shown out-of-band from the QR. Returns 404 when the pre-authorized-code flow is disabled.",
                     "security": [],
                     "parameters": [
                         {
@@ -477,7 +477,7 @@ fn build_openapi_document() -> Value {
                     ],
                     "responses": {
                         "200": {
-                            "description": "Offer page with the credential offer URI and optional tx_code PIN",
+                            "description": "Offer page, or a representative target-selection page for a representative configuration",
                             "content": {
                                 "text/html": {
                                     "schema": { "type": "string" }
@@ -501,6 +501,74 @@ fn build_openapi_document() -> Value {
                             }
                         },
                         "404": { "description": "Pre-authorized-code flow is disabled" },
+                        "500": {
+                            "description": "OpenID4VCI issuer failed",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "/oid4vci/offer/representative": {
+                "post": {
+                    "summary": "Select a represented subject and render a pre-authorized-code offer",
+                    "operationId": "completeRepresentativeOid4vciOffer",
+                    "description": "Public and unauthenticated. Consumes the single-use target-selection state created after identity-provider authentication, verifies the CSRF token, binds the represented subject to the configured identifier type, proves the configured relationship through the exact Registry Relay claim closure, and only then renders a single-use pre-authorized-code offer. The relationship-proof expiry caps the transaction, offer, and access-token expiry. This endpoint is an HTML browser ceremony and accepts only a closed, bounded form body.",
+                    "security": [],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/x-www-form-urlencoded": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "required": ["selection_state", "csrf_token", "target_id"],
+                                    "properties": {
+                                        "selection_state": { "type": "string", "minLength": 1 },
+                                        "csrf_token": { "type": "string", "minLength": 1 },
+                                        "target_id": { "type": "string", "minLength": 1, "maxLength": 256 }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Offer page with the credential offer URI and optional tx_code PIN",
+                            "content": {
+                                "text/html": {
+                                    "schema": { "type": "string" }
+                                }
+                            }
+                        },
+                        "400": {
+                            "description": "Selection state, CSRF token, or represented subject is invalid",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
+                                }
+                            }
+                        },
+                        "403": {
+                            "description": "Relationship proof or issuance policy denied the transaction",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
+                                }
+                            }
+                        },
+                        "404": { "description": "Representative pre-authorized-code flow is disabled" },
+                        "429": {
+                            "description": "Representative credential request is rate limited",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Oid4vciError" }
+                                }
+                            }
+                        },
                         "500": {
                             "description": "OpenID4VCI issuer failed",
                             "content": {
@@ -737,7 +805,7 @@ fn build_openapi_document() -> Value {
             "/v1/credentials": {
                 "post": {
                     "summary": "Issue a credential from a stored evaluation",
-                    "description": "Issues only when a fresh non-delegated registry-backed evaluation has exact compiler pins and normalized unique Relay executions for every selected root's dependency closure, matching the active configuration and public evaluation result. Source-free, delegated, and legacy evaluations remain renderable but are not issuable.",
+                    "description": "Issues only when a fresh non-delegated registry-backed evaluation has exact compiler pins and normalized unique Relay executions for every selected root's dependency closure, matching the active configuration and public evaluation result. Source-free, delegated, and legacy evaluations remain renderable but are not issuable through this direct route. Representative issuance uses the separately configured OpenID4VCI ceremony.",
                     "operationId": "issueCredential",
                     "requestBody": {
                         "required": true,
@@ -4088,6 +4156,7 @@ mod tests {
             "/oid4vci/offers",
             "/oid4vci/offer/start",
             "/oid4vci/offer/callback",
+            "/oid4vci/offer/representative",
             "/oid4vci/token",
             "/v1/claims",
             "/v1/claims/{claim_id}",
@@ -4245,6 +4314,17 @@ mod tests {
             doc["paths"]["/oid4vci/offer/callback"]["get"]["security"],
             json!([])
         );
+        assert_eq!(
+            doc["paths"]["/oid4vci/offer/representative"]["post"]["security"],
+            json!([])
+        );
+        let representative_form = &doc["paths"]["/oid4vci/offer/representative"]["post"]
+            ["requestBody"]["content"]["application/x-www-form-urlencoded"]["schema"];
+        assert_eq!(
+            representative_form["required"],
+            json!(["selection_state", "csrf_token", "target_id"])
+        );
+        assert!(representative_form["properties"]["target_id"].is_object());
         assert_eq!(
             doc["paths"]["/oid4vci/token"]["post"]["security"],
             json!([])

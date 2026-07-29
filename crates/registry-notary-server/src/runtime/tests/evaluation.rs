@@ -649,16 +649,9 @@ async fn delegated_exact_relay_proof_runs_once_before_the_dependent_claim() {
 }
 
 #[tokio::test]
-async fn delegated_capability_denies_an_unrelated_registry_backed_dependency_before_relay() {
-    let mut unrelated = registry_claim(
-        "unrelated-registry-claim",
-        RuleConfig::ConsultationOutput {
-            consultation: "enrollment".to_string(),
-            output: "registration_status".to_string(),
-        },
-        "string",
-    );
-    unrelated.required_scopes.clear();
+async fn delegated_capability_denies_a_registry_dependency_omitted_from_the_committed_closure() {
+    let mut unrelated = delegated_relay_proof_claim();
+    unrelated.id = "unrelated-registry-claim".to_string();
     let evidence = delegated_evidence(vec![
         delegated_relay_proof_claim(),
         unrelated,
@@ -687,7 +680,7 @@ async fn delegated_capability_denies_an_unrelated_registry_backed_dependency_bef
             None,
         )
         .await
-        .expect_err("delegation grants only the exact configured Relay proof claim");
+        .expect_err("delegation grants only the exact committed dependency closure");
 
     assert!(matches!(
         error,
@@ -696,6 +689,52 @@ async fn delegated_capability_denies_an_unrelated_registry_backed_dependency_bef
         }
     ));
     assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn delegated_capability_allows_the_exact_committed_registry_dependency_closure() {
+    let mut dependency = delegated_relay_proof_claim();
+    dependency.id = "registry-dependent-fact".to_string();
+    let evidence = delegated_evidence(vec![
+        delegated_relay_proof_claim(),
+        dependency,
+        delegated_selected_claim(vec!["guardian-link", "registry-dependent-fact"]),
+    ]);
+    let keys = Arc::new(SubjectAccessRateLimitKeys::new(
+        AuditKeyHasher::unkeyed_dev_only(),
+    ));
+    let (runtime, relay) = delegated_runtime_with_relay(
+        &keys,
+        RuntimeRelayOutcome::Match,
+        true,
+        None,
+        None,
+    );
+
+    let results = runtime
+        .evaluate_with_capability(
+            evidence,
+            &EvidenceStore::default(),
+            &delegated_relay_principal(),
+            delegated_attestation_capability_with_allowed_claims(
+                &keys,
+                "NAT-123",
+                "CHILD-123",
+                &["selected", "registry-dependent-fact"],
+            ),
+            delegated_runtime_request(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("the committed registry-backed dependency closure evaluates");
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].claim_id, "selected");
+    // The proof and dependent fact share one compiler-identical Relay group,
+    // so the exact two-claim closure is intentionally coalesced to one call.
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

@@ -129,7 +129,7 @@ pub(super) fn require_relay_consultation_capability(
     match capability {
         EvaluationCapability::Machine { .. } => Ok(()),
         EvaluationCapability::DelegatedAttestation { .. }
-            if capability.is_delegated_proof_claim(claim_id) =>
+            if capability.allows_delegated_claim(claim_id) =>
         {
             Ok(())
         }

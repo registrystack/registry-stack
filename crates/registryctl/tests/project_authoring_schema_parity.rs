@@ -341,7 +341,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     );
     assert_eq!(
         index.coverage_by_sensitivity()[&Sensitivity::RedactedFixture],
-        50,
+        51,
         "fixture request, response, input, body, and expected values remain redacted"
     );
     walk_schema(
@@ -793,15 +793,15 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
                     union_nodes: 6,
                     union_branches: 16,
                     conditionals: 7,
-                    objects: 40,
-                    closed_objects: 36,
+                    objects: 41,
+                    closed_objects: 37,
                     typed_maps: 4,
                     open_maps: 0,
                     arrays: 6,
                     scalar_types: 42,
                     nullable_nodes: 0,
-                    integer_lower_bounds: 16,
-                    integer_upper_bounds: 16,
+                    integer_lower_bounds: 17,
+                    integer_upper_bounds: 17,
                     string_length_bounds: 17,
                     string_patterns: 14,
                     array_size_bounds: 6,
@@ -846,8 +846,8 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
             (
                 "fixture",
                 PublishedStructuralInventory {
-                    nodes: 71,
-                    local_refs: 10,
+                    nodes: 72,
+                    local_refs: 11,
                     union_nodes: 4,
                     union_branches: 8,
                     conditionals: 0,

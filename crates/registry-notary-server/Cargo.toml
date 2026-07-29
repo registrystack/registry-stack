@@ -67,7 +67,7 @@ zeroize.workspace = true
 [dev-dependencies]
 axum-test = { version = "20" }
 chrono = { version = "0.4" }
-registry-notary-client = { workspace = true, features = ["verifier"] }
+registry-notary-client = { workspace = true, features = ["test-support", "verifier"] }
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
 jsonschema.workspace = true
 tempfile = { version = "3" }

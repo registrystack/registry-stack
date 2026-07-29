@@ -73,13 +73,30 @@ impl SubjectAccessConfig {
             );
         }
         self.allowed_operations.validate()?;
-        validate_non_empty_entries("subject_access.allowed_purposes", &self.allowed_purposes)?;
-        validate_non_empty_entries("subject_access.allowed_claims", &self.allowed_claims)?;
-        validate_non_empty_entries("subject_access.allowed_formats", &self.allowed_formats)?;
-        validate_non_empty_entries(
-            "subject_access.allowed_disclosures",
-            &self.allowed_disclosures,
-        )?;
+        self.delegation.validate(evidence)?;
+        if self.allowed_claims.is_empty() {
+            if !self.delegation.enabled {
+                return self.invalid(
+                    "subject_access.allowed_claims must not be empty unless delegation is enabled",
+                );
+            }
+            if !self.allowed_purposes.is_empty()
+                || !self.allowed_formats.is_empty()
+                || !self.allowed_disclosures.is_empty()
+            {
+                return self.invalid(
+                    "delegation-only subject_access requires allowed_purposes, allowed_formats, and allowed_disclosures to be empty; configure them on each delegated relationship",
+                );
+            }
+        } else {
+            validate_non_empty_entries("subject_access.allowed_purposes", &self.allowed_purposes)?;
+            validate_non_empty_entries("subject_access.allowed_formats", &self.allowed_formats)?;
+            validate_non_empty_entries(
+                "subject_access.allowed_disclosures",
+                &self.allowed_disclosures,
+            )?;
+        }
+        validate_entries("subject_access.allowed_claims", &self.allowed_claims)?;
         if self.scope_policy != SubjectAccessScopePolicy::Disabled
             && self.required_scopes.is_empty()
         {
@@ -99,7 +116,14 @@ impl SubjectAccessConfig {
             "subject_access.credential_profiles",
             &self.credential_profiles,
         )?;
-        self.delegation.validate(evidence)?;
+        for relationship in &self.delegation.allowed_relationships {
+            if relationship.max_proof_age_seconds > self.token_policy.max_evaluation_age_seconds {
+                return self.invalid(format!(
+                    "subject_access.delegation relationship '{}' max_proof_age_seconds must not exceed token_policy.max_evaluation_age_seconds",
+                    relationship.relationship_type
+                ));
+            }
+        }
         self.rate_limits.validate()?;
         validate_exact_wallet_origins(&self.allowed_wallet_origins)?;
 
@@ -110,6 +134,18 @@ impl SubjectAccessConfig {
             .collect();
         let allowed_claim_ids: HashSet<&str> =
             self.allowed_claims.iter().map(String::as_str).collect();
+        let subject_access_claim_ids: HashSet<&str> = allowed_claim_ids
+            .iter()
+            .copied()
+            .chain(
+                self.delegation
+                    .allowed_relationships
+                    .iter()
+                    .flat_map(|relationship| {
+                        relationship.allowed_claims.iter().map(String::as_str)
+                    }),
+            )
+            .collect();
         let allowed_purposes: HashSet<&str> =
             self.allowed_purposes.iter().map(String::as_str).collect();
         let allowed_formats: HashSet<&str> =
@@ -154,7 +190,7 @@ impl SubjectAccessConfig {
                 profile_id,
                 profile,
                 &claim_ids,
-                &allowed_claim_ids,
+                &subject_access_claim_ids,
                 self.token_policy.max_credential_validity_seconds,
             )?;
         }
@@ -280,6 +316,9 @@ pub struct SubjectAccessDelegatedRelationshipConfig {
     pub proof_claim: String,
     #[serde(default)]
     pub target_id_type: Option<String>,
+    #[serde(default = "default_delegated_max_proof_age_seconds")]
+    #[schemars(range(min = 1, max = 600))]
+    pub max_proof_age_seconds: u64,
     #[serde(default)]
     pub allowed_claims: Vec<String>,
     #[serde(default)]
@@ -288,8 +327,10 @@ pub struct SubjectAccessDelegatedRelationshipConfig {
     pub allowed_formats: Vec<String>,
     #[serde(default)]
     pub allowed_disclosures: Vec<String>,
-    #[serde(default)]
-    pub credential_profiles: Vec<String>,
+}
+
+const fn default_delegated_max_proof_age_seconds() -> u64 {
+    300
 }
 
 impl SubjectAccessDelegatedRelationshipConfig {
@@ -334,6 +375,11 @@ impl SubjectAccessDelegatedRelationshipConfig {
                 });
             }
         }
+        if self.max_proof_age_seconds == 0 || self.max_proof_age_seconds > 600 {
+            return invalid_subject_access(
+                "subject_access.delegation.allowed_relationships.max_proof_age_seconds must be between 1 and 600",
+            );
+        }
         validate_non_empty_entries(
             "subject_access.delegation.allowed_claims",
             &self.allowed_claims,
@@ -350,16 +396,6 @@ impl SubjectAccessDelegatedRelationshipConfig {
             "subject_access.delegation.allowed_disclosures",
             &self.allowed_disclosures,
         )?;
-        validate_entries(
-            "subject_access.delegation.credential_profiles",
-            &self.credential_profiles,
-        )?;
-        if !self.credential_profiles.is_empty() {
-            return invalid_subject_access(format!(
-                "subject_access.delegation.allowed_relationships relationship '{}' credential_profiles must be empty in 1.0; delegated attestation is evaluation-only. Remove credential_profiles to keep delegated evaluation, or issue a registry-backed non-delegated claim through subject_access.credential_profiles",
-                self.relationship_type
-            ));
-        }
         let allowed_purposes: HashSet<&str> =
             self.allowed_purposes.iter().map(String::as_str).collect();
         let allowed_formats: HashSet<&str> =
@@ -396,11 +432,6 @@ impl SubjectAccessDelegatedRelationshipConfig {
                 return invalid_subject_access(format!(
                     "delegated claim '{claim_id}' and proof_claim '{}' must declare the same purpose",
                     self.proof_claim
-                ));
-            }
-            if !claim.credential_profiles.is_empty() {
-                return invalid_subject_access(format!(
-                    "delegated claim '{claim_id}' credential_profiles must be empty in 1.0; delegated attestation is evaluation-only. Remove the claim credential_profiles binding to keep delegated evaluation, or issue a registry-backed non-delegated claim"
                 ));
             }
             validate_delegated_attestation_claim(
@@ -890,6 +921,12 @@ pub(super) fn validate_delegated_proof_claim_binding(
     relationship: &SubjectAccessDelegatedRelationshipConfig,
     proof_claim: &ClaimDefinition,
 ) -> Result<(), EvidenceConfigError> {
+    if !proof_claim.depends_on.is_empty() {
+        return invalid_subject_access(format!(
+            "delegated proof_claim '{}' must not depend_on other claims so the relationship is proven before the delegated claim closure runs",
+            relationship.proof_claim
+        ));
+    }
     let ClaimEvidenceMode::RegistryBacked { consultations } = &proof_claim.evidence_mode else {
         return invalid_subject_access(format!(
             "delegated proof_claim '{}' must be registry_backed",
@@ -946,9 +983,9 @@ pub(super) fn validate_delegated_attestation_claim(
             claim.id
         ));
     }
-    if !claim.evidence_mode.is_self_attested() {
+    if !claim.evidence_mode.is_self_attested() && !claim.evidence_mode.is_registry_backed() {
         return invalid_subject_access(format!(
-            "delegated claim '{}' must be self_attested",
+            "delegated claim '{}' must be self_attested or registry_backed",
             claim.id
         ));
     }

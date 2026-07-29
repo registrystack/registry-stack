@@ -2111,6 +2111,7 @@ fn evaluate_product_claims(
         evaluated_any = true;
         let mut target = EvidenceEntity::new(subject_type.as_str());
         let mut identifiers = BTreeMap::new();
+        let mut requester_identifiers = BTreeMap::new();
         let mut attributes = BTreeMap::new();
         for consultation in service
             .consultations
@@ -2143,8 +2144,20 @@ fn evaluate_product_claims(
                     );
                 } else if let Some(name) = request_path.strip_prefix("request.target.attributes.") {
                     attributes.insert(name.to_string(), value.clone());
+                } else if let Some(scheme) =
+                    request_path.strip_prefix("request.requester.identifiers.")
+                {
+                    requester_identifiers.insert(
+                        scheme.to_string(),
+                        value
+                            .as_str()
+                            .ok_or_else(|| {
+                                anyhow!("requester identifier fixture input must be a String")
+                            })?
+                            .to_string(),
+                    );
                 } else {
-                    bail!("compiled consultation input uses an unsupported target path");
+                    bail!("compiled consultation input uses an unsupported request path");
                 }
             }
         }
@@ -2158,6 +2171,21 @@ fn evaluate_product_claims(
             })
             .collect();
         target.attributes = attributes;
+        let requester = if requester_identifiers.is_empty() {
+            None
+        } else {
+            let mut requester = EvidenceEntity::new("AuthenticatedRequester");
+            requester.identifiers = requester_identifiers
+                .into_iter()
+                .map(|(scheme, value)| EvidenceIdentifier {
+                    scheme,
+                    value,
+                    issuer: None,
+                    country: None,
+                })
+                .collect();
+            Some(requester)
+        };
         let variables = fixture
             .variables
             .iter()
@@ -2172,7 +2200,7 @@ fn evaluate_product_claims(
         let variables = RequestVariables::try_new(variables).map_err(|error| anyhow!(error))?;
         for (disclosure, claim_ids) in claim_groups {
             let request = EvaluateRequest {
-                requester: None,
+                requester: requester.clone(),
                 target: Some(target.clone()),
                 relationship: None,
                 on_behalf_of: None,

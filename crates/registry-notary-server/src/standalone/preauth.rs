@@ -855,6 +855,7 @@ pub(crate) struct PreAuthAuditFields {
     pub(crate) credential_configuration_id: Option<registry_notary_core::ConfigMetadata>,
     pub(crate) denial_code: Option<SubjectAccessDenialCode>,
     pub(crate) rate_limit_bucket: Option<RateLimitBucket>,
+    pub(crate) access_mode: Option<AccessMode>,
 }
 
 /// Build a hashed pre-auth audit event for a public endpoint. The pre-auth
@@ -887,7 +888,7 @@ pub(crate) fn pre_auth_audit_event(
         relay_consultation_ids: Vec::new(),
         forwarded: None,
         error_code: None,
-        access_mode: Some(AccessMode::SubjectBound),
+        access_mode: Some(fields.access_mode.unwrap_or(AccessMode::SubjectBound)),
         federation_peer_id_hash: None,
         federation_issuer: None,
         federation_profile: None,

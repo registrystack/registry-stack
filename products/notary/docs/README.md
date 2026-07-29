@@ -20,6 +20,7 @@ every selected claim. It never connects directly to a registry source.
 - [Client SDK guide](client-sdk-guide.md)
 - [API reference](api-reference.md)
 - [Wallet interop with OID4VCI](oid4vci-wallet-interop.md)
+- [Representative credential issuance](representative-credential-issuance.md)
 - [SD-JWT VC conformance](sd-jwt-vc-conformance-profile.md)
 
 ## Operate

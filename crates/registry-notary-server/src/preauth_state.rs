@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use registry_notary_core::tokens::BoundSubject;
 use registry_platform_replay::ReplayScope;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -276,6 +277,8 @@ pub(crate) struct LoginState {
     pub(crate) pkce_verifier: String,
     pub(crate) nonce: String,
     pub(crate) credential_configuration_id: String,
+    pub(crate) representative: Option<AuthenticatedRepresentative>,
+    pub(crate) csrf_token: Option<String>,
 }
 
 impl std::fmt::Debug for LoginState {
@@ -288,6 +291,66 @@ impl std::fmt::Debug for LoginState {
                 "credential_configuration_id",
                 &self.credential_configuration_id,
             )
+            .field(
+                "representative",
+                &self.representative.as_ref().map(|_| "[redacted]"),
+            )
+            .field(
+                "csrf_token",
+                &self.csrf_token.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+pub(crate) struct AuthenticatedRepresentative {
+    subject: String,
+    subject_binding_claim: String,
+    subject_binding_value: String,
+    client_id: String,
+    scopes: Vec<String>,
+    acr: Option<String>,
+    auth_time: Option<i64>,
+}
+
+impl AuthenticatedRepresentative {
+    pub(crate) fn from_bound_subject(subject: BoundSubject) -> Self {
+        Self {
+            subject: subject.subject,
+            subject_binding_claim: subject.subject_binding_claim,
+            subject_binding_value: subject.subject_binding_value,
+            client_id: subject.client_id,
+            scopes: subject.scopes,
+            acr: subject.acr,
+            auth_time: subject.auth_time,
+        }
+    }
+
+    pub(crate) fn into_bound_subject(mut self) -> BoundSubject {
+        BoundSubject {
+            subject: std::mem::take(&mut self.subject),
+            subject_binding_claim: std::mem::take(&mut self.subject_binding_claim),
+            subject_binding_value: std::mem::take(&mut self.subject_binding_value),
+            client_id: std::mem::take(&mut self.client_id),
+            scopes: std::mem::take(&mut self.scopes),
+            acr: std::mem::take(&mut self.acr),
+            auth_time: self.auth_time.take(),
+        }
+    }
+}
+
+impl std::fmt::Debug for AuthenticatedRepresentative {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuthenticatedRepresentative")
+            .field("subject", &"[redacted]")
+            .field("subject_binding_claim", &self.subject_binding_claim)
+            .field("subject_binding_value", &"[redacted]")
+            .field("client_id", &self.client_id)
+            .field("scopes", &self.scopes)
+            .field("acr", &self.acr)
+            .field("auth_time", &self.auth_time)
             .finish()
     }
 }
@@ -1455,6 +1518,8 @@ mod tests {
             pkce_verifier: "verifier-secret".to_string(),
             nonce: "nonce-secret".to_string(),
             credential_configuration_id: "person_is_alive_sd_jwt".to_string(),
+            representative: None,
+            csrf_token: None,
         }
     }
 
@@ -1548,6 +1613,62 @@ mod tests {
             .unwrap();
         assert!(state.consume_login("opaque").await.unwrap().is_some());
         assert!(state.consume_login("opaque").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn representative_selection_state_is_sensitive_and_single_use() {
+        let state = memory_state();
+        let bound_subject = BoundSubject {
+            subject: "representative-subject".to_string(),
+            subject_binding_claim: "national_id".to_string(),
+            subject_binding_value: "NAT-123".to_string(),
+            client_id: "citizen-portal".to_string(),
+            scopes: vec!["subject_access".to_string()],
+            acr: Some("urn:example:loa:substantial".to_string()),
+            auth_time: Some(123),
+        };
+        state
+            .reserve_login(
+                "selection-state",
+                LoginState {
+                    pkce_verifier: String::new(),
+                    nonce: String::new(),
+                    credential_configuration_id: "dependent_birth_sd_jwt".to_string(),
+                    representative: Some(AuthenticatedRepresentative::from_bound_subject(
+                        bound_subject.clone(),
+                    )),
+                    csrf_token: Some("csrf-secret".to_string()),
+                },
+                300,
+            )
+            .await
+            .unwrap();
+
+        let mut consumed = state
+            .consume_login("selection-state")
+            .await
+            .unwrap()
+            .expect("selection state is present once");
+        assert_eq!(consumed.csrf_token.take().as_deref(), Some("csrf-secret"));
+        let recovered = consumed
+            .representative
+            .take()
+            .expect("representative is present")
+            .into_bound_subject();
+        assert_eq!(recovered.subject, bound_subject.subject);
+        assert_eq!(
+            recovered.subject_binding_value,
+            bound_subject.subject_binding_value
+        );
+        assert_eq!(recovered.client_id, bound_subject.client_id);
+        assert_eq!(recovered.scopes, bound_subject.scopes);
+        assert_eq!(recovered.acr, bound_subject.acr);
+        assert_eq!(recovered.auth_time, bound_subject.auth_time);
+        assert!(state
+            .consume_login("selection-state")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
