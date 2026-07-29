@@ -13,10 +13,13 @@ function releasedHtml(route, body) {
   return `<!doctype html><html><head>
 <meta name="robots" content="noindex,follow">
 <link rel="canonical" href="https://docs.registrystack.org/v/1.0.0${route}">
-</head><body>
+</head><body><header><div class="registry-masthead">
+<a class="registry-wordmark" href="/v/1.0.0/">Registry Stack</a>
+<nav class="registry-utility" aria-label="Site"><a href="/v/1.0.0/guide/">Guide</a></nav>
+</div></header><main data-pagefind-body>
 <aside class="registry-preview-banner" role="note"><p>Versioned archive.</p></aside>
 ${body}
-</body></html>
+</main></body></html>
 `;
 }
 
@@ -61,7 +64,7 @@ async function createFixture(t, {
       path,
       releasedHtml(
         route,
-        `<p>Released ${page}</p><a href="/v/1.0.0/guide/">Guide</a><a href="/preview/guide/">Development</a>`,
+        `<h1>Released ${page}</h1><p>Rendered diagnostic output for ${page}</p><a href="/v/1.0.0/guide/">Guide</a><a href="/preview/guide/">Development</a>`,
       ),
     );
   }
@@ -85,7 +88,10 @@ Full corpus: https://docs.registrystack.org/llms-full.txt
 [External](https://example.test/v/1.0.0/guide/)
 `,
   );
-  await writeFile(resolve(archiveRoot, 'guide.md'), '# Released guide\n');
+  await writeFile(
+    resolve(archiveRoot, 'guide.md'),
+    '# Released guide\n\n<DiagnosticReference catalog="operator" />\n',
+  );
   await mkdir(resolve(archiveRoot, 'assets'), { recursive: true });
   await writeFile(
     resolve(archiveRoot, 'assets/app.js'),
@@ -165,6 +171,10 @@ test('promotes the locked release to canonical root without changing its archive
   assert.match(root, /<strong>Latest release\.<\/strong>/);
   assert.match(root, /href="\/guide\/"/);
   assert.match(root, /href="\/dev\/guide\/"/);
+  assert.match(root, /data-registry-canonical-search/);
+  assert.match(root, /href="\/pagefind\/pagefind-ui\.css"/);
+  assert.match(root, /src="\/pagefind\/pagefind-ui\.js"/);
+  assert.match(root, /event\.key\.toLowerCase\(\) === "k"/);
   assert.equal(
     await readFile(resolve(fixture.docsRoot, 'dist/index.md'), 'utf8'),
     `Registry stack documentation: machine-readable Markdown.
@@ -181,14 +191,13 @@ Full corpus: https://docs.registrystack.org/llms-full.txt
     (await readFile(resolve(fixture.docsRoot, 'dist/llms.txt'), 'utf8'))
       .includes('https://docs.registrystack.org/llms-full.txt'),
   );
-  assert.match(
-    await readFile(resolve(fixture.docsRoot, 'dist/llms-full.txt'), 'utf8'),
-    /# Released guide/,
-  );
-  assert.match(
-    await readFile(resolve(fixture.docsRoot, 'dist/llms-small.txt'), 'utf8'),
-    /# Released index/,
-  );
+  const fullCorpus = await readFile(resolve(fixture.docsRoot, 'dist/llms-full.txt'), 'utf8');
+  assert.match(fullCorpus, /# Released guide\/index\.html/);
+  assert.match(fullCorpus, /Rendered diagnostic output for guide\/index\.html/);
+  assert.doesNotMatch(fullCorpus, /DiagnosticReference/);
+  const smallCorpus = await readFile(resolve(fixture.docsRoot, 'dist/llms-small.txt'), 'utf8');
+  assert.match(smallCorpus, /# Released index\.html/);
+  assert.match(smallCorpus, /# Released guide\/index\.html/);
   assert.equal(
     await readFile(resolve(fixture.docsRoot, 'dist/assets/app.js'), 'utf8'),
     'const local = "/guide/"; const external = "https://example.test/v/1.0.0/guide/";\n',
@@ -253,6 +262,24 @@ test('keeps redirect routes out of the canonical sitemap', async (t) => {
     await readFile(resolve(fixture.docsRoot, 'dist/preview/old/index.html'), 'utf8'),
     /registry-legacy-preview-redirect/,
   );
+});
+
+test('keeps eligible rendered pages in the abridged corpus and excludes API operations', async (t) => {
+  const fixture = await createFixture(t, {
+    releasedPages: [
+      'index.html',
+      'guide/index.html',
+      'reference/apis/relay/index.html',
+    ],
+  });
+
+  await stageProductionDocsets({ docsRoot: fixture.docsRoot });
+
+  const full = await readFile(resolve(fixture.docsRoot, 'dist/llms-full.txt'), 'utf8');
+  const small = await readFile(resolve(fixture.docsRoot, 'dist/llms-small.txt'), 'utf8');
+  assert.match(full, /# Released reference\/apis\/relay\/index\.html/);
+  assert.match(small, /# Released guide\/index\.html/);
+  assert.doesNotMatch(small, /# Released reference\/apis\/relay\/index\.html/);
 });
 
 test('rejects an archive tree that differs from its immutable lock', async (t) => {

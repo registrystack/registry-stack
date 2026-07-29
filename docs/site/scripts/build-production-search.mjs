@@ -101,6 +101,13 @@ export async function buildProductionSearch({
   if (!entrypointInfo?.isFile() || entrypointInfo.isSymbolicLink()) {
     throw new Error(`production search entrypoint was not generated: ${entrypoint}`);
   }
+  for (const asset of ['pagefind-ui.js', 'pagefind-ui.css']) {
+    const path = resolve(outputPath, asset);
+    const info = await existingInfo(path);
+    if (!info?.isFile() || info.isSymbolicLink()) {
+      throw new Error(`production search UI asset was not generated: ${path}`);
+    }
+  }
   return { pages: pages.length, outputPath };
 }
 

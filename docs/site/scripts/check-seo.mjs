@@ -136,6 +136,8 @@ if (scope === 'all' && productionLayout) {
     'llms-full.txt',
     'llms-small.txt',
     'pagefind/pagefind.js',
+    'pagefind/pagefind-ui.js',
+    'pagefind/pagefind-ui.css',
   ]) {
     if (!await exists(join(distDir, asset))) {
       errors.push(`Canonical release asset is missing: ${join(distDir, asset)}`);

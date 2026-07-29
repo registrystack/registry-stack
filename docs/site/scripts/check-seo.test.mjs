@@ -86,6 +86,8 @@ function productionFixture(t) {
     'llms-full.txt',
     'llms-small.txt',
     'pagefind/pagefind.js',
+    'pagefind/pagefind-ui.js',
+    'pagefind/pagefind-ui.css',
   ]) {
     write(root, `dist/${asset}`, 'canonical release asset\n');
   }

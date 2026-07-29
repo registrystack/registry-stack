@@ -50,6 +50,8 @@ function fakePagefind(indexed) {
           async writeFiles({ outputPath }) {
             await mkdir(outputPath, { recursive: true });
             await writeFile(resolve(outputPath, 'pagefind.js'), 'export {};\n');
+            await writeFile(resolve(outputPath, 'pagefind-ui.js'), 'window.PagefindUI = class {};\n');
+            await writeFile(resolve(outputPath, 'pagefind-ui.css'), '.pagefind-ui {}\n');
             return { errors: [], outputPath };
           },
           async deleteIndex() {},
