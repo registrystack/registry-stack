@@ -93,10 +93,17 @@ test('allows archived navigation to the production development mount', (t) => {
 
 test('allows archived navigation through the legacy preview redirect', (t) => {
   const root = fixture(t, '/preview/');
-  write(root, 'dist/preview/index.html', '<html></html>');
   const result = run(root);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Built link check passed/);
+});
+
+test('does not fall back when the legacy preview mount exists', (t) => {
+  const root = fixture(t, '/preview/explanation/current/');
+  write(root, 'dist/preview/index.html', '<html></html>');
+  const result = run(root);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /links to missing/);
 });
 
 test('does not fall back when the production current-docset mount exists', (t) => {
