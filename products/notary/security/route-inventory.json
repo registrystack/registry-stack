@@ -125,6 +125,15 @@
     },
     {
       "listener": "public",
+      "path": "/oid4vci/offers",
+      "methods": [
+        "POST"
+      ],
+      "source": "crates/registry-notary-server/src/api.rs",
+      "notes": "Machine-authenticated registrar integration route. Requires registry_notary:credential_offer_create, the selected credential-configuration scope, exact target-scoped authorization_details, an existing caller-owned registry-backed evaluation, and Idempotency-Key."
+    },
+    {
+      "listener": "public",
       "path": "/oid4vci/token",
       "methods": [
         "POST"

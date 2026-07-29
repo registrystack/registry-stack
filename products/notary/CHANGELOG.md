@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Registry-backed direct Relay claims can now carry bounded closed object and
+  array values through evaluation storage, OID4VCI Type Metadata, SD-JWT
+  issuance, and verification. Top-level structured claims remain one selective
+  disclosure; nested disclosure is not supported.
+- Authenticated registry clients can create a short-lived pre-authorized
+  OID4VCI offer from a fresh caller-owned stored evaluation through
+  `POST /oid4vci/offers`. Exact retries return one stored response, the
+  required transaction-code value remains outside the offer URI, and the
+  wallet ceremony remains bound to one immutable transaction.
+
 ## [0.15.2] - 2026-07-28
 
 - No user-visible Registry Notary changes. This release fixes forward from the

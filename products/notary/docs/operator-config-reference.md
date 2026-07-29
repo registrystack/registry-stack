@@ -285,7 +285,13 @@ evidence.claims[].evidence_mode.consultations.*.inputs
 evidence.claims[].evidence_mode.consultations.*.inputs.*
 evidence.claims[].evidence_mode.consultations.*.outputs
 evidence.claims[].evidence_mode.consultations.*.outputs.*
+evidence.claims[].evidence_mode.consultations.*.outputs.*.fields
+evidence.claims[].evidence_mode.consultations.*.outputs.*.fields.*
+evidence.claims[].evidence_mode.consultations.*.outputs.*.fields.*.required
+evidence.claims[].evidence_mode.consultations.*.outputs.*.fields.*.schema
+evidence.claims[].evidence_mode.consultations.*.outputs.*.items
 evidence.claims[].evidence_mode.consultations.*.outputs.*.max_bytes
+evidence.claims[].evidence_mode.consultations.*.outputs.*.max_items
 evidence.claims[].evidence_mode.consultations.*.outputs.*.maximum
 evidence.claims[].evidence_mode.consultations.*.outputs.*.minimum
 evidence.claims[].evidence_mode.consultations.*.outputs.*.nullable
@@ -707,6 +713,53 @@ claims become null on `no_match` in the evaluation view and are not issuable
 as null credential claims. Ambiguity or failure evaluates no claims from that
 consultation.
 
+Consultation outputs use a closed tagged schema. Scalar output variants are
+`boolean`, `integer`, `string`, and `date`. Direct output claims also accept
+recursive `object` and `array` variants:
+
+```yaml
+outputs:
+  parents:
+    type: array
+    nullable: false
+    max_bytes: 1024
+    max_items: 2
+    items:
+      type: object
+      nullable: false
+      max_bytes: 384
+      fields:
+        type:
+          required: true
+          schema:
+            type: string
+            nullable: false
+            max_bytes: 16
+        name:
+          required: true
+          schema:
+            type: string
+            nullable: false
+            max_bytes: 160
+        identifier:
+          required: false
+          schema:
+            type: string
+            nullable: true
+            max_bytes: 64
+```
+
+Objects must declare 1 to 32 fields. Unknown keys are rejected. Arrays must
+declare one item schema and a `max_items` value from 1 through 256. Object and
+array `max_bytes` values are canonical serialized-value limits from 1 through
+65,536 bytes. The complete expected output map permits at most 32 outputs,
+schema depth is at most 8, schema node count is at most 256, expanded node
+count is at most 4,096, and each field name is at most 128 UTF-8 bytes.
+
+Notary requires exact schema agreement with the compiler-pinned Relay public
+contract. A direct structured claim is stored and issued as the exact validated
+JSON value. CEL rules remain scalar-only.
+
 `value.max_bytes` is an optional UTF-8 byte ceiling for a string claim result.
 When present, it must be between 1 and 65536 and `value.type` must be `string`.
 Notary accepts a result exactly at the bound, rejects an over-bound result as a
@@ -719,6 +772,8 @@ string claims.
 Disclosure remains a Notary decision. Credential profiles own ordered claim
 membership, issuance format, holder binding, validity, and allowed disclosure.
 Relay outputs are never credentials or public claims by themselves.
+A top-level structured SD-JWT claim is disclosed or withheld as one unit.
+Nested object fields and individual array items are not separate disclosures.
 
 `formats` is optional for each claim. When omitted, Notary uses
 `application/vnd.registry-notary.claim-result+json`, the canonical evaluation

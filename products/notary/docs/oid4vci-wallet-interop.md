@@ -13,6 +13,7 @@ The wallet facade supports:
 
 - registry-backed claims whose exact compiler-pinned Relay execution is stored
   in a Notary transaction;
+- bounded closed object and array claims from direct Relay outputs;
 - `dc+sd-jwt` credentials;
 - EdDSA or ES256 issuer signing, selected by the credential profile;
 - EdDSA JWT holder proof with `did:jwk` binding;
@@ -47,7 +48,76 @@ Before enabling the wallet facade:
 See the [operator configuration reference](operator-config-reference.md) and
 [credential issuance migration](credential-issuance-migration.md).
 
-## End-to-end developer check
+## Create an offer from a registrar evaluation
+
+An authorized registry client can create an offer after it evaluates the
+authoritative record through `POST /v1/evaluations`. This path does not use the
+citizen browser or identity-provider callback.
+
+The machine credential must be an external configured API key or OpenID
+Connect (OIDC) token. A Notary-issued wallet access token is not accepted. The
+credential needs `registry_notary:credential_offer_create`, the selected
+credential configuration's scope, and access to the evaluation's exact
+service, purpose, claims, and target. It must carry Registry Notary
+`authorization_details` that permit `create_credential_offer` for the exact
+target, complete claim set, value disclosure, claim-result format, purpose,
+service, and machine access mode.
+
+Send only the stored evaluation identifier and configured credential type:
+
+```http
+POST /oid4vci/offers HTTP/1.1
+Host: notary.example.gov
+Authorization: Bearer <machine-client-token>
+Idempotency-Key: <stable-retry-key>
+Content-Type: application/json
+
+{
+  "evaluation_id": "<evaluation-id>",
+  "credential_configuration_id": "birth_certificate_sd_jwt"
+}
+```
+
+The request cannot contain a target, purpose, claim value, Relay result, or
+provenance. Registry Notary reloads those values from the fresh caller-owned
+evaluation and active reviewed configuration. It rejects denied, stale,
+source-free, mismatched, foreign, or already consumed evaluations before
+creating an issuance transaction.
+
+A successful response is:
+
+```json
+{
+  "credential_offer_uri": "<sensitive-openid-credential-offer-uri>",
+  "tx_code": "<separate-numeric-pin>",
+  "expires_at": "2026-07-29T12:05:00Z"
+}
+```
+
+Registrar-created offers always require `tx_code`, independent of the citizen
+self-service transaction-code setting. The offer URI describes that
+requirement but never contains the numeric PIN. The API separates the two
+values but does not create a second communications channel. The registrar
+integration must deliver the PIN separately from the QR code, link, message,
+or device that carries the offer URI.
+
+Treat the complete response as secret-adjacent. Every response uses
+`Cache-Control: no-store` and `Pragma: no-cache`. Do not log the response,
+offer URI, transaction code, target, raw evaluation values, or holder
+identifiers.
+
+Use the same `Idempotency-Key` only for an exact retry of the same request.
+An exact retry returns the stored response and does not mint a second
+transaction. Reusing the key for another request, using another key for an
+evaluation already reserved for issuance, or racing two requests returns
+`409`. A client-scoped quota can return `429`. Retry a lost response with the
+original key; do not start another evaluation or invent a second key.
+
+The wallet then redeems the offer through `/oid4vci/token` and
+`/oid4vci/credential`. The pre-authorized code, access token, proof nonce,
+holder proof, and credential remain bound to the same immutable transaction.
+
+## Check the citizen browser flow
 
 1. Open this URL in the citizen's browser:
 
@@ -163,6 +233,13 @@ Notary serves Type Metadata at both the configured `vct` URL and the
 claim and its selective-disclosure behavior. `status` is a reserved top-level
 claim and cannot be projected as a selectively disclosable value.
 
+For a direct structured Relay output, each claim also includes the namespaced
+`registry_notary_value_schema` member. The member publishes the exact closed
+recursive value contract, including required object fields, item schemas, and
+byte and item bounds. It does not define nested disclosure. A top-level object
+or array claim is one SD-JWT disclosure: the holder discloses or withholds the
+complete value.
+
 ## Credential request and response
 
 The wallet sends one proof using either the supported single-proof shape or the
@@ -188,7 +265,8 @@ origin.
 ## Security invariants
 
 - Notary creates the offer only after the identity binding and registry-backed
-  evaluation succeed.
+  evaluation succeed, or after an authorized registrar selects an existing
+  fresh caller-owned registry-backed evaluation.
 - The credential endpoint reloads the stored transaction and verifies the
   active claim, profile, purpose, contract hash, Relay ULID, acquisition time,
   and claim provenance before signer access.
