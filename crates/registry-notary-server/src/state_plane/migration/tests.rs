@@ -2866,9 +2866,9 @@ async fn assert_retention_contract(
                     decode(repeat('c9', 32), 'hex'),
                     decode(repeat('ca', 12), 'hex'),
                     decode(repeat('cb', 17), 'hex'),
-                    clock_timestamp() + lifetime,
-                    clock_timestamp() + lifetime,
-                    clock_timestamp() + lifetime,
+                    pg_catalog.statement_timestamp() + lifetime,
+                    pg_catalog.statement_timestamp() + lifetime,
+                    pg_catalog.statement_timestamp() + lifetime,
                     clock_timestamp() - interval '2 seconds'
                FROM (VALUES
                     ('c0', 'c1', 'c2', 'c3', interval '-1 second'),
