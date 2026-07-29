@@ -120,11 +120,26 @@ fn delegated_attestation_capability(
     requester_subject: &str,
     dependent_subject: &str,
 ) -> EvaluationCapability {
+    delegated_attestation_capability_with_allowed_claims(
+        keys,
+        requester_subject,
+        dependent_subject,
+        &["selected"],
+    )
+}
+
+fn delegated_attestation_capability_with_allowed_claims(
+    keys: &SubjectAccessRateLimitKeys,
+    requester_subject: &str,
+    dependent_subject: &str,
+    allowed_claim_ids: &[&str],
+) -> EvaluationCapability {
     EvaluationCapability::DelegatedAttestation {
         proof_claim_id: BoundedClaimId::new("guardian-link").expect("proof claim id is bounded"),
-        allowed_claim_ids: BTreeSet::from([
-            BoundedClaimId::new("selected").expect("delegated claim id is bounded"),
-        ]),
+        allowed_claim_ids: allowed_claim_ids
+            .iter()
+            .map(|claim_id| BoundedClaimId::new(*claim_id).expect("claim id is bounded"))
+            .collect(),
         requester_subject_binding_hash: keys
             .delegated_subject_binding("national_id", requester_subject)
             .expect("requester hashes"),

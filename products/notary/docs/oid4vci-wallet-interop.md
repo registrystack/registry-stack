@@ -5,7 +5,9 @@
 Registry Notary exposes an issuer-initiated pre-authorized code flow for
 issuing registry-backed `dc+sd-jwt` credentials to holder wallets. Source-free
 `self_attested` claims remain evaluation-only and cannot appear in an OID4VCI
-credential configuration.
+credential configuration. A credential configuration can also select the
+digitally authenticated representative ceremony for one registry-proven
+relationship.
 
 ## Supported 1.0 profile
 
@@ -18,6 +20,8 @@ The wallet facade supports:
 - EdDSA or ES256 issuer signing, selected by the credential profile;
 - EdDSA JWT holder proof with `did:jwk` binding;
 - an issuer-initiated pre-authorized code grant;
+- a representative-authenticated target-selection ceremony when explicitly
+  configured;
 - one credential per immediate response.
 
 It does not support wallet-facing authorization-code grants, a public nonce
@@ -46,7 +50,9 @@ Before enabling the wallet facade:
 - set the Notary state backend and rate limits.
 
 See the [operator configuration reference](operator-config-reference.md) and
-[credential issuance migration](credential-issuance-migration.md).
+[credential issuance migration](credential-issuance-migration.md). For a
+representative flow, use
+[representative credential issuance](representative-credential-issuance.md).
 
 ## Create an offer from a registrar evaluation
 
@@ -288,10 +294,14 @@ origin.
 - Notary creates the offer only after the identity binding and registry-backed
   evaluation succeed, or after an authorized registrar selects an existing
   fresh caller-owned registry-backed evaluation.
+- In representative mode, the relationship proof runs before its dependent
+  credential claims. Offer and token expiry cannot exceed proof expiry.
 - The credential endpoint reloads the stored transaction and verifies the
   active claim, profile, purpose, contract hash, Relay ULID, acquisition time,
   and claim provenance before signer access.
 - Wallet input cannot select a free-form subject or replace stored evidence.
+- The credential endpoint performs no new Relay consultation. Representative
+  lifecycle changes after issuance require credential revocation.
 - Pre-authorized codes, access tokens, proof nonces, and transaction bindings
   are time bounded and replay protected.
 - Identity-provider codes, wallet grants, access tokens, proof JWTs, subjects,
@@ -310,7 +320,7 @@ frozen candidate artifact and immutable evidence are published.
 | Symptom | Likely cause | Check |
 | --- | --- | --- |
 | OID4VCI routes are unavailable | The facade or pre-authorized flow is disabled | Expanded config and startup diagnostics |
-| Configuration is rejected | A source-free, delegated, mixed, or one-sided credential binding remains | Claim evidence mode, profile bindings, and OID4VCI projections |
+| Configuration is rejected | A source-free, mixed, one-sided, or delegated binding without the representative ceremony remains | Claim evidence mode, representative policy, profile bindings, and OID4VCI projections |
 | Offer is not rendered | Identity binding, Relay execution, or stored transaction creation failed | Sanitized audit records and Relay availability |
 | Wallet asks for a different grant | Wallet does not support issuer-initiated pre-authorized code | Wallet version and imported offer |
 | PIN is rejected | Wrong, expired, replayed, or locked offer | Offer age and rate-limit diagnostics |

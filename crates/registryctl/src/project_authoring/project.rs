@@ -3238,6 +3238,110 @@ fn validate_oid4vci_binding(
     if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
         bail!("OID4VCI credential profiles require registry-backed claim evidence");
     }
+    if let Some(representative) = &binding.representative_issuance {
+        validate_stable_id(
+            &representative.relationship,
+            "OID4VCI representative relationship",
+        )?;
+        validate_stable_id(
+            &representative.proof_claim,
+            "OID4VCI representative proof claim",
+        )?;
+        validate_token(
+            &representative.target_id_type,
+            "OID4VCI representative target id type",
+            256,
+        )?;
+        if representative.max_proof_age_seconds == 0
+            || representative.max_proof_age_seconds > 600
+        {
+            bail!("OID4VCI representative max_proof_age_seconds must be between one and 600");
+        }
+        let credential_claim = &credential.claims[0];
+        if let Some((shared_profile, _)) =
+            service
+                .credential_profiles
+                .iter()
+                .find(|(profile_id, profile)| {
+                    *profile_id != &binding.credential.profile
+                        && profile
+                            .claims
+                            .iter()
+                            .any(|claim_id| claim_id == credential_claim)
+                })
+        {
+            bail!(
+                "OID4VCI representative credential claim '{}' must be exclusive to credential profile '{}'; credential profile '{}' also selects it",
+                credential_claim,
+                binding.credential.profile,
+                shared_profile
+            );
+        }
+        let proof = service
+            .claims
+            .get(&representative.proof_claim)
+            .ok_or_else(|| {
+                anyhow!(
+                    "OID4VCI representative_issuance.proof_claim '{}' is not a claim in credential service '{}'",
+                    representative.proof_claim,
+                    binding.credential.service
+                )
+            })?;
+        if representative.proof_claim == credential.claims[0] {
+            bail!(
+                "OID4VCI representative_issuance.proof_claim must differ from the credential claim"
+            );
+        }
+        if inferred_claim_evidence(service, proof)? != ClaimEvidence::RegistryBacked {
+            bail!("OID4VCI representative_issuance.proof_claim must be registry-backed");
+        }
+        let consultation_name = claim_consultation_name(service, proof)?;
+        let consultation = &service.consultations[consultation_name];
+        let requester_mapping = format!(
+            "request.requester.identifiers.{}",
+            binding.subject.id_type
+        );
+        let target_mapping = format!(
+            "request.target.identifiers.{}",
+            representative.target_id_type
+        );
+        if !consultation
+            .input
+            .values()
+            .any(|mapping| mapping == &requester_mapping)
+        {
+            bail!(
+                "OID4VCI representative_issuance.proof_claim '{}' consultation '{}' must bind the authenticated representative with input mapping '{}'",
+                representative.proof_claim,
+                consultation_name,
+                requester_mapping
+            );
+        }
+        if !consultation
+            .input
+            .values()
+            .any(|mapping| mapping == &target_mapping)
+        {
+            bail!(
+                "OID4VCI representative_issuance.proof_claim '{}' consultation '{}' must bind the represented subject with input mapping '{}'",
+                representative.proof_claim,
+                consultation_name,
+                target_mapping
+            );
+        }
+        if consultation.input.len() != 2
+            || consultation
+                .input
+                .values()
+                .any(|mapping| mapping != &requester_mapping && mapping != &target_mapping)
+        {
+            bail!(
+                "OID4VCI representative_issuance.proof_claim '{}' consultation '{}' must map exactly the authenticated representative and represented subject identifiers; the target-selection ceremony cannot supply additional inputs",
+                representative.proof_claim,
+                consultation_name
+            );
+        }
+    }
     if normalize_credential_format(&credential.format) != "application/dc+sd-jwt" {
         bail!("OID4VCI credential profile format must be dc+sd-jwt");
     }

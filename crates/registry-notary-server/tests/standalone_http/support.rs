@@ -119,7 +119,28 @@ pub(super) fn test_relay_contract() -> Value {
 }
 
 pub(super) fn test_relay_contract_hash() -> String {
-    let canonical = canonicalize_json(&test_relay_contract()).expect("contract canonicalizes");
+    relay_contract_hash(&test_relay_contract())
+}
+
+pub(super) fn representative_test_relay_contract() -> Value {
+    let mut contract = test_relay_contract();
+    contract["spec"]["inputs"]["representative_id"] = json!({
+        "role": "selector",
+        "type": "string",
+        "maxLength": 256,
+        "x-registry-max-bytes": 256,
+        "x-registry-canonicalization": "identity"
+    });
+    contract
+}
+
+#[cfg(feature = "registry-notary-cel")]
+pub(super) fn representative_test_relay_contract_hash() -> String {
+    relay_contract_hash(&representative_test_relay_contract())
+}
+
+fn relay_contract_hash(contract: &Value) -> String {
+    let canonical = canonicalize_json(contract).expect("contract canonicalizes");
     let mut hasher = Sha256::new();
     hasher.update(TEST_RELAY_CONTRACT_DOMAIN);
     hasher.update(canonical);
@@ -173,10 +194,10 @@ async fn test_relay_execute(State(state): State<TestRelayState>, request: Reques
     }))
 }
 
-async fn start_test_relay() -> String {
+async fn start_test_relay(contract: Value) -> String {
     let state = TestRelayState {
-        contract: test_relay_contract(),
-        contract_hash: test_relay_contract_hash(),
+        contract_hash: relay_contract_hash(&contract),
+        contract,
     };
     let app = Router::new()
         .route(
@@ -229,10 +250,15 @@ pub(super) async fn standalone_router(
     mut config: StandaloneRegistryNotaryConfig,
 ) -> Result<Router, StandaloneServerError> {
     let admin_listener_mode = config.server.admin_listener.mode;
+    let relay_contract = if config.subject_access.delegation.enabled {
+        representative_test_relay_contract()
+    } else {
+        test_relay_contract()
+    };
     if let Some(relay) = config.evidence.relay.as_mut() {
         std::fs::write(&relay.token_file, test_relay_token())
             .expect("test Relay workload token writes");
-        relay.base_url = start_test_relay().await;
+        relay.base_url = start_test_relay(relay_contract).await;
     }
     let runtime = compile_notary_runtime(config)?.activate().await?;
     match admin_listener_mode {

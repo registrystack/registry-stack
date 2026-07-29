@@ -9,7 +9,11 @@ use super::{
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_client::verifier::verify_sd_jwt_vc;
 #[cfg(feature = "registry-notary-cel")]
-use registry_notary_client::{HolderBindingPolicy, VerifyOptions};
+use registry_notary_client::{
+    HolderBindingPolicy, RegistryNotaryClient, StatusListPolicy, VerifyOptions,
+};
+#[cfg(feature = "registry-notary-cel")]
+use wiremock::ResponseTemplate;
 
 #[tokio::test]
 pub(super) async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing() {
@@ -1675,6 +1679,256 @@ pub(super) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
         credential_body,
         "an exact retry receives the verbatim cached credential response"
     );
+    idp.stop().await;
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+pub(super) async fn representative_preauth_end_to_end_separates_representative_subject_and_holder()
+{
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let verifier_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = representative_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    );
+    config.credential_status.base_url = verifier_upstream.url();
+    enable_shared_admin_listener(&mut config);
+    config
+        .auth
+        .oidc
+        .as_mut()
+        .expect("OIDC auth is configured")
+        .scope_map
+        .insert(
+            "status_admin".to_string(),
+            vec!["registry_notary:admin".to_string()],
+        );
+    let app = standalone_router(config)
+        .await
+        .expect("representative standalone router builds");
+    let server = TestServer::builder().mock_transport().build(app);
+
+    let page = drive_representative_offer_to_page(
+        &server,
+        &token_upstream,
+        &idp,
+        "representative-1",
+        "represented-subject-1",
+    )
+    .await;
+    let code_payload = jwt_payload(&page.code);
+    let pin = page.pin.expect("representative offer includes a PIN");
+    let token = redeem_token(&server, &page.code, &pin).await;
+    token.assert_status_ok();
+    let token_body: Value = token.json();
+    let access_token = token_body["access_token"]
+        .as_str()
+        .expect("access token issued");
+    let access_payload = jwt_payload(access_token);
+    for payload in [&code_payload, &access_payload] {
+        assert!(
+            !payload.to_string().contains("representative-1")
+                && !payload.to_string().contains("esignet-citizen-subject"),
+            "representative identifiers must not cross the wallet boundary"
+        );
+        assert!(payload["sub"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("hmac-sha256:")));
+        assert!(payload["national_id"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("hmac-sha256:")));
+    }
+    let target_handle = access_payload["authorization_details"][0]["target"]["id"]
+        .as_str()
+        .expect("representative access token carries a target handle");
+    assert!(target_handle.starts_with("hmac-sha256:"));
+    assert!(
+        !access_payload.to_string().contains("represented-subject-1"),
+        "the represented subject identifier must not cross the wallet boundary"
+    );
+    assert_eq!(
+        access_payload["authorization_details"][0]["relationship"]["relationship_type"],
+        json!("authorized-representative")
+    );
+
+    let c_nonce = token_body["c_nonce"]
+        .as_str()
+        .expect("transaction-scoped nonce is issued");
+    let proof = sign_oid4vci_proof(NOTARY_ISSUER, c_nonce);
+    let credential = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {access_token}"))
+        .json(&json!({
+            "format": "dc+sd-jwt",
+            "credential_configuration_id": "represented_person_is_alive_sd_jwt",
+            "proof": { "proof_type": "jwt", "jwt": proof }
+        }))
+        .await;
+    credential.assert_status_ok();
+    let compact = credential.json::<Value>()["credential"]
+        .as_str()
+        .expect("representative credential is issued")
+        .to_string();
+    let payload = decode_sd_jwt_payload(&compact);
+    let subject = payload["sub"]
+        .as_str()
+        .expect("credential subject pseudonym is present");
+    assert!(subject.starts_with("rnref:v1:hmac-sha256:"));
+    assert_ne!(subject, holder_did_jwk());
+    assert_eq!(payload["cnf"]["kid"], json!(holder_did_jwk()));
+    let credential_id = payload["jti"]
+        .as_str()
+        .expect("representative credential id is present");
+    let status_path = format!("/v1/credentials/{credential_id}/status");
+    assert_eq!(
+        payload["status"]["status_list"]["uri"],
+        json!(format!("{}{status_path}", verifier_upstream.url())),
+        "representative credentials carry verifier-resolvable status"
+    );
+
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let admin_token = idp.mint_token(json!({
+        "sub": "status-admin",
+        "aud": NOTARY_AUDIENCE,
+        "azp": "citizen-portal",
+        "scope": "status_admin",
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    let revoked = server
+        .post(&format!("/admin{status_path}"))
+        .add_header("authorization", format!("Bearer {admin_token}"))
+        .json(&json!({ "status": "revoked" }))
+        .await;
+    revoked.assert_status_ok();
+    assert_eq!(revoked.json::<Value>()["status"], json!("revoked"));
+
+    let status_list = server
+        .get(&status_path)
+        .add_header(header::ACCEPT, "application/statuslist+jwt")
+        .await;
+    status_list.assert_status_ok();
+    let status_list_jwt = status_list.text();
+    let jwks = server
+        .get("/.well-known/evidence/jwks.json")
+        .await
+        .json::<Value>();
+    verifier_upstream
+        .expect("GET", "/.well-known/evidence/jwks.json")
+        .respond_json(200, jwks)
+        .await;
+    verifier_upstream
+        .expect("GET", &status_path)
+        .respond(
+            ResponseTemplate::new(200).set_body_raw(status_list_jwt, "application/statuslist+jwt"),
+        )
+        .await;
+    let verifier = RegistryNotaryClient::builder(verifier_upstream.url())
+        .build()
+        .expect("verifier client builds");
+    let verifier_error = verifier
+        .verify_sd_jwt_vc(
+            &compact,
+            VerifyOptions::new("did:web:issuer.example")
+                .holder_binding(HolderBindingPolicy::RequiredKid(holder_did_jwk()))
+                .status_list(
+                    StatusListPolicy::loopback_for_testing(
+                        "did:web:issuer.example",
+                        verifier_upstream.url(),
+                    )
+                    .expect("loopback verifier policy is valid"),
+                ),
+        )
+        .await
+        .expect_err("verifier observes representative credential revocation");
+    assert_eq!(verifier_error.code(), "status.revoked");
+
+    let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
+    assert!(!audit.contains("representative-1"));
+    assert!(!audit.contains("represented-subject-1"));
+    let records = audit_envelopes(&audit_path)
+        .into_iter()
+        .map(|envelope| envelope.record)
+        .collect::<Vec<_>>();
+    for decision in [
+        "representative_target_selection_started",
+        "preauth_offer_minted",
+        "preauth_token_issued",
+    ] {
+        let event = records
+            .iter()
+            .find(|record| record["decision"] == json!(decision))
+            .unwrap_or_else(|| panic!("{decision} audit event exists"));
+        assert_eq!(event["access_mode"], json!("delegated_attestation"));
+    }
+    let credential_audit = credential_issued_audit(&audit_path);
+    assert_eq!(
+        credential_audit["access_mode"],
+        json!("delegated_attestation")
+    );
+    assert_eq!(
+        credential_audit["credential_configuration_id"],
+        json!("represented_person_is_alive_sd_jwt")
+    );
+    assert_eq!(credential_audit["holder_binding_mode"], json!("did"));
+    assert!(credential_audit["target_ref_hash"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("hmac-sha256:")));
+    assert!(credential_audit["requester_ref_hash"]
+        .as_str()
+        .is_some_and(|value| value.starts_with("hmac-sha256:")));
+    idp.stop().await;
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+pub(super) async fn representative_invalid_state_is_throttled_before_repeated_store_lookups() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = representative_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    );
+    config
+        .subject_access
+        .rate_limits
+        .invalid_token_per_client_address_per_minute = 1;
+    let app = standalone_router(config)
+        .await
+        .expect("representative standalone router builds");
+    let server = TestServer::builder().mock_transport().build(app);
+    let invalid_body = "selection_state=unknown-state&csrf_token=unknown-csrf&target_id=SUBJECT-1";
+
+    server
+        .post("/oid4vci/offer/representative")
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .text(invalid_body)
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    server
+        .post("/oid4vci/offer/representative")
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .text(invalid_body)
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+
     idp.stop().await;
 }
 

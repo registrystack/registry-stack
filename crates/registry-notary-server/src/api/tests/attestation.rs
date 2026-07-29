@@ -579,6 +579,7 @@ fn delegated_attestation_derives_requester_and_pins_metadata() {
 
     derive_delegated_attestation_request_context(
         &state.subject_access,
+        &evidence,
         &state.subject_access_rate_keys,
         &principal,
         &mut request,
@@ -650,7 +651,7 @@ fn delegated_attestation_rejects_spoofed_requester_context() {
     let evidence = delegated_evidence_config();
     let principal = delegated_transaction_principal(&config, &evidence);
     let state = RegistryNotaryApiState::new_with_subject_access(
-        Arc::new(evidence),
+        Arc::new(evidence.clone()),
         Arc::new(config),
         delegated_test_audit_hasher(),
         Arc::new(EvidenceStore::default()),
@@ -667,6 +668,7 @@ fn delegated_attestation_rejects_spoofed_requester_context() {
 
     let err = derive_delegated_attestation_request_context(
         &state.subject_access,
+        &evidence,
         &state.subject_access_rate_keys,
         &principal,
         &mut request,
@@ -687,20 +689,21 @@ fn delegated_attestation_canonicalizes_target_to_validated_subject() {
     let evidence = delegated_evidence_config();
     let principal = delegated_transaction_principal(&config, &evidence);
     let state = RegistryNotaryApiState::new_with_subject_access(
-        Arc::new(evidence),
+        Arc::new(evidence.clone()),
         Arc::new(config),
         delegated_test_audit_hasher(),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
     // Caller pins the validated subject CHILD-123 via the configured id_type,
-    // but smuggles a divergent canonical id (VICTIM-A) plus an extra
-    // identifier and attribute that the binding hash would never see.
+    // but smuggles a false entity type, divergent canonical id (VICTIM-A),
+    // extra identifier, and attribute that the binding hash would never see.
     let mut request = delegated_request();
     let target = request
         .target
         .as_mut()
         .expect("delegated target is present");
+    target.entity_type = "Household".to_string();
     target.id = Some("VICTIM-A".to_string());
     target
         .identifiers
@@ -717,6 +720,7 @@ fn delegated_attestation_canonicalizes_target_to_validated_subject() {
 
     derive_delegated_attestation_request_context(
         &state.subject_access,
+        &evidence,
         &state.subject_access_rate_keys,
         &principal,
         &mut request,
@@ -724,6 +728,10 @@ fn delegated_attestation_canonicalizes_target_to_validated_subject() {
     .expect("delegated request context derives");
 
     let canonical_target = request.target.as_ref().expect("target survives derivation");
+    assert_eq!(
+        canonical_target.entity_type, "person",
+        "delegation must derive the target type from the selected claim"
+    );
     // The canonical id field must be collapsed so an arbitrary lookup keyed on
     // target.id can never read the smuggled VICTIM-A value.
     assert!(
@@ -780,6 +788,7 @@ fn delegated_attestation_requires_transaction_details_to_cover_proof_claim() {
     let mut request = delegated_request();
     derive_delegated_attestation_request_context(
         &state.subject_access,
+        &evidence,
         &state.subject_access_rate_keys,
         &principal,
         &mut request,
@@ -817,6 +826,7 @@ fn delegated_attestation_requires_transaction_details_target() {
     let mut request = delegated_request();
     derive_delegated_attestation_request_context(
         &state.subject_access,
+        &evidence,
         &state.subject_access_rate_keys,
         &principal,
         &mut request,
@@ -849,6 +859,7 @@ fn stored_delegated_attestation_rechecks_current_authorization_details() {
     let mut request = delegated_request();
     derive_delegated_attestation_request_context(
         &state.subject_access,
+        &evidence,
         &state.subject_access_rate_keys,
         &principal,
         &mut request,
@@ -906,6 +917,7 @@ fn stored_delegated_attestation_rechecks_current_target_binding() {
     let mut request = delegated_request();
     derive_delegated_attestation_request_context(
         &state.subject_access,
+        &evidence,
         &state.subject_access_rate_keys,
         &principal,
         &mut request,
@@ -942,6 +954,64 @@ fn stored_delegated_attestation_rechecks_current_target_binding() {
     .expect_err("stored delegated access must re-check current target binding");
 
     assert!(matches!(err, EvidenceError::EvaluationBindingMismatch));
+}
+
+#[test]
+fn stored_delegated_attestation_accepts_the_committed_target_handle_in_wallet_tokens() {
+    let evidence = delegated_evidence_config();
+    let config = delegated_subject_access_config();
+    let mut principal = delegated_transaction_principal(&config, &evidence);
+    let state = RegistryNotaryApiState::new_with_subject_access(
+        Arc::new(evidence.clone()),
+        Arc::new(config),
+        delegated_test_audit_hasher(),
+        Arc::new(EvidenceStore::default()),
+        Arc::new(NoopIssuerResolver),
+    );
+    let mut request = delegated_request();
+    derive_delegated_attestation_request_context(
+        &state.subject_access,
+        &evidence,
+        &state.subject_access_rate_keys,
+        &principal,
+        &mut request,
+    )
+    .expect("delegated request context derives");
+    let context = prepare_subject_access_evaluate(&state, &evidence, &principal, &request)
+        .expect("delegated context prepares");
+    let target_handle = context
+        .metadata
+        .dependent_target_hash
+        .as_ref()
+        .expect("target handle exists")
+        .as_str()
+        .to_string();
+    principal
+        .authorization_details
+        .as_mut()
+        .and_then(|details| details.target.as_mut())
+        .expect("delegated authorization target exists")
+        .id = target_handle;
+    let mut evaluation = evaluation_for_proof();
+    evaluation.client_id = context.metadata.principal_hash.as_str().to_string();
+    evaluation.purpose = context.purpose;
+    evaluation.claim_ids = vec!["dependent-person-is-alive".to_string()];
+    evaluation.claim_refs = request.claims;
+    evaluation.disclosure = context.metadata.disclosure.as_str().to_string();
+    evaluation.format = context.metadata.result_format.as_str().to_string();
+    evaluation.subject_access = Some(context.metadata);
+
+    require_subject_access_stored_access(
+        &state,
+        &evidence,
+        &principal,
+        &evaluation,
+        &evaluation.claim_ids,
+        &evaluation.disclosure,
+        &evaluation.format,
+        false,
+    )
+    .expect("the wallet-facing committed handle binds to the stored target");
 }
 
 #[test]

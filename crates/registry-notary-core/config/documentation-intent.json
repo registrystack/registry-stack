@@ -5817,6 +5817,36 @@
     },
     {
       "schema": "notary",
+      "pointer": "/$defs/Oid4vciCredentialConfigurationConfig/properties/representative_issuance",
+      "key_path": "oid4vci.credential_configurations.*.representative_issuance",
+      "path_kind": "property",
+      "profile": "notary_oid4vci_sensitive",
+      "purpose_source": "profile",
+      "default_source": "reviewed_runtime_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
+      "pointer": "/$defs/Oid4vciRepresentativeIssuanceConfig/properties/ceremony",
+      "key_path": "oid4vci.credential_configurations.*.representative_issuance.ceremony",
+      "path_kind": "property",
+      "profile": "notary_oid4vci_sensitive",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
+      "pointer": "/$defs/Oid4vciRepresentativeIssuanceConfig/properties/relationship",
+      "key_path": "oid4vci.credential_configurations.*.representative_issuance.relationship",
+      "path_kind": "property",
+      "profile": "notary_oid4vci_sensitive",
+      "purpose_source": "profile",
+      "default_source": "no_schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
       "pointer": "/$defs/Oid4vciCredentialConfigurationConfig/properties/scope",
       "key_path": "oid4vci.credential_configurations.*.scope",
       "path_kind": "property",
@@ -6807,22 +6837,12 @@
     },
     {
       "schema": "notary",
-      "pointer": "/$defs/SubjectAccessDelegatedRelationshipConfig/properties/credential_profiles",
-      "key_path": "subject_access.delegation.allowed_relationships[].credential_profiles",
+      "pointer": "/$defs/SubjectAccessDelegatedRelationshipConfig/properties/max_proof_age_seconds",
+      "key_path": "subject_access.delegation.allowed_relationships[].max_proof_age_seconds",
       "path_kind": "property",
       "profile": "notary_subject_access_sensitive",
       "purpose_source": "profile",
       "default_source": "schema_default",
-      "schema_facts_reviewed": true
-    },
-    {
-      "schema": "notary",
-      "pointer": "/$defs/SubjectAccessDelegatedRelationshipConfig/properties/credential_profiles/items",
-      "key_path": "subject_access.delegation.allowed_relationships[].credential_profiles[]",
-      "path_kind": "array_item",
-      "profile": "notary_subject_access_sensitive",
-      "purpose_source": "profile",
-      "default_source": "not_applicable",
       "schema_facts_reviewed": true
     },
     {
@@ -7654,6 +7674,13 @@
       "key_path": "oid4vci.credential_configurations.*.claims",
       "path_kind": "property",
       "runtime_default_note": "When omitted, Rust deserialization supplies the product-owned empty collection required by this runtime contract."
+    },
+    {
+      "schema": "notary",
+      "pointer": "/$defs/Oid4vciCredentialConfigurationConfig/properties/representative_issuance",
+      "key_path": "oid4vci.credential_configurations.*.representative_issuance",
+      "path_kind": "property",
+      "runtime_default_note": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a configuration value."
     },
     {
       "schema": "notary",

@@ -816,7 +816,7 @@ fn product_owned_documentation_intent_has_exact_runtime_key_inventory() {
     let assignments = intent["assignments"]
         .as_array()
         .expect("Notary intent assignments are an array");
-    assert_eq!(assignments.len(), 536);
+    assert_eq!(assignments.len(), 538);
     let assigned_paths = assignments
         .iter()
         .map(|assignment| {

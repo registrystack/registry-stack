@@ -255,17 +255,18 @@ Delegated subject access is available only when
 `subject_access.delegation.enabled: true` and
 `subject_access.delegation.allowed_relationships` contains the requested
 relationship. Each allowed relationship names one compiler-pinned Relay-backed
-`proof_claim` and its exact claims, purposes, formats, disclosures, and
-no credential profiles. Delegated self-attestation is evaluation and rendering
-only in 1.0. Both `/v1/credentials` and the OID4VCI credential endpoint reject
-delegated evaluations. Keep delegation disabled unless that relationship proof
-and its scoped authorization-details contract have been reviewed.
+`proof_claim` and its exact claims, purposes, formats, and disclosures. Direct
+`POST /v1/credentials` issuance remains unavailable for delegated
+evaluations. An OID4VCI credential configuration may explicitly select the
+digitally authenticated representative ceremony and one relationship. That
+configuration requires a separate registry-backed credential root, direct
+dependency on the proof claim, proof freshness, and live status.
 
-Configuration load rejects a delegated relationship `credential_profiles`
-entry or a credential-profile binding on a delegated claim. To keep delegated
-evaluation, remove that credential capability. To issue a credential, model a
-separate registry-backed, non-delegated claim and bind it through
-`subject_access.credential_profiles`.
+Use Registryctl to generate the coupled claim dependency, delegated closure,
+status configuration, and ceremony. See
+[representative credential issuance](representative-credential-issuance.md).
+Keep delegation disabled unless the relationship proof and scoped
+authorization-details contract have been reviewed.
 
 ## Scope policy
 
@@ -369,7 +370,7 @@ review the evidence boundary.
 | Subject mismatch | Token claim is missing or caller-supplied identity context conflicts with the derived subject | `subject_binding.token_claim`, token claims, request body identity fields |
 | Userinfo subject not found | `claim_source: userinfo` without a usable endpoint or issuer | `auth.oidc.userinfo_endpoint`, `userinfo_issuers` |
 | Delegation config rejected | Delegated authorization does not match the compiled service policy | Check requester, target, relationship, purpose, and authorization details |
-| Delegated credential config rejected | A delegated relationship or delegated claim still carries a credential-profile binding | Remove the delegated credential capability, or use a registry-backed non-delegated credential claim |
+| Delegated credential config rejected | The credential does not select the representative ceremony, its root is not registry-backed, or the proof relationship is inconsistent | Use the Registryctl representative authoring block and inspect its field-specific diagnostic |
 | Credential config rejected | A source-free claim or mixed profile was exposed for issuance | Use only mutually bound `registry_backed` claims in `allowed_claims`, credential profiles, and OID4VCI projections |
 | Credential issuance denied after upgrade | The evaluation is legacy, source-free, or its stored Relay execution pins do not match | Re-evaluate the exact registry-backed claims under the active configuration |
 | Batch request denied | Batch evaluation is not supported for self-attestation | Keep `batch_evaluate: false` |

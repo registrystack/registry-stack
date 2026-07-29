@@ -167,7 +167,9 @@ fn generated_notary_config(
             if let Some(max_bytes) = value_max_bytes {
                 claim_value["max_bytes"] = json!(max_bytes);
             }
-            claims.push(json!({
+            let depends_on =
+                representative_claim_dependencies(environment, service_id, claim_id, service);
+            let mut generated_claim = json!({
                 "id": claim_id,
                 "title": claim_id.replace('-', " "),
                 "version": service.version.to_string(),
@@ -184,7 +186,11 @@ fn generated_notary_config(
                 },
                 "formats": formats,
                 "credential_profiles": claim_credential_profiles,
-            }));
+            });
+            if !depends_on.is_empty() {
+                generated_claim["depends_on"] = json!(depends_on);
+            }
+            claims.push(generated_claim);
         }
     }
     let api_keys = environment
@@ -369,6 +375,30 @@ fn validate_compiler_credential_profile_evidence(
     Ok(())
 }
 
+fn representative_claim_dependencies(
+    environment: &EnvironmentDocument,
+    service_id: &str,
+    claim_id: &str,
+    service: &ServiceDeclaration,
+) -> Vec<String> {
+    let Some(binding) = environment.oid4vci.as_ref() else {
+        return Vec::new();
+    };
+    let Some(representative) = binding.representative_issuance.as_ref() else {
+        return Vec::new();
+    };
+    if binding.credential.service != service_id {
+        return Vec::new();
+    }
+    let Some(credential) = service.credential_profiles.get(&binding.credential.profile) else {
+        return Vec::new();
+    };
+    if credential.claims.first().is_none_or(|root| root != claim_id) {
+        return Vec::new();
+    }
+    vec![representative.proof_claim.clone()]
+}
+
 fn add_oid4vci_config(
     generated: &mut Value,
     loaded: &LoadedRegistryProject,
@@ -407,6 +437,7 @@ fn add_oid4vci_config(
         .first()
         .ok_or_else(|| anyhow!("validated OID4VCI service access scope is absent"))?;
     let (_, allowed_disclosures) = expanded_disclosure(&claim.disclosure);
+    let representative = binding.representative_issuance.as_ref();
     let public_base_url = binding.public_base_url.trim_end_matches('/');
     let insecure_esignet = [
         binding.authorization_server.issuer.as_str(),
@@ -417,7 +448,7 @@ fn add_oid4vci_config(
     ]
     .into_iter()
     .any(url_uses_http);
-    generated["subject_access"] = json!({
+    let mut subject_access = json!({
         "enabled": true,
         "subject_binding": {
             "token_claim": binding.subject.token_claim,
@@ -435,12 +466,15 @@ fn add_oid4vci_config(
             "assurance_claim_source": "id_token",
             "max_auth_age_seconds": 1_200,
             "max_access_token_lifetime_seconds": 1_200,
-            "max_evaluation_age_seconds": 300,
+            "max_evaluation_age_seconds": representative
+                .map(|representative| representative.max_proof_age_seconds)
+                .unwrap_or(300)
+                .max(300),
             "max_credential_validity_seconds": validity_seconds,
             "max_clock_leeway_seconds": 60,
         },
         "allowed_operations": {
-            "evaluate": false,
+            "evaluate": representative.is_some(),
             "render": false,
             "issue_credential": true,
             "batch_evaluate": false,
@@ -462,6 +496,46 @@ fn add_oid4vci_config(
             "tx_code_attempts_per_code_per_minute": 10,
         },
     });
+    if let Some(representative) = representative {
+        // This binding is delegation-only. Keep the representative credential
+        // root out of the subject-bound allow-lists so it is validated and
+        // authorized solely under the relationship's requester/target
+        // contract.
+        subject_access["allowed_purposes"] = json!([]);
+        subject_access["allowed_claims"] = json!([]);
+        subject_access["allowed_formats"] = json!([]);
+        subject_access["allowed_disclosures"] = json!([]);
+        subject_access["delegation"] = json!({
+            "enabled": true,
+            "allowed_relationships": [{
+                "relationship_type": representative.relationship,
+                "proof_claim": representative.proof_claim,
+                "target_id_type": representative.target_id_type,
+                "max_proof_age_seconds": representative.max_proof_age_seconds,
+                "allowed_claims": [claim_id],
+                "allowed_purposes": [service.purpose],
+                "allowed_formats": ["application/vnd.registry-notary.claim-result+json"],
+                "allowed_disclosures": allowed_disclosures,
+            }],
+        });
+    }
+    generated["subject_access"] = subject_access;
+    let mut credential_configuration = json!({
+        "claim_id": claim_id,
+        "credential_profile": profile_id,
+        "format": "dc+sd-jwt",
+        "scope": scope,
+        "vct": credential.credential_type,
+        "display_name": binding.credential.profile.replace(['-', '_'], " "),
+        "proof_signing_alg_values_supported": ["EdDSA"],
+        "cryptographic_binding_methods_supported": ["did:jwk"],
+    });
+    if let Some(representative) = representative {
+        credential_configuration["representative_issuance"] = json!({
+            "ceremony": "digitally_authenticated_representative",
+            "relationship": representative.relationship,
+        });
+    }
     generated["oid4vci"] = json!({
         "enabled": true,
         "credential_issuer": public_base_url,
@@ -495,18 +569,16 @@ fn add_oid4vci_config(
         },
         "display": [],
         "credential_configurations": {
-            profile_id.clone(): {
-                "claim_id": claim_id,
-                "credential_profile": profile_id,
-                "format": "dc+sd-jwt",
-                "scope": scope,
-                "vct": credential.credential_type,
-                "display_name": binding.credential.profile.replace(['-', '_'], " "),
-                "proof_signing_alg_values_supported": ["EdDSA"],
-                "cryptographic_binding_methods_supported": ["did:jwk"],
-            },
+            profile_id.clone(): credential_configuration,
         },
     });
+    if representative.is_some() {
+        generated["credential_status"] = json!({
+            "enabled": true,
+            "base_url": public_base_url,
+            "retention_seconds": 86_400,
+        });
+    }
     Ok(())
 }
 

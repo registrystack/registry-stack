@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Added a compact `oid4vci.representative_issuance` authoring block.
+  Registryctl validates generic requester and target bindings, derives the
+  proof dependency, ceremony, exact delegated closure, status endpoint, and
+  300-second proof-freshness default, and supports authenticated-requester
+  witnesses in offline fixtures. It rejects shared credential roots and proof
+  inputs that the target-selection ceremony cannot supply.
+
 ## [0.15.2] - 2026-07-28
 
 - No user-visible Registryctl changes. This release fixes forward from the

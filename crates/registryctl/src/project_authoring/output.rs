@@ -2012,7 +2012,12 @@ fn validate_request_mapping(mapping: &str) -> Result<()> {
     }
     let identifier = mapping
         .strip_prefix("request.target.identifiers.")
-        .ok_or_else(|| anyhow!("consultation input must use the closed target grammar"))?;
+        .or_else(|| mapping.strip_prefix("request.requester.identifiers."))
+        .ok_or_else(|| {
+            anyhow!(
+                "consultation input must bind a target field or an authenticated requester identifier"
+            )
+        })?;
     let mut bytes = identifier.bytes();
     if identifier.is_empty()
         || identifier.len() > 96

@@ -112,10 +112,11 @@ use crate::{
     openapi_document,
     posture::{posture_document, PostureContext, PostureDocumentError},
     preauth_state::{
-        CredentialMaterialization, IssuanceAuthority, IssuanceTransaction, LoginState,
-        PreauthorizationStateError, RegistryClientOfferPreflightOutcome,
-        RegistryClientOfferReservation, RegistryClientOfferReservationOutcome,
-        RegistryClientOfferResponse, RegistryClientTransactionCode,
+        AuthenticatedRepresentative, CredentialMaterialization, IssuanceAuthority,
+        IssuanceTransaction, LoginState, PreauthorizationStateError,
+        RegistryClientOfferPreflightOutcome, RegistryClientOfferReservation,
+        RegistryClientOfferReservationOutcome, RegistryClientOfferResponse,
+        RegistryClientTransactionCode,
     },
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::{
@@ -132,6 +133,7 @@ use crate::{
     SubjectAccessRateLimitBucket, SubjectAccessRateLimitError, SubjectAccessRateLimitKeys,
     SubjectAccessRateLimiter,
 };
+use subtle::ConstantTimeEq;
 
 pub(crate) use crate::digest::evidence_claim_hash;
 use crate::digest::{sha256_canonical_json, sha256_json};
@@ -193,6 +195,10 @@ where
         .route("/oid4vci/offer/start", get(oid4vci_offer_start))
         .route("/oid4vci/offer/callback", get(oid4vci_offer_callback))
         .route("/oid4vci/offers", post(oid4vci_create_registry_offer))
+        .route(
+            "/oid4vci/offer/representative",
+            post(oid4vci_offer_representative),
+        )
         .route("/oid4vci/token", post(oid4vci_token))
         .route("/oid4vci/credential", post(oid4vci_credential))
         .route("/v1/claims", get(list_claims))

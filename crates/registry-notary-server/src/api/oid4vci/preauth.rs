@@ -999,6 +999,8 @@ pub(in crate::api) async fn oid4vci_offer_start(
                 pkce_verifier,
                 nonce: nonce.clone(),
                 credential_configuration_id: configuration_id,
+                representative: None,
+                csrf_token: None,
             },
             preauth.login_state_ttl_seconds(),
         )
@@ -1042,6 +1044,7 @@ pub(in crate::api) async fn prepare_registry_backed_issuance_transaction(
     bound_subject: &BoundSubject,
     configuration_id: &str,
     transaction_id: &str,
+    representative_target: Option<&str>,
 ) -> Result<IssuanceTransaction, EvidenceError> {
     let evidence = state.enabled_evidence()?;
     let (configuration_id, configuration) = state
@@ -1051,34 +1054,93 @@ pub(in crate::api) async fn prepare_registry_backed_issuance_transaction(
         .ok_or(EvidenceError::InvalidRequest)?;
     let configuration_claim_ids = configuration.credential_claim_ids();
     require_registry_backed_credential_claims(evidence, &configuration_claim_ids)?;
+    let target_subject_type = configuration_claim_ids
+        .first()
+        .and_then(|claim_id| crate::find_claim(evidence, claim_id).ok())
+        .map(|claim| claim.subject_type.as_str())
+        .ok_or(EvidenceError::InvalidRequest)?;
     let mut principal = preauth.principal_for_subject(bound_subject)?;
     add_scope_if_missing(&mut principal.scopes, &configuration.scope);
-    let principal = classify_subject_access_principal(&state.subject_access, &principal)?;
-    if !principal.is_subject_access()
-        || requested_attestation_access_mode(&principal) == AccessMode::DelegatedAttestation
-    {
+    let mut principal = classify_subject_access_principal(&state.subject_access, &principal)?;
+    if !principal.is_subject_access() {
         return Err(EvidenceError::SubjectAccessInvalidToken);
     }
-    let target = EvidenceEntity::from_subject_request(
-        "Person",
-        oid4vci_bound_subject(&state.subject_access, &principal)?,
-    );
-    let mut request = EvaluateRequest {
-        requester: Some(target.clone()),
-        target: Some(target),
-        relationship: Some(EvidenceRelationship {
-            relationship_type: "self".to_string(),
-            attributes: Default::default(),
-        }),
-        on_behalf_of: None,
-        variables: Default::default(),
-        claims: configuration_claim_ids
-            .iter()
-            .map(|claim_id| ClaimRef::from(claim_id.as_str()))
-            .collect(),
-        disclosure: None,
-        format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
-        purpose: None,
+    let mut request = if let Some(representative) = configuration.representative_issuance.as_ref() {
+        let target = representative_target.ok_or(EvidenceError::InvalidRequest)?;
+        if target.trim().is_empty() || target.len() > 256 || target.trim() != target {
+            return Err(EvidenceError::InvalidRequest);
+        }
+        let relationship = state
+            .subject_access
+            .delegation
+            .relationship(&representative.relationship)
+            .ok_or(EvidenceError::InvalidRequest)?;
+        principal.authorization_details =
+            Some(oid4vci_representative_issuance_authorization_details(
+                evidence,
+                &state.subject_access,
+                configuration,
+                relationship,
+                target,
+            )?);
+        principal.access_mode = AccessMode::DelegatedAttestation;
+        let mut request = EvaluateRequest {
+            requester: None,
+            target: Some(EvidenceEntity::from_subject_request(
+                target_subject_type,
+                SubjectRequest {
+                    id: target.to_string(),
+                    id_type: Some(
+                        delegated_target_id_type(&state.subject_access, relationship).to_string(),
+                    ),
+                },
+            )),
+            relationship: None,
+            on_behalf_of: None,
+            variables: Default::default(),
+            claims: configuration_claim_ids
+                .iter()
+                .map(|claim_id| ClaimRef::from(claim_id.as_str()))
+                .collect(),
+            disclosure: None,
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: None,
+        };
+        derive_delegated_attestation_request_context(
+            &state.subject_access,
+            evidence,
+            &state.subject_access_rate_keys,
+            &principal,
+            &mut request,
+        )?;
+        request
+    } else {
+        if representative_target.is_some()
+            || requested_attestation_access_mode(&principal) == AccessMode::DelegatedAttestation
+        {
+            return Err(EvidenceError::SubjectAccessInvalidToken);
+        }
+        let target = EvidenceEntity::from_subject_request(
+            "Person",
+            oid4vci_bound_subject(&state.subject_access, &principal)?,
+        );
+        EvaluateRequest {
+            requester: Some(target.clone()),
+            target: Some(target),
+            relationship: Some(EvidenceRelationship {
+                relationship_type: "self".to_string(),
+                attributes: Default::default(),
+            }),
+            on_behalf_of: None,
+            variables: Default::default(),
+            claims: configuration_claim_ids
+                .iter()
+                .map(|claim_id| ClaimRef::from(claim_id.as_str()))
+                .collect(),
+            disclosure: None,
+            format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+            purpose: None,
+        }
     };
     let context =
         prepare_subject_access_credential_evaluation(state, evidence, &principal, &request)?;
@@ -1136,10 +1198,13 @@ pub(in crate::api) async fn prepare_registry_backed_issuance_transaction(
         oid4vci_configuration_fingerprint(evidence, configuration_id, configuration)?;
     let commitment = oid4vci_issuance_transaction_commitment(
         transaction_id,
-        evidence,
-        configuration_id,
-        configuration,
-        &configuration_fingerprint,
+        Oid4vciIssuanceCommitmentContext {
+            evidence,
+            subject_access_config: &state.subject_access,
+            configuration_id,
+            configuration,
+            configuration_fingerprint: &configuration_fingerprint,
+        },
         &evaluation_id,
         &evaluation,
     )?;
@@ -1219,15 +1284,27 @@ pub(in crate::api) fn oid4vci_configuration_fingerprint(
     )
 }
 
+pub(in crate::api) struct Oid4vciIssuanceCommitmentContext<'a> {
+    pub(in crate::api) evidence: &'a EvidenceConfig,
+    pub(in crate::api) subject_access_config: &'a SubjectAccessConfig,
+    pub(in crate::api) configuration_id: &'a str,
+    pub(in crate::api) configuration: &'a Oid4vciCredentialConfigurationConfig,
+    pub(in crate::api) configuration_fingerprint: &'a str,
+}
+
 pub(in crate::api) fn oid4vci_issuance_transaction_commitment(
     transaction_id: &str,
-    evidence: &EvidenceConfig,
-    configuration_id: &str,
-    configuration: &Oid4vciCredentialConfigurationConfig,
-    configuration_fingerprint: &str,
+    context: Oid4vciIssuanceCommitmentContext<'_>,
     evaluation_id: &str,
     evaluation: &registry_notary_core::StoredEvaluation,
 ) -> Result<String, EvidenceError> {
+    let Oid4vciIssuanceCommitmentContext {
+        evidence,
+        subject_access_config,
+        configuration_id,
+        configuration,
+        configuration_fingerprint,
+    } = context;
     let subject_access = evaluation
         .subject_access
         .as_ref()
@@ -1263,8 +1340,50 @@ pub(in crate::api) fn oid4vci_issuance_transaction_commitment(
     );
     normalized.insert("authenticated_issuer", json!(subject_access.issuer));
     normalized.insert("authenticated_client", json!(subject_access.client_id));
+    normalized.insert(
+        "subject_access_binding",
+        serde_json::to_value(subject_access).map_err(|_| EvidenceError::InvalidRequest)?,
+    );
+    let delegated_proof_max_age_seconds =
+        if let Some(representative) = configuration.representative_issuance.as_ref() {
+            let relationship = subject_access_config
+                .delegation
+                .relationship(&representative.relationship)
+                .ok_or(EvidenceError::EvaluationBindingMismatch)?;
+            if subject_access
+                .relationship_type
+                .as_ref()
+                .is_none_or(|stored| stored.as_str() != relationship.relationship_type)
+                || subject_access
+                    .proof_claim_id
+                    .as_ref()
+                    .is_none_or(|stored| stored.as_str() != relationship.proof_claim)
+            {
+                return Err(EvidenceError::EvaluationBindingMismatch);
+            }
+            Some(relationship.max_proof_age_seconds)
+        } else {
+            None
+        };
+    normalized.insert(
+        "delegated_proof_max_age_seconds",
+        json!(delegated_proof_max_age_seconds),
+    );
     normalized.insert("service", json!(evidence.service_id));
     normalized.insert("purpose", json!(evaluation.purpose));
+    normalized.insert("disclosure", json!(evaluation.disclosure));
+    normalized.insert("format", json!(evaluation.format));
+    normalized.insert("evaluation_created_at", json!(evaluation.created_at));
+    normalized.insert("evaluation_expires_at", json!(evaluation.expires_at));
+    normalized.insert("evaluation_request_hash", json!(evaluation.request_hash));
+    normalized.insert(
+        "result_target_refs",
+        json!(evaluation
+            .results
+            .iter()
+            .map(|result| &result.target_ref)
+            .collect::<Vec<_>>()),
+    );
     normalized.insert(
         "canonical_claim_references",
         json!(evaluation.selected_claim_refs()),
@@ -1459,10 +1578,312 @@ pub(in crate::api) async fn oid4vci_offer_callback(
         acr: subject.acr,
         auth_time: subject.auth_time,
     };
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    let Ok(jti) = generate_opaque_token() else {
-        return preauth_server_error(&preauth, path, "GET", &stored.credential_configuration_id)
+    let representative_enabled = state
+        .oid4vci
+        .credential_configurations
+        .get(&stored.credential_configuration_id)
+        .is_some_and(|configuration| configuration.representative_issuance.is_some());
+    if representative_enabled {
+        let (Ok(selection_state), Ok(csrf_token)) =
+            (generate_opaque_token(), generate_opaque_token())
+        else {
+            return preauth_server_error_for_access_mode(
+                &preauth,
+                path,
+                "GET",
+                &stored.credential_configuration_id,
+                AccessMode::DelegatedAttestation,
+            )
             .await;
+        };
+        let selection = LoginState {
+            pkce_verifier: String::new(),
+            nonce: String::new(),
+            credential_configuration_id: stored.credential_configuration_id.clone(),
+            representative: Some(AuthenticatedRepresentative::from_bound_subject(
+                bound_subject,
+            )),
+            csrf_token: Some(csrf_token.clone()),
+        };
+        if preauth
+            .preauthorization_state()
+            .reserve_login(
+                &selection_state,
+                selection,
+                preauth.login_state_ttl_seconds(),
+            )
+            .await
+            .is_err()
+        {
+            return preauth_server_error(
+                &preauth,
+                path,
+                "GET",
+                &stored.credential_configuration_id,
+            )
+            .await;
+        }
+        let audit = pre_auth_audit_event(
+            "GET",
+            path,
+            StatusCode::OK.as_u16(),
+            "representative_target_selection_started",
+            PreAuthAuditFields {
+                credential_configuration_id: ConfigMetadata::new(
+                    &stored.credential_configuration_id,
+                )
+                .ok(),
+                access_mode: Some(AccessMode::DelegatedAttestation),
+                ..PreAuthAuditFields::default()
+            },
+        );
+        if preauth.emit_audit(&audit).await.is_err() {
+            return oid4vci_error_response(Oid4vciWireError::ServerError);
+        }
+        return no_store_html(representative_target_page_html(
+            &selection_state,
+            &csrf_token,
+        ));
+    }
+    complete_oid4vci_offer(
+        state,
+        preauth,
+        path,
+        "GET",
+        stored.credential_configuration_id.clone(),
+        bound_subject,
+        None,
+    )
+    .await
+}
+
+struct RepresentativeTargetSelection {
+    selection_state: String,
+    csrf_token: String,
+    target_id: String,
+}
+
+/// `POST /oid4vci/offer/representative` (public): consume the authenticated
+/// representative's single-use selection state and evaluate the configured
+/// relationship plus credential claim before minting a wallet offer.
+pub(in crate::api) async fn oid4vci_offer_representative(
+    state: Option<Extension<Arc<RegistryNotaryApiState>>>,
+    connect_info: Option<Extension<axum::extract::ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Some(Extension(state)) = state else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(preauth) = preauth_runtime(&state) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let path = "/oid4vci/offer/representative";
+    let client_address = token_client_address(&state, &headers, connect_info.as_deref());
+    if check_token_client_address_rate_limit(&state, &client_address)
+        .await
+        .is_err()
+    {
+        return preauth_denied_for_access_mode(
+            &preauth,
+            path,
+            "POST",
+            None,
+            SubjectAccessDenialCode::RateLimited,
+            Oid4vciWireError::RateLimited,
+            AccessMode::DelegatedAttestation,
+        )
+        .await;
+    }
+    let selection = match parse_representative_target_selection(&headers, &body) {
+        Ok(selection) => selection,
+        Err(()) => {
+            return preauth_denied_after_invalid_client_attempt(
+                &state,
+                &preauth,
+                path,
+                &client_address,
+                None,
+                Oid4vciWireError::InvalidRequest,
+            )
+            .await;
+        }
+    };
+    let mut stored = match preauth
+        .preauthorization_state()
+        .consume_login(&selection.selection_state)
+        .await
+    {
+        Ok(Some(stored)) => stored,
+        Ok(None) => {
+            return preauth_denied_after_invalid_client_attempt(
+                &state,
+                &preauth,
+                path,
+                &client_address,
+                None,
+                Oid4vciWireError::InvalidRequest,
+            )
+            .await;
+        }
+        Err(_) => {
+            return preauth_denied_for_access_mode(
+                &preauth,
+                path,
+                "POST",
+                None,
+                SubjectAccessDenialCode::OperationDenied,
+                Oid4vciWireError::ServerError,
+                AccessMode::DelegatedAttestation,
+            )
+            .await;
+        }
+    };
+    let Some(expected_csrf) = stored.csrf_token.take() else {
+        return preauth_denied_for_access_mode(
+            &preauth,
+            path,
+            "POST",
+            Some(&stored.credential_configuration_id),
+            SubjectAccessDenialCode::InvalidToken,
+            Oid4vciWireError::InvalidRequest,
+            AccessMode::DelegatedAttestation,
+        )
+        .await;
+    };
+    if !stored.pkce_verifier.is_empty()
+        || !stored.nonce.is_empty()
+        || expected_csrf.len() != selection.csrf_token.len()
+        || !bool::from(
+            expected_csrf
+                .as_bytes()
+                .ct_eq(selection.csrf_token.as_bytes()),
+        )
+    {
+        return preauth_denied_for_access_mode(
+            &preauth,
+            path,
+            "POST",
+            Some(&stored.credential_configuration_id),
+            SubjectAccessDenialCode::InvalidToken,
+            Oid4vciWireError::InvalidRequest,
+            AccessMode::DelegatedAttestation,
+        )
+        .await;
+    }
+    let representative_configuration = state
+        .oid4vci
+        .credential_configurations
+        .get(&stored.credential_configuration_id)
+        .is_some_and(|configuration| configuration.representative_issuance.is_some());
+    let Some(representative) = stored.representative.take() else {
+        return preauth_denied_for_access_mode(
+            &preauth,
+            path,
+            "POST",
+            Some(&stored.credential_configuration_id),
+            SubjectAccessDenialCode::InvalidToken,
+            Oid4vciWireError::InvalidRequest,
+            AccessMode::DelegatedAttestation,
+        )
+        .await;
+    };
+    if !representative_configuration {
+        return preauth_denied_for_access_mode(
+            &preauth,
+            path,
+            "POST",
+            Some(&stored.credential_configuration_id),
+            SubjectAccessDenialCode::DelegatedRelationshipNotAllowed,
+            Oid4vciWireError::AccessDenied,
+            AccessMode::DelegatedAttestation,
+        )
+        .await;
+    }
+    let bound_subject = representative.into_bound_subject();
+    let principal = match preauth.principal_for_subject(&bound_subject) {
+        Ok(principal) => principal,
+        Err(_) => {
+            return preauth_denied_for_access_mode(
+                &preauth,
+                path,
+                "POST",
+                Some(&stored.credential_configuration_id),
+                SubjectAccessDenialCode::InvalidToken,
+                Oid4vciWireError::InvalidToken,
+                AccessMode::DelegatedAttestation,
+            )
+            .await;
+        }
+    };
+    let principal_hash = match state
+        .subject_access_rate_keys
+        .principal(&principal.principal_id)
+    {
+        Ok(hash) => hash,
+        Err(_) => {
+            return preauth_server_error_for_access_mode(
+                &preauth,
+                path,
+                "POST",
+                &stored.credential_configuration_id,
+                AccessMode::DelegatedAttestation,
+            )
+            .await;
+        }
+    };
+    if state
+        .subject_access_rate_limiter
+        .check_authenticated_request(&principal_hash)
+        .await
+        .is_err()
+    {
+        return preauth_denied_for_access_mode(
+            &preauth,
+            path,
+            "POST",
+            Some(&stored.credential_configuration_id),
+            SubjectAccessDenialCode::RateLimited,
+            Oid4vciWireError::RateLimited,
+            AccessMode::DelegatedAttestation,
+        )
+        .await;
+    }
+    complete_oid4vci_offer(
+        state,
+        preauth,
+        path,
+        "POST",
+        stored.credential_configuration_id.clone(),
+        bound_subject,
+        Some(selection.target_id),
+    )
+    .await
+}
+
+async fn complete_oid4vci_offer(
+    state: Arc<RegistryNotaryApiState>,
+    preauth: Arc<PreAuthRuntime>,
+    path: &str,
+    method: &str,
+    configuration_id: String,
+    bound_subject: BoundSubject,
+    representative_target: Option<String>,
+) -> Response {
+    let access_mode = if representative_target.is_some() {
+        AccessMode::DelegatedAttestation
+    } else {
+        AccessMode::SubjectBound
+    };
+    let Ok(jti) = generate_opaque_token() else {
+        return preauth_server_error_for_access_mode(
+            &preauth,
+            path,
+            method,
+            &configuration_id,
+            access_mode,
+        )
+        .await;
     };
     // The registry-backed evaluation is completed before any offer is minted.
     // A denied, unavailable, stale, malformed, or provenance-invalid Relay
@@ -1471,8 +1892,9 @@ pub(in crate::api) async fn oid4vci_offer_callback(
         &state,
         &preauth,
         &bound_subject,
-        &stored.credential_configuration_id,
+        &configuration_id,
         &jti,
+        representative_target.as_deref(),
     )
     .await
     {
@@ -1482,49 +1904,112 @@ pub(in crate::api) async fn oid4vci_offer_callback(
                 code = error.audit_code(),
                 "registry-backed OID4VCI evaluation denied before offer minting"
             );
-            return preauth_denied(
+            return preauth_denied_for_access_mode(
                 &preauth,
                 path,
-                "GET",
-                Some(&stored.credential_configuration_id),
+                method,
+                Some(&configuration_id),
                 denial_code_from_error(&error).unwrap_or(SubjectAccessDenialCode::OperationDenied),
                 oid4vci_error_from_evidence(&error),
+                access_mode,
             )
             .await;
         }
     };
-    let code_exp = now + preauth.pre_authorized_code_ttl_seconds() as i64;
-    let transaction_expires_at = match OffsetDateTime::from_unix_timestamp(
-        code_exp + preauth.access_token_ttl_seconds() as i64,
-    ) {
-        Ok(expires_at) => expires_at,
-        Err(_) => {
-            return preauth_server_error(
+    let evaluation = match state
+        .store
+        .get(
+            &transaction.evaluation_id,
+            &transaction.evaluation_client_id,
+        )
+        .await
+    {
+        Ok(Some(evaluation)) => evaluation,
+        _ => {
+            return preauth_server_error_for_access_mode(
                 &preauth,
                 path,
-                "GET",
-                &stored.credential_configuration_id,
+                method,
+                &configuration_id,
+                access_mode,
             )
             .await;
         }
     };
+    // Relay evaluation can take long enough for a short-lived relationship
+    // proof to expire. Take the offer timestamp only after evaluation and
+    // storage complete so no already-expired wallet grant can be minted.
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let evaluation_expires_at = match evaluation
+        .subject_access
+        .as_ref()
+        .and_then(|metadata| metadata.evaluation_expires_at.as_deref())
+        .and_then(|expires_at| OffsetDateTime::parse(expires_at, &Rfc3339).ok())
+    {
+        Some(expires_at) if expires_at.unix_timestamp() > now => expires_at,
+        _ => {
+            return preauth_server_error_for_access_mode(
+                &preauth,
+                path,
+                method,
+                &configuration_id,
+                access_mode,
+            )
+            .await;
+        }
+    };
+    let token_subject = match wallet_token_subject(bound_subject, &evaluation, access_mode) {
+        Ok(subject) => subject,
+        Err(_) => {
+            return preauth_server_error_for_access_mode(
+                &preauth,
+                path,
+                method,
+                &configuration_id,
+                access_mode,
+            )
+            .await;
+        }
+    };
+    let code_exp = (now + preauth.pre_authorized_code_ttl_seconds() as i64)
+        .min(evaluation_expires_at.unix_timestamp());
+    let transaction_expires_at =
+        match OffsetDateTime::from_unix_timestamp(evaluation_expires_at.unix_timestamp()) {
+            Ok(expires_at) => expires_at,
+            Err(_) => {
+                return preauth_server_error_for_access_mode(
+                    &preauth,
+                    path,
+                    method,
+                    &configuration_id,
+                    access_mode,
+                )
+                .await;
+            }
+        };
     if preauth
         .preauthorization_state()
         .reserve_issuance_transaction(&jti, transaction.clone(), transaction_expires_at)
         .await
         .is_err()
     {
-        return preauth_server_error(&preauth, path, "GET", &stored.credential_configuration_id)
-            .await;
-    }
+        return preauth_server_error_for_access_mode(
+            &preauth,
+            path,
+            method,
+            &configuration_id,
+            access_mode,
+        )
+        .await;
+    };
     let code_claims = PreAuthorizedCodeClaims {
         issuer: preauth.notary_issuer().to_string(),
         jti: jti.clone(),
-        credential_configuration_id: stored.credential_configuration_id.clone(),
+        credential_configuration_id: configuration_id.clone(),
         issuance_transaction_id: jti.clone(),
         issuance_transaction_commitment: transaction.commitment.clone(),
         tx_code_required: preauth.tx_code_required(),
-        subject: bound_subject,
+        subject: token_subject,
         iat: now,
         exp: code_exp,
     };
@@ -1537,22 +2022,24 @@ pub(in crate::api) async fn oid4vci_offer_callback(
     {
         Ok(signed) => signed,
         Err(_) => {
-            return preauth_server_error(
+            return preauth_server_error_for_access_mode(
                 &preauth,
                 path,
-                "GET",
-                &stored.credential_configuration_id,
+                method,
+                &configuration_id,
+                access_mode,
             )
             .await;
         }
     };
     let tx_code_pin = if preauth.tx_code_required() {
         let Ok(pin) = generate_numeric_tx_code(preauth.tx_code_length()) else {
-            return preauth_server_error(
+            return preauth_server_error_for_access_mode(
                 &preauth,
                 path,
-                "GET",
-                &stored.credential_configuration_id,
+                method,
+                &configuration_id,
+                access_mode,
             )
             .await;
         };
@@ -1562,11 +2049,12 @@ pub(in crate::api) async fn oid4vci_offer_callback(
         let expires_at = match OffsetDateTime::from_unix_timestamp(code_claims.exp) {
             Ok(expires_at) => expires_at,
             Err(_) => {
-                return preauth_server_error(
+                return preauth_server_error_for_access_mode(
                     &preauth,
                     path,
-                    "GET",
-                    &stored.credential_configuration_id,
+                    method,
+                    &configuration_id,
+                    access_mode,
                 )
                 .await;
             }
@@ -1578,11 +2066,12 @@ pub(in crate::api) async fn oid4vci_offer_callback(
                 .await,
             Ok(true)
         ) {
-            return preauth_server_error(
+            return preauth_server_error_for_access_mode(
                 &preauth,
                 path,
-                "GET",
-                &stored.credential_configuration_id,
+                method,
+                &configuration_id,
+                access_mode,
             )
             .await;
         }
@@ -1598,32 +2087,34 @@ pub(in crate::api) async fn oid4vci_offer_callback(
     });
     let offer = CredentialOffer::pre_authorized_code(
         state.oid4vci.credential_issuer.clone(),
-        vec![stored.credential_configuration_id.clone()],
+        vec![configuration_id.clone()],
         signed_code.compact.clone(),
         tx_code,
     );
     let offer_uri = match offer_request_uri(&offer) {
         Ok(uri) => uri,
         Err(_) => {
-            return preauth_server_error(
+            return preauth_server_error_for_access_mode(
                 &preauth,
                 path,
-                "GET",
-                &stored.credential_configuration_id,
+                method,
+                &configuration_id,
+                access_mode,
             )
             .await;
         }
     };
     let audit = pre_auth_audit_event(
-        "GET",
+        method,
         path,
         StatusCode::OK.as_u16(),
         "preauth_offer_minted",
         PreAuthAuditFields {
             credential_configuration_id: registry_notary_core::ConfigMetadata::new(
-                &stored.credential_configuration_id,
+                &configuration_id,
             )
             .ok(),
+            access_mode: Some(access_mode),
             ..PreAuthAuditFields::default()
         },
     );
@@ -1634,6 +2125,36 @@ pub(in crate::api) async fn oid4vci_offer_callback(
         .metrics
         .record_credential("openid4vci_preauth", "offer_minted");
     Html(offer_page_html(&offer_uri, tx_code_pin.as_deref())).into_response()
+}
+
+fn wallet_token_subject(
+    mut subject: BoundSubject,
+    evaluation: &registry_notary_core::StoredEvaluation,
+    access_mode: AccessMode,
+) -> Result<BoundSubject, EvidenceError> {
+    let metadata = evaluation
+        .subject_access
+        .as_ref()
+        .ok_or(EvidenceError::EvaluationBindingMismatch)?;
+    if metadata.access_mode != access_mode {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    if access_mode == AccessMode::DelegatedAttestation {
+        if !metadata.principal_hash.as_str().starts_with("hmac-sha256:")
+            || !metadata
+                .subject_binding_hash
+                .as_str()
+                .starts_with("hmac-sha256:")
+        {
+            return Err(EvidenceError::EvaluationBindingMismatch);
+        }
+        // Relationship evaluation needs the representative's verified
+        // identifiers, but the wallet needs only opaque handles that bind its
+        // signed tokens back to the committed transaction.
+        subject.subject = metadata.principal_hash.as_str().to_string();
+        subject.subject_binding_value = metadata.subject_binding_hash.as_str().to_string();
+    }
+    Ok(subject)
 }
 
 /// `POST /oid4vci/token` (public): the OID4VCI token endpoint for the
@@ -1881,32 +2402,7 @@ pub(in crate::api) async fn oid4vci_token(
         )
         .await;
     };
-    let access_token_exp = (now + preauth.access_token_ttl_seconds() as i64)
-        .min(live_transaction.expires_at.unix_timestamp());
-    let Ok(access_token_expires_in) = u64::try_from(access_token_exp - now) else {
-        return token_error_after_invalid_attempt_with_access_mode(
-            &state,
-            &preauth,
-            path,
-            &client_address,
-            Some(configuration_id),
-            transaction_access_mode,
-            TokenWireError::InvalidGrant,
-        )
-        .await;
-    };
-    if access_token_expires_in == 0 {
-        return token_error_after_invalid_attempt_with_access_mode(
-            &state,
-            &preauth,
-            path,
-            &client_address,
-            Some(configuration_id),
-            transaction_access_mode,
-            TokenWireError::InvalidGrant,
-        )
-        .await;
-    }
+    let transaction_expires_at = live_transaction.expires_at;
     let transaction = live_transaction.transaction;
     let transaction_code = if tx_code_required {
         let tx_code = request.tx_code.as_deref().unwrap_or("");
@@ -1958,14 +2454,70 @@ pub(in crate::api) async fn oid4vci_token(
     let mut bound_subject = bound_subject;
     add_scope_if_missing(&mut bound_subject.scopes, &configuration.scope);
     let (authorization_detail, actor) = match &transaction.authority {
-        IssuanceAuthority::SubjectAccess => (
-            oid4vci_issuance_authorization_details(
-                &state.evidence,
-                &state.subject_access,
-                configuration,
-            ),
-            None,
-        ),
+        IssuanceAuthority::SubjectAccess => {
+            let detail =
+                if let Some(representative) = configuration.representative_issuance.as_ref() {
+                    let evaluation = match state
+                        .store
+                        .get(
+                            &transaction.evaluation_id,
+                            &transaction.evaluation_client_id,
+                        )
+                        .await
+                    {
+                        Ok(Some(evaluation)) => evaluation,
+                        _ => {
+                            return token_error_with_audit_access_mode(
+                                &preauth,
+                                path,
+                                Some(configuration_id),
+                                SubjectAccessDenialCode::OperationDenied,
+                                transaction_access_mode,
+                                TokenWireError::ServerError,
+                            )
+                            .await;
+                        }
+                    };
+                    (|| {
+                        let metadata = evaluation
+                            .subject_access
+                            .as_ref()
+                            .ok_or(EvidenceError::EvaluationBindingMismatch)?;
+                        let relationship = state
+                            .subject_access
+                            .delegation
+                            .relationship(&representative.relationship)
+                            .ok_or(EvidenceError::EvaluationBindingMismatch)?;
+                        if metadata.access_mode != AccessMode::DelegatedAttestation
+                            || metadata
+                                .relationship_type
+                                .as_ref()
+                                .map(ConfigMetadata::as_str)
+                                != Some(relationship.relationship_type.as_str())
+                        {
+                            return Err(EvidenceError::EvaluationBindingMismatch);
+                        }
+                        let target_hash = metadata
+                            .dependent_target_hash
+                            .as_ref()
+                            .ok_or(EvidenceError::EvaluationBindingMismatch)?;
+                        oid4vci_representative_issuance_authorization_details(
+                            &state.evidence,
+                            &state.subject_access,
+                            configuration,
+                            relationship,
+                            target_hash.as_str(),
+                        )
+                    })()
+                } else {
+                    oid4vci_issuance_authorization_details(
+                        &state.evidence,
+                        &state.subject_access,
+                        configuration,
+                    )
+                };
+            (detail, None)
+        }
         IssuanceAuthority::RegistryClient {
             initiating_client_id_hash,
             auth_profile_id,
@@ -2101,6 +2653,25 @@ pub(in crate::api) async fn oid4vci_token(
         )
         .await;
     }
+    // The code was valid when verified, but transaction lookup, replay
+    // redemption, and nonce persistence are asynchronous. Refresh the clock
+    // here so a short-lived proof can never produce an already-expired access
+    // token after those operations complete.
+    let access_token_now = OffsetDateTime::now_utc().unix_timestamp();
+    let Some((access_token_iat, access_token_exp)) = capped_access_token_window(
+        access_token_now,
+        preauth.access_token_ttl_seconds(),
+        transaction_expires_at.unix_timestamp(),
+    ) else {
+        return token_error_with_audit(
+            &preauth,
+            path,
+            Some(configuration_id),
+            SubjectAccessDenialCode::InvalidToken,
+            TokenWireError::InvalidGrant,
+        )
+        .await;
+    };
     let access_token_claims = AccessTokenClaims {
         issuer: preauth.notary_issuer().to_string(),
         jti: None,
@@ -2113,7 +2684,7 @@ pub(in crate::api) async fn oid4vci_token(
         authorization_details,
         confirmation: None,
         actor,
-        iat: now,
+        iat: access_token_iat,
         exp: access_token_exp,
     };
     let access_token = match mint_access_token(
@@ -2146,10 +2717,19 @@ pub(in crate::api) async fn oid4vci_token(
                 configuration_id,
             )
             .ok(),
+            access_mode: Some(if configuration.representative_issuance.is_some() {
+                AccessMode::DelegatedAttestation
+            } else {
+                AccessMode::SubjectBound
+            }),
             ..PreAuthAuditFields::default()
         },
     );
-    audit.access_mode = Some(issuance_authority_access_mode(&transaction.authority));
+    audit.access_mode = Some(if configuration.representative_issuance.is_some() {
+        AccessMode::DelegatedAttestation
+    } else {
+        issuance_authority_access_mode(&transaction.authority)
+    });
     if preauth.emit_audit(&audit).await.is_err() {
         return token_error_response(TokenWireError::ServerError);
     }
@@ -2159,7 +2739,13 @@ pub(in crate::api) async fn oid4vci_token(
     Json(Oid4vciTokenResponse {
         access_token: access_token.compact,
         token_type: "Bearer".to_string(),
-        expires_in: Some(access_token_expires_in),
+        expires_in: Some(
+            access_token_claims
+                .exp
+                .saturating_sub(access_token_claims.iat)
+                .try_into()
+                .unwrap_or_default(),
+        ),
         c_nonce: Some(c_nonce),
         c_nonce_expires_in: state
             .oid4vci
@@ -2255,6 +2841,97 @@ pub(in crate::api) fn url_percent_encode(value: &str) -> String {
         }
     }
     out
+}
+
+fn parse_representative_target_selection(
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> Result<RepresentativeTargetSelection, ()> {
+    const MAX_BODY_BYTES: usize = 4096;
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if content_type
+        .split(';')
+        .next()
+        .is_none_or(|value| value.trim() != "application/x-www-form-urlencoded")
+        || body.len() > MAX_BODY_BYTES
+    {
+        return Err(());
+    }
+    let raw = std::str::from_utf8(body).map_err(|_| ())?;
+    let mut selection_state = None;
+    let mut csrf_token = None;
+    let mut target_id = None;
+    for pair in raw.split('&').filter(|pair| !pair.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let key = form_urldecode(key).map_err(|_| ())?;
+        let value = form_urldecode(value).map_err(|_| ())?;
+        let slot = match key.as_str() {
+            "selection_state" => &mut selection_state,
+            "csrf_token" => &mut csrf_token,
+            "target_id" => &mut target_id,
+            _ => return Err(()),
+        };
+        if slot.replace(value).is_some() {
+            return Err(());
+        }
+    }
+    let selection = RepresentativeTargetSelection {
+        selection_state: selection_state.ok_or(())?,
+        csrf_token: csrf_token.ok_or(())?,
+        target_id: target_id.ok_or(())?,
+    };
+    if selection.selection_state.is_empty()
+        || selection.csrf_token.is_empty()
+        || selection.target_id.is_empty()
+        || selection.target_id.len() > 256
+        || selection.target_id.trim() != selection.target_id
+    {
+        return Err(());
+    }
+    Ok(selection)
+}
+
+fn representative_target_page_html(selection_state: &str, csrf_token: &str) -> String {
+    let selection_state = html_escape(selection_state);
+    let csrf_token = html_escape(csrf_token);
+    format!(
+        "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+<meta name=\"referrer\" content=\"no-referrer\"><title>Select credential subject</title></head>\
+<body><h1>Who is this credential for?</h1>\
+<p>Enter the identifier of the subject you are authorized to represent.</p>\
+<form method=\"post\" action=\"representative\">\
+<input type=\"hidden\" name=\"selection_state\" value=\"{selection_state}\">\
+<input type=\"hidden\" name=\"csrf_token\" value=\"{csrf_token}\">\
+<label for=\"target-id\">Subject identifier</label>\
+<input id=\"target-id\" name=\"target_id\" type=\"text\" maxlength=\"256\" required autocomplete=\"off\">\
+<button type=\"submit\">Verify relationship and continue</button>\
+</form></body></html>"
+    )
+}
+
+fn no_store_html(html: String) -> Response {
+    let mut response = Html(html).into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    headers.insert(
+        axum::http::HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        axum::http::HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(
+            "default-src 'none'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        ),
+    );
+    headers.insert(
+        axum::http::HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    response
 }
 
 /// Render the citizen-facing offer page: the QR-encodable offer URI plus an
@@ -2443,6 +3120,48 @@ pub(in crate::api) async fn preauth_denied(
     denial_code: SubjectAccessDenialCode,
     wire_error: Oid4vciWireError,
 ) -> Response {
+    preauth_denied_for_access_mode(
+        preauth,
+        path,
+        method,
+        credential_configuration_id,
+        denial_code,
+        wire_error,
+        AccessMode::SubjectBound,
+    )
+    .await
+}
+
+async fn preauth_denied_after_invalid_client_attempt(
+    state: &RegistryNotaryApiState,
+    preauth: &PreAuthRuntime,
+    path: &str,
+    client_address: &str,
+    credential_configuration_id: Option<&str>,
+    wire_error: Oid4vciWireError,
+) -> Response {
+    consume_invalid_client_address_attempt(state, client_address).await;
+    preauth_denied_for_access_mode(
+        preauth,
+        path,
+        "POST",
+        credential_configuration_id,
+        SubjectAccessDenialCode::InvalidToken,
+        wire_error,
+        AccessMode::DelegatedAttestation,
+    )
+    .await
+}
+
+async fn preauth_denied_for_access_mode(
+    preauth: &PreAuthRuntime,
+    path: &str,
+    method: &str,
+    credential_configuration_id: Option<&str>,
+    denial_code: SubjectAccessDenialCode,
+    wire_error: Oid4vciWireError,
+    access_mode: AccessMode,
+) -> Response {
     let response = oid4vci_error_response(wire_error);
     let status = response.status().as_u16();
     let audit = pre_auth_audit_event(
@@ -2454,6 +3173,7 @@ pub(in crate::api) async fn preauth_denied(
             credential_configuration_id: credential_configuration_id
                 .and_then(|id| registry_notary_core::ConfigMetadata::new(id).ok()),
             denial_code: Some(denial_code),
+            access_mode: Some(access_mode),
             ..PreAuthAuditFields::default()
         },
     );
@@ -2469,6 +3189,23 @@ pub(in crate::api) async fn preauth_server_error(
     method: &str,
     credential_configuration_id: &str,
 ) -> Response {
+    preauth_server_error_for_access_mode(
+        preauth,
+        path,
+        method,
+        credential_configuration_id,
+        AccessMode::SubjectBound,
+    )
+    .await
+}
+
+async fn preauth_server_error_for_access_mode(
+    preauth: &PreAuthRuntime,
+    path: &str,
+    method: &str,
+    credential_configuration_id: &str,
+    access_mode: AccessMode,
+) -> Response {
     let audit = pre_auth_audit_event(
         method,
         path,
@@ -2479,6 +3216,7 @@ pub(in crate::api) async fn preauth_server_error(
                 credential_configuration_id,
             )
             .ok(),
+            access_mode: Some(access_mode),
             ..PreAuthAuditFields::default()
         },
     );
@@ -2518,15 +3256,7 @@ async fn token_error_after_invalid_attempt_with_access_mode(
     access_mode: AccessMode,
     error: TokenWireError,
 ) -> Response {
-    if let Ok(hashed) = state
-        .subject_access_rate_keys
-        .client_address(client_address)
-    {
-        let _ = state
-            .subject_access_rate_limiter
-            .check_invalid_token_for_client_address(&hashed)
-            .await;
-    }
+    consume_invalid_client_address_attempt(state, client_address).await;
     token_error_with_audit_access_mode(
         preauth,
         path,
@@ -2536,6 +3266,21 @@ async fn token_error_after_invalid_attempt_with_access_mode(
         error,
     )
     .await
+}
+
+async fn consume_invalid_client_address_attempt(
+    state: &RegistryNotaryApiState,
+    client_address: &str,
+) {
+    if let Ok(hashed) = state
+        .subject_access_rate_keys
+        .client_address(client_address)
+    {
+        let _ = state
+            .subject_access_rate_limiter
+            .check_invalid_token_for_client_address(&hashed)
+            .await;
+    }
 }
 
 pub(in crate::api) async fn token_error_with_audit(
@@ -2711,6 +3456,16 @@ pub(in crate::api) fn hex_nibble(byte: u8) -> Result<u8, TokenWireError> {
     }
 }
 
+fn capped_access_token_window(
+    now: i64,
+    access_token_ttl_seconds: u64,
+    code_expires_at: i64,
+) -> Option<(i64, i64)> {
+    let ttl = i64::try_from(access_token_ttl_seconds).ok()?;
+    let expires_at = now.checked_add(ttl)?.min(code_expires_at);
+    (expires_at > now).then_some((now, expires_at))
+}
+
 #[cfg(test)]
 mod replay_scope_tests {
     use super::*;
@@ -2725,6 +3480,67 @@ mod replay_scope_tests {
         assert_ne!(
             pre_authorized_code_replay_scope(issuer).unwrap(),
             pre_authorized_code_replay_scope("https://other-notary.example").unwrap()
+        );
+    }
+
+    #[test]
+    fn access_token_window_uses_a_fresh_time_and_requires_future_expiry() {
+        assert_eq!(capped_access_token_window(100, 300, 120), Some((100, 120)));
+        assert_eq!(capped_access_token_window(120, 300, 120), None);
+        assert_eq!(capped_access_token_window(121, 300, 120), None);
+    }
+
+    #[test]
+    fn representative_target_form_is_closed_bounded_and_exact() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        let body =
+            Bytes::from_static(b"selection_state=state-1&csrf_token=csrf-1&target_id=CHILD-123");
+        let parsed =
+            parse_representative_target_selection(&headers, &body).expect("valid form parses");
+        assert_eq!(parsed.selection_state, "state-1");
+        assert_eq!(parsed.csrf_token, "csrf-1");
+        assert_eq!(parsed.target_id, "CHILD-123");
+
+        for invalid in [
+            "selection_state=one&selection_state=two&csrf_token=csrf&target_id=CHILD-123",
+            "selection_state=one&csrf_token=csrf&target_id=CHILD-123&unexpected=value",
+            "selection_state=one&csrf_token=csrf&target_id=%20CHILD-123",
+        ] {
+            assert!(parse_representative_target_selection(
+                &headers,
+                &Bytes::copy_from_slice(invalid.as_bytes())
+            )
+            .is_err());
+        }
+        assert!(
+            parse_representative_target_selection(&headers, &Bytes::from(vec![b'a'; 4097]))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn representative_target_page_escapes_tokens_and_is_not_cached() {
+        let html = representative_target_page_html("state<&", "csrf<&");
+        assert!(!html.contains("state<&"));
+        assert!(!html.contains("csrf<&"));
+        assert!(html.contains("state&lt;&amp;"));
+        assert!(html.contains("csrf&lt;&amp;"));
+        assert!(
+            html.contains("action=\"representative\""),
+            "the relative action must preserve an external issuer base path"
+        );
+        let response = no_store_html(html);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        assert_eq!(
+            response.headers().get("referrer-policy").unwrap(),
+            "no-referrer"
         );
     }
 }

@@ -171,6 +171,8 @@ impl PostgresSensitiveState {
             version: LOGIN_RECORD_VERSION,
             pkce_verifier: &login.pkce_verifier,
             nonce: &login.nonce,
+            representative: login.representative.as_ref(),
+            csrf_token: login.csrf_token.as_deref(),
         };
         let mut ciphertext = Zeroizing::new(
             serde_json::to_vec(&plaintext)
@@ -255,6 +257,8 @@ impl PostgresSensitiveState {
             pkce_verifier: std::mem::take(&mut decrypted.pkce_verifier),
             nonce: std::mem::take(&mut decrypted.nonce),
             credential_configuration_id: configuration_id,
+            representative: decrypted.representative.take(),
+            csrf_token: decrypted.csrf_token.take(),
         }))
     }
 
@@ -1025,6 +1029,10 @@ struct EncryptedLoginState<'a> {
     version: u8,
     pkce_verifier: &'a str,
     nonce: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    representative: Option<&'a crate::preauth_state::AuthenticatedRepresentative>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    csrf_token: Option<&'a str>,
 }
 
 #[derive(Deserialize, Zeroize, ZeroizeOnDrop)]
@@ -1032,6 +1040,10 @@ struct DecryptedLoginState {
     version: u8,
     pkce_verifier: String,
     nonce: String,
+    #[serde(default)]
+    representative: Option<crate::preauth_state::AuthenticatedRepresentative>,
+    #[serde(default)]
+    csrf_token: Option<String>,
 }
 
 #[derive(Serialize)]

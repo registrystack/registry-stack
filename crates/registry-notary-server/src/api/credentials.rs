@@ -536,6 +536,7 @@ pub(super) async fn issue_credential(
             SubjectAccessCredentialAuditDetails {
                 profile_id,
                 holder_binding_mode: &profile.holder_binding.mode,
+                access_mode: metadata.access_mode,
                 policy_hash: metadata.policy_hash.clone(),
                 purposes: Some(vec![evaluation.purpose.clone()]),
                 protocol: None,

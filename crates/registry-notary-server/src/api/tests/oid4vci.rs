@@ -292,6 +292,7 @@ async fn oid4vci_source_free_bypass_denies_before_offer_or_signer_access() {
         },
         "person_is_alive_sd_jwt",
         &transaction_id,
+        None,
     )
     .await
     .expect_err("source-free configuration is credential-ineligible");
@@ -1280,6 +1281,7 @@ async fn oid4vci_rejects_tampered_dependency_catalog_before_signing() {
         },
         "person_is_alive_sd_jwt",
         &ulid::Ulid::new().to_string(),
+        None,
     )
     .await
     .expect_err("duplicate dependency catalog is rejected before an offer");

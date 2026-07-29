@@ -1983,6 +1983,19 @@ struct Oid4vciBinding {
     allowed_wallet_origins: Vec<String>,
     #[serde(default)]
     tx_code: Oid4vciTxCodeBinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    representative_issuance: Option<Oid4vciRepresentativeIssuanceBinding>,
+}
+
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Oid4vciRepresentativeIssuanceBinding {
+    relationship: String,
+    proof_claim: String,
+    target_id_type: String,
+    #[serde(default = "default_oid4vci_representative_max_proof_age_seconds")]
+    max_proof_age_seconds: u64,
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -2003,6 +2016,10 @@ impl Default for Oid4vciTxCodeBinding {
 
 const fn default_oid4vci_tx_code_required() -> bool {
     true
+}
+
+const fn default_oid4vci_representative_max_proof_age_seconds() -> u64 {
+    300
 }
 
 #[cfg_attr(test, derive(schemars::JsonSchema))]
@@ -2110,6 +2127,8 @@ struct FixtureDocument {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct GovernedLiveRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    requester: Option<GovernedLiveTarget>,
     target: GovernedLiveTarget,
     #[cfg_attr(test, schemars(with = "BTreeMap<String, String>"))]
     #[serde(
@@ -2128,7 +2147,7 @@ struct GovernedLiveRequest {
 impl GovernedLiveRequest {
     fn to_evaluate_request(&self) -> registry_notary_core::EvaluateRequest {
         registry_notary_core::EvaluateRequest {
-            requester: None,
+            requester: self.requester.as_ref().map(governed_live_entity),
             target: Some(registry_notary_core::EvidenceEntity {
                 entity_type: self.target.entity_type.clone(),
                 id: self.target.id.clone(),
@@ -2155,6 +2174,26 @@ impl GovernedLiveRequest {
             format: self.format.clone(),
             purpose: Some(self.purpose.clone()),
         }
+    }
+}
+
+fn governed_live_entity(entity: &GovernedLiveTarget) -> registry_notary_core::EvidenceEntity {
+    registry_notary_core::EvidenceEntity {
+        entity_type: entity.entity_type.clone(),
+        id: entity.id.clone(),
+        identifiers: entity
+            .identifiers
+            .iter()
+            .map(|identifier| registry_notary_core::EvidenceIdentifier {
+                scheme: identifier.scheme.clone(),
+                value: identifier.value.clone(),
+                issuer: None,
+                country: None,
+            })
+            .collect(),
+        attributes: entity.attributes.clone(),
+        assurance: None,
+        profile: None,
     }
 }
 

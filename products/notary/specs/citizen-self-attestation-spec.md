@@ -8,21 +8,25 @@
 > **Supersession note (2026-06-22).** The archived V1 non-goal for delegated
 > access no longer describes the delegated self-attestation work. Current
 > operator guidance lives in `docs/self-attestation-operator-guide.md`; the
-> OID4VCI facade still rejects delegated attestation transaction tokens.
+> OID4VCI facade accepts delegated attestation only for the sealed digitally
+> authenticated representative ceremony.
 >
 > **Credential supersession note (2026-07-17).** Source-free credential
 > issuance described below is removed. Source-free claims are evaluation-only.
 > Direct and OID4VCI issuance now require a fresh, non-delegated stored
 > evaluation with exact compiler pins and unique Relay execution records for
 > every selected root's registry-backed dependency closure. Delegated
-> self-attestation is evaluation-only in 1.0.
+> self-attestation remains evaluation-only unless a credential configuration
+> explicitly enables the digitally authenticated representative ceremony.
 > See `docs/credential-issuance-migration.md` for current operator guidance.
 
 Historical implementation status: the original design covered evaluation,
 rendering, credential issuance, batch denial, rate limits, and OID4VCI. The
 credential portions below are superseded and must not be implemented or copied.
-Current source-free and delegated self-attestation is evaluation-only. Current
-credential issuance is registry-backed as described in the supersession note.
+Current source-free self-attestation is evaluation-only. Delegated
+self-attestation is evaluation-only unless it uses the sealed representative
+OID4VCI ceremony. Current credential issuance is registry-backed as described
+in the supersession note.
 
 ## Goal
 

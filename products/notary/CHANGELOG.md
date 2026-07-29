@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   upgrades only the immediately preceding attested v1 catalog; older or
   drifted schemas require a sequential upgrade, a matching backup and binary,
   or a fresh installation.
+- Added Registryctl-authored OID4VCI representative credential issuance with
+  identity-provider authentication, closed target selection, registry-backed
+  relationship proof, committed dependency closure, proof-bounded
+  transactions, pseudonymous wallet-token bindings, holder binding, and
+  required credential status.
 
 ## [0.15.2] - 2026-07-28
 

@@ -1768,6 +1768,16 @@
           },
           "type": "array"
         },
+        "representative_issuance": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Oid4vciRepresentativeIssuanceConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "scope": {
           "type": "string"
         },
@@ -2038,6 +2048,28 @@
           "type": "integer"
         }
       },
+      "type": "object"
+    },
+    "Oid4vciRepresentativeIssuanceCeremony": {
+      "enum": [
+        "digitally_authenticated_representative"
+      ],
+      "type": "string"
+    },
+    "Oid4vciRepresentativeIssuanceConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "ceremony": {
+          "$ref": "#/$defs/Oid4vciRepresentativeIssuanceCeremony"
+        },
+        "relationship": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ceremony",
+        "relationship"
+      ],
       "type": "object"
     },
     "Oid4vciTxCodeConfig": {
@@ -2990,12 +3022,12 @@
           },
           "type": "array"
         },
-        "credential_profiles": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+        "max_proof_age_seconds": {
+          "default": 300,
+          "format": "uint64",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
         },
         "proof_claim": {
           "type": "string"

@@ -1033,7 +1033,7 @@ fn claim_dependency_graph_has_fixed_v1_node_and_edge_bounds() {
 }
 
 #[test]
-fn delegated_subject_access_allows_only_its_configured_registry_proof_edge() {
+fn delegated_subject_access_allows_registry_backed_dependency_closures() {
     let config = valid_delegated_subject_access_config();
     config
         .validate()
@@ -1063,8 +1063,9 @@ fn delegated_subject_access_allows_only_its_configured_registry_proof_edge() {
         .expect("delegated claim");
     make_registry_backed(delegated, "civil_status");
     delegated.purpose = Some("dependent_attestation".to_string());
-    let reason = expect_subject_access_error(&registry_dependent);
-    assert!(reason.contains("must be self_attested"));
+    registry_dependent
+        .validate()
+        .expect("a delegated root may use its committed registry-backed dependency closure");
 }
 
 #[test]

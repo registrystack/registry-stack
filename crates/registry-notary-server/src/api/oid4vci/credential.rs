@@ -28,7 +28,7 @@ pub(in crate::api) async fn oid4vci_credential(
     let Some(preauth) = preauth_runtime(&state) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let principal = match classify_subject_access_principal(&state.subject_access, &principal) {
+    let mut principal = match classify_subject_access_principal(&state.subject_access, &principal) {
         Ok(principal)
             if principal.is_subject_access()
                 || (principal.access_mode() == AccessMode::MachineClient
@@ -57,7 +57,13 @@ pub(in crate::api) async fn oid4vci_credential(
             Err(error) => return oid4vci_error_response(error),
         };
     let configuration_claim_ids = configuration.credential_claim_ids();
-    if requested_attestation_access_mode(&principal) == AccessMode::DelegatedAttestation {
+    let requested_access_mode = requested_attestation_access_mode(&principal);
+    let representative_configuration = configuration.representative_issuance.is_some();
+    if (principal.is_subject_access()
+        && (requested_access_mode == AccessMode::DelegatedAttestation)
+            != representative_configuration)
+        || (!principal.is_subject_access() && representative_configuration)
+    {
         let mut response = oid4vci_error_response(Oid4vciWireError::AccessDenied);
         attach_oid4vci_subject_access_denial_audit(
             &mut response,
@@ -68,6 +74,9 @@ pub(in crate::api) async fn oid4vci_credential(
             Some(state.subject_access.subject_binding.token_claim.as_str()),
         );
         return response;
+    }
+    if principal.is_subject_access() {
+        principal.access_mode = requested_access_mode;
     }
     if let Err(error) = require_oid4vci_configuration_scope(configuration, &principal) {
         let mut response = oid4vci_error_response(error);
@@ -283,6 +292,7 @@ pub(in crate::api) fn oid4vci_credential_response_with_audit(
         SubjectAccessCredentialAuditDetails {
             profile_id: &configuration.credential_profile,
             holder_binding_mode: &profile.holder_binding.mode,
+            access_mode: evaluation.access_mode(),
             policy_hash: evaluation
                 .subject_access
                 .as_ref()
@@ -447,10 +457,13 @@ async fn materialize_oid4vci_transaction(
     let commitment = match &transaction.authority {
         IssuanceAuthority::SubjectAccess => oid4vci_issuance_transaction_commitment(
             &transaction.transaction_id,
-            evidence,
-            configuration_id,
-            configuration,
-            &configuration_fingerprint,
+            Oid4vciIssuanceCommitmentContext {
+                evidence,
+                subject_access_config: &state.subject_access,
+                configuration_id,
+                configuration,
+                configuration_fingerprint: &configuration_fingerprint,
+            },
             &transaction.evaluation_id,
             &evaluation,
         ),
@@ -518,6 +531,22 @@ async fn materialize_oid4vci_transaction(
         return Err(Oid4vciWireError::InvalidProof);
     }
     let holder_id = validated_proof.holder_id.as_str();
+    let subject_ref = if principal.access_mode() == AccessMode::DelegatedAttestation {
+        let Some(first) = evaluation.results.first() else {
+            return Err(Oid4vciWireError::AccessDenied);
+        };
+        if first.target_ref.handle.is_empty()
+            || evaluation
+                .results
+                .iter()
+                .any(|result| result.target_ref.handle != first.target_ref.handle)
+        {
+            return Err(Oid4vciWireError::AccessDenied);
+        }
+        first.target_ref.handle.as_str()
+    } else {
+        holder_id
+    };
     let credential_id = state
         .credential_status
         .is_enabled()
@@ -539,7 +568,7 @@ async fn materialize_oid4vci_transaction(
             profile,
             &issuer,
             &evaluation.results,
-            holder_id,
+            subject_ref,
             Some(holder_id),
             iat,
             sd_jwt::IssueOptions {
@@ -759,6 +788,41 @@ pub(in crate::api) fn require_oid4vci_registry_client_authorization_details(
     .map_err(|_| EvidenceError::EvaluationBindingMismatch)
 }
 
+pub(in crate::api) fn oid4vci_representative_issuance_authorization_details(
+    evidence: &EvidenceConfig,
+    config: &SubjectAccessConfig,
+    configuration: &Oid4vciCredentialConfigurationConfig,
+    relationship: &SubjectAccessDelegatedRelationshipConfig,
+    target_id: &str,
+) -> Result<registry_notary_core::EvidenceAuthorizationDetails, EvidenceError> {
+    let mut details = oid4vci_issuance_authorization_details(evidence, config, configuration)?;
+    details.claims = details
+        .claims
+        .iter()
+        .map(|claim_ref| {
+            let claim = crate::find_claim(evidence, &claim_ref.id)
+                .map_err(|_| EvidenceError::InvalidRequest)?;
+            Ok(ClaimRef::with_version(&claim.id, &claim.version))
+        })
+        .collect::<Result<Vec<_>, EvidenceError>>()?;
+    let proof_claim = crate::find_claim(evidence, &relationship.proof_claim)
+        .map_err(|_| EvidenceError::InvalidRequest)?;
+    details.claims.push(ClaimRef::with_version(
+        &proof_claim.id,
+        &proof_claim.version,
+    ));
+    details.access_mode = Some(AccessMode::DelegatedAttestation);
+    details.target = Some(registry_notary_core::EvidenceAuthorizationTarget {
+        id_type: delegated_target_id_type(config, relationship).to_string(),
+        id: target_id.to_string(),
+    });
+    details.relationship = Some(registry_notary_core::EvidenceAuthorizationRelationship {
+        relationship_type: relationship.relationship_type.clone(),
+        proof_claim: relationship.proof_claim.clone(),
+    });
+    Ok(details)
+}
+
 pub(in crate::api) fn require_oid4vci_issuance_authorization_details(
     evidence: &EvidenceConfig,
     config: &SubjectAccessConfig,
@@ -782,7 +846,22 @@ pub(in crate::api) fn require_oid4vci_issuance_authorization_details(
             return Ok(());
         }
     };
-    let expected = oid4vci_issuance_authorization_details(evidence, config, configuration)?;
+    let expected = if let Some(representative) = configuration.representative_issuance.as_ref() {
+        let relationship = config
+            .delegation
+            .relationship(&representative.relationship)
+            .ok_or(EvidenceError::InvalidRequest)?;
+        oid4vci_representative_issuance_authorization_details(
+            evidence,
+            config,
+            configuration,
+            relationship,
+            "",
+        )?
+    } else {
+        oid4vci_issuance_authorization_details(evidence, config, configuration)?
+    };
+    let expected_mode = expected.access_mode.unwrap_or(AccessMode::SubjectBound);
     crate::authz_details::validate_scoped_authorization_details(
         details,
         &crate::authz_details::ScopedAuthorizationRequest {
@@ -792,7 +871,7 @@ pub(in crate::api) fn require_oid4vci_issuance_authorization_details(
             disclosure: expected.disclosure.as_deref().unwrap_or(""),
             format: expected.format.as_deref().unwrap_or(""),
             purpose: expected.purpose.as_deref().unwrap_or(""),
-            access_mode: AccessMode::SubjectBound,
+            access_mode: expected_mode,
             subject: Some(crate::authz_details::ScopedAuthorizationSubject {
                 binding_claim: config.subject_binding.token_claim.clone(),
                 id_type: config.subject_binding.id_type.clone(),
@@ -930,6 +1009,7 @@ pub(in crate::api) fn apply_stored_subject_access_access_mode(
 
 pub(in crate::api) fn derive_delegated_attestation_request_context(
     config: &SubjectAccessConfig,
+    evidence: &EvidenceConfig,
     keys: &SubjectAccessRateLimitKeys,
     principal: &EvidencePrincipal,
     request: &mut EvaluateRequest,
@@ -987,8 +1067,22 @@ pub(in crate::api) fn derive_delegated_attestation_request_context(
     // single value so the binding hash, the proof claim, and the dependent
     // claim provably read the same subject. No arbitrary caller-supplied target
     // context (extra identifiers, canonical id, attributes, profile) is trusted.
+    let mut subject_types = request.claims.iter().map(|claim| {
+        find_requested_claim(evidence, claim).map(|claim| claim.subject_type.as_str())
+    });
+    let target_entity_type = subject_types
+        .next()
+        .transpose()
+        .map_err(|_| subject_access_denied(SubjectAccessDenialCode::ClaimDenied))?
+        .ok_or_else(|| subject_access_denied(SubjectAccessDenialCode::ClaimDenied))?;
+    if subject_types.any(|subject_type| {
+        subject_type.is_err()
+            || subject_type.is_ok_and(|subject_type| subject_type != target_entity_type)
+    }) {
+        return Err(subject_access_denied(SubjectAccessDenialCode::ClaimDenied));
+    }
     request.target = Some(EvidenceEntity::from_subject_request(
-        "Person",
+        target_entity_type.to_string(),
         target_subject,
     ));
 

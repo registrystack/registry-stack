@@ -2265,6 +2265,8 @@ async fn postgres_v1_sensitive_restart_restore_probe() -> Result<(), Box<dyn std
                 pkce_verifier: format!("restart-{phase}-pkce-secret"),
                 nonce: format!("restart-{phase}-login-nonce"),
                 credential_configuration_id: format!("restart-{phase}-config"),
+                representative: None,
+                csrf_token: None,
             };
             assert_eq!(
                 sensitive
@@ -2394,6 +2396,8 @@ async fn assert_sensitive_adapter_contract(
         pkce_verifier: "adapter-pkce-secret".to_string(),
         nonce: "adapter-login-nonce".to_string(),
         credential_configuration_id: "adapter-config".to_string(),
+        representative: None,
+        csrf_token: None,
     };
     assert_eq!(
         sensitive

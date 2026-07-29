@@ -150,11 +150,11 @@
                 relationship_type: "guardian".to_string(),
                 proof_claim: "guardian-link-established".to_string(),
                 target_id_type: Some("civil_registration_id".to_string()),
+                max_proof_age_seconds: 300,
                 allowed_claims: vec!["dependent-person-is-alive".to_string()],
                 allowed_purposes: vec!["dependent_attestation".to_string()],
                 allowed_formats: vec![FORMAT_CLAIM_RESULT_JSON.to_string()],
                 allowed_disclosures: vec!["predicate".to_string()],
-                credential_profiles: Vec::new(),
             }],
         };
         config
@@ -832,6 +832,7 @@
             &bound_subject,
             configuration_id,
             &transaction_id,
+            None,
         )
         .await
         .expect("registry-backed issuance transaction prepares");

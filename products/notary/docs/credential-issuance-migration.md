@@ -33,13 +33,14 @@ OID4VCI projection:
   credential-capable subject-access allow-lists, and OID4VCI configurations.
 - Keep a source-free service evaluation-only by disabling credential issuance
   and omitting credential profiles and OID4VCI credential configurations.
-- Remove `credential_profiles` from every delegated relationship and from each
-  delegated dependent claim. Delegated self-attestation remains available for
-  evaluation and rendering, but neither direct nor OID4VCI credential issuance
-  accepts a delegated evaluation in 1.0.
-- If a dependent fact must become a credential, model a separate
-  registry-backed, non-delegated claim and bind that claim through
-  `subject_access.credential_profiles`.
+- Remove legacy `credential_profiles` entries from delegated relationships.
+  Representative OID4VCI issuance is configured on the credential
+  configuration instead and requires the digitally authenticated
+  representative ceremony, one named relationship, and live credential
+  status.
+- Keep other delegated claims evaluation-only. Direct issuance and OID4VCI
+  configurations without the representative ceremony reject delegated
+  evaluations.
 
 Configuration load rejects a mixed or one-sided binding. The diagnostic names
 the invalid credential claim binding and the required remediation.
@@ -91,7 +92,8 @@ change.
 
 1. Regenerate the project configuration and correct any credential-binding
    validation errors.
-2. Remove or replace source-free and delegated credential journeys. They may
+2. Remove or replace source-free credential journeys and delegated credential
+   journeys that do not use the representative OID4VCI ceremony. They may
    continue as evaluation and rendering journeys.
 3. Deploy compatible Relay and Notary configuration from one project
    generation.

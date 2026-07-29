@@ -903,14 +903,20 @@ pub(super) fn prepare_delegated_attestation_evaluate(
         &format,
     )?;
     let now = OffsetDateTime::now_utc();
-    let evaluation_expires_at = now
-        + time::Duration::seconds(
-            state.subject_access.token_policy.max_evaluation_age_seconds as i64,
-        );
+    let evaluation_expires_at =
+        now + time::Duration::seconds(relationship_config.max_proof_age_seconds as i64);
     let proof_claim_id = BoundedClaimId::new(relationship_config.proof_claim.clone())
         .map_err(|_| EvidenceError::InvalidRequest)?;
-    let delegated_claim_id =
-        BoundedClaimId::new(claim_id.id.clone()).map_err(|_| EvidenceError::InvalidRequest)?;
+    let claim_versions = requested_claim_versions(&request.claims)?;
+    let levels = build_claim_levels(evidence, &request.claims, &claim_versions)?;
+    let mut allowed_claim_ids = BTreeSet::new();
+    for allowed_claim_id in levels.into_iter().flatten() {
+        if allowed_claim_id != relationship_config.proof_claim {
+            allowed_claim_ids.insert(
+                BoundedClaimId::new(allowed_claim_id).map_err(|_| EvidenceError::InvalidRequest)?,
+            );
+        }
+    }
     let relationship_type = ConfigMetadata::new(relationship_config.relationship_type.clone())
         .map_err(|_| EvidenceError::InvalidRequest)?;
     let metadata = StoredSubjectAccessMetadata {
@@ -945,7 +951,7 @@ pub(super) fn prepare_delegated_attestation_evaluate(
     };
     let evaluation_capability = EvaluationCapability::DelegatedAttestation {
         proof_claim_id,
-        allowed_claim_ids: BTreeSet::from([delegated_claim_id]),
+        allowed_claim_ids,
         requester_subject_binding_hash,
         dependent_target_hash,
         relationship_type,
@@ -1217,11 +1223,15 @@ fn require_subject_access_stored_access_inner(
         }
     }
     require_subject_access_token_policy(&state.subject_access, principal)?;
-    let principal_hash = state
-        .subject_access_rate_keys
-        .principal(&principal.principal_id)
-        .map_err(|error| error.evidence_error())?;
-    if principal_hash != metadata.principal_hash {
+    let principal_matches = allow_token_envelope_transition
+        && principal.principal_id == metadata.principal_hash.as_str();
+    if !principal_matches
+        && state
+            .subject_access_rate_keys
+            .principal(&principal.principal_id)
+            .map_err(|error| error.evidence_error())?
+            != metadata.principal_hash
+    {
         return Err(EvidenceError::EvaluationBindingMismatch);
     }
     if metadata.subject_binding_claim.as_str() != state.subject_access.subject_binding.token_claim {
@@ -1291,7 +1301,11 @@ fn require_subject_access_stored_access_inner(
     // Delegated evaluations bind the requester subject over the (id_type, id)
     // pair (see prepare_delegated_attestation_evaluate); non-delegated
     // subject-access keeps the value-only binding byte-for-byte unchanged.
-    let subject_binding_hash = if metadata.access_mode == AccessMode::DelegatedAttestation {
+    let subject_binding_matches = allow_token_envelope_transition
+        && subject_binding_value == metadata.subject_binding_hash.as_str();
+    let subject_binding_hash = if subject_binding_matches {
+        metadata.subject_binding_hash.clone()
+    } else if metadata.access_mode == AccessMode::DelegatedAttestation {
         state
             .subject_access_rate_keys
             .delegated_subject_binding(
@@ -1357,7 +1371,16 @@ pub(super) fn require_delegated_stored_authorization_details(
     require_delegated_authorization_target_binding(details, metadata, keys)?;
     let proof_claim = find_requested_claim(evidence, &ClaimRef::from(proof_claim_id.as_str()))
         .map_err(|_| subject_access_denied(SubjectAccessDenialCode::DelegatedProofDenied))?;
-    let mut authorized_claims = evaluation.selected_claim_refs();
+    let mut authorized_claims = evaluation
+        .selected_claim_refs()
+        .into_iter()
+        .map(|selected| {
+            let claim = find_requested_claim(evidence, &selected).map_err(|_| {
+                subject_access_denied(SubjectAccessDenialCode::DelegatedClaimDenied)
+            })?;
+            Ok(ClaimRef::with_version(&claim.id, &claim.version))
+        })
+        .collect::<Result<Vec<_>, EvidenceError>>()?;
     let proof_ref = ClaimRef::with_version(&proof_claim.id, &proof_claim.version);
     if !authorized_claims.contains(&proof_ref) {
         authorized_claims.push(proof_ref);
@@ -1399,6 +1422,13 @@ pub(super) fn require_delegated_authorization_target_binding(
         .ok_or(EvidenceError::EvaluationBindingMismatch)?;
     if target.id.trim().is_empty() || target.id_type != metadata.subject_id_type.as_str() {
         return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    // The internal evaluation authorization carries the selected civil
+    // identifier so Relay can resolve the relationship. The wallet-facing
+    // Notary token carries only the committed HMAC handle. Both forms bind to
+    // the same stored value, but the raw target never crosses into the wallet.
+    if target.id == expected_hash.as_str() {
+        return Ok(());
     }
     let target_hash = keys
         .delegated_subject_binding(target.id_type.as_str(), target.id.as_str())

@@ -106,6 +106,106 @@ pre_authorized_code_ttl_seconds: 300
     config
 }
 
+#[cfg(feature = "registry-notary-cel")]
+pub(super) fn representative_preauth_config(
+    base_url: &str,
+    audit_path: &str,
+    esignet_issuer: &str,
+    esignet_jwks_uri: &str,
+    esignet_authorize_url: &str,
+    esignet_token_url: &str,
+) -> StandaloneRegistryNotaryConfig {
+    let mut config = subject_access_preauth_config(
+        base_url,
+        audit_path,
+        esignet_issuer,
+        esignet_jwks_uri,
+        esignet_authorize_url,
+        esignet_token_url,
+    );
+    let mut proof = config
+        .evidence
+        .claims
+        .pop()
+        .expect("base registry-backed claim exists");
+    proof.id = "authorized-representative".to_string();
+    proof.title = "Authorized representative".to_string();
+    proof.credential_profiles.clear();
+    let registry_notary_core::ClaimEvidenceMode::RegistryBacked { consultations } =
+        &mut proof.evidence_mode
+    else {
+        panic!("base claim is registry-backed");
+    };
+    for consultation in consultations.values_mut() {
+        consultation.profile.contract_hash = representative_test_relay_contract_hash();
+        consultation.inputs.insert(
+            "subject_id".to_string(),
+            registry_notary_core::RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.civil_registration_id".to_string(),
+            ),
+        );
+        consultation.inputs.insert(
+            "representative_id".to_string(),
+            registry_notary_core::RelayConsultationInput::RequesterIdentifier(
+                "request.requester.identifiers.national_id".to_string(),
+            ),
+        );
+    }
+    let mut credential_claim = proof.clone();
+    credential_claim.id = "represented-person-is-alive".to_string();
+    credential_claim.title = "Represented person is alive".to_string();
+    credential_claim.depends_on = vec![proof.id.clone()];
+    credential_claim.credential_profiles = vec!["civil_status_sd_jwt".to_string()];
+    config.evidence.claims = vec![proof, credential_claim];
+    config
+        .evidence
+        .credential_profiles
+        .get_mut("civil_status_sd_jwt")
+        .expect("credential profile exists")
+        .allowed_claims = vec!["represented-person-is-alive".to_string()];
+    config.subject_access.allowed_claims.clear();
+    config.subject_access.allowed_purposes.clear();
+    config.subject_access.allowed_formats.clear();
+    config.subject_access.allowed_disclosures.clear();
+    config.subject_access.delegation = serde_norway::from_str(
+        r#"
+enabled: true
+allowed_relationships:
+  - relationship_type: authorized-representative
+    proof_claim: authorized-representative
+    target_id_type: civil_registration_id
+    max_proof_age_seconds: 300
+    allowed_claims: [represented-person-is-alive]
+    allowed_purposes: [citizen_subject_access]
+    allowed_formats: [application/vnd.registry-notary.claim-result+json]
+    allowed_disclosures: [value]
+"#,
+    )
+    .expect("representative delegation policy parses");
+    let credential = config
+        .oid4vci
+        .credential_configurations
+        .remove("person_is_alive_sd_jwt")
+        .expect("base credential configuration exists");
+    let mut credential = credential;
+    credential.claim_id = Some("represented-person-is-alive".to_string());
+    credential.representative_issuance =
+        Some(registry_notary_core::Oid4vciRepresentativeIssuanceConfig {
+            ceremony: registry_notary_core::Oid4vciRepresentativeIssuanceCeremony::DigitallyAuthenticatedRepresentative,
+            relationship: "authorized-representative".to_string(),
+        });
+    config
+        .oid4vci
+        .credential_configurations
+        .insert("represented_person_is_alive_sd_jwt".to_string(), credential);
+    config.credential_status = registry_notary_core::CredentialStatusConfig {
+        enabled: true,
+        base_url: NOTARY_ISSUER.to_string(),
+        ..registry_notary_core::CredentialStatusConfig::default()
+    };
+    config
+}
+
 /// Extract a query parameter from a URL.
 pub(super) fn query_param(url: &str, name: &str) -> Option<String> {
     let query = url.split_once('?')?.1;
@@ -213,6 +313,95 @@ pub(super) async fn drive_offer_to_page(
         .await;
     callback.assert_status_ok();
     let html = callback.text();
+    let offer_uri = extract_between(&html, "href=\"", "\"").expect("offer href present");
+    let offer_json =
+        query_param(&offer_uri, "credential_offer").expect("offer carries credential_offer");
+    let offer: Value = serde_json::from_str(&offer_json).expect("offer is JSON");
+    let code = offer["grants"]["urn:ietf:params:oauth:grant-type:pre-authorized_code"]
+        ["pre-authorized_code"]
+        .as_str()
+        .expect("offer carries pre-authorized_code")
+        .to_string();
+    let pin = extract_between(&html, "id=\"tx-code\">", "<");
+    PreauthOfferPage {
+        code,
+        pin,
+        offer,
+        html,
+    }
+}
+
+/// Drive the authenticated representative ceremony through target selection.
+#[cfg(feature = "registry-notary-cel")]
+pub(super) async fn drive_representative_offer_to_page(
+    server: &TestServer,
+    token_upstream: &MockHttpUpstream,
+    idp: &MockIdp,
+    representative_id: &str,
+    target_id: &str,
+) -> PreauthOfferPage {
+    let start = server
+        .get("/oid4vci/offer/start?credential_configuration_id=represented_person_is_alive_sd_jwt")
+        .await;
+    start.assert_status(StatusCode::SEE_OTHER);
+    let location = start
+        .headers()
+        .get("location")
+        .expect("offer start redirects")
+        .to_str()
+        .expect("location is valid")
+        .to_string();
+    let state = query_param(&location, "state").expect("redirect carries state");
+    let nonce = query_param(&location, "nonce").expect("redirect carries nonce");
+
+    token_upstream
+        .expect("POST", "/token")
+        .respond_json(
+            200,
+            json!({
+                "access_token": "esignet-access-token",
+                "token_type": "Bearer",
+                "id_token": esignet_id_token(idp, &nonce, representative_id),
+                "expires_in": 300,
+            }),
+        )
+        .await;
+    let callback = server
+        .get(&format!(
+            "/oid4vci/offer/callback?code=esignet-code-123&state={state}"
+        ))
+        .await;
+    callback.assert_status_ok();
+    assert_eq!(
+        callback
+            .headers()
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
+    let selection_html = callback.text();
+    let selection_state =
+        extract_between(&selection_html, "name=\"selection_state\" value=\"", "\"")
+            .expect("selection state is present");
+    let csrf_token = extract_between(&selection_html, "name=\"csrf_token\" value=\"", "\"")
+        .expect("CSRF token is present");
+    assert!(
+        !selection_html.contains("openid-credential-offer"),
+        "the callback must not mint an offer before target selection and proof"
+    );
+
+    let selected = server
+        .post("/oid4vci/offer/representative")
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .bytes(Bytes::from(format!(
+            "selection_state={}&csrf_token={}&target_id={}",
+            urlencode(&selection_state),
+            urlencode(&csrf_token),
+            urlencode(target_id),
+        )))
+        .await;
+    selected.assert_status_ok();
+    let html = selected.text();
     let offer_uri = extract_between(&html, "href=\"", "\"").expect("offer href present");
     let offer_json =
         query_param(&offer_uri, "credential_offer").expect("offer carries credential_offer");

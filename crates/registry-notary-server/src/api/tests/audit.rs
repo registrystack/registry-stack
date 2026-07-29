@@ -247,6 +247,7 @@ fn credential_audit_context_links_stored_target_and_requester_refs() {
         SubjectAccessCredentialAuditDetails {
             profile_id: "person_is_alive_sd_jwt",
             holder_binding_mode: "did",
+            access_mode: AccessMode::SubjectBound,
             policy_hash: None,
             purposes: Some(vec!["citizen_subject_access".to_string()]),
             protocol: Some("openid4vci"),
@@ -261,6 +262,7 @@ fn credential_audit_context_links_stored_target_and_requester_refs() {
         .expect("audit context is attached");
     assert_eq!(audit.target_type.as_deref(), Some("Person"));
     assert_eq!(audit.requester_type.as_deref(), Some("Person"));
+    assert_eq!(audit.access_mode, Some(AccessMode::SubjectBound));
     assert!(audit.target_ref_hash.is_some());
     assert!(audit.requester_ref_hash.is_some());
 }
