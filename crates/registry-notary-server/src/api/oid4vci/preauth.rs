@@ -121,18 +121,22 @@ async fn oid4vci_create_registry_offer_inner(
         _ => return evidence_error_response(EvidenceError::EvaluationNotFound),
     };
     let configuration_claim_ids = configuration.credential_claim_ids();
+    let configuration_claim_refs = oid4vci_credential_claim_refs(configuration);
     let result_claim_ids = evaluation
         .results
         .iter()
-        .map(|result| result.claim_id.as_str())
+        .map(|result| result.claim_id.clone())
         .collect::<Vec<_>>();
-    if evaluation.claim_ids != configuration_claim_ids
-        || result_claim_ids
-            != configuration_claim_ids
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-        || evaluation.disclosure != DisclosureProfile::Value.as_str()
+    if !crate::authz_details::exact_unique_string_set(
+        &evaluation.claim_ids,
+        &configuration_claim_ids,
+    ) || !crate::authz_details::exact_unique_string_set(
+        &result_claim_ids,
+        &configuration_claim_ids,
+    ) || !crate::authz_details::exact_unique_claim_ref_set(
+        &evaluation.selected_claim_refs(),
+        &configuration_claim_refs,
+    ) || evaluation.disclosure != DisclosureProfile::Value.as_str()
         || evaluation.format != FORMAT_CLAIM_RESULT_JSON
         || evaluation.results.is_empty()
         || evaluation.results.iter().any(|result| {
@@ -204,18 +208,24 @@ async fn oid4vci_create_registry_offer_inner(
     let Some(authorized_target) = details.target.as_ref() else {
         return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
     };
-    let authorized_target_ref = match target_ref_view(
+    let Some(stored_target_binding) = evaluation
+        .issuance_provenance
+        .as_ref()
+        .map(|provenance| provenance.authorization_target_binding.as_str())
+        .filter(|binding| !binding.is_empty())
+    else {
+        return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+    };
+    let authorized_target_binding = match issuance_authorization_target_binding(
         &state.subject_access_rate_keys,
-        &EvidenceEntity::with_identifier(
-            target_ref.entity_type.clone(),
-            authorized_target.id_type.clone(),
-            authorized_target.id.clone(),
-        ),
+        target_ref,
+        &authorized_target.id_type,
+        &authorized_target.id,
     ) {
-        Ok(target_ref) => target_ref,
+        Ok(binding) => binding,
         Err(error) => return evidence_error_response(error),
     };
-    if !same_target_ref(&authorized_target_ref, target_ref)
+    if authorized_target_binding != stored_target_binding
         || crate::authz_details::validate_scoped_authorization_details(
             details,
             &crate::authz_details::ScopedAuthorizationRequest {
@@ -280,6 +290,61 @@ async fn oid4vci_create_registry_offer_inner(
     })) {
         Ok(hash) => hash,
         Err(error) => return evidence_error_response(error),
+    };
+    match preauth
+        .preauthorization_state()
+        .registry_client_offer_preflight(
+            &request.evaluation_id,
+            &principal.principal_id,
+            &idempotency_key_hash,
+            &canonical_request_hash,
+        )
+        .await
+    {
+        Ok(RegistryClientOfferPreflightOutcome::Available) => {}
+        Ok(RegistryClientOfferPreflightOutcome::Replayed(response)) => {
+            state
+                .metrics
+                .record_credential("openid4vci_registry_offer", "replayed");
+            return registry_client_offer_success_response(
+                response,
+                &state.subject_access_rate_keys,
+                "registry_offer_replayed",
+                &request.evaluation_id,
+                &evaluation,
+                configuration_id,
+                profile_id,
+                &profile.holder_binding.mode,
+                target_ref,
+            );
+        }
+        Ok(RegistryClientOfferPreflightOutcome::IdempotencyConflict)
+        | Ok(RegistryClientOfferPreflightOutcome::EvaluationConsumed) => {
+            return registry_offer_problem(StatusCode::CONFLICT, "offer_conflict");
+        }
+        Err(_) => {
+            return registry_offer_problem(StatusCode::SERVICE_UNAVAILABLE, "offer_unavailable");
+        }
+    }
+    if let Err(error) = state
+        .machine_quota_limiter
+        .check_and_consume(&principal.principal_id, 1)
+        .await
+    {
+        return evidence_error_response(EvidenceError::MachineQuotaExceeded {
+            retry_after_seconds: error.retry_after_seconds,
+        });
+    }
+    let (quota_principal_hash, _quota_limit, quota_cost) = match state
+        .machine_quota_limiter
+        .batch_reservation_parameters(&principal.principal_id, 1)
+    {
+        Ok(parameters) => parameters,
+        Err(error) => {
+            return evidence_error_response(EvidenceError::MachineQuotaExceeded {
+                retry_after_seconds: error.retry_after_seconds,
+            })
+        }
     };
     let transaction_id = match generate_opaque_token() {
         Ok(transaction_id) => transaction_id,
@@ -384,17 +449,6 @@ async fn oid4vci_create_registry_offer_inner(
         tx_code: Some(tx_code.clone()),
         expires_at: format_time(code_expires_at),
     };
-    let (quota_principal_hash, quota_limit, quota_cost) = match state
-        .machine_quota_limiter
-        .batch_reservation_parameters(&principal.principal_id, 1)
-    {
-        Ok(parameters) => parameters,
-        Err(error) => {
-            return evidence_error_response(EvidenceError::MachineQuotaExceeded {
-                retry_after_seconds: error.retry_after_seconds,
-            })
-        }
-    };
     let audit_evaluation_id = request.evaluation_id.clone();
     let reservation = RegistryClientOfferReservation {
         transaction_id,
@@ -412,7 +466,9 @@ async fn oid4vci_create_registry_offer_inner(
         response,
         retention_expires_at: evaluation_expires_at,
         quota_principal_hash,
-        quota_limit,
+        // Quota was charged before signer work. The atomic final reservation
+        // must not debit the same request a second time.
+        quota_limit: None,
         quota_cost,
     };
     let (response, audit_decision) = match preauth
@@ -450,9 +506,8 @@ async fn oid4vci_create_registry_offer_inner(
             return registry_offer_problem(StatusCode::SERVICE_UNAVAILABLE, "offer_unavailable");
         }
     };
-    let mut response = Json(response).into_response();
-    if let Err(error) = attach_registry_client_offer_audit(
-        &mut response,
+    registry_client_offer_success_response(
+        response,
         &state.subject_access_rate_keys,
         audit_decision,
         &audit_evaluation_id,
@@ -461,10 +516,7 @@ async fn oid4vci_create_registry_offer_inner(
         profile_id,
         &profile.holder_binding.mode,
         target_ref,
-    ) {
-        return evidence_error_response(error);
-    }
-    response
+    )
 }
 
 pub(in crate::api) fn same_target_ref(left: &TargetRefView, right: &TargetRefView) -> bool {
@@ -498,6 +550,35 @@ fn registry_offer_problem(status: StatusCode, code: &'static str) -> Response {
         if let Ok(value) = HeaderValue::from_str(request_id.as_str()) {
             response.headers_mut().insert("x-request-id", value);
         }
+    }
+    response
+}
+
+#[allow(clippy::too_many_arguments)]
+fn registry_client_offer_success_response(
+    response: RegistryClientOfferResponse,
+    keys: &SubjectAccessRateLimitKeys,
+    audit_decision: &str,
+    evaluation_id: &str,
+    evaluation: &registry_notary_core::StoredEvaluation,
+    configuration_id: &str,
+    profile_id: &str,
+    holder_binding_mode: &str,
+    target_ref: &TargetRefView,
+) -> Response {
+    let mut response = Json(response).into_response();
+    if let Err(error) = attach_registry_client_offer_audit(
+        &mut response,
+        keys,
+        audit_decision,
+        evaluation_id,
+        evaluation,
+        configuration_id,
+        profile_id,
+        holder_binding_mode,
+        target_ref,
+    ) {
+        return evidence_error_response(error);
     }
     response
 }
@@ -1323,63 +1404,6 @@ pub(in crate::api) async fn oid4vci_token(
         )
         .await;
     };
-    let transaction_code = if tx_code_required {
-        // Cap wrong-PIN attempts per code (brute-force guard). A locked code
-        // (attempts over the cap) is rejected before the PIN compare.
-        if check_tx_code_attempt(&state, code).await.is_err() {
-            return token_error_after_invalid_attempt(
-                &state,
-                &preauth,
-                path,
-                &client_address,
-                configuration_id.as_deref(),
-                TokenWireError::SlowDown,
-            )
-            .await;
-        }
-        let tx_code = request.tx_code.as_deref().unwrap_or("");
-        match preauth
-            .preauthorization_state()
-            .verify_transaction_code(&jti, tx_code)
-            .await
-        {
-            Ok(Some(proof)) => Some(proof),
-            Ok(None) => {
-                return token_error_after_invalid_attempt(
-                    &state,
-                    &preauth,
-                    path,
-                    &client_address,
-                    configuration_id.as_deref(),
-                    TokenWireError::InvalidGrant,
-                )
-                .await;
-            }
-            Err(_) => {
-                return token_error_with_audit(
-                    &preauth,
-                    path,
-                    configuration_id.as_deref(),
-                    SubjectAccessDenialCode::OperationDenied,
-                    TokenWireError::ServerError,
-                )
-                .await;
-            }
-        }
-    } else {
-        None
-    };
-    let Some(bound_subject) = bound_subject_from_code(&verified, &state) else {
-        return token_error_after_invalid_attempt(
-            &state,
-            &preauth,
-            path,
-            &client_address,
-            configuration_id.as_deref(),
-            TokenWireError::InvalidGrant,
-        )
-        .await;
-    };
     let Some(configuration_id) = configuration_id else {
         return token_error_after_invalid_attempt(
             &state,
@@ -1439,16 +1463,16 @@ pub(in crate::api) async fn oid4vci_token(
         )
         .await;
     }
-    let transaction = match preauth
+    let live_transaction = match preauth
         .preauthorization_state()
         .transaction(transaction_id)
         .await
     {
-        Ok(Some(transaction))
-            if transaction.commitment == transaction_commitment
-                && transaction.credential_configuration_id == *configuration_id =>
+        Ok(Some(live))
+            if live.transaction.commitment == transaction_commitment
+                && live.transaction.credential_configuration_id == *configuration_id =>
         {
-            transaction
+            live
         }
         _ => {
             return token_error_after_invalid_attempt(
@@ -1462,7 +1486,96 @@ pub(in crate::api) async fn oid4vci_token(
             .await;
         }
     };
-    let transaction_access_mode = issuance_authority_access_mode(&transaction.authority);
+    let transaction_access_mode =
+        issuance_authority_access_mode(&live_transaction.transaction.authority);
+    let access_token_exp = (now + preauth.access_token_ttl_seconds() as i64)
+        .min(live_transaction.expires_at.unix_timestamp());
+    let Ok(access_token_expires_in) = u64::try_from(access_token_exp - now) else {
+        return token_error_after_invalid_attempt_with_access_mode(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            Some(configuration_id),
+            transaction_access_mode,
+            TokenWireError::InvalidGrant,
+        )
+        .await;
+    };
+    if access_token_expires_in == 0 {
+        return token_error_after_invalid_attempt_with_access_mode(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            Some(configuration_id),
+            transaction_access_mode,
+            TokenWireError::InvalidGrant,
+        )
+        .await;
+    }
+    let transaction = live_transaction.transaction;
+    let transaction_code = if tx_code_required {
+        // Cap wrong-PIN attempts per code (brute-force guard). A locked code
+        // (attempts over the cap) is rejected before the PIN compare.
+        if check_tx_code_attempt(&state, code).await.is_err() {
+            return token_error_after_invalid_attempt_with_access_mode(
+                &state,
+                &preauth,
+                path,
+                &client_address,
+                Some(configuration_id),
+                transaction_access_mode,
+                TokenWireError::SlowDown,
+            )
+            .await;
+        }
+        let tx_code = request.tx_code.as_deref().unwrap_or("");
+        match preauth
+            .preauthorization_state()
+            .verify_transaction_code(&jti, tx_code)
+            .await
+        {
+            Ok(Some(proof)) => Some(proof),
+            Ok(None) => {
+                return token_error_after_invalid_attempt_with_access_mode(
+                    &state,
+                    &preauth,
+                    path,
+                    &client_address,
+                    Some(configuration_id),
+                    transaction_access_mode,
+                    TokenWireError::InvalidGrant,
+                )
+                .await;
+            }
+            Err(_) => {
+                return token_error_with_audit_access_mode(
+                    &preauth,
+                    path,
+                    Some(configuration_id),
+                    SubjectAccessDenialCode::OperationDenied,
+                    transaction_access_mode,
+                    TokenWireError::ServerError,
+                )
+                .await;
+            }
+        }
+    } else {
+        None
+    };
+    let Some(bound_subject) = bound_subject_from_code(&verified, &state) else {
+        return token_error_after_invalid_attempt_with_access_mode(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            Some(configuration_id),
+            transaction_access_mode,
+            TokenWireError::InvalidGrant,
+        )
+        .await;
+    };
     let mut bound_subject = bound_subject;
     add_scope_if_missing(&mut bound_subject.scopes, &configuration.scope);
     let (authorization_detail, actor) = match &transaction.authority {
@@ -1622,7 +1735,7 @@ pub(in crate::api) async fn oid4vci_token(
         confirmation: None,
         actor,
         iat: now,
-        exp: now + preauth.access_token_ttl_seconds() as i64,
+        exp: access_token_exp,
     };
     let access_token = match mint_access_token(
         preauth.access_token_signer(),
@@ -1667,7 +1780,7 @@ pub(in crate::api) async fn oid4vci_token(
     Json(Oid4vciTokenResponse {
         access_token: access_token.compact,
         token_type: "Bearer".to_string(),
-        expires_in: Some(preauth.access_token_ttl_seconds()),
+        expires_in: Some(access_token_expires_in),
         c_nonce: Some(c_nonce),
         c_nonce_expires_in: state
             .oid4vci
@@ -2073,13 +2186,13 @@ async fn token_error_with_audit_access_mode(
     error: TokenWireError,
 ) -> Response {
     let response = token_error_response(error);
-    let mut audit = token_error_audit_event(
+    let audit = token_error_audit_event_with_access_mode(
         path,
         response.status().as_u16(),
         credential_configuration_id,
         denial_code,
+        access_mode,
     );
-    audit.access_mode = Some(access_mode);
     if preauth.emit_audit(&audit).await.is_err() {
         return token_error_after_audit_result(response, true);
     }
@@ -2095,6 +2208,18 @@ pub(in crate::api) fn token_error_after_audit_result(
     } else {
         response
     }
+}
+
+pub(in crate::api) fn token_error_audit_event_with_access_mode(
+    path: &str,
+    status: u16,
+    credential_configuration_id: Option<&str>,
+    denial_code: SubjectAccessDenialCode,
+    access_mode: AccessMode,
+) -> EvidenceAuditEvent {
+    let mut audit = token_error_audit_event(path, status, credential_configuration_id, denial_code);
+    audit.access_mode = Some(access_mode);
+    audit
 }
 
 pub(in crate::api) fn token_error_audit_event(

@@ -2413,7 +2413,7 @@ mod promotion_adapter_tests {
         // intentional review pins. Adding or changing a published path without
         // updating its closed mapping and reviewed revision fails this test and
         // `project_promotion_projection`.
-        assert_eq!(index.by_path().len(), 681);
+        assert_eq!(index.by_path().len(), 683);
         let mapped = index
             .by_path()
             .keys()

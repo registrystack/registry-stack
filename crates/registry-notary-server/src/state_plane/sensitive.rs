@@ -25,9 +25,10 @@ use super::{NotaryPostgresStatePlaneError, NotaryPostgresStatePlaneRuntime};
 use crate::{
     preauth_state::{
         decode_hash_uri, validate_registry_client_offer_structure, CredentialMaterialization,
-        IssuanceTransaction, LoginState, PreauthorizationStateError,
-        RegistryClientOfferReservation, RegistryClientOfferReservationOutcome,
-        RegistryClientOfferResponse, VerifiedTransactionCode,
+        IssuanceTransaction, LiveIssuanceTransaction, LoginState, PreauthorizationStateError,
+        RegistryClientOfferPreflightOutcome, RegistryClientOfferReservation,
+        RegistryClientOfferReservationOutcome, RegistryClientOfferResponse,
+        VerifiedTransactionCode,
     },
     replay::{replay_identifier_hash, replay_scope_hash},
 };
@@ -449,6 +450,67 @@ impl PostgresSensitiveState {
         }
     }
 
+    pub(crate) async fn registry_client_offer_preflight(
+        &self,
+        evaluation_id: &str,
+        evaluation_client_id: &str,
+        idempotency_key_hash: &str,
+        canonical_request_hash: &str,
+    ) -> Result<RegistryClientOfferPreflightOutcome, PreauthorizationStateError> {
+        if evaluation_id.is_empty() || evaluation_client_id.is_empty() {
+            return Err(PreauthorizationStateError::Unavailable);
+        }
+        let idempotency_hash = decode_hash_uri(idempotency_key_hash, "hmac-sha256:")?;
+        let request_hash = decode_hash_uri(canonical_request_hash, "sha256:")?;
+        let evaluation_hash = self.keys.identifier_hash_fields(
+            EVALUATION_ISSUANCE_CONTEXT,
+            &[evaluation_id.as_bytes(), evaluation_client_id.as_bytes()],
+        );
+        let session = self
+            .runtime
+            .open_domain_session()
+            .await
+            .map_err(SensitiveStateError::from)?;
+        let row = session
+            .run_operation(session.client().query_one(
+                "SELECT * FROM registry_notary_api.registry_client_offer_preflight_v1(\
+                     $1::bytea, $2::bytea, $3::bytea, $4::bytea)",
+                &[
+                    &&idempotency_hash[..],
+                    &&request_hash[..],
+                    &&evaluation_hash[..],
+                    &&self.keys.key_id[..],
+                ],
+            ))
+            .await
+            .map_err(SensitiveStateError::from)?;
+        match row.get::<_, i16>("outcome") {
+            1 => Ok(RegistryClientOfferPreflightOutcome::Available),
+            2 => {
+                let key_id: Vec<u8> = row.get("key_id");
+                if key_id.ct_eq(&self.keys.key_id).unwrap_u8() != 1 {
+                    return Err(SensitiveStateError::InvalidStoredRecord.into());
+                }
+                let retention_expires_at: OffsetDateTime = row.get("retention_expires_at");
+                let nonce: Vec<u8> = row.get("response_aead_nonce");
+                let mut ciphertext = Zeroizing::new(row.get::<_, Vec<u8>>("response_ciphertext"));
+                let aad = registry_client_offer_response_aad(
+                    &idempotency_hash,
+                    &request_hash,
+                    &key_id,
+                    retention_expires_at,
+                )?;
+                let plaintext = open(&self.keys.aead, &aad, &nonce, &mut ciphertext)?;
+                let response: RegistryClientOfferResponse = serde_json::from_slice(plaintext)
+                    .map_err(|_| SensitiveStateError::InvalidStoredRecord)?;
+                Ok(RegistryClientOfferPreflightOutcome::Replayed(response))
+            }
+            0 => Ok(RegistryClientOfferPreflightOutcome::IdempotencyConflict),
+            -2 => Ok(RegistryClientOfferPreflightOutcome::EvaluationConsumed),
+            _ => Err(SensitiveStateError::InvalidStoredRecord.into()),
+        }
+    }
+
     pub(crate) async fn reserve_evaluation_issuance(
         &self,
         evaluation_id: &str,
@@ -494,7 +556,7 @@ impl PostgresSensitiveState {
     pub(crate) async fn issuance_transaction(
         &self,
         transaction_id: &str,
-    ) -> Result<Option<IssuanceTransaction>, SensitiveStateError> {
+    ) -> Result<Option<LiveIssuanceTransaction>, SensitiveStateError> {
         let transaction_hash = self
             .keys
             .identifier_hash(ISSUANCE_TRANSACTION_CONTEXT, transaction_id);
@@ -505,8 +567,13 @@ impl PostgresSensitiveState {
                 &[&&transaction_hash[..]],
             ))
             .await?;
-        row.map(|row| self.decrypt_issuance_transaction(&transaction_hash, &row))
-            .transpose()
+        row.map(|row| {
+            Ok(LiveIssuanceTransaction {
+                transaction: self.decrypt_issuance_transaction(&transaction_hash, &row)?,
+                expires_at: row.get("expires_at"),
+            })
+        })
+        .transpose()
     }
 
     pub(crate) async fn bind_issuance_nonce(

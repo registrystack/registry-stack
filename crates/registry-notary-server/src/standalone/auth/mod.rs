@@ -43,6 +43,8 @@ pub(super) struct OidcAuthenticator {
     assurance_claim_source: SubjectAccessAssuranceClaimSource,
     userinfo_endpoint: Option<String>,
     userinfo_issuers: Vec<String>,
+    citizen_client_ids: Vec<String>,
+    citizen_audiences: Vec<String>,
     /// Second, separately-keyed trust anchor for the Notary's own issuer
     /// (the pre-authorized-code access tokens). `None` unless self-issuance
     /// is enabled. The unverified issuer is used only to select this verifier;
@@ -233,6 +235,22 @@ impl OidcAuthenticator {
             .enabled
             .then(|| config.subject_access.subject_binding.token_claim.clone())
             .filter(|claim| !claim.is_empty());
+        let (citizen_client_ids, citizen_audiences) = if config.subject_access.enabled {
+            (
+                config
+                    .subject_access
+                    .citizen_clients
+                    .allowed_client_ids
+                    .clone(),
+                config
+                    .subject_access
+                    .citizen_clients
+                    .allowed_audiences
+                    .clone(),
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let notary_anchor = Authenticator::build_notary_anchor(
             config,
             oidc.principal_claim.clone(),
@@ -247,6 +265,8 @@ impl OidcAuthenticator {
             assurance_claim_source: config.subject_access.token_policy.assurance_claim_source,
             userinfo_endpoint: oidc.userinfo_endpoint.clone(),
             userinfo_issuers,
+            citizen_client_ids,
+            citizen_audiences,
             notary_anchor,
         })
     }
@@ -281,6 +301,8 @@ impl OidcAuthenticator {
             self.assurance_claim_source,
             self.userinfo_endpoint.as_deref(),
             &self.userinfo_issuers,
+            &self.citizen_client_ids,
+            &self.citizen_audiences,
         )
         .await
     }

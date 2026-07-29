@@ -1857,6 +1857,16 @@ fn registry_offer_test_evidence() -> EvidenceConfig {
         .expect("credential profile exists")
         .disclosure
         .allowed = vec![DisclosureProfile::Value.as_str().to_string()];
+    let mut registered = evidence.claims[0].clone();
+    registered.id = "person-is-registered".to_string();
+    registered.title = "Person is registered".to_string();
+    evidence.claims.push(registered);
+    evidence
+        .credential_profiles
+        .get_mut("civil_status_sd_jwt")
+        .expect("credential profile exists")
+        .allowed_claims
+        .push("person-is-registered".to_string());
     evidence
 }
 
@@ -1865,6 +1875,25 @@ fn registry_offer_test_oid4vci() -> Oid4vciConfig {
     let mut oid4vci = oid4vci_config();
     oid4vci.pre_authorized_code.enabled = true;
     oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
+    let configuration = oid4vci
+        .credential_configurations
+        .get_mut(REGISTRY_OFFER_CONFIGURATION_ID)
+        .expect("registry offer credential configuration exists");
+    configuration.claim_id = None;
+    configuration.claims = vec![
+        registry_notary_core::Oid4vciCredentialClaimConfig {
+            id: "person-is-alive".to_string(),
+            output_path: vec!["person_alive".to_string()],
+            display_name: "Person is alive".to_string(),
+            sd: "always".to_string(),
+        },
+        registry_notary_core::Oid4vciCredentialClaimConfig {
+            id: "person-is-registered".to_string(),
+            output_path: vec!["person_registered".to_string()],
+            display_name: "Person is registered".to_string(),
+            sd: "always".to_string(),
+        },
+    ];
     oid4vci
 }
 
@@ -1899,7 +1928,12 @@ fn registry_offer_authorization_details(
             .to_string(),
         actions: vec!["create_credential_offer".to_string()],
         locations: vec![state.evidence.service_id.clone()],
-        claims: vec![ClaimRef::from("person-is-alive")],
+        // Deliberately reverse configuration order. Authorization is an exact
+        // set; configuration order is authoritative only for projection.
+        claims: vec![
+            ClaimRef::from("person-is-registered"),
+            ClaimRef::from("person-is-alive"),
+        ],
         disclosure: Some(DisclosureProfile::Value.as_str().to_string()),
         format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
         purpose: Some(REGISTRY_OFFER_PURPOSE.to_string()),
@@ -1924,11 +1958,21 @@ fn registry_offer_headers(idempotency_key: &str) -> HeaderMap {
 
 #[cfg(feature = "registry-notary-cel")]
 async fn registry_offer_fixture() -> RegistryOfferTestFixture {
-    let evidence = Arc::new(registry_offer_test_evidence());
+    registry_offer_fixture_with(
+        registry_offer_test_evidence(),
+        oid4vci_test_preauth_runtime(registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP),
+    )
+    .await
+}
+
+#[cfg(feature = "registry-notary-cel")]
+async fn registry_offer_fixture_with(
+    evidence: EvidenceConfig,
+    preauth: Arc<PreAuthRuntime>,
+) -> RegistryOfferTestFixture {
+    let evidence = Arc::new(evidence);
     let oid4vci = Arc::new(registry_offer_test_oid4vci());
     let store = Arc::new(EvidenceStore::default());
-    let preauth =
-        oid4vci_test_preauth_runtime(registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP);
     let mut subject_access = subject_access_config();
     subject_access
         .rate_limits
@@ -1959,6 +2003,23 @@ async fn registry_offer_fixture() -> RegistryOfferTestFixture {
 #[cfg(feature = "registry-notary-cel")]
 async fn registry_offer_evaluate(fixture: &RegistryOfferTestFixture, target_id: &str) -> String {
     let mut request = evaluate_request(target_id);
+    request.claims = vec![
+        ClaimRef::from("person-is-registered"),
+        ClaimRef::from("person-is-alive"),
+    ];
+    let target = request.target.as_mut().expect("evaluation target exists");
+    target.id = Some(format!("registry-record:{target_id}"));
+    target
+        .identifiers
+        .push(registry_notary_core::EvidenceIdentifier {
+            scheme: "registry_file_number".to_string(),
+            value: format!("FILE-{target_id}"),
+            issuer: Some("civil-registry".to_string()),
+            country: Some("ZZ".to_string()),
+        });
+    target
+        .attributes
+        .insert("registry_region".to_string(), json!("central"));
     request.disclosure = Some(DisclosureProfile::Value.as_str().to_string());
     request.purpose = Some(REGISTRY_OFFER_PURPOSE.to_string());
     let response = evaluate(
@@ -2192,6 +2253,19 @@ fn oid4vci_token_audit_mode_follows_issuance_authority_without_exposing_values()
 async fn oid4vci_registry_offer_completes_machine_evaluation_to_wallet_credential() {
     let fixture = registry_offer_fixture().await;
     let evaluation_id = registry_offer_evaluate(&fixture, "NAT-REGISTRAR-001").await;
+    let mut short_evaluation = fixture
+        .store
+        .get(&evaluation_id, REGISTRY_OFFER_PRINCIPAL_ID)
+        .await
+        .expect("stored evaluation read succeeds")
+        .expect("stored evaluation exists");
+    short_evaluation.expires_at =
+        format_time(OffsetDateTime::now_utc() + time::Duration::seconds(90));
+    fixture
+        .store
+        .insert(short_evaluation)
+        .await
+        .expect("short evaluation lifetime fixture writes");
     let mut principal = fixture.principal.clone();
     principal.authorization_details = Some(registry_offer_authorization_details(
         &fixture.state,
@@ -2272,6 +2346,18 @@ async fn oid4vci_registry_offer_completes_machine_evaluation_to_wallet_credentia
         serde_json::from_slice(&wrong_pin_body).expect("wrong-PIN response parses");
     assert_eq!(wrong_pin_body["error"], "invalid_grant");
     assert!(!wrong_pin_body.to_string().contains(tx_code));
+    assert_eq!(
+        token_error_audit_event_with_access_mode(
+            "/oid4vci/token",
+            StatusCode::BAD_REQUEST.as_u16(),
+            Some(REGISTRY_OFFER_CONFIGURATION_ID),
+            SubjectAccessDenialCode::InvalidToken,
+            AccessMode::MachineClient,
+        )
+        .access_mode,
+        Some(AccessMode::MachineClient),
+        "the wrong-PIN audit path retains the loaded registry transaction mode",
+    );
 
     let token_response = oid4vci_token(
         Some(Extension(Arc::clone(&fixture.state))),
@@ -2285,6 +2371,13 @@ async fn oid4vci_registry_offer_completes_machine_evaluation_to_wallet_credentia
         .await
         .expect("token response reads");
     let token_body: Value = serde_json::from_slice(&token_body).expect("token response parses");
+    let expires_in = token_body["expires_in"]
+        .as_u64()
+        .expect("access token lifetime is returned");
+    assert!(
+        (1..=90).contains(&expires_in),
+        "access token lifetime is capped to the authoritative transaction remainder",
+    );
     let access_token = token_body["access_token"]
         .as_str()
         .expect("access token is returned");
@@ -2303,6 +2396,18 @@ async fn oid4vci_registry_offer_completes_machine_evaluation_to_wallet_credentia
         OffsetDateTime::now_utc().unix_timestamp(),
     )
     .expect("access token verifies");
+    assert_eq!(
+        u64::try_from(
+            verified_access.payload["exp"]
+                .as_i64()
+                .expect("access token exp exists")
+                - verified_access.payload["iat"]
+                    .as_i64()
+                    .expect("access token iat exists"),
+        )
+        .expect("access token lifetime is positive"),
+        expires_in,
+    );
     let access_payload = verified_access.payload.to_string();
     assert!(!access_payload.contains(REGISTRY_OFFER_PRINCIPAL_ID));
     assert!(!access_payload.contains("NAT-REGISTRAR-001"));
@@ -2452,6 +2557,142 @@ async fn oid4vci_registry_offer_is_atomic_for_retry_conflict_and_consumption() {
     assert_eq!(
         registry_offer_response_json(key_reuse).await["code"],
         "offer_conflict"
+    );
+}
+
+#[cfg(feature = "registry-notary-cel")]
+#[tokio::test]
+async fn oid4vci_registry_offer_preflight_skips_signer_for_sequential_denials_and_replay() {
+    let sign_attempt_count = Arc::new(AtomicUsize::new(0));
+    let preauth = oid4vci_test_preauth_runtime_with_limited_signer(
+        registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP,
+        Arc::clone(&sign_attempt_count),
+        1,
+    );
+    let fixture = registry_offer_fixture_with(registry_offer_test_evidence(), preauth).await;
+    let evaluation_id = registry_offer_evaluate(&fixture, "NAT-PREFLIGHT-001").await;
+    let mut principal = fixture.principal.clone();
+    principal.authorization_details = Some(registry_offer_authorization_details(
+        &fixture.state,
+        "NAT-PREFLIGHT-001",
+    ));
+
+    let created = registry_offer_create(
+        &fixture,
+        principal.clone(),
+        &evaluation_id,
+        "registrar-preflight",
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_body = registry_offer_response_json(created).await;
+    assert_eq!(sign_attempt_count.load(Ordering::SeqCst), 1);
+
+    let exact_replay = registry_offer_create(
+        &fixture,
+        principal.clone(),
+        &evaluation_id,
+        "registrar-preflight",
+    )
+    .await;
+    assert_eq!(exact_replay.status(), StatusCode::OK);
+    assert_eq!(
+        registry_offer_response_json(exact_replay).await,
+        created_body
+    );
+    assert_eq!(
+        sign_attempt_count.load(Ordering::SeqCst),
+        1,
+        "exact replay must return before signer work"
+    );
+
+    let other_evaluation_id = registry_offer_evaluate(&fixture, "NAT-PREFLIGHT-002").await;
+    let mut other_principal = fixture.principal.clone();
+    other_principal.authorization_details = Some(registry_offer_authorization_details(
+        &fixture.state,
+        "NAT-PREFLIGHT-002",
+    ));
+    let idempotency_conflict = registry_offer_create(
+        &fixture,
+        other_principal,
+        &other_evaluation_id,
+        "registrar-preflight",
+    )
+    .await;
+    assert_eq!(idempotency_conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        sign_attempt_count.load(Ordering::SeqCst),
+        1,
+        "idempotency-key conflict must return before signer work"
+    );
+
+    let consumed = registry_offer_create(
+        &fixture,
+        principal,
+        &evaluation_id,
+        "registrar-preflight-new-operation",
+    )
+    .await;
+    assert_eq!(consumed.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        sign_attempt_count.load(Ordering::SeqCst),
+        1,
+        "consumed evaluation must return before signer work"
+    );
+}
+
+#[cfg(feature = "registry-notary-cel")]
+#[tokio::test]
+async fn oid4vci_registry_offer_charges_quota_before_signer_work() {
+    let sign_attempt_count = Arc::new(AtomicUsize::new(0));
+    let preauth = oid4vci_test_preauth_runtime_with_limited_signer(
+        registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP,
+        Arc::clone(&sign_attempt_count),
+        0,
+    );
+    let mut evidence = registry_offer_test_evidence();
+    evidence.machine_quota = registry_notary_core::MachineQuotaConfig {
+        enabled: true,
+        // The two evaluations consume two units. The first offer consumes the
+        // third before its signer failure, leaving the second offer over quota.
+        subjects_per_minute: 3,
+    };
+    let fixture = registry_offer_fixture_with(evidence, preauth).await;
+    let first_evaluation_id = registry_offer_evaluate(&fixture, "NAT-QUOTA-SIGN-001").await;
+    let second_evaluation_id = registry_offer_evaluate(&fixture, "NAT-QUOTA-SIGN-002").await;
+
+    let mut first_principal = fixture.principal.clone();
+    first_principal.authorization_details = Some(registry_offer_authorization_details(
+        &fixture.state,
+        "NAT-QUOTA-SIGN-001",
+    ));
+    let signer_failure = registry_offer_create(
+        &fixture,
+        first_principal,
+        &first_evaluation_id,
+        "registrar-quota-sign-1",
+    )
+    .await;
+    assert!(signer_failure.status().is_server_error());
+    assert_eq!(sign_attempt_count.load(Ordering::SeqCst), 1);
+
+    let mut second_principal = fixture.principal.clone();
+    second_principal.authorization_details = Some(registry_offer_authorization_details(
+        &fixture.state,
+        "NAT-QUOTA-SIGN-002",
+    ));
+    let quota_denial = registry_offer_create(
+        &fixture,
+        second_principal,
+        &second_evaluation_id,
+        "registrar-quota-sign-2",
+    )
+    .await;
+    assert_eq!(quota_denial.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        sign_attempt_count.load(Ordering::SeqCst),
+        1,
+        "over-quota offer must return before signer work"
     );
 }
 
@@ -2654,6 +2895,118 @@ async fn oid4vci_registry_offer_denies_unbound_authority_and_mutated_evidence() 
         authorized,
         &provenance_tamper_id,
         "provenance-mutated",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[cfg(feature = "registry-notary-cel")]
+#[tokio::test]
+async fn oid4vci_registry_offer_rejects_non_exact_claim_and_target_authority() {
+    let fixture = registry_offer_fixture().await;
+    let evaluation_id = registry_offer_evaluate(&fixture, "NAT-EXACT-AUTHORITY").await;
+    let correct_details =
+        registry_offer_authorization_details(&fixture.state, "NAT-EXACT-AUTHORITY");
+
+    let mut wrong_scheme_rar = fixture.principal.clone();
+    let mut wrong_scheme_details = correct_details.clone();
+    wrong_scheme_details
+        .target
+        .as_mut()
+        .expect("offer RAR has a target")
+        .id_type = "registry_file_number".to_string();
+    wrong_scheme_rar.authorization_details = Some(wrong_scheme_details);
+    let response = registry_offer_create(
+        &fixture,
+        wrong_scheme_rar,
+        &evaluation_id,
+        "wrong-rar-target-scheme",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let mut duplicate_claim_rar = fixture.principal.clone();
+    let mut duplicate_claim_details = correct_details.clone();
+    duplicate_claim_details.claims[1] = duplicate_claim_details.claims[0].clone();
+    duplicate_claim_rar.authorization_details = Some(duplicate_claim_details);
+    let response = registry_offer_create(
+        &fixture,
+        duplicate_claim_rar,
+        &evaluation_id,
+        "duplicate-rar-claim",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let mut version_substitution_rar = fixture.principal.clone();
+    let mut version_substitution_details = correct_details;
+    version_substitution_details.claims[0].version = Some("1".to_string());
+    version_substitution_rar.authorization_details = Some(version_substitution_details);
+    let response = registry_offer_create(
+        &fixture,
+        version_substitution_rar,
+        &evaluation_id,
+        "version-substitution-rar-claim",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[cfg(feature = "registry-notary-cel")]
+#[tokio::test]
+async fn oid4vci_registry_offer_rejects_missing_or_cross_evaluation_target_binding() {
+    let fixture = registry_offer_fixture().await;
+    let legacy_binding_id = registry_offer_evaluate(&fixture, "NAT-BOUNDARY-LEGACY").await;
+    fixture.store.tamper_next_read(|evaluation| {
+        evaluation
+            .issuance_provenance
+            .as_mut()
+            .expect("issuance provenance exists")
+            .authorization_target_binding
+            .clear();
+    });
+    let mut authorized = fixture.principal.clone();
+    authorized.authorization_details = Some(registry_offer_authorization_details(
+        &fixture.state,
+        "NAT-BOUNDARY-LEGACY",
+    ));
+    let response = registry_offer_create(
+        &fixture,
+        authorized,
+        &legacy_binding_id,
+        "legacy-target-binding",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let first_binding_id = registry_offer_evaluate(&fixture, "NAT-BOUNDARY-BINDING-A").await;
+    let second_binding_id = registry_offer_evaluate(&fixture, "NAT-BOUNDARY-BINDING-B").await;
+    let second_binding = fixture
+        .store
+        .get(&second_binding_id, REGISTRY_OFFER_PRINCIPAL_ID)
+        .await
+        .expect("stored evaluation read succeeds")
+        .expect("stored evaluation exists")
+        .issuance_provenance
+        .expect("issuance provenance exists")
+        .authorization_target_binding;
+    fixture.store.tamper_next_read(move |evaluation| {
+        evaluation
+            .issuance_provenance
+            .as_mut()
+            .expect("issuance provenance exists")
+            .authorization_target_binding = second_binding.clone();
+    });
+    let mut authorized = fixture.principal.clone();
+    authorized.authorization_details = Some(registry_offer_authorization_details(
+        &fixture.state,
+        "NAT-BOUNDARY-BINDING-A",
+    ));
+    let response = registry_offer_create(
+        &fixture,
+        authorized,
+        &first_binding_id,
+        "cross-evaluation-target-binding",
     )
     .await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);

@@ -112,15 +112,16 @@ use crate::{
     posture::{posture_document, PostureContext, PostureDocumentError},
     preauth_state::{
         CredentialMaterialization, IssuanceAuthority, IssuanceTransaction, LoginState,
-        PreauthorizationStateError, RegistryClientOfferReservation,
-        RegistryClientOfferReservationOutcome, RegistryClientOfferResponse,
-        RegistryClientTransactionCode,
+        PreauthorizationStateError, RegistryClientOfferPreflightOutcome,
+        RegistryClientOfferReservation, RegistryClientOfferReservationOutcome,
+        RegistryClientOfferResponse, RegistryClientTransactionCode,
     },
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::{
-        build_claim_levels, claim_ids, claim_semantics_metadata, requested_claim_versions,
+        build_claim_levels, claim_ids, claim_semantics_metadata,
+        issuance_authorization_target_binding, requested_claim_versions,
         require_issuable_evaluation_provenance, require_registry_backed_credential_claims,
-        target_ref_view, validate_batch_subject_limit, EvaluationAuditSnapshot,
+        validate_batch_subject_limit, EvaluationAuditSnapshot,
     },
     standalone::{
         generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge, pre_auth_audit_event,

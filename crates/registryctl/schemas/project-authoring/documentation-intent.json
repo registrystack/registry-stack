@@ -139,6 +139,7 @@
     { "schema": "environment", "pointer": "/$defs/relayResource/anyOf/0", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/relayResource/anyOf/1", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/oid4vci/properties/allowed_wallet_origins/items", "path_kind": "array_item" },
+    { "schema": "environment", "pointer": "/$defs/oid4vci/properties/registrar_clients/items", "path_kind": "array_item" },
     { "schema": "environment", "pointer": "/$defs/privateCidrs/items", "path_kind": "array_item" },
     { "schema": "environment", "pointer": "/$defs/credential/oneOf/0", "path_kind": "branch" },
     { "schema": "environment", "pointer": "/$defs/credential/oneOf/1", "path_kind": "branch" },

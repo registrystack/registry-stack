@@ -333,6 +333,15 @@ impl PreAuthRuntime {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_access_token_signer_for_tests(
+        mut self,
+        signer: Arc<dyn SigningProvider>,
+    ) -> Self {
+        self.access_token_signer = signer;
+        self
+    }
+
     /// Emit a hashed pre-auth audit event. Returns an error if emission fails so
     /// callers fail closed rather than silently dropping the audit trail.
     pub(crate) async fn emit_audit(&self, event: &EvidenceAuditEvent) -> Result<(), AuditError> {

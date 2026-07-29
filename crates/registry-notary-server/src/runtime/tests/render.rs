@@ -1,6 +1,45 @@
 // SPDX-License-Identifier: Apache-2.0
 
     #[test]
+    fn top_level_target_id_uses_reserved_authorization_id_type() {
+        let keys = SubjectAccessRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let mut target = EvidenceEntity::new("Person");
+        target.id = Some("registry-person-42".to_string());
+        target
+            .attributes
+            .insert("region".to_string(), json!("central"));
+        let target_ref = target_ref_view(&keys, &target).expect("target reference hashes");
+        let evaluated = issuance_authorization_target_binding(
+            &keys,
+            &target_ref,
+            "id",
+            "registry-person-42",
+        )
+        .expect("top-level id binding hashes");
+        assert_eq!(
+            evaluated,
+            issuance_authorization_target_binding(
+                &keys,
+                &target_ref,
+                "id",
+                "registry-person-42",
+            )
+            .expect("matching RAR binding hashes"),
+        );
+        assert_ne!(
+            evaluated,
+            issuance_authorization_target_binding(
+                &keys,
+                &target_ref,
+                "national_id",
+                "registry-person-42",
+            )
+            .expect("wrong-scheme comparison hashes"),
+            "top-level target.id cannot alias a named identifier scheme",
+        );
+    }
+
+    #[test]
     fn render_cccev_uses_result_claim_version_for_requirement() {
         let mut older_claim = test_claim("selected", Vec::new(), true);
         older_claim.oots = Some(registry_notary_core::OotsConfig {
@@ -418,6 +457,7 @@ profile_b:
                     consultation_id: "01J00000000000000000000000".to_string(),
                     acquired_at: issued_at.to_string(),
                 }],
+                authorization_target_binding: String::new(),
             }),
             subject_access: None,
         };

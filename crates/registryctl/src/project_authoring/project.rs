@@ -858,6 +858,8 @@ fn semantic_digests(
             "relay": environment.relay,
             "notary_relay": environment.notary_relay,
             "notary_state": environment.notary_state,
+            "oid4vci_registrar_clients": environment.oid4vci.as_ref()
+                .map(|binding| &binding.registrar_clients),
             "deployment": environment.deployment,
         });
         if let Some(relay_state) = &environment.relay_state {
@@ -887,7 +889,7 @@ fn semantic_digests(
 // A schema or knowledge change must therefore be reviewed for promotion
 // semantics before a new projection can be emitted.
 const PROMOTION_FIELD_KNOWLEDGE_REVISION: &str =
-    "sha256:09bd1b95dfb5a5141afa41da1f433d4bba5daeb46ed1849bb85e2cb84e144d65";
+    "sha256:5f2fa5cff59147791a8d8af3d4ee5fc3c8cfdd053877e681a0d1b9a06b1601bf";
 
 fn project_promotion_projection(
     loaded: &LoadedRegistryProject,
@@ -959,6 +961,8 @@ fn project_promotion_projection(
         "oid4vci_authorization_server": environment.oid4vci.as_ref().map(|binding| json!({
             "issuer": binding.authorization_server.issuer,
         })),
+        "oid4vci_registrar_clients": environment.oid4vci.as_ref()
+            .map(|binding| &binding.registrar_clients),
     });
     let trust_members = environment
         .integrations
@@ -991,6 +995,13 @@ fn project_promotion_projection(
                 .iter()
                 .flat_map(|relay| relay.allowed_clients.iter())
                 .map(|client| json!(["relay_client", client])),
+        )
+        .chain(
+            environment
+                .oid4vci
+                .iter()
+                .flat_map(|binding| binding.registrar_clients.iter())
+                .map(|client| json!(["oid4vci_registrar_client", client])),
         )
         .collect::<Vec<_>>();
 
@@ -1582,6 +1593,7 @@ fn promotion_kind_for_field_path(path: &knowledge::FieldPath) -> Option<Promotio
                 || pointer.contains("/mtls")
                 || pointer.contains("audience")
                 || pointer.contains("allowed_clients")
+                || pointer.contains("registrar_clients")
                 || pointer.contains("/issuer")
             {
                 Some(Kind::Trust)
@@ -3214,6 +3226,19 @@ fn validate_oid4vci_binding(
     }
 
     validate_token(&binding.client.id, "OID4VCI client id", 256)?;
+    if binding.registrar_clients.len() > 64 {
+        bail!("OID4VCI registrar_clients exceeds the supported bound");
+    }
+    let mut registrar_clients = BTreeSet::new();
+    for client in &binding.registrar_clients {
+        validate_token(client, "OID4VCI registrar client id", 256)?;
+        if client == &binding.client.id {
+            bail!("OID4VCI registrar_clients must not contain the citizen client id");
+        }
+        if !registrar_clients.insert(client) {
+            bail!("OID4VCI registrar_clients must not contain duplicates");
+        }
+    }
     validate_secret_reference(&binding.client.signing_key)?;
     validate_token(
         &binding.client.signing_kid,

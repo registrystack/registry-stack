@@ -157,7 +157,7 @@ pub(in crate::api) async fn oid4vci_credential(
                 .transaction(transaction_id)
                 .await
             {
-                Ok(Some(transaction)) => transaction,
+                Ok(Some(live)) => live.transaction,
                 _ => return oid4vci_error_response(Oid4vciWireError::ServerError),
             };
             let evaluation = match state
@@ -324,7 +324,23 @@ async fn materialize_oid4vci_transaction(
         .await
         .map_err(|_| Oid4vciWireError::ServerError)?
         .ok_or(Oid4vciWireError::AccessDenied)?;
-    if evaluation.claim_ids != configuration.credential_claim_ids() {
+    let configuration_claim_ids = configuration.credential_claim_ids();
+    let configuration_claim_refs = oid4vci_credential_claim_refs(configuration);
+    let result_claim_ids = evaluation
+        .results
+        .iter()
+        .map(|result| result.claim_id.clone())
+        .collect::<Vec<_>>();
+    if !crate::authz_details::exact_unique_string_set(
+        &evaluation.claim_ids,
+        &configuration_claim_ids,
+    ) || !crate::authz_details::exact_unique_string_set(
+        &result_claim_ids,
+        &configuration_claim_ids,
+    ) || !crate::authz_details::exact_unique_claim_ref_set(
+        &evaluation.selected_claim_refs(),
+        &configuration_claim_refs,
+    ) {
         return Err(Oid4vciWireError::AccessDenied);
     }
     let profile = evidence

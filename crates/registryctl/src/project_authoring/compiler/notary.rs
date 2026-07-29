@@ -296,16 +296,19 @@ fn generated_notary_config(
     let mut auth = json!({ "api_keys": api_keys });
     if let Some(binding) = &environment.oid4vci {
         let public_base_url = binding.public_base_url.trim_end_matches('/');
+        let allowed_clients = std::iter::once(binding.client.id.as_str())
+            .chain(binding.registrar_clients.iter().map(String::as_str))
+            .collect::<Vec<_>>();
         instance["public_base_url"] = Value::String(public_base_url.to_string());
         evidence["api_base_url"] = Value::String(public_base_url.to_string());
         auth["oidc"] = json!({
             "issuer": binding.authorization_server.issuer,
             "jwks_url": binding.authorization_server.jwks_url,
             "userinfo_endpoint": binding.authorization_server.userinfo_url,
-            "audiences": [binding.client.id],
-            "allowed_clients": [binding.client.id],
+            "audiences": [binding.client.id.as_str(), public_base_url],
+            "allowed_clients": allowed_clients,
             "allowed_algorithms": ["RS256"],
-            "allowed_token_types": [],
+            "allowed_token_types": ["JWT"],
             "scope_claim": "scope",
             "scope_separator": " ",
             "principal_claim": "sub",

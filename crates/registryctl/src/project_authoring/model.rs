@@ -1968,6 +1968,14 @@ struct Oid4vciBinding {
     credential: Oid4vciCredentialBinding,
     authorization_server: Oid4vciAuthorizationServerBinding,
     client: Oid4vciClientBinding,
+    /// Machine OIDC clients admitted to create registrar-initiated offers.
+    ///
+    /// These clients use the pinned authorization server and the Notary public
+    /// base URL as their resource audience. They are deliberately separate
+    /// from the citizen client so generated subject-access classification
+    /// remains closed.
+    #[serde(default)]
+    registrar_clients: Vec<String>,
     access_token: Oid4vciSigningKeyBinding,
     sensitive_state_key: SecretReference,
     subject: Oid4vciSubjectBinding,

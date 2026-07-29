@@ -103,18 +103,21 @@ pub(crate) fn validate_scoped_authorization_details(
         return Err(ScopedAuthorizationError::Location);
     }
     let claims_match = if expected.allow_subset_claims {
-        expected
-            .claims
-            .iter()
-            .all(|expected_claim| details.claims.contains(expected_claim))
+        unique_claim_refs(&details.claims)
+            && unique_claim_refs(expected.claims)
+            && expected
+                .claims
+                .iter()
+                .all(|expected_claim| details.claims.contains(expected_claim))
             && expected.allowed_claims.is_some_and(|allowed_claims| {
-                details
-                    .claims
-                    .iter()
-                    .all(|detail_claim| allowed_claims.contains(detail_claim))
+                unique_claim_refs(allowed_claims)
+                    && details
+                        .claims
+                        .iter()
+                        .all(|detail_claim| allowed_claims.contains(detail_claim))
             })
     } else {
-        details.claims == expected.claims
+        exact_unique_claim_ref_set(&details.claims, expected.claims)
     };
     if !claims_match {
         return Err(ScopedAuthorizationError::Claim);
@@ -138,6 +141,32 @@ pub(crate) fn validate_scoped_authorization_details(
         return Err(ScopedAuthorizationError::Target);
     }
     Ok(())
+}
+
+pub(crate) fn exact_unique_claim_ref_set(left: &[ClaimRef], right: &[ClaimRef]) -> bool {
+    left.len() == right.len()
+        && unique_claim_refs(left)
+        && unique_claim_refs(right)
+        && left.iter().all(|claim| right.contains(claim))
+}
+
+pub(crate) fn exact_unique_string_set(left: &[String], right: &[String]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .enumerate()
+            .all(|(position, value)| !left[..position].contains(value) && right.contains(value))
+        && right
+            .iter()
+            .enumerate()
+            .all(|(position, value)| !right[..position].contains(value))
+}
+
+fn unique_claim_refs(claims: &[ClaimRef]) -> bool {
+    claims
+        .iter()
+        .enumerate()
+        .all(|(position, claim)| !claims[..position].contains(claim))
 }
 
 fn exact_single(values: &[String], expected: &str) -> bool {
@@ -351,6 +380,42 @@ mod tests {
             validate_scoped_authorization_details(
                 &token_details,
                 &request(&expected_claims, true, Some(&request_claims)),
+            ),
+            Err(ScopedAuthorizationError::Claim)
+        );
+    }
+
+    #[test]
+    fn exact_claim_validation_treats_order_as_non_authoritative() {
+        let claim_a = claim("person-is-alive");
+        let claim_b = claim("address-is-current");
+        let token_details = details(vec![claim_b.clone(), claim_a.clone()]);
+        let expected_claims = [claim_a, claim_b];
+
+        validate_scoped_authorization_details(
+            &token_details,
+            &request(&expected_claims, false, None),
+        )
+        .expect("authorization claims are an exact set");
+    }
+
+    #[test]
+    fn exact_claim_validation_rejects_duplicates_and_version_substitution() {
+        let claim_a = claim("person-is-alive");
+        let duplicate = details(vec![claim_a.clone(), claim_a.clone()]);
+        assert_eq!(
+            validate_scoped_authorization_details(
+                &duplicate,
+                &request(&[claim_a.clone(), claim_a.clone()], false, None),
+            ),
+            Err(ScopedAuthorizationError::Claim)
+        );
+
+        let token_details = details(vec![ClaimRef::with_version("person-is-alive", "2")]);
+        assert_eq!(
+            validate_scoped_authorization_details(
+                &token_details,
+                &request(&[claim_a], false, None),
             ),
             Err(ScopedAuthorizationError::Claim)
         );

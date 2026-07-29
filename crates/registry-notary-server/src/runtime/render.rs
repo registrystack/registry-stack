@@ -285,10 +285,21 @@ pub(crate) fn require_issuable_evaluation_provenance(
     evaluation: &registry_notary_core::StoredEvaluation,
 ) -> Result<(), EvidenceError> {
     let selected = evaluation.selected_claim_refs();
+    let selected_ids = selected
+        .iter()
+        .map(|claim_ref| claim_ref.id.clone())
+        .collect::<Vec<_>>();
+    let result_ids = evaluation
+        .results
+        .iter()
+        .map(|result| result.claim_id.clone())
+        .collect::<Vec<_>>();
     if selected.is_empty()
         || selected.len() > MAX_CLAIM_DEPENDENCY_NODES_V1
         || evaluation.claim_ids.len() != selected.len()
         || evaluation.results.len() != selected.len()
+        || !crate::authz_details::exact_unique_string_set(&evaluation.claim_ids, &selected_ids)
+        || !crate::authz_details::exact_unique_string_set(&result_ids, &selected_ids)
     {
         return Err(EvidenceError::EvaluationBindingMismatch);
     }
@@ -312,15 +323,8 @@ pub(crate) fn require_issuable_evaluation_provenance(
         return Err(EvidenceError::EvaluationBindingMismatch);
     }
 
-    let mut selected_ids = BTreeSet::new();
-    let mut result_ids = BTreeSet::new();
     let mut private_claims = BTreeMap::new();
     let mut private_consultations = BTreeMap::new();
-    for result in &evaluation.results {
-        if !result_ids.insert(result.claim_id.as_str()) {
-            return Err(EvidenceError::EvaluationBindingMismatch);
-        }
-    }
     for provenance in &stored.claims {
         if private_claims
             .insert(provenance.claim_id.as_str(), provenance)
@@ -421,12 +425,7 @@ pub(crate) fn require_issuable_evaluation_provenance(
         return Err(EvidenceError::EvaluationBindingMismatch);
     }
 
-    for (position, claim_ref) in selected.iter().enumerate() {
-        if evaluation.claim_ids[position] != claim_ref.id
-            || !selected_ids.insert(claim_ref.id.as_str())
-        {
-            return Err(EvidenceError::EvaluationBindingMismatch);
-        }
+    for claim_ref in &selected {
         let selected_claim = find_claim_for_selection(evidence, claim_ref, &versions)
             .map_err(|_| EvidenceError::EvaluationBindingMismatch)?;
         let root_private = private_claims
@@ -529,6 +528,37 @@ pub(crate) fn target_ref_view(
         identifier_schemes: entity_ref.identifier_schemes,
         profile: entity_ref.profile,
     })
+}
+
+/// Commit the complete opaque target reference together with the canonical
+/// identity used by authorization details. `id` is reserved for the
+/// top-level `EvidenceEntity.id`; identifier schemes must use their real
+/// scheme names so the two representations cannot alias.
+pub(crate) fn issuance_authorization_target_binding(
+    subject_access_rate_keys: &SubjectAccessRateLimitKeys,
+    target_ref: &TargetRefView,
+    id_type: &str,
+    id: &str,
+) -> Result<String, EvidenceError> {
+    if id_type.trim().is_empty() || id.trim().is_empty() {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    let canonical_input = serde_json::to_string(&json!({
+        "schema": "registry.notary.private-issuance-authorization-target/v1",
+        "target_ref": target_ref,
+        "primary_identity": {
+            "id_type": id_type,
+            "id": id,
+        },
+    }))
+    .map_err(|_| EvidenceError::EvaluationBindingMismatch)?;
+    subject_access_rate_keys
+        .audit_pseudonym_ref(
+            "oid4vci-issuance-authorization-target-binding-v1",
+            &canonical_input,
+        )
+        .map(|binding| binding.as_str().to_string())
+        .map_err(|error| error.evidence_error())
 }
 
 pub(super) fn entity_ref_view(

@@ -11,11 +11,21 @@ pub(in super::super) async fn authenticate_oidc(
     assurance_claim_source: SubjectAccessAssuranceClaimSource,
     userinfo_endpoint: Option<&str>,
     userinfo_issuers: &[String],
+    citizen_client_ids: &[String],
+    citizen_audiences: &[String],
 ) -> Result<EvidencePrincipal, EvidenceError> {
     let Some(token) = credentials.bearer_token.as_deref() else {
         return Err(EvidenceError::MissingCredential);
     };
     let verified = verifier.verify(token).await.map_err(oidc_auth_error)?;
+    if !oidc_citizen_candidate(&verified, citizen_client_ids, citizen_audiences) {
+        return principal_from_machine_oidc(
+            &verified,
+            EvidenceAuthProfileId::ExternalOidc,
+            token_type_from_compact_jwt(token),
+            principal_claim,
+        );
+    }
     let verified_userinfo = match (subject_binding_claim, subject_binding_claim_source) {
         (Some(_), SubjectAccessClaimSource::Userinfo) => {
             let endpoint = userinfo_endpoint.ok_or(EvidenceError::MissingCredential)?;
@@ -68,21 +78,50 @@ pub(in super::super) async fn authenticate_oidc(
             Some(id_token)
         }
     };
-    let token_type = jsonwebtoken::decode_header(token)
-        .ok()
-        .and_then(|header| header.typ)
-        .and_then(|typ| verified_claim_value(&typ));
     principal_from_oidc(
         &verified,
         EvidenceAuthProfileId::ExternalOidc,
         verified_userinfo.as_ref(),
         verified_id_token.as_ref(),
-        token_type,
+        token_type_from_compact_jwt(token),
         principal_claim,
         subject_binding_claim,
         subject_binding_claim_source,
         assurance_claim_source,
     )
+}
+
+fn token_type_from_compact_jwt(token: &str) -> Option<VerifiedClaimValue> {
+    jsonwebtoken::decode_header(token)
+        .ok()
+        .and_then(|header| header.typ)
+        .and_then(|typ| verified_claim_value(&typ))
+}
+
+pub(in super::super) fn oidc_citizen_candidate(
+    verified: &VerifiedToken,
+    citizen_client_ids: &[String],
+    citizen_audiences: &[String],
+) -> bool {
+    let client_matches = [
+        verified.claims.azp.as_deref(),
+        verified.claims.client_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|candidate| {
+        citizen_client_ids
+            .iter()
+            .any(|allowed| candidate == allowed)
+    });
+    let audience_matches = match verified.claims.aud.as_ref() {
+        Some(Audience::One(audience)) => citizen_audiences.contains(audience),
+        Some(Audience::Many(audiences)) => audiences
+            .iter()
+            .any(|audience| citizen_audiences.contains(audience)),
+        None => false,
+    };
+    client_matches || audience_matches
 }
 
 /// Read the `iss` claim from a JWT WITHOUT verifying the signature. Used only to
@@ -99,6 +138,50 @@ pub(in super::super) fn principal_from_oidc(
     subject_binding_claim: Option<&str>,
     subject_binding_claim_source: SubjectAccessClaimSource,
     assurance_claim_source: SubjectAccessAssuranceClaimSource,
+) -> Result<EvidencePrincipal, EvidenceError> {
+    principal_from_oidc_inner(
+        verified,
+        auth_profile_id,
+        userinfo,
+        id_token,
+        token_type,
+        principal_claim,
+        subject_binding_claim,
+        subject_binding_claim_source,
+        Some(assurance_claim_source),
+    )
+}
+
+pub(in super::super) fn principal_from_machine_oidc(
+    verified: &VerifiedToken,
+    auth_profile_id: EvidenceAuthProfileId,
+    token_type: Option<VerifiedClaimValue>,
+    principal_claim: &str,
+) -> Result<EvidencePrincipal, EvidenceError> {
+    principal_from_oidc_inner(
+        verified,
+        auth_profile_id,
+        None,
+        None,
+        token_type,
+        principal_claim,
+        None,
+        SubjectAccessClaimSource::AccessToken,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn principal_from_oidc_inner(
+    verified: &VerifiedToken,
+    auth_profile_id: EvidenceAuthProfileId,
+    userinfo: Option<&registry_platform_oidc::Claims>,
+    id_token: Option<&VerifiedToken>,
+    token_type: Option<VerifiedClaimValue>,
+    principal_claim: &str,
+    subject_binding_claim: Option<&str>,
+    subject_binding_claim_source: SubjectAccessClaimSource,
+    assurance_claim_source: Option<SubjectAccessAssuranceClaimSource>,
 ) -> Result<EvidencePrincipal, EvidenceError> {
     let principal_id = if principal_claim == "sub" {
         verified.claims.sub.clone()
@@ -117,7 +200,7 @@ pub(in super::super) fn principal_from_oidc(
         principal_id,
         scopes: verified.scopes.clone(),
         access_mode: AccessMode::MachineClient,
-        verified_claims: bounded_verified_claims_from_oidc(
+        verified_claims: bounded_verified_claims_from_oidc_inner(
             verified,
             userinfo,
             id_token,
@@ -140,6 +223,7 @@ pub(in super::super) fn authorization_details_from_oidc(
     Ok(details.filter(crate::authz_details::has_transaction_scope))
 }
 
+#[cfg(test)]
 pub(in super::super) fn bounded_verified_claims_from_oidc(
     verified: &VerifiedToken,
     userinfo: Option<&registry_platform_oidc::Claims>,
@@ -148,6 +232,27 @@ pub(in super::super) fn bounded_verified_claims_from_oidc(
     subject_binding_claim: Option<&str>,
     subject_binding_claim_source: SubjectAccessClaimSource,
     assurance_claim_source: SubjectAccessAssuranceClaimSource,
+) -> Option<BoundedVerifiedClaims> {
+    bounded_verified_claims_from_oidc_inner(
+        verified,
+        userinfo,
+        id_token,
+        token_type,
+        subject_binding_claim,
+        subject_binding_claim_source,
+        Some(assurance_claim_source),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bounded_verified_claims_from_oidc_inner(
+    verified: &VerifiedToken,
+    userinfo: Option<&registry_platform_oidc::Claims>,
+    id_token: Option<&VerifiedToken>,
+    token_type: Option<VerifiedClaimValue>,
+    subject_binding_claim: Option<&str>,
+    subject_binding_claim_source: SubjectAccessClaimSource,
+    assurance_claim_source: Option<SubjectAccessAssuranceClaimSource>,
 ) -> Option<BoundedVerifiedClaims> {
     let issuer = verified
         .claims
@@ -170,8 +275,9 @@ pub(in super::super) fn bounded_verified_claims_from_oidc(
         (None, None)
     };
     let assurance_claims = match assurance_claim_source {
-        SubjectAccessAssuranceClaimSource::AccessToken => &verified.claims,
-        SubjectAccessAssuranceClaimSource::IdToken => &id_token?.claims,
+        Some(SubjectAccessAssuranceClaimSource::AccessToken) => Some(&verified.claims),
+        Some(SubjectAccessAssuranceClaimSource::IdToken) => Some(&id_token?.claims),
+        None => None,
     };
     Some(BoundedVerifiedClaims {
         issuer,
@@ -205,11 +311,10 @@ pub(in super::super) fn bounded_verified_claims_from_oidc(
         subject_binding_claim,
         subject_binding_value,
         acr: assurance_claims
-            .extra
-            .get("acr")
+            .and_then(|claims| claims.extra.get("acr"))
             .and_then(Value::as_str)
             .and_then(verified_claim_value),
-        auth_time: numeric_claim(&assurance_claims.extra, "auth_time"),
+        auth_time: assurance_claims.and_then(|claims| numeric_claim(&claims.extra, "auth_time")),
         exp: verified.claims.exp,
         iat: verified.claims.iat,
         nbf: verified.claims.nbf,
