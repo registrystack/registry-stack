@@ -1452,17 +1452,6 @@ pub(in crate::api) async fn oid4vci_token(
         )
         .await;
     };
-    if transaction_id != jti {
-        return token_error_after_invalid_attempt(
-            &state,
-            &preauth,
-            path,
-            &client_address,
-            Some(configuration_id),
-            TokenWireError::InvalidGrant,
-        )
-        .await;
-    }
     let live_transaction = match preauth
         .preauthorization_state()
         .transaction(transaction_id)
@@ -1472,22 +1461,53 @@ pub(in crate::api) async fn oid4vci_token(
             if live.transaction.commitment == transaction_commitment
                 && live.transaction.credential_configuration_id == *configuration_id =>
         {
-            live
+            Some(live)
         }
-        _ => {
-            return token_error_after_invalid_attempt(
-                &state,
-                &preauth,
-                path,
-                &client_address,
-                Some(configuration_id),
-                TokenWireError::InvalidGrant,
-            )
-            .await;
-        }
+        _ => None,
     };
-    let transaction_access_mode =
-        issuance_authority_access_mode(&live_transaction.transaction.authority);
+    let transaction_access_mode = live_transaction
+        .as_ref()
+        .map(|live| issuance_authority_access_mode(&live.transaction.authority))
+        .unwrap_or(AccessMode::SubjectBound);
+    // Enforce the signed code's PIN-attempt policy even when its transaction
+    // binding is absent or invalid. This prevents a forged transaction ID from
+    // bypassing the per-code brute-force guard.
+    if tx_code_required && check_tx_code_attempt(&state, code).await.is_err() {
+        return token_error_after_invalid_attempt_with_access_mode(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            Some(configuration_id),
+            transaction_access_mode,
+            TokenWireError::SlowDown,
+        )
+        .await;
+    }
+    if transaction_id != jti {
+        return token_error_after_invalid_attempt_with_access_mode(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            Some(configuration_id),
+            transaction_access_mode,
+            TokenWireError::InvalidGrant,
+        )
+        .await;
+    }
+    let Some(live_transaction) = live_transaction else {
+        return token_error_after_invalid_attempt_with_access_mode(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            Some(configuration_id),
+            transaction_access_mode,
+            TokenWireError::InvalidGrant,
+        )
+        .await;
+    };
     let access_token_exp = (now + preauth.access_token_ttl_seconds() as i64)
         .min(live_transaction.expires_at.unix_timestamp());
     let Ok(access_token_expires_in) = u64::try_from(access_token_exp - now) else {
@@ -1516,20 +1536,6 @@ pub(in crate::api) async fn oid4vci_token(
     }
     let transaction = live_transaction.transaction;
     let transaction_code = if tx_code_required {
-        // Cap wrong-PIN attempts per code (brute-force guard). A locked code
-        // (attempts over the cap) is rejected before the PIN compare.
-        if check_tx_code_attempt(&state, code).await.is_err() {
-            return token_error_after_invalid_attempt_with_access_mode(
-                &state,
-                &preauth,
-                path,
-                &client_address,
-                Some(configuration_id),
-                transaction_access_mode,
-                TokenWireError::SlowDown,
-            )
-            .await;
-        }
         let tx_code = request.tx_code.as_deref().unwrap_or("");
         match preauth
             .preauthorization_state()
