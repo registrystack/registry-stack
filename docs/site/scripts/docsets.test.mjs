@@ -15,7 +15,7 @@ function validDocsets() {
       {
         id: 'latest',
         label: 'Latest',
-        path: '/',
+        path: '/dev/',
         status: 'current',
         availability: 'unreleased',
         source: 'main',

@@ -92,12 +92,13 @@ jobs:
         working-directory: docs/site
         run: node scripts/generate-standard-journeys.mjs --check
 
-      - name: Build Main-source preview
+      - name: Build unreleased Main documentation
         working-directory: docs/site
         run: |
           npm run generate
-          DOCS_DOCSET=latest DOCS_BASE=/preview/ npx astro check
-          DOCS_DOCSET=latest DOCS_BASE=/preview/ npx astro build --outDir dist/preview
+          DOCS_DOCSET=latest DOCS_BASE=/dev/ npx astro check
+          DOCS_DOCSET=latest DOCS_BASE=/dev/ npx astro build --outDir dist/dev
+          node scripts/apply-archive-seo.mjs dist/dev
         env:
           PUBLIC_UMAMI_WEBSITE_ID: ${{ vars.PUBLIC_UMAMI_WEBSITE_ID }}
           PUBLIC_UMAMI_SCRIPT_SRC: ${{ vars.PUBLIC_UMAMI_SCRIPT_SRC }}
@@ -107,7 +108,7 @@ jobs:
         working-directory: docs/site
         run: npm run assemble:archives -- --bootstrap
 
-      - name: Stage released-root routing
+      - name: Promote released documentation to the canonical root
         working-directory: docs/site
         run: npm run stage:production-docsets
 
@@ -115,8 +116,8 @@ jobs:
         working-directory: docs/site
         run: npm run check:llms:built
         env:
-          DOCS_DIST_DIR: ${{ github.workspace }}/docs/site/dist/preview
-          DOCS_PUBLIC_BASE: /preview/
+          DOCS_DIST_DIR: ${{ github.workspace }}/docs/site/dist/dev
+          DOCS_PUBLIC_BASE: /dev/
 
       - name: Verify assembled documentation tree
         working-directory: docs/site

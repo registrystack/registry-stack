@@ -568,6 +568,7 @@ def validate_docsets(
             manifests_by_tag[source_tag] = manifest
 
     checked = 0
+    released_manifest_tags: list[str] = []
     for docset in docsets:
         if not isinstance(docset, dict):
             continue
@@ -586,6 +587,13 @@ def validate_docsets(
             continue
 
         stack = manifest["stack"]
+        if stack.get("status") == "released":
+            released_manifest_tags.append(docset_id)
+            if docset.get("availability") != "released":
+                errors.append(
+                    f"docset {docset_id} availability must be 'released' "
+                    "because its release manifest status is 'released'"
+                )
         products = docset.get("products")
         if not isinstance(products, dict):
             errors.append(f"docset {docset_id} products must be an object")
@@ -627,6 +635,23 @@ def validate_docsets(
                     f"does not match release manifest ref {expected_ref!r}"
                 )
         checked += 1
+
+    if released_manifest_tags:
+        latest_released_tag = max(
+            released_manifest_tags,
+            key=lambda tag: release_version_tuple(tag[1:]) or (-1, -1, -1),
+        )
+        released_selector = (
+            docsets_data.get("released")
+            if isinstance(docsets_data, dict)
+            else None
+        )
+        if released_selector != latest_released_tag:
+            errors.append(
+                "docsets.yaml released selector must be "
+                f"{latest_released_tag!r}, the newest released manifest, "
+                f"not {released_selector!r}"
+            )
 
     if errors:
         for error in errors:

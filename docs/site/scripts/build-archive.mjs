@@ -11,4 +11,4 @@ if (docset.id === docsets.current || docset.status !== 'archived') {
   process.exit(1);
 }
 
-await buildDocsetArchive(docset, { indexable: docset.id === docsets.released });
+await buildDocsetArchive(docset);

@@ -8,6 +8,7 @@ import { CURRENT_PRODUCTION_DOCSET_PATH } from '../src/lib/docset-path.mjs';
 const distDir = resolve(process.env.DOCS_DIST_DIR || 'dist');
 const attrPattern = /\s(?:href|src)=["']([^"']+)["']/g;
 const idPattern = /\sid=["']([^"']+)["']/g;
+const LEGACY_PREVIEW_PATH = '/preview/';
 
 function scopeFromArgs(args) {
   if (args.length === 0) return 'all';
@@ -93,17 +94,17 @@ function isWithinRoot(path, root) {
 
 function resolveTarget(path) {
   const target = targetPath(path);
-  if (
-    productionCurrentMountExists ||
-    !isWithinRoot(path, CURRENT_PRODUCTION_DOCSET_PATH)
-  ) {
-    return target;
+  for (const [mount, mountExists] of [
+    [CURRENT_PRODUCTION_DOCSET_PATH, productionCurrentMountExists],
+    [LEGACY_PREVIEW_PATH, legacyPreviewMountExists],
+  ]) {
+    if (mountExists || !isWithinRoot(path, mount)) continue;
+    const relativePath = path === mount.slice(0, -1)
+      ? '/'
+      : `/${path.slice(mount.length)}`;
+    return targetPath(relativePath);
   }
-
-  const relativePath = path === CURRENT_PRODUCTION_DOCSET_PATH.slice(0, -1)
-    ? '/'
-    : `/${path.slice(CURRENT_PRODUCTION_DOCSET_PATH.length)}`;
-  return targetPath(relativePath);
+  return target;
 }
 
 async function currentEvidencePaths() {
@@ -127,6 +128,7 @@ const archivedRootPattern = /^\/v\/[^/]+\//;
 const productionCurrentMountExists = await exists(
   targetPath(CURRENT_PRODUCTION_DOCSET_PATH),
 );
+const legacyPreviewMountExists = await exists(targetPath(LEGACY_PREVIEW_PATH));
 const docsets = await loadDocsets();
 const archivedRoots = new Set(
   docsets.docsets
@@ -135,6 +137,7 @@ const archivedRoots = new Set(
 );
 const declaredArchiveDestinations = new Set([
   CURRENT_PRODUCTION_DOCSET_PATH,
+  LEGACY_PREVIEW_PATH,
   ...archivedRoots,
 ]);
 

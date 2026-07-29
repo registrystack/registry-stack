@@ -103,10 +103,10 @@ export function validateDocsets(manifest) {
   if (
     current.status !== 'current' ||
     current.availability !== 'unreleased' ||
-    current.path !== '/'
+    current.path !== '/dev/'
   ) {
     throw new Error(
-      `docsets.yaml current "${manifest.current}" must be current, unreleased, and mounted at /`,
+      `docsets.yaml current "${manifest.current}" must be current, unreleased, and mounted at /dev/`,
     );
   }
 

@@ -43,7 +43,7 @@ function loadDocsetsManifest() {
 }
 
 /**
- * @param {{ current: string, released: string, docsets: Array<{ id: string, status: string }> }} docsets
+ * @param {{ current: string, released: string, docsets: Array<{ id: string, status: string, availability: string, path: string }> }} docsets
  * @param {NodeJS.ProcessEnv} env
  */
 export function resolveDocsetBuildContext(docsets, env = process.env) {
@@ -54,19 +54,23 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const base = env.DOCS_BASE || undefined;
   const basePath = base?.replace(/\/$/, '');
   const isArchivedBuild = selectedDocset.status === 'archived';
-  const isHistoricalArchiveBuild =
-    isArchivedBuild && selectedDocset.id !== docsets.released;
+  const isSearchExcludedBuild =
+    isArchivedBuild || selectedDocset.availability === 'unreleased';
+  const currentDocset = docsets.docsets.find((entry) => entry.id === docsets.current);
+  if (!currentDocset) throw new Error(`current docs docset "${docsets.current}" not found`);
   /** @param {string} path */
   const internalRedirect = (path) => basePath ? `${basePath}${path}` : path;
   /** @param {string} path */
   const currentDocsetRedirect = (path) =>
-    isArchivedBuild ? `https://docs.registrystack.org/preview${path}` : internalRedirect(path);
+    isArchivedBuild
+      ? `https://docs.registrystack.org${currentDocset.path.replace(/\/$/, '')}${path}`
+      : internalRedirect(path);
 
   return {
     base,
     basePath,
     isArchivedBuild,
-    isHistoricalArchiveBuild,
+    isSearchExcludedBuild,
     internalRedirect,
     currentDocsetRedirect,
   };
@@ -76,7 +80,7 @@ const docsetsManifest = loadDocsetsManifest();
 const {
   base,
   isArchivedBuild,
-  isHistoricalArchiveBuild,
+  isSearchExcludedBuild,
   internalRedirect,
   currentDocsetRedirect,
 } = resolveDocsetBuildContext(docsetsManifest);
@@ -222,7 +226,7 @@ export default defineConfig({
         // minimal prose; they are excluded from llms-small.txt to keep the
         // compact version useful, but remain in llms-full.txt.
         // Only registered for current builds. Archived docsets do not publish
-        // a separate machine-readable corpus; preview bases remain current.
+        // a separate machine-readable corpus; the /dev/ build remains current.
         ...(isArchivedBuild ? [] : [starlightLlmsTxt({
           description: 'Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Registry Notary.',
           details: DISCOVERY_HEADER,
@@ -411,6 +415,6 @@ export default defineConfig({
         },
       ],
     }),
-    ...(isHistoricalArchiveBuild ? [disabledSitemap] : [sitemap()]),
+    ...(isSearchExcludedBuild ? [disabledSitemap] : [sitemap()]),
   ],
 });

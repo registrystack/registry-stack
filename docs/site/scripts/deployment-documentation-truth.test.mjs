@@ -22,7 +22,7 @@ const currentActivationPages = [
   'products/notary/docs/deployment-hardening-runbook.md',
 ];
 
-test('current docs stay preview while v0.15.2 advances and v0.13.0 stays released', async () => {
+test('current docs stay under /dev/ while v0.15.2 is the released archive', async () => {
   const [docsets, repoDocs, generatedDocsets] = await Promise.all([
     readYaml('docs/site/src/data/docsets.yaml'),
     readYaml('docs/site/src/data/repo-docs.yaml'),
@@ -33,20 +33,21 @@ test('current docs stay preview while v0.15.2 advances and v0.13.0 stays release
   const released = docsets.docsets.find((docset) => docset.id === docsets.released);
 
   assert.equal(current.id, 'latest');
-  assert.equal(docsets.released, 'v0.13.0');
+  assert.equal(docsets.released, 'v0.15.2');
   assert.notEqual(docsets.current, docsets.released);
-  assert.equal(current.label, 'Documentation preview');
+  assert.equal(current.label, 'Development (unreleased)');
+  assert.equal(current.path, '/dev/');
   assert.equal(current.status, 'current');
   assert.equal(current.availability, 'unreleased');
   assert.equal(current.source, 'registry-stack-main');
   assert.equal(
     current.description,
-    'Draft Registry Stack documentation for content and navigation review.',
+    'Unreleased Registry Stack documentation built from the main branch.',
   );
   for (const product of Object.values(current.products)) {
     assert.equal(product.ref, 'HEAD');
     assert.equal(product.version, 'main source (unreleased)');
-    assert.doesNotMatch(product.version, /^v0\.13\.0$/);
+    assert.doesNotMatch(product.version, /^v0\.15\.2$/);
   }
 
   for (const [repoId, repo] of Object.entries(repoDocs.repos)) {
@@ -59,42 +60,30 @@ test('current docs stay preview while v0.15.2 advances and v0.13.0 stays release
     );
   }
 
-  assert.equal(released.path, '/v/0.13.0/');
+  assert.equal(released.path, '/v/0.15.2/');
   assert.equal(released.status, 'archived');
   assert.equal(released.availability, 'released');
-  assert.equal(released.source, 'registry-stack-v0.13.0');
-  assert.match(released.description, /^Released RegistryStack v0\.13\.0/);
+  assert.equal(released.source, 'registry-stack-v0.15.2');
+  assert.match(released.description, /^Released Registry Stack v0\.15\.2/);
   for (const [productId, product] of Object.entries(released.products)) {
     if (productId === 'crosswalk') continue;
-    assert.equal(product.version, 'v0.13.0');
+    assert.equal(product.version, 'v0.15.2');
     assert.equal(
       product.ref,
-      'd45761a0104bd3d9c2e4b4db391d4223f289bd44',
-      `${productId} v0.13.0 docs must stay on the immutable release ref`,
+      '5da961bf965cc9bb0e962db8bd3b6055459a0d97',
+      `${productId} v0.15.2 docs must stay on the immutable prepared-source ref`,
     );
   }
 
   for (const docset of docsets.docsets) {
     if (docset.id === 'latest') continue;
-    if (docset.id === 'v0.15.2') {
-      assert.match(
-        docset.status,
-        /^(draft|archived)$/,
-        'v0.15.2 must expose a documented candidate lifecycle status',
-      );
-    } else {
-      assert.equal(docset.status, 'archived', `${docset.id} must expose its release-train status`);
-    }
+    assert.equal(docset.status, 'archived', `${docset.id} must expose its release-train status`);
     const expectedAvailability =
-      docset.id === 'v0.15.2'
-        ? docset.status === 'draft'
-          ? 'unreleased'
-          : 'candidate'
-        : ['v0.15.1', 'v0.15.0'].includes(docset.id)
-          ? 'candidate'
-          : docset.id.startsWith('v')
-            ? 'released'
-            : 'candidate';
+      ['v0.15.1', 'v0.15.0'].includes(docset.id)
+        ? 'candidate'
+        : docset.id.startsWith('v')
+          ? 'released'
+          : 'candidate';
     assert.equal(
       docset.availability,
       expectedAvailability,

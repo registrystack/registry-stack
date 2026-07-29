@@ -1,5 +1,6 @@
 import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const robotsMeta = '<meta name="robots" content="noindex,follow">';
 
@@ -25,24 +26,28 @@ function addNoindex(html) {
   return html.replace('</head>', `${robotsMeta}</head>`);
 }
 
-function removeNoindex(html) {
-  return html.replace(
-    /\s*<meta\s+name=["']robots["']\s+content=["']noindex,follow["']\s*\/?>/gi,
-    '',
-  );
-}
-
-export async function applyArchiveSeo(outDir, { indexable = false } = {}) {
+export async function applyArchiveSeo(outDir) {
   for (const file of await htmlFiles(outDir)) {
     const html = await readFile(file, 'utf8');
-    const updated = indexable
-      ? removeNoindex(html)
-      : addNoindex(removeSitemapLinks(html));
+    const updated = addNoindex(removeSitemapLinks(html));
     if (updated !== html) await writeFile(file, updated);
   }
 
-  if (!indexable) {
-    await rm(join(outDir, 'sitemap-index.xml'), { force: true });
-    await rm(join(outDir, 'sitemap-0.xml'), { force: true });
-  }
+  await rm(join(outDir, 'sitemap-index.xml'), { force: true });
+  await rm(join(outDir, 'sitemap-0.xml'), { force: true });
+}
+
+async function main() {
+  const output = process.argv[2];
+  if (!output) throw new Error('usage: apply-archive-seo.mjs <output-directory>');
+  const outDir = resolve(output);
+  await applyArchiveSeo(outDir);
+  console.log(`Applied noindex SEO policy to ${outDir}.`);
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
 }
