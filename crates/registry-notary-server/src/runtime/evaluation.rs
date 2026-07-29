@@ -1757,20 +1757,22 @@ fn stored_issuance_provenance(
         claims.push(claim);
     }
     let target_ref = target_ref_view(subject_access_rate_keys, target)?;
-    let primary_identity = target
-        .to_subject_request()
-        .ok_or(EvidenceError::InvalidRequest)?;
-    let primary_id_type = match primary_identity.id_type.as_deref() {
-        Some("id") => return Err(EvidenceError::InvalidRequest),
-        Some(id_type) => id_type,
-        None => "id",
+    let authorization_target_binding = match target.to_subject_request() {
+        Some(primary_identity) => {
+            let primary_id_type = match primary_identity.id_type.as_deref() {
+                Some("id") => return Err(EvidenceError::InvalidRequest),
+                Some(id_type) => id_type,
+                None => "id",
+            };
+            issuance_authorization_target_binding(
+                subject_access_rate_keys,
+                &target_ref,
+                primary_id_type,
+                &primary_identity.id,
+            )?
+        }
+        None => String::new(),
     };
-    let authorization_target_binding = issuance_authorization_target_binding(
-        subject_access_rate_keys,
-        &target_ref,
-        primary_id_type,
-        &primary_identity.id,
-    )?;
     Ok(Some(StoredIssuanceProvenance {
         claims,
         consultations: consultations.into_values().collect(),
