@@ -177,9 +177,9 @@ Full corpus: https://docs.registrystack.org/llms-full.txt
 [External](https://example.test/v/1.0.0/guide/)
 `,
   );
-  assert.match(
-    await readFile(resolve(fixture.docsRoot, 'dist/llms.txt'), 'utf8'),
-    /https:\/\/docs\.registrystack\.org\/llms-full\.txt/,
+  assert.ok(
+    (await readFile(resolve(fixture.docsRoot, 'dist/llms.txt'), 'utf8'))
+      .includes('https://docs.registrystack.org/llms-full.txt'),
   );
   assert.match(
     await readFile(resolve(fixture.docsRoot, 'dist/llms-full.txt'), 'utf8'),
