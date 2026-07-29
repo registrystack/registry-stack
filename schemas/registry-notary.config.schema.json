@@ -2454,8 +2454,88 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "additionalProperties": {
+                "$ref": "#/$defs/RelayOutputObjectFieldContract"
+              },
+              "type": "object"
+            },
+            "max_bytes": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "nullable": {
+              "default": false,
+              "type": "boolean"
+            },
+            "type": {
+              "const": "object",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "max_bytes",
+            "fields"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "$ref": "#/$defs/RelayOutputContract"
+            },
+            "max_bytes": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_items": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "nullable": {
+              "default": false,
+              "type": "boolean"
+            },
+            "type": {
+              "const": "array",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "max_bytes",
+            "max_items",
+            "items"
+          ],
+          "type": "object"
         }
       ]
+    },
+    "RelayOutputObjectFieldContract": {
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "schema": {
+          "$ref": "#/$defs/RelayOutputContract"
+        }
+      },
+      "required": [
+        "required",
+        "schema"
+      ],
+      "type": "object"
     },
     "RequestVariableConfig": {
       "additionalProperties": false,
