@@ -2152,12 +2152,39 @@ fn generated_credential_operation(
         .as_deref()
         .map(|scope| scope.split_ascii_whitespace().collect::<Vec<_>>())
         .unwrap_or_default();
-    let expiry_safety_skew_ms = interface
-        .refresh_skew
-        .as_deref()
-        .map(parse_oauth_refresh_skew_ms)
-        .transpose()?
-        .unwrap_or(30_000);
+    let response = match interface
+        .response_profile
+        .ok_or_else(|| anyhow!("OAuth response profile is absent"))?
+    {
+        OAuthResponseProfile::Oauth2Bearer => {
+            let expiry_safety_skew_ms = interface
+                .refresh_skew
+                .as_deref()
+                .map(parse_oauth_refresh_skew_ms)
+                .transpose()?
+                .unwrap_or(30_000);
+            json!({
+                "max_bytes": 8 * 1024,
+                "accepted_statuses": [200],
+                "schema": "strict_access_token_bearer_expires_in",
+                "access_token_max_bytes": 4096,
+                "token_type": "Bearer",
+                "expires_in_min_seconds": 60,
+                "expires_in_max_seconds": 3600,
+                "max_token_lifetime_ms": 3600000,
+                "expiry_safety_skew_ms": expiry_safety_skew_ms,
+                "cache_mode": "expiry_bound",
+            })
+        }
+        OAuthResponseProfile::Oauth2BearerNoExpiry => json!({
+            "max_bytes": 8 * 1024,
+            "accepted_statuses": [200],
+            "schema": "strict_access_token_bearer_no_expiry",
+            "access_token_max_bytes": 4096,
+            "token_type": "Bearer",
+            "cache_mode": "disabled",
+        }),
+    };
     Ok(Some(json!({
         "id": "oauth",
         "kind": "oauth2_client_credentials",
@@ -2173,18 +2200,7 @@ fn generated_credential_operation(
             "audience": interface.audience,
             "scopes": scopes,
         },
-        "response": {
-            "max_bytes": 8 * 1024,
-            "accepted_statuses": [200],
-            "schema": "strict_access_token_bearer_expires_in",
-            "access_token_max_bytes": 4096,
-            "token_type": "Bearer",
-            "expires_in_min_seconds": 60,
-            "expires_in_max_seconds": 3600,
-            "max_token_lifetime_ms": 3600000,
-            "expiry_safety_skew_ms": expiry_safety_skew_ms,
-            "cache_mode": "expiry_bound",
-        },
+        "response": response,
         "failure_policy": "fail_closed_source_unavailable_no_retry_no_stale_no_data_dispatch",
     })))
 }
@@ -2606,6 +2622,12 @@ fn private_binding_document(
             format!("{}-source", consultation.integration)
         }
     };
+    let max_token_lifetime_ms = credential_destination.as_ref().and_then(|_| {
+        credential_interface(&integration.document)
+            .response_profile
+            .filter(|profile| profile.uses_expiry_bound_cache())
+            .map(|_| 3_600_000)
+    });
     Ok(json!({
         "profile": { "id": profile_id, "version": profile_version },
         "integration_pack": {
@@ -2644,7 +2666,7 @@ fn private_binding_document(
                 .and_then(|binding| binding.source.rate.as_ref())
                 .map_or(integration.document.bounds.concurrency.min(60), |rate| rate.burst),
             "max_public_response_bytes": 64 * 1024,
-            "max_token_lifetime_ms": credential_destination.as_ref().map(|_| 3_600_000),
+            "max_token_lifetime_ms": max_token_lifetime_ms,
         },
         "capabilities": {
             "allow_script": allow_rhai,

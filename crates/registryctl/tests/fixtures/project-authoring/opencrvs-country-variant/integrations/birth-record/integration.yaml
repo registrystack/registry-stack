@@ -8,7 +8,7 @@ source:
   auth:
     type: oauth2_client_credentials
     request: json
-    response_profile: oauth2_bearer
+    response_profile: oauth2_bearer_no_expiry
   allow:
     - method: POST
       path: /exchange/v2/records/search

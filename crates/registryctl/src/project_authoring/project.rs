@@ -3547,9 +3547,7 @@ fn validate_credential_interface(integration: &IntegrationDocument) -> Result<()
             if interface.name.is_some() || interface.max_value_bytes.is_some() {
                 bail!("non-API-key credential interfaces cannot declare API-key fields");
             }
-            if interface.request.is_none()
-                || interface.response_profile != Some(OAuthResponseProfile::Oauth2Bearer)
-            {
+            if interface.request.is_none() || interface.response_profile.is_none() {
                 bail!("OAuth client credentials require request and response_profile");
             }
             if let Some(scope) = &interface.scope {
@@ -3567,6 +3565,13 @@ fn validate_credential_interface(integration: &IntegrationDocument) -> Result<()
             }
             if let Some(audience) = &interface.audience {
                 validate_token(audience, "OAuth audience", 2048)?;
+            }
+            if interface
+                .response_profile
+                .is_some_and(|profile| !profile.uses_expiry_bound_cache())
+                && interface.refresh_skew.is_some()
+            {
+                bail!("OAuth refresh_skew requires the oauth2_bearer response profile");
             }
             if let Some(refresh_skew) = interface.refresh_skew.as_deref() {
                 parse_oauth_refresh_skew_ms(refresh_skew)?;

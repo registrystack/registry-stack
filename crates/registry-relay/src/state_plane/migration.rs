@@ -30,15 +30,15 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "audit-pseudonym-keyring=registry.relay.postgres-audit-pseudonym-keyring/v1\0",
     "materialization-publication=registry.relay.postgres-materialization-publication/v1\0",
     "materialization-publication-order=attempt-before-access-atomic-completion-pointer-monotonic-generation-v1\0",
-    "consultation-completion=atomic-intent-sealed-seed-closed-three-outcomes-script-verification-permit-dynamic-ordinal-call-ack-known-unfinished-recovery-date-schema-v5\0",
+    "consultation-completion=atomic-intent-sealed-seed-closed-three-outcomes-script-verification-permit-dynamic-ordinal-call-ack-known-unfinished-recovery-date-schema-explicit-token-cache-v6\0",
     "consultation-batch-child-replay=authenticated-hmac-binding-reserve-before-quota-atomic-terminal-publication-provenance-without-consent-fixed-retention-v3\0",
     "consultation-authorization=database-expiry-credential-verification-data-order-keyed-request-effect-call-ack-v4\0",
-    "consultation-credentials=direct-data-auth-reference-distinct-authored-verification-no-expiry-v3\0",
+    "consultation-credentials=direct-data-auth-reference-distinct-authored-verification-no-expiry-explicit-cache-v4\0",
     "serving-fence-order=fence-row-keyring-intent-permit-audit-head-v1\0",
     "key-order=utf8-bytewise-key-order-v1\0",
 );
 pub(crate) const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "sha256:de5f85061217001d7e37fe5681aec6cdaa36b01072fca97dda609485e8938713";
+    "sha256:5a8cfa791fd22856860f4ceee56f6defaf66dac8931df65f6cf409093996b8ed";
 
 pub(super) const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
 const SUPPORTED_POSTGRES_MIN_MAJOR: i32 = 16;
@@ -47,16 +47,16 @@ const SUPPORTED_POSTGRES_MAX_MAJOR: i32 = 18;
 // Filled from the semantic catalog descriptor below on disposable supported
 // PostgreSQL majors. Constraint rendering is explicitly versioned because
 // pg_get_constraintdef is not a cross-major wire contract.
-const CONSTRAINT_FINGERPRINT_PG16: &str = "25dbf98e1e26411436c24a391b534e07";
-const CONSTRAINT_FINGERPRINT_PG17: &str = "25dbf98e1e26411436c24a391b534e07";
-const CONSTRAINT_FINGERPRINT_PG18: &str = "a85469cded76f1f5f72f674c09fc08b3";
+const CONSTRAINT_FINGERPRINT_PG16: &str = "9433515378b0f927da32df733cb0b8bb";
+const CONSTRAINT_FINGERPRINT_PG17: &str = "9433515378b0f927da32df733cb0b8bb";
+const CONSTRAINT_FINGERPRINT_PG18: &str = "86ef3cd4fa92a39c62c73c7298327b8b";
 const COLUMN_FINGERPRINT_PG16: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
 const COLUMN_FINGERPRINT_PG17: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
 const COLUMN_FINGERPRINT_PG18: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
-const FUNCTION_FINGERPRINT_PG16: &str = "974de91ab404047b05d2fbe76ab3bc45";
-const FUNCTION_FINGERPRINT_PG17: &str = "974de91ab404047b05d2fbe76ab3bc45";
-const FUNCTION_FINGERPRINT_PG18: &str = "974de91ab404047b05d2fbe76ab3bc45";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "a16f5fe68a6a6751ecb0f935bf987059";
+const FUNCTION_FINGERPRINT_PG16: &str = "278f7c9d2738740ecbbaa641f4f1240f";
+const FUNCTION_FINGERPRINT_PG17: &str = "278f7c9d2738740ecbbaa641f4f1240f";
+const FUNCTION_FINGERPRINT_PG18: &str = "278f7c9d2738740ecbbaa641f4f1240f";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "c677518aec8eb5c7cb27dc37ed7f4551";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fingerprint_check CHECK (
         capability_fingerprint =
-        'sha256:de5f85061217001d7e37fe5681aec6cdaa36b01072fca97dda609485e8938713'
+        'sha256:5a8cfa791fd22856860f4ceee56f6defaf66dac8931df65f6cf409093996b8ed'
     ),
     CONSTRAINT state_plane_metadata_roles_distinct_check CHECK (
         owner_role_oid <> runtime_role_oid
@@ -1036,7 +1036,8 @@ BEGIN
                OR v_seed #>> '{dispatch,plan_kind}' <> 'bounded_http'
                OR (v_seed #>> '{bounds,data_exchanges}')::integer <> 2
                OR (v_seed #>> '{bounds,credential_exchanges}')::integer <> 1
-               OR jsonb_typeof(v_seed #> '{bounds,credential_token_lifetime_ms}') <> 'null'
+               OR v_seed #>> '{credential,token_cache_mode}'
+                    IS DISTINCT FROM 'disabled'
            )
        )
        OR jsonb_typeof(v_seed #> '{acquisition,public_outcomes}') IS DISTINCT FROM 'array'
@@ -1155,8 +1156,11 @@ BEGIN
        OR (jsonb_typeof(v_seed #> '{destinations,data_destination_id}') = 'string'
            AND v_seed #>> '{destinations,data_destination_id}'
                 !~ '^[a-z][a-z0-9._-]{0,95}$')
-       OR relay_state_private.jsonb_object_key_count_v1(v_seed -> 'credential') <> 2
-       OR (v_seed -> 'credential') - ARRAY['reference', 'generation']::text[] <> '{}'::jsonb
+       OR relay_state_private.jsonb_object_key_count_v1(v_seed -> 'credential')
+            NOT BETWEEN 2 AND 3
+       OR (v_seed -> 'credential') - ARRAY[
+           'reference', 'generation', 'token_cache_mode'
+       ]::text[] <> '{}'::jsonb
        OR jsonb_typeof(v_seed #> '{credential,reference}') NOT IN ('string', 'null')
        OR (jsonb_typeof(v_seed #> '{credential,reference}') = 'string'
            AND v_seed #>> '{credential,reference}' !~ '^[a-z][a-z0-9._-]{0,95}$')
@@ -1172,6 +1176,13 @@ BEGIN
            CASE WHEN jsonb_typeof(v_seed #> '{credential,generation}') = 'null'
                 THEN NULL ELSE v_seed #>> '{credential,generation}' END
        ) NOT IN (0, 2)
+       OR (
+           v_seed -> 'credential' ? 'token_cache_mode'
+           AND (
+               jsonb_typeof(v_seed #> '{credential,token_cache_mode}') <> 'string'
+               OR v_seed #>> '{credential,token_cache_mode}' <> 'disabled'
+           )
+       )
        OR relay_state_private.jsonb_object_key_count_v1(v_seed -> 'dispatch') <> 2
        OR (v_seed -> 'dispatch') - ARRAY[
            'plan_kind', 'permit_bindings'
@@ -1233,17 +1244,14 @@ BEGIN
            (v_seed #>> '{bounds,credential_exchanges}')::integer = 0
            AND jsonb_typeof(v_seed #> '{bounds,credential_token_lifetime_ms}') <> 'null'
        )
-       OR (
-           (v_seed #>> '{bounds,credential_exchanges}')::integer = 1
-           AND jsonb_typeof(v_seed #> '{bounds,credential_token_lifetime_ms}') = 'null'
-           AND (
-               v_seed #>> '{dispatch,plan_kind}' <> 'bounded_http'
-               OR v_seed #>> '{acquisition,class}' <> 'bounded_full_record'
-               OR jsonb_array_length(v_seed #> '{acquisition,disclosure_fields}') <> 0
-               OR (v_seed #>> '{bounds,data_exchanges}')::integer <> 2
-               OR jsonb_array_length(v_seed #> '{dispatch,permit_bindings}') <> 3
-           )
-       )
+       -- A null lifetime describes no reusable cache authority, not a source
+       -- protocol or permit topology. Require the compiler-owned discriminator
+       -- instead of treating signed DCI's historical shape as that proxy.
+       OR (v_seed -> 'credential' ? 'token_cache_mode') <>
+          (
+              (v_seed #>> '{bounds,credential_exchanges}')::integer = 1
+              AND jsonb_typeof(v_seed #> '{bounds,credential_token_lifetime_ms}') = 'null'
+          )
        OR ((v_seed #>> '{bounds,data_exchanges}')::integer > 0) <>
           (jsonb_typeof(v_seed #> '{destinations,data_destination_id}') = 'string')
        OR v_seed ->> 'request_digest' !~ '^sha256:[0-9a-f]{64}$'
@@ -1359,11 +1367,9 @@ BEGIN
            )
        )
        OR (
-           (v_seed #>> '{bounds,credential_exchanges}')::integer = 1
-           AND jsonb_typeof(v_seed #> '{bounds,credential_token_lifetime_ms}') = 'null'
+           jsonb_array_length(v_seed #> '{acquisition,disclosure_fields}') = 0
            AND NOT (
-               v_seed #>> '{dispatch,plan_kind}' IN ('bounded_http', 'script')
-               AND v_verification_binding_count = 1
+               v_verification_binding_count = 1
                AND v_data_binding_count = 1
            )
        )
@@ -1547,7 +1553,7 @@ WITH metadata AS (
       AND schema_version = 1
       AND capability_id = 'registry.relay.postgres-durable-audit/v1'
       AND capability_fingerprint =
-        'sha256:de5f85061217001d7e37fe5681aec6cdaa36b01072fca97dda609485e8938713'
+        'sha256:5a8cfa791fd22856860f4ceee56f6defaf66dac8931df65f6cf409093996b8ed'
       AND serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
       AND serving_fence_lock_key <> 0
       AND serving_fence_lock_key <> 7221091440
@@ -2199,9 +2205,9 @@ SELECT
            )
     )
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '25dbf98e1e26411436c24a391b534e07'
-            WHEN 17 THEN '25dbf98e1e26411436c24a391b534e07'
-            WHEN 18 THEN 'a85469cded76f1f5f72f674c09fc08b3'
+            WHEN 16 THEN '9433515378b0f927da32df733cb0b8bb'
+            WHEN 17 THEN '9433515378b0f927da32df733cb0b8bb'
+            WHEN 18 THEN '86ef3cd4fa92a39c62c73c7298327b8b'
             ELSE '' END FROM constraint_fingerprint, server)
     AND (SELECT value = CASE server.major
             WHEN 16 THEN 'f1cce8b8398fd1b177d3d6b61a112cec'
@@ -2209,9 +2215,9 @@ SELECT
             WHEN 18 THEN 'f1cce8b8398fd1b177d3d6b61a112cec'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '974de91ab404047b05d2fbe76ab3bc45'
-            WHEN 17 THEN '974de91ab404047b05d2fbe76ab3bc45'
-            WHEN 18 THEN '974de91ab404047b05d2fbe76ab3bc45'
+            WHEN 16 THEN '278f7c9d2738740ecbbaa641f4f1240f'
+            WHEN 17 THEN '278f7c9d2738740ecbbaa641f4f1240f'
+            WHEN 18 THEN '278f7c9d2738740ecbbaa641f4f1240f'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
@@ -8692,10 +8698,11 @@ mod tests {
     }
 
     #[test]
-    fn completion_seed_uses_dynamic_ordinal_bindings_for_authored_verification() {
+    fn completion_seed_uses_explicit_cache_mode_and_dynamic_authored_verification() {
         for required in [
             "jsonb_array_length(v_seed #> '{acquisition,disclosure_fields}') NOT BETWEEN 0 AND 64",
-            "jsonb_typeof(v_seed #> '{bounds,credential_token_lifetime_ms}') = 'null'",
+            "v_seed -> 'credential' ? 'token_cache_mode'",
+            "v_seed #>> '{credential,token_cache_mode}' <> 'disabled'",
             "v_verification_binding_count = 1",
             "v_data_binding_count = 1",
             "v_binding - ARRAY['kind', 'ordinal']::text[]",
@@ -8896,10 +8903,10 @@ mod tests {
             PERSISTENT_QUOTA_CAPABILITY_V1,
             AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
             MATERIALIZATION_PUBLICATION_CAPABILITY_V1,
-            "atomic-intent-sealed-seed-closed-three-outcomes-script-verification-permit-dynamic-ordinal-call-ack-known-unfinished-recovery-date-schema-v5",
+            "atomic-intent-sealed-seed-closed-three-outcomes-script-verification-permit-dynamic-ordinal-call-ack-known-unfinished-recovery-date-schema-explicit-token-cache-v6",
             "authenticated-hmac-binding-reserve-before-quota-atomic-terminal-publication-provenance-without-consent-fixed-retention-v3",
             "database-expiry-credential-verification-data-order-keyed-request-effect-call-ack-v4",
-            "direct-data-auth-reference-distinct-authored-verification-no-expiry-v3",
+            "direct-data-auth-reference-distinct-authored-verification-no-expiry-explicit-cache-v4",
             "utf8-bytewise-key-order-v1",
         ] {
             assert!(

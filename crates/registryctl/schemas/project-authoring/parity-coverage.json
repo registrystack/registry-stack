@@ -836,8 +836,8 @@
       }
     },
     {
-      "id": "integration-oauth-refresh-skew-at-minimum-token-lifetime",
-      "dimension": "boundary",
+      "id": "integration-oauth-no-expiry-forbids-refresh-skew",
+      "dimension": "conditional",
       "expected_failing_keywords": ["oneOf"],
       "schema": "integration",
       "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
@@ -845,7 +845,7 @@
       "mutation": {
         "operation": "set",
         "pointer": "/source/auth/refresh_skew",
-        "value": "60s"
+        "value": "20s"
       }
     },
     {

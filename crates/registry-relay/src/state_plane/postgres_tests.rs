@@ -47,8 +47,9 @@ use crate::consultation::{
 use crate::source_plan::{
     bounded_runtime_vector_plan_fixture, dhis2_completion_seed_fixture,
     maximum_completion_seed_fixture, normal_completion_seed_fixture,
-    open_crvs_completion_seed_fixture, rhai_five_operation_two_slot_completion_seed_fixture,
-    semantic_alias_completion_seed_fixture, snapshot_completion_seed_fixture,
+    open_crvs_completion_seed_fixture, open_crvs_no_expiry_script_completion_seed_fixture,
+    rhai_five_operation_two_slot_completion_seed_fixture, semantic_alias_completion_seed_fixture,
+    snapshot_completion_seed_fixture,
 };
 
 use super::migration::RUNTIME_SESSION_LIMITS_SQL;
@@ -3419,6 +3420,7 @@ WHERE metadata.singleton = true
     let compiler_normal_seed = normal_completion_seed_fixture();
     let compiler_dhis2_seed = dhis2_completion_seed_fixture();
     let compiler_open_crvs_seed = open_crvs_completion_seed_fixture();
+    let compiler_open_crvs_script_seed = open_crvs_no_expiry_script_completion_seed_fixture();
     let compiler_snapshot_seed = snapshot_completion_seed_fixture();
     let mut compiler_date_seed = compiler_snapshot_seed.clone();
     compiler_date_seed["acquisition"]["schema"]["fields"]["registration_status"] =
@@ -3499,6 +3501,20 @@ WHERE metadata.singleton = true
         )
         .await?
         .try_get(0)?;
+    let compiler_open_crvs_script_seed_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&compiler_open_crvs_script_seed)?],
+        )
+        .await?
+        .try_get(0)?;
+    let mut missing_disabled_cache_mode = compiler_open_crvs_script_seed.clone();
+    missing_disabled_cache_mode["credential"]
+        .as_object_mut()
+        .expect("compiler credential seed object")
+        .remove("token_cache_mode");
+    let mut unknown_disabled_cache_mode = compiler_open_crvs_script_seed.clone();
+    unknown_disabled_cache_mode["credential"]["token_cache_mode"] = json!("expiry_bound");
     let mut obsolete_operation_union = compiler_open_crvs_seed.clone();
     obsolete_operation_union["authorized_operation_union"] = json!([]);
     let obsolete_operation_union_valid: bool = admin
@@ -3574,6 +3590,16 @@ WHERE metadata.singleton = true
             &snapshot_with_dangling_reference,
             false,
         ),
+        (
+            "no-expiry credential exchange without an explicit disabled cache",
+            &missing_disabled_cache_mode,
+            false,
+        ),
+        (
+            "no-expiry credential exchange with an unknown cache mode",
+            &unknown_disabled_cache_mode,
+            false,
+        ),
     ] {
         let valid = admin
             .query_one(
@@ -3601,6 +3627,10 @@ WHERE metadata.singleton = true
     assert!(
         compiler_open_crvs_seed_valid,
         "the compiler's cache-disabled OpenCRVS seed must satisfy SQL"
+    );
+    assert!(
+        compiler_open_crvs_script_seed_valid,
+        "the generated OpenCRVS script seed must satisfy SQL"
     );
     assert!(
         compiler_snapshot_seed_valid,
@@ -4426,6 +4456,10 @@ WHERE metadata.singleton = true
     for (marker, compiler_seed) in [
         ("compiler-normal-seed", compiler_normal_seed.clone()),
         ("compiler-dhis2-basic-seed", compiler_dhis2_seed.clone()),
+        (
+            "compiler-opencrvs-script-seed",
+            compiler_open_crvs_script_seed.clone(),
+        ),
         ("compiler-maximum-seed", compiler_maximum_seed.clone()),
     ] {
         let credential_count = u8::try_from(

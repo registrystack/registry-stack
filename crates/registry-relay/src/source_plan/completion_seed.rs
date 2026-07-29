@@ -16,8 +16,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::artifact::{
-    IntegrationPackArtifact, PrivateBindingArtifact, PublicContractArtifact,
-    SourceObservedAtDocument, SourcePlanKind, SourcePlanLimits, SourceRevisionDocument,
+    IntegrationPackArtifact, OAuth2TokenCacheModeDocument, PrivateBindingArtifact,
+    PublicContractArtifact, SourceObservedAtDocument, SourcePlanKind, SourcePlanLimits,
+    SourceRevisionDocument,
 };
 use super::compiler::{
     CompiledBodyTemplate, CompiledCardinalityMechanism, CompiledOperation,
@@ -58,6 +59,20 @@ pub(super) struct CompiledCompletionSeedTemplate {
     credential_generation: Option<u64>,
     permit_bindings: Box<[CompiledPermitBinding]>,
     credential_token_lifetime_ms: Option<u32>,
+    credential_token_cache_mode: Option<CompiledCredentialTokenCacheMode>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CompiledCredentialTokenCacheMode {
+    Disabled,
+}
+
+impl CompiledCredentialTokenCacheMode {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -119,6 +134,12 @@ impl CompiledCompletionSeedTemplate {
 
     pub(super) const fn credential_token_lifetime_ms(&self) -> Option<u32> {
         self.credential_token_lifetime_ms
+    }
+
+    pub(super) const fn credential_token_cache_mode(
+        &self,
+    ) -> Option<CompiledCredentialTokenCacheMode> {
+        self.credential_token_cache_mode
     }
 }
 
@@ -919,6 +940,9 @@ pub(super) fn measure_completion_seed(
         .credential
         .as_ref()
         .map(|credential| credential.generation);
+    let credential_token_cache_mode = credential_operation
+        .filter(|operation| operation.response.cache_mode == OAuth2TokenCacheModeDocument::Disabled)
+        .map(|_| CompiledCredentialTokenCacheMode::Disabled);
     let template = CompiledCompletionSeedTemplate {
         credential_destination_id: credential_destination_id.map(Into::into),
         data_destination_id: data_destination_id.map(Into::into),
@@ -927,6 +951,7 @@ pub(super) fn measure_completion_seed(
         credential_generation,
         permit_bindings: compiled_permit_bindings.into_boxed_slice(),
         credential_token_lifetime_ms: effective_token_lifetime_ms,
+        credential_token_cache_mode,
     };
     let operation_bounds = effective_limits.operation();
     let kind = match pack.document.spec.plan.kind {
@@ -961,6 +986,13 @@ pub(super) fn measure_completion_seed(
             "max_bytes": max_bytes,
         }),
     };
+    let mut credential = json!({
+        "reference": credential_reference,
+        "generation": credential_generation,
+    });
+    if let Some(cache_mode) = credential_token_cache_mode {
+        credential["token_cache_mode"] = Value::String(cache_mode.as_str().to_owned());
+    }
     let mut seed = json!({
         "schema": "registry.relay.consultation-completion-seed/v1",
         "correlation": {"notary_evaluation_id": "7ZZZZZZZZZZZZZZZZZZZZZZZZZ"},
@@ -1021,10 +1053,7 @@ pub(super) fn measure_completion_seed(
             "data_destination_id": data_destination_id,
             "verification_destination_id": verification_destination_id,
         },
-        "credential": {
-            "reference": credential_reference,
-            "generation": credential_generation,
-        },
+        "credential": credential,
         "dispatch": {
             "plan_kind": kind,
             "permit_bindings": permit_bindings,

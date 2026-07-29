@@ -5716,7 +5716,7 @@ fn oauth_refresh_skew_accepts_explicit_default_and_safe_ceiling() {
         let project = copy_project("opencrvs", temporary.path());
         replace_in_file(
             &project.join("integrations/birth-record/integration.yaml"),
-            "    response_profile: oauth2_bearer",
+            "    response_profile: oauth2_bearer_no_expiry",
             &format!("    response_profile: oauth2_bearer\n    refresh_skew: {authored}"),
         );
         let report = build_registry_project(&ProjectBuildOptions {
@@ -5740,6 +5740,81 @@ fn oauth_refresh_skew_accepts_explicit_default_and_safe_ceiling() {
             expected_ms
         );
     }
+}
+
+#[test]
+fn oauth_no_expiry_profile_is_exact_and_disables_token_caching() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("opencrvs", temporary.path());
+    test_registry_project(&ProjectTestOptions {
+        project_directory: project.clone(),
+        environment: None,
+        live: false,
+    })
+    .expect("strict two-member OAuth fixtures execute");
+
+    let report = build_registry_project(&ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("no-expiry OAuth project builds through the Relay compiler");
+    let output = resolve_build_output(
+        &project,
+        report.output.expect("no-expiry OAuth build output"),
+    );
+    let pack: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            output.join("private/relay/config/artifacts/integration-packs/birth-record.json"),
+        )
+        .expect("generated OpenCRVS integration pack reads"),
+    )
+    .expect("generated OpenCRVS integration pack is JSON");
+    assert_eq!(
+        pack["spec"]["plan"]["credential_operation"]["response"],
+        serde_json::json!({
+            "max_bytes": 8192,
+            "accepted_statuses": [200],
+            "schema": "strict_access_token_bearer_no_expiry",
+            "access_token_max_bytes": 4096,
+            "token_type": "Bearer",
+            "cache_mode": "disabled"
+        })
+    );
+    let binding: serde_json::Value =
+        serde_json::from_slice(
+            &std::fs::read(output.join(
+                "private/relay/config/artifacts/private-bindings/birth-verification-birth.json",
+            ))
+            .expect("generated OpenCRVS private binding reads"),
+        )
+        .expect("generated OpenCRVS private binding is JSON");
+    assert!(
+        binding["limits"].get("max_token_lifetime_ms").is_none(),
+        "a no-expiry token must not gain a cache lifetime from private configuration"
+    );
+
+    let skew_root = tempfile::tempdir().expect("temporary directory");
+    let skew_project = copy_project("opencrvs", skew_root.path());
+    replace_in_file(
+        &skew_project.join("integrations/birth-record/integration.yaml"),
+        "    response_profile: oauth2_bearer_no_expiry",
+        "    response_profile: oauth2_bearer_no_expiry\n    refresh_skew: 20s",
+    );
+    let error = test_registry_project(&ProjectTestOptions {
+        project_directory: skew_project,
+        environment: None,
+        live: false,
+    })
+    .expect_err("no-expiry profile rejects refresh skew");
+    let rendered = format!("{error:#}");
+    assert!(
+        rendered.contains("schema_path=/properties/source/properties/auth/oneOf keyword=oneOf"),
+        "unexpected no-expiry refresh-skew diagnostic: {rendered}"
+    );
+    assert!(!rendered.contains("oauth2_bearer_no_expiry"));
+    assert!(!rendered.contains("20s"));
 }
 
 fn validate_yaml(schema: &jsonschema::JSONSchema, path: &Path) {

@@ -36,6 +36,19 @@ class DockerBuildContractTest(unittest.TestCase):
             script,
         )
 
+    def test_local_image_revision_is_exact_and_forwarded_as_an_oci_label(self):
+        script = (ROOT / "scripts" / "build-image.sh").read_text()
+
+        self.assertIn('image_revision="${REGISTRY_RELAY_IMAGE_REVISION:-}"', script)
+        self.assertIn(
+            'expr "$image_revision" : \'[0-9a-f][0-9a-f]*$\'',
+            script,
+        )
+        self.assertIn(
+            '--label "org.opencontainers.image.revision=$image_revision"',
+            script,
+        )
+
     def test_flags_documented_direct_local_manifest_builds(self):
         module = self.module
         path = ROOT / "README.md"

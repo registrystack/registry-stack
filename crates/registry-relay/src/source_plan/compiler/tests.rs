@@ -526,6 +526,26 @@ fn signed_dci_script_fixture() -> Fixture {
     fixture
 }
 
+fn open_crvs_no_expiry_script_fixture() -> Fixture {
+    let mut fixture = signed_dci_script_fixture();
+    fixture.pack_value["spec"]["plan"]["script_authority"]
+        .as_object_mut()
+        .expect("OpenCRVS Script authority")
+        .remove("signed_dci");
+    let plan = fixture.pack_value["spec"]["plan"]
+        .as_object_mut()
+        .expect("OpenCRVS Script plan");
+    plan.remove("verification_operations");
+    plan.remove("verification_destination_slot");
+    fixture.pack_value["spec"]["bounds"]["max_data_exchanges"] = json!(1);
+    fixture.contract_value["spec"]["bounds"]["max_data_exchanges"] = json!(1);
+    fixture.binding_value["verification_destination"] = Value::Null;
+    fixture.binding_value["credential_destination"]["origin"] =
+        json!("https://identity.example.test/");
+    fixture.refresh_all();
+    fixture
+}
+
 fn dhis2_fixture() -> Fixture {
     let pack = DHIS2_PACK.to_vec();
     let pack_value = parse_json_strict(&pack).expect("strict DHIS2 pack JSON");
@@ -1102,13 +1122,15 @@ fn open_crvs_exact_presence_plan_compiles_embedded_jwks_and_fresh_oauth() {
         .parse(200, br#"{"access_token":"fresh","token_type":"Bearer"}"#)
         .expect("strict two-member token response");
     assert_eq!(token.usable_lifetime_ms(), None);
-    assert!(matches!(
-        credential.parser().parse(
-            200,
-            br#"{"access_token":"fresh","token_type":"Bearer","expires_in":60}"#,
-        ),
-        Err(CredentialOperationFailure::MalformedResponse)
-    ));
+    for malformed in [
+        br#"{"access_token":"fresh","token_type":"bearer"}"#.as_slice(),
+        br#"{"access_token":"fresh","token_type":"Bearer","expires_in":60}"#,
+        br#"{"access_token":"fresh","token_type":"Bearer","expires_in":null}"#,
+        br#"{"access_token":"fresh","token_type":"Bearer","expires_in":60,"expires_in":120}"#,
+        br#"{"access_token":"fresh","token_type":"Bearer","extra":"rejected"}"#,
+    ] {
+        assert!(credential.parser().parse(200, malformed).is_err());
+    }
 }
 
 #[test]
@@ -1225,6 +1247,28 @@ pub(crate) fn dhis2_runtime_vector_plan_fixture() -> CompiledSourcePlan {
 
 pub(crate) fn open_crvs_completion_seed_fixture() -> Value {
     completion_seed_value(&open_crvs_fixture())
+}
+
+pub(crate) fn open_crvs_no_expiry_script_completion_seed_fixture() -> Value {
+    completion_seed_value_with_rhai_limits(
+        &open_crvs_no_expiry_script_fixture(),
+        Some(rhai_test_worker_limits(1)),
+    )
+}
+
+pub(crate) fn open_crvs_no_expiry_script_runtime_plan_fixture() -> CompiledSourcePlan {
+    let fixture = open_crvs_no_expiry_script_fixture();
+    let worker = RhaiWorkerCapability::from_initialized_worker(
+        &fixture.pack_hash,
+        rhai_test_worker_limits(1),
+    )
+    .expect("OpenCRVS no-expiry Script worker capability");
+    compile_with_rhai_workers(&fixture, &[worker])
+        .expect("OpenCRVS no-expiry Script plan compiles")
+        .plans
+        .into_values()
+        .next()
+        .expect("one OpenCRVS no-expiry Script plan")
 }
 
 pub(crate) fn open_crvs_runtime_vector_plan_fixture() -> CompiledSourcePlan {
@@ -1916,6 +1960,23 @@ fn maintained_dhis2_seed_distinguishes_direct_basic_auth_from_credential_exchang
         Value::Null
     );
     assert_eq!(seed["bounds"]["credential_token_lifetime_ms"], Value::Null);
+}
+
+#[test]
+fn generated_opencrvs_script_seed_marks_its_no_expiry_token_cache_contract() {
+    let seed = open_crvs_no_expiry_script_completion_seed_fixture();
+    assert_eq!(seed["dispatch"]["plan_kind"], json!("script"));
+    assert_eq!(
+        seed["dispatch"]["permit_bindings"],
+        json!([
+            {"kind": "credential", "ordinal": 0},
+            {"kind": "data", "ordinal": 0},
+        ])
+    );
+    assert_eq!(seed["bounds"]["credential_exchanges"], json!(1));
+    assert_eq!(seed["bounds"]["data_exchanges"], json!(1));
+    assert_eq!(seed["bounds"]["credential_token_lifetime_ms"], Value::Null);
+    assert_eq!(seed["credential"]["token_cache_mode"], json!("disabled"));
 }
 
 #[test]

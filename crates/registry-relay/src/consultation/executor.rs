@@ -1672,6 +1672,7 @@ async fn execute_interactive_rhai(
         .acquire_owned()
         .await
         .map_err(|_| ConcreteExecutorUnfinished)?;
+    let hard_deadline = dispatch.local_not_after();
     let mut host = ProductionRhaiHost {
         dispatch,
         bound: &bound,
@@ -1685,12 +1686,21 @@ async fn execute_interactive_rhai(
     };
     let worker = WorkerProcess::dedicated_executable().map_err(|_| ConcreteExecutorUnfinished)?;
     let output = worker
-        .evaluate_with_host(&request, &mut host)
+        .evaluate_with_host(&request, &mut host, hard_deadline)
         .await
-        .map_err(|_| ConcreteExecutorUnfinished)?;
+        .map_err(|error| {
+            // WorkerError rendering is value-free by contract. Keep this
+            // diagnostic useful without exposing scripts, inputs, responses,
+            // credentials, or destination details.
+            tracing::warn!(
+                worker_error = ?error,
+                "interactive Rhai worker could not complete"
+            );
+            ConcreteExecutorUnfinished
+        })?;
     drop(host);
     drop(quota);
-    match output {
+    let result = match output {
         WorkerOutput::Success {
             outcome: WorkerOutcome::NoMatch,
             ..
@@ -1731,7 +1741,11 @@ async fn execute_interactive_rhai(
         WorkerOutput::Failure { failure } => Ok(ConcreteExecutorProof::known_failure(
             map_script_failure(failure),
         )),
-    }
+    };
+    result.map_err(|_| {
+        tracing::warn!("interactive Rhai worker result failed closed validation");
+        ConcreteExecutorUnfinished
+    })
 }
 
 const fn map_script_failure(failure: ScriptFailure) -> KnownFailureClass {

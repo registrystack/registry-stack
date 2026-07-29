@@ -999,9 +999,9 @@ fn validate_authored_credential_interface(interface: &CredentialInterface) -> Re
             if interface.name.is_some()
                 || interface.max_value_bytes.is_some()
                 || interface.request.is_none()
-                || interface.response_profile != Some(OAuthResponseProfile::Oauth2Bearer)
+                || interface.response_profile.is_none()
             {
-                bail!("source.auth OAuth fields do not form the oauth2_bearer profile");
+                bail!("source.auth OAuth fields do not form a supported response profile");
             }
             if let Some(scope) = &interface.scope {
                 let scopes = scope.split_ascii_whitespace().collect::<Vec<_>>();
@@ -1018,6 +1018,13 @@ fn validate_authored_credential_interface(interface: &CredentialInterface) -> Re
             }
             if let Some(audience) = &interface.audience {
                 validate_token(audience, "source.auth.audience", 2048)?;
+            }
+            if interface
+                .response_profile
+                .is_some_and(|profile| !profile.uses_expiry_bound_cache())
+                && interface.refresh_skew.is_some()
+            {
+                bail!("source.auth.refresh_skew requires the oauth2_bearer response profile");
             }
             if let Some(refresh_skew) = interface.refresh_skew.as_deref() {
                 parse_oauth_refresh_skew_ms(refresh_skew)?;
@@ -1821,6 +1828,37 @@ fn lower_oauth_credential_operation(
         OAuthRequestFormat::Form => "oauth2_client_credentials_form_v1",
         OAuthRequestFormat::Json => "oauth2_client_credentials_json_v1",
     };
+    let profile = interface
+        .response_profile
+        .ok_or_else(|| anyhow!("OAuth response profile is absent"))?;
+    let mut fields = BTreeMap::from([
+        (
+            "access_token".to_string(),
+            SchemaField {
+                required: true,
+                schema: SchemaNode::String { max_bytes: 4096 },
+            },
+        ),
+        (
+            "token_type".to_string(),
+            SchemaField {
+                required: true,
+                schema: SchemaNode::String { max_bytes: 16 },
+            },
+        ),
+    ]);
+    if profile.uses_expiry_bound_cache() {
+        fields.insert(
+            "expires_in".to_string(),
+            SchemaField {
+                required: true,
+                schema: SchemaNode::Integer {
+                    min: 60,
+                    max: 3_600,
+                },
+            },
+        );
+    }
     Ok(Some((
         "oauth".to_string(),
         OperationDeclaration {
@@ -1844,32 +1882,7 @@ fn lower_oauth_credential_operation(
                 max_bytes: 8 * 1024,
                 schema: SchemaNode::Object {
                     additional_fields: AdditionalFields::Reject,
-                    fields: BTreeMap::from([
-                        (
-                            "access_token".to_string(),
-                            SchemaField {
-                                required: true,
-                                schema: SchemaNode::String { max_bytes: 4096 },
-                            },
-                        ),
-                        (
-                            "token_type".to_string(),
-                            SchemaField {
-                                required: true,
-                                schema: SchemaNode::String { max_bytes: 16 },
-                            },
-                        ),
-                        (
-                            "expires_in".to_string(),
-                            SchemaField {
-                                required: true,
-                                schema: SchemaNode::Integer {
-                                    min: 60,
-                                    max: 3_600,
-                                },
-                            },
-                        ),
-                    ]),
+                    fields,
                 },
                 codec: Some("oauth2_token_v1".to_string()),
                 cardinality: None,

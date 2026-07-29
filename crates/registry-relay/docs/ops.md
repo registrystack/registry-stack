@@ -214,6 +214,11 @@ build rejects any requested profile that differs from the effective compiled
 set, so its feature label stays consistent with
 `/admin/v1/capabilities`.
 
+Set `REGISTRY_RELAY_IMAGE_REVISION` to the exact 40-character lowercase Git
+commit SHA when a local candidate image must carry reviewed source provenance.
+The helper validates it and writes `org.opencontainers.image.revision` without
+changing the compiled feature label.
+
 If release notes claim SP DCI, standards CEL mapping, or OGC EDR support, record
 the standards-enabled image tag or digest in the release evidence.
 

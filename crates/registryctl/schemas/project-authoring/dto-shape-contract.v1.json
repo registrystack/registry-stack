@@ -3495,7 +3495,8 @@
           },
           "OAuthResponseProfile": {
             "enum": [
-              "oauth2_bearer"
+              "oauth2_bearer",
+              "oauth2_bearer_no_expiry"
             ],
             "type": "string"
           },

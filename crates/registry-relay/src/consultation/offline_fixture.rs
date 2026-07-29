@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use registry_platform_crypto::canonicalize_json;
@@ -1183,7 +1184,12 @@ fn execute_rhai(
         source_bytes: 0,
         terminal_error: None,
     };
-    let output = run_rhai_worker(&request, &mut host, worker_program);
+    let hard_deadline = tokio::time::Instant::now()
+        .checked_add(Duration::from_millis(u64::from(
+            plan.limits().operation().timeout_ms,
+        )))
+        .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+    let output = run_rhai_worker(&request, &mut host, worker_program, hard_deadline);
     if let Some(error) = host.terminal_error {
         return Err(error);
     }
@@ -1309,6 +1315,7 @@ fn run_rhai_worker(
     request: &WorkerRequest,
     host: &mut OfflineRhaiHost<'_>,
     worker_program: Option<&Path>,
+    hard_deadline: tokio::time::Instant,
 ) -> Result<crate::rhai_worker::WorkerOutput, OfflineFixtureError> {
     let worker = worker_program
         .map_or_else(WorkerProcess::dedicated_executable, |program| {
@@ -1319,7 +1326,7 @@ fn run_rhai_worker(
         .enable_all()
         .build()
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?
-        .block_on(worker.evaluate_with_host(request, host))
+        .block_on(worker.evaluate_with_host(request, host, hard_deadline))
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)
 }
 

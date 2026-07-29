@@ -7,6 +7,20 @@
   serialized-size limits are compiler-validated and hash-bound, and Relay
   rejects unknown keys, wrong nested types, excessive structures, and
   over-bound values before publishing a match.
+- BREAKING: Fix consultation admission for compiler-generated no-expiry OAuth
+  Script plans by sealing an explicit disabled token-cache discriminator into
+  the completion seed and validating it independently from signed DCI permit
+  topology. The corrected PostgreSQL function changes the exact state-plane
+  capability fingerprint. Quiesce consultations and cleanly re-bootstrap the
+  pre-1.0 consultation state plane before upgrading; do not run old and updated
+  Relay binaries against one state plane.
+- Local image builds can set `REGISTRY_RELAY_IMAGE_REVISION` to an exact
+  40-character lowercase Git commit SHA and publish it as the
+  `org.opencontainers.image.revision` OCI label.
+- Script workers now charge their active execution budget only while the
+  isolated worker is running or exchanging IPC. Relay-owned credential,
+  permit, TLS, and source waits remain bounded by the existing absolute durable
+  consultation deadline and no longer consume the script CPU budget.
 
 ## 0.15.2 - 2026-07-28
 

@@ -186,6 +186,10 @@
     { "schema": "integration", "pointer": "/$defs/credential/oneOf/1", "path_kind": "branch" },
     { "schema": "integration", "pointer": "/$defs/credential/oneOf/2", "path_kind": "branch" },
     { "schema": "integration", "pointer": "/$defs/credential/oneOf/3", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/credential/oneOf/3/allOf/0", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/credential/oneOf/3/allOf/0/if", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/credential/oneOf/3/allOf/0/then", "path_kind": "branch" },
+    { "schema": "integration", "pointer": "/$defs/credential/oneOf/3/allOf/0/then/not", "path_kind": "branch" },
     { "schema": "integration", "pointer": "/$defs/source/properties/allow/items", "path_kind": "array_item" },
     { "schema": "integration", "pointer": "/$defs/source/properties/request_headers/items", "path_kind": "array_item" },
     { "schema": "integration", "pointer": "/$defs/source/properties/response_headers/items", "path_kind": "array_item" },
@@ -1210,7 +1214,7 @@
     {
       "schema": "integration",
       "pointer": "/$defs/credential/oneOf/3/properties/response_profile",
-      "purpose": "Requires the bounded OAuth bearer-token response profile supported by the source adapter."
+      "purpose": "Selects an exact OAuth bearer-token response shape. oauth2_bearer requires access_token, token_type Bearer, and a bounded expires_in value and permits expiry-bound caching. oauth2_bearer_no_expiry requires only access_token and token_type Bearer, rejects expiry and extra fields, and disables token caching."
     },
     {
       "schema": "integration",
@@ -1220,7 +1224,7 @@
     {
       "schema": "integration",
       "pointer": "/$defs/credential/oneOf/3/properties/refresh_skew",
-      "purpose": "Sets a positive refresh interval below sixty seconds so a cached OAuth credential retains usable lifetime."
+      "purpose": "With oauth2_bearer, sets a positive refresh interval below sixty seconds so a cached OAuth credential retains usable lifetime. The no-expiry profile rejects this field because caching is disabled."
     },
     {
       "schema": "integration",

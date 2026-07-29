@@ -664,7 +664,14 @@ impl WorkerProcess {
 
     /// Evaluates a script that is not permitted to perform source calls.
     pub async fn evaluate(&self, request: &WorkerRequest) -> Result<WorkerOutput, WorkerError> {
-        self.evaluate_with_host(request, &mut RejectingHost).await
+        let hard_deadline = tokio_time::Instant::now()
+            .checked_add(
+                Duration::from_millis(request.limits.wall_time_ms)
+                    .saturating_add(WORKER_STARTUP_GRACE),
+            )
+            .ok_or(WorkerError::ContractViolation)?;
+        self.evaluate_with_host(request, &mut RejectingHost, hard_deadline)
+            .await
     }
 
     /// Evaluates one interactive consultation with a Relay-owned source host.
@@ -672,11 +679,18 @@ impl WorkerProcess {
         &self,
         request: &WorkerRequest,
         host: &mut H,
+        hard_deadline: tokio_time::Instant,
     ) -> Result<WorkerOutput, WorkerError> {
         validate_request(request)?;
         let request_line = encode_line(request, request.limits.max_ipc_frame_bytes)?;
-        let timeout =
+        let active_timeout =
             Duration::from_millis(request.limits.wall_time_ms).saturating_add(WORKER_STARTUP_GRACE);
+        let mut active_deadline = tokio_time::Instant::now()
+            .checked_add(active_timeout)
+            .ok_or(WorkerError::ContractViolation)?;
+        if hard_deadline <= tokio_time::Instant::now() {
+            return Err(WorkerError::TimedOut);
+        }
         let mut command = Command::new(&self.program);
         command
             .arg(WORKER_MODE)
@@ -691,14 +705,23 @@ impl WorkerProcess {
         let stdout = child.stdout.take().ok_or(WorkerError::IpcFailed)?;
         let frame_limit = request.limits.max_ipc_frame_bytes;
         let exchange = async {
-            stdin
-                .write_all(&request_line)
-                .await
-                .map_err(|_| WorkerError::IpcFailed)?;
+            tokio_time::timeout_at(active_deadline.min(hard_deadline), async {
+                stdin
+                    .write_all(&request_line)
+                    .await
+                    .map_err(|_| WorkerError::IpcFailed)
+            })
+            .await
+            .map_err(|_| WorkerError::TimedOut)??;
             let mut stdout = AsyncBufReader::new(stdout);
             let mut expected_call_id = 0_u32;
             loop {
-                let frame = read_async_frame::<ChildFrame>(&mut stdout, frame_limit).await?;
+                let frame = tokio_time::timeout_at(
+                    active_deadline.min(hard_deadline),
+                    read_async_frame::<ChildFrame>(&mut stdout, frame_limit),
+                )
+                .await
+                .map_err(|_| WorkerError::TimedOut)??;
                 match frame {
                     ChildFrame::HostCall { call } => {
                         if call.call_id() != expected_call_id
@@ -708,17 +731,28 @@ impl WorkerProcess {
                         }
                         expected_call_id += 1;
                         validate_source_call(&call, &request.limits)?;
-                        let response = host.call(call).await.map_err(WorkerError::HostFailed)?;
+                        let host_wait_started = tokio_time::Instant::now();
+                        let response = tokio_time::timeout_at(hard_deadline, host.call(call))
+                            .await
+                            .map_err(|_| WorkerError::TimedOut)?
+                            .map_err(WorkerError::HostFailed)?;
+                        active_deadline = active_deadline
+                            .checked_add(host_wait_started.elapsed())
+                            .ok_or(WorkerError::TimedOut)?;
                         validate_source_response(&response, &request.limits)?;
                         let response = ParentFrame::HostResponse {
                             call_id: expected_call_id - 1,
                             response,
                         };
                         let bytes = encode_line(&response, frame_limit)?;
-                        stdin
-                            .write_all(&bytes)
-                            .await
-                            .map_err(|_| WorkerError::IpcFailed)?;
+                        tokio_time::timeout_at(active_deadline.min(hard_deadline), async {
+                            stdin
+                                .write_all(&bytes)
+                                .await
+                                .map_err(|_| WorkerError::IpcFailed)
+                        })
+                        .await
+                        .map_err(|_| WorkerError::TimedOut)??;
                     }
                     ChildFrame::Complete { output } => {
                         validate_output(request, &output)?;
@@ -728,13 +762,40 @@ impl WorkerProcess {
                 }
             }
         };
-        let result = tokio_time::timeout(timeout, exchange).await;
+        let result = exchange.await;
         let _ = child.kill().await;
         let _ = child.wait().await;
-        match result {
-            Ok(result) => result,
-            Err(_) => Err(WorkerError::TimedOut),
-        }
+        result
+    }
+}
+
+#[derive(Debug)]
+struct ActiveExecutionDeadline {
+    deadline: Mutex<Instant>,
+}
+
+impl ActiveExecutionDeadline {
+    fn from_timeout(timeout: Duration) -> Result<Arc<Self>, WorkerError> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(WorkerError::ContractViolation)?;
+        Ok(Arc::new(Self {
+            deadline: Mutex::new(deadline),
+        }))
+    }
+
+    fn extend_by(&self, duration: Duration) -> Result<(), WorkerError> {
+        let mut deadline = self.deadline.lock().map_err(|_| WorkerError::IpcFailed)?;
+        *deadline = deadline
+            .checked_add(duration)
+            .ok_or(WorkerError::IpcFailed)?;
+        Ok(())
+    }
+
+    fn expired(&self) -> bool {
+        self.deadline
+            .lock()
+            .map_or(true, |deadline| Instant::now() >= *deadline)
     }
 }
 
@@ -853,11 +914,10 @@ pub fn probe_script_diagnostic(
     validate_entrypoint(entrypoint).map_err(|_| {
         ScriptProbeDiagnostic::without_position(ScriptProbeCause::ContractViolation)
     })?;
-    let deadline = Instant::now()
-        .checked_add(Duration::from_millis(limits.wall_time_ms))
-        .ok_or_else(|| {
-            ScriptProbeDiagnostic::without_position(ScriptProbeCause::ContractViolation)
-        })?;
+    let deadline = ActiveExecutionDeadline::from_timeout(Duration::from_millis(
+        limits.wall_time_ms,
+    ))
+    .map_err(|_| ScriptProbeDiagnostic::without_position(ScriptProbeCause::ContractViolation))?;
     let engine = hardened_engine(&limits, deadline, None, true);
     let normalized = normalize_host_namespace_syntax(script);
     let ast = engine.compile(normalized).map_err(|error| {
@@ -1431,7 +1491,17 @@ pub fn run_worker_stdio() -> ExitCode {
         frame_limit = request.limits.max_ipc_frame_bytes.min(MAX_IPC_FRAME_BYTES);
         validate_request(&request)?;
         apply_process_sandbox(&request.limits)?;
-        evaluate_in_process(&request, Arc::new(StdioTransport { frame_limit }))
+        let active_deadline = ActiveExecutionDeadline::from_timeout(Duration::from_millis(
+            request.limits.wall_time_ms,
+        ))?;
+        evaluate_in_process_with_deadline(
+            &request,
+            Arc::new(StdioTransport {
+                frame_limit,
+                active_deadline: Arc::clone(&active_deadline),
+            }),
+            active_deadline,
+        )
     });
     let frame = match result {
         Ok(output) => ChildFrame::Complete { output },
@@ -2001,13 +2071,18 @@ trait BlockingTransport: Send + Sync {
 
 struct StdioTransport {
     frame_limit: usize,
+    active_deadline: Arc<ActiveExecutionDeadline>,
 }
 
 impl BlockingTransport for StdioTransport {
     fn exchange(&self, call: SourceCall) -> Result<SourceResponse, WorkerError> {
         let expected_call_id = call.call_id();
         write_sync_frame(&ChildFrame::HostCall { call }, self.frame_limit)?;
-        match read_sync_frame::<ParentFrame>(self.frame_limit)? {
+        let host_wait_started = Instant::now();
+        let bytes = read_sync_frame_bytes(self.frame_limit)?;
+        self.active_deadline
+            .extend_by(host_wait_started.elapsed())?;
+        match decode_line::<ParentFrame>(&bytes, self.frame_limit)? {
             ParentFrame::HostResponse { call_id, response } if call_id == expected_call_id => {
                 Ok(response)
             }
@@ -2126,7 +2201,7 @@ const SOURCE_HOST_FUNCTIONS: &[SourceHostFunction] =
 
 fn hardened_engine(
     limits: &WorkerLimits,
-    deadline: Instant,
+    active_deadline: Arc<ActiveExecutionDeadline>,
     source_transport: Option<Arc<dyn BlockingTransport>>,
     signed_dci_search: bool,
 ) -> Engine {
@@ -2331,7 +2406,7 @@ fn hardened_engine(
         .disable_symbol("timestamp");
     engine.on_print(|_| {});
     engine.on_debug(|_, _, _| {});
-    engine.on_progress(move |_| (Instant::now() >= deadline).then_some(Dynamic::UNIT));
+    engine.on_progress(move |_| active_deadline.expired().then_some(Dynamic::UNIT));
     engine
 }
 
@@ -2662,16 +2737,24 @@ fn contains_encoded_separator(value: &str) -> bool {
     lower.contains("%2f") || lower.contains("%5c") || lower.contains("%2e")
 }
 
+#[cfg(test)]
 fn evaluate_in_process(
     request: &WorkerRequest,
     transport: Arc<dyn BlockingTransport>,
 ) -> Result<WorkerOutput, WorkerError> {
-    let deadline = Instant::now()
-        .checked_add(Duration::from_millis(request.limits.wall_time_ms))
-        .ok_or(WorkerError::ContractViolation)?;
+    let active_deadline =
+        ActiveExecutionDeadline::from_timeout(Duration::from_millis(request.limits.wall_time_ms))?;
+    evaluate_in_process_with_deadline(request, transport, active_deadline)
+}
+
+fn evaluate_in_process_with_deadline(
+    request: &WorkerRequest,
+    transport: Arc<dyn BlockingTransport>,
+    active_deadline: Arc<ActiveExecutionDeadline>,
+) -> Result<WorkerOutput, WorkerError> {
     let engine = hardened_engine(
         &request.limits,
-        deadline,
+        active_deadline,
         Some(transport.clone()),
         request.signed_dci_search,
     );
@@ -2856,12 +2939,17 @@ async fn read_async_frame<T: for<'de> Deserialize<'de>>(
 }
 
 fn read_sync_frame<T: for<'de> Deserialize<'de>>(max_frame_bytes: usize) -> Result<T, WorkerError> {
+    let bytes = read_sync_frame_bytes(max_frame_bytes)?;
+    decode_line(&bytes, max_frame_bytes)
+}
+
+fn read_sync_frame_bytes(max_frame_bytes: usize) -> Result<Vec<u8>, WorkerError> {
     let mut bytes = Vec::with_capacity(8 * 1024);
     std::io::BufReader::new(std::io::stdin().lock())
         .take((max_frame_bytes + 1) as u64)
         .read_until(b'\n', &mut bytes)
         .map_err(|_| WorkerError::IpcFailed)?;
-    decode_line(&bytes, max_frame_bytes)
+    Ok(bytes)
 }
 
 fn decode_line<T: for<'de> Deserialize<'de>>(

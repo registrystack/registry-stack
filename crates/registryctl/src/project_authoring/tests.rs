@@ -3615,6 +3615,61 @@ outputs:
 }
 
 #[test]
+fn oauth_authoring_lowers_strict_no_expiry_exchange_without_refresh_controls() {
+    let authored: AuthoredIntegrationDocument = serde_norway::from_str(
+        r#"
+version: 1
+id: generic-status
+revision: 1
+source:
+  auth:
+    type: oauth2_client_credentials
+    request: form
+    response_profile: oauth2_bearer_no_expiry
+input:
+  person_id: { role: selector, type: string, maxLength: 64 }
+capability:
+  http:
+    request: { method: GET, path: '/people/{input.person_id}' }
+outputs:
+  active: { type: boolean, x-registry-source: /active }
+"#,
+    )
+    .expect("no-expiry OAuth integration parses");
+    let lowered =
+        lower_authored_integration(&authored).expect("no-expiry OAuth integration lowers");
+    let operations = integration_operations(&lowered);
+    let oauth = operations
+        .get("oauth")
+        .expect("host-owned OAuth operation");
+    let SchemaNode::Object {
+        additional_fields,
+        fields,
+    } = &oauth.response.schema
+    else {
+        panic!("OAuth response uses the closed object schema");
+    };
+    assert_eq!(additional_fields, &AdditionalFields::Reject);
+    assert_eq!(
+        fields.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["access_token", "token_type"]
+    );
+
+    let mut invalid = authored;
+    invalid
+        .source
+        .as_mut()
+        .expect("source")
+        .auth
+        .refresh_skew = Some("20s".to_string());
+    let error = lower_authored_integration(&invalid)
+        .expect_err("no-expiry response profile rejects cache refresh controls");
+    assert!(error
+        .to_string()
+        .contains("refresh_skew requires the oauth2_bearer response profile"));
+}
+
+#[test]
 fn environment_source_binding_has_no_legacy_destination_or_credential_type_aliases() {
     let source: EnvironmentIntegration = serde_norway::from_str(
         r#"

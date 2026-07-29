@@ -249,7 +249,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         [
             (SchemaKind::Project, 220),
             (SchemaKind::Environment, 206),
-            (SchemaKind::Integration, 166),
+            (SchemaKind::Integration, 171),
             (SchemaKind::Fixture, 63),
             (SchemaKind::Entity, 35),
         ]
@@ -261,11 +261,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_path_kind(),
         [
             (FieldPathKind::Root, 5),
-            (FieldPathKind::Property, 485),
+            (FieldPathKind::Property, 486),
             (FieldPathKind::MapKey, 26),
             (FieldPathKind::MapValue, 33),
             (FieldPathKind::ArrayItem, 34),
-            (FieldPathKind::Branch, 107),
+            (FieldPathKind::Branch, 111),
         ]
         .into_iter()
         .collect(),
@@ -275,11 +275,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_sensitivity(),
         [
             (Sensitivity::Public, 6),
-            (Sensitivity::Internal, 438),
+            (Sensitivity::Internal, 439),
             (Sensitivity::Sensitive, 69),
             (Sensitivity::SecretReference, 14),
             (Sensitivity::RedactedFixture, 51),
-            (Sensitivity::Structural, 112),
+            (Sensitivity::Structural, 116),
         ]
         .into_iter()
         .collect(),
@@ -287,7 +287,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     );
     assert_eq!(
         index.by_path().len(),
-        690,
+        695,
         "the field-knowledge gate covers every published schema path"
     );
     assert_eq!(
@@ -817,11 +817,11 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
             (
                 "integration",
                 PublishedStructuralInventory {
-                    nodes: 195,
+                    nodes: 200,
                     local_refs: 46,
                     union_nodes: 12,
                     union_branches: 29,
-                    conditionals: 0,
+                    conditionals: 1,
                     objects: 38,
                     closed_objects: 31,
                     typed_maps: 7,
@@ -837,7 +837,7 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
                     unique_arrays: 8,
                     object_size_bounds: 9,
                     property_name_constraints: 4,
-                    enums: 10,
+                    enums: 11,
                     consts: 17,
                     defaults: 3,
                     deprecations: 0,

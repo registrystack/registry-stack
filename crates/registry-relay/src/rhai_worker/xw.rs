@@ -822,17 +822,15 @@ fn register_redaction_fixed(engine: &mut Engine, limits: WorkerLimits) {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::Arc,
-        time::{Duration, Instant},
-    };
+    use std::{sync::Arc, time::Duration};
 
     use rhai::FnPtr;
 
     use super::*;
     use crate::rhai_worker::{
-        evaluate_in_process, hardened_engine, BlockingTransport, OutputSchema, SourceCall,
-        SourceResponse, TypedValue, WorkerOutcome, WorkerOutput, WorkerRequest,
+        evaluate_in_process, hardened_engine, ActiveExecutionDeadline, BlockingTransport,
+        OutputSchema, SourceCall, SourceResponse, TypedValue, WorkerOutcome, WorkerOutput,
+        WorkerRequest,
     };
 
     struct NoCallTransport;
@@ -846,7 +844,8 @@ mod tests {
     fn engine_and_scope(limits: WorkerLimits) -> (Engine, Scope<'static>) {
         let engine = hardened_engine(
             &limits,
-            Instant::now() + Duration::from_secs(10),
+            ActiveExecutionDeadline::from_timeout(Duration::from_secs(10))
+                .expect("test deadline is representable"),
             None,
             false,
         );
