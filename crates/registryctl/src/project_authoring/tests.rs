@@ -186,6 +186,7 @@ maxLength: 10
                 max_bytes,
                 minimum: None,
                 maximum: None,
+                structured_schema: None,
                 from: Some("snapshot.record.birth_date".to_string()),
                 source_pointer: None,
             },
@@ -266,8 +267,201 @@ maximum: 9223372036854775807
 "#,
         )
         .expect("full i64 output contract parses");
-        validate_authored_output("sequence", &output)
+        let mut nodes = OUTPUT_SCHEMA_ENVELOPE_NODES_V1;
+        validate_authored_output("sequence", &output, &mut nodes)
             .expect("integration output bounds intentionally retain full i64");
+    }
+
+    #[test]
+    fn structured_script_output_lowers_recursively_with_closed_bounded_fields() {
+        let authored = r#"type: array
+nullable: false
+max_bytes: 1024
+max_items: 2
+items:
+  type: object
+  nullable: false
+  max_bytes: 384
+  fields:
+    type:
+      required: true
+      schema: { type: string, maxLength: 16 }
+    name:
+      required: true
+      schema: { type: string, maxLength: 160 }
+    identifier:
+      required: false
+      schema: { type: [string, "null"], maxLength: 64 }
+"#;
+        let output: AuthoredOutputDeclaration =
+            serde_norway::from_str(authored).expect("structured output parses");
+        let mut nodes = OUTPUT_SCHEMA_ENVELOPE_NODES_V1;
+        let expanded = validate_authored_output("parents", &output, &mut nodes)
+            .expect("structured output validates");
+        assert_eq!(nodes, OUTPUT_SCHEMA_ENVELOPE_NODES_V1 + 5);
+        assert_eq!(expanded, 9);
+
+        let lowered = lower_output_map(
+            &BTreeMap::from([("parents".to_string(), output)]),
+            "birth",
+            false,
+        )
+        .expect("structured script output lowers");
+        let parents = &lowered["parents"];
+        assert_eq!(parents.output_type, OutputType::Array);
+        assert_eq!(parents.max_bytes, Some(1024));
+        assert!(parents.from.is_none());
+        let Some(StructuredOutputSchema::Array {
+            nullable,
+            max_bytes,
+            max_items,
+            items,
+        }) = &parents.structured_schema
+        else {
+            panic!("parents must retain its recursive schema");
+        };
+        assert!(!nullable);
+        assert_eq!(*max_bytes, 1024);
+        assert_eq!(*max_items, 2);
+        let StructuredOutputSchema::Object { fields, .. } = items.as_ref() else {
+            panic!("parents items must be objects");
+        };
+        assert_eq!(
+            fields.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["identifier", "name", "type"]
+        );
+        assert!(!fields["identifier"].required);
+        assert!(matches!(
+            fields["identifier"].schema.as_ref(),
+            StructuredOutputSchema::String {
+                nullable: true,
+                max_bytes: 256
+            }
+        ));
+
+        assert!(lower_output_map(
+            &BTreeMap::from([(
+                "parents".to_string(),
+                serde_norway::from_str(authored).expect("structured output parses again"),
+            )]),
+            "birth",
+            true,
+        )
+        .expect_err("HTTP cannot author structured output projection")
+        .to_string()
+        .contains("require capability.script"));
+    }
+
+    #[test]
+    fn structured_output_limits_reserve_the_notary_result_envelope() {
+        fn boolean_schema() -> AuthoredOutputSchema {
+            AuthoredOutputSchema::Scalar(AuthoredScalarOutputSchema {
+                output_type: AuthoredSchemaType::Single(AuthoredScalarType::Boolean),
+                format: None,
+                max_length: None,
+                minimum: None,
+                maximum: None,
+            })
+        }
+
+        fn boolean_output() -> AuthoredOutputDeclaration {
+            AuthoredOutputDeclaration::Scalar(AuthoredScalarOutputDeclaration {
+                output_type: AuthoredSchemaType::Single(AuthoredScalarType::Boolean),
+                format: None,
+                max_length: None,
+                minimum: None,
+                maximum: None,
+                source: None,
+            })
+        }
+
+        fn object_declaration(field_count: usize) -> AuthoredOutputObjectDeclaration {
+            AuthoredOutputObjectDeclaration {
+                output_type: AuthoredOutputObjectType::Object,
+                nullable: false,
+                max_bytes: 65_536,
+                fields: (0..field_count)
+                    .map(|index| {
+                        (
+                            format!("field_{index}"),
+                            AuthoredOutputObjectField {
+                                required: true,
+                                schema: Box::new(boolean_schema()),
+                            },
+                        )
+                    })
+                    .collect(),
+            }
+        }
+
+        fn object_output(field_count: usize) -> AuthoredOutputDeclaration {
+            AuthoredOutputDeclaration::Object(object_declaration(field_count))
+        }
+
+        fn array_output(array_nodes: usize) -> AuthoredOutputDeclaration {
+            assert!(array_nodes > 0);
+            let mut items = boolean_schema();
+            for _ in 1..array_nodes {
+                items = AuthoredOutputSchema::Array(AuthoredOutputArrayDeclaration {
+                    output_type: AuthoredOutputArrayType::Array,
+                    nullable: false,
+                    max_bytes: 65_536,
+                    max_items: 1,
+                    items: Box::new(items),
+                });
+            }
+            AuthoredOutputDeclaration::Array(AuthoredOutputArrayDeclaration {
+                output_type: AuthoredOutputArrayType::Array,
+                nullable: false,
+                max_bytes: 65_536,
+                max_items: 1,
+                items: Box::new(items),
+            })
+        }
+
+        let maximum_depth = BTreeMap::from([("nested".to_string(), array_output(5))]);
+        validate_authored_outputs(&maximum_depth)
+            .expect("five array nodes plus one leaf fit downstream depth eight");
+        let excessive_depth = BTreeMap::from([("nested".to_string(), array_output(6))]);
+        assert!(validate_authored_outputs(&excessive_depth)
+            .expect_err("one more nested node exceeds downstream depth eight")
+            .to_string()
+            .contains("maximum depth of 8"));
+
+        let node_budget = |extra_scalars| {
+            let mut outputs = (0..7)
+                .map(|index| (format!("wide_{index}"), object_output(32)))
+                .collect::<BTreeMap<_, _>>();
+            for index in 0..(5 + extra_scalars) {
+                outputs.insert(format!("scalar_{index}"), boolean_output());
+            }
+            outputs
+        };
+        validate_authored_outputs(&node_budget(0))
+            .expect("236 authored nodes plus the 20-node envelope fit exactly");
+        assert!(validate_authored_outputs(&node_budget(1))
+            .expect_err("237 authored nodes exceed the downstream node budget")
+            .to_string()
+            .contains("more than 256 nodes"));
+
+        let expanded_output = |field_count| {
+            BTreeMap::from([(
+                "expanded".to_string(),
+                AuthoredOutputDeclaration::Array(AuthoredOutputArrayDeclaration {
+                    output_type: AuthoredOutputArrayType::Array,
+                    nullable: false,
+                    max_bytes: 65_536,
+                    max_items: 255,
+                    items: Box::new(AuthoredOutputSchema::Object(object_declaration(field_count))),
+                }),
+            )])
+        };
+        validate_authored_outputs(&expanded_output(14))
+            .expect("expanded schema remains below the downstream envelope-adjusted bound");
+        assert!(validate_authored_outputs(&expanded_output(15))
+            .expect_err("the result envelope pushes expanded nodes beyond 4096")
+            .to_string()
+            .contains("recursive expansion exceeds 4096 nodes"));
     }
 
     #[test]

@@ -212,6 +212,22 @@
             "server.openapi_requires_auth only affects /openapi.json"
         );
     }
+
+    #[test]
+    fn registrar_offer_creation_is_not_auth_exempt() {
+        for openapi_requires_auth in [true, false] {
+            assert!(
+                !is_auth_exempt_path(
+                    "/oid4vci/offers",
+                    AuthExemptionPolicy {
+                        openapi_requires_auth,
+                    },
+                ),
+                "registrar offer creation must always pass through authentication middleware"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn invalid_bearer_tokens_are_rate_limited_when_subject_access_is_enabled() {
         let rate_limits = SubjectAccessRateLimitsConfig {

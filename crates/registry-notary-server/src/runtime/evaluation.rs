@@ -552,8 +552,6 @@ impl RegistryNotaryRuntime {
                 policy,
             )
             .await?;
-        let issuance_provenance =
-            stored_issuance_provenance(&evidence, &request.claims, &claim_versions, &internal)?;
         let views = request
             .claims
             .iter()
@@ -571,6 +569,13 @@ impl RegistryNotaryRuntime {
                 )
             })
             .collect::<Result<Vec<_>, EvidenceError>>()?;
+        let issuance_provenance = stored_issuance_provenance(
+            &evidence,
+            &request.claims,
+            &claim_versions,
+            &internal,
+            &views,
+        )?;
         let expires_at = subject_access
             .as_ref()
             .and_then(|metadata| metadata.evaluation_expires_at.as_deref())
@@ -1216,12 +1221,6 @@ impl RegistryNotaryRuntime {
                 EvaluationPolicy::default(),
             )
             .await?;
-        let issuance_provenance = stored_issuance_provenance(
-            &evidence,
-            &item.request.claims,
-            &item.claim_versions,
-            &internal,
-        )?;
         let views = item
             .request
             .claims
@@ -1240,6 +1239,13 @@ impl RegistryNotaryRuntime {
                 )
             })
             .collect::<Result<Vec<_>, EvidenceError>>()?;
+        let issuance_provenance = stored_issuance_provenance(
+            &evidence,
+            &item.request.claims,
+            &item.claim_versions,
+            &internal,
+            &views,
+        )?;
         Ok(EvaluatedRegistryClaims {
             views,
             issuance_provenance,
@@ -1649,6 +1655,7 @@ fn stored_issuance_provenance(
     selected_claims: &[ClaimRef],
     claim_versions: &ClaimVersionSelections,
     internal: &BTreeMap<String, ClaimResultInternal>,
+    selected_views: &[ClaimResultView],
 ) -> Result<Option<StoredIssuanceProvenance>, EvidenceError> {
     // Retain restricted Relay identifiers only when the selected roots share
     // an actual credential profile. Root configuration validation closes both
@@ -1712,6 +1719,25 @@ fn stored_issuance_provenance(
             .get(claim_id.as_str())
             .ok_or(EvidenceError::RuleEvaluationFailed)?;
         let mut claim = provenance.claim;
+        claim.result_content_binding = match selected_views
+            .iter()
+            .find(|view| view.claim_id == result.claim_id)
+        {
+            Some(view) => issuance_result_content_binding(view)?,
+            None => sha256_canonical_json(&json!({
+                "schema": "registry.notary.private-dependency-result-content/v1",
+                "result": {
+                    "evaluation_id": result.evaluation_id,
+                    "claim_id": result.claim_id,
+                    "claim_version": result.claim_version,
+                    "subject_type": result.subject_type,
+                    "value": result.value,
+                    "issued_at": format_time(result.issued_at),
+                    "expires_at": result.expires_at.map(format_time),
+                    "provenance": result.provenance,
+                },
+            }))?,
+        };
         claim.execution_binding = issuance_execution_binding(
             &claim,
             &provenance.consultation,
@@ -1800,83 +1826,88 @@ pub(super) async fn evaluate_claim_task(
         }
     }
     let delegated_proof_claim = ctx.evaluation_capability.is_delegated_proof_claim(claim_id);
-    let (consultation_outputs, observed_at, mut relay_consultation_ids, own_issuance_provenance) =
-        match &claim.evidence_mode {
-            ClaimEvidenceMode::SelfAttested => (BTreeMap::new(), None, BTreeSet::new(), None),
-            ClaimEvidenceMode::RegistryBacked { consultations } => {
-                require_relay_consultation_capability(&ctx.evaluation_capability, &claim.id)?;
-                let (_, consultation) = consultations
-                    .first_key_value()
-                    .filter(|_| consultations.len() == 1)
-                    .ok_or(EvidenceError::RuleEvaluationFailed)?;
-                let plan = ctx
-                    .relay_plan
-                    .as_ref()
-                    .ok_or(EvidenceError::EvidenceNotAvailable)?;
-                let result = plan.consult(&claim.id).await.map_err(|_| {
-                    if delegated_proof_claim {
+    let (
+        consultation_outputs,
+        observed_at,
+        mut relay_consultation_ids,
+        own_issuance_provenance,
+        relay_matched,
+    ) = match &claim.evidence_mode {
+        ClaimEvidenceMode::SelfAttested => (BTreeMap::new(), None, BTreeSet::new(), None, false),
+        ClaimEvidenceMode::RegistryBacked { consultations } => {
+            require_relay_consultation_capability(&ctx.evaluation_capability, &claim.id)?;
+            let (_, consultation) = consultations
+                .first_key_value()
+                .filter(|_| consultations.len() == 1)
+                .ok_or(EvidenceError::RuleEvaluationFailed)?;
+            let plan = ctx
+                .relay_plan
+                .as_ref()
+                .ok_or(EvidenceError::EvidenceNotAvailable)?;
+            let result = plan.consult(&claim.id).await.map_err(|_| {
+                if delegated_proof_claim {
+                    delegated_proof_denied()
+                } else {
+                    EvidenceError::EvidenceNotAvailable
+                }
+            })?;
+            let relay_outcome = result.outcome();
+            let consultation_outputs_result = match relay_outcome {
+                RuntimeRelayOutcome::Match => materialize_relay_match(&claim, &result),
+                RuntimeRelayOutcome::NoMatch
+                    if matches!(&claim.rule, RuleConfig::ConsultationOutput { .. })
+                        && registry_claim_has_typed_outputs(&claim) =>
+                {
+                    materialize_relay_absence(&claim)
+                }
+                RuntimeRelayOutcome::NoMatch
+                    if matches!(&claim.rule, RuleConfig::ConsultationOutput { .. }) =>
+                {
+                    Err(EvidenceError::EvidenceNotAvailable)
+                }
+                RuntimeRelayOutcome::NoMatch if matches!(&claim.rule, RuleConfig::Cel { .. }) => {
+                    materialize_relay_absence(&claim)
+                }
+                RuntimeRelayOutcome::NoMatch => Ok(BTreeMap::new()),
+                RuntimeRelayOutcome::Ambiguous => Err(EvidenceError::EvidenceNotAvailable),
+            };
+            let consultation_outputs = consultation_outputs_result.map_err(|error| {
+                if delegated_proof_claim {
+                    if relay_outcome == RuntimeRelayOutcome::NoMatch {
+                        delegated_relationship_unproven()
+                    } else {
                         delegated_proof_denied()
-                    } else {
-                        EvidenceError::EvidenceNotAvailable
                     }
-                })?;
-                let relay_outcome = result.outcome();
-                let consultation_outputs_result = match relay_outcome {
-                    RuntimeRelayOutcome::Match => materialize_relay_match(&claim, &result),
-                    RuntimeRelayOutcome::NoMatch
-                        if matches!(&claim.rule, RuleConfig::ConsultationOutput { .. })
-                            && registry_claim_has_typed_outputs(&claim) =>
-                    {
-                        materialize_relay_absence(&claim)
-                    }
-                    RuntimeRelayOutcome::NoMatch
-                        if matches!(&claim.rule, RuleConfig::ConsultationOutput { .. }) =>
-                    {
-                        Err(EvidenceError::EvidenceNotAvailable)
-                    }
-                    RuntimeRelayOutcome::NoMatch
-                        if matches!(&claim.rule, RuleConfig::Cel { .. }) =>
-                    {
-                        materialize_relay_absence(&claim)
-                    }
-                    RuntimeRelayOutcome::NoMatch => Ok(BTreeMap::new()),
-                    RuntimeRelayOutcome::Ambiguous => Err(EvidenceError::EvidenceNotAvailable),
-                };
-                let consultation_outputs = consultation_outputs_result.map_err(|error| {
-                    if delegated_proof_claim {
-                        if relay_outcome == RuntimeRelayOutcome::NoMatch {
-                            delegated_relationship_unproven()
-                        } else {
-                            delegated_proof_denied()
-                        }
-                    } else {
-                        error
-                    }
-                })?;
-                let acquired_at = result.acquired_at();
-                let consultation_id = result.consultation_id().to_string();
-                (
-                    consultation_outputs,
-                    Some(acquired_at),
-                    BTreeSet::from([consultation_id.clone()]),
-                    Some(ClaimIssuanceProvenanceInternal {
-                        claim: StoredIssuanceClaimProvenance {
-                            claim_id: claim.id.clone(),
-                            claim_version: claim.version.clone(),
-                            relay_profile_id: consultation.profile.id.clone(),
-                            relay_contract_hash: consultation.profile.contract_hash.clone(),
-                            canonical_purpose: ctx.purpose.clone(),
-                            consultation_id: consultation_id.clone(),
-                            execution_binding: String::new(),
-                        },
-                        consultation: StoredIssuanceConsultationProvenance {
-                            consultation_id,
-                            acquired_at: format_time(acquired_at),
-                        },
-                    }),
-                )
-            }
-        };
+                } else {
+                    error
+                }
+            })?;
+            let acquired_at = result.acquired_at();
+            let consultation_id = result.consultation_id().to_string();
+            (
+                consultation_outputs,
+                Some(acquired_at),
+                BTreeSet::from([consultation_id.clone()]),
+                Some(ClaimIssuanceProvenanceInternal {
+                    claim: StoredIssuanceClaimProvenance {
+                        claim_id: claim.id.clone(),
+                        claim_version: claim.version.clone(),
+                        relay_profile_id: consultation.profile.id.clone(),
+                        relay_contract_hash: consultation.profile.contract_hash.clone(),
+                        canonical_purpose: ctx.purpose.clone(),
+                        consultation_id: consultation_id.clone(),
+                        execution_binding: String::new(),
+                        result_content_binding: String::new(),
+                    },
+                    consultation: StoredIssuanceConsultationProvenance {
+                        consultation_id,
+                        acquired_at: format_time(acquired_at),
+                    },
+                }),
+                relay_outcome == RuntimeRelayOutcome::Match,
+            )
+        }
+    };
     // Relay acquisition time pins the result to the consultation evidence.
     let issued_at = observed_at.unwrap_or(ctx.now);
     let value_result = match &claim.rule {
@@ -1890,6 +1921,20 @@ pub(super) async fn evaluate_claim_task(
             let value = get_json_path(record, output)
                 .cloned()
                 .ok_or(EvidenceError::RuleEvaluationFailed)?;
+            if relay_matched {
+                let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode
+                else {
+                    return Err(EvidenceError::RuleEvaluationFailed);
+                };
+                if let Some(output_contract) = consultations
+                    .get(consultation)
+                    .and_then(|consultation| consultation.outputs.get(output))
+                {
+                    if !output_contract.validates_value(&value) {
+                        return Err(EvidenceError::RuleEvaluationFailed);
+                    }
+                }
+            }
             validate_claim_value_config(&value, &claim.value)?;
             Ok(value)
         }

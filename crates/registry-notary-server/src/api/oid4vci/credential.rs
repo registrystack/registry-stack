@@ -26,7 +26,14 @@ pub(in crate::api) async fn oid4vci_credential(
         return StatusCode::NOT_FOUND.into_response();
     };
     let principal = match classify_subject_access_principal(&state.subject_access, &principal) {
-        Ok(principal) if principal.is_subject_access() => principal,
+        Ok(principal)
+            if principal.is_subject_access()
+                || (principal.access_mode() == AccessMode::MachineClient
+                    && principal.auth_profile_id
+                        == registry_notary_core::EvidenceAuthProfileId::NotaryAccessToken) =>
+        {
+            principal
+        }
         _ => return oid4vci_error_response(Oid4vciWireError::InvalidToken),
     };
     if let Err(error) = require_oid4vci_token_audience(&state.oid4vci, &principal) {
@@ -71,28 +78,30 @@ pub(in crate::api) async fn oid4vci_credential(
         );
         return response;
     }
-    if let Err(error) = require_oid4vci_issuance_authorization_details(
-        evidence,
-        &state.subject_access,
-        configuration,
-        &principal,
-        oid4vci_requires_authorization_details(
+    if principal.is_subject_access() {
+        if let Err(error) = require_oid4vci_issuance_authorization_details(
+            evidence,
+            &state.subject_access,
+            configuration,
             &principal,
-            state.runtime_config().as_deref(),
-            Some(preauth.as_ref()),
-        ),
-    ) {
-        let denial_code = denial_code_from_error(&error);
-        let mut response = oid4vci_error_response(oid4vci_error_from_evidence(&error));
-        attach_oid4vci_subject_access_denial_audit(
-            &mut response,
-            "oid4vci_credential_denied",
-            &configuration_claim_ids,
-            configuration_id,
-            denial_code,
-            Some(state.subject_access.subject_binding.token_claim.as_str()),
-        );
-        return response;
+            oid4vci_requires_authorization_details(
+                &principal,
+                state.runtime_config().as_deref(),
+                Some(preauth.as_ref()),
+            ),
+        ) {
+            let denial_code = denial_code_from_error(&error);
+            let mut response = oid4vci_error_response(oid4vci_error_from_evidence(&error));
+            attach_oid4vci_subject_access_denial_audit(
+                &mut response,
+                "oid4vci_credential_denied",
+                &configuration_claim_ids,
+                configuration_id,
+                denial_code,
+                Some(state.subject_access.subject_binding.token_claim.as_str()),
+            );
+            return response;
+        }
     }
     let Some(claims) = principal.verified_claims.as_ref() else {
         return oid4vci_error_response(Oid4vciWireError::InvalidToken);
@@ -281,6 +290,7 @@ pub(in crate::api) fn oid4vci_credential_response_with_audit(
     {
         return Err(Oid4vciWireError::ServerError);
     }
+    override_attestation_audit_access_mode(&mut response, evaluation.access_mode());
     Ok(response)
 }
 
@@ -305,6 +315,147 @@ async fn materialize_oid4vci_transaction(
         transaction,
         nonce,
     } = materialization;
+    let evaluation = state
+        .store
+        .get(
+            &transaction.evaluation_id,
+            &transaction.evaluation_client_id,
+        )
+        .await
+        .map_err(|_| Oid4vciWireError::ServerError)?
+        .ok_or(Oid4vciWireError::AccessDenied)?;
+    if evaluation.claim_ids != configuration.credential_claim_ids() {
+        return Err(Oid4vciWireError::AccessDenied);
+    }
+    let profile = evidence
+        .credential_profiles
+        .get(&configuration.credential_profile)
+        .ok_or(Oid4vciWireError::UnsupportedCredentialType)?;
+    match &transaction.authority {
+        IssuanceAuthority::SubjectAccess if principal.is_subject_access() => {
+            require_oid4vci_transaction_stored_access(
+                state,
+                evidence,
+                principal,
+                &evaluation,
+                &evaluation.claim_ids,
+                &evaluation.disclosure,
+                &evaluation.format,
+            )
+            .map_err(|error| oid4vci_error_from_evidence(&error))?;
+            require_subject_access_credential_profile_policy(
+                &state.subject_access,
+                &configuration.credential_profile,
+                profile,
+            )
+            .map_err(|error| oid4vci_error_from_evidence(&error))?;
+        }
+        IssuanceAuthority::RegistryClient {
+            initiating_client_id,
+            initiating_client_id_hash,
+            auth_profile_id,
+            authorized_scopes,
+            target_ref,
+            service_id,
+            purpose,
+        } if principal.access_mode() == AccessMode::MachineClient
+            && principal.auth_profile_id
+                == registry_notary_core::EvidenceAuthProfileId::NotaryAccessToken =>
+        {
+            let recomputed_client_hash = state
+                .subject_access_rate_keys
+                .principal(initiating_client_id)
+                .map_err(|_| Oid4vciWireError::ServerError)?;
+            if recomputed_client_hash.as_str() != initiating_client_id_hash
+                || transaction.evaluation_client_id != *initiating_client_id
+                || *auth_profile_id
+                    == registry_notary_core::EvidenceAuthProfileId::NotaryAccessToken
+                || service_id != &evidence.service_id
+                || purpose != &evaluation.purpose
+                || evaluation.subject_access.is_some()
+                || evaluation.access_mode() != AccessMode::MachineClient
+                || evaluation.client_id != *initiating_client_id
+                || evaluation.disclosure != DisclosureProfile::Value.as_str()
+                || evaluation.format != FORMAT_CLAIM_RESULT_JSON
+                || !authorized_scopes
+                    .iter()
+                    .any(|scope| scope == REGISTRY_OFFER_CREATE_SCOPE)
+                || !authorized_scopes
+                    .iter()
+                    .any(|scope| scope == &configuration.scope)
+                || evaluation.results.is_empty()
+                || evaluation.results.iter().any(|result| {
+                    !same_target_ref(&result.target_ref, target_ref)
+                        || result.value.as_ref().is_none_or(Value::is_null)
+                        || result.satisfied == Some(false)
+                        || !result.redacted_fields.is_empty()
+                })
+                || !OffsetDateTime::parse(&evaluation.expires_at, &Rfc3339)
+                    .is_ok_and(|expires_at| expires_at > OffsetDateTime::now_utc())
+            {
+                return Err(Oid4vciWireError::AccessDenied);
+            }
+            let registry_principal = EvidencePrincipal {
+                auth_profile_id: *auth_profile_id,
+                principal_id: initiating_client_id.clone(),
+                scopes: authorized_scopes.clone(),
+                access_mode: AccessMode::MachineClient,
+                verified_claims: None,
+                authorization_details: None,
+            };
+            require_evaluation_access(evidence, &registry_principal, &evaluation)
+                .map_err(|error| oid4vci_error_from_evidence(&error))?;
+            require_oid4vci_registry_client_authorization_details(
+                evidence,
+                configuration,
+                purpose,
+                principal,
+            )
+            .map_err(|error| oid4vci_error_from_evidence(&error))?;
+        }
+        IssuanceAuthority::SubjectAccess | IssuanceAuthority::RegistryClient { .. } => {
+            return Err(Oid4vciWireError::AccessDenied);
+        }
+    }
+    require_issuable_evaluation_provenance(evidence, &transaction.evaluation_id, &evaluation)
+        .map_err(|error| oid4vci_error_from_evidence(&error))?;
+    let configuration_fingerprint =
+        oid4vci_configuration_fingerprint(evidence, configuration_id, configuration)
+            .map_err(|_| Oid4vciWireError::ServerError)?;
+    let commitment = match &transaction.authority {
+        IssuanceAuthority::SubjectAccess => oid4vci_issuance_transaction_commitment(
+            &transaction.transaction_id,
+            evidence,
+            configuration_id,
+            configuration,
+            &configuration_fingerprint,
+            &transaction.evaluation_id,
+            &evaluation,
+        ),
+        IssuanceAuthority::RegistryClient {
+            initiating_client_id_hash,
+            auth_profile_id,
+            authorized_scopes,
+            target_ref,
+            ..
+        } => oid4vci_registry_client_transaction_commitment(
+            &transaction.transaction_id,
+            evidence,
+            configuration_id,
+            configuration,
+            &configuration_fingerprint,
+            &transaction.evaluation_id,
+            &evaluation,
+            initiating_client_id_hash,
+            *auth_profile_id,
+            authorized_scopes,
+            target_ref,
+        ),
+    }
+    .map_err(|_| Oid4vciWireError::ServerError)?;
+    if commitment != transaction.commitment {
+        return Err(Oid4vciWireError::AccessDenied);
+    }
     let key = state
         .subject_access_rate_keys
         .oid4vci_nonce(&state.oid4vci.credential_issuer, configuration_id, nonce)
@@ -321,62 +472,14 @@ async fn materialize_oid4vci_transaction(
     .await
     .map_err(|_| Oid4vciWireError::InvalidProof)?;
     state.metrics.record_replay("oid4vci_nonce", "consumed");
-    check_oid4vci_subject_access_rate_limit(
-        state,
-        principal,
-        Some(validated_proof.holder_id.as_str()),
-    )
-    .await
-    .map_err(|_| Oid4vciWireError::RateLimited)?;
-    let evaluation = state
-        .store
-        .get(
-            &transaction.evaluation_id,
-            &transaction.evaluation_client_id,
+    if principal.is_subject_access() {
+        check_oid4vci_subject_access_rate_limit(
+            state,
+            principal,
+            Some(validated_proof.holder_id.as_str()),
         )
         .await
-        .map_err(|_| Oid4vciWireError::ServerError)?
-        .ok_or(Oid4vciWireError::AccessDenied)?;
-    if evaluation.claim_ids != configuration.credential_claim_ids() {
-        return Err(Oid4vciWireError::AccessDenied);
-    }
-    require_oid4vci_transaction_stored_access(
-        state,
-        evidence,
-        principal,
-        &evaluation,
-        &evaluation.claim_ids,
-        &evaluation.disclosure,
-        &evaluation.format,
-    )
-    .map_err(|error| oid4vci_error_from_evidence(&error))?;
-    let profile = evidence
-        .credential_profiles
-        .get(&configuration.credential_profile)
-        .ok_or(Oid4vciWireError::UnsupportedCredentialType)?;
-    require_subject_access_credential_profile_policy(
-        &state.subject_access,
-        &configuration.credential_profile,
-        profile,
-    )
-    .map_err(|error| oid4vci_error_from_evidence(&error))?;
-    require_issuable_evaluation_provenance(evidence, &transaction.evaluation_id, &evaluation)
-        .map_err(|error| oid4vci_error_from_evidence(&error))?;
-    let configuration_fingerprint =
-        oid4vci_configuration_fingerprint(evidence, configuration_id, configuration)
-            .map_err(|_| Oid4vciWireError::ServerError)?;
-    let commitment = oid4vci_issuance_transaction_commitment(
-        &transaction.transaction_id,
-        evidence,
-        configuration_id,
-        configuration,
-        &configuration_fingerprint,
-        &transaction.evaluation_id,
-        &evaluation,
-    )
-    .map_err(|_| Oid4vciWireError::ServerError)?;
-    if commitment != transaction.commitment {
-        return Err(Oid4vciWireError::AccessDenied);
+        .map_err(|_| Oid4vciWireError::RateLimited)?;
     }
     let issuer = state
         .issuer_resolver()
@@ -563,6 +666,57 @@ pub(in crate::api) fn oid4vci_issuance_authorization_details(
         access_mode: Some(AccessMode::SubjectBound),
         ..Default::default()
     })
+}
+
+pub(in crate::api) fn oid4vci_registry_client_authorization_details(
+    evidence: &EvidenceConfig,
+    configuration: &Oid4vciCredentialConfigurationConfig,
+    purpose: &str,
+) -> registry_notary_core::EvidenceAuthorizationDetails {
+    registry_notary_core::EvidenceAuthorizationDetails {
+        detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE.to_string(),
+        schema_version: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
+            .to_string(),
+        actions: vec!["issue_credential".to_string()],
+        locations: vec![evidence.service_id.clone()],
+        claims: oid4vci_credential_claim_refs(configuration),
+        disclosure: Some(DisclosureProfile::Value.as_str().to_string()),
+        format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+        purpose: Some(purpose.to_string()),
+        access_mode: Some(AccessMode::MachineClient),
+        ..Default::default()
+    }
+}
+
+pub(in crate::api) fn require_oid4vci_registry_client_authorization_details(
+    evidence: &EvidenceConfig,
+    configuration: &Oid4vciCredentialConfigurationConfig,
+    purpose: &str,
+    principal: &EvidencePrincipal,
+) -> Result<(), EvidenceError> {
+    let details = principal
+        .authorization_details
+        .as_ref()
+        .filter(|details| crate::authz_details::has_transaction_scope(details))
+        .ok_or(EvidenceError::EvaluationBindingMismatch)?;
+    let claims = oid4vci_credential_claim_refs(configuration);
+    crate::authz_details::validate_scoped_authorization_details(
+        details,
+        &crate::authz_details::ScopedAuthorizationRequest {
+            service_id: evidence.service_id.as_str(),
+            action: "issue_credential",
+            claims: &claims,
+            disclosure: DisclosureProfile::Value.as_str(),
+            format: FORMAT_CLAIM_RESULT_JSON,
+            purpose,
+            access_mode: AccessMode::MachineClient,
+            subject: None,
+            target: None,
+            allow_subset_claims: false,
+            allowed_claims: None,
+        },
+    )
+    .map_err(|_| EvidenceError::EvaluationBindingMismatch)
 }
 
 pub(in crate::api) fn require_oid4vci_issuance_authorization_details(

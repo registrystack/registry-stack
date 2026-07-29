@@ -766,7 +766,7 @@ fn runtime_schema_paths(
     document: &Value,
 ) -> Result<BTreeMap<String, RuntimeSchemaPath>, DocumentationError> {
     let mut paths = BTreeMap::new();
-    let mut visited_references = BTreeSet::new();
+    let mut reference_visits = RuntimeSchemaReferenceVisits::default();
     record_runtime_path(
         &mut paths,
         RuntimePathIdentity {
@@ -784,10 +784,16 @@ fn runtime_schema_paths(
         document,
         "",
         "",
-        &mut visited_references,
+        &mut reference_visits,
         &mut paths,
     )?;
     Ok(paths)
+}
+
+#[derive(Default)]
+struct RuntimeSchemaReferenceVisits {
+    visited: BTreeSet<(String, String)>,
+    active: BTreeSet<String>,
 }
 
 fn walk_runtime_schema(
@@ -796,7 +802,7 @@ fn walk_runtime_schema(
     node: &Value,
     pointer: &str,
     key_path: &str,
-    visited_references: &mut BTreeSet<(String, String)>,
+    reference_visits: &mut RuntimeSchemaReferenceVisits,
     paths: &mut BTreeMap<String, RuntimeSchemaPath>,
 ) -> Result<(), DocumentationError> {
     let Some(object) = node.as_object() else {
@@ -809,7 +815,9 @@ fn walk_runtime_schema(
             ))
         })?;
         let visit = (target_pointer.to_owned(), key_path.to_owned());
-        if visited_references.insert(visit) {
+        if reference_visits.visited.insert(visit)
+            && reference_visits.active.insert(target_pointer.to_owned())
+        {
             let target = document.pointer(target_pointer).ok_or_else(|| {
                 documentation_error(format!(
                     "{schema} runtime schema has unresolved reference {reference:?}"
@@ -821,9 +829,10 @@ fn walk_runtime_schema(
                 target,
                 target_pointer,
                 key_path,
-                visited_references,
+                reference_visits,
                 paths,
             )?;
+            reference_visits.active.remove(target_pointer);
         }
     }
 
@@ -836,7 +845,7 @@ fn walk_runtime_schema(
                     branch,
                     &format!("{pointer}/{keyword}/{index}"),
                     key_path,
-                    visited_references,
+                    reference_visits,
                     paths,
                 )?;
             }
@@ -875,7 +884,7 @@ fn walk_runtime_schema(
                 property,
                 &child_pointer,
                 &child_key_path,
-                visited_references,
+                reference_visits,
                 paths,
             )?;
         }
@@ -901,7 +910,7 @@ fn walk_runtime_schema(
             items,
             &child_pointer,
             &child_key_path,
-            visited_references,
+            reference_visits,
             paths,
         )?;
     }
@@ -929,7 +938,7 @@ fn walk_runtime_schema(
             values,
             &child_pointer,
             &child_key_path,
-            visited_references,
+            reference_visits,
             paths,
         )?;
     }
@@ -2846,7 +2855,7 @@ mod tests {
             .expect("embedded reference coverage is readable");
         assert!(!coverage.source_contract.reads_country_workspaces);
         assert!(!coverage.source_contract.reads_runtime_configuration);
-        assert_eq!(coverage.coverage.path_count, 657);
+        assert_eq!(coverage.coverage.path_count, 681);
     }
 
     #[test]

@@ -245,16 +245,46 @@ pub(in super::super) enum OutputTypeDocument {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in super::super) struct OutputFieldDocument {
-    #[serde(rename = "type")]
-    pub(in super::super) output_type: OutputTypeDocument,
-    pub(in super::super) nullable: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in super::super) max_bytes: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in super::super) minimum: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in super::super) maximum: Option<i64>,
+pub(in super::super) struct OutputObjectFieldDocument {
+    pub(in super::super) required: bool,
+    pub(in super::super) schema: Box<OutputFieldDocument>,
+}
+
+/// Recursive, closed public output schema.
+///
+/// Scalar variants retain the consultation-v1 wire shape. Composite values
+/// add an explicit serialized-value bound and closed child declarations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(in super::super) enum OutputFieldDocument {
+    String {
+        nullable: bool,
+        max_bytes: u32,
+    },
+    Boolean {
+        nullable: bool,
+    },
+    Integer {
+        nullable: bool,
+        minimum: i64,
+        maximum: i64,
+    },
+    Date {
+        nullable: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_bytes: Option<u32>,
+    },
+    Object {
+        nullable: bool,
+        max_bytes: u32,
+        fields: BTreeMap<String, OutputObjectFieldDocument>,
+    },
+    Array {
+        nullable: bool,
+        max_bytes: u32,
+        max_items: u16,
+        items: Box<OutputFieldDocument>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,12 +377,83 @@ pub(in super::super) enum ResponseSchemaDocument {
 
 impl ResponseSchemaDocument {
     pub(super) fn validates_public_output(&self, output: &OutputFieldDocument) -> bool {
-        match (self, &output.output_type) {
-            (Self::String { nullable, .. }, OutputTypeDocument::String)
-            | (Self::Date { nullable }, OutputTypeDocument::Date)
-            | (Self::Boolean { nullable }, OutputTypeDocument::Boolean)
-            | (Self::Integer { nullable, .. }, OutputTypeDocument::Integer) => {
-                *nullable == output.nullable
+        match (self, output) {
+            (
+                Self::String {
+                    nullable,
+                    max_bytes,
+                },
+                OutputFieldDocument::String {
+                    nullable: output_nullable,
+                    max_bytes: output_max_bytes,
+                },
+            ) => nullable == output_nullable && max_bytes == output_max_bytes,
+            (
+                Self::Date { nullable },
+                OutputFieldDocument::Date {
+                    nullable: output_nullable,
+                    max_bytes,
+                },
+            ) => nullable == output_nullable && matches!(max_bytes, None | Some(10)),
+            (
+                Self::Boolean { nullable },
+                OutputFieldDocument::Boolean {
+                    nullable: output_nullable,
+                },
+            ) => nullable == output_nullable,
+            (
+                Self::Integer {
+                    nullable,
+                    minimum,
+                    maximum,
+                },
+                OutputFieldDocument::Integer {
+                    nullable: output_nullable,
+                    minimum: output_minimum,
+                    maximum: output_maximum,
+                },
+            ) => {
+                nullable == output_nullable
+                    && minimum == output_minimum
+                    && maximum == output_maximum
+            }
+            (
+                Self::Object {
+                    nullable,
+                    reject_unknown_fields: true,
+                    fields,
+                },
+                OutputFieldDocument::Object {
+                    nullable: output_nullable,
+                    fields: output_fields,
+                    ..
+                },
+            ) => {
+                nullable == output_nullable
+                    && fields.len() == output_fields.len()
+                    && fields.iter().all(|(name, field)| {
+                        output_fields.get(name).is_some_and(|output_field| {
+                            field.required == output_field.required
+                                && field.schema.validates_public_output(&output_field.schema)
+                        })
+                    })
+            }
+            (
+                Self::Array {
+                    nullable,
+                    max_items,
+                    items,
+                },
+                OutputFieldDocument::Array {
+                    nullable: output_nullable,
+                    max_items: output_max_items,
+                    items: output_items,
+                    ..
+                },
+            ) => {
+                nullable == output_nullable
+                    && max_items == output_max_items
+                    && items.validates_public_output(output_items)
             }
             _ => false,
         }

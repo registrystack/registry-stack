@@ -395,6 +395,12 @@
     },
     {
       "schema": "integration",
+      "pointer": "/$defs/outputObject/properties/fields",
+      "kind": "typed_map",
+      "rationale": "Structured output field names are authored and every value uses the closed requiredness and recursive schema declaration."
+    },
+    {
+      "schema": "integration",
       "pointer": "/$defs/protocol/properties/signed_dci/properties/selectors",
       "kind": "typed_map",
       "rationale": "Signed DCI selector names are authored and every value uses a closed selector binding."

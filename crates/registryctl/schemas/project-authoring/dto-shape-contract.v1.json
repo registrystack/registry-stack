@@ -209,6 +209,8 @@
               "integer",
               "string",
               "date",
+              "object",
+              "array",
               "presence"
             ],
             "type": "string"
@@ -2794,7 +2796,169 @@
             ],
             "type": "object"
           },
+          "AuthoredOutputArrayDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "$ref": "#/$defs/AuthoredOutputSchema"
+              },
+              "max_bytes": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_items": {
+                "format": "uint16",
+                "maximum": 65535,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "nullable": {
+                "type": "boolean"
+              },
+              "type": {
+                "$ref": "#/$defs/AuthoredOutputArrayType"
+              }
+            },
+            "required": [
+              "type",
+              "nullable",
+              "max_bytes",
+              "max_items",
+              "items"
+            ],
+            "type": "object"
+          },
+          "AuthoredOutputArrayType": {
+            "enum": [
+              "array"
+            ],
+            "type": "string"
+          },
           "AuthoredOutputDeclaration": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuthoredScalarOutputDeclaration"
+              },
+              {
+                "$ref": "#/$defs/AuthoredOutputObjectDeclaration"
+              },
+              {
+                "$ref": "#/$defs/AuthoredOutputArrayDeclaration"
+              }
+            ]
+          },
+          "AuthoredOutputObjectDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "fields": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/AuthoredOutputObjectField"
+                },
+                "type": "object"
+              },
+              "max_bytes": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "nullable": {
+                "type": "boolean"
+              },
+              "type": {
+                "$ref": "#/$defs/AuthoredOutputObjectType"
+              }
+            },
+            "required": [
+              "type",
+              "nullable",
+              "max_bytes",
+              "fields"
+            ],
+            "type": "object"
+          },
+          "AuthoredOutputObjectField": {
+            "additionalProperties": false,
+            "properties": {
+              "required": {
+                "type": "boolean"
+              },
+              "schema": {
+                "$ref": "#/$defs/AuthoredOutputSchema"
+              }
+            },
+            "required": [
+              "required",
+              "schema"
+            ],
+            "type": "object"
+          },
+          "AuthoredOutputObjectType": {
+            "enum": [
+              "object"
+            ],
+            "type": "string"
+          },
+          "AuthoredOutputSchema": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AuthoredScalarOutputSchema"
+              },
+              {
+                "$ref": "#/$defs/AuthoredOutputObjectDeclaration"
+              },
+              {
+                "$ref": "#/$defs/AuthoredOutputArrayDeclaration"
+              }
+            ]
+          },
+          "AuthoredOutputsDeclaration": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/$defs/AuthoredOutputDeclaration"
+                },
+                "type": "object"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "AuthoredProtocolDeclaration": {
+            "additionalProperties": false,
+            "properties": {
+              "signed_dci": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AuthoredSignedDciDeclaration"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "AuthoredRequestSemantics": {
+            "enum": [
+              "read_only"
+            ],
+            "type": "string"
+          },
+          "AuthoredResponseFormat": {
+            "enum": [
+              "json",
+              "text"
+            ],
+            "type": "string"
+          },
+          "AuthoredScalarOutputDeclaration": {
             "additionalProperties": false,
             "properties": {
               "format": {
@@ -2849,51 +3013,53 @@
             ],
             "type": "object"
           },
-          "AuthoredOutputsDeclaration": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "$ref": "#/$defs/AuthoredOutputDeclaration"
-                },
-                "type": "object"
-              },
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              }
-            ]
-          },
-          "AuthoredProtocolDeclaration": {
+          "AuthoredScalarOutputSchema": {
             "additionalProperties": false,
             "properties": {
-              "signed_dci": {
+              "format": {
                 "anyOf": [
                   {
-                    "$ref": "#/$defs/AuthoredSignedDciDeclaration"
+                    "$ref": "#/$defs/AuthoredStringFormat"
                   },
                   {
                     "type": "null"
                   }
                 ],
                 "default": null
+              },
+              "maxLength": {
+                "default": null,
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "maximum": {
+                "default": null,
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "minimum": {
+                "default": null,
+                "format": "int64",
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "type": {
+                "$ref": "#/$defs/AuthoredSchemaType"
               }
             },
+            "required": [
+              "type"
+            ],
             "type": "object"
-          },
-          "AuthoredRequestSemantics": {
-            "enum": [
-              "read_only"
-            ],
-            "type": "string"
-          },
-          "AuthoredResponseFormat": {
-            "enum": [
-              "json",
-              "text"
-            ],
-            "type": "string"
           },
           "AuthoredScalarType": {
             "enum": [

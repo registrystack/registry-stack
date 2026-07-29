@@ -26,13 +26,14 @@ use super::compiler::{
     CompiledValueExpression, RhaiWorkerLimits, SourcePlanCompileError,
 };
 use super::runtime_profile::{
-    CompiledDispatchProfile, PhysicalProjectionDigest, PredicatePlanDigest, RhaiPredicateIdentity,
+    CompiledDispatchProfile, CompiledOutputField, CompiledOutputShape, PhysicalProjectionDigest,
+    PredicatePlanDigest, RhaiPredicateIdentity,
 };
 
 pub(super) const MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1: usize = 768 * 1024;
 
 const PREDICATE_PLAN_DOMAIN_V1: &str = "registry.relay.consultation-predicate-plan.v1";
-const PHYSICAL_PROJECTION_DOMAIN_V1: &str = "registry.relay.consultation-physical-projection.v1";
+const PHYSICAL_PROJECTION_DOMAIN_V2: &str = "registry.relay.consultation-physical-projection.v2";
 
 pub(super) struct CompletionSeedSizing {
     pub(super) canonical_bytes_max: usize,
@@ -121,6 +122,10 @@ impl CompiledCompletionSeedTemplate {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "commitment dimensions stay explicit so a caller cannot silently omit one hashed input"
+)]
 pub(super) fn compile_runtime_commitment_digests(
     kind: SourcePlanKind,
     input_names: &[&str],
@@ -129,6 +134,7 @@ pub(super) fn compile_runtime_commitment_digests(
     dispatch: &CompiledDispatchProfile,
     rhai: Option<&RhaiPredicateIdentity>,
     snapshot: Option<&CompiledSnapshotBinding>,
+    output: &[CompiledOutputField],
 ) -> Result<(PredicatePlanDigest, PhysicalProjectionDigest), SourcePlanCompileError> {
     let predicate = compile_predicate_plan_digest(
         kind,
@@ -139,7 +145,7 @@ pub(super) fn compile_runtime_commitment_digests(
         rhai,
         snapshot,
     )?;
-    let projection = compile_physical_projection_digest(kind, operations, snapshot)?;
+    let projection = compile_physical_projection_digest(kind, operations, snapshot, output)?;
     Ok((predicate, projection))
 }
 
@@ -233,6 +239,7 @@ fn compile_physical_projection_digest(
     kind: SourcePlanKind,
     operations: &[CompiledOperation],
     snapshot: Option<&CompiledSnapshotBinding>,
+    output: &[CompiledOutputField],
 ) -> Result<PhysicalProjectionDigest, SourcePlanCompileError> {
     let mut operation_preimages = operations
         .iter()
@@ -244,6 +251,7 @@ fn compile_physical_projection_digest(
                     json!({
                         "field": output.field(),
                         "pointer_tokens": output.extraction_pointer().tokens().collect::<Vec<_>>(),
+                        "schema": output_shape_preimage(output.schema()),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -304,8 +312,15 @@ fn compile_physical_projection_digest(
         return Err(SourcePlanCompileError::CompilerInvariant);
     }
     let mut preimage = json!({
-        "schema": "registry.relay.consultation-physical-projection.v1",
+        "schema": "registry.relay.consultation-physical-projection.v2",
         "plan_kind": source_plan_kind_str(kind),
+        "output_schema": output
+            .iter()
+            .map(|field| (
+                field.name().to_owned(),
+                output_shape_preimage(field.shape()),
+            ))
+            .collect::<serde_json::Map<_, _>>(),
         "operations": operation_preimages
             .into_iter()
             .map(|(_, preimage)| preimage)
@@ -315,9 +330,76 @@ fn compile_physical_projection_digest(
         preimage["snapshot_projection"] = snapshot_projection;
     }
     PhysicalProjectionDigest::from_compiled_label(domain_separated_digest(
-        PHYSICAL_PROJECTION_DOMAIN_V1,
+        PHYSICAL_PROJECTION_DOMAIN_V2,
         &preimage,
     )?)
+}
+
+fn output_shape_preimage(shape: &CompiledOutputShape) -> Value {
+    match shape {
+        CompiledOutputShape::String {
+            nullable,
+            max_bytes,
+        } => json!({
+            "type": "string",
+            "nullable": nullable,
+            "max_bytes": max_bytes,
+        }),
+        CompiledOutputShape::Boolean { nullable } => json!({
+            "type": "boolean",
+            "nullable": nullable,
+        }),
+        CompiledOutputShape::Integer {
+            nullable,
+            minimum,
+            maximum,
+        } => json!({
+            "type": "integer",
+            "nullable": nullable,
+            "minimum": minimum,
+            "maximum": maximum,
+        }),
+        CompiledOutputShape::Date { nullable } => json!({
+            "type": "date",
+            "nullable": nullable,
+        }),
+        CompiledOutputShape::Object {
+            nullable,
+            max_bytes,
+            fields,
+        } => {
+            let fields = fields
+                .iter()
+                .map(|field| {
+                    (
+                        field.name().to_owned(),
+                        json!({
+                            "required": field.required(),
+                            "schema": output_shape_preimage(field.shape()),
+                        }),
+                    )
+                })
+                .collect::<serde_json::Map<_, _>>();
+            json!({
+                "type": "object",
+                "nullable": nullable,
+                "max_bytes": max_bytes,
+                "fields": fields,
+            })
+        }
+        CompiledOutputShape::Array {
+            nullable,
+            max_bytes,
+            max_items,
+            items,
+        } => json!({
+            "type": "array",
+            "nullable": nullable,
+            "max_bytes": max_bytes,
+            "max_items": max_items,
+            "items": output_shape_preimage(items),
+        }),
+    }
 }
 
 fn predicate_operation_preimage(

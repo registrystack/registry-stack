@@ -2,7 +2,8 @@
 //! Closed, platform-owned JSON decoding for registry-data responses.
 //!
 //! The decoder consumes opaque destination data, validates the complete JSON
-//! value, and releases only declared bounded scalar projections.
+//! value, and releases only declared bounded projections. Composite projections
+//! are released only as canonical JSON bytes from recursively closed schemas.
 //!
 //! Successful parse-tree strings and raw body bytes have zeroizing owners.
 //! Rejected parses can create temporary allocations inside parser dependencies;

@@ -513,6 +513,9 @@ fn claim_value_type(value: &ClaimValueDeclaration) -> Result<&'static str> {
         OutputType::Integer => Ok("integer"),
         OutputType::String => Ok("string"),
         OutputType::Date => Ok("date"),
+        OutputType::Object | OutputType::Array => {
+            bail!("claim value contracts cannot declare structured values")
+        }
         OutputType::Presence => bail!("claim value contracts cannot use presence"),
     }
 }
@@ -522,6 +525,12 @@ fn generated_notary_output_contracts(integration: &IntegrationDocument) -> Resul
         .outputs
         .iter()
         .map(|(name, output)| {
+            if let Some(schema) = &output.structured_schema {
+                return Ok((
+                    name.clone(),
+                    generated_notary_structured_output_contract(schema)?,
+                ));
+            }
             let contract = match output.output_type {
                 OutputType::Boolean => {
                     json!({ "type": "boolean", "nullable": output.nullable })
@@ -550,12 +559,84 @@ fn generated_notary_output_contracts(integration: &IntegrationDocument) -> Resul
                 OutputType::Date => {
                     json!({ "type": "date", "nullable": output.nullable })
                 }
+                OutputType::Object | OutputType::Array => {
+                    bail!("structured output schema is absent")
+                }
                 OutputType::Presence => bail!("presence is an outcome, not a declared output"),
             };
             Ok((name.clone(), contract))
         })
         .collect::<Result<Map<String, Value>>>()?;
     Ok(Value::Object(outputs))
+}
+
+fn generated_notary_structured_output_contract(
+    schema: &StructuredOutputSchema,
+) -> Result<Value> {
+    Ok(match schema {
+        StructuredOutputSchema::String {
+            nullable,
+            max_bytes,
+        } => json!({
+            "type": "string",
+            "nullable": nullable,
+            "max_bytes": max_bytes,
+        }),
+        StructuredOutputSchema::Boolean { nullable } => json!({
+            "type": "boolean",
+            "nullable": nullable,
+        }),
+        StructuredOutputSchema::Integer {
+            nullable,
+            minimum,
+            maximum,
+        } => json!({
+            "type": "integer",
+            "nullable": nullable,
+            "minimum": minimum,
+            "maximum": maximum,
+        }),
+        StructuredOutputSchema::Date { nullable } => json!({
+            "type": "date",
+            "nullable": nullable,
+        }),
+        StructuredOutputSchema::Object {
+            nullable,
+            max_bytes,
+            fields,
+        } => {
+            let fields = fields
+                .iter()
+                .map(|(name, field)| {
+                    Ok((
+                        name.clone(),
+                        json!({
+                            "required": field.required,
+                            "schema": generated_notary_structured_output_contract(&field.schema)?,
+                        }),
+                    ))
+                })
+                .collect::<Result<Map<String, Value>>>()?;
+            json!({
+                "type": "object",
+                "nullable": nullable,
+                "max_bytes": max_bytes,
+                "fields": fields,
+            })
+        }
+        StructuredOutputSchema::Array {
+            nullable,
+            max_bytes,
+            max_items,
+            items,
+        } => json!({
+            "type": "array",
+            "nullable": nullable,
+            "max_bytes": max_bytes,
+            "max_items": max_items,
+            "items": generated_notary_structured_output_contract(items)?,
+        }),
+    })
 }
 
 fn output_source_schema<'a>(
@@ -630,6 +711,8 @@ fn generated_notary_claim_rule(
             OutputType::Integer => "integer",
             OutputType::String => "string",
             OutputType::Date => "date",
+            OutputType::Object => "object",
+            OutputType::Array => "array",
             OutputType::Presence => bail!("presence cannot be referenced as an output"),
         };
         let nullable = true;

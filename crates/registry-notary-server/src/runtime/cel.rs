@@ -215,6 +215,7 @@ pub(super) fn cel_preflight_root_bindings(
             let mut output_view = consultation
                 .outputs
                 .iter()
+                .filter(|(_, output)| output.is_scalar())
                 .map(|(name, output)| (name.clone(), registry_output_dummy_value(output)))
                 .collect::<Map<_, _>>();
             output_view.insert("matched".to_string(), Value::Bool(true));
@@ -282,6 +283,19 @@ fn registry_output_dummy_value(output: &registry_notary_core::RelayOutputContrac
             bounded_string_preview(Some(*max_bytes))
         }
         registry_notary_core::RelayOutputContract::Date { .. } => json!("2000-01-01"),
+        registry_notary_core::RelayOutputContract::Object { fields, .. } => Value::Object(
+            fields
+                .iter()
+                .filter(|(_, field)| field.required)
+                .map(|(name, field)| {
+                    (
+                        name.clone(),
+                        registry_output_dummy_value(field.schema.as_ref()),
+                    )
+                })
+                .collect(),
+        ),
+        registry_notary_core::RelayOutputContract::Array { .. } => Value::Array(Vec::new()),
     }
 }
 
@@ -344,6 +358,16 @@ fn validate_registry_cel_expression(
             return Err(EvidenceError::InvalidRequest);
         }
     }
+    let referenced_members = cel_first_level_member_references(expression, consultation_name);
+    if referenced_members.iter().any(|member| {
+        consultation
+            .outputs
+            .get(member)
+            .is_none_or(|output| !output.is_scalar())
+            && !matches!(member.as_str(), "matched" | "outcome")
+    }) {
+        return Err(EvidenceError::InvalidRequest);
+    }
     let compact = expression
         .bytes()
         .filter(|byte| !byte.is_ascii_whitespace())
@@ -354,7 +378,7 @@ fn validate_registry_cel_expression(
             continue;
         }
         let path = format!("{consultation_name}.{name}");
-        if !compact.contains(&path) {
+        if !referenced_members.contains(name) {
             continue;
         }
         let left_guard = format!("{path}!=null");
@@ -369,6 +393,72 @@ fn validate_registry_cel_expression(
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn cel_first_level_member_references(expression: &str, root: &str) -> BTreeSet<String> {
+    let bytes = expression.as_bytes();
+    let mut members = BTreeSet::new();
+    let mut index = 0;
+    let mut quote: Option<u8> = None;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active_quote) = quote {
+            if byte == b'\\' {
+                index = index.saturating_add(2);
+                continue;
+            }
+            if byte == active_quote {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        if !is_cel_identifier_start_byte(byte) {
+            index += 1;
+            continue;
+        }
+        let identifier_start = index;
+        index += 1;
+        while index < bytes.len() && is_cel_identifier_continue_byte(bytes[index]) {
+            index += 1;
+        }
+        let previous = identifier_start
+            .checked_sub(1)
+            .and_then(|previous| bytes.get(previous))
+            .copied();
+        if previous == Some(b'.') || &expression[identifier_start..index] != root {
+            continue;
+        }
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if bytes.get(index) != Some(&b'.') {
+            continue;
+        }
+        index += 1;
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if bytes
+            .get(index)
+            .is_none_or(|byte| !is_cel_identifier_start_byte(*byte))
+        {
+            continue;
+        }
+        let member_start = index;
+        index += 1;
+        while index < bytes.len() && is_cel_identifier_continue_byte(bytes[index]) {
+            index += 1;
+        }
+        members.insert(expression[member_start..index].to_string());
+    }
+    members
 }
 
 pub(super) fn registry_cel_required_variables<'a>(
@@ -507,7 +597,8 @@ pub(super) fn cel_root_bindings(
     ctx: &CelEvaluationContext<'_>,
 ) -> Result<BTreeMap<String, Value>, EvidenceError> {
     if ctx.claim.evidence_mode.is_registry_backed() {
-        let mut root_bindings = ctx.consultation_outputs.clone();
+        let mut root_bindings =
+            registry_cel_scalar_consultation_outputs(ctx.claim, ctx.consultation_outputs)?;
         for (name, declaration) in &ctx.evidence.variables {
             let Some(value) = ctx.variables.get(name) else {
                 continue;
@@ -575,6 +666,41 @@ pub(super) fn cel_root_bindings(
         ctx.config,
     )?;
     Ok(root_bindings)
+}
+
+#[cfg(feature = "registry-notary-cel")]
+pub(super) fn registry_cel_scalar_consultation_outputs(
+    claim: &ClaimDefinition,
+    consultation_outputs: &BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, Value>, EvidenceError> {
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+        return Err(EvidenceError::InvalidRequest);
+    };
+    consultations
+        .iter()
+        .map(|(consultation_name, consultation)| {
+            let source = consultation_outputs
+                .get(consultation_name)
+                .and_then(Value::as_object)
+                .ok_or(EvidenceError::RuleEvaluationFailed)?;
+            let mut projected = Map::new();
+            for fixed in ["matched", "outcome"] {
+                if let Some(value) = source.get(fixed) {
+                    projected.insert(fixed.to_string(), value.clone());
+                }
+            }
+            for (name, _) in consultation
+                .outputs
+                .iter()
+                .filter(|(_, output)| output.is_scalar())
+            {
+                if let Some(value) = source.get(name) {
+                    projected.insert(name.clone(), value.clone());
+                }
+            }
+            Ok((consultation_name.clone(), Value::Object(projected)))
+        })
+        .collect()
 }
 
 #[cfg(feature = "registry-notary-cel")]

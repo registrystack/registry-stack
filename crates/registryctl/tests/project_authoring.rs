@@ -5343,6 +5343,57 @@ fn integration_input_pattern_schema_matches_the_wire_limit() {
 }
 
 #[test]
+fn integration_output_schema_accepts_only_bounded_closed_recursive_shapes() {
+    let schema: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("schemas/project-authoring/integration.schema.json"),
+        )
+        .expect("integration schema reads"),
+    )
+    .expect("integration schema parses");
+    let schema = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .expect("integration schema compiles");
+    let authored: serde_norway::Value = serde_norway::from_slice(
+        &std::fs::read(golden("opencrvs").join("integrations/birth-record/integration.yaml"))
+            .expect("OpenCRVS integration reads"),
+    )
+    .expect("OpenCRVS integration parses");
+    let authored = serde_json::to_value(authored).expect("integration converts to JSON");
+    assert!(
+        schema.validate(&authored).is_ok(),
+        "bounded recursive output is public authoring"
+    );
+
+    let mut missing_item_ceiling = authored.clone();
+    missing_item_ceiling["outputs"]["parents"]
+        .as_object_mut()
+        .expect("parents schema")
+        .remove("max_items");
+    assert!(schema.validate(&missing_item_ceiling).is_err());
+
+    let mut open_object = authored.clone();
+    open_object["outputs"]["parents"]["items"]["additionalProperties"] =
+        serde_json::Value::Bool(true);
+    assert!(schema.validate(&open_object).is_err());
+
+    let mut empty_object = authored.clone();
+    empty_object["outputs"]["parents"]["items"]["fields"] = serde_json::json!({});
+    assert!(schema.validate(&empty_object).is_err());
+
+    let mut nested_source_pointer = authored.clone();
+    nested_source_pointer["outputs"]["parents"]["items"]["fields"]["name"]["schema"]
+        ["x-registry-source"] = serde_json::json!("/name");
+    assert!(schema.validate(&nested_source_pointer).is_err());
+
+    let mut excessive_array = authored;
+    excessive_array["outputs"]["parents"]["max_items"] = serde_json::json!(257);
+    assert!(schema.validate(&excessive_array).is_err());
+}
+
+#[test]
 fn exact_selector_authored_member_order_is_canonical() {
     let first_root = tempfile::tempdir().expect("first temporary directory");
     let second_root = tempfile::tempdir().expect("second temporary directory");
@@ -5816,7 +5867,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "f9ca6af65849bfdeb6598e6fa3b0f83834a74845d5ff4f32be6418bdf66c5cde",
+        "d938972366e4e25125273e6b9021335368b66149fe177e5f46e29e098a11ce0e",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }

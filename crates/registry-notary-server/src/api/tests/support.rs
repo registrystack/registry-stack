@@ -1028,6 +1028,7 @@ evaluation_profiles:
                 canonical_purpose: purpose.to_string(),
                 consultation_id: "01J00000000000000000000000".to_string(),
                 execution_binding: String::new(),
+                result_content_binding: String::new(),
             }],
             consultations: vec![
                 registry_notary_core::StoredIssuanceConsultationProvenance {
@@ -1058,6 +1059,7 @@ evaluation_profiles:
                     canonical_purpose: purpose.to_string(),
                     consultation_id: "01J00000000000000000000001".to_string(),
                     execution_binding: String::new(),
+                    result_content_binding: String::new(),
                 },
                 registry_notary_core::StoredIssuanceClaimProvenance {
                     claim_id: root_claim_id.to_string(),
@@ -1069,6 +1071,7 @@ evaluation_profiles:
                     canonical_purpose: purpose.to_string(),
                     consultation_id: "01J00000000000000000000000".to_string(),
                     execution_binding: String::new(),
+                    result_content_binding: String::new(),
                 },
             ],
             consultations: vec![
@@ -1093,6 +1096,11 @@ evaluation_profiles:
         evaluation_id: &str,
         relay_consultation_count: usize,
     ) {
+        let mut result = claim_result_view(evaluation_id, &stored.claims[claim_index].claim_id);
+        result.provenance.used.relay_consultation_count = relay_consultation_count;
+        stored.claims[claim_index].result_content_binding =
+            crate::runtime::issuance_result_content_binding(&result)
+                .expect("fixture result content binding hashes");
         let claim = &stored.claims[claim_index];
         let consultation = stored
             .consultations

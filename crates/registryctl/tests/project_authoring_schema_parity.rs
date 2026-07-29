@@ -249,7 +249,7 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         [
             (SchemaKind::Project, 220),
             (SchemaKind::Environment, 198),
-            (SchemaKind::Integration, 142),
+            (SchemaKind::Integration, 166),
             (SchemaKind::Fixture, 62),
             (SchemaKind::Entity, 35),
         ]
@@ -261,11 +261,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_path_kind(),
         [
             (FieldPathKind::Root, 5),
-            (FieldPathKind::Property, 461),
-            (FieldPathKind::MapKey, 25),
-            (FieldPathKind::MapValue, 32),
+            (FieldPathKind::Property, 477),
+            (FieldPathKind::MapKey, 26),
+            (FieldPathKind::MapValue, 33),
             (FieldPathKind::ArrayItem, 33),
-            (FieldPathKind::Branch, 101),
+            (FieldPathKind::Branch, 107),
         ]
         .into_iter()
         .collect(),
@@ -275,11 +275,11 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
         index.coverage_by_sensitivity(),
         [
             (Sensitivity::Public, 6),
-            (Sensitivity::Internal, 414),
+            (Sensitivity::Internal, 432),
             (Sensitivity::Sensitive, 67),
             (Sensitivity::SecretReference, 14),
             (Sensitivity::RedactedFixture, 50),
-            (Sensitivity::Structural, 106),
+            (Sensitivity::Structural, 112),
         ]
         .into_iter()
         .collect(),
@@ -287,12 +287,12 @@ fn published_field_knowledge_is_complete_typed_reachable_and_editor_exact() {
     );
     assert_eq!(
         index.by_path().len(),
-        657,
+        681,
         "the field-knowledge gate covers every published schema path"
     );
     assert_eq!(
         index.references().len(),
-        260,
+        271,
         "every published local reference remains resolved in the deterministic reference index"
     );
     assert_eq!(
@@ -817,28 +817,28 @@ fn exact_published_structural_contract_inventory_is_release_gated() {
             (
                 "integration",
                 PublishedStructuralInventory {
-                    nodes: 165,
-                    local_refs: 35,
-                    union_nodes: 10,
-                    union_branches: 23,
+                    nodes: 195,
+                    local_refs: 46,
+                    union_nodes: 12,
+                    union_branches: 29,
                     conditionals: 0,
-                    objects: 33,
-                    closed_objects: 27,
-                    typed_maps: 6,
+                    objects: 38,
+                    closed_objects: 31,
+                    typed_maps: 7,
                     open_maps: 0,
                     arrays: 9,
-                    scalar_types: 50,
+                    scalar_types: 59,
                     nullable_nodes: 0,
-                    integer_lower_bounds: 16,
-                    integer_upper_bounds: 16,
+                    integer_lower_bounds: 22,
+                    integer_upper_bounds: 22,
                     string_length_bounds: 14,
                     string_patterns: 20,
                     array_size_bounds: 9,
                     unique_arrays: 8,
-                    object_size_bounds: 8,
-                    property_name_constraints: 3,
+                    object_size_bounds: 9,
+                    property_name_constraints: 4,
                     enums: 10,
-                    consts: 14,
+                    consts: 17,
                     defaults: 3,
                     deprecations: 0,
                 },

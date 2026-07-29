@@ -206,13 +206,14 @@ pub(crate) fn issuance_execution_binding(
     provenance: &ClaimProvenance,
 ) -> Result<String, EvidenceError> {
     sha256_canonical_json(&json!({
-        "schema": "registry.notary.issuance-execution-binding/v1",
+        "schema": "registry.notary.issuance-execution-binding/v2",
         "claim": {
             "id": claim.claim_id,
             "version": claim.claim_version,
             "relay_profile_id": claim.relay_profile_id,
             "relay_contract_hash": claim.relay_contract_hash,
             "canonical_purpose": claim.canonical_purpose,
+            "result_content_binding": claim.result_content_binding,
         },
         "execution": {
             "consultation_id": consultation.consultation_id,
@@ -224,6 +225,28 @@ pub(crate) fn issuance_execution_binding(
             "provenance": provenance,
         },
     }))
+}
+
+/// Commit the complete issuance-facing result without copying its value into
+/// restricted provenance. Canonical JSON makes object member order irrelevant
+/// while preserving every nested value, array position, disclosure decision,
+/// target handle, and public provenance field.
+pub(crate) fn issuance_result_content_binding(
+    result: &ClaimResultView,
+) -> Result<String, EvidenceError> {
+    sha256_canonical_json(&json!({
+        "schema": "registry.notary.issuance-result-content/v1",
+        "result": result,
+    }))
+}
+
+fn valid_sha256_binding(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 fn expected_issuance_claim_provenance(
@@ -357,6 +380,7 @@ pub(crate) fn require_issuable_evaluation_provenance(
             || private.relay_profile_id != consultation.profile.id
             || private.relay_contract_hash != consultation.profile.contract_hash
             || private.canonical_purpose != evaluation.purpose
+            || !valid_sha256_binding(&private.result_content_binding)
         {
             return Err(EvidenceError::EvaluationBindingMismatch);
         }
@@ -432,6 +456,29 @@ pub(crate) fn require_issuable_evaluation_provenance(
             .iter()
             .find(|result| result.claim_id == claim_ref.id)
             .ok_or(EvidenceError::EvaluationBindingMismatch)?;
+        if let RuleConfig::ConsultationOutput { output, .. } = &selected_claim.rule {
+            let ClaimEvidenceMode::RegistryBacked { consultations } = &selected_claim.evidence_mode
+            else {
+                return Err(EvidenceError::EvaluationBindingMismatch);
+            };
+            let output_contract = consultations
+                .first_key_value()
+                .filter(|_| consultations.len() == 1)
+                .and_then(|(_, consultation)| consultation.outputs.get(output))
+                .ok_or(EvidenceError::EvaluationBindingMismatch)?;
+            if matches!(
+                output_contract,
+                registry_notary_core::RelayOutputContract::Object { .. }
+                    | registry_notary_core::RelayOutputContract::Array { .. }
+            ) && (result
+                .value
+                .as_ref()
+                .is_none_or(|value| !output_contract.validates_value(value))
+                || !result.redacted_fields.is_empty())
+            {
+                return Err(EvidenceError::EvaluationBindingMismatch);
+            }
+        }
         let generated = &result.provenance.generated_by;
         let result_issued_at = OffsetDateTime::parse(&result.issued_at, &Rfc3339)
             .map_err(|_| EvidenceError::EvaluationBindingMismatch)?;
@@ -442,6 +489,7 @@ pub(crate) fn require_issuable_evaluation_provenance(
             &result.issued_at,
             &result.provenance,
         )?;
+        let result_content_binding = issuance_result_content_binding(result)?;
         if result.evaluation_id != evaluation_id
             || result.claim_version != selected_claim.version
             || result_issued_at != *root_acquired_at
@@ -454,6 +502,7 @@ pub(crate) fn require_issuable_evaluation_provenance(
             || generated.claim_id != claim_ref.id
             || generated.claim_version != selected_claim.version
             || result.provenance.used.relay_consultation_count != root_consultations.len()
+            || result_content_binding != root_private.result_content_binding
             || result_binding != root_private.execution_binding
         {
             return Err(EvidenceError::EvaluationBindingMismatch);
@@ -469,7 +518,7 @@ pub fn format_time(value: OffsetDateTime) -> String {
         .expect("OffsetDateTime within supported RFC3339 range")
 }
 
-pub(super) fn target_ref_view(
+pub(crate) fn target_ref_view(
     subject_access_rate_keys: &SubjectAccessRateLimitKeys,
     target: &EvidenceEntity,
 ) -> Result<TargetRefView, EvidenceError> {

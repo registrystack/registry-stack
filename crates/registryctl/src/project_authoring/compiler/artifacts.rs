@@ -700,26 +700,8 @@ fn generated_script_pack_semantics(
         .document
         .outputs
         .iter()
-        .map(|(name, output)| {
-            let output_type = match output.output_type {
-                OutputType::Boolean | OutputType::Presence => "boolean",
-                OutputType::Integer => "integer",
-                OutputType::String => "string",
-                OutputType::Date => "date",
-            };
-            let mut declaration = json!({ "type": output_type, "nullable": output.nullable });
-            match output.output_type {
-                OutputType::String => declaration["max_bytes"] = json!(output.max_bytes),
-                OutputType::Integer => {
-                    declaration["minimum"] = json!(output.minimum);
-                    declaration["maximum"] = json!(output.maximum);
-                }
-                OutputType::Date => declaration["max_bytes"] = json!(10),
-                OutputType::Boolean | OutputType::Presence => {}
-            }
-            (name.clone(), declaration)
-        })
-        .collect::<Map<String, Value>>();
+        .map(|(name, output)| Ok((name.clone(), relay_output_schema_for_output(output)?)))
+        .collect::<Result<Map<String, Value>>>()?;
     let signed_dci = script.signed_dci.as_ref().map(|protocol| {
         json!({
             "protocol_version": "1.0.0",
@@ -898,35 +880,20 @@ fn generated_http_pack_semantics(
         .outputs
         .iter()
         .map(|(name, output)| {
-            let output_type = if output
+            if output
                 .from
                 .as_deref()
                 .is_some_and(|source| source.ends_with(".presence"))
             {
-                "presence"
+                Ok((
+                    name.clone(),
+                    json!({ "type": "presence", "nullable": output.nullable }),
+                ))
             } else {
-                match output.output_type {
-                    OutputType::Boolean | OutputType::Presence => "boolean",
-                    OutputType::Integer => "integer",
-                    OutputType::String => "string",
-                    OutputType::Date => "date",
-                }
-            };
-            let mut declaration = json!({ "type": output_type, "nullable": output.nullable });
-            match output.output_type {
-                OutputType::String => {
-                    declaration["max_bytes"] = json!(output.max_bytes);
-                }
-                OutputType::Integer => {
-                    declaration["minimum"] = json!(output.minimum);
-                    declaration["maximum"] = json!(output.maximum);
-                }
-                OutputType::Date => declaration["max_bytes"] = json!(10),
-                OutputType::Boolean | OutputType::Presence => {}
+                Ok((name.clone(), relay_output_schema_for_output(output)?))
             }
-            (name.clone(), declaration)
         })
-        .collect::<Map<String, Value>>();
+        .collect::<Result<Map<String, Value>>>()?;
     let root_operation_id = data_operations[0].0;
     let operations = data_operations
         .iter()
@@ -1048,6 +1015,9 @@ fn generated_http_pack_semantics(
 }
 
 fn relay_acquisition_schema_for_output(output: &OutputDeclaration) -> Result<Value> {
+    if let Some(schema) = &output.structured_schema {
+        return relay_structured_acquisition_schema(schema);
+    }
     Ok(match output.output_type {
         OutputType::String => json!({
             "type": "string",
@@ -1067,6 +1037,152 @@ fn relay_acquisition_schema_for_output(output: &OutputDeclaration) -> Result<Val
             "nullable": output.nullable,
             "minimum": output.minimum.context("integer output minimum is absent")?,
             "maximum": output.maximum.context("integer output maximum is absent")?,
+        }),
+        OutputType::Object | OutputType::Array => {
+            bail!("structured output schema is absent")
+        }
+    })
+}
+
+fn relay_structured_acquisition_schema(schema: &StructuredOutputSchema) -> Result<Value> {
+    Ok(match schema {
+        StructuredOutputSchema::String {
+            nullable,
+            max_bytes,
+        } => json!({
+            "type": "string",
+            "nullable": nullable,
+            "max_bytes": max_bytes,
+        }),
+        StructuredOutputSchema::Boolean { nullable } => json!({
+            "type": "boolean",
+            "nullable": nullable,
+        }),
+        StructuredOutputSchema::Integer {
+            nullable,
+            minimum,
+            maximum,
+        } => json!({
+            "type": "integer",
+            "nullable": nullable,
+            "minimum": minimum,
+            "maximum": maximum,
+        }),
+        StructuredOutputSchema::Date { nullable } => json!({
+            "type": "date",
+            "nullable": nullable,
+        }),
+        StructuredOutputSchema::Object {
+            nullable, fields, ..
+        } => {
+            let fields = fields
+                .iter()
+                .map(|(name, field)| {
+                    Ok((
+                        name.clone(),
+                        json!({
+                            "required": field.required,
+                            "schema": relay_structured_acquisition_schema(&field.schema)?,
+                        }),
+                    ))
+                })
+                .collect::<Result<Map<String, Value>>>()?;
+            json!({
+                "type": "object",
+                "nullable": nullable,
+                "reject_unknown_fields": true,
+                "fields": fields,
+            })
+        }
+        StructuredOutputSchema::Array {
+            nullable,
+            max_items,
+            items,
+            ..
+        } => json!({
+            "type": "array",
+            "nullable": nullable,
+            "max_items": max_items,
+            "items": relay_structured_acquisition_schema(items)?,
+        }),
+    })
+}
+
+fn relay_output_schema_for_output(output: &OutputDeclaration) -> Result<Value> {
+    if let Some(schema) = &output.structured_schema {
+        return relay_structured_output_schema(schema);
+    }
+    let mut schema = relay_acquisition_schema_for_output(output)?;
+    if output.output_type == OutputType::Date {
+        schema["max_bytes"] = json!(10);
+    }
+    Ok(schema)
+}
+
+fn relay_structured_output_schema(schema: &StructuredOutputSchema) -> Result<Value> {
+    Ok(match schema {
+        StructuredOutputSchema::String {
+            nullable,
+            max_bytes,
+        } => json!({
+            "type": "string",
+            "nullable": nullable,
+            "max_bytes": max_bytes,
+        }),
+        StructuredOutputSchema::Boolean { nullable } => json!({
+            "type": "boolean",
+            "nullable": nullable,
+        }),
+        StructuredOutputSchema::Integer {
+            nullable,
+            minimum,
+            maximum,
+        } => json!({
+            "type": "integer",
+            "nullable": nullable,
+            "minimum": minimum,
+            "maximum": maximum,
+        }),
+        StructuredOutputSchema::Date { nullable } => json!({
+            "type": "date",
+            "nullable": nullable,
+            "max_bytes": 10,
+        }),
+        StructuredOutputSchema::Object {
+            nullable,
+            max_bytes,
+            fields,
+        } => {
+            let fields = fields
+                .iter()
+                .map(|(name, field)| {
+                    Ok((
+                        name.clone(),
+                        json!({
+                            "required": field.required,
+                            "schema": relay_structured_output_schema(&field.schema)?,
+                        }),
+                    ))
+                })
+                .collect::<Result<Map<String, Value>>>()?;
+            json!({
+                "type": "object",
+                "nullable": nullable,
+                "max_bytes": max_bytes,
+                "fields": fields,
+            })
+        }
+        StructuredOutputSchema::Array {
+            nullable,
+            max_bytes,
+            max_items,
+            items,
+        } => json!({
+            "type": "array",
+            "nullable": nullable,
+            "max_bytes": max_bytes,
+            "max_items": max_items,
+            "items": relay_structured_output_schema(items)?,
         }),
     })
 }
@@ -2543,13 +2659,14 @@ mod artifact_projection_tests {
     use super::*;
 
     #[test]
-    fn date_acquisition_schema_is_not_a_bounded_string() {
+    fn date_acquisition_and_output_schemas_use_their_exact_shapes() {
         let date = relay_acquisition_schema_for_output(&OutputDeclaration {
             output_type: OutputType::Date,
             nullable: false,
             max_bytes: None,
             minimum: None,
             maximum: None,
+            structured_schema: None,
             from: None,
             source_pointer: None,
         })
@@ -2560,15 +2677,116 @@ mod artifact_projection_tests {
             max_bytes: Some(10),
             minimum: None,
             maximum: None,
+            structured_schema: None,
             from: None,
             source_pointer: None,
         })
         .expect("string schema compiles");
 
-        assert_eq!(date, json!({"type": "date", "nullable": false}));
+        assert_eq!(
+            date,
+            json!({"type": "date", "nullable": false})
+        );
+        assert_eq!(
+            relay_output_schema_for_output(&OutputDeclaration {
+                output_type: OutputType::Date,
+                nullable: false,
+                max_bytes: None,
+                minimum: None,
+                maximum: None,
+                structured_schema: None,
+                from: None,
+                source_pointer: None,
+            })
+            .expect("date output schema compiles"),
+            json!({"type": "date", "nullable": false, "max_bytes": 10})
+        );
         assert_eq!(
             string,
             json!({"type": "string", "nullable": false, "max_bytes": 10})
+        );
+    }
+
+    #[test]
+    fn structured_acquisition_schema_preserves_the_exact_recursive_shape() {
+        let declaration = OutputDeclaration {
+            output_type: OutputType::Array,
+            nullable: false,
+            max_bytes: Some(1024),
+            minimum: None,
+            maximum: None,
+            structured_schema: Some(StructuredOutputSchema::Array {
+                nullable: false,
+                max_bytes: 1024,
+                max_items: 2,
+                items: Box::new(StructuredOutputSchema::Object {
+                    nullable: false,
+                    max_bytes: 384,
+                    fields: BTreeMap::from([(
+                        "name".to_string(),
+                        StructuredOutputObjectField {
+                            required: true,
+                            schema: Box::new(StructuredOutputSchema::String {
+                                nullable: false,
+                                max_bytes: 640,
+                            }),
+                        },
+                    )]),
+                }),
+            }),
+            from: None,
+            source_pointer: None,
+        };
+        let parents =
+            relay_output_schema_for_output(&declaration).expect("structured schema compiles");
+
+        assert_eq!(
+            parents,
+            json!({
+                "type": "array",
+                "nullable": false,
+                "max_bytes": 1024,
+                "max_items": 2,
+                "items": {
+                    "type": "object",
+                    "nullable": false,
+                    "max_bytes": 384,
+                    "fields": {
+                        "name": {
+                            "required": true,
+                            "schema": {
+                                "type": "string",
+                                "nullable": false,
+                                "max_bytes": 640
+                            }
+                        }
+                    }
+                }
+            })
+        );
+        assert_eq!(
+            relay_acquisition_schema_for_output(&declaration)
+                .expect("structured acquisition schema compiles"),
+            json!({
+                "type": "array",
+                "nullable": false,
+                "max_items": 2,
+                "items": {
+                    "type": "object",
+                    "nullable": false,
+                    "reject_unknown_fields": true,
+                    "fields": {
+                        "name": {
+                            "required": true,
+                            "schema": {
+                                "type": "string",
+                                "nullable": false,
+                                "max_bytes": 640
+                            }
+                        }
+                    }
+                }
+            })
         );
     }
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use registry_relay::rhai_worker::{
-    OutputSchema, OutputType, TypedValue, WorkerLimits, WorkerOutcome, WorkerOutput, WorkerProcess,
+    OutputSchema, TypedValue, WorkerLimits, WorkerOutcome, WorkerOutput, WorkerProcess,
     WorkerRequest,
 };
 
@@ -18,13 +18,7 @@ async fn first_product_worker_invocation_keeps_cold_start_outside_script_budget(
     );
     request.output_schema.insert(
         "active".to_owned(),
-        OutputSchema {
-            output_type: OutputType::Boolean,
-            nullable: false,
-            max_bytes: None,
-            minimum: None,
-            maximum: None,
-        },
+        OutputSchema::Boolean { nullable: false },
     );
     let output = worker
         .evaluate(&request)

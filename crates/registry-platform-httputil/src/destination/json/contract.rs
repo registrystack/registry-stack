@@ -20,7 +20,7 @@ pub const MAX_CLOSED_JSON_EXPANDED_NODES: usize = 4_096;
 pub const MAX_CLOSED_JSON_OBJECT_FIELDS: usize = 32;
 /// Maximum items in one schema-bounded response array.
 pub const MAX_CLOSED_JSON_ARRAY_ITEMS: u16 = 256;
-/// Maximum scalar projections released from one record.
+/// Maximum projections released from one record.
 pub const MAX_CLOSED_JSON_PROJECTIONS: usize = 64;
 /// Maximum bytes in a field, projection name, or decoded pointer token.
 pub const MAX_CLOSED_JSON_NAME_BYTES: usize = 128;
@@ -41,7 +41,7 @@ pub enum ClosedJsonDecoderBuildError {
     InvalidSchema,
     #[error("closed JSON record normalization does not match its schema")]
     InvalidNormalization,
-    #[error("closed JSON scalar projection is invalid")]
+    #[error("closed JSON projection is invalid")]
     InvalidProjection,
 }
 
@@ -270,7 +270,11 @@ pub enum ClosedJsonRecordRoot {
     ObjectArrayProbeTwo { field_index: usize },
 }
 
-/// One named decoded pointer to a scalar relative to the normalized record.
+/// One named decoded pointer relative to the normalized record.
+///
+/// Scalar targets retain their typed projection. Object and array targets are
+/// admitted only when their complete subtree rejects unknown object members,
+/// and are released as canonical JSON bytes.
 pub struct ClosedJsonScalarProjection {
     name: Box<str>,
     tokens: Box<[Box<str>]>,
@@ -339,7 +343,7 @@ pub struct ClosedJsonDecoder {
 }
 
 impl ClosedJsonDecoder {
-    /// Validate the schema, normalization, and scalar projections together.
+    /// Validate the schema, normalization, and projections together.
     pub fn new(
         schema: ClosedJsonSchema,
         root: ClosedJsonRecordRoot,
@@ -490,6 +494,7 @@ pub(super) struct CompiledScalarProjection {
     pub(super) name: Box<str>,
     pub(super) steps: Box<[ProjectionStep]>,
     pub(super) scalar: ScalarContract,
+    pub(super) missing_allowed: bool,
 }
 
 pub(super) struct CompiledPresenceProjection {
@@ -535,17 +540,9 @@ pub(super) enum ScalarContract {
         minimum: i64,
         maximum: i64,
     },
-}
-
-impl ScalarContract {
-    pub(super) const fn nullable(self) -> bool {
-        match self {
-            Self::String { nullable, .. }
-            | Self::Boolean { nullable }
-            | Self::Integer { nullable, .. }
-            | Self::Number { nullable, .. } => nullable,
-        }
-    }
+    CanonicalJson {
+        nullable: bool,
+    },
 }
 
 fn valid_name(value: &str) -> bool {
@@ -798,11 +795,13 @@ fn compile_projection(
     record_schema: &ClosedJsonSchema,
     projection: ClosedJsonScalarProjection,
 ) -> Result<CompiledScalarProjection, ClosedJsonDecoderBuildError> {
-    let (projected_schema, steps) = compile_projection_steps(record_schema, &projection.tokens)?;
+    let (projected_schema, steps, missing_allowed) =
+        compile_projection_steps(record_schema, &projection.tokens)?;
     Ok(CompiledScalarProjection {
         name: projection.name,
         steps,
         scalar: scalar_contract(projected_schema)?,
+        missing_allowed,
     })
 }
 
@@ -810,7 +809,7 @@ fn compile_presence_projection(
     record_schema: &ClosedJsonSchema,
     projection: ClosedJsonPresenceProjection,
 ) -> Result<CompiledPresenceProjection, ClosedJsonDecoderBuildError> {
-    let (_, steps) = compile_projection_steps(record_schema, &projection.tokens)?;
+    let (_, steps, _) = compile_projection_steps(record_schema, &projection.tokens)?;
     Ok(CompiledPresenceProjection {
         name: projection.name,
         steps,
@@ -820,25 +819,39 @@ fn compile_presence_projection(
 fn compile_projection_steps<'schema>(
     record_schema: &'schema ClosedJsonSchema,
     tokens: &[Box<str>],
-) -> Result<(&'schema ClosedJsonSchema, Box<[ProjectionStep]>), ClosedJsonDecoderBuildError> {
+) -> Result<(&'schema ClosedJsonSchema, Box<[ProjectionStep]>, bool), ClosedJsonDecoderBuildError> {
     let mut current = record_schema;
     let mut steps = Vec::with_capacity(tokens.len());
-    for token in tokens {
+    let mut missing_allowed = false;
+    for (token_index, token) in tokens.iter().enumerate() {
+        let has_descendants = token_index + 1 < tokens.len();
         current = match &current.node {
-            ClosedJsonSchemaNode::Object { fields, .. } => {
+            ClosedJsonSchemaNode::Object {
+                nullable, fields, ..
+            } => {
                 let field = fields
                     .iter()
                     .find(|field| field.name.as_ref() == token.as_ref())
                     .ok_or(ClosedJsonDecoderBuildError::InvalidProjection)?;
+                // A nullable parent or an absent optional ancestor collapses
+                // the complete projection to null. An optional terminal field
+                // does so only when that field's own schema is nullable.
+                missing_allowed |= *nullable || (!field.required && has_descendants);
                 steps.push(ProjectionStep::Object(field.name.clone()));
                 &field.schema
             }
             ClosedJsonSchemaNode::Array {
-                max_items, items, ..
+                nullable,
+                max_items,
+                items,
             } => {
                 let index = canonical_array_index(token)
                     .filter(|index| *index < usize::from(*max_items))
                     .ok_or(ClosedJsonDecoderBuildError::InvalidProjection)?;
+                // Array cardinality is bounded above, not fixed. A missing
+                // ancestor item collapses the projection, while a terminal
+                // missing item requires a nullable item schema.
+                missing_allowed |= *nullable || has_descendants;
                 steps.push(ProjectionStep::Array(index));
                 items
             }
@@ -850,7 +863,8 @@ fn compile_projection_steps<'schema>(
             }
         };
     }
-    Ok((current, steps.into_boxed_slice()))
+    missing_allowed |= current.nullable();
+    Ok((current, steps.into_boxed_slice(), missing_allowed))
 }
 
 fn canonical_array_index(token: &str) -> Option<usize> {
@@ -894,6 +908,12 @@ fn scalar_contract(
             minimum,
             maximum,
         }),
+        ClosedJsonSchemaNode::Object { nullable, .. }
+        | ClosedJsonSchemaNode::Array { nullable, .. }
+            if !schema_tolerates_unknown_fields(schema) =>
+        {
+            Ok(ScalarContract::CanonicalJson { nullable })
+        }
         ClosedJsonSchemaNode::Object { .. } | ClosedJsonSchemaNode::Array { .. } => {
             Err(ClosedJsonDecoderBuildError::InvalidProjection)
         }

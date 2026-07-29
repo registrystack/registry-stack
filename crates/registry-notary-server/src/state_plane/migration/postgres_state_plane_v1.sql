@@ -1,10 +1,10 @@
-CREATE SCHEMA registry_notary_private AUTHORIZATION CURRENT_USER;
-CREATE SCHEMA registry_notary_api AUTHORIZATION CURRENT_USER;
+CREATE SCHEMA IF NOT EXISTS registry_notary_private AUTHORIZATION CURRENT_USER;
+CREATE SCHEMA IF NOT EXISTS registry_notary_api AUTHORIZATION CURRENT_USER;
 
 REVOKE ALL ON SCHEMA registry_notary_private FROM PUBLIC;
 REVOKE ALL ON SCHEMA registry_notary_api FROM PUBLIC;
 
-CREATE TABLE registry_notary_private.schema_metadata (
+CREATE TABLE IF NOT EXISTS registry_notary_private.schema_metadata (
     singleton boolean PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     capability_id text NOT NULL,
     schema_version integer NOT NULL CHECK (schema_version > 0),
@@ -15,7 +15,7 @@ CREATE TABLE registry_notary_private.schema_metadata (
     CHECK (owner_role_oid <> runtime_role_oid)
 );
 
-CREATE TABLE registry_notary_private.replay_identifier (
+CREATE TABLE IF NOT EXISTS registry_notary_private.replay_identifier (
     scope_hash bytea NOT NULL CHECK (pg_catalog.octet_length(scope_hash) = 32),
     identifier_hash bytea NOT NULL CHECK (pg_catalog.octet_length(identifier_hash) = 32),
     created_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
@@ -23,10 +23,10 @@ CREATE TABLE registry_notary_private.replay_identifier (
     PRIMARY KEY (scope_hash, identifier_hash),
     CHECK (expires_at > created_at)
 );
-CREATE INDEX replay_identifier_expiry_idx
+CREATE INDEX IF NOT EXISTS replay_identifier_expiry_idx
     ON registry_notary_private.replay_identifier (expires_at);
 
-CREATE TABLE registry_notary_private.consumable_nonce (
+CREATE TABLE IF NOT EXISTS registry_notary_private.consumable_nonce (
     scope_hash bytea NOT NULL CHECK (pg_catalog.octet_length(scope_hash) = 32),
     nonce_hash bytea NOT NULL CHECK (pg_catalog.octet_length(nonce_hash) = 32),
     generation bigint NOT NULL CHECK (generation > 0),
@@ -41,12 +41,12 @@ CREATE TABLE registry_notary_private.consumable_nonce (
         OR (state = 'consumed' AND tombstone_expires_at IS NOT NULL)
     )
 );
-CREATE INDEX consumable_nonce_retention_idx
+CREATE INDEX IF NOT EXISTS consumable_nonce_retention_idx
     ON registry_notary_private.consumable_nonce (
         (CASE WHEN state = 'reserved' THEN reservation_expires_at ELSE tombstone_expires_at END)
     );
 
-CREATE TABLE registry_notary_private.evaluation (
+CREATE TABLE IF NOT EXISTS registry_notary_private.evaluation (
     evaluation_id text PRIMARY KEY CHECK (pg_catalog.length(evaluation_id) BETWEEN 1 AND 256),
     client_id_hash bytea NOT NULL CHECK (pg_catalog.octet_length(client_id_hash) = 32),
     request_hash bytea NOT NULL CHECK (pg_catalog.octet_length(request_hash) = 32),
@@ -57,12 +57,12 @@ CREATE TABLE registry_notary_private.evaluation (
     expires_at timestamptz NOT NULL,
     CHECK (expires_at > created_at)
 );
-CREATE INDEX evaluation_client_expiry_idx
+CREATE INDEX IF NOT EXISTS evaluation_client_expiry_idx
     ON registry_notary_private.evaluation (client_id_hash, expires_at);
-CREATE INDEX evaluation_expiry_idx
+CREATE INDEX IF NOT EXISTS evaluation_expiry_idx
     ON registry_notary_private.evaluation (expires_at);
 
-CREATE TABLE registry_notary_private.batch_idempotency (
+CREATE TABLE IF NOT EXISTS registry_notary_private.batch_idempotency (
     key_hash bytea PRIMARY KEY CHECK (pg_catalog.octet_length(key_hash) = 32),
     request_hash bytea NOT NULL CHECK (pg_catalog.octet_length(request_hash) = 32),
     principal_hash bytea NOT NULL CHECK (pg_catalog.octet_length(principal_hash) = 32),
@@ -84,13 +84,13 @@ CREATE TABLE registry_notary_private.batch_idempotency (
             AND response_version IS NULL AND response_json IS NULL)
     )
 );
-CREATE INDEX batch_idempotency_retention_idx
+CREATE INDEX IF NOT EXISTS batch_idempotency_retention_idx
     ON registry_notary_private.batch_idempotency (retention_expires_at);
-CREATE INDEX batch_idempotency_lease_idx
+CREATE INDEX IF NOT EXISTS batch_idempotency_lease_idx
     ON registry_notary_private.batch_idempotency (lease_expires_at)
     WHERE state = 'in_flight';
 
-CREATE TABLE registry_notary_private.credential_status (
+CREATE TABLE IF NOT EXISTS registry_notary_private.credential_status (
     credential_id text PRIMARY KEY CHECK (pg_catalog.length(credential_id) BETWEEN 1 AND 512),
     issuer text NOT NULL CHECK (pg_catalog.length(issuer) BETWEEN 1 AND 2048),
     profile text NOT NULL CHECK (pg_catalog.length(profile) BETWEEN 1 AND 256),
@@ -103,20 +103,20 @@ CREATE TABLE registry_notary_private.credential_status (
     CHECK (purge_after > credential_expires_at),
     CHECK (updated_at >= issued_at)
 );
-CREATE INDEX credential_status_purge_idx
+CREATE INDEX IF NOT EXISTS credential_status_purge_idx
     ON registry_notary_private.credential_status (purge_after);
 
-CREATE TABLE registry_notary_private.machine_quota (
+CREATE TABLE IF NOT EXISTS registry_notary_private.machine_quota (
     principal_hash bytea PRIMARY KEY CHECK (pg_catalog.octet_length(principal_hash) = 32),
     window_started_at timestamptz NOT NULL,
     window_expires_at timestamptz NOT NULL,
     used integer NOT NULL CHECK (used >= 0),
     CHECK (window_expires_at > window_started_at)
 );
-CREATE INDEX machine_quota_expiry_idx
+CREATE INDEX IF NOT EXISTS machine_quota_expiry_idx
     ON registry_notary_private.machine_quota (window_expires_at);
 
-CREATE TABLE registry_notary_private.subject_access_quota (
+CREATE TABLE IF NOT EXISTS registry_notary_private.subject_access_quota (
     bucket_kind text NOT NULL CHECK (bucket_kind IN (
         'invalid_token_per_client_address',
         'per_principal',
@@ -132,10 +132,10 @@ CREATE TABLE registry_notary_private.subject_access_quota (
     PRIMARY KEY (bucket_kind, key_hash),
     CHECK (window_expires_at > window_started_at)
 );
-CREATE INDEX subject_access_quota_expiry_idx
+CREATE INDEX IF NOT EXISTS subject_access_quota_expiry_idx
     ON registry_notary_private.subject_access_quota (window_expires_at);
 
-CREATE TABLE registry_notary_private.preauthorization_login_state (
+CREATE TABLE IF NOT EXISTS registry_notary_private.preauthorization_login_state (
     state_hash bytea PRIMARY KEY CHECK (pg_catalog.octet_length(state_hash) = 32),
     credential_configuration_id text NOT NULL
         CHECK (pg_catalog.length(credential_configuration_id) BETWEEN 1 AND 256),
@@ -146,10 +146,10 @@ CREATE TABLE registry_notary_private.preauthorization_login_state (
     expires_at timestamptz NOT NULL,
     CHECK (expires_at > created_at)
 );
-CREATE INDEX preauthorization_login_state_expiry_idx
+CREATE INDEX IF NOT EXISTS preauthorization_login_state_expiry_idx
     ON registry_notary_private.preauthorization_login_state (expires_at);
 
-CREATE TABLE registry_notary_private.preauthorization_tx_code (
+CREATE TABLE IF NOT EXISTS registry_notary_private.preauthorization_tx_code (
     jti_hash bytea PRIMARY KEY CHECK (pg_catalog.octet_length(jti_hash) = 32),
     key_id bytea NOT NULL CHECK (pg_catalog.octet_length(key_id) = 32),
     pin_verifier bytea NOT NULL CHECK (pg_catalog.octet_length(pin_verifier) = 32),
@@ -158,10 +158,10 @@ CREATE TABLE registry_notary_private.preauthorization_tx_code (
     expires_at timestamptz NOT NULL,
     CHECK (expires_at > created_at)
 );
-CREATE INDEX preauthorization_tx_code_expiry_idx
+CREATE INDEX IF NOT EXISTS preauthorization_tx_code_expiry_idx
     ON registry_notary_private.preauthorization_tx_code (expires_at);
 
-CREATE TABLE registry_notary_private.oid4vci_issuance_transaction (
+CREATE TABLE IF NOT EXISTS registry_notary_private.oid4vci_issuance_transaction (
     transaction_hash bytea PRIMARY KEY CHECK (pg_catalog.octet_length(transaction_hash) = 32),
     key_id bytea NOT NULL CHECK (pg_catalog.octet_length(key_id) = 32),
     credential_configuration_id text NOT NULL
@@ -204,8 +204,43 @@ CREATE TABLE registry_notary_private.oid4vci_issuance_transaction (
             AND response_aead_nonce IS NULL AND response_ciphertext IS NULL)
     )
 );
-CREATE INDEX oid4vci_issuance_transaction_expiry_idx
+CREATE INDEX IF NOT EXISTS oid4vci_issuance_transaction_expiry_idx
     ON registry_notary_private.oid4vci_issuance_transaction (expires_at);
+
+CREATE TABLE IF NOT EXISTS registry_notary_private.issuance_evaluation_consumption (
+    evaluation_hash bytea PRIMARY KEY
+        CHECK (pg_catalog.octet_length(evaluation_hash) = 32),
+    key_id bytea NOT NULL CHECK (pg_catalog.octet_length(key_id) = 32),
+    created_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
+    expires_at timestamptz NOT NULL,
+    CHECK (expires_at > created_at)
+);
+CREATE INDEX IF NOT EXISTS issuance_evaluation_consumption_expiry_idx
+    ON registry_notary_private.issuance_evaluation_consumption (expires_at);
+
+CREATE TABLE IF NOT EXISTS registry_notary_private.registry_client_offer (
+    idempotency_key_hash bytea PRIMARY KEY
+        CHECK (pg_catalog.octet_length(idempotency_key_hash) = 32),
+    request_hash bytea NOT NULL CHECK (pg_catalog.octet_length(request_hash) = 32),
+    evaluation_hash bytea NOT NULL UNIQUE
+        CHECK (pg_catalog.octet_length(evaluation_hash) = 32),
+    transaction_hash bytea NOT NULL UNIQUE
+        CHECK (pg_catalog.octet_length(transaction_hash) = 32),
+    key_id bytea NOT NULL CHECK (pg_catalog.octet_length(key_id) = 32),
+    response_aead_nonce bytea NOT NULL
+        CHECK (pg_catalog.octet_length(response_aead_nonce) BETWEEN 12 AND 24),
+    response_ciphertext bytea NOT NULL
+        CHECK (pg_catalog.octet_length(response_ciphertext) BETWEEN 17 AND 65536),
+    retention_expires_at timestamptz NOT NULL,
+    evaluation_expires_at timestamptz NOT NULL,
+    purge_after timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
+    CHECK (retention_expires_at > created_at),
+    CHECK (evaluation_expires_at > created_at),
+    CHECK (purge_after = GREATEST(retention_expires_at, evaluation_expires_at))
+);
+CREATE INDEX IF NOT EXISTS registry_client_offer_purge_idx
+    ON registry_notary_private.registry_client_offer (purge_after);
 
 ALTER DEFAULT PRIVILEGES IN SCHEMA registry_notary_private
     REVOKE ALL ON TABLES FROM PUBLIC;
@@ -214,7 +249,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA registry_notary_private
 ALTER DEFAULT PRIVILEGES IN SCHEMA registry_notary_api
     REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 
-CREATE FUNCTION registry_notary_api.attest_v1()
+CREATE OR REPLACE FUNCTION registry_notary_api.attest_v1()
 RETURNS TABLE (
     capability_id text,
     schema_version integer,
@@ -247,7 +282,7 @@ AS $function$
      WHERE metadata.singleton
 $function$;
 
-CREATE FUNCTION registry_notary_api.readiness_v1()
+CREATE OR REPLACE FUNCTION registry_notary_api.readiness_v1()
 RETURNS TABLE (
     capability_id text,
     schema_version integer,
@@ -266,7 +301,7 @@ AS $function$
     SELECT * FROM registry_notary_api.attest_v1()
 $function$;
 
-CREATE FUNCTION registry_notary_api.replay_insert_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.replay_insert_v1(
     p_scope_hash bytea,
     p_identifier_hash bytea,
     p_expires_at timestamptz
@@ -298,7 +333,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.nonce_reserve_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.nonce_reserve_v1(
     p_scope_hash bytea,
     p_nonce_hash bytea,
     p_expires_at timestamptz
@@ -344,7 +379,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.nonce_reservation_generation_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.nonce_reservation_generation_v1(
     p_scope_hash bytea,
     p_nonce_hash bytea
 )
@@ -362,7 +397,7 @@ AS $function$
        AND stored.reservation_expires_at > pg_catalog.statement_timestamp()
 $function$;
 
-CREATE FUNCTION registry_notary_api.nonce_consume_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.nonce_consume_v1(
     p_scope_hash bytea,
     p_nonce_hash bytea,
     p_generation bigint
@@ -396,7 +431,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.evaluation_insert_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.evaluation_insert_v1(
     p_evaluation_id text,
     p_client_id_hash bytea,
     p_request_hash bytea,
@@ -426,7 +461,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.evaluation_get_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.evaluation_get_v1(
     p_evaluation_id text,
     p_client_id_hash bytea
 )
@@ -450,7 +485,7 @@ AS $function$
        AND evaluation.expires_at > pg_catalog.clock_timestamp()
 $function$;
 
-CREATE FUNCTION registry_notary_api.batch_reserve_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.batch_reserve_v1(
     p_key_hash bytea,
     p_request_hash bytea,
     p_principal_hash bytea,
@@ -590,7 +625,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.batch_heartbeat_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.batch_heartbeat_v1(
     p_key_hash bytea,
     p_request_hash bytea,
     p_owner_token bytea,
@@ -620,7 +655,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.batch_complete_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.batch_complete_v1(
     p_key_hash bytea,
     p_request_hash bytea,
     p_owner_token bytea,
@@ -681,7 +716,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.batch_fail_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.batch_fail_v1(
     p_key_hash bytea,
     p_request_hash bytea,
     p_owner_token bytea
@@ -710,7 +745,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.credential_status_insert_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.credential_status_insert_v1(
     p_credential_id text,
     p_issuer text,
     p_profile text,
@@ -742,7 +777,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.credential_status_get_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.credential_status_get_v1(
     p_credential_id text
 )
 RETURNS TABLE (
@@ -778,7 +813,7 @@ AS $function$
        AND stored.purge_after > pg_catalog.clock_timestamp()
 $function$;
 
-CREATE FUNCTION registry_notary_api.credential_status_update_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.credential_status_update_v1(
     p_credential_id text,
     p_status text
 )
@@ -850,7 +885,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.machine_quota_debit_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.machine_quota_debit_v1(
     p_principal_hash bytea,
     p_limit integer,
     p_cost integer
@@ -902,7 +937,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.subject_access_quota_debit_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.subject_access_quota_debit_v1(
     p_bucket_kinds text[],
     p_key_hashes bytea[],
     p_limits integer[],
@@ -1020,7 +1055,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.subject_access_quota_check_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.subject_access_quota_check_v1(
     p_bucket_kinds text[],
     p_key_hashes bytea[],
     p_limits integer[],
@@ -1110,7 +1145,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.preauthorization_login_reserve_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.preauthorization_login_reserve_v1(
     p_state_hash bytea,
     p_credential_configuration_id text,
     p_key_id bytea,
@@ -1142,6 +1177,12 @@ BEGIN
         UNION ALL
         SELECT 1 FROM registry_notary_private.oid4vci_issuance_transaction
          WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.issuance_evaluation_consumption
+         WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.registry_client_offer
+         WHERE purge_after > v_now AND key_id <> p_key_id
     ) THEN
         RAISE EXCEPTION USING ERRCODE = '55000',
             MESSAGE = 'sensitive-state key generation mismatch';
@@ -1174,7 +1215,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.preauthorization_login_consume_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.preauthorization_login_consume_v1(
     p_state_hash bytea
 )
 RETURNS TABLE (
@@ -1198,7 +1239,7 @@ AS $function$
               stored.expires_at
 $function$;
 
-CREATE FUNCTION registry_notary_api.preauthorization_tx_code_reserve_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.preauthorization_tx_code_reserve_v1(
     p_jti_hash bytea,
     p_key_id bytea,
     p_pin_verifier bytea,
@@ -1227,6 +1268,12 @@ BEGIN
         UNION ALL
         SELECT 1 FROM registry_notary_private.oid4vci_issuance_transaction
          WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.issuance_evaluation_consumption
+         WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.registry_client_offer
+         WHERE purge_after > v_now AND key_id <> p_key_id
     ) THEN
         RAISE EXCEPTION USING ERRCODE = '55000',
             MESSAGE = 'sensitive-state key generation mismatch';
@@ -1243,7 +1290,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.preauthorization_key_attest_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.preauthorization_key_attest_v1(
     p_key_id bytea
 )
 RETURNS boolean
@@ -1262,10 +1309,16 @@ AS $function$
             UNION ALL
             SELECT 1 FROM registry_notary_private.oid4vci_issuance_transaction
              WHERE expires_at > pg_catalog.statement_timestamp() AND key_id <> p_key_id
+            UNION ALL
+            SELECT 1 FROM registry_notary_private.issuance_evaluation_consumption
+             WHERE expires_at > pg_catalog.statement_timestamp() AND key_id <> p_key_id
+            UNION ALL
+            SELECT 1 FROM registry_notary_private.registry_client_offer
+             WHERE purge_after > pg_catalog.statement_timestamp() AND key_id <> p_key_id
        )
 $function$;
 
-CREATE FUNCTION registry_notary_api.preauthorization_tx_code_peek_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.preauthorization_tx_code_peek_v1(
     p_jti_hash bytea
 )
 RETURNS TABLE (
@@ -1287,7 +1340,7 @@ AS $function$
        AND stored.expires_at > pg_catalog.clock_timestamp()
 $function$;
 
-CREATE FUNCTION registry_notary_api.preauthorization_redeem_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.preauthorization_redeem_v1(
     p_replay_scope_hash bytea,
     p_jti_hash bytea,
     p_code_expires_at timestamptz,
@@ -1342,7 +1395,299 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.oid4vci_transaction_reserve_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.evaluation_issuance_consume_v1(
+    p_evaluation_hash bytea,
+    p_key_id bytea,
+    p_expires_at timestamptz
+)
+RETURNS smallint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+DECLARE
+    v_now timestamptz := pg_catalog.clock_timestamp();
+    v_count bigint;
+BEGIN
+    IF pg_catalog.octet_length(p_evaluation_hash) <> 32
+       OR pg_catalog.octet_length(p_key_id) <> 32
+       OR p_expires_at <= v_now THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'invalid evaluation issuance consumption';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(5642808141211099137);
+    IF EXISTS (
+        SELECT 1 FROM registry_notary_private.preauthorization_login_state
+         WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.preauthorization_tx_code
+         WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.oid4vci_issuance_transaction
+         WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.issuance_evaluation_consumption
+         WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.registry_client_offer
+         WHERE purge_after > v_now AND key_id <> p_key_id
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '55000',
+            MESSAGE = 'sensitive-state key generation mismatch';
+    END IF;
+    LOCK TABLE registry_notary_private.issuance_evaluation_consumption
+        IN SHARE ROW EXCLUSIVE MODE;
+    DELETE FROM registry_notary_private.issuance_evaluation_consumption
+     WHERE expires_at <= v_now;
+    IF EXISTS (
+        SELECT 1 FROM registry_notary_private.issuance_evaluation_consumption
+         WHERE evaluation_hash = p_evaluation_hash
+    ) THEN
+        RETURN 0;
+    END IF;
+    SELECT pg_catalog.count(*) INTO v_count
+      FROM registry_notary_private.issuance_evaluation_consumption;
+    IF v_count >= 4096 THEN
+        RETURN -1;
+    END IF;
+    INSERT INTO registry_notary_private.issuance_evaluation_consumption (
+        evaluation_hash, key_id, created_at, expires_at
+    ) VALUES (p_evaluation_hash, p_key_id, v_now, p_expires_at);
+    RETURN 1;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION registry_notary_api.registry_client_offer_reserve_v1(
+    p_idempotency_key_hash bytea,
+    p_request_hash bytea,
+    p_evaluation_hash bytea,
+    p_transaction_hash bytea,
+    p_jti_hash bytea,
+    p_key_id bytea,
+    p_configuration_id text,
+    p_commitment text,
+    p_record_aead_nonce bytea,
+    p_record_ciphertext bytea,
+    p_transaction_expires_at timestamptz,
+    p_pin_verifier bytea,
+    p_pin_length smallint,
+    p_code_expires_at timestamptz,
+    p_response_aead_nonce bytea,
+    p_response_ciphertext bytea,
+    p_retention_expires_at timestamptz,
+    p_evaluation_expires_at timestamptz,
+    p_quota_principal_hash bytea,
+    p_quota_limit integer,
+    p_quota_cost integer
+)
+RETURNS TABLE (
+    outcome smallint,
+    key_id bytea,
+    response_aead_nonce bytea,
+    response_ciphertext bytea,
+    retention_expires_at timestamptz,
+    retry_after_seconds bigint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+DECLARE
+    v_now timestamptz := pg_catalog.clock_timestamp();
+    v_count bigint;
+    v_stored registry_notary_private.registry_client_offer%ROWTYPE;
+    v_quota registry_notary_private.machine_quota%ROWTYPE;
+BEGIN
+    IF pg_catalog.octet_length(p_idempotency_key_hash) <> 32
+       OR pg_catalog.octet_length(p_request_hash) <> 32 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'invalid registry-client idempotency binding';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(5642808141211099137);
+    IF EXISTS (
+        SELECT 1 FROM registry_notary_private.preauthorization_login_state AS login
+         WHERE login.expires_at > v_now AND login.key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.preauthorization_tx_code AS tx_code
+         WHERE tx_code.expires_at > v_now AND tx_code.key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.oid4vci_issuance_transaction AS transaction
+         WHERE transaction.expires_at > v_now AND transaction.key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.issuance_evaluation_consumption AS consumption
+         WHERE consumption.expires_at > v_now AND consumption.key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.registry_client_offer AS offer
+         WHERE offer.purge_after > v_now AND offer.key_id <> p_key_id
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '55000',
+            MESSAGE = 'sensitive-state key generation mismatch';
+    END IF;
+    LOCK TABLE registry_notary_private.oid4vci_issuance_transaction,
+               registry_notary_private.preauthorization_tx_code,
+               registry_notary_private.issuance_evaluation_consumption,
+               registry_notary_private.registry_client_offer
+        IN SHARE ROW EXCLUSIVE MODE;
+    DELETE FROM registry_notary_private.oid4vci_issuance_transaction
+     WHERE expires_at <= v_now;
+    DELETE FROM registry_notary_private.preauthorization_tx_code
+     WHERE expires_at <= v_now;
+    DELETE FROM registry_notary_private.issuance_evaluation_consumption
+     WHERE expires_at <= v_now;
+    DELETE FROM registry_notary_private.registry_client_offer
+     WHERE purge_after <= v_now;
+
+    SELECT * INTO v_stored
+      FROM registry_notary_private.registry_client_offer
+     WHERE idempotency_key_hash = p_idempotency_key_hash
+     FOR UPDATE;
+    IF FOUND THEN
+        IF v_stored.request_hash <> p_request_hash THEN
+            RETURN QUERY SELECT 0::smallint, NULL::bytea, NULL::bytea,
+                NULL::bytea, NULL::timestamptz, NULL::bigint;
+        ELSIF v_stored.retention_expires_at > v_now THEN
+            RETURN QUERY SELECT 2::smallint, v_stored.key_id,
+                v_stored.response_aead_nonce, v_stored.response_ciphertext,
+                v_stored.retention_expires_at, 0::bigint;
+        ELSE
+            RETURN QUERY SELECT -2::smallint, NULL::bytea, NULL::bytea,
+                NULL::bytea, NULL::timestamptz, NULL::bigint;
+        END IF;
+        RETURN;
+    END IF;
+
+    IF pg_catalog.octet_length(p_evaluation_hash) <> 32
+       OR pg_catalog.octet_length(p_transaction_hash) <> 32
+       OR pg_catalog.octet_length(p_jti_hash) <> 32
+       OR pg_catalog.octet_length(p_key_id) <> 32
+       OR pg_catalog.octet_length(p_quota_principal_hash) <> 32
+       OR p_quota_cost <= 0
+       OR (p_quota_limit IS NOT NULL AND p_quota_limit <= 0)
+       OR p_commitment !~ '^sha256:[0-9a-f]{64}$'
+       OR (p_pin_verifier IS NULL) <> (p_pin_length IS NULL)
+       OR (p_pin_verifier IS NOT NULL
+           AND (pg_catalog.octet_length(p_pin_verifier) <> 32
+                OR p_pin_length NOT BETWEEN 4 AND 12)) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'invalid registry-client offer reservation';
+    END IF;
+    IF p_code_expires_at <= v_now
+       OR p_transaction_expires_at < p_code_expires_at
+       OR p_evaluation_expires_at <= v_now
+       OR p_retention_expires_at < p_code_expires_at THEN
+        RETURN QUERY SELECT -4::smallint, NULL::bytea, NULL::bytea,
+            NULL::bytea, NULL::timestamptz, NULL::bigint;
+        RETURN;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM registry_notary_private.issuance_evaluation_consumption
+         WHERE evaluation_hash = p_evaluation_hash
+           AND expires_at > v_now
+    ) THEN
+        RETURN QUERY SELECT -2::smallint, NULL::bytea, NULL::bytea,
+            NULL::bytea, NULL::timestamptz, NULL::bigint;
+        RETURN;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM registry_notary_private.oid4vci_issuance_transaction
+         WHERE transaction_hash = p_transaction_hash
+    ) OR EXISTS (
+        SELECT 1 FROM registry_notary_private.preauthorization_tx_code
+         WHERE jti_hash = p_jti_hash
+    ) THEN
+        RETURN QUERY SELECT -3::smallint, NULL::bytea, NULL::bytea,
+            NULL::bytea, NULL::timestamptz, NULL::bigint;
+        RETURN;
+    END IF;
+    SELECT pg_catalog.count(*) INTO v_count
+      FROM registry_notary_private.oid4vci_issuance_transaction;
+    IF v_count >= 4096 THEN
+        RETURN QUERY SELECT -1::smallint, NULL::bytea, NULL::bytea,
+            NULL::bytea, NULL::timestamptz, NULL::bigint;
+        RETURN;
+    END IF;
+    SELECT pg_catalog.count(*) INTO v_count
+      FROM registry_notary_private.registry_client_offer;
+    IF v_count >= 4096 THEN
+        RETURN QUERY SELECT -1::smallint, NULL::bytea, NULL::bytea,
+            NULL::bytea, NULL::timestamptz, NULL::bigint;
+        RETURN;
+    END IF;
+    SELECT pg_catalog.count(*) INTO v_count
+      FROM registry_notary_private.issuance_evaluation_consumption;
+    IF v_count >= 4096 THEN
+        RETURN QUERY SELECT -1::smallint, NULL::bytea, NULL::bytea,
+            NULL::bytea, NULL::timestamptz, NULL::bigint;
+        RETURN;
+    END IF;
+
+    IF p_quota_limit IS NOT NULL THEN
+        INSERT INTO registry_notary_private.machine_quota (
+            principal_hash, window_started_at, window_expires_at, used
+        ) VALUES (
+            p_quota_principal_hash, v_now, v_now + interval '1 minute', 0
+        ) ON CONFLICT (principal_hash) DO NOTHING;
+        SELECT * INTO STRICT v_quota
+          FROM registry_notary_private.machine_quota
+         WHERE principal_hash = p_quota_principal_hash
+         FOR UPDATE;
+        IF v_quota.window_expires_at <= v_now THEN
+            UPDATE registry_notary_private.machine_quota
+               SET window_started_at = v_now,
+                   window_expires_at = v_now + interval '1 minute',
+                   used = 0
+             WHERE principal_hash = p_quota_principal_hash;
+            v_quota.window_expires_at := v_now + interval '1 minute';
+            v_quota.used := 0;
+        END IF;
+        IF p_quota_cost > p_quota_limit - v_quota.used THEN
+            RETURN QUERY SELECT -5::smallint, NULL::bytea, NULL::bytea,
+                NULL::bytea, NULL::timestamptz,
+                GREATEST(1::bigint, CEIL(EXTRACT(EPOCH FROM
+                    (v_quota.window_expires_at - v_now)))::bigint);
+            RETURN;
+        END IF;
+        UPDATE registry_notary_private.machine_quota
+           SET used = used + p_quota_cost
+         WHERE principal_hash = p_quota_principal_hash;
+    END IF;
+
+    INSERT INTO registry_notary_private.oid4vci_issuance_transaction (
+        transaction_hash, key_id, credential_configuration_id, commitment,
+        record_aead_nonce, record_ciphertext, state, created_at, updated_at, expires_at
+    ) VALUES (
+        p_transaction_hash, p_key_id, p_configuration_id, p_commitment,
+        p_record_aead_nonce, p_record_ciphertext, 'ready', v_now, v_now,
+        p_transaction_expires_at
+    );
+    IF p_pin_verifier IS NOT NULL THEN
+        INSERT INTO registry_notary_private.preauthorization_tx_code (
+            jti_hash, key_id, pin_verifier, pin_length, created_at, expires_at
+        ) VALUES (
+            p_jti_hash, p_key_id, p_pin_verifier, p_pin_length, v_now,
+            p_code_expires_at
+        );
+    END IF;
+    INSERT INTO registry_notary_private.issuance_evaluation_consumption (
+        evaluation_hash, key_id, created_at, expires_at
+    ) VALUES (p_evaluation_hash, p_key_id, v_now, p_evaluation_expires_at);
+    INSERT INTO registry_notary_private.registry_client_offer (
+        idempotency_key_hash, request_hash, evaluation_hash, transaction_hash,
+        key_id, response_aead_nonce, response_ciphertext, retention_expires_at,
+        evaluation_expires_at, purge_after, created_at
+    ) VALUES (
+        p_idempotency_key_hash, p_request_hash, p_evaluation_hash,
+        p_transaction_hash, p_key_id, p_response_aead_nonce,
+        p_response_ciphertext, p_retention_expires_at,
+        p_evaluation_expires_at,
+        GREATEST(p_retention_expires_at, p_evaluation_expires_at), v_now
+    );
+    RETURN QUERY SELECT 1::smallint, NULL::bytea, NULL::bytea,
+        NULL::bytea, NULL::timestamptz, 0::bigint;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION registry_notary_api.oid4vci_transaction_reserve_v1(
     p_transaction_hash bytea,
     p_key_id bytea,
     p_configuration_id text,
@@ -1376,6 +1721,12 @@ BEGIN
         UNION ALL
         SELECT 1 FROM registry_notary_private.oid4vci_issuance_transaction
          WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.issuance_evaluation_consumption
+         WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.registry_client_offer
+         WHERE purge_after > v_now AND key_id <> p_key_id
     ) THEN
         RAISE EXCEPTION USING ERRCODE = '55000',
             MESSAGE = 'sensitive-state key generation mismatch';
@@ -1406,7 +1757,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.oid4vci_transaction_get_v1(p_transaction_hash bytea)
+CREATE OR REPLACE FUNCTION registry_notary_api.oid4vci_transaction_get_v1(p_transaction_hash bytea)
 RETURNS TABLE (
     key_id bytea,
     credential_configuration_id text,
@@ -1426,7 +1777,7 @@ AS $function$
        AND stored.expires_at > pg_catalog.clock_timestamp()
 $function$;
 
-CREATE FUNCTION registry_notary_api.oid4vci_transaction_bind_nonce_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.oid4vci_transaction_bind_nonce_v1(
     p_transaction_hash bytea,
     p_commitment text,
     p_token_nonce_hash bytea
@@ -1448,7 +1799,7 @@ AS $function$
     RETURNING TRUE
 $function$;
 
-CREATE FUNCTION registry_notary_api.oid4vci_transaction_begin_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.oid4vci_transaction_begin_v1(
     p_transaction_hash bytea,
     p_commitment text,
     p_configuration_id text,
@@ -1519,7 +1870,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.oid4vci_transaction_complete_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.oid4vci_transaction_complete_v1(
     p_transaction_hash bytea,
     p_holder_thumbprint_hash bytea,
     p_request_hash bytea,
@@ -1543,7 +1894,7 @@ AS $function$
     RETURNING TRUE
 $function$;
 
-CREATE FUNCTION registry_notary_api.oid4vci_transaction_fail_v1(
+CREATE OR REPLACE FUNCTION registry_notary_api.oid4vci_transaction_fail_v1(
     p_transaction_hash bytea,
     p_holder_thumbprint_hash bytea
 )
@@ -1561,7 +1912,7 @@ AS $function$
     RETURNING TRUE
 $function$;
 
-CREATE FUNCTION registry_notary_api.retention_prune_v1(p_batch_size integer)
+CREATE OR REPLACE FUNCTION registry_notary_api.retention_prune_v1(p_batch_size integer)
 RETURNS TABLE (deleted_count bigint, batch_saturated boolean)
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -1713,6 +2064,36 @@ BEGIN
     ), deleted AS (
         DELETE FROM registry_notary_private.oid4vci_issuance_transaction AS stored
          USING candidates WHERE stored.transaction_hash = candidates.transaction_hash
+        RETURNING 1
+    ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
+    v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
+
+    WITH candidates AS (
+        SELECT evaluation_hash
+          FROM registry_notary_private.issuance_evaluation_consumption
+         WHERE expires_at <= v_now
+         ORDER BY expires_at, evaluation_hash
+         LIMIT p_batch_size FOR UPDATE SKIP LOCKED
+    ), deleted AS (
+        DELETE FROM registry_notary_private.issuance_evaluation_consumption AS stored
+         USING candidates
+         WHERE stored.evaluation_hash = candidates.evaluation_hash
+        RETURNING 1
+    ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
+    v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
+
+    WITH candidates AS (
+        SELECT idempotency_key_hash
+          FROM registry_notary_private.registry_client_offer
+         WHERE purge_after <= v_now
+         ORDER BY purge_after, idempotency_key_hash
+         LIMIT p_batch_size FOR UPDATE SKIP LOCKED
+    ), deleted AS (
+        DELETE FROM registry_notary_private.registry_client_offer AS stored
+         USING candidates
+         WHERE stored.idempotency_key_hash = candidates.idempotency_key_hash
         RETURNING 1
     ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
     v_total := v_total + v_count;

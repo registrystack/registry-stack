@@ -320,41 +320,97 @@ pub(super) fn validate_output(
     output: &BTreeMap<String, OutputFieldDocument>,
     acquired_fields: &BTreeSet<AcquiredField>,
 ) -> Result<(), SourcePlanArtifactError> {
-    if output.len() > MAX_ACQUIRED_FIELDS || acquired_fields.len() > MAX_ACQUIRED_FIELDS {
+    if output.len() > MAX_STATIC_COMPONENTS || acquired_fields.len() > MAX_ACQUIRED_FIELDS {
         return Err(SourcePlanArtifactError::InvalidSet);
     }
     for name in output.keys() {
         AcquiredField::try_from(name.as_str())
             .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
     }
+    let mut schema_nodes = 0_usize;
+    let mut expanded_nodes = 0_usize;
     for field in output.values() {
-        let valid = match field.output_type {
-            OutputTypeDocument::String => {
-                field
-                    .max_bytes
-                    .is_some_and(|bound| (1..=MAX_PUBLIC_RESPONSE_BYTES).contains(&bound))
-                    && field.minimum.is_none()
-                    && field.maximum.is_none()
-            }
-            OutputTypeDocument::Integer => {
-                field.max_bytes.is_none()
-                    && matches!((field.minimum, field.maximum), (Some(min), Some(max))
-                        if min <= max
-                            && min.unsigned_abs() <= MAX_JSON_INTEROPERABLE_INTEGER
-                            && max.unsigned_abs() <= MAX_JSON_INTEROPERABLE_INTEGER)
-            }
-            OutputTypeDocument::Date => {
-                field.max_bytes == Some(10) && field.minimum.is_none() && field.maximum.is_none()
-            }
-            OutputTypeDocument::Boolean => {
-                field.max_bytes.is_none() && field.minimum.is_none() && field.maximum.is_none()
-            }
-        };
-        if !valid {
-            return Err(SourcePlanArtifactError::InvalidAcquisition);
+        let expanded = validate_output_schema(field, 1, &mut schema_nodes)?;
+        expanded_nodes = expanded_nodes
+            .checked_add(expanded)
+            .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+        if expanded_nodes > MAX_RESPONSE_SCHEMA_EXPANDED_NODES {
+            return Err(SourcePlanArtifactError::InvalidLimits);
         }
     }
     Ok(())
+}
+
+fn validate_output_schema(
+    schema: &OutputFieldDocument,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<usize, SourcePlanArtifactError> {
+    *nodes = nodes
+        .checked_add(1)
+        .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+    if depth > MAX_RESPONSE_SCHEMA_DEPTH || *nodes > MAX_RESPONSE_SCHEMA_NODES {
+        return Err(SourcePlanArtifactError::InvalidLimits);
+    }
+    match schema {
+        OutputFieldDocument::String { max_bytes, .. }
+            if (1..=MAX_PUBLIC_RESPONSE_BYTES).contains(max_bytes) =>
+        {
+            Ok(1)
+        }
+        OutputFieldDocument::Boolean { .. } => Ok(1),
+        OutputFieldDocument::Integer {
+            minimum, maximum, ..
+        } if minimum <= maximum
+            && minimum.unsigned_abs() <= MAX_JSON_INTEROPERABLE_INTEGER
+            && maximum.unsigned_abs() <= MAX_JSON_INTEROPERABLE_INTEGER =>
+        {
+            Ok(1)
+        }
+        OutputFieldDocument::Date {
+            max_bytes: None | Some(10),
+            ..
+        } => Ok(1),
+        OutputFieldDocument::Object {
+            max_bytes, fields, ..
+        } => {
+            if !(1..=MAX_PUBLIC_RESPONSE_BYTES).contains(max_bytes)
+                || fields.is_empty()
+                || fields.len() > MAX_STATIC_COMPONENTS
+            {
+                return Err(SourcePlanArtifactError::InvalidLimits);
+            }
+            let mut expanded = 1_usize;
+            for (name, field) in fields {
+                validate_response_field_name(name)?;
+                let child = validate_output_schema(&field.schema, depth + 1, nodes)?;
+                expanded = expanded
+                    .checked_add(child)
+                    .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+            }
+            Ok(expanded)
+        }
+        OutputFieldDocument::Array {
+            max_bytes,
+            max_items,
+            items,
+            ..
+        } => {
+            if !(1..=MAX_PUBLIC_RESPONSE_BYTES).contains(max_bytes)
+                || !(1..=MAX_RESPONSE_ARRAY_ITEMS).contains(max_items)
+            {
+                return Err(SourcePlanArtifactError::InvalidLimits);
+            }
+            let child = validate_output_schema(items, depth + 1, nodes)?;
+            usize::from(*max_items)
+                .checked_mul(child)
+                .and_then(|expanded| expanded.checked_add(1))
+                .ok_or(SourcePlanArtifactError::InvalidLimits)
+        }
+        OutputFieldDocument::String { .. }
+        | OutputFieldDocument::Integer { .. }
+        | OutputFieldDocument::Date { .. } => Err(SourcePlanArtifactError::InvalidLimits),
+    }
 }
 
 pub(super) fn validate_authorization(
@@ -1733,22 +1789,7 @@ fn validate_http_operation(
         let declared = output
             .get(field.as_str())
             .ok_or(SourcePlanArtifactError::InvalidAcquisition)?;
-        let type_matches = match declared.output_type {
-            OutputTypeDocument::Date => matches!(raw_schema, ResponseSchemaDocument::Date {
-                nullable,
-            } if !*nullable || declared.nullable),
-            OutputTypeDocument::String => matches!(raw_schema, ResponseSchemaDocument::String {
-                nullable,
-                ..
-            } if !*nullable || declared.nullable),
-            OutputTypeDocument::Boolean => matches!(raw_schema, ResponseSchemaDocument::Boolean {
-                nullable,
-            } if !*nullable || declared.nullable),
-            OutputTypeDocument::Integer => matches!(raw_schema, ResponseSchemaDocument::Integer {
-                nullable,
-                ..
-            } if !*nullable || declared.nullable),
-        };
+        let type_matches = raw_schema.validates_public_output(declared);
         let reviewed_rhai_alias = if *plan_kind == SourcePlanKind::Script {
             operation
                 .response
@@ -1997,14 +2038,19 @@ pub(super) fn resolve_response_pointer<'a>(
         };
     }
     match current {
-        ResponseSchemaDocument::String { .. }
+        ResponseSchemaDocument::ScriptBody | ResponseSchemaDocument::Number { .. } => {
+            Err(SourcePlanArtifactError::InvalidAcquisition)
+        }
+        ResponseSchemaDocument::Object {
+            reject_unknown_fields: false,
+            ..
+        } => Err(SourcePlanArtifactError::InvalidAcquisition),
+        ResponseSchemaDocument::Object { .. }
+        | ResponseSchemaDocument::Array { .. }
+        | ResponseSchemaDocument::String { .. }
         | ResponseSchemaDocument::Date { .. }
         | ResponseSchemaDocument::Boolean { .. }
-        | ResponseSchemaDocument::Integer { .. }
-        | ResponseSchemaDocument::Number { .. } => Ok(current),
-        ResponseSchemaDocument::ScriptBody
-        | ResponseSchemaDocument::Object { .. }
-        | ResponseSchemaDocument::Array { .. } => Err(SourcePlanArtifactError::InvalidAcquisition),
+        | ResponseSchemaDocument::Integer { .. } => Ok(current),
     }
 }
 

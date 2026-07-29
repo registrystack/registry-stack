@@ -311,6 +311,7 @@ fn endpoint_kind_from_route(route: &str) -> &'static str {
         "/.well-known/vct/{*vct_path}" | "/credentials/{*vct_path}" => "credential_metadata",
         "/oid4vci/offer/start"
         | "/oid4vci/offer/callback"
+        | "/oid4vci/offers"
         | "/oid4vci/token"
         | "/oid4vci/credential" => "oid4vci",
         "/v1/claims" | "/v1/claims/{claim_id}" | "/v1/formats" => "catalog",

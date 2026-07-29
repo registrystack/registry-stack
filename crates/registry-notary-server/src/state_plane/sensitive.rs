@@ -24,7 +24,10 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use super::{NotaryPostgresStatePlaneError, NotaryPostgresStatePlaneRuntime};
 use crate::{
     preauth_state::{
-        CredentialMaterialization, IssuanceTransaction, LoginState, VerifiedTransactionCode,
+        decode_hash_uri, validate_registry_client_offer_structure, CredentialMaterialization,
+        IssuanceTransaction, LoginState, PreauthorizationStateError,
+        RegistryClientOfferReservation, RegistryClientOfferReservationOutcome,
+        RegistryClientOfferResponse, VerifiedTransactionCode,
     },
     replay::{replay_identifier_hash, replay_scope_hash},
 };
@@ -42,6 +45,9 @@ const ISSUANCE_HOLDER_CONTEXT: &[u8] = b"oid4vci-holder-thumbprint";
 const ISSUANCE_REQUEST_CONTEXT: &[u8] = b"oid4vci-credential-request";
 const ISSUANCE_RECORD_AAD_CONTEXT: &[u8] = b"registry-notary/oid4vci/transaction-aad/v1";
 const ISSUANCE_RESPONSE_AAD_CONTEXT: &[u8] = b"registry-notary/oid4vci/response-aad/v1";
+const EVALUATION_ISSUANCE_CONTEXT: &[u8] = b"oid4vci-evaluation-issuance";
+const REGISTRY_CLIENT_OFFER_RESPONSE_AAD_CONTEXT: &[u8] =
+    b"registry-notary/oid4vci/registry-client-offer-response-aad/v1";
 
 /// The configured environment variable name is retained, but its value is
 /// read only by [`PostgresSensitiveState::activate`].
@@ -295,6 +301,193 @@ impl PostgresSensitiveState {
             0 => Ok(IssuanceReserveOutcome::Duplicate),
             -1 => Ok(IssuanceReserveOutcome::Capacity),
             _ => Err(SensitiveStateError::InvalidStoredRecord),
+        }
+    }
+
+    pub(crate) async fn reserve_registry_client_offer(
+        &self,
+        reservation: RegistryClientOfferReservation,
+    ) -> Result<RegistryClientOfferReservationOutcome, PreauthorizationStateError> {
+        validate_registry_client_offer_structure(&reservation)?;
+        let idempotency_hash = decode_hash_uri(&reservation.idempotency_key_hash, "hmac-sha256:")?;
+        let request_hash = decode_hash_uri(&reservation.canonical_request_hash, "sha256:")?;
+        let evaluation_hash = self.keys.identifier_hash_fields(
+            EVALUATION_ISSUANCE_CONTEXT,
+            &[
+                reservation.evaluation_id.as_bytes(),
+                reservation.transaction.evaluation_client_id.as_bytes(),
+            ],
+        );
+        let transaction_hash = self
+            .keys
+            .identifier_hash(ISSUANCE_TRANSACTION_CONTEXT, &reservation.transaction_id);
+        let jti_hash = replay_identifier_hash(&reservation.transaction_id);
+        let transaction_expires_at = normalize_expiry(reservation.transaction_expires_at)?;
+        let code_expires_at = normalize_expiry(reservation.code_expires_at)?;
+        let retention_expires_at = normalize_expiry(reservation.retention_expires_at)?;
+        let evaluation_expires_at = normalize_expiry(reservation.evaluation_expires_at)?;
+
+        let record_aad = issuance_record_aad(
+            &transaction_hash,
+            &self.keys.key_id,
+            &reservation.transaction.credential_configuration_id,
+            &reservation.transaction.commitment,
+            transaction_expires_at,
+        )?;
+        let record_plaintext = Zeroizing::new(
+            serde_json::to_vec(&EncryptedIssuanceTransaction {
+                version: ISSUANCE_RECORD_VERSION,
+                transaction: &reservation.transaction,
+            })
+            .map_err(|_| SensitiveStateError::CryptographyUnavailable)?,
+        );
+        let (record_nonce, record_ciphertext) =
+            seal(&self.keys.aead, &record_aad, &record_plaintext)?;
+
+        let response_aad = registry_client_offer_response_aad(
+            &idempotency_hash,
+            &request_hash,
+            &self.keys.key_id,
+            retention_expires_at,
+        )?;
+        let response_plaintext = Zeroizing::new(
+            serde_json::to_vec(&reservation.response)
+                .map_err(|_| SensitiveStateError::CryptographyUnavailable)?,
+        );
+        let (response_nonce, response_ciphertext) =
+            seal(&self.keys.aead, &response_aad, &response_plaintext)?;
+
+        let pin_length = reservation
+            .transaction_code
+            .as_ref()
+            .map(|code| {
+                i16::try_from(code.pin_length).map_err(|_| PreauthorizationStateError::Unavailable)
+            })
+            .transpose()?;
+        let pin_verifier = reservation
+            .transaction_code
+            .as_ref()
+            .map(|code| self.keys.pin_verifier(&jti_hash, &code.pin));
+        let pin_verifier_parameter = pin_verifier.as_ref().map(<[u8; KEY_BYTES]>::as_slice);
+
+        let session = self
+            .runtime
+            .open_domain_session()
+            .await
+            .map_err(SensitiveStateError::from)?;
+        let row = session
+            .run_operation(session.client().query_one(
+                "SELECT * FROM registry_notary_api.registry_client_offer_reserve_v1(\
+                     $1::bytea, $2::bytea, $3::bytea, $4::bytea, $5::bytea, $6::bytea, \
+                     $7::text, $8::text, $9::bytea, $10::bytea, $11::timestamptz, \
+                     $12::bytea, $13::smallint, $14::timestamptz, $15::bytea, \
+                     $16::bytea, $17::timestamptz, $18::timestamptz, $19::bytea, \
+                     $20::integer, $21::integer)",
+                &[
+                    &&idempotency_hash[..],
+                    &&request_hash[..],
+                    &&evaluation_hash[..],
+                    &&transaction_hash[..],
+                    &&jti_hash[..],
+                    &&self.keys.key_id[..],
+                    &reservation.transaction.credential_configuration_id,
+                    &reservation.transaction.commitment,
+                    &record_nonce,
+                    &record_ciphertext,
+                    &transaction_expires_at,
+                    &pin_verifier_parameter,
+                    &pin_length,
+                    &code_expires_at,
+                    &response_nonce,
+                    &response_ciphertext,
+                    &retention_expires_at,
+                    &evaluation_expires_at,
+                    &reservation.quota_principal_hash,
+                    &reservation.quota_limit,
+                    &reservation.quota_cost,
+                ],
+            ))
+            .await
+            .map_err(SensitiveStateError::from)?;
+        match row.get::<_, i16>("outcome") {
+            1 => Ok(RegistryClientOfferReservationOutcome::Created(
+                reservation.response,
+            )),
+            2 => {
+                let key_id: Vec<u8> = row.get("key_id");
+                if key_id.ct_eq(&self.keys.key_id).unwrap_u8() != 1 {
+                    return Err(SensitiveStateError::InvalidStoredRecord.into());
+                }
+                let stored_retention_expires_at: OffsetDateTime = row.get("retention_expires_at");
+                let nonce: Vec<u8> = row.get("response_aead_nonce");
+                let mut ciphertext = Zeroizing::new(row.get::<_, Vec<u8>>("response_ciphertext"));
+                let aad = registry_client_offer_response_aad(
+                    &idempotency_hash,
+                    &request_hash,
+                    &key_id,
+                    stored_retention_expires_at,
+                )?;
+                let plaintext = open(&self.keys.aead, &aad, &nonce, &mut ciphertext)?;
+                let response: RegistryClientOfferResponse = serde_json::from_slice(plaintext)
+                    .map_err(|_| SensitiveStateError::InvalidStoredRecord)?;
+                Ok(RegistryClientOfferReservationOutcome::Replayed(response))
+            }
+            0 => Err(PreauthorizationStateError::IdempotencyConflict),
+            -1 => Err(PreauthorizationStateError::IssuanceTransactionCapacity),
+            -2 => Err(PreauthorizationStateError::EvaluationConsumed),
+            -3 => Err(PreauthorizationStateError::DuplicateIssuanceTransaction),
+            -4 => Err(PreauthorizationStateError::InvalidExpiry),
+            -5 => {
+                let retry_after_seconds: i64 = row
+                    .try_get("retry_after_seconds")
+                    .map_err(|_| SensitiveStateError::InvalidStoredRecord)?;
+                Err(PreauthorizationStateError::MachineQuotaExceeded {
+                    retry_after_seconds: retry_after_seconds.max(1) as u64,
+                })
+            }
+            _ => Err(SensitiveStateError::InvalidStoredRecord.into()),
+        }
+    }
+
+    pub(crate) async fn reserve_evaluation_issuance(
+        &self,
+        evaluation_id: &str,
+        evaluation_client_id: &str,
+        evaluation_expires_at: OffsetDateTime,
+    ) -> Result<(), PreauthorizationStateError> {
+        if evaluation_id.is_empty() || evaluation_client_id.is_empty() {
+            return Err(PreauthorizationStateError::Unavailable);
+        }
+        if evaluation_expires_at <= OffsetDateTime::now_utc() {
+            return Err(PreauthorizationStateError::InvalidExpiry);
+        }
+        let evaluation_hash = self.keys.identifier_hash_fields(
+            EVALUATION_ISSUANCE_CONTEXT,
+            &[evaluation_id.as_bytes(), evaluation_client_id.as_bytes()],
+        );
+        let evaluation_expires_at = normalize_expiry(evaluation_expires_at)?;
+        let session = self
+            .runtime
+            .open_domain_session()
+            .await
+            .map_err(SensitiveStateError::from)?;
+        let row = session
+            .run_operation(session.client().query_one(
+                "SELECT registry_notary_api.evaluation_issuance_consume_v1(\
+                     $1::bytea, $2::bytea, $3::timestamptz)",
+                &[
+                    &&evaluation_hash[..],
+                    &&self.keys.key_id[..],
+                    &evaluation_expires_at,
+                ],
+            ))
+            .await
+            .map_err(SensitiveStateError::from)?;
+        match row.get::<_, i16>(0) {
+            1 => Ok(()),
+            0 => Err(PreauthorizationStateError::EvaluationConsumed),
+            -1 => Err(PreauthorizationStateError::IssuanceTransactionCapacity),
+            _ => Err(SensitiveStateError::InvalidStoredRecord.into()),
         }
     }
 
@@ -699,6 +892,17 @@ impl SensitiveStateKeys {
         hmac_framed(&self.identifier, &[domain, value.as_bytes()])
     }
 
+    pub(crate) fn identifier_hash_fields(
+        &self,
+        domain: &[u8],
+        fields: &[&[u8]],
+    ) -> [u8; KEY_BYTES] {
+        let mut framed = Vec::with_capacity(fields.len() + 1);
+        framed.push(domain);
+        framed.extend_from_slice(fields);
+        hmac_framed(&self.identifier, &framed)
+    }
+
     pub(crate) fn login_state_hash(&self, opaque_state: &str) -> [u8; KEY_BYTES] {
         self.identifier_hash(STATE_IDENTIFIER_CONTEXT, opaque_state)
     }
@@ -839,6 +1043,25 @@ fn issuance_response_aad(
     Ok(aad)
 }
 
+fn registry_client_offer_response_aad(
+    idempotency_hash: &[u8; KEY_BYTES],
+    request_hash: &[u8; KEY_BYTES],
+    key_id: &[u8],
+    retention_expires_at: OffsetDateTime,
+) -> Result<Vec<u8>, SensitiveStateError> {
+    if key_id.len() != KEY_BYTES {
+        return Err(SensitiveStateError::InvalidStoredRecord);
+    }
+    let mut aad = Vec::with_capacity(144);
+    aad.extend_from_slice(REGISTRY_CLIENT_OFFER_RESPONSE_AAD_CONTEXT);
+    aad.push(ISSUANCE_RECORD_VERSION);
+    aad.extend_from_slice(idempotency_hash);
+    aad.extend_from_slice(request_hash);
+    aad.extend_from_slice(key_id);
+    aad.extend_from_slice(&retention_expires_at.unix_timestamp().to_be_bytes());
+    Ok(aad)
+}
+
 fn append_aad_text(aad: &mut Vec<u8>, value: &str) -> Result<(), SensitiveStateError> {
     let length =
         u32::try_from(value.len()).map_err(|_| SensitiveStateError::InvalidStoredRecord)?;
@@ -913,6 +1136,16 @@ mod tests {
             keys.login_state_hash("same"),
             replay_identifier_hash("same")
         );
+        assert_ne!(
+            keys.identifier_hash_fields(
+                EVALUATION_ISSUANCE_CONTEXT,
+                &[b"evaluation", b"client-one"],
+            ),
+            keys.identifier_hash_fields(
+                EVALUATION_ISSUANCE_CONTEXT,
+                &[b"evaluation", b"client-two"],
+            )
+        );
         assert_ne!(test_keys(7).key_id, test_keys(8).key_id);
     }
 
@@ -969,6 +1202,32 @@ mod tests {
                 SensitiveStateError::InvalidStoredRecord
             );
         }
+    }
+
+    #[test]
+    fn registry_client_offer_aad_binds_key_request_and_retention() {
+        let keys = test_keys(9);
+        let expiry = OffsetDateTime::from_unix_timestamp(1_900_000_000).unwrap();
+        let first =
+            registry_client_offer_response_aad(&[1; 32], &[2; 32], &keys.key_id, expiry).unwrap();
+        assert_ne!(
+            first,
+            registry_client_offer_response_aad(&[3; 32], &[2; 32], &keys.key_id, expiry).unwrap()
+        );
+        assert_ne!(
+            first,
+            registry_client_offer_response_aad(&[1; 32], &[4; 32], &keys.key_id, expiry).unwrap()
+        );
+        assert_ne!(
+            first,
+            registry_client_offer_response_aad(
+                &[1; 32],
+                &[2; 32],
+                &keys.key_id,
+                expiry + time::Duration::seconds(1),
+            )
+            .unwrap()
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, Write};
 
+use registry_platform_crypto::canonicalize_json;
 use registry_platform_httputil::destination::json::ProjectedJsonScalar;
 use serde::de::Error as _;
 use serde::ser::{SerializeMap, Serializer};
@@ -117,6 +118,7 @@ enum BatchTerminalScalar {
     String(Zeroizing<String>),
     Boolean(bool),
     Integer(i64),
+    CanonicalJson(Zeroizing<Vec<u8>>),
 }
 
 impl Serialize for BatchTerminalScalar {
@@ -129,6 +131,11 @@ impl Serialize for BatchTerminalScalar {
             Self::String(value) => serializer.serialize_str(value),
             Self::Boolean(value) => serializer.serialize_bool(*value),
             Self::Integer(value) => serializer.serialize_i64(*value),
+            Self::CanonicalJson(value) => {
+                let value: serde_json::Value =
+                    serde_json::from_slice(value).map_err(serde::ser::Error::custom)?;
+                value.serialize(serializer)
+            }
         }
     }
 }
@@ -147,7 +154,10 @@ impl<'de> Deserialize<'de> for BatchTerminalScalar {
                 .as_i64()
                 .map(Self::Integer)
                 .ok_or_else(|| D::Error::custom("batch terminal scalar is not a signed integer")),
-            _ => Err(D::Error::custom("batch terminal value is not a scalar")),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => canonicalize_json(&value)
+                .map(Zeroizing::new)
+                .map(Self::CanonicalJson)
+                .map_err(D::Error::custom),
         }
     }
 }
@@ -184,22 +194,28 @@ impl ValidatedOutputMap {
                 (
                     CompiledOutputShape::String { max_bytes, .. },
                     ProjectedJsonScalar::String(value),
-                ) => value.as_str().len() <= usize::try_from(max_bytes).unwrap_or(usize::MAX),
+                ) => value.as_str().len() <= usize::try_from(*max_bytes).unwrap_or(usize::MAX),
                 (CompiledOutputShape::Boolean { .. }, ProjectedJsonScalar::Boolean(_)) => true,
                 (
                     CompiledOutputShape::Integer {
                         minimum, maximum, ..
                     },
                     ProjectedJsonScalar::Integer(value),
-                ) => (minimum..=maximum).contains(value),
+                ) => (*minimum..=*maximum).contains(value),
                 (CompiledOutputShape::Date { .. }, ProjectedJsonScalar::String(value)) => {
                     valid_full_date(value)
                 }
                 (
+                    CompiledOutputShape::Object { .. } | CompiledOutputShape::Array { .. },
+                    ProjectedJsonScalar::CanonicalJson(value),
+                ) => canonical_output_matches_shape(value, output.shape()),
+                (
                     CompiledOutputShape::String { nullable: true, .. }
                     | CompiledOutputShape::Boolean { nullable: true }
                     | CompiledOutputShape::Integer { nullable: true, .. }
-                    | CompiledOutputShape::Date { nullable: true },
+                    | CompiledOutputShape::Date { nullable: true }
+                    | CompiledOutputShape::Object { nullable: true, .. }
+                    | CompiledOutputShape::Array { nullable: true, .. },
                     ProjectedJsonScalar::Null,
                 ) => true,
                 _ => false,
@@ -564,7 +580,7 @@ impl BatchTerminalPayload {
                     (
                         CompiledOutputShape::String { max_bytes, .. },
                         BatchTerminalScalar::String(value),
-                    ) => value.len() <= usize::try_from(max_bytes).unwrap_or(usize::MAX),
+                    ) => value.len() <= usize::try_from(*max_bytes).unwrap_or(usize::MAX),
                     (CompiledOutputShape::Date { .. }, BatchTerminalScalar::String(value)) => {
                         valid_full_date(value)
                     }
@@ -574,12 +590,18 @@ impl BatchTerminalPayload {
                             minimum, maximum, ..
                         },
                         BatchTerminalScalar::Integer(value),
-                    ) => (minimum..=maximum).contains(value),
+                    ) => (*minimum..=*maximum).contains(value),
+                    (
+                        CompiledOutputShape::Object { .. } | CompiledOutputShape::Array { .. },
+                        BatchTerminalScalar::CanonicalJson(value),
+                    ) => canonical_output_matches_shape(value, field.shape()),
                     (
                         CompiledOutputShape::String { nullable: true, .. }
                         | CompiledOutputShape::Boolean { nullable: true }
                         | CompiledOutputShape::Integer { nullable: true, .. }
-                        | CompiledOutputShape::Date { nullable: true },
+                        | CompiledOutputShape::Date { nullable: true }
+                        | CompiledOutputShape::Object { nullable: true, .. }
+                        | CompiledOutputShape::Array { nullable: true, .. },
                         BatchTerminalScalar::Null,
                     ) => true,
                     _ => false,
@@ -720,6 +742,9 @@ impl ProjectedRecord<'_> {
                         }
                         ProjectedJsonScalar::Boolean(value) => BatchTerminalScalar::Boolean(*value),
                         ProjectedJsonScalar::Integer(value) => BatchTerminalScalar::Integer(*value),
+                        ProjectedJsonScalar::CanonicalJson(value) => {
+                            BatchTerminalScalar::CanonicalJson(Zeroizing::new(value.to_vec()))
+                        }
                         ProjectedJsonScalar::Number(_) => {
                             return Err(ConsultationResponseError::Serialization);
                         }
@@ -775,9 +800,10 @@ fn terminal_scalar_from_json(
             .as_i64()
             .map(BatchTerminalScalar::Integer)
             .ok_or(ConsultationResponseError::Serialization),
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-            Err(ConsultationResponseError::Serialization)
-        }
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => canonicalize_json(value)
+            .map(Zeroizing::new)
+            .map(BatchTerminalScalar::CanonicalJson)
+            .map_err(|_| ConsultationResponseError::Serialization),
     }
 }
 
@@ -911,6 +937,11 @@ impl Serialize for ProjectedScalar<'_> {
             ProjectedJsonScalar::Boolean(value) => serializer.serialize_bool(*value),
             ProjectedJsonScalar::Integer(value) => serializer.serialize_i64(*value),
             ProjectedJsonScalar::Number(value) => serializer.serialize_f64(*value),
+            ProjectedJsonScalar::CanonicalJson(value) => {
+                let value: serde_json::Value =
+                    serde_json::from_slice(value).map_err(serde::ser::Error::custom)?;
+                value.serialize(serializer)
+            }
         }
     }
 }
@@ -919,6 +950,72 @@ struct BoundedResponseWriter<'a> {
     bytes: &'a mut Zeroizing<Vec<u8>>,
     limit: usize,
     exceeded: bool,
+}
+
+fn canonical_output_matches_shape(bytes: &[u8], shape: &CompiledOutputShape) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return false;
+    };
+    canonicalize_json(&value).is_ok_and(|canonical| canonical == bytes)
+        && json_output_matches_shape(&value, shape)
+}
+
+fn json_output_matches_shape(value: &serde_json::Value, shape: &CompiledOutputShape) -> bool {
+    if value.is_null() {
+        return shape.nullable();
+    }
+    match (value, shape) {
+        (serde_json::Value::String(value), CompiledOutputShape::String { max_bytes, .. }) => {
+            value.len() <= usize::try_from(*max_bytes).unwrap_or(usize::MAX)
+        }
+        (serde_json::Value::String(value), CompiledOutputShape::Date { .. }) => {
+            valid_full_date(value)
+        }
+        (serde_json::Value::Bool(_), CompiledOutputShape::Boolean { .. }) => true,
+        (
+            serde_json::Value::Number(value),
+            CompiledOutputShape::Integer {
+                minimum, maximum, ..
+            },
+        ) => value
+            .as_i64()
+            .is_some_and(|value| (*minimum..=*maximum).contains(&value)),
+        (
+            serde_json::Value::Object(value),
+            CompiledOutputShape::Object {
+                max_bytes, fields, ..
+            },
+        ) => {
+            canonicalize_json(&serde_json::Value::Object(value.clone())).is_ok_and(|encoded| {
+                encoded.len() <= usize::try_from(*max_bytes).unwrap_or(usize::MAX)
+            }) && !value
+                .keys()
+                .any(|name| !fields.iter().any(|field| field.name() == name))
+                && fields.iter().all(|field| {
+                    value.get(field.name()).map_or(!field.required(), |value| {
+                        json_output_matches_shape(value, field.shape())
+                    })
+                })
+        }
+        (
+            serde_json::Value::Array(value),
+            CompiledOutputShape::Array {
+                max_bytes,
+                max_items,
+                items,
+                ..
+            },
+        ) => {
+            value.len() <= usize::from(*max_items)
+                && canonicalize_json(&serde_json::Value::Array(value.clone())).is_ok_and(
+                    |encoded| encoded.len() <= usize::try_from(*max_bytes).unwrap_or(usize::MAX),
+                )
+                && value
+                    .iter()
+                    .all(|value| json_output_matches_shape(value, items))
+        }
+        _ => false,
+    }
 }
 
 impl<'a> BoundedResponseWriter<'a> {
@@ -1138,6 +1235,78 @@ mod tests {
             vec![("status".into(), ProjectedJsonScalar::Integer(3))],
         )
         .is_err());
+    }
+
+    #[test]
+    fn structured_output_remains_an_exact_json_value_in_live_and_replay_payloads() {
+        let plan = crate::source_plan::structured_output_plan_fixture();
+        let structured = json!({
+            "registration_number": "2026-000042",
+            "parents": [
+                {
+                    "name": {"family": "Lovelace", "given": "Ada"},
+                    "relationship": "mother"
+                },
+                {
+                    "name": {"family": "King", "given": "William"},
+                    "relationship": "father"
+                }
+            ]
+        });
+        let canonical = canonicalize_json(&structured).expect("canonical structured output");
+        let outputs = ValidatedOutputMap::try_new(
+            plan.runtime_profile(),
+            vec![(
+                "status".into(),
+                ProjectedJsonScalar::CanonicalJson(Zeroizing::new(canonical)),
+            )],
+        )
+        .expect("schema-validated structured output");
+        let response = PublishableConsultationResponse::from_validated_live_result(
+            ConsultationId::generate(),
+            Some(NotaryEvaluationId::try_parse("01JYZZZZZZZZZZZZZZZZZZZZZZ").unwrap()),
+            plan.runtime_profile(),
+            ConsultationOutcome::Match,
+            Some(&outputs),
+            1_752_148_800_120,
+        )
+        .expect("structured response");
+        let public: Value = serde_json::from_slice(response.bytes_for_test()).unwrap();
+        assert_eq!(public["outputs"]["status"], structured);
+        let terminal: Value =
+            serde_json::from_str(response.batch_terminal_json().unwrap().as_str()).unwrap();
+        assert_eq!(terminal["outputs"]["status"], structured);
+
+        for invalid in [
+            json!({
+                "registration_number": "2026-000042",
+                "parents": [],
+                "undeclared": true
+            }),
+            json!({
+                "registration_number": 42,
+                "parents": []
+            }),
+            json!({
+                "registration_number": "2026-000042",
+                "parents": [
+                    {"name": {"family": "A", "given": "B"}, "relationship": "mother"},
+                    {"name": {"family": "C", "given": "D"}, "relationship": "father"},
+                    {"name": {"family": "E", "given": "F"}, "relationship": "guardian"}
+                ]
+            }),
+        ] {
+            assert!(ValidatedOutputMap::try_new(
+                plan.runtime_profile(),
+                vec![(
+                    "status".into(),
+                    ProjectedJsonScalar::CanonicalJson(Zeroizing::new(
+                        canonicalize_json(&invalid).unwrap(),
+                    )),
+                )],
+            )
+            .is_err());
+        }
     }
 
     #[test]

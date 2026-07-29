@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Sensitive runtime decoding and bounded scalar projection.
+//! Sensitive runtime decoding and bounded projection.
 use std::fmt;
 
-use registry_platform_canonical_json::parse_json_strict;
+use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use serde_json::Value;
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -69,7 +69,7 @@ pub enum ClosedJsonDecodeError {
     ResponseContractViolation,
     #[error("destination response exceeds the probe-two cardinality bound")]
     CardinalityViolation,
-    #[error("destination response violates its scalar projection contract")]
+    #[error("destination response violates its projection contract")]
     ProjectionContractViolation,
 }
 /// Cardinality plus the only projected record that may be published.
@@ -101,7 +101,7 @@ impl fmt::Debug for ClosedJsonOutcome {
     }
 }
 
-/// One record containing only reviewed scalar projections.
+/// One record containing only reviewed bounded projections.
 pub struct ProjectedJsonRecord {
     fields: Box<[ProjectedJsonField]>,
 }
@@ -145,7 +145,7 @@ impl fmt::Debug for ProjectedJsonRecord {
     }
 }
 
-/// One declared projection name and bounded scalar value.
+/// One declared projection name and bounded value.
 pub struct ProjectedJsonField {
     name: Box<str>,
     value: ProjectedJsonScalar,
@@ -178,13 +178,17 @@ impl fmt::Debug for ProjectedJsonField {
     }
 }
 
-/// One schema-validated scalar. Projected strings retain a zeroizing owner.
+/// One schema-validated projection.
+///
+/// Projected strings and canonical composite JSON retain zeroizing owners.
+/// Composite values never expose their parsed [`Value`] representation.
 pub enum ProjectedJsonScalar {
     Null,
     String(Zeroizing<String>),
     Boolean(bool),
     Integer(i64),
     Number(f64),
+    CanonicalJson(Zeroizing<Vec<u8>>),
 }
 
 impl fmt::Debug for ProjectedJsonScalar {
@@ -195,6 +199,7 @@ impl fmt::Debug for ProjectedJsonScalar {
             Self::Boolean(_) => "boolean",
             Self::Integer(_) => "integer",
             Self::Number(_) => "number",
+            Self::CanonicalJson(_) => "canonical_json",
         };
         formatter
             .debug_struct("ProjectedJsonScalar")
@@ -330,8 +335,7 @@ fn project_field(
         };
         let Some(next) = next else {
             return projection
-                .scalar
-                .nullable()
+                .missing_allowed
                 .then(|| ProjectedJsonField {
                     name: projection.name.clone(),
                     value: ProjectedJsonScalar::Null,
@@ -372,7 +376,8 @@ fn project_scalar(
             ScalarContract::String { nullable, .. }
             | ScalarContract::Boolean { nullable }
             | ScalarContract::Integer { nullable, .. }
-            | ScalarContract::Number { nullable, .. } => nullable,
+            | ScalarContract::Number { nullable, .. }
+            | ScalarContract::CanonicalJson { nullable } => nullable,
         };
         return nullable
             .then_some(ProjectedJsonScalar::Null)
@@ -409,6 +414,12 @@ fn project_scalar(
             .filter(|number| *number >= minimum as f64 && *number <= maximum as f64)
             .map(ProjectedJsonScalar::Number)
             .ok_or(ClosedJsonDecodeError::ProjectionContractViolation),
+        (ScalarContract::CanonicalJson { .. }, Value::Object(_) | Value::Array(_)) => {
+            canonicalize_json(value)
+                .map(Zeroizing::new)
+                .map(ProjectedJsonScalar::CanonicalJson)
+                .map_err(|_| ClosedJsonDecodeError::ProjectionContractViolation)
+        }
         _ => Err(ClosedJsonDecodeError::ProjectionContractViolation),
     }
 }

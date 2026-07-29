@@ -19,3 +19,12 @@ from this `registryctl` build for VS Code and Zed.
 
 Project-owned Rhai handles traversal and normalization. Relay owns signature,
 correlation, selector, sender, receiver, and cardinality verification.
+
+The match response is explicitly synthetic. Its fictional parent records
+contain a source-only reference so the adapter demonstrates data minimization:
+it constructs each released parent object field by field and releases only
+`type`, `name`, and `identifier`. The closed `parents` output permits at most
+two objects and caps both the array and each item by canonical serialized
+bytes. The adapter never spreads or returns a whole source parent record.
+`parents` is one top-level credential claim and is disclosed or withheld as a
+whole unit; this project does not declare nested selective disclosure.

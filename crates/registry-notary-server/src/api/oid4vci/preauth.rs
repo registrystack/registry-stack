@@ -8,6 +8,500 @@ pub(in crate::api) struct Oid4vciOfferStartQuery {
     pub(in crate::api) credential_configuration_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::api) struct Oid4vciRegistryOfferRequest {
+    pub(in crate::api) evaluation_id: String,
+    pub(in crate::api) credential_configuration_id: String,
+}
+
+/// `POST /oid4vci/offers` (authenticated): create one registrar-initiated
+/// pre-authorized offer from an already stored machine evaluation.
+///
+/// The request cannot supply facts, target, purpose, profile, or provenance.
+/// Every authority-bearing value is recovered from authenticated configuration
+/// and the immutable stored evaluation.
+pub(in crate::api) async fn oid4vci_create_registry_offer(
+    headers: HeaderMap,
+    state: Option<Extension<Arc<RegistryNotaryApiState>>>,
+    principal: Option<Extension<EvidencePrincipal>>,
+    request: Result<Json<Oid4vciRegistryOfferRequest>, JsonRejection>,
+) -> Response {
+    let mut response =
+        oid4vci_create_registry_offer_inner(headers, state, principal, request).await;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    response
+}
+
+async fn oid4vci_create_registry_offer_inner(
+    headers: HeaderMap,
+    state: Option<Extension<Arc<RegistryNotaryApiState>>>,
+    principal: Option<Extension<EvidencePrincipal>>,
+    request: Result<Json<Oid4vciRegistryOfferRequest>, JsonRejection>,
+) -> Response {
+    let request = match parse_json_body(request) {
+        Ok(request) => request,
+        Err(error) => return evidence_error_response(error),
+    };
+    let Some(Extension(state)) = state else {
+        return evidence_error_response(EvidenceError::ServerDisabled);
+    };
+    let Some(preauth) = preauth_runtime(&state) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(Extension(principal)) = principal else {
+        return evidence_error_response(EvidenceError::MissingCredential);
+    };
+    let principal = match classify_subject_access_principal(&state.subject_access, &principal) {
+        Ok(principal)
+            if principal.access_mode() == AccessMode::MachineClient
+                && principal.auth_profile_id
+                    != registry_notary_core::EvidenceAuthProfileId::NotaryAccessToken
+                && principal.has_scope(REGISTRY_OFFER_CREATE_SCOPE) =>
+        {
+            principal
+        }
+        Ok(_) => {
+            return evidence_error_response(EvidenceError::ScopeDenied {
+                required: REGISTRY_OFFER_CREATE_SCOPE.to_string(),
+            })
+        }
+        Err(error) => return evidence_error_response(error),
+    };
+    let Some(idempotency_key) = idempotency_key(&headers).filter(|key| {
+        !key.is_empty()
+            && key.len() <= 256
+            && key
+                .bytes()
+                .all(|byte| matches!(byte, b'!' | b'#'..=b'[' | b']'..=b'~'))
+    }) else {
+        return evidence_error_response(EvidenceError::InvalidRequest);
+    };
+    let evidence = match state.enabled_evidence() {
+        Ok(evidence) => evidence,
+        Err(error) => return evidence_error_response(error),
+    };
+    let Some((configuration_id, configuration)) = state
+        .oid4vci
+        .credential_configurations
+        .get_key_value(&request.credential_configuration_id)
+    else {
+        return evidence_error_response(EvidenceError::EvaluationNotFound);
+    };
+    if !principal.has_scope(&configuration.scope) {
+        return evidence_error_response(EvidenceError::ScopeDenied {
+            required: configuration.scope.clone(),
+        });
+    }
+    let evaluation = match state
+        .store
+        .get(&request.evaluation_id, &principal.principal_id)
+        .await
+    {
+        Ok(Some(evaluation))
+            if evaluation.subject_access.is_none()
+                && evaluation.client_id == principal.principal_id
+                && evaluation.access_mode() == AccessMode::MachineClient =>
+        {
+            evaluation
+        }
+        Ok(Some(_)) | Ok(None) => {
+            return evidence_error_response(EvidenceError::EvaluationNotFound);
+        }
+        Err(error) => return evidence_error_response(error),
+    };
+    let now = OffsetDateTime::now_utc();
+    let evaluation_expires_at = match OffsetDateTime::parse(&evaluation.expires_at, &Rfc3339) {
+        Ok(expires_at) if expires_at > now => expires_at,
+        _ => return evidence_error_response(EvidenceError::EvaluationNotFound),
+    };
+    let configuration_claim_ids = configuration.credential_claim_ids();
+    let result_claim_ids = evaluation
+        .results
+        .iter()
+        .map(|result| result.claim_id.as_str())
+        .collect::<Vec<_>>();
+    if evaluation.claim_ids != configuration_claim_ids
+        || result_claim_ids
+            != configuration_claim_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        || evaluation.disclosure != DisclosureProfile::Value.as_str()
+        || evaluation.format != FORMAT_CLAIM_RESULT_JSON
+        || evaluation.results.is_empty()
+        || evaluation.results.iter().any(|result| {
+            result.value.as_ref().is_none_or(Value::is_null)
+                || result.satisfied == Some(false)
+                || !result.redacted_fields.is_empty()
+        })
+    {
+        return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+    }
+    let Some(target_ref) = evaluation.results.first().map(|result| &result.target_ref) else {
+        return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+    };
+    if evaluation
+        .results
+        .iter()
+        .any(|result| !same_target_ref(&result.target_ref, target_ref))
+    {
+        return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+    }
+    if let Err(error) = require_evaluation_access(evidence, &principal, &evaluation) {
+        return evidence_error_response(error);
+    }
+    let selected = evaluation.selected_claim_refs();
+    let configured_purpose = match common_subject_access_purpose(evidence, &selected) {
+        Ok(purpose) => purpose,
+        Err(error) => return evidence_error_response(error),
+    };
+    if configured_purpose != evaluation.purpose
+        || (!evidence.allowed_purposes.is_empty()
+            && !evidence
+                .allowed_purposes
+                .iter()
+                .any(|purpose| purpose == &evaluation.purpose))
+    {
+        return evidence_error_response(EvidenceError::PurposeNotAllowed);
+    }
+    if let Err(error) =
+        require_registry_backed_credential_claims(evidence, &configuration_claim_ids)
+    {
+        return evidence_error_response(error);
+    }
+    let (profile_id, profile) = match credential_profile_for(
+        evidence,
+        &evaluation,
+        Some(&configuration.credential_profile),
+    ) {
+        Ok(profile) => profile,
+        Err(error) => return evidence_error_response(error),
+    };
+    if profile_id != configuration.credential_profile
+        || (!profile.disclosure.allowed.is_empty()
+            && !profile
+                .disclosure
+                .allowed
+                .iter()
+                .any(|allowed| allowed == &evaluation.disclosure))
+    {
+        return evidence_error_response(EvidenceError::DisclosureNotAllowed);
+    }
+    if let Err(error) =
+        require_issuable_evaluation_provenance(evidence, &request.evaluation_id, &evaluation)
+    {
+        return evidence_error_response(error);
+    }
+    let Some(details) = principal.authorization_details.as_ref() else {
+        return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+    };
+    let Some(authorized_target) = details.target.as_ref() else {
+        return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+    };
+    let authorized_target_ref = match target_ref_view(
+        &state.subject_access_rate_keys,
+        &EvidenceEntity::with_identifier(
+            target_ref.entity_type.clone(),
+            authorized_target.id_type.clone(),
+            authorized_target.id.clone(),
+        ),
+    ) {
+        Ok(target_ref) => target_ref,
+        Err(error) => return evidence_error_response(error),
+    };
+    if !same_target_ref(&authorized_target_ref, target_ref)
+        || crate::authz_details::validate_scoped_authorization_details(
+            details,
+            &crate::authz_details::ScopedAuthorizationRequest {
+                service_id: evidence.service_id.as_str(),
+                action: "create_credential_offer",
+                claims: &selected,
+                disclosure: DisclosureProfile::Value.as_str(),
+                format: FORMAT_CLAIM_RESULT_JSON,
+                purpose: evaluation.purpose.as_str(),
+                access_mode: AccessMode::MachineClient,
+                subject: None,
+                target: Some(crate::authz_details::ScopedAuthorizationTarget {
+                    id_type: authorized_target.id_type.clone(),
+                    id: authorized_target.id.clone(),
+                }),
+                allow_subset_claims: false,
+                allowed_claims: None,
+            },
+        )
+        .is_err()
+    {
+        return evidence_error_response(EvidenceError::EvaluationBindingMismatch);
+    }
+    let configuration_fingerprint =
+        match oid4vci_configuration_fingerprint(evidence, configuration_id, configuration) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => return evidence_error_response(error),
+        };
+    let initiating_client_id_hash = match state
+        .subject_access_rate_keys
+        .principal(&principal.principal_id)
+    {
+        Ok(hash) => hash.as_str().to_string(),
+        Err(error) => return evidence_error_response(error.evidence_error()),
+    };
+    let canonical_idempotency_input = format!(
+        "client\0{}\0{}\0key\0{}\0{}",
+        initiating_client_id_hash.len(),
+        initiating_client_id_hash,
+        idempotency_key.len(),
+        idempotency_key
+    );
+    let idempotency_key_hash = match state.subject_access_rate_keys.audit_pseudonym_ref(
+        "oid4vci-registry-offer-idempotency-v1",
+        &canonical_idempotency_input,
+    ) {
+        Ok(hash) => hash.as_str().to_string(),
+        Err(error) => return evidence_error_response(error.evidence_error()),
+    };
+    let mut canonical_authorized_scopes = principal.scopes.clone();
+    canonical_authorized_scopes.sort();
+    canonical_authorized_scopes.dedup();
+    let canonical_request_hash = match sha256_canonical_json(&json!({
+        "schema": "registry.notary.registry-client-offer-request/v1",
+        "request": request,
+        "configuration_fingerprint": configuration_fingerprint,
+        "evaluation": evaluation,
+        "initiating_client_id_hash": initiating_client_id_hash,
+        "auth_profile_id": principal.auth_profile_id,
+        "authorized_scopes": canonical_authorized_scopes,
+        "authorization_details": details,
+    })) {
+        Ok(hash) => hash,
+        Err(error) => return evidence_error_response(error),
+    };
+    let transaction_id = match generate_opaque_token() {
+        Ok(transaction_id) => transaction_id,
+        Err(_) => return evidence_error_response(EvidenceError::CredentialIssuanceFailed),
+    };
+    let commitment = match oid4vci_registry_client_transaction_commitment(
+        &transaction_id,
+        evidence,
+        configuration_id,
+        configuration,
+        &configuration_fingerprint,
+        &request.evaluation_id,
+        &evaluation,
+        &initiating_client_id_hash,
+        principal.auth_profile_id,
+        &principal.scopes,
+        target_ref,
+    ) {
+        Ok(commitment) => commitment,
+        Err(error) => return evidence_error_response(error),
+    };
+    let authority = IssuanceAuthority::RegistryClient {
+        initiating_client_id: principal.principal_id.clone(),
+        initiating_client_id_hash,
+        auth_profile_id: principal.auth_profile_id,
+        authorized_scopes: principal.scopes.clone(),
+        target_ref: target_ref.clone(),
+        service_id: evidence.service_id.clone(),
+        purpose: evaluation.purpose.clone(),
+    };
+    let transaction = IssuanceTransaction {
+        transaction_id: transaction_id.clone(),
+        evaluation_id: request.evaluation_id.clone(),
+        evaluation_client_id: principal.principal_id.clone(),
+        credential_configuration_id: configuration_id.clone(),
+        commitment: commitment.clone(),
+        authority,
+    };
+    let now_unix = now.unix_timestamp();
+    let code_exp = (now_unix + preauth.pre_authorized_code_ttl_seconds() as i64)
+        .min(evaluation_expires_at.unix_timestamp());
+    if code_exp <= now_unix {
+        return evidence_error_response(EvidenceError::EvaluationNotFound);
+    }
+    let code_expires_at = match OffsetDateTime::from_unix_timestamp(code_exp) {
+        Ok(expires_at) => expires_at,
+        Err(_) => return evidence_error_response(EvidenceError::CredentialIssuanceFailed),
+    };
+    let transaction_expires_at = evaluation_expires_at
+        .min(code_expires_at + time::Duration::seconds(preauth.access_token_ttl_seconds() as i64));
+    let wallet_authority = BoundSubject {
+        subject: transaction_id.clone(),
+        subject_binding_claim: state.subject_access.subject_binding.token_claim.clone(),
+        subject_binding_value: transaction_id.clone(),
+        client_id: "registry-notary-wallet-transaction".to_string(),
+        scopes: vec![configuration.scope.clone()],
+        acr: None,
+        auth_time: None,
+    };
+    let code_claims = PreAuthorizedCodeClaims {
+        issuer: preauth.notary_issuer().to_string(),
+        jti: transaction_id.clone(),
+        credential_configuration_id: configuration_id.clone(),
+        issuance_transaction_id: transaction_id.clone(),
+        issuance_transaction_commitment: commitment,
+        // Registrar-initiated offers always require a separately presented
+        // transaction code, independent of the citizen self-service setting.
+        tx_code_required: true,
+        subject: wallet_authority,
+        iat: now_unix,
+        exp: code_exp,
+    };
+    let signed_code = match mint_pre_authorized_code(
+        preauth.access_token_signer(),
+        PRE_AUTHORIZED_CODE_JWT_TYP,
+        &code_claims,
+    )
+    .await
+    {
+        Ok(code) => code,
+        Err(error) => return evidence_error_response(error),
+    };
+    let tx_code = match generate_numeric_tx_code(preauth.tx_code_length()) {
+        Ok(code) => code,
+        Err(_) => return evidence_error_response(EvidenceError::CredentialIssuanceFailed),
+    };
+    let offer = CredentialOffer::pre_authorized_code(
+        state.oid4vci.credential_issuer.clone(),
+        vec![configuration_id.clone()],
+        signed_code.compact,
+        Some(TxCode::new(
+            preauth.tx_code_length(),
+            Some("Enter the PIN delivered separately by the registrar".to_string()),
+        )),
+    );
+    let credential_offer_uri = match offer_request_uri(&offer) {
+        Ok(uri) => uri,
+        Err(()) => return evidence_error_response(EvidenceError::CredentialIssuanceFailed),
+    };
+    let response = RegistryClientOfferResponse {
+        credential_offer_uri,
+        tx_code: Some(tx_code.clone()),
+        expires_at: format_time(code_expires_at),
+    };
+    let (quota_principal_hash, quota_limit, quota_cost) = match state
+        .machine_quota_limiter
+        .batch_reservation_parameters(&principal.principal_id, 1)
+    {
+        Ok(parameters) => parameters,
+        Err(error) => {
+            return evidence_error_response(EvidenceError::MachineQuotaExceeded {
+                retry_after_seconds: error.retry_after_seconds,
+            })
+        }
+    };
+    let audit_evaluation_id = request.evaluation_id.clone();
+    let reservation = RegistryClientOfferReservation {
+        transaction_id,
+        evaluation_id: request.evaluation_id,
+        evaluation_expires_at,
+        idempotency_key_hash,
+        canonical_request_hash,
+        transaction,
+        transaction_code: Some(RegistryClientTransactionCode {
+            pin: tx_code,
+            pin_length: preauth.tx_code_length(),
+        }),
+        code_expires_at,
+        transaction_expires_at,
+        response,
+        retention_expires_at: evaluation_expires_at,
+        quota_principal_hash,
+        quota_limit,
+        quota_cost,
+    };
+    let (response, audit_decision) = match preauth
+        .preauthorization_state()
+        .reserve_registry_client_offer(reservation)
+        .await
+    {
+        Ok(RegistryClientOfferReservationOutcome::Created(response)) => {
+            state
+                .metrics
+                .record_credential("openid4vci_registry_offer", "created");
+            (response, "registry_offer_created")
+        }
+        Ok(RegistryClientOfferReservationOutcome::Replayed(response)) => {
+            state
+                .metrics
+                .record_credential("openid4vci_registry_offer", "replayed");
+            (response, "registry_offer_replayed")
+        }
+        Err(PreauthorizationStateError::IdempotencyConflict)
+        | Err(PreauthorizationStateError::EvaluationConsumed) => {
+            return registry_offer_problem(StatusCode::CONFLICT, "offer_conflict");
+        }
+        Err(PreauthorizationStateError::IssuanceTransactionCapacity) => {
+            return registry_offer_problem(StatusCode::TOO_MANY_REQUESTS, "offer_rate_limited");
+        }
+        Err(PreauthorizationStateError::MachineQuotaExceeded {
+            retry_after_seconds,
+        }) => {
+            return evidence_error_response(EvidenceError::MachineQuotaExceeded {
+                retry_after_seconds,
+            })
+        }
+        Err(_) => {
+            return registry_offer_problem(StatusCode::SERVICE_UNAVAILABLE, "offer_unavailable");
+        }
+    };
+    let mut response = Json(response).into_response();
+    if let Err(error) = attach_registry_client_offer_audit(
+        &mut response,
+        &state.subject_access_rate_keys,
+        audit_decision,
+        &audit_evaluation_id,
+        &evaluation,
+        configuration_id,
+        profile_id,
+        &profile.holder_binding.mode,
+        target_ref,
+    ) {
+        return evidence_error_response(error);
+    }
+    response
+}
+
+pub(in crate::api) fn same_target_ref(left: &TargetRefView, right: &TargetRefView) -> bool {
+    left.entity_type == right.entity_type
+        && left.handle == right.handle
+        && left.identifier_schemes == right.identifier_schemes
+        && left.profile == right.profile
+}
+
+fn registry_offer_problem(status: StatusCode, code: &'static str) -> Response {
+    let request_id = crate::standalone::current_request_correlation_id();
+    let mut body = json!({
+        "type": format!("{}/{}", crate::PROBLEM_TYPE_BASE_URL, code.replace('_', "/")),
+        "title": "Credential offer was not created",
+        "status": status.as_u16(),
+        "detail": "the registrar-initiated credential offer could not be created",
+        "code": code,
+    });
+    if let Some(request_id) = request_id.as_ref() {
+        body["request_id"] = json!(request_id.as_str());
+    }
+    let mut response = (status, Json(body)).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/problem+json"),
+    );
+    response
+        .extensions_mut()
+        .insert(EvidenceErrorCodeContext(code.to_string()));
+    if let Some(request_id) = request_id {
+        if let Ok(value) = HeaderValue::from_str(request_id.as_str()) {
+            response.headers_mut().insert("x-request-id", value);
+        }
+    }
+    response
+}
+
 /// `GET /oid4vci/offer/start` (public): begin the eSignet authorization-code
 /// login as the confidential RP and redirect the citizen browser to eSignet.
 ///
@@ -64,6 +558,9 @@ pub(in crate::api) async fn oid4vci_offer_start(
             PreauthorizationStateError::DuplicateLoginState
             | PreauthorizationStateError::DuplicateIssuanceTransaction
             | PreauthorizationStateError::IssuanceTransactionCapacity
+            | PreauthorizationStateError::IdempotencyConflict
+            | PreauthorizationStateError::EvaluationConsumed
+            | PreauthorizationStateError::MachineQuotaExceeded { .. }
             | PreauthorizationStateError::Unavailable
             | PreauthorizationStateError::IncompatibleTransactionCodeProof
             | PreauthorizationStateError::InvalidExpiry
@@ -198,6 +695,7 @@ pub(in crate::api) async fn prepare_registry_backed_issuance_transaction(
         evaluation_client_id,
         credential_configuration_id: configuration_id.clone(),
         commitment,
+        authority: crate::preauth_state::IssuanceAuthority::SubjectAccess,
     })
 }
 
@@ -222,6 +720,21 @@ pub(in crate::api) fn oid4vci_configuration_fingerprint(
         "credential_configuration",
         serde_json::to_value(configuration).map_err(|_| EvidenceError::InvalidRequest)?,
     );
+    let claim_definitions = configuration
+        .credential_claim_ids()
+        .into_iter()
+        .map(|claim_id| {
+            let definition = evidence
+                .claims
+                .iter()
+                .find(|claim| claim.id == claim_id)
+                .ok_or(EvidenceError::InvalidRequest)?;
+            serde_json::to_value(definition)
+                .map(|definition| (claim_id, definition))
+                .map_err(|_| EvidenceError::InvalidRequest)
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    normalized.insert("claim_definitions", json!(claim_definitions));
     normalized.insert(
         "credential_profile",
         json!({
@@ -316,6 +829,89 @@ pub(in crate::api) fn oid4vci_issuance_transaction_commitment(
         serde_json::to_value(provenance).map_err(|_| EvidenceError::InvalidRequest)?,
     );
     normalized.insert("stored_evaluation_id", json!(evaluation_id));
+    sha256_canonical_json(
+        &serde_json::to_value(normalized).map_err(|_| EvidenceError::InvalidRequest)?,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::api) fn oid4vci_registry_client_transaction_commitment(
+    transaction_id: &str,
+    evidence: &EvidenceConfig,
+    configuration_id: &str,
+    configuration: &Oid4vciCredentialConfigurationConfig,
+    configuration_fingerprint: &str,
+    evaluation_id: &str,
+    evaluation: &registry_notary_core::StoredEvaluation,
+    initiating_client_id_hash: &str,
+    auth_profile_id: registry_notary_core::EvidenceAuthProfileId,
+    authorized_scopes: &[String],
+    target_ref: &TargetRefView,
+) -> Result<String, EvidenceError> {
+    if evaluation.subject_access.is_some()
+        || evaluation.client_id.is_empty()
+        || !initiating_client_id_hash.starts_with("hmac-sha256:")
+        || evaluation.results.is_empty()
+        || evaluation
+            .results
+            .iter()
+            .any(|result| !same_target_ref(&result.target_ref, target_ref))
+    {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    let provenance = evaluation
+        .issuance_provenance
+        .as_ref()
+        .ok_or(EvidenceError::EvaluationBindingMismatch)?;
+    let issuance_material_binding = sha256_canonical_json(&json!({
+        "schema": "registry.notary.oid4vci-issuance-material/v1",
+        "evaluation_id": evaluation_id,
+        "purpose": evaluation.purpose,
+        "claim_references": evaluation.selected_claim_refs(),
+        "disclosure": evaluation.disclosure,
+        "format": evaluation.format,
+        "results": evaluation.results,
+        "created_at": evaluation.created_at,
+        "expires_at": evaluation.expires_at,
+        "request_hash": evaluation.request_hash,
+        "issuance_provenance": provenance,
+    }))?;
+    let mut authorized_scopes = authorized_scopes.to_vec();
+    authorized_scopes.sort();
+    authorized_scopes.dedup();
+    let mut normalized = BTreeMap::new();
+    normalized.insert(
+        "schema_version",
+        json!("registry-notary-oid4vci-registry-client-transaction/v1"),
+    );
+    normalized.insert("transaction_id", json!(transaction_id));
+    normalized.insert(
+        "initiating_client_id_hash",
+        json!(initiating_client_id_hash),
+    );
+    normalized.insert("auth_profile_id", json!(auth_profile_id));
+    normalized.insert("authorized_scopes", json!(authorized_scopes));
+    normalized.insert("target_ref", json!(target_ref));
+    normalized.insert("service", json!(evidence.service_id));
+    normalized.insert("purpose", json!(evaluation.purpose));
+    normalized.insert(
+        "canonical_claim_references",
+        json!(evaluation.selected_claim_refs()),
+    );
+    normalized.insert("credential_configuration_id", json!(configuration_id));
+    normalized.insert(
+        "credential_profile",
+        json!(configuration.credential_profile),
+    );
+    normalized.insert(
+        "configuration_fingerprint",
+        json!(configuration_fingerprint),
+    );
+    normalized.insert("stored_evaluation_id", json!(evaluation_id));
+    normalized.insert(
+        "issuance_material_binding",
+        json!(issuance_material_binding),
+    );
     sha256_canonical_json(
         &serde_json::to_value(normalized).map_err(|_| EvidenceError::InvalidRequest)?,
     )
@@ -866,23 +1462,63 @@ pub(in crate::api) async fn oid4vci_token(
             .await;
         }
     };
+    let transaction_access_mode = issuance_authority_access_mode(&transaction.authority);
     let mut bound_subject = bound_subject;
     add_scope_if_missing(&mut bound_subject.scopes, &configuration.scope);
-    let authorization_details = match oid4vci_issuance_authorization_details(
-        &state.evidence,
-        &state.subject_access,
-        configuration,
-    )
-    .and_then(|details| {
-        serde_json::to_value(details).map_err(|_| EvidenceError::CredentialIssuanceFailed)
-    }) {
-        Ok(details) => vec![details],
-        Err(_) => {
-            return token_error_with_audit(
+    let (authorization_detail, actor) = match &transaction.authority {
+        IssuanceAuthority::SubjectAccess => (
+            oid4vci_issuance_authorization_details(
+                &state.evidence,
+                &state.subject_access,
+                configuration,
+            ),
+            None,
+        ),
+        IssuanceAuthority::RegistryClient {
+            initiating_client_id_hash,
+            auth_profile_id,
+            service_id,
+            purpose,
+            ..
+        } if service_id == &state.evidence.service_id
+            && initiating_client_id_hash.starts_with("hmac-sha256:") =>
+        {
+            (
+                Ok(oid4vci_registry_client_authorization_details(
+                    &state.evidence,
+                    configuration,
+                    purpose,
+                )),
+                Some(json!({
+                    "type": "registry_client",
+                    "client_id_hash": initiating_client_id_hash,
+                    "auth_profile_id": auth_profile_id,
+                })),
+            )
+        }
+        IssuanceAuthority::RegistryClient { .. } => {
+            return token_error_with_audit_access_mode(
                 &preauth,
                 path,
                 Some(configuration_id),
                 SubjectAccessDenialCode::OperationDenied,
+                transaction_access_mode,
+                TokenWireError::InvalidGrant,
+            )
+            .await;
+        }
+    };
+    let authorization_details = match authorization_detail.and_then(|details| {
+        serde_json::to_value(details).map_err(|_| EvidenceError::CredentialIssuanceFailed)
+    }) {
+        Ok(details) => vec![details],
+        Err(_) => {
+            return token_error_with_audit_access_mode(
+                &preauth,
+                path,
+                Some(configuration_id),
+                SubjectAccessDenialCode::OperationDenied,
+                transaction_access_mode,
                 TokenWireError::ServerError,
             )
             .await;
@@ -894,11 +1530,12 @@ pub(in crate::api) async fn oid4vci_token(
     {
         Some(scope) => scope,
         None => {
-            return token_error_with_audit(
+            return token_error_with_audit_access_mode(
                 &preauth,
                 path,
                 Some(configuration_id),
                 SubjectAccessDenialCode::OperationDenied,
+                transaction_access_mode,
                 TokenWireError::ServerError,
             )
             .await;
@@ -917,22 +1554,24 @@ pub(in crate::api) async fn oid4vci_token(
     {
         Ok(true) => {}
         Ok(false) => {
-            return token_error_after_invalid_attempt(
+            return token_error_after_invalid_attempt_with_access_mode(
                 &state,
                 &preauth,
                 path,
                 &client_address,
                 Some(configuration_id),
+                transaction_access_mode,
                 TokenWireError::InvalidGrant,
             )
             .await;
         }
         Err(_) => {
-            return token_error_with_audit(
+            return token_error_with_audit_access_mode(
                 &preauth,
                 path,
                 Some(configuration_id),
                 SubjectAccessDenialCode::OperationDenied,
+                transaction_access_mode,
                 TokenWireError::ServerError,
             )
             .await;
@@ -942,11 +1581,12 @@ pub(in crate::api) async fn oid4vci_token(
     let c_nonce = match issue_c_nonce(&state, configuration_id).await {
         Some(c_nonce) => c_nonce,
         None => {
-            return token_error_with_audit(
+            return token_error_with_audit_access_mode(
                 &preauth,
                 path,
                 Some(configuration_id),
                 SubjectAccessDenialCode::OperationDenied,
+                transaction_access_mode,
                 TokenWireError::ServerError,
             )
             .await;
@@ -959,11 +1599,12 @@ pub(in crate::api) async fn oid4vci_token(
             .await,
         Ok(true)
     ) {
-        return token_error_with_audit(
+        return token_error_with_audit_access_mode(
             &preauth,
             path,
             Some(configuration_id),
             SubjectAccessDenialCode::OperationDenied,
+            transaction_access_mode,
             TokenWireError::ServerError,
         )
         .await;
@@ -979,7 +1620,7 @@ pub(in crate::api) async fn oid4vci_token(
         subject: bound_subject,
         authorization_details,
         confirmation: None,
-        actor: None,
+        actor,
         iat: now,
         exp: now + preauth.access_token_ttl_seconds() as i64,
     };
@@ -992,17 +1633,18 @@ pub(in crate::api) async fn oid4vci_token(
     {
         Ok(token) => token,
         Err(_) => {
-            return token_error_with_audit(
+            return token_error_with_audit_access_mode(
                 &preauth,
                 path,
                 Some(configuration_id),
                 SubjectAccessDenialCode::OperationDenied,
+                transaction_access_mode,
                 TokenWireError::ServerError,
             )
             .await;
         }
     };
-    let audit = pre_auth_audit_event(
+    let mut audit = pre_auth_audit_event(
         "POST",
         path,
         StatusCode::OK.as_u16(),
@@ -1015,6 +1657,7 @@ pub(in crate::api) async fn oid4vci_token(
             ..PreAuthAuditFields::default()
         },
     );
+    audit.access_mode = Some(issuance_authority_access_mode(&transaction.authority));
     if preauth.emit_audit(&audit).await.is_err() {
         return token_error_response(TokenWireError::ServerError);
     }
@@ -1033,6 +1676,15 @@ pub(in crate::api) async fn oid4vci_token(
             .then_some(state.oid4vci.nonce.ttl_seconds),
     })
     .into_response()
+}
+
+pub(in crate::api) const fn issuance_authority_access_mode(
+    authority: &IssuanceAuthority,
+) -> AccessMode {
+    match authority {
+        IssuanceAuthority::SubjectAccess => AccessMode::SubjectBound,
+        IssuanceAuthority::RegistryClient { .. } => AccessMode::MachineClient,
+    }
 }
 
 /// The pre-auth runtime, present only when the flow is enabled and configured.
@@ -1353,6 +2005,27 @@ pub(in crate::api) async fn token_error_after_invalid_attempt(
     credential_configuration_id: Option<&str>,
     error: TokenWireError,
 ) -> Response {
+    token_error_after_invalid_attempt_with_access_mode(
+        state,
+        preauth,
+        path,
+        client_address,
+        credential_configuration_id,
+        AccessMode::SubjectBound,
+        error,
+    )
+    .await
+}
+
+async fn token_error_after_invalid_attempt_with_access_mode(
+    state: &RegistryNotaryApiState,
+    preauth: &PreAuthRuntime,
+    path: &str,
+    client_address: &str,
+    credential_configuration_id: Option<&str>,
+    access_mode: AccessMode,
+    error: TokenWireError,
+) -> Response {
     if let Ok(hashed) = state
         .subject_access_rate_keys
         .client_address(client_address)
@@ -1362,11 +2035,12 @@ pub(in crate::api) async fn token_error_after_invalid_attempt(
             .check_invalid_token_for_client_address(&hashed)
             .await;
     }
-    token_error_with_audit(
+    token_error_with_audit_access_mode(
         preauth,
         path,
         credential_configuration_id,
         SubjectAccessDenialCode::InvalidToken,
+        access_mode,
         error,
     )
     .await
@@ -1379,13 +2053,33 @@ pub(in crate::api) async fn token_error_with_audit(
     denial_code: SubjectAccessDenialCode,
     error: TokenWireError,
 ) -> Response {
+    token_error_with_audit_access_mode(
+        preauth,
+        path,
+        credential_configuration_id,
+        denial_code,
+        AccessMode::SubjectBound,
+        error,
+    )
+    .await
+}
+
+async fn token_error_with_audit_access_mode(
+    preauth: &PreAuthRuntime,
+    path: &str,
+    credential_configuration_id: Option<&str>,
+    denial_code: SubjectAccessDenialCode,
+    access_mode: AccessMode,
+    error: TokenWireError,
+) -> Response {
     let response = token_error_response(error);
-    let audit = token_error_audit_event(
+    let mut audit = token_error_audit_event(
         path,
         response.status().as_u16(),
         credential_configuration_id,
         denial_code,
     );
+    audit.access_mode = Some(access_mode);
     if preauth.emit_audit(&audit).await.is_err() {
         return token_error_after_audit_result(response, true);
     }

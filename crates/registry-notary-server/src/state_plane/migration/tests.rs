@@ -6,7 +6,10 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_notary_core::{StateConfig, StatePostgresqlConfig, STATE_STORAGE_POSTGRESQL};
 
 use crate::preauth_state::{
-    CredentialMaterialization, IssuanceTransaction, LoginState, PreauthorizationState,
+    CredentialMaterialization, IssuanceAuthority, IssuanceTransaction, LoginState,
+    PreauthorizationState, PreauthorizationStateError, RegistryClientOfferReservation,
+    RegistryClientOfferReservationOutcome, RegistryClientOfferResponse,
+    RegistryClientTransactionCode,
 };
 use crate::state_plane::{
     attest_postgres_state_plane_runtime, LoginReserveOutcome, NotaryPostgresStatePlaneError,
@@ -26,6 +29,9 @@ const SENSITIVE_PROBE_PIN_ENV: &str = "REGISTRY_NOTARY_STATE_SENSITIVE_PROBE_PIN
 const OWNER_ROLE: &str = "registry_notary_owner_test";
 const RUNTIME_ROLE: &str = "registry_notary_runtime_test";
 const MIGRATION_ROLE: &str = "registry_notary_migration_test";
+const UPGRADE_OWNER_ROLE: &str = "registry_notary_upgrade_owner_test";
+const UPGRADE_RUNTIME_ROLE: &str = "registry_notary_upgrade_runtime_test";
+const UPGRADE_MIGRATION_ROLE: &str = "registry_notary_upgrade_migration_test";
 const RESTORE_SOURCE_OWNER_ROLE: &str = "registry_notary_restore_source_owner";
 const RESTORE_SOURCE_RUNTIME_ROLE: &str = "registry_notary_restore_source_runtime";
 const RESTORE_SOURCE_MIGRATION_ROLE: &str = "registry_notary_restore_source_migration";
@@ -53,6 +59,8 @@ fn schema_fingerprint_is_the_framed_semantic_identity() {
         "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2",
         "preauthorization-tx-code=verified-notary-issuer-stable-scope-jti-keyed-pin-verifier-peek-redeem-one-winner-expiry-live-key-attestation-v3",
         "oid4vci-issuance-transaction=keyed-id-encrypted-immutable-record-sha256-uri-commitment-token-nonce-bind-holder-and-request-atomic-one-materialization-encrypted-response-terminal-failure-expiry-v2",
+        "issuance-evaluation-consumption=keyed-owner-evaluation-single-lineage-shared-direct-and-offer-expiry-capacity-v1",
+        "registry-client-offer=hashed-idempotency-exact-encrypted-response-shared-evaluation-consumption-atomic-client-quota-transaction-and-optional-pin-expiry-capacity-v2",
         "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2",
     ] {
         assert!(
@@ -110,9 +118,252 @@ fn migration_uses_fixed_security_definer_api_without_generic_grants() {
         "preauthorization_login_state",
         "preauthorization_tx_code",
         "oid4vci_issuance_transaction",
+        "issuance_evaluation_consumption",
+        "registry_client_offer",
     ] {
         assert!(POSTGRES_STATE_PLANE_MIGRATION_V1.contains(table));
     }
+}
+
+fn previous_state_plane_migration_v1() -> String {
+    fn remove_unique_range(sql: &mut String, start: &str, end: &str) {
+        assert_eq!(
+            sql.matches(start).count(),
+            1,
+            "previous migration start marker must be unique"
+        );
+        let start_offset = sql.find(start).expect("checked start marker");
+        let end_offset = sql[start_offset..]
+            .find(end)
+            .map(|offset| start_offset + offset)
+            .expect("previous migration end marker");
+        sql.replace_range(start_offset..end_offset, "");
+    }
+
+    let mut sql = POSTGRES_STATE_PLANE_MIGRATION_V1.to_string();
+    remove_unique_range(
+        &mut sql,
+        "CREATE TABLE IF NOT EXISTS registry_notary_private.issuance_evaluation_consumption",
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA registry_notary_private",
+    );
+    remove_unique_range(
+        &mut sql,
+        "CREATE OR REPLACE FUNCTION registry_notary_api.evaluation_issuance_consume_v1",
+        "CREATE OR REPLACE FUNCTION registry_notary_api.oid4vci_transaction_reserve_v1",
+    );
+
+    let v_now_key_extension = r#"        UNION ALL
+        SELECT 1 FROM registry_notary_private.issuance_evaluation_consumption
+         WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.registry_client_offer
+         WHERE purge_after > v_now AND key_id <> p_key_id
+"#;
+    assert_eq!(sql.matches(v_now_key_extension).count(), 3);
+    sql = sql.replace(v_now_key_extension, "");
+    let statement_key_extension = r#"            UNION ALL
+            SELECT 1 FROM registry_notary_private.issuance_evaluation_consumption
+             WHERE expires_at > pg_catalog.statement_timestamp() AND key_id <> p_key_id
+            UNION ALL
+            SELECT 1 FROM registry_notary_private.registry_client_offer
+             WHERE purge_after > pg_catalog.statement_timestamp() AND key_id <> p_key_id
+"#;
+    assert_eq!(sql.matches(statement_key_extension).count(), 1);
+    sql = sql.replace(statement_key_extension, "");
+    remove_unique_range(
+        &mut sql,
+        r#"    WITH candidates AS (
+        SELECT evaluation_hash
+          FROM registry_notary_private.issuance_evaluation_consumption"#,
+        "    RETURN QUERY SELECT v_total, v_saturated;",
+    );
+    assert_eq!(sql.matches("SECURITY DEFINER").count(), 31);
+    assert!(!sql.contains("issuance_evaluation_consumption"));
+    assert!(!sql.contains("registry_client_offer"));
+    sql
+}
+
+#[test]
+fn preceding_migration_fixture_is_exactly_narrowed() {
+    previous_state_plane_migration_v1();
+}
+
+async fn assert_previous_state_plane_upgrade_contract(
+    database_url: &str,
+    admin: &Client,
+) -> Result<(), Box<dyn std::error::Error>> {
+    admin
+        .batch_execute(&format!(
+            "CREATE ROLE {UPGRADE_OWNER_ROLE} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE \
+                 NOREPLICATION NOBYPASSRLS;\n\
+             CREATE ROLE {UPGRADE_RUNTIME_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE \
+                 NOREPLICATION NOBYPASSRLS;\n\
+             CREATE ROLE {UPGRADE_MIGRATION_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE \
+                 NOREPLICATION NOBYPASSRLS;\n\
+             GRANT {UPGRADE_OWNER_ROLE} TO {UPGRADE_MIGRATION_ROLE};\n\
+             GRANT CREATE ON DATABASE postgres TO {UPGRADE_OWNER_ROLE};"
+        ))
+        .await?;
+    let (mut migration, migration_driver) =
+        connect_as(database_url, UPGRADE_MIGRATION_ROLE).await?;
+    let transaction = migration.transaction().await?;
+    transaction
+        .batch_execute(&format!(
+            "SET LOCAL ROLE {UPGRADE_OWNER_ROLE};\n{}",
+            previous_state_plane_migration_v1()
+        ))
+        .await?;
+    let roles = transaction
+        .query_one(
+            "SELECT owner.oid::bigint, runtime.oid::bigint\n\
+               FROM pg_catalog.pg_roles AS owner\n\
+               JOIN pg_catalog.pg_roles AS runtime ON runtime.rolname = $2\n\
+              WHERE owner.rolname = $1",
+            &[&UPGRADE_OWNER_ROLE, &UPGRADE_RUNTIME_ROLE],
+        )
+        .await?;
+    let owner_oid: i64 = roles.get(0);
+    let runtime_oid: i64 = roles.get(1);
+    transaction
+        .execute(
+            "INSERT INTO registry_notary_private.schema_metadata (\n\
+                 singleton, capability_id, schema_version, schema_fingerprint,\n\
+                 owner_role_oid, runtime_role_oid\n\
+             ) VALUES (TRUE, $1, $2, $3, $4::bigint::oid, $5::bigint::oid)",
+            &[
+                &STATE_PLANE_CAPABILITY_V1,
+                &STATE_PLANE_SCHEMA_VERSION_V1,
+                &PREVIOUS_STATE_PLANE_SCHEMA_FINGERPRINT_V1,
+                &owner_oid,
+                &runtime_oid,
+            ],
+        )
+        .await?;
+    let live_scope = vec![0xa1_u8; 32];
+    let live_identifier = vec![0xa2_u8; 32];
+    let live_state = vec![0xa3_u8; 32];
+    let live_key = vec![0xa4_u8; 32];
+    transaction
+        .execute(
+            "INSERT INTO registry_notary_private.replay_identifier (\n\
+                 scope_hash, identifier_hash, expires_at\n\
+             ) VALUES ($1, $2, pg_catalog.clock_timestamp() + interval '1 hour')",
+            &[&live_scope, &live_identifier],
+        )
+        .await?;
+    transaction
+        .execute(
+            "INSERT INTO registry_notary_private.preauthorization_login_state (\n\
+                 state_hash, credential_configuration_id, key_id, aead_nonce,\n\
+                 ciphertext, expires_at\n\
+             ) VALUES ($1, 'upgrade-live-state', $2, $3, $4,\n\
+                 pg_catalog.clock_timestamp() + interval '1 hour')",
+            &[
+                &live_state,
+                &live_key,
+                &vec![0xa5_u8; 12],
+                &vec![0xa6_u8; 17],
+            ],
+        )
+        .await?;
+    transaction.commit().await?;
+
+    let server_major = attest_server(admin).await?;
+    assert_eq!(
+        catalog_definition_fingerprint(admin).await?,
+        expected_previous_catalog_definition_fingerprint(server_major)?,
+        "the upgrade fixture must exactly reproduce the preceding catalog"
+    );
+    let installed = install_postgres_state_plane_v1(
+        &mut migration,
+        &OwnerDatabaseRole::parse(UPGRADE_OWNER_ROLE)?,
+        &RuntimeDatabaseRole::parse(UPGRADE_RUNTIME_ROLE)?,
+    )
+    .await?;
+    assert_eq!(installed.server_major, server_major);
+    assert_eq!(
+        admin
+            .query_one(
+                "SELECT schema_fingerprint FROM registry_notary_private.schema_metadata",
+                &[],
+            )
+            .await?
+            .get::<_, String>(0),
+        STATE_PLANE_SCHEMA_FINGERPRINT_V1
+    );
+    assert_eq!(
+        admin
+            .query_one(
+                "SELECT count(*)::bigint FROM registry_notary_private.replay_identifier\n\
+                  WHERE scope_hash = $1 AND identifier_hash = $2",
+                &[&live_scope, &live_identifier],
+            )
+            .await?
+            .get::<_, i64>(0),
+        1,
+        "forward migration must preserve preceding live rows"
+    );
+    assert_eq!(
+        admin
+            .query_one(
+                "SELECT count(*)::bigint\n\
+                   FROM registry_notary_private.preauthorization_login_state\n\
+                  WHERE state_hash = $1 AND key_id = $2",
+                &[&live_state, &live_key],
+            )
+            .await?
+            .get::<_, i64>(0),
+        1,
+        "forward migration must preserve preceding live sensitive rows"
+    );
+    let new_table_counts = admin
+        .query_one(
+            "SELECT\n\
+                 (SELECT count(*)::bigint FROM \
+                    registry_notary_private.issuance_evaluation_consumption),\n\
+                 (SELECT count(*)::bigint FROM \
+                    registry_notary_private.registry_client_offer)",
+            &[],
+        )
+        .await?;
+    assert_eq!(new_table_counts.get::<_, i64>(0), 0);
+    assert_eq!(new_table_counts.get::<_, i64>(1), 0);
+
+    let (runtime, runtime_driver) = connect_as(database_url, UPGRADE_RUNTIME_ROLE).await?;
+    assert_eq!(attest_postgres_state_plane_v1(&runtime).await?, installed);
+    assert_eq!(
+        runtime
+            .query_one(
+                "SELECT registry_notary_api.evaluation_issuance_consume_v1(\n\
+                     $1, $2, pg_catalog.clock_timestamp() + interval '1 hour')",
+                &[&vec![0xa7_u8; 32], &live_key],
+            )
+            .await?
+            .get::<_, i16>(0),
+        1
+    );
+    install_postgres_state_plane_v1(
+        &mut migration,
+        &OwnerDatabaseRole::parse(UPGRADE_OWNER_ROLE)?,
+        &RuntimeDatabaseRole::parse(UPGRADE_RUNTIME_ROLE)?,
+    )
+    .await?;
+
+    drop(runtime);
+    runtime_driver.abort();
+    drop(migration);
+    migration_driver.abort();
+    admin
+        .batch_execute(&format!(
+            "DROP SCHEMA registry_notary_api CASCADE;\n\
+             DROP SCHEMA registry_notary_private CASCADE;\n\
+             DROP ROLE {UPGRADE_RUNTIME_ROLE};\n\
+             DROP ROLE {UPGRADE_MIGRATION_ROLE};\n\
+             REVOKE CREATE ON DATABASE postgres FROM {UPGRADE_OWNER_ROLE};\n\
+             DROP ROLE {UPGRADE_OWNER_ROLE};"
+        ))
+        .await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -373,14 +624,22 @@ async fn postgres_v1_typed_state_contracts_and_drift_rejection(
             "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace\n\
                WHERE nspname IN ('registry_notary_private', 'registry_notary_api'))\n\
              OR EXISTS (SELECT 1 FROM pg_catalog.pg_roles\n\
-               WHERE rolname IN ($1, $2, $3))",
-            &[&OWNER_ROLE, &RUNTIME_ROLE, &MIGRATION_ROLE],
+               WHERE rolname IN ($1, $2, $3, $4, $5, $6))",
+            &[
+                &OWNER_ROLE,
+                &RUNTIME_ROLE,
+                &MIGRATION_ROLE,
+                &UPGRADE_OWNER_ROLE,
+                &UPGRADE_RUNTIME_ROLE,
+                &UPGRADE_MIGRATION_ROLE,
+            ],
         )
         .await?
         .get(0);
     if occupied {
         return Err("the dedicated conformance database is not empty".into());
     }
+    assert_previous_state_plane_upgrade_contract(&database_url, &admin).await?;
     admin
         .batch_execute(&format!(
             "CREATE ROLE {OWNER_ROLE} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE \
@@ -2050,8 +2309,9 @@ async fn assert_sensitive_adapter_contract(
             .await?
     );
 
-    let preauthorization_state =
-        PreauthorizationState::from_state_plane(Arc::clone(&readiness_handle))?;
+    let preauthorization_state = Arc::new(PreauthorizationState::from_state_plane(Arc::clone(
+        &readiness_handle,
+    ))?);
     let mismatch_jti = "adapter-policy-mismatch-jti";
     assert!(
         preauthorization_state
@@ -2093,6 +2353,7 @@ async fn assert_sensitive_adapter_contract(
         evaluation_client_id: "hmac-sha256:adapter-client".to_string(),
         credential_configuration_id: "adapter-config".to_string(),
         commitment: format!("sha256:{}", "c".repeat(64)),
+        authority: IssuanceAuthority::SubjectAccess,
     };
     preauthorization_state
         .reserve_issuance_transaction(transaction_id, transaction.clone(), expires_at)
@@ -2216,11 +2477,241 @@ async fn assert_sensitive_adapter_contract(
         );
     }
 
+    let offer_now = time::OffsetDateTime::now_utc();
+    let offer_transaction = IssuanceTransaction {
+        transaction_id: "adapter-registry-offer-transaction".to_string(),
+        evaluation_id: "adapter-registry-offer-evaluation".to_string(),
+        evaluation_client_id: "adapter-registry-client".to_string(),
+        credential_configuration_id: "adapter-config".to_string(),
+        commitment: format!("sha256:{}", "e".repeat(64)),
+        authority: IssuanceAuthority::RegistryClient {
+            initiating_client_id: "adapter-registry-client".to_string(),
+            initiating_client_id_hash: format!("hmac-sha256:{}", "f".repeat(64)),
+            auth_profile_id: registry_notary_core::EvidenceAuthProfileId::ExternalOidc,
+            authorized_scopes: vec!["registry:evidence".to_string()],
+            target_ref: registry_notary_core::TargetRefView {
+                entity_type: "Person".to_string(),
+                handle: "adapter-target-handle".to_string(),
+                identifier_schemes: Vec::new(),
+                profile: None,
+            },
+            service_id: "adapter.notary".to_string(),
+            purpose: "civil-registration".to_string(),
+        },
+    };
+    let offer_response = RegistryClientOfferResponse {
+        credential_offer_uri: "openid-credential-offer://adapter-secret-offer".to_string(),
+        tx_code: Some("246810".to_string()),
+        expires_at: "2030-01-01T00:00:00Z".to_string(),
+    };
+    let offer_reservation = |idempotency: char, request: char, transaction: IssuanceTransaction| {
+        RegistryClientOfferReservation {
+            transaction_id: transaction.transaction_id.clone(),
+            evaluation_id: transaction.evaluation_id.clone(),
+            evaluation_expires_at: offer_now + time::Duration::minutes(20),
+            idempotency_key_hash: format!("hmac-sha256:{}", idempotency.to_string().repeat(64)),
+            canonical_request_hash: format!("sha256:{}", request.to_string().repeat(64)),
+            transaction,
+            transaction_code: Some(RegistryClientTransactionCode {
+                pin: "246810".to_string(),
+                pin_length: 6,
+            }),
+            code_expires_at: offer_now + time::Duration::minutes(5),
+            transaction_expires_at: offer_now + time::Duration::minutes(15),
+            response: offer_response.clone(),
+            retention_expires_at: offer_now + time::Duration::minutes(10),
+            quota_principal_hash: vec![0x71; 32],
+            quota_limit: None,
+            quota_cost: 1,
+        }
+    };
+    assert_eq!(
+        preauthorization_state
+            .reserve_registry_client_offer(offer_reservation('1', 'a', offer_transaction.clone(),))
+            .await?,
+        RegistryClientOfferReservationOutcome::Created(offer_response.clone())
+    );
+    assert_eq!(
+        preauthorization_state
+            .reserve_registry_client_offer(offer_reservation('1', 'a', offer_transaction.clone(),))
+            .await?,
+        RegistryClientOfferReservationOutcome::Replayed(offer_response.clone())
+    );
+    assert!(matches!(
+        preauthorization_state
+            .reserve_registry_client_offer(offer_reservation('1', 'b', offer_transaction.clone(),))
+            .await,
+        Err(PreauthorizationStateError::IdempotencyConflict)
+    ));
+    let mut other_transaction = offer_transaction.clone();
+    other_transaction.transaction_id = "adapter-other-offer-transaction".to_string();
+    assert!(matches!(
+        preauthorization_state
+            .reserve_registry_client_offer(offer_reservation('2', 'a', other_transaction,))
+            .await,
+        Err(PreauthorizationStateError::EvaluationConsumed)
+    ));
+    assert!(matches!(
+        preauthorization_state
+            .reserve_evaluation_issuance(
+                "adapter-registry-offer-evaluation",
+                "adapter-registry-client",
+                offer_now + time::Duration::minutes(20),
+            )
+            .await,
+        Err(PreauthorizationStateError::EvaluationConsumed)
+    ));
+    preauthorization_state
+        .reserve_evaluation_issuance(
+            "adapter-direct-first-evaluation",
+            "adapter-registry-client",
+            offer_now + time::Duration::minutes(20),
+        )
+        .await?;
+    let mut direct_first_offer = offer_transaction.clone();
+    direct_first_offer.transaction_id = "adapter-direct-first-offer".to_string();
+    direct_first_offer.evaluation_id = "adapter-direct-first-evaluation".to_string();
+    assert!(matches!(
+        preauthorization_state
+            .reserve_registry_client_offer(offer_reservation('3', 'a', direct_first_offer,))
+            .await,
+        Err(PreauthorizationStateError::EvaluationConsumed)
+    ));
+
+    let race_barrier = Arc::new(tokio::sync::Barrier::new(3));
+    let direct_state = Arc::clone(&preauthorization_state);
+    let direct_barrier = Arc::clone(&race_barrier);
+    let direct_race = tokio::spawn(async move {
+        direct_barrier.wait().await;
+        direct_state
+            .reserve_evaluation_issuance(
+                "adapter-raced-evaluation",
+                "adapter-registry-client",
+                offer_now + time::Duration::minutes(20),
+            )
+            .await
+            .map(|()| "direct")
+    });
+    let mut raced_transaction = offer_transaction.clone();
+    raced_transaction.transaction_id = "adapter-raced-offer".to_string();
+    raced_transaction.evaluation_id = "adapter-raced-evaluation".to_string();
+    let raced_offer = offer_reservation('6', 'a', raced_transaction);
+    let offer_state = Arc::clone(&preauthorization_state);
+    let offer_barrier = Arc::clone(&race_barrier);
+    let offer_race = tokio::spawn(async move {
+        offer_barrier.wait().await;
+        offer_state
+            .reserve_registry_client_offer(raced_offer)
+            .await
+            .map(|_| "offer")
+    });
+    race_barrier.wait().await;
+    let race_outcomes = [direct_race.await?, offer_race.await?];
+    assert_eq!(
+        race_outcomes
+            .iter()
+            .filter(|outcome| outcome.is_ok())
+            .count(),
+        1
+    );
+    assert_eq!(
+        race_outcomes
+            .iter()
+            .filter(|outcome| matches!(
+                outcome,
+                Err(PreauthorizationStateError::EvaluationConsumed)
+            ))
+            .count(),
+        1
+    );
+
+    let mut quota_transaction = offer_transaction.clone();
+    quota_transaction.transaction_id = "adapter-quota-offer-one".to_string();
+    quota_transaction.evaluation_id = "adapter-quota-evaluation-one".to_string();
+    let mut quota_offer = offer_reservation('4', 'a', quota_transaction.clone());
+    quota_offer.quota_principal_hash = vec![0xd1; 32];
+    quota_offer.quota_limit = Some(1);
+    assert!(matches!(
+        preauthorization_state
+            .reserve_registry_client_offer(quota_offer)
+            .await?,
+        RegistryClientOfferReservationOutcome::Created(_)
+    ));
+    let mut quota_replay = offer_reservation('4', 'a', quota_transaction);
+    quota_replay.quota_principal_hash = vec![0xd1; 32];
+    quota_replay.quota_limit = Some(1);
+    assert!(matches!(
+        preauthorization_state
+            .reserve_registry_client_offer(quota_replay)
+            .await?,
+        RegistryClientOfferReservationOutcome::Replayed(_)
+    ));
+    let mut quota_denied_transaction = offer_transaction.clone();
+    quota_denied_transaction.transaction_id = "adapter-quota-offer-two".to_string();
+    quota_denied_transaction.evaluation_id = "adapter-quota-evaluation-two".to_string();
+    let mut quota_denied = offer_reservation('5', 'a', quota_denied_transaction);
+    quota_denied.quota_principal_hash = vec![0xd1; 32];
+    quota_denied.quota_limit = Some(1);
+    assert!(matches!(
+        preauthorization_state
+            .reserve_registry_client_offer(quota_denied)
+            .await,
+        Err(PreauthorizationStateError::MachineQuotaExceeded {
+            retry_after_seconds: 1..=60
+        })
+    ));
+    preauthorization_state
+        .reserve_evaluation_issuance(
+            "adapter-quota-evaluation-two",
+            "adapter-registry-client",
+            offer_now + time::Duration::minutes(20),
+        )
+        .await?;
+    assert!(preauthorization_state
+        .verify_transaction_code("adapter-registry-offer-transaction", "246810")
+        .await?
+        .is_some());
+    let stored_offers = admin
+        .query(
+            "SELECT offer.response_ciphertext, transaction.record_ciphertext \
+               FROM registry_notary_private.registry_client_offer AS offer \
+               JOIN registry_notary_private.oid4vci_issuance_transaction AS transaction \
+                 ON transaction.transaction_hash = offer.transaction_hash",
+            &[],
+        )
+        .await?;
+    assert!(
+        !stored_offers.is_empty(),
+        "registry-client offer ciphertext must be persisted"
+    );
+    for stored_offer in stored_offers {
+        let offer_ciphertext: Vec<u8> = stored_offer.get(0);
+        let transaction_ciphertext: Vec<u8> = stored_offer.get(1);
+        for secret in [
+            b"openid-credential-offer://adapter-secret-offer".as_slice(),
+            b"246810".as_slice(),
+            b"adapter-registry-client".as_slice(),
+            b"adapter-target-handle".as_slice(),
+        ] {
+            assert!(
+                !offer_ciphertext
+                    .windows(secret.len())
+                    .any(|window| window == secret)
+                    && !transaction_ciphertext
+                        .windows(secret.len())
+                        .any(|window| window == secret),
+                "registry-client offer plaintext must not be stored"
+            );
+        }
+    }
+
     admin
         .batch_execute(
             "DELETE FROM registry_notary_private.preauthorization_login_state; \
              DELETE FROM registry_notary_private.preauthorization_tx_code; \
-             DELETE FROM registry_notary_private.oid4vci_issuance_transaction;",
+             DELETE FROM registry_notary_private.oid4vci_issuance_transaction; \
+             DELETE FROM registry_notary_private.issuance_evaluation_consumption; \
+             DELETE FROM registry_notary_private.registry_client_offer;",
         )
         .await?;
 
@@ -2269,7 +2760,9 @@ async fn assert_retention_contract(
                       registry_notary_private.subject_access_quota,
                       registry_notary_private.preauthorization_login_state,
                       registry_notary_private.preauthorization_tx_code,
-                      registry_notary_private.oid4vci_issuance_transaction;
+                      registry_notary_private.oid4vci_issuance_transaction,
+                      registry_notary_private.issuance_evaluation_consumption,
+                      registry_notary_private.registry_client_offer;
              INSERT INTO registry_notary_private.replay_identifier
                 (scope_hash, identifier_hash, created_at, expires_at)
              SELECT decode(repeat('90', 32), 'hex'), decode(repeat(marker, 32), 'hex'),
@@ -2352,7 +2845,36 @@ async fn assert_retention_contract(
                     clock_timestamp() - interval '2 seconds', clock_timestamp(),
                     clock_timestamp() + lifetime
                FROM (VALUES ('b0', interval '-1 second'),
-                            ('b1', interval '5 minutes')) AS rows(marker, lifetime);",
+                            ('b1', interval '5 minutes')) AS rows(marker, lifetime);
+             INSERT INTO registry_notary_private.issuance_evaluation_consumption
+                (evaluation_hash, key_id, created_at, expires_at)
+             SELECT decode(repeat(marker, 32), 'hex'),
+                    decode(repeat('c8', 32), 'hex'),
+                    clock_timestamp() - interval '2 seconds',
+                    clock_timestamp() + lifetime
+               FROM (VALUES ('cc', interval '-1 second'),
+                            ('cd', interval '5 minutes')) AS rows(marker, lifetime);
+             INSERT INTO registry_notary_private.registry_client_offer
+                (idempotency_key_hash, request_hash, evaluation_hash,
+                 transaction_hash, key_id, response_aead_nonce,
+                 response_ciphertext, retention_expires_at,
+                 evaluation_expires_at, purge_after, created_at)
+             SELECT decode(repeat(marker, 32), 'hex'),
+                    decode(repeat(request_marker, 32), 'hex'),
+                    decode(repeat(evaluation_marker, 32), 'hex'),
+                    decode(repeat(transaction_marker, 32), 'hex'),
+                    decode(repeat('c9', 32), 'hex'),
+                    decode(repeat('ca', 12), 'hex'),
+                    decode(repeat('cb', 17), 'hex'),
+                    clock_timestamp() + lifetime,
+                    clock_timestamp() + lifetime,
+                    clock_timestamp() + lifetime,
+                    clock_timestamp() - interval '2 seconds'
+               FROM (VALUES
+                    ('c0', 'c1', 'c2', 'c3', interval '-1 second'),
+                    ('c4', 'c5', 'c6', 'c7', interval '5 minutes'))
+                    AS rows(marker, request_marker, evaluation_marker,
+                            transaction_marker, lifetime);",
         )
         .await?;
     let prune = runtime
@@ -2364,7 +2886,7 @@ async fn assert_retention_contract(
         .await?;
     let pruned: i64 = prune.get("deleted_count");
     assert_eq!(
-        pruned, 10,
+        pruned, 12,
         "each typed state table must prune its expired row"
     );
     assert!(
@@ -2383,12 +2905,14 @@ async fn assert_retention_contract(
                 (SELECT count(*) FROM registry_notary_private.subject_access_quota) +
                 (SELECT count(*) FROM registry_notary_private.preauthorization_login_state) +
                 (SELECT count(*) FROM registry_notary_private.preauthorization_tx_code) +
-                (SELECT count(*) FROM registry_notary_private.oid4vci_issuance_transaction)",
+                (SELECT count(*) FROM registry_notary_private.oid4vci_issuance_transaction) +
+                (SELECT count(*) FROM registry_notary_private.issuance_evaluation_consumption) +
+                (SELECT count(*) FROM registry_notary_private.registry_client_offer)",
             &[],
         )
         .await?
         .get(0);
-    assert_eq!(remaining, 10, "retention must preserve every live row");
+    assert_eq!(remaining, 12, "retention must preserve every live row");
 
     admin
         .batch_execute(

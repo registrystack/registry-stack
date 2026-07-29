@@ -36,6 +36,26 @@ pub(super) fn classify_subject_access_principal(
         return Ok(principal.clone());
     }
 
+    // A locally verified transaction-scoped token minted from a
+    // registry-client offer remains machine authority. Its opaque `sub` lets
+    // the wallet present the token, but must never reclassify the wallet as the
+    // civil subject. The encrypted issuance transaction is the authority.
+    if principal.auth_profile_id == registry_notary_core::EvidenceAuthProfileId::NotaryAccessToken
+        && principal.verified_claims.is_some()
+        && principal
+            .authorization_details
+            .as_ref()
+            .is_some_and(|details| {
+                details.access_mode == Some(AccessMode::MachineClient)
+                    && details.actions.as_slice() == ["issue_credential"]
+                    && crate::authz_details::has_transaction_scope(details)
+            })
+    {
+        let mut classified = principal.clone();
+        classified.access_mode = AccessMode::MachineClient;
+        return Ok(classified);
+    }
+
     let citizen_scope_signal = config
         .required_scopes
         .iter()

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use registry_platform_crypto::canonicalize_json;
 use registry_platform_httputil::destination::json::{
     decode_script_fixture_json, decode_script_fixture_text, ClosedJsonDecodeError,
     ClosedJsonOutcome, ProjectedJsonScalar,
@@ -24,15 +25,14 @@ use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::rhai_worker::{
-    HostFailure, OutputSchema as RhaiOutputSchema, OutputType as RhaiOutputType, ScriptFailure,
-    SourceCall, SourceHost, SourceResponse, TypedValue as RhaiTypedValue, WorkerLimits,
-    WorkerOutcome, WorkerOutput, WorkerProcess, WorkerRequest,
+    HostFailure, OutputSchema as RhaiOutputSchema, ScriptFailure, SourceCall, SourceHost,
+    SourceResponse, TypedValue as RhaiTypedValue, WorkerLimits, WorkerOutcome, WorkerOutput,
+    WorkerProcess, WorkerRequest,
 };
 use crate::source_backend::decode_snapshot_rows;
 use crate::source_plan::{
-    CompiledInputType, CompiledInputValue, CompiledRhaiOutputType, CompiledSourcePlan,
-    CompiledSourcePlanRegistry, CompiledStatusOutcome, SourcePlanArtifactBundle,
-    SourcePlanCompileError, SourcePlanKind,
+    CompiledInputType, CompiledInputValue, CompiledSourcePlan, CompiledSourcePlanRegistry,
+    CompiledStatusOutcome, SourcePlanArtifactBundle, SourcePlanCompileError, SourcePlanKind,
 };
 
 use super::executor::{
@@ -1291,25 +1291,10 @@ fn build_rhai_request(
         );
     }
     for output in plan.rhai_outputs() {
-        let (output_type, max_bytes, minimum, maximum) = match output.output_type() {
-            CompiledRhaiOutputType::String { max_bytes } => {
-                (RhaiOutputType::String, Some(max_bytes as usize), None, None)
-            }
-            CompiledRhaiOutputType::Boolean => (RhaiOutputType::Boolean, None, None, None),
-            CompiledRhaiOutputType::Integer { minimum, maximum } => {
-                (RhaiOutputType::Integer, None, Some(minimum), Some(maximum))
-            }
-            CompiledRhaiOutputType::Date => (RhaiOutputType::Date, None, None, None),
-        };
         request.output_schema.insert(
             output.name().to_owned(),
-            RhaiOutputSchema {
-                output_type,
-                nullable: output.nullable(),
-                max_bytes,
-                minimum,
-                maximum,
-            },
+            RhaiOutputSchema::from_compiled(output.output_type())
+                .map_err(|_| OfflineFixtureError::SourceResponseMalformed)?,
         );
     }
     if super::executor::signed_dci_script_host_required(plan)
@@ -1349,6 +1334,14 @@ fn rhai_output(value: RhaiTypedValue) -> Result<ProjectedJsonScalar, OfflineFixt
         }
         RhaiTypedValue::Integer { value } => {
             value.map_or(ProjectedJsonScalar::Null, ProjectedJsonScalar::Integer)
+        }
+        RhaiTypedValue::Object { value } | RhaiTypedValue::Array { value } => {
+            value.map_or(Ok(ProjectedJsonScalar::Null), |value| {
+                canonicalize_json(&value)
+                    .map(Zeroizing::new)
+                    .map(ProjectedJsonScalar::CanonicalJson)
+                    .map_err(|_| OfflineFixtureError::SourceResponseMalformed)
+            })?
         }
     })
 }
@@ -1464,7 +1457,9 @@ fn render_offline_text(
             ProjectedJsonScalar::String(value) => value.to_string(),
             ProjectedJsonScalar::Boolean(value) => value.to_string(),
             ProjectedJsonScalar::Integer(value) => value.to_string(),
-            ProjectedJsonScalar::Null | ProjectedJsonScalar::Number(_) => {
+            ProjectedJsonScalar::Null
+            | ProjectedJsonScalar::Number(_)
+            | ProjectedJsonScalar::CanonicalJson(_) => {
                 return Err(OfflineFixtureError::ExecutionContractViolation)
             }
         },
@@ -1525,6 +1520,8 @@ fn projected_scalar_json(value: &ProjectedJsonScalar) -> Result<Value, OfflineFi
         ProjectedJsonScalar::Number(value) => serde_json::Number::from_f64(*value)
             .map(Value::Number)
             .ok_or(OfflineFixtureError::ExecutionContractViolation)?,
+        ProjectedJsonScalar::CanonicalJson(value) => serde_json::from_slice(value)
+            .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
     })
 }
 
@@ -2091,15 +2088,36 @@ fn execute_snapshot(
 }
 
 fn snapshot_projected_value(
-    shape: crate::source_plan::runtime_profile::CompiledOutputShape,
+    shape: &crate::source_plan::runtime_profile::CompiledOutputShape,
     name: &str,
     fields: &serde_json::Map<String, Value>,
 ) -> Result<ProjectedJsonScalar, OfflineFixtureError> {
-    let _ = shape;
-    fields
+    let value = fields
         .get(name)
-        .map(json_scalar)
-        .ok_or(OfflineFixtureError::SourceResponseMalformed)
+        .ok_or(OfflineFixtureError::SourceResponseMalformed)?;
+    match (shape, value) {
+        (_, Value::Null) => Ok(ProjectedJsonScalar::Null),
+        (
+            crate::source_plan::runtime_profile::CompiledOutputShape::Object { .. },
+            Value::Object(_),
+        )
+        | (
+            crate::source_plan::runtime_profile::CompiledOutputShape::Array { .. },
+            Value::Array(_),
+        ) => canonicalize_json(value)
+            .map(Zeroizing::new)
+            .map(ProjectedJsonScalar::CanonicalJson)
+            .map_err(|_| OfflineFixtureError::SourceResponseMalformed),
+        (
+            crate::source_plan::runtime_profile::CompiledOutputShape::Object { .. }
+            | crate::source_plan::runtime_profile::CompiledOutputShape::Array { .. },
+            _,
+        )
+        | (_, Value::Object(_) | Value::Array(_)) => {
+            Err(OfflineFixtureError::SourceResponseMalformed)
+        }
+        _ => Ok(json_scalar(value)),
+    }
 }
 
 fn require_basic_success(
@@ -2190,6 +2208,9 @@ fn scalar_value(value: &ProjectedJsonScalar) -> Value {
         ProjectedJsonScalar::Integer(value) => Value::from(*value),
         ProjectedJsonScalar::Number(value) => {
             serde_json::Number::from_f64(*value).map_or(Value::Null, Value::Number)
+        }
+        ProjectedJsonScalar::CanonicalJson(value) => {
+            serde_json::from_slice(value).unwrap_or(Value::Null)
         }
     }
 }
@@ -2817,7 +2838,7 @@ mod tests {
             ("eligible".to_owned(), Value::Bool(true)),
         ]);
         let status = snapshot_projected_value(
-            crate::source_plan::runtime_profile::CompiledOutputShape::String {
+            &crate::source_plan::runtime_profile::CompiledOutputShape::String {
                 nullable: true,
                 max_bytes: 32,
             },
@@ -2831,7 +2852,7 @@ mod tests {
         ));
         assert!(matches!(
             snapshot_projected_value(
-                crate::source_plan::runtime_profile::CompiledOutputShape::Boolean {
+                &crate::source_plan::runtime_profile::CompiledOutputShape::Boolean {
                     nullable: true,
                 },
                 "missing",
