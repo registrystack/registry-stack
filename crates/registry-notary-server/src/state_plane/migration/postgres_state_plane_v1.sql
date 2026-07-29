@@ -116,6 +116,21 @@ CREATE TABLE IF NOT EXISTS registry_notary_private.machine_quota (
 CREATE INDEX IF NOT EXISTS machine_quota_expiry_idx
     ON registry_notary_private.machine_quota (window_expires_at);
 
+CREATE TABLE IF NOT EXISTS registry_notary_private.machine_quota_operation (
+    principal_hash bytea NOT NULL CHECK (pg_catalog.octet_length(principal_hash) = 32),
+    operation_hash bytea NOT NULL CHECK (pg_catalog.octet_length(operation_hash) = 32),
+    request_hash bytea NOT NULL CHECK (pg_catalog.octet_length(request_hash) = 32),
+    lease_owner_hash bytea NOT NULL CHECK (pg_catalog.octet_length(lease_owner_hash) = 32),
+    lease_expires_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
+    expires_at timestamptz NOT NULL,
+    PRIMARY KEY (principal_hash, operation_hash),
+    CHECK (expires_at > created_at),
+    CHECK (lease_expires_at <= expires_at)
+);
+CREATE INDEX IF NOT EXISTS machine_quota_operation_expiry_idx
+    ON registry_notary_private.machine_quota_operation (expires_at);
+
 CREATE TABLE IF NOT EXISTS registry_notary_private.subject_access_quota (
     bucket_kind text NOT NULL CHECK (bucket_kind IN (
         'invalid_token_per_client_address',
@@ -937,6 +952,155 @@ BEGIN
 END
 $function$;
 
+CREATE OR REPLACE FUNCTION registry_notary_api.machine_quota_debit_once_v1(
+    p_principal_hash bytea,
+    p_operation_hash bytea,
+    p_request_hash bytea,
+    p_lease_owner_hash bytea,
+    p_limit integer,
+    p_cost integer,
+    p_lease_seconds integer,
+    p_operation_expires_at timestamptz
+)
+RETURNS TABLE (
+    allowed boolean,
+    acquired boolean,
+    conflict boolean,
+    remaining integer,
+    retry_after_seconds bigint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+DECLARE
+    v_now timestamptz := pg_catalog.clock_timestamp();
+    v_quota registry_notary_private.machine_quota%ROWTYPE;
+    v_operation registry_notary_private.machine_quota_operation%ROWTYPE;
+BEGIN
+    IF pg_catalog.octet_length(p_principal_hash) <> 32
+       OR pg_catalog.octet_length(p_operation_hash) <> 32
+       OR pg_catalog.octet_length(p_request_hash) <> 32
+       OR pg_catalog.octet_length(p_lease_owner_hash) <> 32
+       OR (p_limit IS NOT NULL AND p_limit <= 0) OR p_cost <= 0
+       OR p_lease_seconds NOT BETWEEN 1 AND 60
+       OR p_operation_expires_at <= v_now THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'invalid idempotent machine quota input';
+    END IF;
+    INSERT INTO registry_notary_private.machine_quota (
+        principal_hash, window_started_at, window_expires_at, used
+    ) VALUES (p_principal_hash, v_now, v_now + interval '1 minute', 0)
+    ON CONFLICT (principal_hash) DO NOTHING;
+    SELECT * INTO STRICT v_quota
+      FROM registry_notary_private.machine_quota AS quota
+     WHERE quota.principal_hash = p_principal_hash
+     FOR UPDATE;
+    v_now := pg_catalog.clock_timestamp();
+    IF p_operation_expires_at <= v_now THEN
+        RAISE EXCEPTION USING ERRCODE = '22023',
+            MESSAGE = 'expired idempotent machine quota operation';
+    END IF;
+    IF v_quota.window_expires_at <= v_now THEN
+        UPDATE registry_notary_private.machine_quota AS quota
+           SET window_started_at = v_now,
+               window_expires_at = v_now + interval '1 minute',
+               used = 0
+         WHERE quota.principal_hash = p_principal_hash;
+        v_quota.window_expires_at := v_now + interval '1 minute';
+        v_quota.used := 0;
+    END IF;
+    DELETE FROM registry_notary_private.machine_quota_operation AS operation
+     WHERE operation.principal_hash = p_principal_hash
+       AND operation.operation_hash = p_operation_hash
+       AND operation.expires_at <= v_now;
+    SELECT * INTO v_operation
+      FROM registry_notary_private.machine_quota_operation AS operation
+     WHERE operation.principal_hash = p_principal_hash
+       AND operation.operation_hash = p_operation_hash
+       AND operation.expires_at > v_now
+     FOR UPDATE;
+    v_now := pg_catalog.clock_timestamp();
+    IF FOUND THEN
+        IF v_operation.expires_at <= v_now THEN
+            RAISE EXCEPTION USING ERRCODE = '22023',
+                MESSAGE = 'expired idempotent machine quota operation';
+        END IF;
+        IF v_operation.request_hash <> p_request_hash THEN
+            RETURN QUERY SELECT TRUE, FALSE, TRUE,
+                CASE WHEN p_limit IS NULL THEN 0
+                     ELSE GREATEST(0, p_limit - v_quota.used) END,
+                0::bigint;
+        ELSIF v_operation.lease_owner_hash = p_lease_owner_hash
+           OR v_operation.lease_expires_at <= v_now THEN
+            UPDATE registry_notary_private.machine_quota_operation AS operation
+               SET lease_owner_hash = p_lease_owner_hash,
+                   lease_expires_at = LEAST(
+                       v_now + pg_catalog.make_interval(secs => p_lease_seconds),
+                       operation.expires_at
+                   )
+             WHERE operation.principal_hash = p_principal_hash
+               AND operation.operation_hash = p_operation_hash;
+            RETURN QUERY SELECT TRUE, TRUE, FALSE,
+                CASE WHEN p_limit IS NULL THEN 0
+                     ELSE GREATEST(0, p_limit - v_quota.used) END,
+                0::bigint;
+        ELSE
+            RETURN QUERY SELECT TRUE, FALSE, FALSE,
+                CASE WHEN p_limit IS NULL THEN 0
+                     ELSE GREATEST(0, p_limit - v_quota.used) END,
+                0::bigint;
+        END IF;
+        RETURN;
+    END IF;
+    IF p_limit IS NOT NULL AND p_cost > p_limit - v_quota.used THEN
+        RETURN QUERY SELECT FALSE, FALSE, FALSE,
+            GREATEST(0, p_limit - v_quota.used),
+            GREATEST(1::bigint, CEIL(EXTRACT(EPOCH FROM
+                (v_quota.window_expires_at - v_now)))::bigint);
+        RETURN;
+    END IF;
+    IF p_limit IS NOT NULL THEN
+        UPDATE registry_notary_private.machine_quota AS quota
+           SET used = quota.used + p_cost
+         WHERE quota.principal_hash = p_principal_hash;
+    END IF;
+    INSERT INTO registry_notary_private.machine_quota_operation (
+        principal_hash, operation_hash, request_hash, lease_owner_hash, lease_expires_at,
+        created_at, expires_at
+    ) VALUES (
+        p_principal_hash, p_operation_hash, p_request_hash, p_lease_owner_hash,
+        LEAST(
+            v_now + pg_catalog.make_interval(secs => p_lease_seconds),
+            p_operation_expires_at
+        ),
+        v_now, p_operation_expires_at
+    );
+    RETURN QUERY SELECT TRUE, TRUE, FALSE,
+        CASE WHEN p_limit IS NULL THEN 0
+             ELSE p_limit - (v_quota.used + p_cost) END,
+        0::bigint;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION registry_notary_api.machine_quota_operation_release_v1(
+    p_principal_hash bytea,
+    p_operation_hash bytea,
+    p_lease_owner_hash bytea
+)
+RETURNS boolean
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+    UPDATE registry_notary_private.machine_quota_operation AS operation
+       SET lease_expires_at = pg_catalog.clock_timestamp()
+     WHERE operation.principal_hash = p_principal_hash
+       AND operation.operation_hash = p_operation_hash
+       AND operation.lease_owner_hash = p_lease_owner_hash
+    RETURNING TRUE
+$function$;
+
 CREATE OR REPLACE FUNCTION registry_notary_api.subject_access_quota_debit_v1(
     p_bucket_kinds text[],
     p_key_hashes bytea[],
@@ -1552,7 +1716,9 @@ CREATE OR REPLACE FUNCTION registry_notary_api.registry_client_offer_reserve_v1(
     p_evaluation_expires_at timestamptz,
     p_quota_principal_hash bytea,
     p_quota_limit integer,
-    p_quota_cost integer
+    p_quota_cost integer,
+    p_quota_operation_hash bytea,
+    p_quota_lease_owner_hash bytea
 )
 RETURNS TABLE (
     outcome smallint,
@@ -1571,13 +1737,59 @@ DECLARE
     v_count bigint;
     v_stored registry_notary_private.registry_client_offer%ROWTYPE;
     v_quota registry_notary_private.machine_quota%ROWTYPE;
+    v_quota_operation registry_notary_private.machine_quota_operation%ROWTYPE;
 BEGIN
     IF pg_catalog.octet_length(p_idempotency_key_hash) <> 32
-       OR pg_catalog.octet_length(p_request_hash) <> 32 THEN
+       OR pg_catalog.octet_length(p_request_hash) <> 32
+       OR pg_catalog.octet_length(p_quota_principal_hash) <> 32
+       OR (p_quota_operation_hash IS NULL)
+          <> (p_quota_lease_owner_hash IS NULL)
+       OR (p_quota_operation_hash IS NOT NULL
+           AND (pg_catalog.octet_length(p_quota_operation_hash) <> 32
+                OR pg_catalog.octet_length(p_quota_lease_owner_hash) <> 32)) THEN
         RAISE EXCEPTION USING ERRCODE = '22023',
             MESSAGE = 'invalid registry-client idempotency binding';
     END IF;
     PERFORM pg_catalog.pg_advisory_xact_lock(5642808141211099137);
+    v_now := pg_catalog.clock_timestamp();
+    IF p_quota_limit IS NOT NULL THEN
+        INSERT INTO registry_notary_private.machine_quota (
+            principal_hash, window_started_at, window_expires_at, used
+        ) VALUES (
+            p_quota_principal_hash, v_now, v_now + interval '1 minute', 0
+        ) ON CONFLICT (principal_hash) DO NOTHING;
+        SELECT * INTO STRICT v_quota
+          FROM registry_notary_private.machine_quota
+         WHERE principal_hash = p_quota_principal_hash
+         FOR UPDATE;
+        v_now := pg_catalog.clock_timestamp();
+        IF v_quota.window_expires_at <= v_now THEN
+            UPDATE registry_notary_private.machine_quota
+               SET window_started_at = v_now,
+                   window_expires_at = v_now + interval '1 minute',
+                   used = 0
+             WHERE principal_hash = p_quota_principal_hash;
+            v_quota.window_expires_at := v_now + interval '1 minute';
+            v_quota.used := 0;
+        END IF;
+    END IF;
+    IF p_quota_operation_hash IS NOT NULL THEN
+        SELECT * INTO v_quota_operation
+          FROM registry_notary_private.machine_quota_operation AS operation
+         WHERE operation.principal_hash = p_quota_principal_hash
+           AND operation.operation_hash = p_quota_operation_hash
+         FOR UPDATE;
+        v_now := pg_catalog.clock_timestamp();
+        IF NOT FOUND
+           OR v_quota_operation.request_hash <> p_request_hash
+           OR v_quota_operation.lease_owner_hash <> p_quota_lease_owner_hash
+           OR v_quota_operation.lease_expires_at <= v_now
+           OR v_quota_operation.expires_at <= v_now THEN
+            RETURN QUERY SELECT -6::smallint, NULL::bytea, NULL::bytea,
+                NULL::bytea, NULL::timestamptz, NULL::bigint;
+            RETURN;
+        END IF;
+    END IF;
     IF EXISTS (
         SELECT 1 FROM registry_notary_private.preauthorization_login_state AS login
          WHERE login.expires_at > v_now AND login.key_id <> p_key_id
@@ -1634,7 +1846,6 @@ BEGIN
        OR pg_catalog.octet_length(p_transaction_hash) <> 32
        OR pg_catalog.octet_length(p_jti_hash) <> 32
        OR pg_catalog.octet_length(p_key_id) <> 32
-       OR pg_catalog.octet_length(p_quota_principal_hash) <> 32
        OR p_quota_cost <= 0
        OR (p_quota_limit IS NOT NULL AND p_quota_limit <= 0)
        OR p_commitment !~ '^sha256:[0-9a-f]{64}$'
@@ -1696,24 +1907,6 @@ BEGIN
     END IF;
 
     IF p_quota_limit IS NOT NULL THEN
-        INSERT INTO registry_notary_private.machine_quota (
-            principal_hash, window_started_at, window_expires_at, used
-        ) VALUES (
-            p_quota_principal_hash, v_now, v_now + interval '1 minute', 0
-        ) ON CONFLICT (principal_hash) DO NOTHING;
-        SELECT * INTO STRICT v_quota
-          FROM registry_notary_private.machine_quota
-         WHERE principal_hash = p_quota_principal_hash
-         FOR UPDATE;
-        IF v_quota.window_expires_at <= v_now THEN
-            UPDATE registry_notary_private.machine_quota
-               SET window_started_at = v_now,
-                   window_expires_at = v_now + interval '1 minute',
-                   used = 0
-             WHERE principal_hash = p_quota_principal_hash;
-            v_quota.window_expires_at := v_now + interval '1 minute';
-            v_quota.used := 0;
-        END IF;
         IF p_quota_cost > p_quota_limit - v_quota.used THEN
             RETURN QUERY SELECT -5::smallint, NULL::bytea, NULL::bytea,
                 NULL::bytea, NULL::timestamptz,
@@ -2082,6 +2275,22 @@ BEGIN
     ), deleted AS (
         DELETE FROM registry_notary_private.machine_quota AS stored
          USING candidates WHERE stored.principal_hash = candidates.principal_hash
+        RETURNING 1
+    ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
+    v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
+
+    WITH candidates AS (
+        SELECT principal_hash, operation_hash
+          FROM registry_notary_private.machine_quota_operation
+         WHERE expires_at <= v_now
+         ORDER BY expires_at, principal_hash, operation_hash
+         LIMIT p_batch_size FOR UPDATE SKIP LOCKED
+    ), deleted AS (
+        DELETE FROM registry_notary_private.machine_quota_operation AS stored
+         USING candidates
+         WHERE stored.principal_hash = candidates.principal_hash
+           AND stored.operation_hash = candidates.operation_hash
         RETURNING 1
     ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
     v_total := v_total + v_count;

@@ -107,6 +107,7 @@ use crate::{
         CredentialStatusStore, CredentialStatusStoreError,
     },
     format_time,
+    machine_quota::{MachineQuotaOperationOutcome, OPERATION_LEASE_SECONDS},
     metrics::AppMetrics,
     openapi_document,
     posture::{posture_document, PostureContext, PostureDocumentError},

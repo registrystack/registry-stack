@@ -23,6 +23,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use super::{NotaryPostgresStatePlaneError, NotaryPostgresStatePlaneRuntime};
 use crate::{
+    machine_quota::MachineQuotaOperationFence,
     preauth_state::{
         decode_hash_uri, validate_registry_client_offer_structure, CredentialMaterialization,
         IssuanceTransaction, LiveIssuanceTransaction, LoginState, PreauthorizationStateError,
@@ -305,11 +306,35 @@ impl PostgresSensitiveState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn reserve_registry_client_offer(
         &self,
         reservation: RegistryClientOfferReservation,
     ) -> Result<RegistryClientOfferReservationOutcome, PreauthorizationStateError> {
+        self.reserve_registry_client_offer_with_fence(reservation, None)
+            .await
+    }
+
+    pub(crate) async fn reserve_registry_client_offer_fenced(
+        &self,
+        reservation: RegistryClientOfferReservation,
+        fence: &MachineQuotaOperationFence,
+    ) -> Result<RegistryClientOfferReservationOutcome, PreauthorizationStateError> {
+        self.reserve_registry_client_offer_with_fence(reservation, Some(fence))
+            .await
+    }
+
+    async fn reserve_registry_client_offer_with_fence(
+        &self,
+        reservation: RegistryClientOfferReservation,
+        fence: Option<&MachineQuotaOperationFence>,
+    ) -> Result<RegistryClientOfferReservationOutcome, PreauthorizationStateError> {
         validate_registry_client_offer_structure(&reservation)?;
+        if fence.is_some_and(|fence| {
+            reservation.quota_principal_hash.as_slice() != fence.principal_hash()
+        }) {
+            return Err(PreauthorizationStateError::OperationLeaseLost);
+        }
         let idempotency_hash = decode_hash_uri(&reservation.idempotency_key_hash, "hmac-sha256:")?;
         let request_hash = decode_hash_uri(&reservation.canonical_request_hash, "sha256:")?;
         let evaluation_hash = self.keys.identifier_hash_fields(
@@ -370,6 +395,8 @@ impl PostgresSensitiveState {
             .as_ref()
             .map(|code| self.keys.pin_verifier(&jti_hash, &code.pin));
         let pin_verifier_parameter = pin_verifier.as_ref().map(<[u8; KEY_BYTES]>::as_slice);
+        let quota_operation_hash = fence.map(|fence| &fence.operation_hash()[..]);
+        let quota_lease_owner_hash = fence.map(|fence| &fence.lease_owner_hash()[..]);
 
         let session = self
             .runtime
@@ -383,7 +410,7 @@ impl PostgresSensitiveState {
                      $7::text, $8::text, $9::bytea, $10::bytea, $11::timestamptz, \
                      $12::bytea, $13::smallint, $14::timestamptz, $15::bytea, \
                      $16::bytea, $17::timestamptz, $18::timestamptz, $19::bytea, \
-                     $20::integer, $21::integer)",
+                     $20::integer, $21::integer, $22::bytea, $23::bytea)",
                 &[
                     &&idempotency_hash[..],
                     &&request_hash[..],
@@ -406,6 +433,8 @@ impl PostgresSensitiveState {
                     &reservation.quota_principal_hash,
                     &reservation.quota_limit,
                     &reservation.quota_cost,
+                    &quota_operation_hash,
+                    &quota_lease_owner_hash,
                 ],
             ))
             .await
@@ -446,6 +475,7 @@ impl PostgresSensitiveState {
                     retry_after_seconds: retry_after_seconds.max(1) as u64,
                 })
             }
+            -6 => Err(PreauthorizationStateError::OperationLeaseLost),
             _ => Err(SensitiveStateError::InvalidStoredRecord.into()),
         }
     }

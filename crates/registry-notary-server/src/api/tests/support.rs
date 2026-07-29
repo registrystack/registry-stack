@@ -628,6 +628,173 @@
         )
     }
 
+    struct FirstSigningAttemptGate {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    impl FirstSigningAttemptGate {
+        fn new() -> Self {
+            Self {
+                entered: tokio::sync::Notify::new(),
+                release: tokio::sync::Notify::new(),
+            }
+        }
+
+        async fn wait_until_entered(&self) {
+            self.entered.notified().await;
+        }
+
+        fn release(&self) {
+            self.release.notify_one();
+        }
+    }
+
+    struct FirstAttemptBlockingAccessTokenSigner {
+        inner: LocalJwkSigner,
+        sign_attempt_count: Arc<AtomicUsize>,
+        gate: Arc<FirstSigningAttemptGate>,
+    }
+
+    impl FirstAttemptBlockingAccessTokenSigner {
+        fn new(
+            sign_attempt_count: Arc<AtomicUsize>,
+            gate: Arc<FirstSigningAttemptGate>,
+        ) -> Self {
+            let inner = LocalJwkSigner::new(
+                PrivateJwk::parse(
+                    &json!({
+                        "kty": "OKP",
+                        "crv": "Ed25519",
+                        "d": HOLDER_PRIV_D_B64,
+                        "x": HOLDER_PUB_X_B64,
+                        "alg": "EdDSA",
+                        "kid": "did:web:notary.example#access"
+                    })
+                    .to_string(),
+                )
+                .expect("test access-token JWK parses"),
+            )
+            .expect("test access-token signer builds");
+            Self {
+                inner,
+                sign_attempt_count,
+                gate,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SigningProvider for FirstAttemptBlockingAccessTokenSigner {
+        fn algorithm(&self) -> registry_platform_crypto::SigningAlgorithm {
+            self.inner.algorithm()
+        }
+
+        fn key_id(&self) -> &str {
+            self.inner.key_id()
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            self.inner.public_jwk()
+        }
+
+        async fn sign(
+            &self,
+            payload: &[u8],
+        ) -> Result<Vec<u8>, registry_platform_crypto::SigningError> {
+            let attempt = self.sign_attempt_count.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                self.gate.entered.notify_one();
+                self.gate.release.notified().await;
+            }
+            self.inner.sign(payload).await
+        }
+    }
+
+    fn oid4vci_test_preauth_runtime_with_first_signing_attempt_gate(
+        access_token_typ: &str,
+        sign_attempt_count: Arc<AtomicUsize>,
+        gate: Arc<FirstSigningAttemptGate>,
+    ) -> Arc<PreAuthRuntime> {
+        let signer = Arc::new(FirstAttemptBlockingAccessTokenSigner::new(
+            sign_attempt_count,
+            gate,
+        ));
+        Arc::new(
+            PreAuthRuntime::for_api_tests(access_token_typ)
+                .with_access_token_signer_for_tests(signer),
+        )
+    }
+
+    struct FirstAttemptFailingAccessTokenSigner {
+        inner: LocalJwkSigner,
+        sign_attempt_count: Arc<AtomicUsize>,
+    }
+
+    impl FirstAttemptFailingAccessTokenSigner {
+        fn new(sign_attempt_count: Arc<AtomicUsize>) -> Self {
+            let inner = LocalJwkSigner::new(
+                PrivateJwk::parse(
+                    &json!({
+                        "kty": "OKP",
+                        "crv": "Ed25519",
+                        "d": HOLDER_PRIV_D_B64,
+                        "x": HOLDER_PUB_X_B64,
+                        "alg": "EdDSA",
+                        "kid": "did:web:notary.example#access"
+                    })
+                    .to_string(),
+                )
+                .expect("test access-token JWK parses"),
+            )
+            .expect("test access-token signer builds");
+            Self {
+                inner,
+                sign_attempt_count,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SigningProvider for FirstAttemptFailingAccessTokenSigner {
+        fn algorithm(&self) -> registry_platform_crypto::SigningAlgorithm {
+            self.inner.algorithm()
+        }
+
+        fn key_id(&self) -> &str {
+            self.inner.key_id()
+        }
+
+        fn public_jwk(&self) -> PublicJwk {
+            self.inner.public_jwk()
+        }
+
+        async fn sign(
+            &self,
+            payload: &[u8],
+        ) -> Result<Vec<u8>, registry_platform_crypto::SigningError> {
+            if self.sign_attempt_count.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(registry_platform_crypto::SigningError::external(
+                    "test first signing attempt failed",
+                ));
+            }
+            self.inner.sign(payload).await
+        }
+    }
+
+    fn oid4vci_test_preauth_runtime_with_first_signing_attempt_failure(
+        access_token_typ: &str,
+        sign_attempt_count: Arc<AtomicUsize>,
+    ) -> Arc<PreAuthRuntime> {
+        let signer = Arc::new(FirstAttemptFailingAccessTokenSigner::new(
+            sign_attempt_count,
+        ));
+        Arc::new(
+            PreAuthRuntime::for_api_tests(access_token_typ)
+                .with_access_token_signer_for_tests(signer),
+        )
+    }
+
     fn oid4vci_test_audit_hasher() -> AuditKeyHasher {
         const ENV: &str = "TEST_OID4VCI_AUDIT_HASH_SECRET";
         std::env::set_var(ENV, "0123456789abcdef0123456789abcdef");

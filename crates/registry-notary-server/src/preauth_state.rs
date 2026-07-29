@@ -20,6 +20,7 @@ use time::{Duration, OffsetDateTime};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{
+    machine_quota::MachineQuotaOperationFence,
     replay::{replay_identifier_hash, replay_scope_hash},
     state_plane::{NotaryStatePlaneHandle, SensitiveStateError, SensitiveStateKeys},
 };
@@ -343,6 +344,8 @@ pub(crate) enum PreauthorizationStateError {
     EvaluationConsumed,
     #[error("registry-client offer quota was exhausted")]
     MachineQuotaExceeded { retry_after_seconds: u64 },
+    #[error("registry-client offer operation lease is no longer owned")]
+    OperationLeaseLost,
     #[error(transparent)]
     SensitiveState(#[from] SensitiveStateError),
 }
@@ -402,6 +405,7 @@ impl PreauthorizationState {
     /// Atomically reserve the immutable transaction, optional transaction-code
     /// verifier, evaluation consumption, and exact response for a
     /// registry-client initiated offer.
+    #[cfg(test)]
     pub(crate) async fn reserve_registry_client_offer(
         &self,
         reservation: RegistryClientOfferReservation,
@@ -414,6 +418,28 @@ impl PreauthorizationState {
                 handle
                     .sensitive_state()?
                     .reserve_registry_client_offer(reservation)
+                    .await
+            }
+        }
+    }
+
+    /// Finalize an offer only while the caller still owns the quota-operation
+    /// lease. In-memory mode holds the operation mutex through the synchronous
+    /// reservation; PostgreSQL verifies and locks the same owner token inside
+    /// the authoritative reservation transaction.
+    pub(crate) async fn reserve_registry_client_offer_fenced(
+        &self,
+        reservation: RegistryClientOfferReservation,
+        fence: &MachineQuotaOperationFence,
+    ) -> Result<RegistryClientOfferReservationOutcome, PreauthorizationStateError> {
+        match &self.backend {
+            PreauthorizationBackend::InMemory(state) => fence
+                .complete_in_memory(|| state.reserve_registry_client_offer(reservation))
+                .map_err(|()| PreauthorizationStateError::OperationLeaseLost)?,
+            PreauthorizationBackend::Postgresql(handle) => {
+                handle
+                    .sensitive_state()?
+                    .reserve_registry_client_offer_fenced(reservation, fence)
                     .await
             }
         }
@@ -1693,6 +1719,36 @@ mod tests {
                 .unwrap(),
             RegistryClientOfferReservationOutcome::Replayed(expected)
         );
+    }
+
+    #[tokio::test]
+    async fn registry_client_offer_replay_stops_when_the_signed_code_expires() {
+        let state = memory_state();
+        let mut reservation =
+            registry_client_offer_reservation("expiring-offer", "evaluation", '9', 'f');
+        let code_expires_at = OffsetDateTime::now_utc() + Duration::milliseconds(250);
+        reservation.code_expires_at = code_expires_at;
+        reservation.retention_expires_at = code_expires_at;
+        reservation.response.expires_at = crate::format_time(code_expires_at);
+        state
+            .reserve_registry_client_offer(reservation)
+            .await
+            .expect("live offer reserves");
+
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        assert!(matches!(
+            state
+                .registry_client_offer_preflight(
+                    "evaluation",
+                    "registry-client",
+                    &format!("hmac-sha256:{}", "9".repeat(64)),
+                    &format!("sha256:{}", "f".repeat(64)),
+                )
+                .await
+                .expect("expired replay lookup succeeds"),
+            RegistryClientOfferPreflightOutcome::EvaluationConsumed
+        ));
     }
 
     #[tokio::test]
