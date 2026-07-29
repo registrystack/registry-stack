@@ -26,12 +26,12 @@ test('committed internal and public reference artifacts are exact and complete',
   validateAuthoringReference(reference, coverage);
   assert.deepEqual(publicReference, reference);
   assert.deepEqual(publicCoverage, coverage);
-  assert.equal(reference.fields.length, 1771);
-  assert.equal(coverage.reviewed_intent_assignment_required_count, 1771);
-  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1771);
-  assert.equal(coverage.distinct_reviewed_intent_count, 596);
-  assert.equal(coverage.distinct_reviewed_intents_reused_count, 82);
-  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1257);
+  assert.equal(reference.fields.length, 1801);
+  assert.equal(coverage.reviewed_intent_assignment_required_count, 1801);
+  assert.equal(coverage.reviewed_intent_assignment_covered_count, 1801);
+  assert.equal(coverage.distinct_reviewed_intent_count, 616);
+  assert.equal(coverage.distinct_reviewed_intents_reused_count, 86);
+  assert.equal(coverage.reviewed_intent_assignments_using_reused_intent_count, 1271);
   assert.deepEqual(reference.reference_baseline, {
     generator_lifecycle: 'unreleased',
     published_release: null,
@@ -52,32 +52,32 @@ test('committed internal and public reference artifacts are exact and complete',
   assert.deepEqual(reference.coverage.by_schema, {
     project: 220,
     environment: 198,
-    integration: 142,
+    integration: 166,
     fixture: 62,
     entity: 35,
     relay: 584,
-    notary: 530,
+    notary: 536,
   });
   assert.deepEqual(reference.coverage.by_path_kind, {
     root: 7,
-    property: 1413,
-    map_key: 25,
-    map_value: 47,
+    property: 1434,
+    map_key: 26,
+    map_value: 49,
     array_item: 178,
-    branch: 101,
+    branch: 107,
   });
   assert.equal(
     Object.values(reference.coverage.by_intent_profile).reduce(
       (total, count) => total + count,
       0,
     ),
-    1114,
+    1120,
   );
   assert.equal(reference.fields.filter((field) => field.empty_behavior === 'allowed').length, 523);
-  assert.equal(reference.fields.filter((field) => field.empty_behavior === 'rejected').length, 307);
+  assert.equal(reference.fields.filter((field) => field.empty_behavior === 'rejected').length, 308);
   assert.equal(
     reference.fields.filter((field) => field.empty_behavior === 'not_applicable').length,
-    941,
+    970,
   );
 });
 

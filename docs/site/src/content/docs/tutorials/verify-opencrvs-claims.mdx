@@ -96,6 +96,39 @@ ambiguity fixtures prove that Relay does not choose a record when the source res
 non-unique. Derived checks reject malformed signatures, unexpected response shapes, excessive
 data, and source work before authorization.
 
+The match fixture also proves the closed `parents` array:
+
+```json
+{
+  "parents": [
+    {
+      "type": "mother",
+      "name": "Mira Example",
+      "identifier": "PARENT-0001"
+    },
+    {
+      "type": "father",
+      "name": "Noah Example",
+      "identifier": "PARENT-0002"
+    }
+  ]
+}
+```
+
+The source observation includes a fictional `source_only_reference` for each parent. The adapter
+constructs each released object from `type`, `name`, and `identifier`, so that source-only member
+cannot cross the Relay boundary.
+
+The output contract limits `parents` to two items and 1,024 canonical serialized bytes. Each item
+is a closed object limited to 384 bytes. Unknown keys, missing required fields, invalid nested
+types, excessive items, and over-bound serialized values fail the fixture or consultation.
+
+When a credential profile includes this direct structured claim, Registry Notary stores and issues
+the exact validated array from the compiler-pinned Relay result. The `parents` claim is one
+top-level Selective Disclosure JSON Web Token (SD-JWT) disclosure. A holder can disclose or
+withhold the complete array. Individual parent objects and their fields are not independently
+disclosable.
+
 ## Adapt the project contract
 
 Review and update these surfaces:
@@ -152,6 +185,8 @@ Before deployment approval, confirm:
 - Notary has a Relay workload binding for registry-backed claims and no direct OpenCRVS connector.
 - The source product and version do not select the script capability.
 - Each fixture proves the canonical source request and a minimized typed result.
+- Structured output schemas are closed, byte-bounded, item-bounded, and identical in the Relay
+  public contract and Notary consultation expectation.
 - The generated review record identifies every semantic and operator-security review required by
   the adapted project.
 

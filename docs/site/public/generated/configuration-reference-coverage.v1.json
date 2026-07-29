@@ -39,38 +39,38 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1771,
-    "reference_count": 485,
+    "path_count": 1801,
+    "reference_count": 499,
     "by_schema": {
       "project": 220,
       "environment": 198,
-      "integration": 142,
+      "integration": 166,
       "fixture": 62,
       "entity": 35,
       "relay": 584,
-      "notary": 530
+      "notary": 536
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1413,
-      "map_key": 25,
-      "map_value": 47,
+      "property": 1434,
+      "map_key": 26,
+      "map_value": 49,
       "array_item": 178,
-      "branch": 101
+      "branch": 107
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1145,
+      "internal": 1168,
       "sensitive": 399,
       "secret_reference": 41,
       "redacted_fixture": 50,
-      "structural": 120
+      "structural": 127
     },
     "by_intent_source": {
-      "schema_description": 504,
-      "reviewed_override": 248,
+      "schema_description": 515,
+      "reviewed_override": 261,
       "structural_taxonomy": 127,
-      "reviewed_profile": 892
+      "reviewed_profile": 898
     },
     "by_intent_profile": {
       "notary_audit_internal": 4,
@@ -88,10 +88,11 @@
       "notary_deployment_sensitive": 1,
       "notary_evidence_claims_evidence_mode_consultations_inputs_open_map": 1,
       "notary_evidence_claims_evidence_mode_consultations_open_map": 1,
+      "notary_evidence_claims_evidence_mode_consultations_output_fields_open_map": 1,
       "notary_evidence_claims_evidence_mode_consultations_outputs_open_map": 1,
       "notary_evidence_claims_rule_bindings_claims_open_map": 1,
       "notary_evidence_credential_profiles_open_map": 1,
-      "notary_evidence_internal": 92,
+      "notary_evidence_internal": 97,
       "notary_evidence_secret_reference": 5,
       "notary_evidence_sensitive": 40,
       "notary_evidence_signing_keys_open_map": 1,
@@ -148,10 +149,10 @@
       "relay_vocabularies_open_map": 1
     }
   },
-  "reviewed_intent_assignment_required_count": 1771,
-  "reviewed_intent_assignment_covered_count": 1771,
-  "distinct_reviewed_intent_count": 596,
-  "distinct_reviewed_intents_reused_count": 82,
-  "reviewed_intent_assignments_using_reused_intent_count": 1257,
+  "reviewed_intent_assignment_required_count": 1801,
+  "reviewed_intent_assignment_covered_count": 1801,
+  "distinct_reviewed_intent_count": 616,
+  "distinct_reviewed_intents_reused_count": 86,
+  "reviewed_intent_assignments_using_reused_intent_count": 1271,
   "missing_intent": []
 }
