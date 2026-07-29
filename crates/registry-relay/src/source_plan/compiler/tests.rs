@@ -3324,6 +3324,75 @@ fn semantic_output_aliases_are_distinct_from_complete_raw_acquisition() {
     assert_eq!(seed["acquisition"]["disclosure_fields"], json!(["status"]));
 }
 
+#[test]
+fn scalar_public_outputs_preserve_independent_bounds_and_safe_nullability() {
+    let mut string = semantic_alias_fixture();
+    let string_source = json!({"type": "string", "nullable": false, "max_bytes": 65_536});
+    string.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]["fields"]
+        ["registration_status"]["schema"] = string_source.clone();
+    string.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"] =
+        string_source.clone();
+    string.pack_value["spec"]["acquisition"]["fields"]["registration_status"] =
+        string_source.clone();
+    string.contract_value["spec"]["acquisition"]["fields"]["registration_status"] = string_source;
+    string.pack_value["spec"]["output"]["status"]["nullable"] = json!(true);
+    string.contract_value["spec"]["output"]["status"]["nullable"] = json!(true);
+    string.refresh_all();
+    compile(&string).expect("broad string acquisition narrows to a nullable public output");
+
+    let mut integer = semantic_alias_fixture();
+    let integer_source =
+        json!({"type": "integer", "nullable": false, "minimum": -100, "maximum": 100});
+    let integer_output =
+        json!({"type": "integer", "nullable": true, "minimum": -10, "maximum": 10});
+    integer.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]["fields"]
+        ["registration_status"]["schema"] = integer_source.clone();
+    integer.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"] =
+        integer_source.clone();
+    integer.pack_value["spec"]["acquisition"]["fields"]["registration_status"] =
+        integer_source.clone();
+    integer.contract_value["spec"]["acquisition"]["fields"]["registration_status"] = integer_source;
+    integer.pack_value["spec"]["output"]["status"] = integer_output.clone();
+    integer.contract_value["spec"]["output"]["status"] = integer_output;
+    integer.refresh_all();
+    compile(&integer).expect("broad integer acquisition narrows to a nullable public output");
+
+    let mut wider_output = semantic_alias_fixture();
+    let narrow_source = json!({"type": "string", "nullable": false, "max_bytes": 32});
+    wider_output.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]
+        ["fields"]["registration_status"]["schema"] = narrow_source.clone();
+    wider_output.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"] =
+        narrow_source.clone();
+    wider_output.pack_value["spec"]["acquisition"]["fields"]["registration_status"] =
+        narrow_source.clone();
+    wider_output.contract_value["spec"]["acquisition"]["fields"]["registration_status"] =
+        narrow_source;
+    wider_output.refresh_all();
+    compile(&wider_output)
+        .expect("independently enforced scalar bounds remain consultation-v1 compatible");
+}
+
+#[test]
+fn scalar_public_outputs_reject_nullable_source_for_nonnullable_output() {
+    let mut nullability = semantic_alias_fixture();
+    let nullable_source = json!({"type": "string", "nullable": true, "max_bytes": 64});
+    nullability.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]
+        ["fields"]["registration_status"]["schema"] = nullable_source.clone();
+    nullability.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"] =
+        nullable_source.clone();
+    nullability.pack_value["spec"]["acquisition"]["fields"]["registration_status"] =
+        nullable_source.clone();
+    nullability.contract_value["spec"]["acquisition"]["fields"]["registration_status"] =
+        nullable_source;
+    nullability.refresh_all();
+    assert!(matches!(
+        compile(&nullability),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidAcquisition
+        ))
+    ));
+}
+
 fn structured_output_fixture() -> Fixture {
     let mut fixture = semantic_alias_fixture();
     let name_response = json!({

@@ -4,7 +4,6 @@
 use super::super::*;
 
 const REGISTRY_OFFER_SIGNER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
-const REGISTRY_OFFER_SIGNER_VALIDITY_MARGIN: time::Duration = time::Duration::seconds(1);
 const REGISTRY_OFFER_LEASE_RENEWAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const REGISTRY_OFFER_FINAL_RESERVATION_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(45);
@@ -583,10 +582,9 @@ async fn oid4vci_create_registry_offer_inner(
         iat: now_unix,
         exp: code_exp,
     };
-    let signing_validity_floor = OffsetDateTime::now_utc()
-        + time::Duration::seconds(REGISTRY_OFFER_SIGNER_TIMEOUT.as_secs() as i64)
-        + REGISTRY_OFFER_SIGNER_VALIDITY_MARGIN;
-    if code_expires_at <= signing_validity_floor {
+    let Some(signing_timeout) =
+        registry_offer_completion_timeout(code_expires_at, REGISTRY_OFFER_SIGNER_TIMEOUT)
+    else {
         release_registry_offer_quota_operation(
             &state,
             &principal.principal_id,
@@ -595,9 +593,9 @@ async fn oid4vci_create_registry_offer_inner(
         )
         .await;
         return evidence_error_response(EvidenceError::EvaluationNotFound);
-    }
+    };
     let signed_code = match tokio::time::timeout(
-        REGISTRY_OFFER_SIGNER_TIMEOUT,
+        signing_timeout,
         mint_pre_authorized_code(
             preauth.access_token_signer(),
             PRE_AUTHORIZED_CODE_JWT_TYP,
@@ -867,12 +865,10 @@ fn registry_offer_completion_timeout(
     code_expires_at: OffsetDateTime,
     maximum: std::time::Duration,
 ) -> Option<std::time::Duration> {
-    std::time::Duration::try_from(
-        code_expires_at - OffsetDateTime::now_utc() - REGISTRY_OFFER_SIGNER_VALIDITY_MARGIN,
-    )
-    .ok()
-    .filter(|remaining| !remaining.is_zero())
-    .map(|remaining| remaining.min(maximum))
+    std::time::Duration::try_from(code_expires_at - OffsetDateTime::now_utc())
+        .ok()
+        .filter(|remaining| !remaining.is_zero())
+        .map(|remaining| remaining.min(maximum))
 }
 
 pub(in crate::api) fn registry_offer_problem(status: StatusCode, code: &'static str) -> Response {
@@ -921,10 +917,8 @@ fn registry_client_offer_success_response(
     holder_binding_mode: &str,
     target_ref: &TargetRefView,
 ) -> Response {
-    let response_is_fresh =
-        OffsetDateTime::parse(&response.expires_at, &Rfc3339).is_ok_and(|expires_at| {
-            expires_at > OffsetDateTime::now_utc() + REGISTRY_OFFER_SIGNER_VALIDITY_MARGIN
-        });
+    let response_is_fresh = OffsetDateTime::parse(&response.expires_at, &Rfc3339)
+        .is_ok_and(|expires_at| expires_at > OffsetDateTime::now_utc());
     if !response_is_fresh {
         return evidence_error_response(EvidenceError::EvaluationNotFound);
     }
