@@ -16,10 +16,12 @@ import test from 'node:test';
 import {
   ARCHIVE_BUNDLE_SCHEMA,
   LEGACY_ARCHIVE_BUNDLE_SCHEMA,
+  SINGLE_TREE_ARCHIVE_BUNDLE_SCHEMA,
   archiveMetadata,
   assertArchiveMetadataMatchesDocset,
   createArchiveBundle,
   inspectArchiveBundle,
+  releaseRootOutputDirectory,
   restoreArchiveBundle,
   treeDigest,
 } from './archive-bundle.mjs';
@@ -42,10 +44,14 @@ async function fixture(t) {
   const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-bundle-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const output = resolve(root, 'dist/v/1.2.3');
+  const rootOutput = releaseRootOutputDirectory(root, docset);
   await mkdir(resolve(output, 'guide'), { recursive: true });
+  await mkdir(resolve(rootOutput, 'guide'), { recursive: true });
   await writeFile(resolve(output, 'index.html'), '<h1>Archive</h1>\n');
   await writeFile(resolve(output, 'guide/index.html'), '<p>Guide</p>\n');
-  return { root, output };
+  await writeFile(resolve(rootOutput, 'index.html'), '<h1>Canonical release</h1>\n');
+  await writeFile(resolve(rootOutput, 'guide/index.html'), '<p>Root guide</p>\n');
+  return { root, rootOutput, output };
 }
 
 test('creates byte-for-byte deterministic archive bundles and restores them', async (t) => {
@@ -57,7 +63,8 @@ test('creates byte-for-byte deterministic archive bundles and restores them', as
   const second = await createArchiveBundle({ docsRoot: root, docset, bundlePath: secondPath });
 
   assert.equal(first.bundle_sha256, second.bundle_sha256);
-  assert.equal(first.tree_sha256, second.tree_sha256);
+  assert.equal(first.root_tree_sha256, second.root_tree_sha256);
+  assert.equal(first.version_tree_sha256, second.version_tree_sha256);
   assert.deepEqual(await readFile(firstPath), await readFile(secondPath));
 
   await rm(output, { recursive: true });
@@ -66,7 +73,8 @@ test('creates byte-for-byte deterministic archive bundles and restores them', as
     bundlePath: secondPath,
     docset,
     expectedBundleSha256: second.bundle_sha256,
-    expectedTreeSha256: second.tree_sha256,
+    expectedRootTreeSha256: second.root_tree_sha256,
+    expectedVersionTreeSha256: second.version_tree_sha256,
   });
   assert.equal(await readFile(resolve(restored.output, 'guide/index.html'), 'utf8'), '<p>Guide</p>\n');
   assert.deepEqual(await readFile(restored.public_bundle), await readFile(secondPath));
@@ -83,7 +91,8 @@ test('rejects a bundle that does not match the immutable digest', async (t) => {
       bundlePath,
       docset,
       expectedBundleSha256: result.bundle_sha256,
-      expectedTreeSha256: result.tree_sha256,
+      expectedRootTreeSha256: result.root_tree_sha256,
+      expectedVersionTreeSha256: result.version_tree_sha256,
     }),
     /does not match lock/,
   );
@@ -113,30 +122,75 @@ test('rejects symlinks in immutable archive trees', async (t) => {
   await assert.rejects(treeDigest(output), /cannot contain symlinks/);
 });
 
-test('future metadata binds the release tag without source SHA sensitivity', async (t) => {
+test('requires both release trees unless historical single-tree mode is explicit', async (t) => {
+  const { root, rootOutput } = await fixture(t);
+  await rm(rootOutput, { recursive: true });
+  await assert.rejects(
+    createArchiveBundle({
+      docsRoot: root,
+      docset,
+      bundlePath: resolve(root, 'missing-root.tar.gz'),
+    }),
+    /canonical release root output must be a real directory/,
+  );
+});
+
+test('dual-tree metadata binds the release tag, route, and both tree digests', async (t) => {
   const { root } = await fixture(t);
   const bundlePath = resolve(root, 'archive.tar.gz');
   const result = await createArchiveBundle({ docsRoot: root, docset, bundlePath });
 
-  assert.deepEqual(archiveMetadata(docset, result.tree_sha256), {
+  assert.deepEqual(archiveMetadata(docset, {
+    rootTreeSha256: result.root_tree_sha256,
+    versionTreeSha256: result.version_tree_sha256,
+  }), {
     schema_version: ARCHIVE_BUNDLE_SCHEMA,
     release_tag: 'v1.2.3',
-    tree_sha256: result.tree_sha256,
+    root_tree_sha256: result.root_tree_sha256,
+    version_path: '/v/1.2.3/',
+    version_tree_sha256: result.version_tree_sha256,
   });
   await inspectArchiveBundle({
     bundlePath,
     docset: { ...docset, source: 'different-source', products: {} },
     expectedBundleSha256: result.bundle_sha256,
-    expectedTreeSha256: result.tree_sha256,
+    expectedRootTreeSha256: result.root_tree_sha256,
+    expectedVersionTreeSha256: result.version_tree_sha256,
   });
   await assert.rejects(
     inspectArchiveBundle({
       bundlePath,
       docset: { ...docset, id: 'v1.2.4', path: '/v/1.2.4/' },
       expectedBundleSha256: result.bundle_sha256,
-      expectedTreeSha256: result.tree_sha256,
+      expectedRootTreeSha256: result.root_tree_sha256,
+      expectedVersionTreeSha256: result.version_tree_sha256,
     }),
     /metadata does not match/,
+  );
+});
+
+test('historical v2 single-tree bundles remain parseable and restorable', async (t) => {
+  const { root, output } = await fixture(t);
+  const bundlePath = resolve(root, 'single-tree.tar.gz');
+  const result = await createArchiveBundle({
+    docsRoot: root,
+    docset,
+    bundlePath,
+    singleTree: true,
+  });
+
+  assert.equal(result.metadata.schema_version, SINGLE_TREE_ARCHIVE_BUNDLE_SCHEMA);
+  await rm(output, { recursive: true });
+  const restored = await restoreArchiveBundle({
+    docsRoot: root,
+    bundlePath,
+    docset,
+    expectedBundleSha256: result.bundle_sha256,
+    expectedTreeSha256: result.tree_sha256,
+  });
+  assert.equal(
+    await readFile(resolve(restored.output, 'guide/index.html'), 'utf8'),
+    '<p>Guide</p>\n',
   );
 });
 

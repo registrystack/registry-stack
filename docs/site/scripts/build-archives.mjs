@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { applyArchiveSeo } from './apply-archive-seo.mjs';
 import {
   archiveOutputDirectory,
+  releaseRootOutputDirectory,
   validateArchiveOutputLocation,
 } from './archive-bundle.mjs';
 import { loadDocsets } from './docsets.mjs';
@@ -158,7 +159,7 @@ export async function buildDocsetArchive(docset, {
     throw new Error(`Docset "${docset.id}" is not archived`);
   }
 
-  const env = {
+  const rootEnv = {
     ...process.env,
     DOCS_DOCSET: docset.id,
     DOCS_BASE: '/',
@@ -170,8 +171,15 @@ export async function buildDocsetArchive(docset, {
     PUBLIC_UMAMI_SCRIPT_SRC: '',
     PUBLIC_UMAMI_DOMAINS: '',
   };
-  const outDir = await validateArchiveOutputLocation(docsRoot, docset);
-  await rm(outDir, { recursive: true, force: true });
+  const versionEnv = {
+    ...rootEnv,
+    DOCS_BASE: docset.path,
+    DOCS_RELEASED_ARCHIVE: '',
+  };
+  const versionOutDir = await validateArchiveOutputLocation(docsRoot, docset);
+  const rootOutDir = releaseRootOutputDirectory(docsRoot, docset);
+  await rm(rootOutDir, { recursive: true, force: true });
+  await rm(versionOutDir, { recursive: true, force: true });
   // Current-source generators consume the checked-out registryctl contracts
   // and label their output as unreleased. Release archives instead stage those
   // generated artifacts from the docset's pinned source ref and refresh only
@@ -180,18 +188,26 @@ export async function buildDocsetArchive(docset, {
   // links or canonical metadata.
   const restoreGeneratedArtifacts = await stageGeneratedArtifacts(docset, { docsRoot });
   try {
-    await runCommand('npm', ['run', 'generate:archive'], env);
-    await runCommand('npx', ['astro', 'check'], env);
+    await runCommand('npm', ['run', 'generate:archive'], rootEnv);
+    await runCommand('npx', ['astro', 'check'], rootEnv);
+    await runCommand(
+      'npx',
+      ['astro', 'build', '--outDir', rootOutDir],
+      rootEnv,
+    );
     await runCommand(
       'npx',
       ['astro', 'build', '--outDir', archiveOutputDirectory(docsRoot, docset)],
-      env,
+      versionEnv,
     );
-    await applySeo(outDir, { indexable });
+    await applySeo(rootOutDir, { indexable });
+    await applySeo(versionOutDir, { indexable: false });
   } finally {
     await restoreGeneratedArtifacts();
   }
-  console.log(`Built archived docset ${docset.id} at ${outDir}.`);
+  console.log(
+    `Built released docset ${docset.id} at ${rootOutDir} and ${versionOutDir}.`,
+  );
 }
 
 export async function buildArchivedDocsets({

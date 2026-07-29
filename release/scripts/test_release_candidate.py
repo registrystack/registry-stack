@@ -14,6 +14,7 @@ import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("release_candidate.py")
@@ -23,6 +24,9 @@ IMAGE_DIGEST = "sha256:" + "c" * 64
 CONFIG_DIGEST = "sha256:" + "d" * 64
 LAYER_DIGEST = "sha256:" + "e" * 64
 ATTESTATION_DIGEST = "sha256:" + "f" * 64
+POSTGRESQL_REF = (
+    SCRIPT.parent.parent / "registryctl-postgresql-image.ref"
+).read_text(encoding="utf-8").strip()
 
 
 def load_module():
@@ -36,6 +40,104 @@ def load_module():
 
 def sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def json_bytes(value: object) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
+def security_evidence_members() -> dict[str, bytes]:
+    refs = {
+        name: f"ghcr.io/registrystack/{name}-candidate@{IMAGE_DIGEST}"
+        for name in ("registry-notary", "registry-relay")
+    }
+    refs["postgresql"] = POSTGRESQL_REF
+    members = {
+        "images/postgresql.digest": f"{POSTGRESQL_REF}\n".encode(),
+        "grype/grype-db-status.json": json_bytes({"status": "valid"}),
+        "advisory-verdict.json": json_bytes(
+            {
+                "schema_version": "registry-stack.advisory-verdict.v2",
+                "verdict": "passed",
+                "subjects": [
+                    "registry-notary-image",
+                    "registry-relay-image",
+                    "postgresql-runtime",
+                ],
+            }
+        ),
+    }
+    for name, image_ref in refs.items():
+        spdx = {"spdxVersion": "SPDX-2.3", "packages": []}
+        if name == "postgresql":
+            subject_id = "SPDXRef-RegistryStack-postgresql-digest-subject"
+            spdx["documentDescribes"] = [subject_id]
+            spdx["packages"] = [
+                {
+                    "SPDXID": subject_id,
+                    "name": image_ref,
+                    "externalRefs": [
+                        {
+                            "referenceLocator": (
+                                "pkg:oci/postgresql@"
+                                f"{image_ref.rsplit('@', 1)[1]}"
+                            )
+                        }
+                    ],
+                }
+            ]
+        members[f"image-sbom/{name}.spdx.json"] = json_bytes(spdx)
+        members[f"syft/{name}.syft.json"] = json_bytes(
+            {
+                "artifacts": [],
+                "source": {
+                    "type": "image",
+                    "target": {"userInput": image_ref},
+                },
+            }
+        )
+        members[f"grype/{name}.grype.json"] = json_bytes(
+            {
+                "matches": [],
+                "source": {
+                    "type": "image",
+                    "target": {"userInput": image_ref},
+                },
+                "descriptor": {
+                    "db": {
+                        "built": "2026-07-29T00:00:00Z",
+                        "checksum": "sha256:" + "2" * 64,
+                    }
+                },
+            }
+        )
+    return members
+
+
+def security_evidence_tar(
+    entries: list[tuple[str, bytes]],
+    *,
+    link: tuple[str, str] | None = None,
+) -> bytes:
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w:gz") as archive:
+        for directory in ("images", "image-sbom", "syft", "grype"):
+            info = tarfile.TarInfo(directory)
+            info.type = tarfile.DIRTYPE
+            info.mode = 0o755
+            archive.addfile(info)
+        for name, payload in entries:
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            info.mode = 0o644
+            archive.addfile(info, io.BytesIO(payload))
+        if link is not None:
+            name, target = link
+            info = tarfile.TarInfo(name)
+            info.type = tarfile.SYMTYPE
+            info.linkname = target
+            archive.addfile(info)
+    return output.getvalue()
 
 
 def fixture(root: Path, *, now: datetime) -> dict:
@@ -846,15 +948,43 @@ class ReleaseCandidateTest(unittest.TestCase):
             self.module.parse_tag_binding(legacy),
         )
 
+    def replace_security_evidence(
+        self,
+        candidate: dict,
+        bundle_root: Path,
+        payload: bytes,
+    ) -> Path:
+        record = next(
+            item
+            for item in candidate["payloads"]
+            if item["kind"] == "security-evidence"
+        )
+        path = bundle_root / record["name"]
+        path.write_bytes(payload)
+        record["size"] = len(payload)
+        record["sha256"] = sha256(payload)
+        return path
+
     def make_v2_candidate(self) -> tuple[dict, Path, Path, dict]:
         bundle_root = self.root.parent / "v2-bundle"
+        evidence_members = security_evidence_members()
+        evidence_name = "registry-stack-v1.2.3-security-evidence.tar.gz"
         files = {
             "registryctl-v1.2.3-linux-amd64": b"registryctl",
             "registry-docs-v1.2.3.tar.gz": b"docs",
             "registry-stack-v1.2.3.sbom.spdx.json": b"sbom",
-            "security/registry-notary.grype.json": b"notary scan",
-            "security/registry-relay.grype.json": b"relay scan",
-            "security/advisory-verdict.json": b"advisory",
+            "security/registry-notary.grype.json": evidence_members[
+                "grype/registry-notary.grype.json"
+            ],
+            "security/registry-relay.grype.json": evidence_members[
+                "grype/registry-relay.grype.json"
+            ],
+            "security/advisory-verdict.json": evidence_members[
+                "advisory-verdict.json"
+            ],
+            evidence_name: security_evidence_tar(
+                sorted(evidence_members.items())
+            ),
         }
         for name, payload in files.items():
             path = bundle_root / name
@@ -864,7 +994,7 @@ class ReleaseCandidateTest(unittest.TestCase):
         with tarfile.open(bundle_path, "w:gz") as archive:
             for name in sorted(files):
                 archive.add(bundle_root / name, arcname=name)
-        workflow_revision = "b" * 40
+        workflow_revision = SOURCE_SHA
         created = self.now - timedelta(hours=1)
         candidate = {
             "schema_version": "registry-stack.release-candidate.v2",
@@ -898,6 +1028,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                     ("registryctl-v1.2.3-linux-amd64", "binary"),
                     ("registry-docs-v1.2.3.tar.gz", "docs"),
                     ("registry-stack-v1.2.3.sbom.spdx.json", "sbom"),
+                    (evidence_name, "security-evidence"),
                 )
             ],
             "images": [
@@ -954,22 +1085,227 @@ class ReleaseCandidateTest(unittest.TestCase):
         }
         return candidate, bundle_path, bundle_root, run
 
-    def test_v2_candidate_verifies_exact_bundle_and_separate_revisions(self) -> None:
+    def test_v2_candidate_requires_source_to_equal_workflow_revision(self) -> None:
         candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
         validated = self.module.validate_candidate_manifest(
             candidate,
             bundle_path=bundle_path,
             bundle_root=bundle_root,
             expected_source_sha=SOURCE_SHA,
-            expected_workflow_revision="b" * 40,
+            expected_workflow_revision=SOURCE_SHA,
             now=self.now,
             promotion=True,
             workflow_run_metadata=run,
         )
-        self.assertNotEqual(
+        self.assertEqual(
             validated["release"]["source_sha"],
             validated["workflow"]["revision"],
         )
+        mismatched = copy.deepcopy(candidate)
+        mismatched["workflow"]["revision"] = "b" * 40
+        with self.assertRaisesRegex(
+            self.module.CandidateError,
+            "release.source_sha must equal workflow.revision",
+        ):
+            self.module.validate_candidate_manifest(
+                mismatched,
+                now=self.now,
+            )
+
+    def test_v2_schema_and_runtime_require_one_named_security_evidence_payload(
+        self,
+    ) -> None:
+        schema = json.loads(
+            (
+                SCRIPT.parent.parent
+                / "schemas"
+                / "release-candidate-v2.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        payload_schema = schema["properties"]["payloads"]
+        self.assertEqual(1, payload_schema["minContains"])
+        self.assertEqual(1, payload_schema["maxContains"])
+        self.assertEqual(
+            "security-evidence",
+            payload_schema["contains"]["properties"]["kind"]["const"],
+        )
+
+        candidate, _, _, _ = self.make_v2_candidate()
+        evidence = next(
+            item
+            for item in candidate["payloads"]
+            if item["kind"] == "security-evidence"
+        )
+        removed = copy.deepcopy(candidate)
+        removed["payloads"] = [
+            item
+            for item in removed["payloads"]
+            if item["kind"] != "security-evidence"
+        ]
+        duplicated = copy.deepcopy(candidate)
+        duplicate = copy.deepcopy(evidence)
+        duplicate["name"] = "duplicate-security-evidence.tar.gz"
+        duplicated["payloads"].append(duplicate)
+        wrong_name = copy.deepcopy(candidate)
+        next(
+            item
+            for item in wrong_name["payloads"]
+            if item["kind"] == "security-evidence"
+        )["name"] = "security-evidence.tar.gz"
+        for changed, message in (
+            (removed, "exactly one security-evidence"),
+            (duplicated, "exactly one security-evidence"),
+            (
+                wrong_name,
+                "security-evidence payload name must be "
+                "registry-stack-v1.2.3-security-evidence.tar.gz",
+            ),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(self.module.CandidateError, message):
+                    self.module.validate_candidate_manifest(
+                        changed,
+                        now=self.now,
+                    )
+
+    def test_v2_security_evidence_archive_requires_every_expected_file(
+        self,
+    ) -> None:
+        candidate, _, bundle_root, _ = self.make_v2_candidate()
+        members = security_evidence_members()
+        for missing in sorted(self.module.SECURITY_EVIDENCE_REQUIRED_FILES):
+            with self.subTest(missing=missing):
+                incomplete = [
+                    item
+                    for item in sorted(members.items())
+                    if item[0] != missing
+                ]
+                self.replace_security_evidence(
+                    candidate,
+                    bundle_root,
+                    security_evidence_tar(incomplete),
+                )
+                with self.assertRaisesRegex(
+                    self.module.CandidateError,
+                    "security evidence archive is incomplete",
+                ):
+                    self.module.validate_candidate_manifest(
+                        candidate,
+                        bundle_root=bundle_root,
+                        now=self.now,
+                    )
+
+    def test_v2_security_evidence_archive_rejects_unsafe_structure(
+        self,
+    ) -> None:
+        candidate, _, bundle_root, _ = self.make_v2_candidate()
+        members = sorted(security_evidence_members().items())
+        cases = (
+            (
+                security_evidence_tar(members + [("../escape", b"escape")]),
+                "unsafe path",
+            ),
+            (
+                security_evidence_tar(members + [members[0]]),
+                "duplicate path",
+            ),
+            (
+                security_evidence_tar(
+                    members,
+                    link=("grype/latest", "postgresql.grype.json"),
+                ),
+                "non-regular entry",
+            ),
+            (
+                security_evidence_tar(
+                    members + [("metadata/unexpected.json", b"{}")]
+                ),
+                "unexpected top-level structure",
+            ),
+            (
+                security_evidence_tar(
+                    members + [("grype/unexpected.json", b"{}")]
+                ),
+                "unexpected member",
+            ),
+        )
+        for payload, message in cases:
+            with self.subTest(message=message):
+                self.replace_security_evidence(candidate, bundle_root, payload)
+                with self.assertRaisesRegex(self.module.CandidateError, message):
+                    self.module.validate_candidate_manifest(
+                        candidate,
+                        bundle_root=bundle_root,
+                        now=self.now,
+                    )
+
+    def test_v2_security_evidence_archive_enforces_resource_bounds(self) -> None:
+        candidate, _, bundle_root, _ = self.make_v2_candidate()
+        for limit, message in (
+            ("SECURITY_EVIDENCE_MAX_ARCHIVE_SIZE", "archive size"),
+            ("SECURITY_EVIDENCE_MAX_ENTRY_SIZE", "entry .* size bound"),
+            ("SECURITY_EVIDENCE_MAX_TOTAL_SIZE", "total size bound"),
+            ("SECURITY_EVIDENCE_MAX_MEMBERS", "too many entries"),
+        ):
+            with self.subTest(limit=limit):
+                with (
+                    mock.patch.object(self.module, limit, 1),
+                    self.assertRaisesRegex(self.module.CandidateError, message),
+                ):
+                    self.module.validate_candidate_manifest(
+                        candidate,
+                        bundle_root=bundle_root,
+                        now=self.now,
+                    )
+
+    def test_v2_security_evidence_archive_rejects_unbound_contents(self) -> None:
+        candidate, _, bundle_root, _ = self.make_v2_candidate()
+        base = security_evidence_members()
+
+        invalid_digest = dict(base)
+        invalid_digest["images/postgresql.digest"] = (
+            b"docker.io/library/postgres:latest\n"
+        )
+
+        unreviewed_digest = dict(base)
+        unreviewed_digest["images/postgresql.digest"] = (
+            b"docker.io/library/postgres@sha256:" + b"9" * 64 + b"\n"
+        )
+
+        unbound_spdx = dict(base)
+        spdx = json.loads(unbound_spdx["image-sbom/postgresql.spdx.json"])
+        spdx["documentDescribes"] = []
+        unbound_spdx["image-sbom/postgresql.spdx.json"] = json_bytes(spdx)
+
+        incomplete_verdict = dict(base)
+        verdict = json.loads(incomplete_verdict["advisory-verdict.json"])
+        verdict["subjects"].remove("postgresql-runtime")
+        incomplete_verdict["advisory-verdict.json"] = json_bytes(verdict)
+
+        substituted_scan = dict(base)
+        scan = json.loads(substituted_scan["grype/registry-notary.grype.json"])
+        scan["substituted"] = True
+        substituted_scan["grype/registry-notary.grype.json"] = json_bytes(scan)
+
+        for members, message in (
+            (invalid_digest, "PostgreSQL digest is not canonical or immutable"),
+            (unreviewed_digest, "does not match the reviewed release image"),
+            (unbound_spdx, "PostgreSQL SPDX subject is not bound"),
+            (incomplete_verdict, "does not cover every runtime"),
+            (substituted_scan, "does not match its scan payload"),
+        ):
+            with self.subTest(message=message):
+                self.replace_security_evidence(
+                    candidate,
+                    bundle_root,
+                    security_evidence_tar(sorted(members.items())),
+                )
+                with self.assertRaisesRegex(self.module.CandidateError, message):
+                    self.module.validate_candidate_manifest(
+                        candidate,
+                        bundle_root=bundle_root,
+                        now=self.now,
+                    )
 
     def test_verify_candidate_cli_accepts_trusted_run_metadata(self) -> None:
         candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
@@ -1002,7 +1338,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                     "--source-sha",
                     SOURCE_SHA,
                     "--workflow-revision",
-                    "b" * 40,
+                    SOURCE_SHA,
                     "--version",
                     "1.2.3",
                     "--release-id",
@@ -1186,7 +1522,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                         "--tag-target",
                         SOURCE_SHA,
                         "--workflow-revision",
-                        "b" * 40,
+                        SOURCE_SHA,
                         "--version",
                         "1.2.3",
                         "--release-id",

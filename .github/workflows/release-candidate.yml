@@ -79,6 +79,10 @@ jobs:
             exit 1
           fi
           workflow_revision="${GITHUB_SHA}"
+          if [[ "${REQUEST_SOURCE_SHA}" != "${workflow_revision}" ]]; then
+            echo "source_sha must equal the canaried workflow revision" >&2
+            exit 1
+          fi
           git fetch --force origin refs/heads/main:refs/remotes/origin/main
           git cat-file -e "${REQUEST_SOURCE_SHA}^{commit}"
           git merge-base --is-ancestor \
@@ -117,6 +121,12 @@ jobs:
               >/dev/null 2>&1; then
             echo "tag ${tag} already exists" >&2
             exit 1
+          else
+            tag_lookup_status=$?
+            if [[ "${tag_lookup_status}" -ne 2 ]]; then
+              echo "cannot prove tag ${tag} is absent: git ls-remote exited ${tag_lookup_status}" >&2
+              exit 1
+            fi
           fi
           release_response="${RUNNER_TEMP}/release-response"
           if gh api --include --silent \
@@ -478,8 +488,74 @@ jobs:
         run: |
           set -euo pipefail
           canonical="inputs/candidate-canonical-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -p candidate/security/{image-sbom,syft,grype}
+          mkdir -p candidate/security/{images,image-sbom,syft,grype,rootfs}
           grype db update
+          grype db status -o json \
+            > candidate/security/grype/grype-db-status.json
+          jq -e 'type == "object" and length > 0' \
+            candidate/security/grype/grype-db-status.json >/dev/null
+          scan_image() {
+            local image_ref="$1"
+            local report="$2"
+            local status db_built db_checksum db_built_epoch now_epoch
+            set +e
+            grype "${image_ref}" -o json > "${report}"
+            status=$?
+            set -e
+            if ! jq -e '
+              type == "object" and
+              (.matches | type == "array") and
+              (.source.type == "image") and
+              (
+                .source.target.userInput
+                | type == "string" and
+                  test("@sha256:[0-9a-f]{64}$")
+              ) and
+              (
+                (.descriptor.db.built // .descriptor.db.status.built)
+                | type == "string"
+              ) and
+              (
+                (.descriptor.db.checksum | type == "string") or
+                (
+                  .descriptor.db.status.from
+                  | type == "string" and
+                    test("checksum=sha256%3A[0-9a-fA-F]{64}")
+                )
+              )
+            ' "${report}" >/dev/null; then
+              echo "Grype did not emit a complete scan report (exit ${status})" >&2
+              exit 1
+            fi
+            if (( status != 0 )); then
+              echo "::warning::Grype exited ${status}; enforcing its complete report through the reviewed advisory policy"
+            fi
+            IFS=$'\t' read -r db_built db_checksum < <(
+              jq -er '
+                [
+                  (.descriptor.db.built // .descriptor.db.status.built),
+                  (
+                    .descriptor.db.checksum //
+                    (
+                      .descriptor.db.status.from
+                      | capture(
+                          "checksum=sha256%3A(?<digest>[0-9a-fA-F]{64})"
+                        ).digest
+                      | ascii_downcase
+                    )
+                  )
+                ] | @tsv
+              ' "${report}"
+            )
+            test -n "${db_checksum}"
+            db_built_epoch="$(date -u -d "${db_built}" +%s)"
+            now_epoch="$(date -u +%s)"
+            if (( db_built_epoch > now_epoch ||
+                  now_epoch - db_built_epoch > 259200 )); then
+              echo "Grype database is future-dated or older than three days" >&2
+              exit 1
+            fi
+          }
           for name in registry-notary registry-relay; do
             candidate_ref="$(tr -d '\n' < "${canonical}/dist/images/${name}.digest")"
             digest="${candidate_ref##*@}"
@@ -492,20 +568,40 @@ jobs:
             syft "${candidate_ref}" \
               -o "spdx-json=candidate/security/image-sbom/${name}.spdx.json" \
               -o "syft-json=candidate/security/syft/${name}.syft.json"
-            set +e
-            grype "${candidate_ref}" \
-              -o json > "candidate/security/grype/${name}.grype.json"
-            grype_status=$?
-            set -e
-            jq -e '
-              type == "object" and
-              (.matches | type == "array") and
-              ((.descriptor.db.built // .descriptor.db.status.built) | type == "string")
-            ' "candidate/security/grype/${name}.grype.json" >/dev/null
-            if (( grype_status != 0 )); then
-              echo "::warning::Grype exited ${grype_status}; policy evaluates the complete report"
-            fi
+            scan_image \
+              "${candidate_ref}" \
+              "candidate/security/grype/${name}.grype.json"
           done
+          postgresql_ref="$(tr -d '\n' < release/registryctl-postgresql-image.ref)"
+          postgresql_digest="${postgresql_ref##*@}"
+          if [[ ! "${postgresql_ref}" =~ ^docker\.io/library/postgres@sha256:[0-9a-f]{64}$ ]] ||
+             [[ "$(crane digest "${postgresql_ref}")" != "${postgresql_digest}" ]]; then
+            echo "Reviewed PostgreSQL runtime is unavailable at its locked digest" >&2
+            exit 1
+          fi
+          printf '%s\n' "${postgresql_ref}" \
+            > candidate/security/images/postgresql.digest
+          syft "${postgresql_ref}" \
+            -o "spdx-json=candidate/security/image-sbom/postgresql.spdx.json" \
+            -o "syft-json=candidate/security/syft/postgresql.syft.json"
+          release/scripts/registry-release bind-spdx-subject \
+            candidate/security/image-sbom/postgresql.spdx.json \
+            --image-name postgresql \
+            --digest-ref "${postgresql_ref}"
+          scan_image \
+            "${postgresql_ref}" \
+            candidate/security/grype/postgresql.grype.json
+          mkdir -p candidate/security/rootfs/postgresql
+          crane export "${postgresql_ref}" - \
+            | tar --extract --file=- \
+                --directory=candidate/security/rootfs/postgresql \
+                --no-same-owner --no-same-permissions
+          if find candidate/security/rootfs/postgresql \
+              \( -type b -o -type c -o -type p -o -type s \) \
+              -print -quit | grep -q .; then
+            echo "Exported PostgreSQL rootfs contains a forbidden special file" >&2
+            exit 1
+          fi
           python3 products/notary/scripts/check_advisory_baselines.py \
             grype candidate/security/grype/registry-notary.grype.json \
             --syft-report candidate/security/syft/registry-notary.syft.json \
@@ -514,10 +610,20 @@ jobs:
             grype candidate/security/grype/registry-relay.grype.json \
             --syft-report candidate/security/syft/registry-relay.syft.json \
             --subject registry-relay-image
+          python3 release/scripts/check_postgresql_advisory_policy.py \
+            candidate/security/grype/postgresql.grype.json \
+            --baseline release/security/postgresql-advisory-baseline.json \
+            --syft-report candidate/security/syft/postgresql.syft.json \
+            --rootfs candidate/security/rootfs/postgresql \
+            --expected-image "${postgresql_ref}"
           jq -n '{
             schema_version: "registry-stack.advisory-verdict.v2",
             verdict: "passed",
-            subjects: ["registry-notary-image", "registry-relay-image"]
+            subjects: [
+              "registry-notary-image",
+              "registry-relay-image",
+              "postgresql-runtime"
+            ]
           }' > candidate/security/advisory-verdict.json
 
       - name: Assemble public payload and run install and authoring smoke
@@ -549,6 +655,7 @@ jobs:
             --notary-digest "${RUNNER_TEMP}/registry-notary.release.digest" \
             --postgresql-ref-file release/registryctl-postgresql-image.ref \
             --tag-target "${{ needs.validate.outputs.source_sha }}" \
+            --source-sha "${{ needs.validate.outputs.source_sha }}" \
             --output \
               "candidate/bundle-root/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json"
           syft dir:candidate/bundle-root \
@@ -556,8 +663,12 @@ jobs:
           tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
             --numeric-owner -czf \
             "candidate/bundle-root/registry-stack-${{ needs.validate.outputs.tag }}-security-evidence.tar.gz" \
-            -C candidate/security image-sbom syft grype advisory-verdict.json
-          cp candidate/security/grype/*.grype.json candidate/bundle-root/
+            -C candidate/security \
+              images image-sbom syft grype advisory-verdict.json
+          for name in registry-notary registry-relay; do
+            cp "candidate/security/grype/${name}.grype.json" \
+              candidate/bundle-root/
+          done
           cp candidate/security/advisory-verdict.json candidate/bundle-root/
           relay_candidate="$(tr -d '\n' < "${canonical}/dist/images/registry-relay.digest")"
           notary_candidate="$(tr -d '\n' < "${canonical}/dist/images/registry-notary.digest")"

@@ -86,6 +86,82 @@ def load_registry_release():
 
 
 class RegistryReleaseTest(unittest.TestCase):
+    def test_candidate_request_requires_current_source_workflow_revision(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        source = "a" * 40
+        context = {
+            "repo": ROOT,
+            "selected": {"data": {"stack": {}}},
+        }
+        with (
+            mock.patch.object(
+                registry_release,
+                "prepare_release_context",
+                return_value=context,
+            ),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value=source,
+            ),
+            mock.patch.object(
+                registry_release,
+                "resolve_commit",
+                return_value=source,
+            ),
+            mock.patch.object(registry_release, "run_checked") as dispatch,
+        ):
+            accepted = registry_release.request_release_candidate(
+                ROOT,
+                "1.2.3",
+                "beta-20",
+                source,
+                "origin/main",
+                "registrystack/registry-stack",
+                print_request=False,
+            )
+
+        self.assertEqual(0, accepted)
+        dispatch.assert_called_once()
+
+        stale_source = "b" * 40
+
+        def resolve(_repo: Path, revision: str, _description: str) -> str:
+            return stale_source if revision == stale_source else source
+
+        with (
+            mock.patch.object(
+                registry_release,
+                "prepare_release_context",
+                return_value=context,
+            ),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value=source,
+            ),
+            mock.patch.object(
+                registry_release,
+                "resolve_commit",
+                side_effect=resolve,
+            ),
+            mock.patch.object(registry_release, "run_checked") as no_dispatch,
+        ):
+            rejected = registry_release.request_release_candidate(
+                ROOT,
+                "1.2.3",
+                "beta-20",
+                stale_source,
+                "origin/main",
+                "registrystack/registry-stack",
+                print_request=False,
+            )
+
+        self.assertEqual(1, rejected)
+        no_dispatch.assert_not_called()
+
     def test_candidate_ancestry_accepts_main_advancement_and_rejects_unreachable_source(
         self,
     ) -> None:
@@ -890,22 +966,23 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("retention-days: 7", candidate_telemetry)
         self.assertIn("retention-days: 7", promotion_telemetry)
 
-    def legacy_release_image_scans_are_policy_enforced_and_preserved(self) -> None:
+    def test_release_image_scans_are_policy_enforced_and_preserved(self) -> None:
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
-        images_job = workflow[workflow.index("\n  verify-candidate:") :]
-
-        scan_step = images_job.index("Scan immutable staging digests")
-        enforcement_step = images_job.index("Enforce advisory policy")
-        upload_step = images_job.index("Upload exact candidate payload")
-        self.assertLess(scan_step, enforcement_step)
-        self.assertLess(enforcement_step, upload_step)
-        scan_body = images_job[scan_step:enforcement_step]
-        self.assertIn("scan_sbom() {", scan_body)
+        assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
+        scan_step = assemble.index("Verify and scan exact candidate images")
+        package_step = assemble.index(
+            "Assemble public payload and run install and authoring smoke"
+        )
+        self.assertLess(scan_step, package_step)
+        scan_body = assemble[scan_step:package_step]
+        self.assertIn("scan_image() {", scan_body)
+        self.assertIn('grype "${image_ref}" -o json > "${report}"', scan_body)
         self.assertIn("set +e", scan_body)
         self.assertIn('status=$?', scan_body)
         self.assertIn('(.matches | type == "array")', scan_body)
+        self.assertIn('(.source.type == "image")', scan_body)
         self.assertIn(
             ".descriptor.db.built // .descriptor.db.status.built",
             scan_body,
@@ -914,7 +991,6 @@ class RegistryReleaseTest(unittest.TestCase):
             'test("checksum=sha256%3A[0-9a-fA-F]{64}")',
             scan_body,
         )
-        self.assertIn("read_db_metadata() {", scan_body)
         self.assertIn(
             "Grype did not emit a complete scan report",
             scan_body,
@@ -923,51 +999,104 @@ class RegistryReleaseTest(unittest.TestCase):
             "enforcing its complete report through the reviewed advisory policy",
             scan_body,
         )
+        self.assertIn("now_epoch - db_built_epoch > 259200", scan_body)
         self.assertIn(
-            "grype dist/candidate/dist/grype/registry-notary.grype.json",
-            images_job,
+            "candidate/security/images/postgresql.digest",
+            scan_body,
         )
         self.assertIn(
-            "grype dist/candidate/dist/grype/registry-relay.grype.json",
-            images_job,
+            "candidate/security/image-sbom/postgresql.spdx.json",
+            scan_body,
         )
-        self.assertIn("dist/candidate/dist/images/postgresql.digest", images_job)
-        self.assertIn("dist/candidate/dist/sbom/postgresql.spdx.json", images_job)
-        self.assertIn("dist/candidate/dist/grype/postgresql.grype.json", images_job)
-        self.assertIn("dist/candidate/dist/rootfs/postgresql", images_job)
-        self.assertIn('crane digest "${postgresql_ref}"', images_job)
-        self.assertIn("--syft-report", images_job)
-        self.assertIn("--rootfs", images_job)
-        postgresql_enforcement = images_job[enforcement_step:upload_step]
+        self.assertIn(
+            "release/scripts/registry-release bind-spdx-subject",
+            scan_body,
+        )
+        self.assertIn('--digest-ref "${postgresql_ref}"', scan_body)
+        self.assertIn(
+            "candidate/security/syft/postgresql.syft.json",
+            scan_body,
+        )
+        self.assertIn(
+            "candidate/security/grype/postgresql.grype.json",
+            scan_body,
+        )
+        self.assertIn("candidate/security/rootfs/postgresql", scan_body)
+        self.assertIn('crane digest "${postgresql_ref}"', scan_body)
         self.assertIn(
             "python3 release/scripts/check_postgresql_advisory_policy.py",
-            postgresql_enforcement,
+            scan_body,
         )
         self.assertIn(
-            "dist/candidate/dist/grype/postgresql.grype.json",
-            postgresql_enforcement,
+            "candidate/security/grype/postgresql.grype.json",
+            scan_body,
         )
         self.assertIn(
             "--baseline release/security/postgresql-advisory-baseline.json",
-            postgresql_enforcement,
+            scan_body,
         )
         self.assertIn(
-            "--syft-report dist/candidate/dist/sbom/postgresql.syft.json",
-            postgresql_enforcement,
+            "--syft-report candidate/security/syft/postgresql.syft.json",
+            scan_body,
         )
         self.assertIn(
-            "--rootfs dist/candidate/dist/rootfs/postgresql",
-            postgresql_enforcement,
+            "--rootfs candidate/security/rootfs/postgresql",
+            scan_body,
         )
-        self.assertIn('--expected-image "${postgresql_ref}"', postgresql_enforcement)
-        postgresql_ref_read = postgresql_enforcement.index(
+        self.assertIn('--expected-image "${postgresql_ref}"', scan_body)
+        postgresql_ref_read = scan_body.index(
             'postgresql_ref="$(tr -d \'\\n\' < release/registryctl-postgresql-image.ref)"'
         )
-        expected_image = postgresql_enforcement.index(
+        expected_image = scan_body.index(
             '--expected-image "${postgresql_ref}"'
         )
         self.assertLess(postgresql_ref_read, expected_image)
-        self.assertIn("retention-days: 7", images_job[upload_step:])
+        self.assertIn('"postgresql-runtime"', scan_body)
+        package_body = assemble[package_step:]
+        self.assertIn(
+            "images image-sbom syft grype advisory-verdict.json",
+            package_body,
+        )
+        self.assertNotIn(
+            "cp candidate/security/grype/*.grype.json",
+            package_body,
+        )
+
+    def test_postgresql_scan_workflow_contract_detects_structural_mutations(
+        self,
+    ) -> None:
+        workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
+            encoding="utf-8"
+        )
+        assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
+
+        def assert_contract(text: str) -> None:
+            for fragment in (
+                'grype "${image_ref}" -o json > "${report}"',
+                "Grype did not emit a complete scan report",
+                "now_epoch - db_built_epoch > 259200",
+                '[[ "$(crane digest "${postgresql_ref}")"'
+                ' != "${postgresql_digest}" ]]',
+                "python3 release/scripts/check_postgresql_advisory_policy.py",
+                '"postgresql-runtime"',
+                "images image-sbom syft grype advisory-verdict.json",
+            ):
+                self.assertIn(fragment, text)
+
+        assert_contract(assemble)
+        for fragment in (
+            'grype "${image_ref}" -o json > "${report}"',
+            "Grype did not emit a complete scan report",
+            "now_epoch - db_built_epoch > 259200",
+            '[[ "$(crane digest "${postgresql_ref}")"'
+            ' != "${postgresql_digest}" ]]',
+            "python3 release/scripts/check_postgresql_advisory_policy.py",
+            '"postgresql-runtime"',
+            "images image-sbom syft grype advisory-verdict.json",
+        ):
+            with self.subTest(fragment=fragment):
+                with self.assertRaises(AssertionError):
+                    assert_contract(assemble.replace(fragment, "", 1))
 
     def test_postgresql_advisory_policy_fails_closed(self) -> None:
         digest = "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
@@ -2022,6 +2151,114 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("missing archived docset v0.8.0", result.stderr)
 
+    def test_validate_docsets_accepts_historical_and_dual_tree_archive_locks(
+        self,
+    ) -> None:
+        shapes = (
+            {
+                "bundle_sha256": "a" * 64,
+                "tree_sha256": "b" * 64,
+            },
+            {
+                "bundle_sha256": "a" * 64,
+                "root_tree_sha256": "b" * 64,
+                "version_tree_sha256": "c" * 64,
+            },
+        )
+        for entry in shapes:
+            with self.subTest(fields=sorted(entry)), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest_dir, docsets = write_docset_fixture(root)
+                archive_lock = root / "archive-lock.yaml"
+                archive_lock.write_text(
+                    yaml.safe_dump(
+                        {
+                            "schema_version": "registry-docs.archive-lock.v1",
+                            "archives": {"v0.8.0": entry},
+                        },
+                        sort_keys=False,
+                    ),
+                    encoding="utf-8",
+                )
+
+                result = run_tool(
+                    "validate-docsets",
+                    "--manifest-dir",
+                    str(manifest_dir),
+                    "--docsets",
+                    str(docsets),
+                    "--archive-lock",
+                    str(archive_lock),
+                )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_validate_docsets_rejects_mixed_partial_and_open_archive_locks(
+        self,
+    ) -> None:
+        invalid_entries = (
+            (
+                {
+                    "bundle_sha256": "a" * 64,
+                    "root_tree_sha256": "b" * 64,
+                },
+                "must contain exactly",
+            ),
+            (
+                {
+                    "bundle_sha256": "a" * 64,
+                    "tree_sha256": "b" * 64,
+                    "root_tree_sha256": "c" * 64,
+                    "version_tree_sha256": "d" * 64,
+                },
+                "must contain exactly",
+            ),
+            (
+                {
+                    "bundle_sha256": "a" * 64,
+                    "tree_sha256": "b" * 64,
+                    "telemetry": "not promotion data",
+                },
+                "unknown field telemetry",
+            ),
+            (
+                {
+                    "bundle_sha256": "a" * 64,
+                    "root_tree_sha256": "b" * 64,
+                    "version_tree_sha256": "INVALID",
+                },
+                "version_tree_sha256 must be 64 lowercase hex characters",
+            ),
+        )
+        for entry, expected in invalid_entries:
+            with self.subTest(fields=sorted(entry)), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                manifest_dir, docsets = write_docset_fixture(root)
+                archive_lock = root / "archive-lock.yaml"
+                archive_lock.write_text(
+                    yaml.safe_dump(
+                        {
+                            "schema_version": "registry-docs.archive-lock.v1",
+                            "archives": {"v0.8.0": entry},
+                        },
+                        sort_keys=False,
+                    ),
+                    encoding="utf-8",
+                )
+
+                result = run_tool(
+                    "validate-docsets",
+                    "--manifest-dir",
+                    str(manifest_dir),
+                    "--docsets",
+                    str(docsets),
+                    "--archive-lock",
+                    str(archive_lock),
+                )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn(expected, result.stderr)
+
     def test_audit_import_map(self) -> None:
         result = run_tool("audit", "release/manifests/import-map-2026-06-24.yaml")
         self.assertEqual(0, result.returncode, result.stderr)
@@ -2195,6 +2432,106 @@ class RegistryReleaseTest(unittest.TestCase):
             },
             document,
         )
+
+    def test_active_manifest_validates_and_renders_image_lock_from_explicit_source(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = write_manifest(root, version="0.14.0")
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            data["stack"].pop("source_ref")
+            data["stack"].pop("status")
+            manifest.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+            relay_digest = root / "registry-relay.digest"
+            notary_digest = root / "registry-notary.digest"
+            relay_digest.write_text(
+                f"ghcr.io/registrystack/registry-relay@{IMAGE_DIGEST}\n",
+                encoding="utf-8",
+            )
+            notary_digest.write_text(
+                f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}\n",
+                encoding="utf-8",
+            )
+            source_sha = "c" * 40
+            output = root / "registryctl-v0.14.0-image-lock.json"
+
+            validated = run_tool("validate", str(manifest))
+            rendered = run_tool(
+                "render-registryctl-image-lock",
+                str(manifest),
+                "--relay-digest",
+                str(relay_digest),
+                "--notary-digest",
+                str(notary_digest),
+                "--postgresql-ref-file",
+                str(POSTGRESQL_REF_PATH),
+                "--source-sha",
+                source_sha,
+                "--tag-target",
+                source_sha,
+                "--output",
+                str(output),
+            )
+            document = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, validated.returncode, validated.stderr)
+        self.assertEqual(0, rendered.returncode, rendered.stderr)
+        self.assertEqual(source_sha, document["manifest_source_ref"])
+        self.assertEqual(source_sha, document["tag_target"])
+
+    def test_active_manifest_image_lock_requires_matching_explicit_source(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = write_manifest(root, version="0.14.0")
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            data["stack"].pop("source_ref")
+            data["stack"].pop("status")
+            manifest.write_text(
+                yaml.safe_dump(data, sort_keys=False),
+                encoding="utf-8",
+            )
+            relay_digest = root / "registry-relay.digest"
+            notary_digest = root / "registry-notary.digest"
+            for path, name in (
+                (relay_digest, "registry-relay"),
+                (notary_digest, "registry-notary"),
+            ):
+                path.write_text(
+                    f"ghcr.io/registrystack/{name}@{IMAGE_DIGEST}\n",
+                    encoding="utf-8",
+                )
+            base = [
+                "render-registryctl-image-lock",
+                str(manifest),
+                "--relay-digest",
+                str(relay_digest),
+                "--notary-digest",
+                str(notary_digest),
+                "--postgresql-ref-file",
+                str(POSTGRESQL_REF_PATH),
+                "--tag-target",
+                "c" * 40,
+                "--output",
+                str(root / "registryctl-v0.14.0-image-lock.json"),
+            ]
+
+            missing = run_tool(*base)
+            mismatch = run_tool(
+                *base,
+                "--source-sha",
+                "d" * 40,
+            )
+
+        self.assertNotEqual(0, missing.returncode)
+        self.assertIn("requires --source-sha", missing.stderr)
+        self.assertNotEqual(0, mismatch.returncode)
+        self.assertIn("tag target must equal --source-sha", mismatch.stderr)
 
     def test_registryctl_image_lock_release_version_gate(self) -> None:
         rejected = run_tool(

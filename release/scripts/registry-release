@@ -216,6 +216,7 @@ def render_registryctl_image_lock(
     notary_digest_path: Path,
     postgresql_ref_path: Path | None,
     tag_target: str,
+    source_sha: str | None,
     output: Path,
 ) -> int:
     try:
@@ -228,11 +229,36 @@ def render_registryctl_image_lock(
         release_tag = str(stack.get("source_tag", ""))
         if release_tag != f"v{version}":
             raise ValueError(f"manifest stack.source_tag must be v{version}")
-        manifest_source_ref = str(stack.get("source_ref", ""))
-        if HEX40.fullmatch(manifest_source_ref) is None:
-            raise ValueError("manifest stack.source_ref must be 40 lowercase hexadecimal characters")
+        has_source_ref = "source_ref" in stack
+        has_status = "status" in stack
+        if has_source_ref != has_status:
+            raise ValueError(
+                "manifest stack.source_ref and stack.status must both be present "
+                "for a historical manifest or both omitted for an active manifest"
+            )
+        if has_source_ref:
+            manifest_source_ref = str(stack.get("source_ref", ""))
+            if HEX40.fullmatch(manifest_source_ref) is None:
+                raise ValueError(
+                    "manifest stack.source_ref must be 40 lowercase hexadecimal characters"
+                )
+            if source_sha is not None and source_sha != manifest_source_ref:
+                raise ValueError(
+                    "--source-sha must match historical manifest stack.source_ref"
+                )
+        else:
+            if source_sha is None or HEX40.fullmatch(source_sha) is None:
+                raise ValueError(
+                    "active release manifest requires --source-sha with 40 "
+                    "lowercase hexadecimal characters"
+                )
+            manifest_source_ref = source_sha
         if HEX40.fullmatch(tag_target) is None:
             raise ValueError("tag target must be 40 lowercase hexadecimal characters")
+        if not has_source_ref and tag_target != manifest_source_ref:
+            raise ValueError(
+                "active release image lock tag target must equal --source-sha"
+            )
         expected_name = f"registryctl-v{version}-image-lock.json"
         if output.name != expected_name:
             raise ValueError(f"image lock output filename must be {expected_name}")
@@ -554,12 +580,32 @@ def validate_docsets(
         if not isinstance(entry, dict):
             errors.append(f"archive-lock.yaml {docset_id} entry must be an object")
             continue
-        unknown = sorted(set(entry) - {"bundle_sha256", "tree_sha256"})
+        fields = set(entry)
+        historical_fields = {"bundle_sha256", "tree_sha256"}
+        dual_tree_fields = {
+            "bundle_sha256",
+            "root_tree_sha256",
+            "version_tree_sha256",
+        }
+        supported_fields = historical_fields | dual_tree_fields
+        unknown = sorted(fields - supported_fields)
         if unknown:
             errors.append(
                 f"archive-lock.yaml {docset_id} has unknown field {unknown[0]}"
             )
-        for field in ("bundle_sha256", "tree_sha256"):
+            continue
+        if fields == historical_fields:
+            digest_fields = sorted(historical_fields)
+        elif fields == dual_tree_fields:
+            digest_fields = sorted(dual_tree_fields)
+        else:
+            errors.append(
+                f"archive-lock.yaml {docset_id} must contain exactly "
+                "bundle_sha256 and tree_sha256, or bundle_sha256, "
+                "root_tree_sha256, and version_tree_sha256"
+            )
+            continue
+        for field in digest_fields:
             if SHA256_HEX.fullmatch(str(entry.get(field, ""))) is None:
                 errors.append(
                     f"archive-lock.yaml {docset_id}.{field} must be 64 lowercase hex characters"
@@ -2532,10 +2578,10 @@ def request_release_candidate(
                 f"trusted {default_branch} does not match protected default branch "
                 f"{remote_default}"
             )
-        if not is_ancestor(context["repo"], resolved_source, remote_default):
+        if resolved_source != remote_default:
             raise ReleasePlanError(
-                f"candidate source {resolved_source} is not reachable from protected "
-                f"default branch {remote_default}"
+                f"candidate source {resolved_source} must equal the protected "
+                f"default-branch workflow revision {remote_default} when requested"
             )
         if (
             "source_ref" in selected_stack
@@ -3341,6 +3387,7 @@ def main() -> int:
     image_lock_parser.add_argument("--notary-digest", type=Path, required=True)
     image_lock_parser.add_argument("--postgresql-ref-file", type=Path)
     image_lock_parser.add_argument("--tag-target", required=True)
+    image_lock_parser.add_argument("--source-sha")
     image_lock_parser.add_argument("--output", type=Path, required=True)
     image_lock_version_parser = subparsers.add_parser(
         "verify-registryctl-image-lock-release-version"
@@ -3395,6 +3442,7 @@ def main() -> int:
             args.notary_digest,
             args.postgresql_ref_file,
             args.tag_target,
+            args.source_sha,
             args.output,
         )
     if args.command == "verify-registryctl-image-lock-release-version":

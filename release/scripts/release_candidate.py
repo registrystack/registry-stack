@@ -18,7 +18,7 @@ import sys
 import tarfile
 import zipfile
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 
@@ -30,6 +30,9 @@ REPOSITORY = "registrystack/registry-stack"
 WORKFLOW_PATH = ".github/workflows/release-candidate.yml"
 CANARY_WORKFLOW_PATH = ".github/workflows/release-canary.yml"
 WORKFLOW_REF = "refs/heads/main"
+POSTGRESQL_REF_PATH = (
+    Path(__file__).resolve().parent.parent / "registryctl-postgresql-image.ref"
+)
 MAX_PROMOTION_AGE = timedelta(hours=72)
 V2_MAX_PROMOTION_AGE = timedelta(hours=24)
 MAX_CANARY_AGE = timedelta(hours=24)
@@ -95,6 +98,33 @@ PAYLOAD_KINDS = {
     "sbom",
     "security-evidence",
 }
+SECURITY_EVIDENCE_MAX_ARCHIVE_SIZE = 128 * 1024 * 1024
+SECURITY_EVIDENCE_MAX_ENTRY_SIZE = 64 * 1024 * 1024
+SECURITY_EVIDENCE_MAX_TOTAL_SIZE = 256 * 1024 * 1024
+SECURITY_EVIDENCE_MAX_MEMBERS = 64
+SECURITY_EVIDENCE_DIRECTORIES = {
+    "images",
+    "image-sbom",
+    "syft",
+    "grype",
+}
+SECURITY_EVIDENCE_REQUIRED_FILES = {
+    "images/postgresql.digest",
+    "image-sbom/registry-notary.spdx.json",
+    "image-sbom/registry-relay.spdx.json",
+    "image-sbom/postgresql.spdx.json",
+    "syft/registry-notary.syft.json",
+    "syft/registry-relay.syft.json",
+    "syft/postgresql.syft.json",
+    "grype/registry-notary.grype.json",
+    "grype/registry-relay.grype.json",
+    "grype/postgresql.grype.json",
+    "grype/grype-db-status.json",
+    "advisory-verdict.json",
+}
+POSTGRESQL_DIGEST_REF = re.compile(
+    r"^docker\.io/library/postgres@sha256:[0-9a-f]{64}$"
+)
 
 
 class CandidateError(ValueError):
@@ -587,6 +617,317 @@ def _verify_candidate_files(
             raise CandidateError(f"candidate bundle file size mismatch: {name}")
 
 
+def _security_evidence_member_name(value: str) -> str:
+    """Return one canonical archive path without host-path interpretation."""
+
+    path = PurePosixPath(value)
+    if (
+        not value
+        or "\\" in value
+        or value.startswith("/")
+        or value.endswith("/")
+        or len(value) > 512
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or path.as_posix() != value
+    ):
+        raise CandidateError(
+            f"security evidence archive has unsafe path {value!r}"
+        )
+    return value
+
+
+def _security_evidence_json(contents: dict[str, bytes], name: str) -> dict[str, Any]:
+    try:
+        document = json.loads(contents[name])
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise CandidateError(
+            f"security evidence member {name!r} is not valid JSON"
+        ) from exc
+    if not isinstance(document, dict) or not document:
+        raise CandidateError(
+            f"security evidence member {name!r} must be a non-empty JSON object"
+        )
+    return document
+
+
+def _validate_image_report(
+    document: dict[str, Any],
+    *,
+    name: str,
+    expected_ref: str,
+    report_kind: str,
+) -> None:
+    source = document.get("source")
+    target = source.get("target") if isinstance(source, dict) else None
+    if (
+        not isinstance(source, dict)
+        or source.get("type") != "image"
+        or not isinstance(target, dict)
+        or target.get("userInput") != expected_ref
+    ):
+        raise CandidateError(
+            f"security evidence member {name!r} is not bound to {expected_ref}"
+        )
+    collection = "artifacts" if report_kind == "syft" else "matches"
+    if not isinstance(document.get(collection), list):
+        raise CandidateError(
+            f"security evidence member {name!r} must contain a {collection} array"
+        )
+    if report_kind == "grype":
+        descriptor = document.get("descriptor")
+        database = descriptor.get("db") if isinstance(descriptor, dict) else None
+        status = database.get("status") if isinstance(database, dict) else None
+        built = (
+            database.get("built")
+            if isinstance(database, dict)
+            else None
+        ) or (status.get("built") if isinstance(status, dict) else None)
+        checksum = (
+            database.get("checksum") if isinstance(database, dict) else None
+        )
+        source_url = status.get("from") if isinstance(status, dict) else None
+        has_checksum = isinstance(checksum, str) and bool(checksum)
+        if not has_checksum and isinstance(source_url, str):
+            has_checksum = (
+                re.search(
+                    r"checksum=sha256%3A[0-9a-fA-F]{64}",
+                    source_url,
+                )
+                is not None
+            )
+        if not isinstance(built, str) or not built or not has_checksum:
+            raise CandidateError(
+                f"security evidence member {name!r} lacks Grype database metadata"
+            )
+
+
+def validate_security_evidence_archive(
+    path: Path,
+    *,
+    product_image_refs: dict[str, str],
+    product_scan_sha256: dict[str, str],
+    advisory_sha256: str,
+) -> None:
+    """Inspect the authenticated evidence tar without extracting it.
+
+    The compressed archive is attacker-controlled promotion input even though
+    its hash is bound by the candidate manifest. Resource and structure bounds
+    keep validation fail closed without materializing archive paths.
+    """
+
+    if path.is_symlink() or not path.is_file():
+        raise CandidateError(
+            "security evidence payload must be a regular non-symlink file"
+        )
+    archive_size = path.stat().st_size
+    if (
+        archive_size <= 0
+        or archive_size > SECURITY_EVIDENCE_MAX_ARCHIVE_SIZE
+    ):
+        raise CandidateError("security evidence archive size exceeds its bound")
+
+    seen: set[str] = set()
+    top_level: set[str] = set()
+    contents: dict[str, bytes] = {}
+    total_size = 0
+    member_count = 0
+    expected_top_level = SECURITY_EVIDENCE_DIRECTORIES | {
+        "advisory-verdict.json"
+    }
+    try:
+        with tarfile.open(path, mode="r:gz") as archive:
+            for member in archive:
+                member_count += 1
+                if member_count > SECURITY_EVIDENCE_MAX_MEMBERS:
+                    raise CandidateError(
+                        "security evidence archive has too many entries"
+                    )
+                name = _security_evidence_member_name(member.name)
+                if name in seen:
+                    raise CandidateError(
+                        f"security evidence archive has duplicate path {name!r}"
+                    )
+                seen.add(name)
+                parts = PurePosixPath(name).parts
+                top_level.add(parts[0])
+                if parts[0] not in expected_top_level:
+                    raise CandidateError(
+                        "security evidence archive has unexpected top-level "
+                        f"structure {parts[0]!r}"
+                    )
+                if member.isdir():
+                    if (
+                        member.size != 0
+                        or len(parts) != 1
+                        or name not in SECURITY_EVIDENCE_DIRECTORIES
+                    ):
+                        raise CandidateError(
+                            "security evidence archive has unexpected directory "
+                            f"{name!r}"
+                        )
+                    continue
+                if member.type not in {tarfile.REGTYPE, tarfile.AREGTYPE}:
+                    raise CandidateError(
+                        f"security evidence archive has non-regular entry {name!r}"
+                    )
+                if name not in SECURITY_EVIDENCE_REQUIRED_FILES:
+                    raise CandidateError(
+                        f"security evidence archive has unexpected member {name!r}"
+                    )
+                if member.size <= 0:
+                    raise CandidateError(
+                        f"security evidence archive has empty entry {name!r}"
+                    )
+                if member.size > SECURITY_EVIDENCE_MAX_ENTRY_SIZE:
+                    raise CandidateError(
+                        f"security evidence entry {name!r} exceeds its size bound"
+                    )
+                total_size += member.size
+                if total_size > SECURITY_EVIDENCE_MAX_TOTAL_SIZE:
+                    raise CandidateError(
+                        "security evidence archive exceeds its total size bound"
+                    )
+                source = archive.extractfile(member)
+                if source is None:
+                    raise CandidateError(
+                        f"security evidence archive cannot read {name!r}"
+                    )
+                payload = source.read(SECURITY_EVIDENCE_MAX_ENTRY_SIZE + 1)
+                if len(payload) != member.size:
+                    raise CandidateError(
+                        f"security evidence archive truncated member {name!r}"
+                    )
+                contents[name] = payload
+    except (OSError, tarfile.TarError) as exc:
+        raise CandidateError(
+            f"cannot inspect security evidence archive: {exc}"
+        ) from exc
+
+    missing = SECURITY_EVIDENCE_REQUIRED_FILES - set(contents)
+    if missing:
+        raise CandidateError(
+            f"security evidence archive is incomplete: missing {sorted(missing)!r}"
+        )
+    if top_level != expected_top_level:
+        raise CandidateError(
+            "security evidence archive has unexpected top-level structure: "
+            f"missing={sorted(expected_top_level - top_level)!r} "
+            f"unexpected={sorted(top_level - expected_top_level)!r}"
+        )
+
+    try:
+        postgresql_ref = contents["images/postgresql.digest"].decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise CandidateError(
+            "security evidence PostgreSQL digest is not UTF-8 text"
+        ) from exc
+    canonical_postgresql_ref = postgresql_ref.removesuffix("\n")
+    if (
+        POSTGRESQL_DIGEST_REF.fullmatch(canonical_postgresql_ref) is None
+        or postgresql_ref != canonical_postgresql_ref + "\n"
+    ):
+        raise CandidateError(
+            "security evidence PostgreSQL digest is not canonical or immutable"
+        )
+    try:
+        reviewed_postgresql_ref = POSTGRESQL_REF_PATH.read_text(
+            encoding="utf-8"
+        )
+    except (OSError, UnicodeError) as exc:
+        raise CandidateError(
+            "cannot read the reviewed PostgreSQL release image reference"
+        ) from exc
+    if (
+        reviewed_postgresql_ref
+        != reviewed_postgresql_ref.removesuffix("\n") + "\n"
+        or canonical_postgresql_ref != reviewed_postgresql_ref.removesuffix("\n")
+    ):
+        raise CandidateError(
+            "security evidence PostgreSQL digest does not match the reviewed "
+            "release image reference"
+        )
+    postgresql_ref = canonical_postgresql_ref
+
+    expected_refs = {**product_image_refs, "postgresql": postgresql_ref}
+    for image, expected_ref in expected_refs.items():
+        spdx_name = f"image-sbom/{image}.spdx.json"
+        spdx = _security_evidence_json(contents, spdx_name)
+        if spdx.get("spdxVersion") != "SPDX-2.3" or not isinstance(
+            spdx.get("packages"), list
+        ):
+            raise CandidateError(
+                f"security evidence member {spdx_name!r} is not SPDX 2.3 JSON"
+            )
+        if image == "postgresql":
+            subject_id = "SPDXRef-RegistryStack-postgresql-digest-subject"
+            described = spdx.get("documentDescribes")
+            subject_packages = [
+                package
+                for package in spdx["packages"]
+                if isinstance(package, dict)
+                and package.get("SPDXID") == subject_id
+            ]
+            if (
+                not isinstance(described, list)
+                or subject_id not in described
+                or len(subject_packages) != 1
+                or subject_packages[0].get("name") != postgresql_ref
+                or f"pkg:oci/postgresql@{postgresql_ref.rsplit('@', 1)[1]}"
+                not in json.dumps(subject_packages[0], sort_keys=True)
+            ):
+                raise CandidateError(
+                    "security evidence PostgreSQL SPDX subject is not bound "
+                    "to the reviewed digest"
+                )
+        for report_kind in ("syft", "grype"):
+            report_name = f"{report_kind}/{image}.{report_kind}.json"
+            report = _security_evidence_json(contents, report_name)
+            _validate_image_report(
+                report,
+                name=report_name,
+                expected_ref=expected_ref,
+                report_kind=report_kind,
+            )
+
+    for image, expected_sha256 in product_scan_sha256.items():
+        name = f"grype/{image}.grype.json"
+        if hashlib.sha256(contents[name]).hexdigest() != expected_sha256:
+            raise CandidateError(
+                f"security evidence member {name!r} does not match its scan payload"
+            )
+
+    database_status = _security_evidence_json(
+        contents, "grype/grype-db-status.json"
+    )
+    if not database_status:
+        raise CandidateError("security evidence Grype database status is empty")
+
+    advisory = _security_evidence_json(contents, "advisory-verdict.json")
+    expected_subjects = {
+        "registry-notary-image",
+        "registry-relay-image",
+        "postgresql-runtime",
+    }
+    subjects = advisory.get("subjects")
+    if (
+        advisory.get("schema_version") != "registry-stack.advisory-verdict.v2"
+        or advisory.get("verdict") != "passed"
+        or not isinstance(subjects, list)
+        or any(not isinstance(subject, str) for subject in subjects)
+        or len(subjects) != len(expected_subjects)
+        or set(subjects) != expected_subjects
+    ):
+        raise CandidateError(
+            "security evidence advisory verdict does not cover every runtime"
+        )
+    if hashlib.sha256(contents["advisory-verdict.json"]).hexdigest() != (
+        advisory_sha256
+    ):
+        raise CandidateError(
+            "security evidence advisory verdict does not match its payload"
+        )
+
+
 def validate_candidate_manifest(
     document: Any,
     *,
@@ -637,6 +978,10 @@ def validate_candidate_manifest(
     workflow_revision = require_sha(
         workflow["revision"], "workflow.revision"
     )
+    if source_sha != workflow_revision:
+        raise CandidateError(
+            "active candidate release.source_sha must equal workflow.revision"
+        )
     run_id = require_positive_integer(workflow["run_id"], "workflow.run_id")
     run_attempt = require_positive_integer(
         workflow["run_attempt"], "workflow.run_attempt"
@@ -718,7 +1063,7 @@ def validate_candidate_manifest(
             raise CandidateError(f"candidate file name is duplicated: {name}")
         files[name] = (digest, record["size"])
         payload_by_name[name] = record
-    for singleton_kind in ("docs", "sbom"):
+    for singleton_kind in ("docs", "sbom", "security-evidence"):
         matches = [
             record for record in payloads if record["kind"] == singleton_kind
         ]
@@ -726,6 +1071,19 @@ def validate_candidate_manifest(
             raise CandidateError(
                 f"payloads must contain exactly one {singleton_kind} payload"
             )
+    expected_evidence_name = (
+        f"registry-stack-v{version}-security-evidence.tar.gz"
+    )
+    evidence_payload = next(
+        record
+        for record in payloads
+        if record["kind"] == "security-evidence"
+    )
+    if evidence_payload["name"] != expected_evidence_name:
+        raise CandidateError(
+            "security-evidence payload name must be "
+            f"{expected_evidence_name}"
+        )
 
     images = require_list(manifest["images"], "images")
     if not images:
@@ -733,6 +1091,7 @@ def validate_candidate_manifest(
     image_names: set[str] = set()
     final_refs: set[str] = set()
     candidate_refs: set[str] = set()
+    product_image_refs: dict[str, str] = {}
     for index, value in enumerate(images):
         label = f"images[{index}]"
         image = require_object(
@@ -761,6 +1120,7 @@ def validate_candidate_manifest(
             raise CandidateError("candidate and final image refs must be unique")
         candidate_refs.add(candidate_ref)
         final_refs.add(final_ref)
+        product_image_refs[name] = candidate_ref
     if image_names != IMAGE_NAMES:
         raise CandidateError(
             f"image inventory must be exactly {sorted(IMAGE_NAMES)!r}"
@@ -779,6 +1139,7 @@ def validate_candidate_manifest(
             raise CandidateError(f"{kind}.sha256 must match its payload hash")
 
     scan_images: set[str] = set()
+    product_scan_sha256: dict[str, str] = {}
     for index, value in enumerate(require_list(manifest["scans"], "scans")):
         label = f"scans[{index}]"
         record, name, digest = _validate_file_record(
@@ -795,6 +1156,7 @@ def validate_candidate_manifest(
         if name in files:
             raise CandidateError(f"candidate file name is duplicated: {name}")
         files[name] = (digest, None)
+        product_scan_sha256[image] = digest
     if scan_images != image_names:
         raise CandidateError("every candidate image must have exactly one passed scan")
 
@@ -829,6 +1191,17 @@ def validate_candidate_manifest(
         if bundle_path.stat().st_size != bundle["size"]:
             raise CandidateError("candidate bundle size mismatch")
     _verify_candidate_files(files, bundle_root=bundle_root)
+    if promotion and bundle_root is None:
+        raise CandidateError(
+            "promotion requires an extracted candidate bundle root"
+        )
+    if bundle_root is not None:
+        validate_security_evidence_archive(
+            bundle_root / expected_evidence_name,
+            product_image_refs=product_image_refs,
+            product_scan_sha256=product_scan_sha256,
+            advisory_sha256=advisory_digest,
+        )
 
     expectations = (
         ("source SHA", expected_source_sha, source_sha),

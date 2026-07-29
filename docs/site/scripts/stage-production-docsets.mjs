@@ -11,6 +11,7 @@ import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  ARCHIVE_BUNDLE_SCHEMA,
   inspectArchiveBundle,
   treeDigest,
 } from './archive-bundle.mjs';
@@ -225,8 +226,14 @@ export async function stageProductionDocsets({
     expectedTreeSha256: null,
   });
   try {
-    const siteRoot = resolve(inspected.extraction, 'site');
-    await rejectReleaseTreeCollisions(siteRoot);
+    if (inspected.metadata.schema_version !== ARCHIVE_BUNDLE_SCHEMA) {
+      throw new Error(
+        `released archive ${inputs.releasedTag} must contain separately bound root and version trees`,
+      );
+    }
+    const rootTree = inspected.root_path;
+    const versionTree = inspected.version_path;
+    await rejectReleaseTreeCollisions(rootTree);
     for (const required of [
       'index.html',
       'index.md',
@@ -235,10 +242,14 @@ export async function stageProductionDocsets({
       'pagefind/pagefind.js',
     ]) {
       await requireRegularFile(
-        resolve(siteRoot, required),
+        resolve(rootTree, required),
         `released archive ${required}`,
       );
     }
+    await requireRegularFile(
+      resolve(versionTree, 'index.html'),
+      'released version archive index.html',
+    );
 
     const versionRoot = resolve(distRoot, `v/${inputs.version}`);
     const versionParent = resolve(distRoot, 'v');
@@ -248,20 +259,20 @@ export async function stageProductionDocsets({
     await rm(versionRoot, { recursive: true, force: true });
     await mkdir(dirname(versionRoot), { recursive: true });
     await requireRealDirectory(versionParent, 'archive version root');
-    await cp(siteRoot, versionRoot, {
+    await cp(versionTree, versionRoot, {
       recursive: true,
       dereference: false,
       force: false,
       errorOnExist: true,
       preserveTimestamps: false,
     });
-    if (await treeDigest(versionRoot) !== inspected.tree_sha256) {
+    if (await treeDigest(versionRoot) !== inspected.version_tree_sha256) {
       throw new Error(`versioned release copy ${inputs.releasedTag} changed during staging`);
     }
 
-    const rootEntries = await copyReleaseToRoot(siteRoot, distRoot);
-    for (const source of await collectFiles(siteRoot)) {
-      const rel = relative(siteRoot, source);
+    const rootEntries = await copyReleaseToRoot(rootTree, distRoot);
+    for (const source of await collectFiles(rootTree)) {
+      const rel = relative(rootTree, source);
       const destination = resolve(distRoot, rel);
       const [sourceContents, destinationContents] = await Promise.all([
         readFile(source),
@@ -272,15 +283,16 @@ export async function stageProductionDocsets({
       }
     }
     const legacyPreviewRedirects = await stageLegacyPreviewRedirects(
-      siteRoot,
+      rootTree,
       distRoot,
       inputs.releasedTag,
     );
     return {
       legacyPreviewRedirects,
       released: inputs.releasedTag,
+      rootTreeSha256: inspected.root_tree_sha256,
       rootEntries: rootEntries.length,
-      treeSha256: inspected.tree_sha256,
+      versionTreeSha256: inspected.version_tree_sha256,
       versionPath: `/v/${inputs.version}/`,
     };
   } finally {

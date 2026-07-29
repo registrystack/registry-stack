@@ -120,8 +120,7 @@ test('archived docset builds use isolated generation with release-bound environm
   const root = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-build-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const calls = [];
-  let seoPath;
-  let seoOptions;
+  const seoCalls = [];
 
   await buildDocsetArchive(archivedDocset, {
     docsRoot: root,
@@ -130,8 +129,7 @@ test('archived docset builds use isolated generation with release-bound environm
       calls.push({ command, args, env });
     },
     applySeo: async (path, options) => {
-      seoPath = path;
-      seoOptions = options;
+      seoCalls.push([path, options]);
     },
   });
 
@@ -140,10 +138,19 @@ test('archived docset builds use isolated generation with release-bound environm
     [
       ['npm', ['run', 'generate:archive']],
       ['npx', ['astro', 'check']],
+      [
+        'npx',
+        [
+          'astro',
+          'build',
+          '--outDir',
+          resolve(root, '.release-docsets/v1.2.3/root'),
+        ],
+      ],
       ['npx', ['astro', 'build', '--outDir', resolve(root, 'dist/v/1.2.3')]],
     ],
   );
-  for (const { env } of calls) {
+  for (const { env } of calls.slice(0, -1)) {
     assert.equal(env.DOCS_DOCSET, 'v1.2.3');
     assert.equal(env.DOCS_BASE, '/');
     assert.equal(env.DOCS_RELEASED_ARCHIVE, '');
@@ -152,8 +159,15 @@ test('archived docset builds use isolated generation with release-bound environm
     assert.equal(env.PUBLIC_UMAMI_SCRIPT_SRC, '');
     assert.equal(env.PUBLIC_UMAMI_DOMAINS, '');
   }
-  assert.equal(seoPath, resolve(root, 'dist/v/1.2.3'));
-  assert.deepEqual(seoOptions, { indexable: false });
+  assert.equal(calls.at(-1).env.DOCS_BASE, '/v/1.2.3/');
+  assert.equal(calls.at(-1).env.DOCS_RELEASED_ARCHIVE, '');
+  assert.deepEqual(seoCalls, [
+    [
+      resolve(root, '.release-docsets/v1.2.3/root'),
+      { indexable: false },
+    ],
+    [resolve(root, 'dist/v/1.2.3'), { indexable: false }],
+  ]);
 });
 
 test('selected released archive builds at the canonical root with release discovery', async (t) => {
@@ -169,11 +183,13 @@ test('selected released archive builds at the canonical root with release discov
     applySeo: async () => {},
   });
 
-  assert.ok(calls.length > 0);
-  for (const env of calls) {
+  assert.equal(calls.length, 4);
+  for (const env of calls.slice(0, -1)) {
     assert.equal(env.DOCS_BASE, '/');
     assert.equal(env.DOCS_RELEASED_ARCHIVE, 'true');
   }
+  assert.equal(calls.at(-1).DOCS_BASE, '/v/1.2.3/');
+  assert.equal(calls.at(-1).DOCS_RELEASED_ARCHIVE, '');
 });
 
 test('archive output uses pinned generated artifacts and restores current files', async (t) => {
