@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   writeFile,
 } from 'node:fs/promises';
@@ -12,6 +13,7 @@ import { test } from 'node:test';
 
 import {
   createArchiveBundle,
+  releaseRootOutputDirectory,
   treeDigest,
 } from './archive-bundle.mjs';
 import {
@@ -40,6 +42,11 @@ async function createFixture(t, { collision = null } = {}) {
   t.after(() => rm(docsRoot, { recursive: true, force: true }));
   const devRoot = resolve(docsRoot, 'dist/dev');
   const archiveRoot = resolve(docsRoot, 'dist/v/1.2.3');
+  const rootOutput = releaseRootOutputDirectory(docsRoot, {
+    id: releasedTag,
+    path: versionPath,
+    status: 'archived',
+  });
   await write(devRoot, 'index.html', html('/dev/'));
   await write(
     devRoot,
@@ -54,15 +61,21 @@ async function createFixture(t, { collision = null } = {}) {
   );
   await write(devRoot, 'generated/configuration-reference.v1.json', '{}\n');
 
-  await write(archiveRoot, 'index.html', html('/'));
-  await write(archiveRoot, 'start/quickstart/index.html', html('/start/quickstart/'));
-  await write(archiveRoot, 'index.md', '# Released index\n');
-  await write(archiveRoot, 'llms.txt', '# Released machine docs\n');
-  await write(archiveRoot, 'sitemap-index.xml', '<sitemapindex/>\n');
-  await write(archiveRoot, 'pagefind/pagefind.js', 'export const search = true;\n');
-  await write(archiveRoot, 'pagefind/pagefind-entry.json', '{}\n');
-  await write(archiveRoot, 'generated/configuration-reference.v1.json', '{}\n');
-  if (collision) await write(archiveRoot, `${collision}/index.html`, html(`/${collision}/`));
+  await write(
+    archiveRoot,
+    'index.html',
+    `${html('/')}<script src="/v/1.2.3/_astro/app.js"></script>\n`,
+  );
+  await write(archiveRoot, '_astro/app.js', 'console.log("version");\n');
+  await write(rootOutput, 'index.html', html('/'));
+  await write(rootOutput, 'start/quickstart/index.html', html('/start/quickstart/'));
+  await write(rootOutput, 'index.md', '# Released index\n');
+  await write(rootOutput, 'llms.txt', '# Released machine docs\n');
+  await write(rootOutput, 'sitemap-index.xml', '<sitemapindex/>\n');
+  await write(rootOutput, 'pagefind/pagefind.js', 'export const search = true;\n');
+  await write(rootOutput, 'pagefind/pagefind-entry.json', '{}\n');
+  await write(rootOutput, 'generated/configuration-reference.v1.json', '{}\n');
+  if (collision) await write(rootOutput, `${collision}/index.html`, html(`/${collision}/`));
 
   const docset = {
     id: releasedTag,
@@ -71,7 +84,7 @@ async function createFixture(t, { collision = null } = {}) {
   };
   const bundlePath = resolve(docsRoot, 'released.tar.gz');
   const bundle = await createArchiveBundle({ docsRoot, docset, bundlePath });
-  return { archiveRoot, bundle, bundlePath, devRoot, docsRoot };
+  return { archiveRoot, bundle, bundlePath, devRoot, docsRoot, rootOutput };
 }
 
 test('rejects malformed dispatch values before staging', () => {
@@ -97,7 +110,8 @@ test('rejects malformed dispatch values before staging', () => {
 
 test('promotes unchanged released files to root and the exact version route', async (t) => {
   const fixture = await createFixture(t);
-  const originalIndex = await readFile(resolve(fixture.archiveRoot, 'index.html'));
+  const originalRootIndex = await readFile(resolve(fixture.rootOutput, 'index.html'));
+  const originalVersionIndex = await readFile(resolve(fixture.archiveRoot, 'index.html'));
 
   const result = await stageProductionDocsets({
     docsRoot: fixture.docsRoot,
@@ -109,18 +123,19 @@ test('promotes unchanged released files to root and the exact version route', as
   assert.equal(result.released, releasedTag);
   assert.equal(result.legacyPreviewRedirects, 2);
   assert.equal(result.versionPath, versionPath);
-  assert.equal(result.treeSha256, fixture.bundle.tree_sha256);
+  assert.equal(result.rootTreeSha256, fixture.bundle.root_tree_sha256);
+  assert.equal(result.versionTreeSha256, fixture.bundle.version_tree_sha256);
   assert.deepEqual(
     await readFile(resolve(fixture.docsRoot, 'dist/index.html')),
-    originalIndex,
+    originalRootIndex,
   );
   assert.deepEqual(
     await readFile(resolve(fixture.docsRoot, 'dist/v/1.2.3/index.html')),
-    originalIndex,
+    originalVersionIndex,
   );
   assert.equal(
     await treeDigest(resolve(fixture.docsRoot, 'dist/v/1.2.3')),
-    fixture.bundle.tree_sha256,
+    fixture.bundle.version_tree_sha256,
   );
   assert.equal(
     await readFile(resolve(fixture.devRoot, 'llms.txt'), 'utf8'),
@@ -167,5 +182,98 @@ test('rejects release files that collide with /dev/ or assembly mounts', async (
       bundlePath: fixture.bundlePath,
     }),
     /collides with reserved production path \/dev\//,
+  );
+});
+
+async function candidateBundle(t, tag) {
+  const docsRoot = await mkdtemp(resolve(tmpdir(), 'registry-candidate-docs-'));
+  t.after(() => rm(docsRoot, { recursive: true, force: true }));
+  const version = tag.slice(1);
+  const docset = {
+    id: tag,
+    path: `/v/${version}/`,
+    status: 'archived',
+  };
+  const rootTree = releaseRootOutputDirectory(docsRoot, docset);
+  const versionTree = resolve(docsRoot, `dist/v/${version}`);
+  await write(
+    rootTree,
+    'index.html',
+    `<html><head><link rel="canonical" href="${canonical}/"></head>` +
+      `<body>${tag}<script src="/_astro/app.js"></script></body></html>`,
+  );
+  await write(rootTree, '_astro/app.js', `console.log("${tag} root");\n`);
+  await write(rootTree, 'index.md', `# ${tag}\n`);
+  await write(rootTree, 'llms.txt', `# ${tag}\n`);
+  await write(rootTree, 'sitemap-index.xml', '<sitemapindex/>\n');
+  await write(rootTree, 'pagefind/pagefind.js', 'export const search = true;\n');
+  await write(
+    versionTree,
+    'index.html',
+    `<html><head><meta name="robots" content="noindex,follow"></head>` +
+      `<body><a href="/v/${version}/guide/">Guide</a>` +
+      `<script src="/v/${version}/_astro/app.js"></script></body></html>`,
+  );
+  await write(
+    versionTree,
+    'guide/index.html',
+    `<html><body>${tag} guide</body></html>`,
+  );
+  await write(versionTree, '_astro/app.js', `console.log("${tag} version");\n`);
+  const bundlePath = resolve(docsRoot, `registry-docs-${tag}.tar.gz`);
+  const bundle = await createArchiveBundle({ docsRoot, docset, bundlePath });
+  return { bundle, bundlePath, tag, version };
+}
+
+test('a second release preserves the first release version links and assets', async (t) => {
+  const deployment = await mkdtemp(resolve(tmpdir(), 'registry-docs-two-releases-'));
+  t.after(() => rm(deployment, { recursive: true, force: true }));
+  await write(resolve(deployment, 'dist/dev'), 'index.html', html('/dev/'));
+  const first = await candidateBundle(t, 'v1.0.0');
+  const second = await candidateBundle(t, 'v2.0.0');
+
+  await stageProductionDocsets({
+    docsRoot: deployment,
+    releasedTag: first.tag,
+    docsSha256: first.bundle.bundle_sha256,
+    bundlePath: first.bundlePath,
+  });
+
+  for (const entry of await readdir(resolve(deployment, 'dist'))) {
+    if (!['dev', 'v'].includes(entry)) {
+      await rm(resolve(deployment, 'dist', entry), { recursive: true, force: true });
+    }
+  }
+
+  await stageProductionDocsets({
+    docsRoot: deployment,
+    releasedTag: second.tag,
+    docsSha256: second.bundle.bundle_sha256,
+    bundlePath: second.bundlePath,
+  });
+
+  const historical = await readFile(
+    resolve(deployment, 'dist/v/1.0.0/index.html'),
+    'utf8',
+  );
+  assert.match(historical, /href="\/v\/1\.0\.0\/guide\/"/);
+  assert.match(historical, /src="\/v\/1\.0\.0\/_astro\/app\.js"/);
+  assert.equal(
+    await readFile(
+      resolve(deployment, 'dist/v/1.0.0/_astro/app.js'),
+      'utf8',
+    ),
+    'console.log("v1.0.0 version");\n',
+  );
+  assert.match(
+    await readFile(
+      resolve(deployment, 'dist/v/1.0.0/guide/index.html'),
+      'utf8',
+    ),
+    /v1\.0\.0 guide/,
+  );
+  assert.equal(
+    await readFile(resolve(deployment, 'dist/_astro/app.js'), 'utf8'),
+    'console.log("v2.0.0 root");\n',
   );
 });

@@ -52,13 +52,16 @@ export function validateArchiveLock(lock, docsets) {
       errors.push(`archive-lock.yaml ${id} entry must be a map`);
       continue;
     }
-    const unknown = Object.keys(entry).filter(
-      (key) => !['bundle_sha256', 'tree_sha256'].includes(key),
-    );
+    const dualTree = Object.hasOwn(entry, 'root_tree_sha256') ||
+      Object.hasOwn(entry, 'version_tree_sha256');
+    const allowed = dualTree
+      ? ['bundle_sha256', 'root_tree_sha256', 'version_tree_sha256']
+      : ['bundle_sha256', 'tree_sha256'];
+    const unknown = Object.keys(entry).filter((key) => !allowed.includes(key));
     if (unknown.length > 0) {
       errors.push(`archive-lock.yaml ${id} has unknown field ${unknown[0]}`);
     }
-    for (const field of ['bundle_sha256', 'tree_sha256']) {
+    for (const field of allowed) {
       if (!sha256Pattern.test(entry[field] ?? '')) {
         errors.push(`archive-lock.yaml ${id}.${field} must be 64 lowercase hex characters`);
       }
@@ -88,10 +91,16 @@ export function addArchiveLockEntry(lock, docsetId, result) {
   if (Object.hasOwn(lock.archives, docsetId)) {
     throw new Error(`immutable archive lock entry ${docsetId} already exists`);
   }
-  lock.archives[docsetId] = {
-    bundle_sha256: result.bundle_sha256,
-    tree_sha256: result.tree_sha256,
-  };
+  lock.archives[docsetId] = result.root_tree_sha256
+    ? {
+        bundle_sha256: result.bundle_sha256,
+        root_tree_sha256: result.root_tree_sha256,
+        version_tree_sha256: result.version_tree_sha256,
+      }
+    : {
+        bundle_sha256: result.bundle_sha256,
+        tree_sha256: result.tree_sha256,
+      };
   return lock;
 }
 
@@ -153,10 +162,12 @@ export async function snapshotArchive({
       lockPath: resolve(docsRoot, 'src/data/archive-lock.yaml'),
     });
     const expected = lock.archives?.[docset.id];
-    if (
-      expected?.bundle_sha256 !== result.bundle_sha256 ||
-      expected?.tree_sha256 !== result.tree_sha256
-    ) {
+    const matches = expected?.bundle_sha256 === result.bundle_sha256 &&
+      (result.root_tree_sha256
+        ? expected?.root_tree_sha256 === result.root_tree_sha256 &&
+          expected?.version_tree_sha256 === result.version_tree_sha256
+        : expected?.tree_sha256 === result.tree_sha256);
+    if (!matches) {
       throw new Error(
         `archive bundle ${docset.id} does not match its immutable lock entry`,
       );
@@ -221,7 +232,12 @@ async function main(args) {
   const { docset, result } = await snapshotArchive(parsed);
   const entry = {
     bundle_sha256: result.bundle_sha256,
-    tree_sha256: result.tree_sha256,
+    ...(result.root_tree_sha256
+      ? {
+          root_tree_sha256: result.root_tree_sha256,
+          version_tree_sha256: result.version_tree_sha256,
+        }
+      : { tree_sha256: result.tree_sha256 }),
   };
   process.stdout.write(
     `${docset.id}:\n${YAML.stringify(entry).replace(/^/gm, '  ').trimEnd()}\n`,

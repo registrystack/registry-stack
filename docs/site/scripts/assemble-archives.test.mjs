@@ -7,7 +7,10 @@ import test from 'node:test';
 import YAML from 'yaml';
 
 import { assembleArchives, parseArgs } from './assemble-archives.mjs';
-import { createArchiveBundle } from './archive-bundle.mjs';
+import {
+  createArchiveBundle,
+  releaseRootOutputDirectory,
+} from './archive-bundle.mjs';
 
 const docset = {
   id: 'v1.2.3',
@@ -38,7 +41,12 @@ async function fixture(t) {
   await mkdir(sourceOutput, { recursive: true });
   await writeFile(resolve(sourceOutput, 'index.html'), '<h1>Frozen</h1>\n');
   const bundlePath = resolve(sourceRoot, 'bundle.tar.gz');
-  const bundle = await createArchiveBundle({ docsRoot: sourceRoot, docset, bundlePath });
+  const bundle = await createArchiveBundle({
+    docsRoot: sourceRoot,
+    docset,
+    bundlePath,
+    singleTree: true,
+  });
 
   await mkdir(resolve(targetRoot, 'src/data'), { recursive: true });
   await writeFile(
@@ -116,6 +124,9 @@ test('only bootstraps missing bundles when explicitly allowed', async (t) => {
       const output = resolve(docsRoot, 'dist/v/1.2.3');
       await mkdir(output, { recursive: true });
       await writeFile(resolve(output, 'index.html'), '<h1>Frozen</h1>\n');
+      const rootOutput = releaseRootOutputDirectory(docsRoot, docset);
+      await mkdir(rootOutput, { recursive: true });
+      await writeFile(resolve(rootOutput, 'index.html'), '<h1>Different root</h1>\n');
     },
     restoreGeneratedData: async () => { generatedDataRestores += 1; },
   });

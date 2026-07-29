@@ -15,7 +15,8 @@ import { dirname, posix, relative, resolve, sep } from 'node:path';
 
 import * as tar from 'tar';
 
-export const ARCHIVE_BUNDLE_SCHEMA = 'registry-docs.archive-bundle.v2';
+export const ARCHIVE_BUNDLE_SCHEMA = 'registry-docs.archive-bundle.v3';
+export const SINGLE_TREE_ARCHIVE_BUNDLE_SCHEMA = 'registry-docs.archive-bundle.v2';
 export const LEGACY_ARCHIVE_BUNDLE_SCHEMA = 'registry-docs.archive-bundle.v1';
 export const ARCHIVE_LOCK_SCHEMA = 'registry-docs.archive-lock.v1';
 
@@ -144,6 +145,16 @@ export function archiveOutputDirectory(docsRoot, docset) {
   return output;
 }
 
+export function releaseRootOutputDirectory(docsRoot, docset) {
+  archiveRelativePath(docset);
+  const releaseRoot = resolve(docsRoot, '.release-docsets');
+  const output = resolve(releaseRoot, docset.id, 'root');
+  if (!isWithin(releaseRoot, output)) {
+    throw new Error(`Archived docset "${docset.id}" release root resolves outside staging`);
+  }
+  return output;
+}
+
 export async function validateArchiveOutputLocation(docsRoot, docset) {
   const distRoot = resolve(docsRoot, 'dist');
   const versionRoot = resolve(distRoot, 'v');
@@ -217,15 +228,20 @@ export function archiveSourceRefs(docset) {
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-export function archiveMetadata(docset, outputDigest) {
-  if (!sha256Pattern.test(outputDigest)) {
-    throw new Error('archive output digest must be 64 lowercase hexadecimal characters');
+export function archiveMetadata(docset, {
+  rootTreeSha256,
+  versionTreeSha256,
+} = {}) {
+  if (!sha256Pattern.test(rootTreeSha256) || !sha256Pattern.test(versionTreeSha256)) {
+    throw new Error('archive tree digests must be 64 lowercase hexadecimal characters');
   }
   archiveRelativePath(docset);
   return {
     schema_version: ARCHIVE_BUNDLE_SCHEMA,
     release_tag: docset.id,
-    tree_sha256: outputDigest,
+    root_tree_sha256: rootTreeSha256,
+    version_path: docset.path,
+    version_tree_sha256: versionTreeSha256,
   };
 }
 
@@ -240,23 +256,62 @@ export async function createArchiveBundle({
   docsRoot = process.cwd(),
   docset,
   bundlePath = localArchiveBundlePath(docsRoot, docset),
+  singleTree = false,
 } = {}) {
-  const output = await validateArchiveOutputLocation(docsRoot, docset);
-  await requireRealDirectory(output, `archive output for ${docset.id}`);
+  const versionOutput = await validateArchiveOutputLocation(docsRoot, docset);
+  const rootOutput = releaseRootOutputDirectory(docsRoot, docset);
+  await requireRealDirectory(versionOutput, `versioned archive output for ${docset.id}`);
+  const rootOutputInfo = await existingKind(rootOutput);
+  if (rootOutputInfo && (rootOutputInfo.isSymbolicLink() || !rootOutputInfo.isDirectory())) {
+    throw new Error(`release root output must be a real directory: ${rootOutput}`);
+  }
+  if (!singleTree && !rootOutputInfo) {
+    throw new Error(`canonical release root output must be a real directory: ${rootOutput}`);
+  }
   const staging = await mkdtemp(resolve(tmpdir(), 'registry-docs-archive-bundle-'));
-  let outputDigest;
+  let rootTreeSha256;
+  let treeSha256;
+  let versionTreeSha256;
   let metadata;
   try {
-    await cp(output, resolve(staging, 'site'), {
-      recursive: true,
-      dereference: false,
-      force: false,
-      errorOnExist: true,
-      preserveTimestamps: false,
-      verbatimSymlinks: true,
-    });
-    outputDigest = await treeDigest(resolve(staging, 'site'));
-    metadata = archiveMetadata(docset, outputDigest);
+    if (!singleTree) {
+      for (const [source, name] of [
+        [rootOutput, 'root'],
+        [versionOutput, 'version'],
+      ]) {
+        await cp(source, resolve(staging, name), {
+          recursive: true,
+          dereference: false,
+          force: false,
+          errorOnExist: true,
+          preserveTimestamps: false,
+          verbatimSymlinks: true,
+        });
+      }
+      rootTreeSha256 = await treeDigest(resolve(staging, 'root'));
+      versionTreeSha256 = await treeDigest(resolve(staging, 'version'));
+      metadata = archiveMetadata(docset, {
+        rootTreeSha256,
+        versionTreeSha256,
+      });
+    } else {
+      // Published v1/v2 archives contain one version tree under site/. Keep
+      // this path for deterministic restoration and lock verification.
+      await cp(versionOutput, resolve(staging, 'site'), {
+        recursive: true,
+        dereference: false,
+        force: false,
+        errorOnExist: true,
+        preserveTimestamps: false,
+        verbatimSymlinks: true,
+      });
+      treeSha256 = await treeDigest(resolve(staging, 'site'));
+      metadata = {
+        schema_version: SINGLE_TREE_ARCHIVE_BUNDLE_SCHEMA,
+        release_tag: docset.id,
+        tree_sha256: treeSha256,
+      };
+    }
     await writeFile(
       resolve(staging, 'metadata.json'),
       `${JSON.stringify(metadata, null, 2)}\n`,
@@ -293,7 +348,9 @@ export async function createArchiveBundle({
   return {
     bundle_path: bundlePath,
     bundle_sha256: await fileDigest(bundlePath),
-    tree_sha256: outputDigest,
+    ...(treeSha256 ? { tree_sha256: treeSha256 } : {}),
+    ...(rootTreeSha256 ? { root_tree_sha256: rootTreeSha256 } : {}),
+    ...(versionTreeSha256 ? { version_tree_sha256: versionTreeSha256 } : {}),
     metadata,
   };
 }
@@ -310,7 +367,11 @@ function validateTarEntry(path, entry) {
     !(
       normalized === 'metadata.json' ||
       normalized === 'site' ||
-      normalized.startsWith('site/')
+      normalized.startsWith('site/') ||
+      normalized === 'root' ||
+      normalized.startsWith('root/') ||
+      normalized === 'version' ||
+      normalized.startsWith('version/')
     )
   ) {
     throw new Error(`archive bundle contains an unsafe path: ${path}`);
@@ -322,25 +383,39 @@ function validateTarEntry(path, entry) {
 }
 
 export function assertArchiveMetadataMatchesDocset(metadata, docset) {
-  const expected = metadata.schema_version === LEGACY_ARCHIVE_BUNDLE_SCHEMA
-    ? {
-        schema_version: LEGACY_ARCHIVE_BUNDLE_SCHEMA,
-        docset_id: docset.id,
-        archive_path: docset.path,
-        source: docset.source,
-        published_at: docset.published_at,
-        source_refs: archiveSourceRefs(docset),
-        tree_sha256: metadata.tree_sha256,
-      }
-    : {
-        schema_version: ARCHIVE_BUNDLE_SCHEMA,
-        release_tag: docset.id,
-        tree_sha256: metadata.tree_sha256,
-      };
+  let expected;
+  if (metadata.schema_version === LEGACY_ARCHIVE_BUNDLE_SCHEMA) {
+    expected = {
+      schema_version: LEGACY_ARCHIVE_BUNDLE_SCHEMA,
+      docset_id: docset.id,
+      archive_path: docset.path,
+      source: docset.source,
+      published_at: docset.published_at,
+      source_refs: archiveSourceRefs(docset),
+      tree_sha256: metadata.tree_sha256,
+    };
+  } else if (metadata.schema_version === SINGLE_TREE_ARCHIVE_BUNDLE_SCHEMA) {
+    expected = {
+      schema_version: SINGLE_TREE_ARCHIVE_BUNDLE_SCHEMA,
+      release_tag: docset.id,
+      tree_sha256: metadata.tree_sha256,
+    };
+  } else {
+    expected = {
+      schema_version: ARCHIVE_BUNDLE_SCHEMA,
+      release_tag: docset.id,
+      root_tree_sha256: metadata.root_tree_sha256,
+      version_path: docset.path,
+      version_tree_sha256: metadata.version_tree_sha256,
+    };
+  }
   if (canonicalJson(metadata) !== canonicalJson(expected)) {
     throw new Error(`archive bundle metadata does not match docset ${docset.id}`);
   }
-  if (!sha256Pattern.test(metadata.tree_sha256)) {
+  const digests = metadata.schema_version === ARCHIVE_BUNDLE_SCHEMA
+    ? [metadata.root_tree_sha256, metadata.version_tree_sha256]
+    : [metadata.tree_sha256];
+  if (digests.some((digest) => !sha256Pattern.test(digest))) {
     throw new Error(`archive bundle ${docset.id} has an invalid tree digest`);
   }
 }
@@ -349,7 +424,9 @@ export async function inspectArchiveBundle({
   bundlePath,
   docset,
   expectedBundleSha256,
+  expectedRootTreeSha256,
   expectedTreeSha256,
+  expectedVersionTreeSha256,
 } = {}) {
   if (!sha256Pattern.test(expectedBundleSha256)) {
     throw new Error(`archive bundle ${docset.id} has no valid locked bundle digest`);
@@ -357,6 +434,14 @@ export async function inspectArchiveBundle({
   if (expectedTreeSha256 !== null && expectedTreeSha256 !== undefined &&
       !sha256Pattern.test(expectedTreeSha256)) {
     throw new Error(`archive bundle ${docset.id} has no valid locked tree digest`);
+  }
+  for (const [label, digest] of [
+    ['root', expectedRootTreeSha256],
+    ['version', expectedVersionTreeSha256],
+  ]) {
+    if (digest !== null && digest !== undefined && !sha256Pattern.test(digest)) {
+      throw new Error(`archive bundle ${docset.id} has no valid locked ${label} tree digest`);
+    }
   }
   const { contents: bundleContents } = await readRegularFile(
     bundlePath,
@@ -399,18 +484,67 @@ export async function inspectArchiveBundle({
       preservePaths: false,
       strict: true,
     }));
-    const rootEntries = (await readdir(extraction)).sort();
-    if (canonicalJson(rootEntries) !== canonicalJson(['metadata.json', 'site'])) {
-      throw new Error(`archive bundle ${docset.id} must contain only metadata.json and site/`);
-    }
     const { contents: metadataContents } = await readRegularFile(
       resolve(extraction, 'metadata.json'),
       `archive bundle ${docset.id} metadata`,
     );
-    await requireRealDirectory(resolve(extraction, 'site'), `archive bundle ${docset.id} site`);
     const metadata = JSON.parse(metadataContents.toString('utf8'));
     assertArchiveMetadataMatchesDocset(metadata, docset);
-    const actualTreeDigest = await treeDigest(resolve(extraction, 'site'));
+    const rootEntries = (await readdir(extraction)).sort();
+    if (metadata.schema_version === ARCHIVE_BUNDLE_SCHEMA) {
+      if (expectedTreeSha256 !== null && expectedTreeSha256 !== undefined) {
+        throw new Error(
+          `archive bundle ${docset.id} dual-tree metadata requires dual-tree lock digests`,
+        );
+      }
+      if (canonicalJson(rootEntries) !== canonicalJson(['metadata.json', 'root', 'version'])) {
+        throw new Error(
+          `archive bundle ${docset.id} must contain only metadata.json, root/, and version/`,
+        );
+      }
+      const rootPath = resolve(extraction, 'root');
+      const versionPath = resolve(extraction, 'version');
+      await requireRealDirectory(rootPath, `archive bundle ${docset.id} root`);
+      await requireRealDirectory(versionPath, `archive bundle ${docset.id} version`);
+      const [rootTreeSha256, versionTreeSha256] = await Promise.all([
+        treeDigest(rootPath),
+        treeDigest(versionPath),
+      ]);
+      if (
+        rootTreeSha256 !== metadata.root_tree_sha256 ||
+        versionTreeSha256 !== metadata.version_tree_sha256 ||
+        (expectedRootTreeSha256 && rootTreeSha256 !== expectedRootTreeSha256) ||
+        (expectedVersionTreeSha256 && versionTreeSha256 !== expectedVersionTreeSha256)
+      ) {
+        throw new Error(`archive bundle ${docset.id} dual-tree digest does not match its lock`);
+      }
+      return {
+        bundle_sha256: actualBundleDigest,
+        bundle_snapshot: bundleSnapshot,
+        extraction,
+        metadata,
+        root_path: rootPath,
+        root_tree_sha256: rootTreeSha256,
+        temporary,
+        version_path: versionPath,
+        version_tree_sha256: versionTreeSha256,
+      };
+    }
+
+    if (
+      (expectedRootTreeSha256 !== null && expectedRootTreeSha256 !== undefined) ||
+      (expectedVersionTreeSha256 !== null && expectedVersionTreeSha256 !== undefined)
+    ) {
+      throw new Error(
+        `archive bundle ${docset.id} single-tree metadata requires a single-tree lock digest`,
+      );
+    }
+    if (canonicalJson(rootEntries) !== canonicalJson(['metadata.json', 'site'])) {
+      throw new Error(`archive bundle ${docset.id} must contain only metadata.json and site/`);
+    }
+    const sitePath = resolve(extraction, 'site');
+    await requireRealDirectory(sitePath, `archive bundle ${docset.id} site`);
+    const actualTreeDigest = await treeDigest(sitePath);
     if (
       actualTreeDigest !== metadata.tree_sha256 ||
       (expectedTreeSha256 && actualTreeDigest !== expectedTreeSha256)
@@ -424,8 +558,10 @@ export async function inspectArchiveBundle({
       bundle_snapshot: bundleSnapshot,
       extraction,
       metadata,
+      root_path: sitePath,
       temporary,
       tree_sha256: actualTreeDigest,
+      version_path: sitePath,
     };
   } catch (error) {
     await rm(temporary, { recursive: true, force: true });
@@ -438,20 +574,24 @@ export async function restoreArchiveBundle({
   bundlePath,
   docset,
   expectedBundleSha256,
+  expectedRootTreeSha256,
   expectedTreeSha256,
+  expectedVersionTreeSha256,
   publishBundle = true,
 } = {}) {
   const inspected = await inspectArchiveBundle({
     bundlePath,
     docset,
     expectedBundleSha256,
+    expectedRootTreeSha256,
     expectedTreeSha256,
+    expectedVersionTreeSha256,
   });
   try {
     const output = await validateArchiveOutputLocation(docsRoot, docset);
     await rm(output, { recursive: true, force: true });
     await mkdir(dirname(output), { recursive: true });
-    await cp(resolve(inspected.extraction, 'site'), output, {
+    await cp(inspected.version_path, output, {
       recursive: true,
       force: false,
       errorOnExist: true,

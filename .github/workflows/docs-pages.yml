@@ -43,6 +43,14 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout protected main without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: refs/heads/main
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+
       - name: Authenticate public release and checksum inventory
         env:
           GH_TOKEN: ${{ github.token }}
@@ -62,6 +70,11 @@ jobs:
             --arg tag "${RELEASED_TAG}" \
             '.tag_name==$tag and .draft==false and .prerelease==false' \
             "${release_dir}/release.json" >/dev/null
+          gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+            > "${release_dir}/latest-release.json"
+          python3 release/scripts/verify_latest_published_release.py \
+            --metadata "${release_dir}/latest-release.json" \
+            --expected-tag "${RELEASED_TAG}"
           for name in "${archive}" SHA256SUMS "${checksum_bundle}"; do
             test "$(jq -r --arg name "${name}" \
               '[.assets[] | select(.name==$name)] | length' \
@@ -103,14 +116,6 @@ jobs:
               "https://token.actions.githubusercontent.com" \
             --certificate-identity \
               "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${RELEASED_TAG}"
-
-      - name: Checkout protected main without persisted credentials
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
-        with:
-          ref: refs/heads/main
-          fetch-depth: 0
-          submodules: false
-          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4.4.0
@@ -196,20 +201,35 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Checkout deployment helpers from protected main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: refs/heads/main
+          sparse-checkout: |
+            docs/site/scripts/smoke-docs-deployment.mjs
+            release/scripts/verify_latest_published_release.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
+
+      - name: Recheck latest published release immediately before deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASED_TAG: ${{ inputs.released_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases/latest" \
+            > "${RUNNER_TEMP}/latest-release.json"
+          python3 release/scripts/verify_latest_published_release.py \
+            --metadata "${RUNNER_TEMP}/latest-release.json" \
+            --expected-tag "${RELEASED_TAG}"
 
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5
-
-      - name: Checkout smoke helper from protected main
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
-        with:
-          ref: refs/heads/main
-          sparse-checkout: docs/site/scripts/smoke-docs-deployment.mjs
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
 
       - name: Smoke live canonical deployment
         working-directory: docs/site

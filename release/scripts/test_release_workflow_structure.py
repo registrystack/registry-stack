@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -10,11 +12,36 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
+LATEST_RELEASE_HELPER = (
+    ROOT / "release" / "scripts" / "verify_latest_published_release.py"
+)
 
 
 def workflow(name: str) -> tuple[str, dict]:
     text = (WORKFLOWS / name).read_text(encoding="utf-8")
     return text, yaml.safe_load(text)
+
+
+def verify_latest_release_fixture(
+    metadata: object,
+    expected_tag: str,
+) -> subprocess.CompletedProcess:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "latest-release.json"
+        path.write_text(json.dumps(metadata), encoding="utf-8")
+        return subprocess.run(
+            [
+                "python3",
+                str(LATEST_RELEASE_HELPER),
+                "--metadata",
+                str(path),
+                "--expected-tag",
+                expected_tag,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
 
 
 class CandidateWorkflowStructureTest(unittest.TestCase):
@@ -55,6 +82,27 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("release-candidate-receipt", text)
         self.assertNotIn("release capsule", text.lower())
 
+    def test_candidate_source_is_the_exact_canaried_workflow_revision(self) -> None:
+        text, document = workflow("release-candidate.yml")
+        validation = next(
+            step["run"]
+            for step in document["jobs"]["validate"]["steps"]
+            if step.get("name")
+            == "Validate request, source, CI, canary, and destinations"
+        )
+        self.assertIn(
+            '[[ "${REQUEST_SOURCE_SHA}" != "${workflow_revision}" ]]',
+            validation,
+        )
+        self.assertIn(
+            "source_sha must equal the canaried workflow revision",
+            validation,
+        )
+        self.assertIn(
+            '--source-sha "${{ needs.validate.outputs.source_sha }}"',
+            text,
+        )
+
     def test_candidate_images_are_private_and_layouts_are_built_without_token(self) -> None:
         text, _ = workflow("release-candidate.yml")
         build = text.split("  build-canonical:", 1)[1].split(
@@ -66,6 +114,19 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("Verify local image layouts before package credentials", assemble)
         self.assertIn("--jq .visibility", text)
         self.assertIn(")\" = private", text)
+
+    def test_tag_lookup_accepts_only_git_explicit_absence_status(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        validation = next(
+            step["run"]
+            for step in document["jobs"]["validate"]["steps"]
+            if step.get("name")
+            == "Validate request, source, CI, canary, and destinations"
+        )
+        self.assertIn("git ls-remote --exit-code --tags", validation)
+        self.assertIn("tag_lookup_status=$?", validation)
+        self.assertIn('[[ "${tag_lookup_status}" -ne 2 ]]', validation)
+        self.assertIn("cannot prove tag ${tag} is absent", validation)
 
 
 class PublicationWorkflowStructureTest(unittest.TestCase):
@@ -159,6 +220,49 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
 
 
 class SupportingWorkflowStructureTest(unittest.TestCase):
+    def test_docs_deploy_rechecks_latest_release_at_last_boundary(self) -> None:
+        text, document = workflow("docs-pages.yml")
+        endpoint = 'gh api "repos/${GITHUB_REPOSITORY}/releases/latest"'
+        helper = "release/scripts/verify_latest_published_release.py"
+        self.assertEqual(text.count(endpoint), 2)
+        self.assertEqual(text.count(f"python3 {helper}"), 2)
+        deploy_steps = document["jobs"]["deploy"]["steps"]
+        recheck = next(
+            index
+            for index, step in enumerate(deploy_steps)
+            if step.get("name")
+            == "Recheck latest published release immediately before deployment"
+        )
+        deployment = next(
+            index
+            for index, step in enumerate(deploy_steps)
+            if step.get("name") == "Deploy to GitHub Pages"
+        )
+        self.assertEqual(recheck + 1, deployment)
+
+    def test_latest_release_fixture_rejects_stale_or_nonpublished_dispatches(
+        self,
+    ) -> None:
+        release = {
+            "tag_name": "v1.4.0",
+            "draft": False,
+            "prerelease": False,
+            "published_at": "2026-07-29T10:00:00Z",
+        }
+        self.assertEqual(
+            verify_latest_release_fixture(release, "v1.4.0").returncode,
+            0,
+        )
+        stale = verify_latest_release_fixture(release, "v1.3.0")
+        self.assertNotEqual(stale.returncode, 0)
+        self.assertIn("is stale", stale.stderr)
+        for field in ("draft", "prerelease"):
+            with self.subTest(field=field):
+                invalid = dict(release)
+                invalid[field] = True
+                result = verify_latest_release_fixture(invalid, "v1.4.0")
+                self.assertNotEqual(result.returncode, 0)
+
     def test_canary_has_no_public_write_permission(self) -> None:
         text, document = workflow("release-canary.yml")
         self.assertIn("schedule:", text.split("permissions:", 1)[0])

@@ -365,6 +365,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
 )
 
 RELEASE_SECURITY_POLICY_PATHS = (
+    ".github/workflows/docs-pages.yml",
     ".github/workflows/release.yml",
     ".github/workflows/release-candidate.yml",
     ".github/workflows/release-canary.yml",
@@ -372,6 +373,7 @@ RELEASE_SECURITY_POLICY_PATHS = (
     ".github/workflows/release-candidate-cleanup.yml",
     "release/scripts/release_candidate.py",
     "release/scripts/cleanup-release-candidates.py",
+    "release/scripts/verify_latest_published_release.py",
 )
 
 REQUIRED_RELEASE_SECURITY_GATES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
@@ -982,6 +984,27 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
+        "Latest-only released docs deployment",
+        ".github/workflows/docs-pages.yml",
+        (
+            "name: Authenticate public release and checksum inventory",
+            'gh api "repos/${GITHUB_REPOSITORY}/releases/latest"',
+            "python3 release/scripts/verify_latest_published_release.py",
+            "name: Recheck latest published release immediately before deployment",
+            "name: Deploy to GitHub Pages",
+        ),
+    ),
+    (
+        "Latest release metadata fails closed",
+        "release/scripts/verify_latest_published_release.py",
+        (
+            'if metadata.get("draft") is not False:',
+            'if metadata.get("prerelease") is not False:',
+            "if actual_tag != expected_tag:",
+            "is stale; latest published",
+        ),
+    ),
+    (
         "Protected candidate request and pure validation",
         ".github/workflows/release-candidate.yml",
         (
@@ -989,6 +1012,9 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "name: Validate request, source, CI, canary, and destinations",
             "git merge-base --is-ancestor",
             "verify-canary",
+            "tag_lookup_status=$?",
+            'if [[ "${tag_lookup_status}" -ne 2 ]]; then',
+            "cannot prove tag ${tag} is absent",
             "name: Validate manifests, pins, recipes, and scanner policy fixtures",
         ),
     ),
@@ -1013,7 +1039,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "--jq .visibility",
             ")\" = private",
             "name: Verify and scan exact candidate images",
-            "grype \"${candidate_ref}\"",
+            'scan_image \\\n              "${candidate_ref}"',
             "check_advisory_baselines.py",
         ),
     ),
@@ -1091,6 +1117,12 @@ REQUIRED_RELEASE_SECURITY_GATES = (
 )
 
 ORDERED_RELEASE_SECURITY_GATES = (
+    (
+        "Latest release recheck immediately before docs deployment",
+        ".github/workflows/docs-pages.yml",
+        "name: Recheck latest published release immediately before deployment",
+        "name: Deploy to GitHub Pages",
+    ),
     (
         "Promotion binding before candidate verification",
         ".github/workflows/release.yml",

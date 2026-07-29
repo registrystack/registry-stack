@@ -11,6 +11,7 @@ src/content/docs/products/
 public/products/
 .repo-docs-cache/
 .archive-bundles/
+.release-docsets/
 
 # OpenAPI specs fetched at the pinned ref by scripts/fetch-openapi.mjs
 # (build artifacts; redocly reads them but they are regenerated each build).
