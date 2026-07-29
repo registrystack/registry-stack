@@ -11,6 +11,9 @@ const MAX_OUTPUT_SCHEMA_NODES_V1: usize =
     registry_notary_core::MAX_RELAY_OUTPUT_SCHEMA_NODES_V1;
 const MAX_OUTPUT_EXPANDED_NODES_V1: usize =
     registry_notary_core::MAX_RELAY_OUTPUT_EXPANDED_NODES_V1;
+// Relay parsing and Notary recursive-schema validation accept exact JSON
+// integers only through 2^53 - 1, so authoring must enforce the same boundary.
+const MAX_JSON_SAFE_INTEGER_V1: i64 = 9_007_199_254_740_991;
 
 /// The pre-1.0 project authoring contract. Runtime artifacts may still lower
 /// this concise model into product-owned structures, but authored files never
@@ -1108,7 +1111,12 @@ fn validate_authored_scalar_output(
                 .ok_or_else(|| anyhow!("outputs.{name}.minimum is required for Integer"))?;
             let maximum = maximum
                 .ok_or_else(|| anyhow!("outputs.{name}.maximum is required for Integer"))?;
-            if minimum > maximum || format.is_some() || max_length.is_some() {
+            if minimum > maximum
+                || minimum < -MAX_JSON_SAFE_INTEGER_V1
+                || maximum > MAX_JSON_SAFE_INTEGER_V1
+                || format.is_some()
+                || max_length.is_some()
+            {
                 bail!("outputs.{name} Integer schema has invalid constraints");
             }
         }
@@ -1324,7 +1332,6 @@ fn lower_input_schema(
             })
         }
         AuthoredScalarType::Integer => {
-            const JSON_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
             let minimum = declaration
                 .minimum
                 .ok_or_else(|| anyhow!("input.{name}.minimum is required for Integer inputs"))?;
@@ -1332,8 +1339,8 @@ fn lower_input_schema(
                 .maximum
                 .ok_or_else(|| anyhow!("input.{name}.maximum is required for Integer inputs"))?;
             if minimum > maximum
-                || minimum < -JSON_SAFE_INTEGER
-                || maximum > JSON_SAFE_INTEGER
+                || minimum < -MAX_JSON_SAFE_INTEGER_V1
+                || maximum > MAX_JSON_SAFE_INTEGER_V1
                 || declaration.format.is_some()
                 || declaration.max_length.is_some()
                 || declaration.min_length.is_some()

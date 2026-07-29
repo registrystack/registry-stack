@@ -29,25 +29,25 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "evaluation=client-bound-stored-record-v2-atomic-publication-expiry-v1\0",
     "batch=keyed-request-owner-lease-quota-once-takeover-atomic-completion-stored-response-v2-fifteen-minute-retention-v1\0",
     "credential-status=insert-only-locked-transition-terminal-revocation-database-clock-effective-expiry-before-suspension-retention-monotonic-updated-at-v2\0",
-    "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-v1\0",
+    "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-quota-independent-idempotency-request-conflict-owner-sixty-second-lease-renewal-bounded-completion-final-owner-fence-evaluation-retention-takeover-v4\0",
     "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1\0",
     "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2\0",
     "preauthorization-tx-code=verified-notary-issuer-stable-scope-jti-keyed-pin-verifier-peek-redeem-one-winner-expiry-live-key-attestation-v3\0",
     "oid4vci-issuance-transaction=keyed-id-encrypted-immutable-record-sha256-uri-commitment-token-nonce-bind-holder-and-request-atomic-one-materialization-encrypted-response-terminal-failure-expiry-v2\0",
     "issuance-evaluation-consumption=keyed-owner-evaluation-single-lineage-shared-direct-and-offer-expiry-capacity-v1\0",
     "registry-client-offer=hashed-idempotency-exact-encrypted-response-read-only-preflight-before-side-effects-shared-evaluation-consumption-atomic-client-quota-transaction-and-optional-pin-expiry-capacity-v3\0",
-    "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2\0",
+    "retention=thirteen-fixed-groups-bounded-expiry-prune-skip-locked-saturation-catch-up-v3\0",
 );
 pub const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "f0f447b39578d23e54ba5168db09a5d813240c8373038cf079b4697ee59503a1";
+    "5d18c2de416906b0c40bf8abdd7c7d7b9a1ddad1c21cb90dba50d24112e4f94b";
 // The immediately preceding v1 contract is the only supported in-place
 // upgrade source. Its exact catalog is attested before any DDL runs.
 const PREVIOUS_STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
     "f08bb0bc9b927b534ce736c640d43e3c7f898bd110616f92a60857c5fd1323fd";
 
 const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 0x4e4f_5441_5259_0001;
-const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 13;
-const EXPECTED_API_FUNCTION_COUNT_V1: i64 = 34;
+const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 14;
+const EXPECTED_API_FUNCTION_COUNT_V1: i64 = 36;
 
 /// The `NOLOGIN` role that owns the Notary schemas and fixed functions.
 #[derive(Clone, PartialEq, Eq)]
@@ -494,6 +494,8 @@ fn state_plane_acl_sql(runtime_role: &RuntimeDatabaseRole) -> String {
          GRANT EXECUTE ON FUNCTION registry_notary_api.credential_status_get_v1(text) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.credential_status_update_v1(text, text) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.machine_quota_debit_v1(bytea, integer, integer) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.machine_quota_debit_once_v1(bytea, bytea, bytea, bytea, integer, integer, integer, timestamptz) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.machine_quota_operation_release_v1(bytea, bytea, bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.subject_access_quota_debit_v1(text[], bytea[], integer[], integer[]) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.subject_access_quota_check_v1(text[], bytea[], integer[], integer[]) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_login_reserve_v1(bytea, text, bytea, bytea, bytea, timestamptz) TO {role};\n\
@@ -504,7 +506,7 @@ fn state_plane_acl_sql(runtime_role: &RuntimeDatabaseRole) -> String {
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_redeem_v1(bytea, bytea, timestamptz, boolean, bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.evaluation_issuance_consume_v1(bytea, bytea, timestamptz) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.registry_client_offer_preflight_v1(bytea, bytea, bytea, bytea) TO {role};\n\
-         GRANT EXECUTE ON FUNCTION registry_notary_api.registry_client_offer_reserve_v1(bytea, bytea, bytea, bytea, bytea, bytea, text, text, bytea, bytea, timestamptz, bytea, smallint, timestamptz, bytea, bytea, timestamptz, timestamptz, bytea, integer, integer) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.registry_client_offer_reserve_v1(bytea, bytea, bytea, bytea, bytea, bytea, text, text, bytea, bytea, timestamptz, bytea, smallint, timestamptz, bytea, bytea, timestamptz, timestamptz, bytea, integer, integer, bytea, bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_reserve_v1(bytea, bytea, text, text, bytea, bytea, timestamptz) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_get_v1(bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.oid4vci_transaction_bind_nonce_v1(bytea, text, bytea) TO {role};\n\
@@ -922,11 +924,11 @@ fn expected_previous_catalog_definition_fingerprint(
 // These fingerprints are derived from the deterministic catalog projection
 // below and are pinned separately for every supported PostgreSQL major.
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG16_V1: &str =
-    "36d0d9839d8fb991a831ad65f9bfd35507743fcf9c4c80b281a3367caa2f7722";
+    "459c0604fa2711af2704f8307577ea03df374a067f494abf34411e7c1cd2b621";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG17_V1: &str =
-    "36d0d9839d8fb991a831ad65f9bfd35507743fcf9c4c80b281a3367caa2f7722";
+    "459c0604fa2711af2704f8307577ea03df374a067f494abf34411e7c1cd2b621";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG18_V1: &str =
-    "eb8998790a23d7954ea7dd9dbcb6821c51e2166946a444fe0da25a9ed946e2b8";
+    "495041552db166b39a794e051b43a8a45da657270bca244ed1f6df884a303edf";
 const PREVIOUS_CATALOG_DEFINITION_FINGERPRINT_PG16_V1: &str =
     "cf45576aced8a825cd2891800f2636ec1ca0dd0959b81f3a787cc0ed36ea09a5";
 const PREVIOUS_CATALOG_DEFINITION_FINGERPRINT_PG17_V1: &str =

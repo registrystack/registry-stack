@@ -3,6 +3,23 @@
 
 use super::super::*;
 
+const REGISTRY_OFFER_SIGNER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+const REGISTRY_OFFER_SIGNER_VALIDITY_MARGIN: time::Duration = time::Duration::seconds(1);
+const REGISTRY_OFFER_LEASE_RENEWAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const REGISTRY_OFFER_FINAL_RESERVATION_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(45);
+const REGISTRY_OFFER_OPERATION_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(250);
+const REGISTRY_OFFER_OPERATION_MAX_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(2);
+const REGISTRY_OFFER_OPERATION_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+pub(in crate::api) const REGISTRY_OFFER_OPERATION_RETRY_AFTER_SECONDS: &str = "5";
+const _: () = assert!(
+    REGISTRY_OFFER_LEASE_RENEWAL_TIMEOUT.as_secs()
+        + REGISTRY_OFFER_FINAL_RESERVATION_TIMEOUT.as_secs()
+        < OPERATION_LEASE_SECONDS as u64
+);
+
 #[derive(Debug, Deserialize)]
 pub(in crate::api) struct Oid4vciOfferStartQuery {
     pub(in crate::api) credential_configuration_id: Option<String>,
@@ -197,6 +214,14 @@ async fn oid4vci_create_registry_offer_inner(
     {
         return evidence_error_response(EvidenceError::DisclosureNotAllowed);
     }
+    let credential_issued_at = earliest_issued_at(&evaluation.results).unwrap_or(now);
+    let credential_expires_at =
+        match credential_issued_at.checked_add(time::Duration::seconds(profile.validity_seconds)) {
+            Some(expires_at) if expires_at > now => expires_at,
+            Some(_) => return evidence_error_response(EvidenceError::EvaluationNotFound),
+            None => return evidence_error_response(EvidenceError::CredentialIssuanceFailed),
+        };
+    let offer_expires_at = evaluation_expires_at.min(credential_expires_at);
     if let Err(error) =
         require_issuable_evaluation_provenance(evidence, &request.evaluation_id, &evaluation)
     {
@@ -326,29 +351,145 @@ async fn oid4vci_create_registry_offer_inner(
             return registry_offer_problem(StatusCode::SERVICE_UNAVAILABLE, "offer_unavailable");
         }
     }
-    if let Err(error) = state
-        .machine_quota_limiter
-        .check_and_consume(&principal.principal_id, 1)
+    let quota_operation_id = format!(
+        "idempotency\0{}\0{}",
+        idempotency_key_hash.len(),
+        idempotency_key_hash,
+    );
+    let transaction_id = match generate_opaque_token() {
+        Ok(transaction_id) => transaction_id,
+        Err(_) => return evidence_error_response(EvidenceError::CredentialIssuanceFailed),
+    };
+    let quota_wait_deadline = tokio::time::Instant::now() + REGISTRY_OFFER_OPERATION_WAIT;
+    let quota_poll_jitter = std::time::Duration::from_millis(
+        transaction_id.bytes().fold(0_u64, |accumulator, byte| {
+            accumulator.wrapping_mul(33).wrapping_add(u64::from(byte))
+        }) % 101,
+    );
+    let mut quota_poll_interval = REGISTRY_OFFER_OPERATION_POLL_INTERVAL;
+    let _initial_quota_operation_fence = loop {
+        let quota_outcome = match tokio::time::timeout_at(
+            quota_wait_deadline,
+            state.machine_quota_limiter.check_and_consume_once(
+                &principal.principal_id,
+                1,
+                &quota_operation_id,
+                &canonical_request_hash,
+                &transaction_id,
+                offer_expires_at,
+            ),
+        )
         .await
-    {
-        return evidence_error_response(EvidenceError::MachineQuotaExceeded {
-            retry_after_seconds: error.retry_after_seconds,
-        });
-    }
+        {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                return registry_offer_problem(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "offer_unavailable",
+                );
+            }
+        };
+        match quota_outcome {
+            Ok(MachineQuotaOperationOutcome::Acquired(fence)) => break fence,
+            Ok(MachineQuotaOperationOutcome::Conflict) => {
+                return registry_offer_problem(StatusCode::CONFLICT, "offer_conflict");
+            }
+            Ok(MachineQuotaOperationOutcome::Existing) => {
+                // A concurrent exact request owns the charged lease. Only
+                // that owner may sign. Contenders wait for its authoritative
+                // reservation, or take over an expired/released lease without
+                // spending quota again.
+                let preflight = match tokio::time::timeout_at(
+                    quota_wait_deadline,
+                    preauth
+                        .preauthorization_state()
+                        .registry_client_offer_preflight(
+                            &request.evaluation_id,
+                            &principal.principal_id,
+                            &idempotency_key_hash,
+                            &canonical_request_hash,
+                        ),
+                )
+                .await
+                {
+                    Ok(preflight) => preflight,
+                    Err(_) => {
+                        return registry_offer_problem(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "offer_unavailable",
+                        );
+                    }
+                };
+                match preflight {
+                    Ok(RegistryClientOfferPreflightOutcome::Replayed(response)) => {
+                        state
+                            .metrics
+                            .record_credential("openid4vci_registry_offer", "replayed");
+                        return registry_client_offer_success_response(
+                            response,
+                            &state.subject_access_rate_keys,
+                            "registry_offer_replayed",
+                            &request.evaluation_id,
+                            &evaluation,
+                            configuration_id,
+                            profile_id,
+                            &profile.holder_binding.mode,
+                            target_ref,
+                        );
+                    }
+                    Ok(RegistryClientOfferPreflightOutcome::IdempotencyConflict)
+                    | Ok(RegistryClientOfferPreflightOutcome::EvaluationConsumed) => {
+                        return registry_offer_problem(StatusCode::CONFLICT, "offer_conflict");
+                    }
+                    Ok(RegistryClientOfferPreflightOutcome::Available) => {}
+                    Err(_) => {
+                        return registry_offer_problem(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "offer_unavailable",
+                        );
+                    }
+                }
+                let now = tokio::time::Instant::now();
+                if now >= quota_wait_deadline {
+                    return registry_offer_problem(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "offer_unavailable",
+                    );
+                }
+                tokio::time::sleep_until(std::cmp::min(
+                    now + quota_poll_interval + quota_poll_jitter,
+                    quota_wait_deadline,
+                ))
+                .await;
+                quota_poll_interval = std::cmp::min(
+                    quota_poll_interval.saturating_mul(2),
+                    REGISTRY_OFFER_OPERATION_MAX_POLL_INTERVAL,
+                );
+            }
+            Err(error) => {
+                return evidence_error_response(EvidenceError::MachineQuotaExceeded {
+                    retry_after_seconds: error.retry_after_seconds,
+                });
+            }
+        }
+    };
     let (quota_principal_hash, _quota_limit, quota_cost) = match state
         .machine_quota_limiter
         .batch_reservation_parameters(&principal.principal_id, 1)
     {
         Ok(parameters) => parameters,
         Err(error) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &transaction_id,
+            )
+            .await;
             return evidence_error_response(EvidenceError::MachineQuotaExceeded {
                 retry_after_seconds: error.retry_after_seconds,
-            })
+            });
         }
-    };
-    let transaction_id = match generate_opaque_token() {
-        Ok(transaction_id) => transaction_id,
-        Err(_) => return evidence_error_response(EvidenceError::CredentialIssuanceFailed),
     };
     let commitment = match oid4vci_registry_client_transaction_commitment(
         &transaction_id,
@@ -364,7 +505,16 @@ async fn oid4vci_create_registry_offer_inner(
         target_ref,
     ) {
         Ok(commitment) => commitment,
-        Err(error) => return evidence_error_response(error),
+        Err(error) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &transaction_id,
+            )
+            .await;
+            return evidence_error_response(error);
+        }
     };
     let authority = IssuanceAuthority::RegistryClient {
         initiating_client_id: principal.principal_id.clone(),
@@ -385,15 +535,31 @@ async fn oid4vci_create_registry_offer_inner(
     };
     let now_unix = now.unix_timestamp();
     let code_exp = (now_unix + preauth.pre_authorized_code_ttl_seconds() as i64)
-        .min(evaluation_expires_at.unix_timestamp());
+        .min(offer_expires_at.unix_timestamp());
     if code_exp <= now_unix {
+        release_registry_offer_quota_operation(
+            &state,
+            &principal.principal_id,
+            &quota_operation_id,
+            &transaction_id,
+        )
+        .await;
         return evidence_error_response(EvidenceError::EvaluationNotFound);
     }
     let code_expires_at = match OffsetDateTime::from_unix_timestamp(code_exp) {
         Ok(expires_at) => expires_at,
-        Err(_) => return evidence_error_response(EvidenceError::CredentialIssuanceFailed),
+        Err(_) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &transaction_id,
+            )
+            .await;
+            return evidence_error_response(EvidenceError::CredentialIssuanceFailed);
+        }
     };
-    let transaction_expires_at = evaluation_expires_at
+    let transaction_expires_at = offer_expires_at
         .min(code_expires_at + time::Duration::seconds(preauth.access_token_ttl_seconds() as i64));
     let wallet_authority = BoundSubject {
         subject: transaction_id.clone(),
@@ -417,19 +583,115 @@ async fn oid4vci_create_registry_offer_inner(
         iat: now_unix,
         exp: code_exp,
     };
-    let signed_code = match mint_pre_authorized_code(
-        preauth.access_token_signer(),
-        PRE_AUTHORIZED_CODE_JWT_TYP,
-        &code_claims,
+    let signing_validity_floor = OffsetDateTime::now_utc()
+        + time::Duration::seconds(REGISTRY_OFFER_SIGNER_TIMEOUT.as_secs() as i64)
+        + REGISTRY_OFFER_SIGNER_VALIDITY_MARGIN;
+    if code_expires_at <= signing_validity_floor {
+        release_registry_offer_quota_operation(
+            &state,
+            &principal.principal_id,
+            &quota_operation_id,
+            &transaction_id,
+        )
+        .await;
+        return evidence_error_response(EvidenceError::EvaluationNotFound);
+    }
+    let signed_code = match tokio::time::timeout(
+        REGISTRY_OFFER_SIGNER_TIMEOUT,
+        mint_pre_authorized_code(
+            preauth.access_token_signer(),
+            PRE_AUTHORIZED_CODE_JWT_TYP,
+            &code_claims,
+        ),
     )
     .await
     {
-        Ok(code) => code,
-        Err(error) => return evidence_error_response(error),
+        Ok(Ok(code)) => code,
+        Ok(Err(error)) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &transaction_id,
+            )
+            .await;
+            return evidence_error_response(error);
+        }
+        Err(_) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &transaction_id,
+            )
+            .await;
+            return evidence_error_response(EvidenceError::CredentialIssuanceFailed);
+        }
+    };
+    let Some(lease_renewal_timeout) =
+        registry_offer_completion_timeout(code_expires_at, REGISTRY_OFFER_LEASE_RENEWAL_TIMEOUT)
+    else {
+        release_registry_offer_quota_operation(
+            &state,
+            &principal.principal_id,
+            &quota_operation_id,
+            &transaction_id,
+        )
+        .await;
+        return evidence_error_response(EvidenceError::EvaluationNotFound);
+    };
+    // The initial 60-second owner lease safely contains the 25-second signer
+    // deadline. Renew immediately after signing, then bound the authoritative
+    // reservation to 45 seconds. The 5-second renewal deadline leaves at
+    // least ten seconds before takeover is possible. PostgreSQL and the
+    // in-memory path both fence final completion on this returned owner token.
+    let quota_operation_fence = match tokio::time::timeout(
+        lease_renewal_timeout,
+        state.machine_quota_limiter.check_and_consume_once(
+            &principal.principal_id,
+            1,
+            &quota_operation_id,
+            &canonical_request_hash,
+            &transaction_id,
+            offer_expires_at,
+        ),
+    )
+    .await
+    {
+        Ok(Ok(MachineQuotaOperationOutcome::Acquired(fence))) => fence,
+        Ok(Ok(MachineQuotaOperationOutcome::Conflict)) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &transaction_id,
+            )
+            .await;
+            return registry_offer_problem(StatusCode::CONFLICT, "offer_conflict");
+        }
+        Ok(Ok(MachineQuotaOperationOutcome::Existing)) | Ok(Err(_)) | Err(_) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &transaction_id,
+            )
+            .await;
+            return registry_offer_problem(StatusCode::SERVICE_UNAVAILABLE, "offer_unavailable");
+        }
     };
     let tx_code = match generate_numeric_tx_code(preauth.tx_code_length()) {
         Ok(code) => code,
-        Err(_) => return evidence_error_response(EvidenceError::CredentialIssuanceFailed),
+        Err(_) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &transaction_id,
+            )
+            .await;
+            return evidence_error_response(EvidenceError::CredentialIssuanceFailed);
+        }
     };
     let offer = CredentialOffer::pre_authorized_code(
         state.oid4vci.credential_issuer.clone(),
@@ -442,7 +704,16 @@ async fn oid4vci_create_registry_offer_inner(
     );
     let credential_offer_uri = match offer_request_uri(&offer) {
         Ok(uri) => uri,
-        Err(()) => return evidence_error_response(EvidenceError::CredentialIssuanceFailed),
+        Err(()) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &transaction_id,
+            )
+            .await;
+            return evidence_error_response(EvidenceError::CredentialIssuanceFailed);
+        }
     };
     let response = RegistryClientOfferResponse {
         credential_offer_uri,
@@ -450,6 +721,7 @@ async fn oid4vci_create_registry_offer_inner(
         expires_at: format_time(code_expires_at),
     };
     let audit_evaluation_id = request.evaluation_id.clone();
+    let quota_lease_owner_id = transaction_id.clone();
     let reservation = RegistryClientOfferReservation {
         transaction_id,
         evaluation_id: request.evaluation_id,
@@ -464,45 +736,98 @@ async fn oid4vci_create_registry_offer_inner(
         code_expires_at,
         transaction_expires_at,
         response,
-        retention_expires_at: evaluation_expires_at,
+        // Replays must stop when the signed code does. Evaluation consumption
+        // remains independently retained through evaluation_expires_at.
+        retention_expires_at: code_expires_at,
         quota_principal_hash,
         // Quota was charged before signer work. The atomic final reservation
         // must not debit the same request a second time.
         quota_limit: None,
         quota_cost,
     };
-    let (response, audit_decision) = match preauth
-        .preauthorization_state()
-        .reserve_registry_client_offer(reservation)
-        .await
-    {
-        Ok(RegistryClientOfferReservationOutcome::Created(response)) => {
+    let Some(final_reservation_timeout) = registry_offer_completion_timeout(
+        code_expires_at,
+        REGISTRY_OFFER_FINAL_RESERVATION_TIMEOUT,
+    ) else {
+        release_registry_offer_quota_operation(
+            &state,
+            &principal.principal_id,
+            &quota_operation_id,
+            &quota_lease_owner_id,
+        )
+        .await;
+        return evidence_error_response(EvidenceError::EvaluationNotFound);
+    };
+    let reservation_result = tokio::time::timeout(
+        final_reservation_timeout,
+        preauth
+            .preauthorization_state()
+            .reserve_registry_client_offer_fenced(reservation, &quota_operation_fence),
+    )
+    .await;
+    let (response, audit_decision) = match reservation_result {
+        Ok(Ok(RegistryClientOfferReservationOutcome::Created(response))) => {
             state
                 .metrics
                 .record_credential("openid4vci_registry_offer", "created");
             (response, "registry_offer_created")
         }
-        Ok(RegistryClientOfferReservationOutcome::Replayed(response)) => {
+        Ok(Ok(RegistryClientOfferReservationOutcome::Replayed(response))) => {
             state
                 .metrics
                 .record_credential("openid4vci_registry_offer", "replayed");
             (response, "registry_offer_replayed")
         }
-        Err(PreauthorizationStateError::IdempotencyConflict)
-        | Err(PreauthorizationStateError::EvaluationConsumed) => {
+        Ok(Err(PreauthorizationStateError::IdempotencyConflict))
+        | Ok(Err(PreauthorizationStateError::EvaluationConsumed)) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &quota_lease_owner_id,
+            )
+            .await;
             return registry_offer_problem(StatusCode::CONFLICT, "offer_conflict");
         }
-        Err(PreauthorizationStateError::IssuanceTransactionCapacity) => {
+        Ok(Err(PreauthorizationStateError::IssuanceTransactionCapacity)) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &quota_lease_owner_id,
+            )
+            .await;
             return registry_offer_problem(StatusCode::TOO_MANY_REQUESTS, "offer_rate_limited");
         }
-        Err(PreauthorizationStateError::MachineQuotaExceeded {
+        Ok(Err(PreauthorizationStateError::MachineQuotaExceeded {
             retry_after_seconds,
-        }) => {
+        })) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &quota_lease_owner_id,
+            )
+            .await;
             return evidence_error_response(EvidenceError::MachineQuotaExceeded {
                 retry_after_seconds,
-            })
+            });
+        }
+        Ok(Err(_)) => {
+            release_registry_offer_quota_operation(
+                &state,
+                &principal.principal_id,
+                &quota_operation_id,
+                &quota_lease_owner_id,
+            )
+            .await;
+            return registry_offer_problem(StatusCode::SERVICE_UNAVAILABLE, "offer_unavailable");
         }
         Err(_) => {
+            // Do not release early: the dropped PostgreSQL request is poisoned
+            // and canceled, but retaining the renewed lease until its bounded
+            // expiry prevents a contender from signing while cancellation is
+            // still propagating. A later request may take over safely.
             return registry_offer_problem(StatusCode::SERVICE_UNAVAILABLE, "offer_unavailable");
         }
     };
@@ -526,7 +851,31 @@ pub(in crate::api) fn same_target_ref(left: &TargetRefView, right: &TargetRefVie
         && left.profile == right.profile
 }
 
-fn registry_offer_problem(status: StatusCode, code: &'static str) -> Response {
+async fn release_registry_offer_quota_operation(
+    state: &RegistryNotaryApiState,
+    principal_id: &str,
+    operation_id: &str,
+    lease_owner_id: &str,
+) {
+    let _ = state
+        .machine_quota_limiter
+        .release_operation(principal_id, operation_id, lease_owner_id)
+        .await;
+}
+
+fn registry_offer_completion_timeout(
+    code_expires_at: OffsetDateTime,
+    maximum: std::time::Duration,
+) -> Option<std::time::Duration> {
+    std::time::Duration::try_from(
+        code_expires_at - OffsetDateTime::now_utc() - REGISTRY_OFFER_SIGNER_VALIDITY_MARGIN,
+    )
+    .ok()
+    .filter(|remaining| !remaining.is_zero())
+    .map(|remaining| remaining.min(maximum))
+}
+
+pub(in crate::api) fn registry_offer_problem(status: StatusCode, code: &'static str) -> Response {
     let request_id = crate::standalone::current_request_correlation_id();
     let mut body = json!({
         "type": format!("{}/{}", crate::PROBLEM_TYPE_BASE_URL, code.replace('_', "/")),
@@ -543,6 +892,12 @@ fn registry_offer_problem(status: StatusCode, code: &'static str) -> Response {
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/problem+json"),
     );
+    if status == StatusCode::SERVICE_UNAVAILABLE {
+        response.headers_mut().insert(
+            header::RETRY_AFTER,
+            HeaderValue::from_static(REGISTRY_OFFER_OPERATION_RETRY_AFTER_SECONDS),
+        );
+    }
     response
         .extensions_mut()
         .insert(EvidenceErrorCodeContext(code.to_string()));
@@ -566,6 +921,13 @@ fn registry_client_offer_success_response(
     holder_binding_mode: &str,
     target_ref: &TargetRefView,
 ) -> Response {
+    let response_is_fresh =
+        OffsetDateTime::parse(&response.expires_at, &Rfc3339).is_ok_and(|expires_at| {
+            expires_at > OffsetDateTime::now_utc() + REGISTRY_OFFER_SIGNER_VALIDITY_MARGIN
+        });
+    if !response_is_fresh {
+        return evidence_error_response(EvidenceError::EvaluationNotFound);
+    }
     let mut response = Json(response).into_response();
     if let Err(error) = attach_registry_client_offer_audit(
         &mut response,
@@ -642,6 +1004,7 @@ pub(in crate::api) async fn oid4vci_offer_start(
             | PreauthorizationStateError::IdempotencyConflict
             | PreauthorizationStateError::EvaluationConsumed
             | PreauthorizationStateError::MachineQuotaExceeded { .. }
+            | PreauthorizationStateError::OperationLeaseLost
             | PreauthorizationStateError::Unavailable
             | PreauthorizationStateError::IncompatibleTransactionCodeProof
             | PreauthorizationStateError::InvalidExpiry

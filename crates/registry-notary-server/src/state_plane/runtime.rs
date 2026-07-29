@@ -48,6 +48,9 @@ const MAX_ROOT_CERTIFICATE_BYTES: usize = 64 * 1024;
 /// Each serving replica prunes at most this many expired rows per state table
 /// per pass. The fixed database function rejects larger batches.
 const RETENTION_MAINTENANCE_BATCH_SIZE: i32 = 1_000;
+/// `retention_prune_v1` independently bounds one delete group per private
+/// state table. Keep this synchronized with that fixed SQL contract.
+const RETENTION_PRUNE_GROUP_COUNT: i64 = 13;
 /// Cleanup is deliberately less frequent than request-path state operations;
 /// expiry checks remain authoritative even between maintenance passes.
 const RETENTION_MAINTENANCE_CADENCE: Duration = Duration::from_secs(60);
@@ -422,7 +425,8 @@ impl NotaryPostgresStatePlaneRuntime {
         let batch_saturated: bool = row
             .try_get("batch_saturated")
             .map_err(|_| NotaryPostgresStatePlaneError::OperationUnavailable)?;
-        let maximum_deleted = i64::from(RETENTION_MAINTENANCE_BATCH_SIZE) * 9;
+        let maximum_deleted =
+            i64::from(RETENTION_MAINTENANCE_BATCH_SIZE) * RETENTION_PRUNE_GROUP_COUNT;
         if !(0..=maximum_deleted).contains(&deleted_count)
             || (batch_saturated && deleted_count < i64::from(RETENTION_MAINTENANCE_BATCH_SIZE))
         {
@@ -1241,6 +1245,7 @@ mod tests {
     #[test]
     fn retention_maintenance_uses_the_fixed_bounded_contract() {
         assert_eq!(RETENTION_MAINTENANCE_BATCH_SIZE, 1_000);
+        assert_eq!(RETENTION_PRUNE_GROUP_COUNT, 13);
         assert_eq!(RETENTION_MAINTENANCE_CADENCE, Duration::from_secs(60));
         assert_eq!(
             RETENTION_CATCH_UP_INITIAL_BACKOFF,

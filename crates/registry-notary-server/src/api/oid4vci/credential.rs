@@ -3,6 +3,9 @@
 
 use super::super::*;
 
+const CREDENTIAL_SIGNING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+const CREDENTIAL_COMPLETION_MARGIN: time::Duration = time::Duration::seconds(5);
+
 pub(in crate::api) async fn oid4vci_credential(
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
     principal: Option<Extension<EvidencePrincipal>>,
@@ -472,6 +475,13 @@ async fn materialize_oid4vci_transaction(
     if commitment != transaction.commitment {
         return Err(Oid4vciWireError::AccessDenied);
     }
+    let iat = earliest_issued_at(&evaluation.results).unwrap_or_else(OffsetDateTime::now_utc);
+    let expires_at = iat
+        .checked_add(time::Duration::seconds(profile.validity_seconds))
+        .ok_or(Oid4vciWireError::ServerError)?;
+    if expires_at <= OffsetDateTime::now_utc() {
+        return Err(Oid4vciWireError::AccessDenied);
+    }
     let key = state
         .subject_access_rate_keys
         .oid4vci_nonce(&state.oid4vci.credential_issuer, configuration_id, nonce)
@@ -505,7 +515,6 @@ async fn materialize_oid4vci_transaction(
         return Err(Oid4vciWireError::InvalidProof);
     }
     let holder_id = validated_proof.holder_id.as_str();
-    let iat = earliest_issued_at(&evaluation.results).unwrap_or_else(OffsetDateTime::now_utc);
     let credential_id = state
         .credential_status
         .is_enabled()
@@ -513,24 +522,36 @@ async fn materialize_oid4vci_transaction(
     let status_claim = credential_id
         .as_deref()
         .and_then(|credential_id| state.credential_status.status_claim(credential_id));
-    let signed = sd_jwt::issue(
-        profile,
-        &issuer,
-        &evaluation.results,
-        holder_id,
-        Some(holder_id),
-        iat,
-        sd_jwt::IssueOptions {
-            credential_id,
-            status: status_claim,
-            projection: oid4vci_sd_jwt_projection(configuration),
-        },
+    let signing_budget = std::time::Duration::try_from(
+        expires_at - OffsetDateTime::now_utc() - CREDENTIAL_COMPLETION_MARGIN,
+    )
+    .map_err(|_| Oid4vciWireError::AccessDenied)?
+    .min(CREDENTIAL_SIGNING_TIMEOUT);
+    if signing_budget.is_zero() {
+        return Err(Oid4vciWireError::AccessDenied);
+    }
+    let signed = tokio::time::timeout(
+        signing_budget,
+        sd_jwt::issue(
+            profile,
+            &issuer,
+            &evaluation.results,
+            holder_id,
+            Some(holder_id),
+            iat,
+            sd_jwt::IssueOptions {
+                credential_id,
+                status: status_claim,
+                projection: oid4vci_sd_jwt_projection(configuration),
+            },
+        ),
     )
     .await
+    .map_err(|_| Oid4vciWireError::AccessDenied)?
     .map_err(|_| Oid4vciWireError::ServerError)?;
-    let expires_at = iat
-        .checked_add(time::Duration::seconds(profile.validity_seconds))
-        .ok_or(Oid4vciWireError::ServerError)?;
+    if expires_at <= OffsetDateTime::now_utc() + CREDENTIAL_COMPLETION_MARGIN {
+        return Err(Oid4vciWireError::AccessDenied);
+    }
     if state.credential_status.is_enabled() {
         state
             .credential_status

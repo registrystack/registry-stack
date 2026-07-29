@@ -259,17 +259,75 @@ maximum: 9007199254740991
     }
 
     #[test]
-    fn integer_integration_outputs_preserve_full_i64_bounds() {
-        let output: AuthoredOutputDeclaration = serde_norway::from_str(
-            r#"type: integer
-minimum: -9223372036854775808
-maximum: 9223372036854775807
+    fn integer_integration_outputs_enforce_json_safe_bounds_recursively() {
+        let safe: AuthoredOutputDeclaration = serde_norway::from_str(
+            r#"type: object
+nullable: false
+max_bytes: 1024
+fields:
+  direct:
+    required: true
+    schema:
+      type: integer
+      minimum: -9007199254740991
+      maximum: 9007199254740991
+  nested:
+    required: true
+    schema:
+      type: array
+      nullable: false
+      max_bytes: 512
+      max_items: 2
+      items:
+        type: integer
+        minimum: -9007199254740991
+        maximum: 9007199254740991
 "#,
         )
-        .expect("full i64 output contract parses");
+        .expect("nested JSON-safe output contract parses");
         let mut nodes = OUTPUT_SCHEMA_ENVELOPE_NODES_V1;
-        validate_authored_output("sequence", &output, &mut nodes)
-            .expect("integration output bounds intentionally retain full i64");
+        validate_authored_output("sequence", &safe, &mut nodes)
+            .expect("nested JSON-safe integer boundaries validate");
+
+        for (name, source) in [
+            (
+                "nested object lower bound",
+                r#"type: object
+nullable: false
+max_bytes: 256
+fields:
+  sequence:
+    required: true
+    schema:
+      type: integer
+      minimum: -9007199254740992
+      maximum: 0
+"#,
+            ),
+            (
+                "nested array upper bound",
+                r#"type: array
+nullable: false
+max_bytes: 256
+max_items: 2
+items:
+  type: integer
+  minimum: 0
+  maximum: 9007199254740992
+"#,
+            ),
+        ] {
+            let output: AuthoredOutputDeclaration =
+                serde_norway::from_str(source).expect("adjacent unsafe output contract parses");
+            let mut nodes = OUTPUT_SCHEMA_ENVELOPE_NODES_V1;
+            assert!(
+                validate_authored_output("sequence", &output, &mut nodes)
+                    .expect_err("adjacent unsafe nested integer bound rejects")
+                    .to_string()
+                    .contains("Integer schema has invalid constraints"),
+                "{name} must fail during recursive authoring validation"
+            );
+        }
     }
 
     #[test]

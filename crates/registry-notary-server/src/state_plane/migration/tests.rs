@@ -5,6 +5,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_notary_core::{StateConfig, StatePostgresqlConfig, STATE_STORAGE_POSTGRESQL};
 
+use crate::machine_quota::{MachineQuotaLimiter, MachineQuotaOperationOutcome};
 use crate::preauth_state::{
     CredentialMaterialization, IssuanceAuthority, IssuanceTransaction, LoginState,
     PreauthorizationState, PreauthorizationStateError, RegistryClientOfferPreflightOutcome,
@@ -54,14 +55,14 @@ fn schema_fingerprint_is_the_framed_semantic_identity() {
         "evaluation=client-bound-stored-record-v2-atomic-publication-expiry-v1",
         "batch=keyed-request-owner-lease-quota-once-takeover-atomic-completion-stored-response-v2-fifteen-minute-retention-v1",
         "credential-status=insert-only-locked-transition-terminal-revocation-database-clock-effective-expiry-before-suspension-retention-monotonic-updated-at-v2",
-        "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-v1",
+        "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-quota-independent-idempotency-request-conflict-owner-sixty-second-lease-renewal-bounded-completion-final-owner-fence-evaluation-retention-takeover-v4",
         "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1",
         "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2",
         "preauthorization-tx-code=verified-notary-issuer-stable-scope-jti-keyed-pin-verifier-peek-redeem-one-winner-expiry-live-key-attestation-v3",
         "oid4vci-issuance-transaction=keyed-id-encrypted-immutable-record-sha256-uri-commitment-token-nonce-bind-holder-and-request-atomic-one-materialization-encrypted-response-terminal-failure-expiry-v2",
         "issuance-evaluation-consumption=keyed-owner-evaluation-single-lineage-shared-direct-and-offer-expiry-capacity-v1",
         "registry-client-offer=hashed-idempotency-exact-encrypted-response-read-only-preflight-before-side-effects-shared-evaluation-consumption-atomic-client-quota-transaction-and-optional-pin-expiry-capacity-v3",
-        "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2",
+        "retention=thirteen-fixed-groups-bounded-expiry-prune-skip-locked-saturation-catch-up-v3",
     ] {
         assert!(
             STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1.contains(semantic_revision),
@@ -114,6 +115,7 @@ fn migration_uses_fixed_security_definer_api_without_generic_grants() {
         "batch_idempotency",
         "credential_status",
         "machine_quota",
+        "machine_quota_operation",
         "subject_access_quota",
         "preauthorization_login_state",
         "preauthorization_tx_code",
@@ -143,6 +145,11 @@ fn previous_state_plane_migration_v1() -> String {
     let mut sql = POSTGRES_STATE_PLANE_MIGRATION_V1.to_string();
     remove_unique_range(
         &mut sql,
+        "CREATE TABLE IF NOT EXISTS registry_notary_private.machine_quota_operation",
+        "CREATE TABLE IF NOT EXISTS registry_notary_private.subject_access_quota",
+    );
+    remove_unique_range(
+        &mut sql,
         "CREATE TABLE IF NOT EXISTS registry_notary_private.issuance_evaluation_consumption",
         "ALTER DEFAULT PRIVILEGES IN SCHEMA registry_notary_private",
     );
@@ -150,6 +157,11 @@ fn previous_state_plane_migration_v1() -> String {
         &mut sql,
         "CREATE OR REPLACE FUNCTION registry_notary_api.evaluation_issuance_consume_v1",
         "CREATE OR REPLACE FUNCTION registry_notary_api.oid4vci_transaction_reserve_v1",
+    );
+    remove_unique_range(
+        &mut sql,
+        "CREATE OR REPLACE FUNCTION registry_notary_api.machine_quota_debit_once_v1",
+        "CREATE OR REPLACE FUNCTION registry_notary_api.subject_access_quota_debit_v1",
     );
 
     let v_now_key_extension = r#"        UNION ALL
@@ -173,6 +185,15 @@ fn previous_state_plane_migration_v1() -> String {
     remove_unique_range(
         &mut sql,
         r#"    WITH candidates AS (
+        SELECT principal_hash, operation_hash
+          FROM registry_notary_private.machine_quota_operation"#,
+        r#"    WITH candidates AS (
+        SELECT bucket_kind, key_hash
+          FROM registry_notary_private.subject_access_quota"#,
+    );
+    remove_unique_range(
+        &mut sql,
+        r#"    WITH candidates AS (
         SELECT evaluation_hash
           FROM registry_notary_private.issuance_evaluation_consumption"#,
         "    RETURN QUERY SELECT v_total, v_saturated;",
@@ -180,6 +201,7 @@ fn previous_state_plane_migration_v1() -> String {
     assert_eq!(sql.matches("SECURITY DEFINER").count(), 31);
     assert!(!sql.contains("issuance_evaluation_consumption"));
     assert!(!sql.contains("registry_client_offer"));
+    assert!(!sql.contains("machine_quota_operation"));
     sql
 }
 
@@ -322,12 +344,15 @@ async fn assert_previous_state_plane_upgrade_contract(
                  (SELECT count(*)::bigint FROM \
                     registry_notary_private.issuance_evaluation_consumption),\n\
                  (SELECT count(*)::bigint FROM \
-                    registry_notary_private.registry_client_offer)",
+                    registry_notary_private.registry_client_offer),\n\
+                 (SELECT count(*)::bigint FROM \
+                    registry_notary_private.machine_quota_operation)",
             &[],
         )
         .await?;
     assert_eq!(new_table_counts.get::<_, i64>(0), 0);
     assert_eq!(new_table_counts.get::<_, i64>(1), 0);
+    assert_eq!(new_table_counts.get::<_, i64>(2), 0);
 
     let (runtime, runtime_driver) = connect_as(database_url, UPGRADE_RUNTIME_ROLE).await?;
     assert_eq!(attest_postgres_state_plane_v1(&runtime).await?, installed);
@@ -1618,6 +1643,215 @@ async fn assert_credential_status_and_machine_quota_contracts(
     assert!(!denied.get::<_, bool>("allowed"));
     assert_eq!(denied.get::<_, i32>("remaining"), 0);
     assert!(denied.get::<_, i64>("retry_after_seconds") >= 1);
+
+    let once_principal = vec![0x86_u8; 32];
+    let exact_operation = vec![0x87_u8; 32];
+    let distinct_operation = vec![0x88_u8; 32];
+    let exact_request = vec![0x8b_u8; 32];
+    let first_owner = vec![0x89_u8; 32];
+    let takeover_owner = vec![0x8a_u8; 32];
+    let operation_expires_at = time::OffsetDateTime::now_utc() + time::Duration::minutes(10);
+    let (quota_peer, quota_peer_driver) = connect_as(database_url, RUNTIME_ROLE).await?;
+    let first_args: [&(dyn tokio_postgres::types::ToSql + Sync); 5] = [
+        &once_principal,
+        &exact_operation,
+        &exact_request,
+        &first_owner,
+        &operation_expires_at,
+    ];
+    let retry_args: [&(dyn tokio_postgres::types::ToSql + Sync); 5] = [
+        &once_principal,
+        &exact_operation,
+        &exact_request,
+        &takeover_owner,
+        &operation_expires_at,
+    ];
+    let (first, exact_retry) = tokio::join!(
+        runtime.query_one(
+            "SELECT allowed, acquired, remaining FROM \
+             registry_notary_api.machine_quota_debit_once_v1(\
+                 $1, $2, $3, $4, 1, 1, 60, $5)",
+            &first_args,
+        ),
+        quota_peer.query_one(
+            "SELECT allowed, acquired, remaining FROM \
+             registry_notary_api.machine_quota_debit_once_v1(\
+                 $1, $2, $3, $4, 1, 1, 60, $5)",
+            &retry_args,
+        ),
+    );
+    let first = first?;
+    let exact_retry = exact_retry?;
+    assert!(first.get::<_, bool>("allowed"));
+    assert_eq!(first.get::<_, i32>("remaining"), 0);
+    assert!(exact_retry.get::<_, bool>("allowed"));
+    assert_eq!(exact_retry.get::<_, i32>("remaining"), 0);
+    let first_acquired = first.get::<_, bool>("acquired");
+    let retry_acquired = exact_retry.get::<_, bool>("acquired");
+    assert_ne!(
+        first_acquired, retry_acquired,
+        "exact operations racing on separate connections have one lease owner"
+    );
+    let (acquired_owner, waiting_owner) = if first_acquired {
+        (&first_owner, &takeover_owner)
+    } else {
+        (&takeover_owner, &first_owner)
+    };
+    assert!(runtime
+        .query_one(
+            "SELECT registry_notary_api.machine_quota_operation_release_v1($1, $2, $3)",
+            &[&once_principal, &exact_operation, acquired_owner],
+        )
+        .await?
+        .get::<_, bool>(0));
+    let takeover = runtime
+        .query_one(
+            "SELECT allowed, acquired, remaining FROM \
+             registry_notary_api.machine_quota_debit_once_v1(\
+                 $1, $2, $3, $4, 1, 1, 60, $5)",
+            &[
+                &once_principal,
+                &exact_operation,
+                &exact_request,
+                waiting_owner,
+                &operation_expires_at,
+            ],
+        )
+        .await?;
+    assert!(takeover.get::<_, bool>("allowed"));
+    assert!(takeover.get::<_, bool>("acquired"));
+    assert_eq!(takeover.get::<_, i32>("remaining"), 0);
+    assert!(!runtime
+        .query_one(
+            "SELECT allowed FROM \
+             registry_notary_api.machine_quota_debit_once_v1(\
+                 $1, $2, $3, $4, 1, 1, 60, $5)",
+            &[
+                &once_principal,
+                &distinct_operation,
+                &exact_request,
+                &takeover_owner,
+                &operation_expires_at,
+            ],
+        )
+        .await?
+        .get::<_, bool>("allowed"));
+
+    let conflict_principal = vec![0x8c_u8; 32];
+    let conflict_operation = vec![0x8d_u8; 32];
+    let request_a = vec![0x8e_u8; 32];
+    let request_b = vec![0x8f_u8; 32];
+    let conflict_a_args: [&(dyn tokio_postgres::types::ToSql + Sync); 5] = [
+        &conflict_principal,
+        &conflict_operation,
+        &request_a,
+        &first_owner,
+        &operation_expires_at,
+    ];
+    let conflict_b_args: [&(dyn tokio_postgres::types::ToSql + Sync); 5] = [
+        &conflict_principal,
+        &conflict_operation,
+        &request_b,
+        &takeover_owner,
+        &operation_expires_at,
+    ];
+    let conflict_a = runtime.query_one(
+        "SELECT allowed, acquired, conflict FROM \
+         registry_notary_api.machine_quota_debit_once_v1(\
+             $1, $2, $3, $4, 2, 1, 60, $5)",
+        &conflict_a_args,
+    );
+    let conflict_b = quota_peer.query_one(
+        "SELECT allowed, acquired, conflict FROM \
+         registry_notary_api.machine_quota_debit_once_v1(\
+             $1, $2, $3, $4, 2, 1, 60, $5)",
+        &conflict_b_args,
+    );
+    let (conflict_a, conflict_b) = tokio::join!(conflict_a, conflict_b);
+    let conflict_a = conflict_a?;
+    let conflict_b = conflict_b?;
+    assert!(conflict_a.get::<_, bool>("allowed"));
+    assert!(conflict_b.get::<_, bool>("allowed"));
+    assert_eq!(
+        [
+            conflict_a.get::<_, bool>("acquired"),
+            conflict_b.get::<_, bool>("acquired"),
+        ]
+        .into_iter()
+        .filter(|acquired| *acquired)
+        .count(),
+        1,
+    );
+    assert_eq!(
+        [
+            conflict_a.get::<_, bool>("conflict"),
+            conflict_b.get::<_, bool>("conflict"),
+        ]
+        .into_iter()
+        .filter(|conflict| *conflict)
+        .count(),
+        1,
+    );
+    assert_eq!(
+        admin
+            .query_one(
+                "SELECT used FROM registry_notary_private.machine_quota \
+                 WHERE principal_hash = $1",
+                &[&conflict_principal],
+            )
+            .await?
+            .get::<_, i32>("used"),
+        1,
+        "request-shape conflict must not debit the idempotency operation twice",
+    );
+
+    let disabled_principal = vec![0x90_u8; 32];
+    let disabled_operation = vec![0x91_u8; 32];
+    let disabled_request = vec![0x92_u8; 32];
+    let disabled_first = runtime
+        .query_one(
+            "SELECT acquired FROM registry_notary_api.machine_quota_debit_once_v1(\
+                 $1, $2, $3, $4, NULL::integer, 1, 60, $5)",
+            &[
+                &disabled_principal,
+                &disabled_operation,
+                &disabled_request,
+                &first_owner,
+                &operation_expires_at,
+            ],
+        )
+        .await?;
+    assert!(disabled_first.get::<_, bool>("acquired"));
+    let disabled_retry = quota_peer
+        .query_one(
+            "SELECT acquired, conflict FROM \
+             registry_notary_api.machine_quota_debit_once_v1(\
+                 $1, $2, $3, $4, NULL::integer, 1, 60, $5)",
+            &[
+                &disabled_principal,
+                &disabled_operation,
+                &disabled_request,
+                &takeover_owner,
+                &operation_expires_at,
+            ],
+        )
+        .await?;
+    assert!(!disabled_retry.get::<_, bool>("acquired"));
+    assert!(!disabled_retry.get::<_, bool>("conflict"));
+    assert_eq!(
+        admin
+            .query_one(
+                "SELECT used FROM registry_notary_private.machine_quota \
+                 WHERE principal_hash = $1",
+                &[&disabled_principal],
+            )
+            .await?
+            .get::<_, i32>("used"),
+        0,
+        "disabled quota retains ownership without charging budget",
+    );
+    drop(quota_peer);
+    quota_peer_driver.abort();
     Ok(())
 }
 
@@ -2725,6 +2959,76 @@ async fn assert_sensitive_adapter_contract(
             retry_after_seconds: 1..=60
         })
     ));
+
+    let quota_limiter = MachineQuotaLimiter::with_state_plane(
+        registry_notary_core::MachineQuotaConfig {
+            enabled: false,
+            subjects_per_minute: 1,
+        },
+        Arc::clone(&readiness_handle),
+        registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
+    );
+    let fenced_request_hash = format!("sha256:{}", "d".repeat(64));
+    let fenced_operation_id = format!("hmac-sha256:{}", "8".repeat(64));
+    let fenced_expires_at = offer_now + time::Duration::minutes(20);
+    let stale_fence = match quota_limiter
+        .check_and_consume_once(
+            "adapter-registry-client",
+            1,
+            &fenced_operation_id,
+            &fenced_request_hash,
+            "adapter-fenced-owner-a",
+            fenced_expires_at,
+        )
+        .await
+        .expect("initial fenced operation succeeds")
+    {
+        MachineQuotaOperationOutcome::Acquired(fence) => fence,
+        outcome => panic!("expected initial fenced owner, got {outcome:?}"),
+    };
+    quota_limiter
+        .release_operation(
+            "adapter-registry-client",
+            &fenced_operation_id,
+            "adapter-fenced-owner-a",
+        )
+        .await
+        .expect("fenced owner release succeeds");
+    let current_fence = match quota_limiter
+        .check_and_consume_once(
+            "adapter-registry-client",
+            1,
+            &fenced_operation_id,
+            &fenced_request_hash,
+            "adapter-fenced-owner-b",
+            fenced_expires_at,
+        )
+        .await
+        .expect("fenced takeover succeeds")
+    {
+        MachineQuotaOperationOutcome::Acquired(fence) => fence,
+        outcome => panic!("expected takeover owner, got {outcome:?}"),
+    };
+    let mut fenced_transaction = offer_transaction.clone();
+    fenced_transaction.transaction_id = "adapter-fenced-offer".to_string();
+    fenced_transaction.evaluation_id = "adapter-fenced-evaluation".to_string();
+    let mut stale_reservation = offer_reservation('8', 'd', fenced_transaction.clone());
+    stale_reservation.quota_principal_hash = stale_fence.principal_hash().to_vec();
+    assert!(matches!(
+        preauthorization_state
+            .reserve_registry_client_offer_fenced(stale_reservation, &stale_fence)
+            .await,
+        Err(PreauthorizationStateError::OperationLeaseLost)
+    ));
+    let mut current_reservation = offer_reservation('8', 'd', fenced_transaction);
+    current_reservation.quota_principal_hash = current_fence.principal_hash().to_vec();
+    assert!(matches!(
+        preauthorization_state
+            .reserve_registry_client_offer_fenced(current_reservation, &current_fence)
+            .await?,
+        RegistryClientOfferReservationOutcome::Created(_)
+    ));
+
     preauthorization_state
         .reserve_evaluation_issuance(
             "adapter-quota-evaluation-two",
@@ -2822,6 +3126,7 @@ async fn assert_retention_contract(
                       registry_notary_private.batch_idempotency,
                       registry_notary_private.credential_status,
                       registry_notary_private.machine_quota,
+                      registry_notary_private.machine_quota_operation,
                       registry_notary_private.subject_access_quota,
                       registry_notary_private.preauthorization_login_state,
                       registry_notary_private.preauthorization_tx_code,
@@ -2877,6 +3182,21 @@ async fn assert_retention_contract(
                     clock_timestamp() - interval '2 minutes', clock_timestamp() + lifetime, 1
                FROM (VALUES ('9d', interval '-1 second'),
                             ('9e', interval '5 minutes')) AS rows(marker, lifetime);
+             INSERT INTO registry_notary_private.machine_quota_operation
+                (principal_hash, operation_hash, request_hash, lease_owner_hash,
+                 lease_expires_at, created_at, expires_at)
+             SELECT decode(repeat(principal_marker, 32), 'hex'),
+                    decode(repeat(operation_marker, 32), 'hex'),
+                    decode(repeat(request_marker, 32), 'hex'),
+                    decode(repeat(owner_marker, 32), 'hex'),
+                    clock_timestamp() + lifetime,
+                    clock_timestamp() - interval '2 seconds',
+                    clock_timestamp() + lifetime
+               FROM (VALUES
+                    ('d0', 'd1', 'd2', 'd3', interval '-1 second'),
+                    ('d4', 'd5', 'd6', 'd7', interval '5 minutes'))
+                    AS rows(principal_marker, operation_marker, request_marker,
+                            owner_marker, lifetime);
              INSERT INTO registry_notary_private.subject_access_quota
                 (bucket_kind, key_hash, window_started_at, window_expires_at, used)
              SELECT 'per_principal', decode(repeat(marker, 32), 'hex'),
@@ -2951,7 +3271,7 @@ async fn assert_retention_contract(
         .await?;
     let pruned: i64 = prune.get("deleted_count");
     assert_eq!(
-        pruned, 12,
+        pruned, 13,
         "each typed state table must prune its expired row"
     );
     assert!(
@@ -2967,6 +3287,7 @@ async fn assert_retention_contract(
                 (SELECT count(*) FROM registry_notary_private.batch_idempotency) +
                 (SELECT count(*) FROM registry_notary_private.credential_status) +
                 (SELECT count(*) FROM registry_notary_private.machine_quota) +
+                (SELECT count(*) FROM registry_notary_private.machine_quota_operation) +
                 (SELECT count(*) FROM registry_notary_private.subject_access_quota) +
                 (SELECT count(*) FROM registry_notary_private.preauthorization_login_state) +
                 (SELECT count(*) FROM registry_notary_private.preauthorization_tx_code) +
@@ -2977,7 +3298,7 @@ async fn assert_retention_contract(
         )
         .await?
         .get(0);
-    assert_eq!(remaining, 12, "retention must preserve every live row");
+    assert_eq!(remaining, 13, "retention must preserve every live row");
 
     admin
         .batch_execute(
