@@ -54,14 +54,32 @@ An authorized registry client can create an offer after it evaluates the
 authoritative record through `POST /v1/evaluations`. This path does not use the
 citizen browser or identity-provider callback.
 
-The machine credential must be an external configured API key or OpenID
-Connect (OIDC) token. A Notary-issued wallet access token is not accepted. The
-credential needs `registry_notary:credential_offer_create`, the selected
-credential configuration's scope, and access to the evaluation's exact
-service, purpose, claims, and target. It must carry Registry Notary
-`authorization_details` that permit `create_credential_offer` for the exact
-target, complete claim set, value disclosure, claim-result format, purpose,
-service, and machine access mode.
+Generated projects admit registrar OIDC clients explicitly:
+
+```yaml
+oid4vci:
+  public_base_url: https://notary.example.gov
+  registrar_clients: [opencrvs-registrar]
+```
+
+Registryctl keeps these clients on the same pinned authorization server and
+JWKS as the citizen client, but requires the Notary `public_base_url` as the
+machine resource audience. The signed `JWT` access token needs a stable `sub`
+that matches the evaluation owner, an admitted `azp` or `client_id`,
+`registry_notary:credential_offer_create`, the selected credential
+configuration's scope, and exact Registry Notary `authorization_details`.
+Those details must permit `create_credential_offer` for the target, complete
+claim set, value disclosure, claim-result format, purpose, service, and
+machine access mode. Identify the target with the evaluated primary
+identifier's scheme and value. When an entity has only a top-level
+`target.id`, use the reserved authorization `id_type` value `id`; this keeps
+typed identifiers distinct from the untyped top-level ID.
+
+An admitted registrar client with the machine resource audience needs only
+the access token; citizen userinfo and ID-token assurance are not required.
+Any citizen client or citizen audience signal still selects the citizen path,
+so mixed client/audience tokens cannot retain machine authority. A
+Notary-issued wallet access token is not accepted.
 
 Send only the stored evaluation identifier and configured credential type:
 
@@ -112,6 +130,9 @@ transaction. Reusing the key for another request, using another key for an
 evaluation already reserved for issuance, or racing two requests returns
 `409`. A client-scoped quota can return `429`. Retry a lost response with the
 original key; do not start another evaluation or invent a second key.
+Exact replays, known idempotency conflicts, and consumed-evaluation preflights
+do not call the signer. A genuinely new attempt consumes client quota before
+signer work, so signer failures still count toward abuse protection.
 
 The wallet then redeems the offer through `/oid4vci/token` and
 `/oid4vci/credential`. The pre-authorized code, access token, proof nonce,
