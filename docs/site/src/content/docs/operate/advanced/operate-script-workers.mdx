@@ -30,6 +30,9 @@ Registry Relay owns the code-built worker executable, isolation, host API, reque
 credential resolution, dispatch permits, response bounds, and result validation.
 The worker cannot access the network, filesystem, environment, subprocesses, clock, random source,
 credentials, or production logs.
+Its active execution budget pauses only while Relay performs a validated host call. The same
+absolute durable consultation deadline continues to cap worker IPC, credentials, permits, TLS,
+source I/O, and result completion together.
 
 Protocol helpers add closed parsing or verified exchange behavior.
 They do not add an origin, credential, method, path, or output.
