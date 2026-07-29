@@ -131,6 +131,16 @@ if (scope === 'all' && productionLayout) {
       errors.push('Production robots declaration must point to the canonical root sitemap');
     }
   }
+  for (const asset of [
+    'llms.txt',
+    'llms-full.txt',
+    'llms-small.txt',
+    'pagefind/pagefind.js',
+  ]) {
+    if (!await exists(join(distDir, asset))) {
+      errors.push(`Canonical release asset is missing: ${join(distDir, asset)}`);
+    }
+  }
   for (const docset of archivedDocsets) {
     await rejectSitemap(join(distDir, docset.path), `Archived docset ${docset.id}`, errors);
   }

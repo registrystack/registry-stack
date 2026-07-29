@@ -81,6 +81,14 @@ function productionFixture(t) {
     'dist/robots.txt',
     'Sitemap: https://docs.registrystack.org/sitemap-index.xml\n',
   );
+  for (const asset of [
+    'llms.txt',
+    'llms-full.txt',
+    'llms-small.txt',
+    'pagefind/pagefind.js',
+  ]) {
+    write(root, `dist/${asset}`, 'canonical release asset\n');
+  }
   return root;
 }
 
@@ -125,6 +133,16 @@ test('accepts a canonical release redirect without a sitemap link', (t) => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /2 canonical release HTML files/);
+});
+
+test('rejects missing canonical release search and corpus assets', (t) => {
+  const root = productionFixture(t);
+  rmSync(resolve(root, 'dist/pagefind/pagefind.js'));
+
+  const result = run(root);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Canonical release asset is missing/);
 });
 
 test('rejects indexable unreleased Main documentation', (t) => {

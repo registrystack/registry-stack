@@ -112,6 +112,10 @@ jobs:
         working-directory: docs/site
         run: npm run stage:production-docsets
 
+      - name: Build canonical released-documentation search
+        working-directory: docs/site
+        run: npm run build:production-search
+
       - name: Verify current machine-readable documentation
         working-directory: docs/site
         run: npm run check:llms:built

@@ -18,9 +18,16 @@ import { CURRENT_PRODUCTION_DOCSET_PATH } from '../src/lib/docset-path.mjs';
 const productionCurrentPath = CURRENT_PRODUCTION_DOCSET_PATH;
 const legacyPreviewPath = '/preview/';
 const discoveryFiles = ['llms.txt', 'llms-full.txt', 'llms-small.txt'];
-const reservedRootDirectories = new Set(['_archive-bundles', 'dev', 'preview', 'v']);
+const reservedRootDirectories = new Set([
+  '_archive-bundles',
+  'dev',
+  'pagefind',
+  'preview',
+  'v',
+]);
 const generatedRootFiles = new Set([
   'CNAME',
+  ...discoveryFiles,
   'robots.txt',
   'sitemap-index.xml',
   'sitemap-0.xml',
@@ -241,6 +248,96 @@ async function rewriteDevelopmentDiscoveryFiles(currentRoot) {
   }
 }
 
+function withoutDiscoveryHeader(markdown) {
+  const firstHeading = markdown.indexOf('\n\n# ');
+  return (firstHeading === -1 ? markdown : markdown.slice(firstHeading + 2)).trim();
+}
+
+function canonicalCorpusIndex(discoveryHeader) {
+  return `# Registry stack docs
+
+> Documentation for Registry Stack: tutorials, product docs, explanation, and API reference for Registry Relay and Registry Notary.
+
+${discoveryHeader}
+
+## Documentation Sets
+
+- [Abridged documentation](https://docs.registrystack.org/llms-small.txt): a compact version of the released documentation
+- [Complete documentation](https://docs.registrystack.org/llms-full.txt): the full released documentation
+
+## Notes
+
+- Both corpora are generated from the same locked release pages served at the canonical root.
+- Immutable versioned archives remain unchanged.
+`;
+}
+
+function canonicalCorpusDocument(kind, released, pages) {
+  return `<SYSTEM>This is the ${kind} developer documentation for Registry stack docs ${released.label}</SYSTEM>
+
+${pages.join('\n\n')}
+`;
+}
+
+async function writeCanonicalCorpora(distRoot, promotedFiles, released) {
+  const markdownFiles = promotedFiles
+    .filter((entry) => entry.relative.endsWith('.md'))
+    .sort((left, right) => left.relative.localeCompare(right.relative));
+  const index = markdownFiles.find((entry) => entry.relative === 'index.md');
+  if (!index) {
+    throw new Error(`released archive ${released.id} contains no index.md`);
+  }
+
+  const pages = [];
+  for (const entry of markdownFiles) {
+    pages.push({
+      relative: entry.relative,
+      contents: withoutDiscoveryHeader(await readFile(entry.destination, 'utf8')),
+    });
+  }
+  const indexContents = await readFile(index.destination, 'utf8');
+  const firstHeading = indexContents.indexOf('\n\n# ');
+  if (firstHeading === -1) {
+    throw new Error(`released archive ${released.id} index.md has no discovery header`);
+  }
+  const discoveryHeader = indexContents.slice(0, firstHeading).trim();
+  for (const file of ['llms.txt', 'llms-full.txt']) {
+    if (!discoveryHeader.includes(`https://docs.registrystack.org/${file}`)) {
+      throw new Error(
+        `released archive ${released.id} index.md discovery header is missing ${file}`,
+      );
+    }
+  }
+
+  const abridgedPages = pages.filter(
+    (page) => page.relative === 'index.md' || page.relative.startsWith('explanation/'),
+  );
+  await writeFile(
+    resolve(distRoot, 'llms.txt'),
+    canonicalCorpusIndex(discoveryHeader),
+    { encoding: 'utf8', flag: 'wx' },
+  );
+  await writeFile(
+    resolve(distRoot, 'llms-full.txt'),
+    canonicalCorpusDocument(
+      'full',
+      released,
+      pages.map((page) => page.contents),
+    ),
+    { encoding: 'utf8', flag: 'wx' },
+  );
+  await writeFile(
+    resolve(distRoot, 'llms-small.txt'),
+    canonicalCorpusDocument(
+      'abridged',
+      released,
+      abridgedPages.map((page) => page.contents),
+    ),
+    { encoding: 'utf8', flag: 'wx' },
+  );
+  return discoveryFiles.length;
+}
+
 async function rejectDestinationCollisions(distRoot, destinations) {
   for (const destination of destinations) {
     if (!isWithin(distRoot, destination)) {
@@ -341,6 +438,7 @@ export async function stageProductionDocsets({
   const robotsDestination = resolve(distRoot, 'robots.txt');
   const sitemapIndexDestination = resolve(distRoot, 'sitemap-index.xml');
   const sitemapPagesDestination = resolve(distRoot, 'sitemap-0.xml');
+  const corpusDestinations = discoveryFiles.map((file) => resolve(distRoot, file));
 
   await rejectDestinationCollisions(
     distRoot,
@@ -349,6 +447,7 @@ export async function stageProductionDocsets({
       robotsDestination,
       sitemapIndexDestination,
       sitemapPagesDestination,
+      ...corpusDestinations,
       ...promotedFiles.map((entry) => entry.destination),
       ...legacyRedirects.map((entry) => entry.destination),
     ],
@@ -375,6 +474,8 @@ export async function stageProductionDocsets({
     }
   }
 
+  const corpusFiles = await writeCanonicalCorpora(distRoot, promotedFiles, released);
+
   for (const redirect of legacyRedirects) {
     await mkdir(dirname(redirect.destination), { recursive: true });
     await writeFile(
@@ -392,6 +493,7 @@ export async function stageProductionDocsets({
     released: released.id,
     promotedFiles: promotedFiles.length,
     canonicalRoutes: canonicalRoutes.length,
+    corpusFiles,
     legacyRedirects: legacyRedirects.length,
   };
 }
@@ -399,7 +501,7 @@ export async function stageProductionDocsets({
 async function main() {
   const result = await stageProductionDocsets();
   console.log(
-    `Promoted ${result.promotedFiles} file(s) across ${result.canonicalRoutes} canonical content route(s) for released docset ${result.released}; staged ${result.legacyRedirects} legacy /preview/ redirect(s); Main remains under ${productionCurrentPath}.`,
+    `Promoted ${result.promotedFiles} file(s) across ${result.canonicalRoutes} canonical content route(s) and generated ${result.corpusFiles} corpus file(s) for released docset ${result.released}; staged ${result.legacyRedirects} legacy /preview/ redirect(s); Main remains under ${productionCurrentPath}.`,
   );
 }
 

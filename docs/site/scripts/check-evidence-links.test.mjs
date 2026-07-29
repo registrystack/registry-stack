@@ -246,9 +246,13 @@ test('Pages promotes the released root before checking the mounted Main corpus',
   const llmsCheck = workflow.indexOf('npm run check:llms:built');
   const archiveAssembly = workflow.indexOf('npm run assemble:archives');
   const rootStaging = workflow.indexOf('npm run stage:production-docsets');
+  const rootSearch = workflow.indexOf('npm run build:production-search');
+  const productionVerification = workflow.indexOf('npm run check:seo:built');
   assert.ok(llmsCheck >= 0);
   assert.ok(rootStaging > archiveAssembly);
+  assert.ok(rootSearch > rootStaging);
   assert.ok(llmsCheck > rootStaging);
+  assert.ok(productionVerification > rootSearch);
   assert.match(workflow, /node scripts\/apply-archive-seo\.mjs dist\/dev/);
   assert.match(workflow, /DOCS_DIST_DIR: \$\{\{ github\.workspace \}\}\/docs\/site\/dist\/dev/);
   assert.match(workflow, /DOCS_PUBLIC_BASE: \/dev\//);

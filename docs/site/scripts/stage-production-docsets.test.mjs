@@ -75,7 +75,15 @@ async function createFixture(t, {
   }
   await writeFile(
     resolve(archiveRoot, 'index.md'),
-    '[Guide](/v/1.0.0/guide/)\n[External](https://example.test/v/1.0.0/guide/)\n',
+    `Registry stack documentation: machine-readable Markdown.
+Index of all pages: https://docs.registrystack.org/llms.txt
+Full corpus: https://docs.registrystack.org/llms-full.txt
+
+# Released index
+
+[Guide](/v/1.0.0/guide/)
+[External](https://example.test/v/1.0.0/guide/)
+`,
   );
   await writeFile(resolve(archiveRoot, 'guide.md'), '# Released guide\n');
   await mkdir(resolve(archiveRoot, 'assets'), { recursive: true });
@@ -142,6 +150,7 @@ test('promotes the locked release to canonical root without changing its archive
     released: 'v1.0.0',
     promotedFiles: 6,
     canonicalRoutes: 2,
+    corpusFiles: 3,
     legacyRedirects: 2,
   });
   assert.equal(await treeDigest(fixture.archiveRoot), fixture.lockedDigest);
@@ -158,7 +167,27 @@ test('promotes the locked release to canonical root without changing its archive
   assert.match(root, /href="\/dev\/guide\/"/);
   assert.equal(
     await readFile(resolve(fixture.docsRoot, 'dist/index.md'), 'utf8'),
-    '[Guide](/guide/)\n[External](https://example.test/v/1.0.0/guide/)\n',
+    `Registry stack documentation: machine-readable Markdown.
+Index of all pages: https://docs.registrystack.org/llms.txt
+Full corpus: https://docs.registrystack.org/llms-full.txt
+
+# Released index
+
+[Guide](/guide/)
+[External](https://example.test/v/1.0.0/guide/)
+`,
+  );
+  assert.match(
+    await readFile(resolve(fixture.docsRoot, 'dist/llms.txt'), 'utf8'),
+    /https:\/\/docs\.registrystack\.org\/llms-full\.txt/,
+  );
+  assert.match(
+    await readFile(resolve(fixture.docsRoot, 'dist/llms-full.txt'), 'utf8'),
+    /# Released guide/,
+  );
+  assert.match(
+    await readFile(resolve(fixture.docsRoot, 'dist/llms-small.txt'), 'utf8'),
+    /# Released index/,
   );
   assert.equal(
     await readFile(resolve(fixture.docsRoot, 'dist/assets/app.js'), 'utf8'),
