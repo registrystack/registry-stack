@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Registry-backed direct Relay claims can preserve bounded closed objects and
+  arrays through stored evaluation and SD-JWT issuance. Type Metadata publishes
+  the namespaced recursive value contract. Each top-level structured claim is
+  disclosed or withheld as one unit.
+- An authenticated registry client can create a pre-authorized OID4VCI offer
+  from a fresh caller-owned evaluation at `POST /oid4vci/offers`. The endpoint
+  accepts no credential facts or target input, requires an idempotency key,
+  returns the exact stored response for an exact retry, and keeps the
+  required transaction-code value outside the offer URI.
+
 ## 0.15.2
 
 - Registry Notary has no user-visible changes. This release fixes forward from

@@ -324,6 +324,31 @@
       "service": "registry-notary",
       "listener": "public",
       "method": "POST",
+      "path": "/oid4vci/offers",
+      "feature": null,
+      "audience": "external",
+      "auth": "api_key_or_oidc",
+      "scopes": [
+        "registry_notary:credential_offer_create"
+      ],
+      "rate_limit": "machine_client_offer",
+      "audit": "required",
+      "openapi": true,
+      "stability": "beta",
+      "data_classification": "secret-adjacent",
+      "notes": "Protected registrar integration route. It also requires the selected credential-configuration scope, exact target-scoped authorization_details, a caller-owned fresh registry-backed evaluation, current exact Relay provenance and configuration, and Idempotency-Key. Atomic correctness state binds one evaluation to one transaction, charges the client-scoped quota, and returns the exact stored response for an exact retry. Registrar-created offers always require a separately delivered numeric tx_code. The response is non-storable, and the numeric value is never embedded in the credential_offer_uri.",
+      "source": "manual",
+      "enforcement_tests": [
+        "crates/registry-notary-server/src/standalone/tests/auth.inc::registrar_offer_creation_is_not_auth_exempt",
+        "crates/registry-notary-server/src/preauth_state.rs::registry_client_offer_exact_replay_returns_the_cached_response",
+        "crates/registry-notary-server/src/preauth_state.rs::concurrent_idempotency_keys_consume_an_evaluation_once"
+      ],
+      "waiver": null
+    },
+    {
+      "service": "registry-notary",
+      "listener": "public",
+      "method": "POST",
       "path": "/oid4vci/token",
       "feature": null,
       "audience": "external",

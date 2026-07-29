@@ -1459,6 +1459,232 @@
         ],
         "type": "object"
       },
+      "RegistryClientOfferRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_configuration_id": {
+            "description": "Configured credential type authorized for the evaluation's exact claim set, purpose, and target.",
+            "type": "string"
+          },
+          "evaluation_id": {
+            "description": "Identifier of the fresh registry-backed evaluation owned by the authenticated machine client.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evaluation_id",
+          "credential_configuration_id"
+        ],
+        "type": "object"
+      },
+      "RegistryClientOfferResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "credential_offer_uri": {
+            "description": "Sensitive standard credential offer URI. It contains the pre-authorized code and describes the tx_code requirement, but never contains the numeric tx_code value.",
+            "format": "uri",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "Expiry of the pre-authorized code, capped by the stored evaluation expiry.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "tx_code": {
+            "description": "Required sensitive numeric transaction code. Deliver it to the holder through a channel separate from the credential_offer_uri.",
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "credential_offer_uri",
+          "tx_code",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "RelayOutputContract": {
+        "description": "Recursive, closed compiler-pinned Relay output contract. Runtime validation also enforces maximum depth 8, 256 schema nodes, 4096 expanded nodes, and 128-byte field names.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "nullable": {
+                "default": false,
+                "type": "boolean"
+              },
+              "type": {
+                "enum": [
+                  "boolean"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "maximum": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "minimum": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "nullable": {
+                "default": false,
+                "type": "boolean"
+              },
+              "type": {
+                "enum": [
+                  "integer"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "minimum",
+              "maximum"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "max_bytes": {
+                "maximum": 65536,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "nullable": {
+                "default": false,
+                "type": "boolean"
+              },
+              "type": {
+                "enum": [
+                  "string"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "max_bytes"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "nullable": {
+                "default": false,
+                "type": "boolean"
+              },
+              "type": {
+                "enum": [
+                  "date"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "fields": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/RelayOutputObjectFieldContract"
+                },
+                "maxProperties": 32,
+                "minProperties": 1,
+                "type": "object"
+              },
+              "max_bytes": {
+                "maximum": 65536,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "nullable": {
+                "default": false,
+                "type": "boolean"
+              },
+              "type": {
+                "enum": [
+                  "object"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "max_bytes",
+              "fields"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "$ref": "#/components/schemas/RelayOutputContract"
+              },
+              "max_bytes": {
+                "maximum": 65536,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "max_items": {
+                "maximum": 256,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "nullable": {
+                "default": false,
+                "type": "boolean"
+              },
+              "type": {
+                "enum": [
+                  "array"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "max_bytes",
+              "max_items",
+              "items"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RelayOutputObjectFieldContract": {
+        "additionalProperties": false,
+        "properties": {
+          "required": {
+            "type": "boolean"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/RelayOutputContract"
+          }
+        },
+        "required": [
+          "required",
+          "schema"
+        ],
+        "type": "object"
+      },
       "RenderEvaluationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1530,7 +1756,11 @@
                 "registry_notary_semantics": {
                   "$ref": "#/components/schemas/ClaimSemantics"
                 },
+                "registry_notary_value_schema": {
+                  "$ref": "#/components/schemas/RelayOutputContract"
+                },
                 "sd": {
+                  "description": "The complete top-level claim is selectively disclosed as one unit. Nested object fields and array items are not independently disclosable.",
                   "enum": [
                     "always"
                   ],
@@ -2089,6 +2319,10 @@
                           "https://publicschema.org/date_of_death"
                         ],
                         "predicate": "urn:registry-notary:predicate:person-is-alive"
+                      },
+                      "registry_notary_value_schema": {
+                        "nullable": false,
+                        "type": "boolean"
                       },
                       "sd": "always"
                     }
@@ -2743,6 +2977,10 @@
                         ],
                         "predicate": "urn:registry-notary:predicate:person-is-alive"
                       },
+                      "registry_notary_value_schema": {
+                        "nullable": false,
+                        "type": "boolean"
+                      },
                       "sd": "always"
                     }
                   ],
@@ -3093,6 +3331,348 @@
         },
         "security": [],
         "summary": "Begin an authenticated pre-authorized-code offer"
+      }
+    },
+    "/oid4vci/offers": {
+      "post": {
+        "description": "Creates one short-lived pre-authorized OID4VCI offer from an existing fresh registry-backed evaluation owned by the authenticated machine client. The client supplies only the evaluation id and credential configuration id. Registry Notary reloads the exact stored values, target, purpose, compiler-pinned Relay provenance, credential profile, and configuration fingerprint. The caller must present an external API-key or OIDC machine credential with registry_notary:credential_offer_create, the selected configuration scope, and exact target-scoped authorization_details for create_credential_offer; a Notary-issued wallet access token is not accepted. Idempotency-Key is required. Reusing one key with the same request returns the exact stored response, while changing the request or attempting to create another offer from the consumed evaluation returns 409. The credential_offer_uri describes the required tx_code but never contains its numeric value. The registrar must deliver that value to the holder through a separate channel. Every response is non-storable.",
+        "operationId": "createOid4vciRegistryOffer",
+        "parameters": [
+          {
+            "description": "Caller-generated retry key. Use the same key only for an exact retry of the same request.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 1,
+              "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]{1,256}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryClientOfferRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "credential_offer_uri": "openid-credential-offer://?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example.gov%22%2C%22credential_configuration_ids%22%3A%5B%22birth_certificate_sd_jwt%22%5D%2C%22grants%22%3A%7B%22urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Apre-authorized_code%22%3A%7B%22pre-authorized_code%22%3A%22fake-example-code%22%2C%22tx_code%22%3A%7B%22input_mode%22%3A%22numeric%22%2C%22length%22%3A6%7D%7D%7D%7D",
+                  "expires_at": "2026-07-29T12:05:00Z",
+                  "tx_code": "123456"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryClientOfferResponse"
+                }
+              }
+            },
+            "description": "New or exactly replayed credential offer response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of offer, code, and transaction material.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "description": "Compatibility cache directive for sensitive offer responses.",
+                "schema": {
+                  "enum": [
+                    "no-cache"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "request.invalid",
+                  "detail": "the offer request or Idempotency-Key is invalid",
+                  "request_id": "01J00000000000000000000000",
+                  "status": 400,
+                  "title": "Invalid evidence request",
+                  "type": "https://id.registrystack.org/problems/registry-notary/request/invalid"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Invalid request or idempotency key",
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of offer, code, and transaction material.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "description": "Compatibility cache directive for sensitive offer responses.",
+                "schema": {
+                  "enum": [
+                    "no-cache"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "auth.missing_credential",
+                  "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
+                  "status": 401,
+                  "title": "Missing credential",
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Missing or invalid machine credential",
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of offer, code, and transaction material.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "description": "Compatibility cache directive for sensitive offer responses.",
+                "schema": {
+                  "enum": [
+                    "no-cache"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "auth.scope_denied",
+                  "detail": "missing the offer-create or credential-configuration scope",
+                  "request_id": "01J00000000000000000000000",
+                  "status": 403,
+                  "title": "Scope denied",
+                  "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Caller lacks a required scope or exact target-scoped authorization",
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of offer, code, and transaction material.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "description": "Compatibility cache directive for sensitive offer responses.",
+                "schema": {
+                  "enum": [
+                    "no-cache"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "evaluation.not_found",
+                  "detail": "the evaluation is unknown, expired, or not owned by this client",
+                  "request_id": "01J00000000000000000000000",
+                  "status": 404,
+                  "title": "Evaluation not found",
+                  "type": "https://id.registrystack.org/problems/registry-notary/evaluation/not_found"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Flow is disabled or the evaluation is unavailable to this caller",
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of offer, code, and transaction material.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "description": "Compatibility cache directive for sensitive offer responses.",
+                "schema": {
+                  "enum": [
+                    "no-cache"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "offer_conflict",
+                  "detail": "the idempotency key conflicts or the evaluation was already consumed",
+                  "request_id": "01J00000000000000000000000",
+                  "status": 409,
+                  "title": "Credential offer was not created",
+                  "type": "https://id.registrystack.org/problems/registry-notary/offer_conflict"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Idempotency conflict or evaluation already consumed",
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of offer, code, and transaction material.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "description": "Compatibility cache directive for sensitive offer responses.",
+                "schema": {
+                  "enum": [
+                    "no-cache"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "evaluation.quota_exceeded",
+                  "detail": "the machine offer quota was exceeded for this principal",
+                  "request_id": "01J00000000000000000000000",
+                  "status": 429,
+                  "title": "Machine quota exceeded",
+                  "type": "https://id.registrystack.org/problems/registry-notary/evaluation/quota_exceeded"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Offer creation is rate limited",
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of offer, code, and transaction material.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "description": "Compatibility cache directive for sensitive offer responses.",
+                "schema": {
+                  "enum": [
+                    "no-cache"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "example": {
+                  "code": "offer_unavailable",
+                  "detail": "the offer correctness state is unavailable",
+                  "request_id": "01J00000000000000000000000",
+                  "status": 503,
+                  "title": "Credential offer was not created",
+                  "type": "https://id.registrystack.org/problems/registry-notary/offer_unavailable"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Offer correctness state or another required dependency is unavailable",
+            "headers": {
+              "Cache-Control": {
+                "description": "Prevents storage of offer, code, and transaction material.",
+                "schema": {
+                  "enum": [
+                    "no-store"
+                  ],
+                  "type": "string"
+                }
+              },
+              "Pragma": {
+                "description": "Compatibility cache directive for sensitive offer responses.",
+                "schema": {
+                  "enum": [
+                    "no-cache"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Create a registrar-initiated pre-authorized offer"
       }
     },
     "/oid4vci/token": {
