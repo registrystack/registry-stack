@@ -1630,7 +1630,7 @@ services:
                 "{id} has false reference diagnostics: {reference_diagnostics:?}"
             );
         }
-        assert_eq!(maintained, 11, "catalog maintenance coverage changed");
+        assert_eq!(maintained, 12, "catalog maintenance coverage changed");
     }
 
     #[cfg(unix)]
