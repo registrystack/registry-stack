@@ -2745,6 +2745,69 @@ async fn oid4vci_registry_offer_is_atomic_for_retry_conflict_and_consumption() {
 
 #[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
+async fn oid4vci_registry_offer_exact_retry_canonicalizes_authorized_claim_order() {
+    let fixture = registry_offer_fixture().await;
+    let target_id = "NAT-IDEMPOTENCY-CLAIM-ORDER";
+    let evaluation_id = registry_offer_evaluate(&fixture, target_id).await;
+    let mut initial_principal = fixture.principal.clone();
+    initial_principal.authorization_details = Some(registry_offer_authorization_details(
+        &fixture.state,
+        target_id,
+    ));
+
+    let initial = registry_offer_create(
+        &fixture,
+        initial_principal,
+        &evaluation_id,
+        "registrar-claim-order",
+    )
+    .await;
+    assert_eq!(initial.status(), StatusCode::OK);
+    let initial_body = registry_offer_response_json(initial).await;
+
+    let mut reordered_principal = fixture.principal.clone();
+    let mut reordered_details = registry_offer_authorization_details(&fixture.state, target_id);
+    reordered_details.claims.reverse();
+    reordered_principal.authorization_details = Some(reordered_details);
+    let reordered = registry_offer_create(
+        &fixture,
+        reordered_principal,
+        &evaluation_id,
+        "registrar-claim-order",
+    )
+    .await;
+    assert_eq!(
+        reordered.status(),
+        StatusCode::OK,
+        "claim order does not change the authorized request identity",
+    );
+    assert_eq!(
+        registry_offer_response_json(reordered).await,
+        initial_body,
+        "equivalent claim sets replay the exact persisted offer",
+    );
+
+    let mut version_changed_principal = fixture.principal.clone();
+    let mut version_changed_details =
+        registry_offer_authorization_details(&fixture.state, target_id);
+    version_changed_details.claims[0].version = Some("different-version".to_string());
+    version_changed_principal.authorization_details = Some(version_changed_details);
+    let version_changed = registry_offer_create(
+        &fixture,
+        version_changed_principal,
+        &evaluation_id,
+        "registrar-claim-order",
+    )
+    .await;
+    assert_eq!(
+        version_changed.status(),
+        StatusCode::FORBIDDEN,
+        "claim versions remain authorization-sensitive",
+    );
+}
+
+#[cfg(feature = "registry-notary-cel")]
+#[tokio::test]
 async fn oid4vci_registry_offer_concurrent_exact_retry_debits_last_quota_unit_once() {
     let sign_attempt_count = Arc::new(AtomicUsize::new(0));
     let gate = Arc::new(FirstSigningAttemptGate::new());

@@ -1066,10 +1066,22 @@ fn validate_authored_output(
             Ok(1)
         }
         AuthoredOutputDeclaration::Object(output) => {
-            validate_authored_output_object(name, output, OUTPUT_SCHEMA_ROOT_DEPTH_V1, nodes)
+            validate_authored_output_object(
+                name,
+                &format!("outputs.{name}"),
+                output,
+                OUTPUT_SCHEMA_ROOT_DEPTH_V1,
+                nodes,
+            )
         }
         AuthoredOutputDeclaration::Array(output) => {
-            validate_authored_output_array(name, output, OUTPUT_SCHEMA_ROOT_DEPTH_V1, nodes)
+            validate_authored_output_array(
+                name,
+                &format!("outputs.{name}"),
+                output,
+                OUTPUT_SCHEMA_ROOT_DEPTH_V1,
+                nodes,
+            )
         }
     }
 }
@@ -1140,6 +1152,7 @@ fn record_output_schema_node(name: &str, depth: usize, nodes: &mut usize) -> Res
 
 fn validate_authored_output_schema(
     name: &str,
+    path: &str,
     schema: &AuthoredOutputSchema,
     depth: usize,
     nodes: &mut usize,
@@ -1158,58 +1171,183 @@ fn validate_authored_output_schema(
             Ok(1)
         }
         AuthoredOutputSchema::Object(schema) => {
-            validate_authored_output_object(name, schema, depth, nodes)
+            validate_authored_output_object(name, path, schema, depth, nodes)
         }
         AuthoredOutputSchema::Array(schema) => {
-            validate_authored_output_array(name, schema, depth, nodes)
+            validate_authored_output_array(name, path, schema, depth, nodes)
         }
     }
 }
 
 fn validate_authored_output_object(
     name: &str,
+    path: &str,
     object: &AuthoredOutputObjectDeclaration,
     depth: usize,
     nodes: &mut usize,
 ) -> Result<usize> {
     record_output_schema_node(name, depth, nodes)?;
-    if object.max_bytes == 0 || object.max_bytes > 65_536 {
-        bail!("outputs.{name} object max_bytes must be between 1 and 65536");
+    if !(1..=registry_notary_core::MAX_RELAY_OUTPUT_VALUE_BYTES_V1)
+        .contains(&object.max_bytes)
+    {
+        bail!(
+            "{path}.max_bytes must be between 1 and {}",
+            registry_notary_core::MAX_RELAY_OUTPUT_VALUE_BYTES_V1
+        );
     }
-    if object.fields.is_empty() || object.fields.len() > 32 {
-        bail!("outputs.{name} object fields must contain between 1 and 32 entries");
+    if object.fields.is_empty()
+        || object.fields.len() > registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1
+    {
+        bail!(
+            "{path}.fields must contain between 1 and {} entries",
+            registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1
+        );
     }
     let mut expanded = 1_usize;
     for (field_name, field) in &object.fields {
         validate_input_name(field_name)
-            .with_context(|| format!("outputs.{name}.fields.{field_name}"))?;
-        let child =
-            validate_authored_output_schema(name, &field.schema, depth + 1, nodes)?;
+            .with_context(|| format!("{path}.fields.{field_name}"))?;
+        let child_path = format!("{path}.fields.{field_name}.schema");
+        let child = validate_authored_output_schema(
+            name,
+            &child_path,
+            &field.schema,
+            depth + 1,
+            nodes,
+        )?;
         expanded = expanded
             .checked_add(child)
             .ok_or_else(|| anyhow!("outputs.{name} recursive expansion overflows"))?;
+    }
+    let minimum_bytes = minimum_authored_output_object_json_bytes(path, object)?;
+    if u64::from(object.max_bytes) < minimum_bytes {
+        bail!(
+            "{path}.max_bytes must be at least {minimum_bytes} to encode the smallest non-null object"
+        );
     }
     Ok(expanded)
 }
 
 fn validate_authored_output_array(
     name: &str,
+    path: &str,
     array: &AuthoredOutputArrayDeclaration,
     depth: usize,
     nodes: &mut usize,
 ) -> Result<usize> {
     record_output_schema_node(name, depth, nodes)?;
-    if array.max_bytes == 0 || array.max_bytes > 65_536 {
-        bail!("outputs.{name} array max_bytes must be between 1 and 65536");
+    if !(1..=registry_notary_core::MAX_RELAY_OUTPUT_VALUE_BYTES_V1)
+        .contains(&array.max_bytes)
+    {
+        bail!(
+            "{path}.max_bytes must be between 1 and {}",
+            registry_notary_core::MAX_RELAY_OUTPUT_VALUE_BYTES_V1
+        );
     }
-    if array.max_items == 0 || array.max_items > 256 {
-        bail!("outputs.{name} array max_items must be between 1 and 256");
+    if !(1..=registry_notary_core::MAX_RELAY_OUTPUT_ARRAY_ITEMS_V1).contains(&array.max_items) {
+        bail!(
+            "{path}.max_items must be between 1 and {}",
+            registry_notary_core::MAX_RELAY_OUTPUT_ARRAY_ITEMS_V1
+        );
     }
-    let child = validate_authored_output_schema(name, &array.items, depth + 1, nodes)?;
+    let child = validate_authored_output_schema(
+        name,
+        &format!("{path}.items"),
+        &array.items,
+        depth + 1,
+        nodes,
+    )?;
+    let minimum_bytes = minimum_authored_output_array_json_bytes();
+    if u64::from(array.max_bytes) < minimum_bytes {
+        bail!(
+            "{path}.max_bytes must be at least {minimum_bytes} to encode the smallest non-null array"
+        );
+    }
     usize::from(array.max_items)
         .checked_mul(child)
         .and_then(|expanded| expanded.checked_add(1))
         .ok_or_else(|| anyhow!("outputs.{name} recursive expansion overflows"))
+}
+
+fn minimum_authored_output_schema_json_bytes(
+    path: &str,
+    schema: &AuthoredOutputSchema,
+) -> Result<u64> {
+    let (non_null_bytes, nullable) = match schema {
+        AuthoredOutputSchema::Scalar(schema) => {
+            let (scalar, nullable) = schema_type_parts(&schema.output_type)?;
+            let bytes = match (scalar, schema.format) {
+                (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => 12,
+                (AuthoredScalarType::String, None) => 2,
+                (AuthoredScalarType::Boolean, None) => 4,
+                (AuthoredScalarType::Integer, None) => {
+                    let minimum = schema
+                        .minimum
+                        .ok_or_else(|| anyhow!("{path}.minimum is required for Integer"))?;
+                    let maximum = schema
+                        .maximum
+                        .ok_or_else(|| anyhow!("{path}.maximum is required for Integer"))?;
+                    let shortest = if minimum <= 0 && maximum >= 0 {
+                        0
+                    } else if minimum > 0 {
+                        minimum
+                    } else {
+                        maximum
+                    };
+                    u64::try_from(shortest.to_string().len())
+                        .map_err(|_| anyhow!("{path} minimum JSON size overflows"))?
+                }
+                _ => bail!("{path} has incompatible scalar constraints"),
+            };
+            (bytes, nullable)
+        }
+        AuthoredOutputSchema::Object(object) => (
+            minimum_authored_output_object_json_bytes(path, object)?,
+            object.nullable,
+        ),
+        AuthoredOutputSchema::Array(array) => {
+            (minimum_authored_output_array_json_bytes(), array.nullable)
+        }
+    };
+    Ok(if nullable {
+        non_null_bytes.min(4)
+    } else {
+        non_null_bytes
+    })
+}
+
+fn minimum_authored_output_object_json_bytes(
+    path: &str,
+    object: &AuthoredOutputObjectDeclaration,
+) -> Result<u64> {
+    let mut bytes = 2_u64;
+    let mut required_fields = 0_u64;
+    for (field_name, field) in object.fields.iter().filter(|(_, field)| field.required) {
+        if required_fields > 0 {
+            bytes = checked_minimum_json_bytes_add(path, bytes, 1)?;
+        }
+        let field_name_bytes = u64::try_from(field_name.len())
+            .map_err(|_| anyhow!("{path} minimum JSON size overflows"))?;
+        bytes = checked_minimum_json_bytes_add(path, bytes, field_name_bytes)?;
+        bytes = checked_minimum_json_bytes_add(path, bytes, 3)?;
+        let child_path = format!("{path}.fields.{field_name}.schema");
+        let child_bytes =
+            minimum_authored_output_schema_json_bytes(&child_path, &field.schema)?;
+        bytes = checked_minimum_json_bytes_add(path, bytes, child_bytes)?;
+        required_fields = required_fields
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("{path} minimum JSON size overflows"))?;
+    }
+    Ok(bytes)
+}
+
+const fn minimum_authored_output_array_json_bytes() -> u64 {
+    2
+}
+
+fn checked_minimum_json_bytes_add(path: &str, left: u64, right: u64) -> Result<u64> {
+    left.checked_add(right)
+        .ok_or_else(|| anyhow!("{path} minimum JSON size overflows"))
 }
 
 struct LoweredInputSchema {
