@@ -2896,6 +2896,15 @@ mod tests {
                 br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"Bearer","expires_in":60}"#
                     .as_slice(),
             ),
+            (
+                Some("application/json"),
+                br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","access_token":"SECOND_SYNTHETIC_TOKEN","token_type":"Bearer"}"#
+                    .as_slice(),
+            ),
+            (
+                Some("application/json"),
+                br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"Bearer""#.as_slice(),
+            ),
             (None, valid.as_slice()),
             (Some("text/plain"), valid.as_slice()),
         ] {

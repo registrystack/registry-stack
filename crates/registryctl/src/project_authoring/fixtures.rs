@@ -3328,57 +3328,6 @@ mod fixture_interface_tests {
     }
 
     #[test]
-    fn synthetic_opencrvs_oauth_profile_rejects_noncanonical_json_before_source_access() {
-        use registry_relay::offline_fixture::OfflineSourceResponse;
-
-        let loaded = load_registry_project(&opencrvs_events_project(), Some("local"))
-            .expect("synthetic OpenCRVS Events API project loads");
-        let compiled =
-            compile_project(&loaded, None).expect("synthetic OpenCRVS Events API project compiles");
-        let relay_files = if compiled.relay_consultation_private.is_empty() {
-            &compiled.relay_private
-        } else {
-            &compiled.relay_consultation_private
-        };
-        let relay_config = relay_files
-            .get(Path::new("config/relay.yaml"))
-            .expect("generated Relay config");
-        let relay_fixture = compile_generated_relay_fixture(relay_config, relay_files, None)
-            .expect("generated Relay artifacts compile");
-        let fixture = loaded.integrations["birth-event-search"]
-            .fixtures
-            .iter()
-            .find_map(|(_, fixture)| (fixture.name == "birth-event-match").then_some(fixture))
-            .expect("passing exact-selector fixture");
-        for oauth_body in [
-            br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","access_token":"SECOND_SYNTHETIC_TOKEN","token_type":"Bearer"}"#
-                .as_slice(),
-            br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"Bearer""#.as_slice(),
-        ] {
-            let mut interactions =
-                offline_fixture_interactions(fixture).expect("fixture interactions compile");
-            let OfflineSourceResponse::Http { body, .. } = &mut interactions[0].response else {
-                panic!("first interaction is the OAuth HTTP response");
-            };
-            *body = oauth_body.to_vec();
-
-            let mut calls = Vec::new();
-            let error = execute_offline_profiles(
-                &compiled,
-                &relay_fixture,
-                "birth-event-search",
-                offline_fixture_input(fixture).expect("fixture input compiles"),
-                interactions,
-                true,
-                &mut calls,
-            )
-            .expect_err("strict OAuth parser rejects noncanonical JSON");
-            assert_eq!(error, "source.response_malformed");
-            assert_eq!(calls.len(), 1, "failure occurs before Events API access");
-        }
-    }
-
-    #[test]
     fn synthetic_opencrvs_generated_relay_activates_with_the_production_validator() {
         let loaded = load_registry_project(&opencrvs_events_project(), Some("local"))
             .expect("synthetic OpenCRVS Events API project loads");

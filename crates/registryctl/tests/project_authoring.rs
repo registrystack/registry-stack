@@ -1458,10 +1458,16 @@ fn approved_opencrvs_and_dhis2_claim_sets_execute_offline() {
 #[test]
 fn synthetic_opencrvs_events_api_executes_the_closed_offline_matrix() {
     let project = golden("opencrvs-events-api");
-    let report = test_registry_project(&ProjectTestOptions {
-        project_directory: project.clone(),
-        environment: None,
-    })
+    let report = test_registry_project_selected(
+        &ProjectTestOptions {
+            project_directory: project.clone(),
+            environment: None,
+        },
+        &ProjectTestSelection {
+            trace: true,
+            ..ProjectTestSelection::default()
+        },
+    )
     .expect("synthetic OpenCRVS Events API case study passes offline");
     assert_eq!(report.status, "passed");
     assert!(report.fixtures.iter().all(|fixture| fixture.passed));
@@ -1503,6 +1509,13 @@ fn synthetic_opencrvs_events_api_executes_the_closed_offline_matrix() {
         assert_eq!(fixture.expected_error.as_deref(), Some(safe_code));
         assert!(fixture.outputs.is_empty());
         assert!(fixture.claims.is_empty());
+        if fixture_name.starts_with("oauth-token-") {
+            assert_eq!(
+                fixture.calls.len(),
+                1,
+                "{fixture_name} must stop before Events API access"
+            );
+        }
     }
 
     let matched = report
