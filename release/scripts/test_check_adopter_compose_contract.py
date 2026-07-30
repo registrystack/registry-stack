@@ -74,6 +74,18 @@ class AdopterComposeContractTests(unittest.TestCase):
                 expected_parent="parent-private-client",
             )
 
+    def test_parent_boundary_rejects_container_namespace_mode(self) -> None:
+        model = json.loads(json.dumps(self.baseline))
+        model["services"]["parent-private-client"] = {
+            "network_mode": "container:registry-adopter-probe-registry-notary-1"
+        }
+        with self.assertRaisesRegex(CHECKER.ContractError, "private namespace"):
+            CHECKER.assert_parent_boundary(
+                model,
+                self.baseline,
+                expected_parent="parent-private-client",
+            )
+
     def test_parent_boundary_resolves_private_network_alias(self) -> None:
         baseline = json.loads(json.dumps(self.baseline))
         baseline["networks"] = {
@@ -120,6 +132,18 @@ class AdopterComposeContractTests(unittest.TestCase):
             CHECKER.assert_parent_boundary(
                 model,
                 baseline,
+                expected_parent="parent-private-client",
+            )
+
+    def test_parent_boundary_rejects_volumes_from_product(self) -> None:
+        model = json.loads(json.dumps(self.baseline))
+        model["services"]["parent-private-client"] = {
+            "volumes_from": ["registry-notary:ro"]
+        }
+        with self.assertRaisesRegex(CHECKER.ContractError, "inherited"):
+            CHECKER.assert_parent_boundary(
+                model,
+                self.baseline,
                 expected_parent="parent-private-client",
             )
 
