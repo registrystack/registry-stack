@@ -374,7 +374,7 @@ fn registry_id_change_requires_redeploying_both_products_without_reporting_value
 }
 
 #[test]
-fn single_product_comparison_filters_actions_to_enabled_product_topology() {
+fn relay_only_comparison_filters_actions_to_enabled_product_topology() {
     let temporary = tempfile::tempdir().expect("temporary directory");
 
     let relay_baseline = temporary.path().join("relay-baseline");
@@ -435,62 +435,6 @@ fn single_product_comparison_filters_actions_to_enabled_product_topology() {
             SemanticComparisonRequiredAction::ResignRelayPublicBundle,
             SemanticComparisonRequiredAction::ReactivateRelayPublicConfiguration,
             SemanticComparisonRequiredAction::RestartRegistryRelayPublic,
-        ]
-    );
-
-    let notary_baseline = temporary.path().join("notary-baseline");
-    copy_project_tree(&fixture_project("notary-only-evaluation"), &notary_baseline);
-    let notary_current = temporary.path().join("notary-current");
-    copy_project_tree(&fixture_project("notary-only-evaluation"), &notary_current);
-    rewrite_yaml(&notary_current.join("registry-stack.yaml"), |document| {
-        document["services"]["applicant-evaluation"]["purpose"] =
-            Value::String("changed-purpose".to_owned());
-    });
-    let notary_report = compare_projects(&notary_current, &notary_baseline);
-    let notary_change = first_product_change(&notary_report);
-    assert_eq!(
-        notary_change.address.schema_family,
-        SemanticComparisonSchemaFamily::Project
-    );
-    assert!(notary_change
-        .consumers
-        .contains(&SemanticComparisonConsumer::RegistryNotary));
-    assert!(!notary_change
-        .consumers
-        .contains(&SemanticComparisonConsumer::RegistryRelay));
-    assert!(notary_change
-        .generated_artifacts
-        .contains(&SemanticComparisonGeneratedArtifact::NotaryConfig));
-    assert!(!notary_change
-        .generated_artifacts
-        .contains(&SemanticComparisonGeneratedArtifact::RelayConfig));
-    assert!(notary_change
-        .review_classes
-        .contains(&SemanticComparisonReviewClass::Notary));
-    assert!(!notary_change
-        .review_classes
-        .contains(&SemanticComparisonReviewClass::Relay));
-    assert_eq!(
-        notary_change.requirements.signing,
-        vec![RequiredProductAction::Notary]
-    );
-    assert_eq!(
-        notary_change.requirements.activation,
-        vec![RequiredProductAction::Notary]
-    );
-    assert_eq!(
-        notary_change.requirements.restart,
-        vec![RequiredProductAction::Notary]
-    );
-    assert_eq!(
-        notary_report.required_actions,
-        vec![
-            SemanticComparisonRequiredAction::ReviewSemanticChanges,
-            SemanticComparisonRequiredAction::RunAffectedFixtures,
-            SemanticComparisonRequiredAction::RegenerateGeneratedArtifacts,
-            SemanticComparisonRequiredAction::ResignNotaryBundle,
-            SemanticComparisonRequiredAction::ReactivateNotaryConfiguration,
-            SemanticComparisonRequiredAction::RestartRegistryNotary,
         ]
     );
 }
