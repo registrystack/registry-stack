@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Operators can start Registry Notary directly from a verified Config Bundle
+  using `--bundle-dir`, `--anchor-path`, and `--state-path`. First acceptance
+  requires `--initialize-state`; later startup checks the persisted
+  anti-rollback state. This mode does not fall back to local configuration or
+  break-glass input.
 - Registry-backed direct Relay claims can preserve bounded closed objects and
   arrays through stored evaluation and SD-JWT issuance. Type Metadata publishes
   the namespaced recursive value contract. Each top-level structured claim is

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Registry Notary can start directly from a signed Config Bundle with the
+  complete `--bundle-dir`, `--anchor-path`, and `--state-path` argument set.
+  Direct startup requires explicit first acceptance with
+  `--initialize-state` and has no unsigned local-config or break-glass
+  fallback.
 - Registry-backed direct Relay claims can now carry bounded closed object and
   array values through evaluation storage, OID4VCI Type Metadata, SD-JWT
   issuance, and verification. Top-level structured claims remain one selective
