@@ -11,6 +11,12 @@
   accepts no credential facts or target input, requires an idempotency key,
   returns the exact stored response for an exact retry, and keeps the
   required transaction-code value outside the offer URI.
+- This release advances the PostgreSQL state-plane catalog. Stop all Notary
+  writers, take a verified backup, then run the target release's `state
+  install` and `state doctor` commands before admitting traffic. The installer
+  upgrades only the immediately preceding attested v1 catalog; older or
+  drifted schemas require a sequential upgrade, a matching backup and binary,
+  or a fresh installation.
 
 ## 0.15.2
 
