@@ -7250,6 +7250,47 @@ fn authored_representative_oid4vci_builds_the_exact_status_enabled_policy() {
 }
 
 #[test]
+fn authored_representative_oid4vci_rejects_non_person_requester_fixtures() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    author_oid4vci_binding(
+        &project,
+        "household-eligibility",
+        "household-eligibility",
+        "representative_reference",
+    );
+    author_representative_oid4vci_binding(&project, "representative_reference");
+
+    let mut changed_fixture = false;
+    for entry in std::fs::read_dir(project.join("integrations/eligibility/fixtures"))
+        .expect("fixture directory reads")
+    {
+        let path = entry.expect("fixture entry").path();
+        let mut fixture = read_yaml(&path);
+        if fixture.get("request").is_none() {
+            continue;
+        }
+        fixture["request"]["requester"]["type"] =
+            serde_norway::Value::String("Organisation".to_string());
+        write_yaml(&path, &fixture);
+        changed_fixture = true;
+        break;
+    }
+    assert!(changed_fixture, "representative request fixture exists");
+
+    let error = test_registry_project(&ProjectTestOptions {
+        project_directory: project,
+        environment: Some("local".to_string()),
+        live: false,
+    })
+    .expect_err("non-person representative requester must be rejected");
+    assert!(
+        format!("{error:#}").contains("request_to_consultation_binding_invalid"),
+        "{error:#}"
+    );
+}
+
+#[test]
 fn representative_oid4vci_diagnostics_name_the_invalid_authoring_field_and_fix() {
     let prepare = || {
         let temporary = tempfile::tempdir().expect("representative diagnostic directory");

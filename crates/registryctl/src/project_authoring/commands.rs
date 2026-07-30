@@ -1528,6 +1528,7 @@ fn validate_governed_live_target(
         bail!("live request target fields do not exactly match the selected authored inputs");
     }
     if let Some(requester) = requester {
+        validate_governed_requester_type(requester)?;
         if requester.id.is_some() || !requester.attributes.is_empty() {
             bail!(
                 "live request requester must contain only the required authenticated identifiers"
@@ -1594,6 +1595,13 @@ fn validate_governed_live_target(
             contracts,
             &Value::String(value.to_string()),
         )?;
+    }
+    Ok(())
+}
+
+fn validate_governed_requester_type(requester: &GovernedLiveTarget) -> Result<()> {
+    if !requester.entity_type.eq_ignore_ascii_case("person") {
+        bail!("live request requester type must be Person");
     }
     Ok(())
 }
@@ -1685,6 +1693,23 @@ mod governed_live_request_boundary_tests {
             .expect("explicit proof selection validates")
             .is_none(),
             "an explicitly selected proof is not added twice"
+        );
+    }
+
+    #[test]
+    fn representative_requester_type_matches_the_production_ceremony() {
+        let requester = GovernedLiveTarget {
+            entity_type: "Organisation".to_string(),
+            id: None,
+            identifiers: Vec::new(),
+            attributes: BTreeMap::new(),
+        };
+
+        let error = validate_governed_requester_type(&requester)
+            .expect_err("non-person requester must be rejected");
+        assert_eq!(
+            error.to_string(),
+            "live request requester type must be Person"
         );
     }
 
