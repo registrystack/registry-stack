@@ -659,6 +659,7 @@ fn relay_connection_is_single_closed_bounded_and_redacted() {
 base_url: https://relay.internal.example
 workload_client_id: registry-notary
 token_file: /run/secrets/private-relay.jwt
+root_certificate_path: /run/secrets/private-relay-ca.pem
 allowed_private_cidrs: [10.42.0.0/16, fd42::/64]
 "#,
     )
@@ -669,6 +670,8 @@ allowed_private_cidrs: [10.42.0.0/16, fd42::/64]
     let debug = format!("{relay:?}");
     assert!(!debug.contains("relay.internal.example"));
     assert!(!debug.contains("private-relay.jwt"));
+    assert!(!debug.contains("private-relay-ca.pem"));
+    assert!(debug.contains("custom_root_certificate: true"));
     assert!(!debug.contains("10.42.0.0/16"));
 
     serde_norway::from_str::<RelayConnectionConfig>(
@@ -690,6 +693,26 @@ retry_on_5xx: true
                 if reason.contains("workload_client_id")
         ));
     }
+}
+
+#[test]
+fn relay_custom_root_requires_an_https_origin_and_canonical_absolute_path() {
+    let mut relay = relay_connection();
+    relay.root_certificate_path = Some(PathBuf::from("relay-ca.pem"));
+    assert!(matches!(
+        relay.validate(),
+        Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
+            if reason.contains("root_certificate_path")
+    ));
+
+    relay.root_certificate_path = Some(PathBuf::from("/run/secrets/relay-ca.pem"));
+    relay.base_url = "http://127.0.0.1:8080".to_string();
+    relay.allow_insecure_localhost = true;
+    assert!(matches!(
+        relay.validate(),
+        Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
+            if reason.contains("requires an https")
+    ));
 }
 
 #[test]

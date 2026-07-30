@@ -832,15 +832,26 @@ impl DevBindingProjection {
                 .integrations
                 .get_mut(&self.integration_id)
                 .ok_or_else(|| anyhow!("selected development integration binding is absent"))?;
+            let transport = self
+                .credentials
+                .synthetic_source_transport
+                .as_ref()
+                .ok_or_else(|| anyhow!("synthetic development transport binding is absent"))?;
             selected.source.origin = origin.clone();
-            selected.source.allowed_private_cidrs.clear();
-            selected.source.ca = None;
+            selected.source.allowed_private_cidrs = vec![transport.allowed_private_cidr.clone()];
+            selected.source.ca = Some(CertificateAuthorityBinding {
+                file: PathBuf::from(&transport.root_certificate_path),
+                generation: 1,
+            });
             selected.source.mtls = None;
             if let Some(oauth) = selected.source.oauth.as_mut() {
                 oauth.origin = origin.clone();
                 oauth.path = "/oauth/token".to_string();
-                oauth.allowed_private_cidrs.clear();
-                oauth.ca = None;
+                oauth.allowed_private_cidrs = vec![transport.allowed_private_cidr.clone()];
+                oauth.ca = Some(CertificateAuthorityBinding {
+                    file: PathBuf::from(&transport.root_certificate_path),
+                    generation: 1,
+                });
                 oauth.mtls = None;
             }
             apply_source_credential_projection(
@@ -968,6 +979,10 @@ pub(crate) fn compile_and_sign_dev_lanes(
         &mut compiled.relay_consultation_private,
         &projection.credentials,
     )?;
+    inject_development_notary_relay_transport(
+        &mut compiled.notary_private,
+        &projection.credentials,
+    )?;
 
     let relative_output = output_root
         .strip_prefix(&loaded.root)
@@ -976,8 +991,8 @@ pub(crate) fn compile_and_sign_dev_lanes(
             anyhow!("development signed-lane output must remain under the project root")
         })?;
     validate_relative_authored_path(relative_output)?;
-    if !relative_output.starts_with(Path::new(".registry-stack/dev")) {
-        bail!("development signed-lane output must remain under .registry-stack/dev");
+    if !relative_output.starts_with(Path::new(".registry-stack/dev-artifacts")) {
+        bail!("development signed-lane output must remain under .registry-stack/dev-artifacts");
     }
     let output_root = loaded.root.join(relative_output);
     let output_root = output_root.as_path();
@@ -1025,6 +1040,37 @@ fn inject_development_bootstrap(
     );
     let rendered = serde_norway::to_string(&config)
         .context("failed to render bound consultation Relay config")?
+        .into_bytes()
+        .into_boxed_slice();
+    files.insert(path, rendered);
+    Ok(())
+}
+
+fn inject_development_notary_relay_transport(
+    files: &mut BTreeMap<PathBuf, Box<[u8]>>,
+    credentials: &DevCredentialPublicProjection,
+) -> Result<()> {
+    let path = PathBuf::from("config/notary.yaml");
+    let bytes = files
+        .get(&path)
+        .ok_or_else(|| anyhow!("compiled Notary config is absent"))?;
+    let mut config: Value =
+        serde_norway::from_slice(bytes).context("failed to parse compiled Notary config")?;
+    let relay = config
+        .pointer_mut("/evidence/relay")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| anyhow!("compiled Notary Relay binding is absent"))?;
+    relay.insert(
+        "root_certificate_path".to_string(),
+        json!(credentials.notary_relay.root_certificate_path),
+    );
+    relay.insert(
+        "allowed_private_cidrs".to_string(),
+        json!([credentials.notary_relay.allowed_private_cidr]),
+    );
+    relay.insert("allow_insecure_localhost".to_string(), json!(false));
+    let rendered = serde_norway::to_string(&config)
+        .context("failed to render bound Notary config")?
         .into_bytes()
         .into_boxed_slice();
     files.insert(path, rendered);
@@ -1345,7 +1391,7 @@ mod development_authoring_tests {
             project,
             "local",
             &credentials,
-            &project.join(".registry-stack/dev/test/signed-lanes"),
+            &project.join(".registry-stack/dev-artifacts/test/signed-lanes"),
         )
         .unwrap();
         assert_eq!(signed.lane_config_digests.len(), 3);
@@ -1360,7 +1406,7 @@ mod development_authoring_tests {
         let authoring = compile_dev_runtime_authoring(project, "local").unwrap();
         let credentials =
             PreparedDevCredentialClosure::generate(authoring.credential_requirements()).unwrap();
-        let output = project.join(".registry-stack/dev/test/signed-lanes");
+        let output = project.join(".registry-stack/dev-artifacts/test/signed-lanes");
         let signed = compile_and_sign_dev_lanes(project, "local", &credentials, &output).unwrap();
 
         let lanes = [
@@ -1445,15 +1491,47 @@ mod development_authoring_tests {
                 crate::dev_runtime::DEV_SYNTHETIC_SOURCE_ORIGIN
             )))
         );
+        assert_eq!(
+            binding.pointer("/data_destination/allowed_private_cidrs"),
+            Some(&json!(["10.89.0.3/32"]))
+        );
+        assert_eq!(
+            binding.pointer("/data_destination/ca/file"),
+            Some(&json!("/run/registry/dev-public/synthetic-source-tls.crt"))
+        );
+        assert_eq!(
+            binding.pointer("/credential_destination/allowed_private_cidrs"),
+            None
+        );
+        assert_eq!(binding.pointer("/credential_destination/ca/file"), None);
         let notary = registry_platform_config::verify_config_bundle(
             &signed.notary_bundle,
             &signed.notary_anchor,
         )
         .unwrap();
         let notary_config: Value = serde_norway::from_slice(&notary.config_bytes).unwrap();
+        let typed_notary: registry_notary_core::StandaloneRegistryNotaryConfig =
+            serde_norway::from_slice(&notary.config_bytes).unwrap();
+        typed_notary.validate().unwrap();
         assert_eq!(
             notary_config.pointer("/auth/api_keys/0/fingerprint/name"),
             Some(&json!("EVIDENCE_CLIENT_TOKEN_HASH"))
+        );
+        assert_eq!(
+            notary_config.pointer("/evidence/relay/base_url"),
+            Some(&json!("https://10.89.0.4:8080"))
+        );
+        assert_eq!(
+            notary_config.pointer("/evidence/relay/root_certificate_path"),
+            Some(&json!("/run/secrets/relay-consultation-ca.pem"))
+        );
+        assert_eq!(
+            notary_config.pointer("/evidence/relay/allowed_private_cidrs"),
+            Some(&json!(["10.89.0.4/32"]))
+        );
+        assert_eq!(
+            notary_config.pointer("/evidence/relay/allow_insecure_localhost"),
+            Some(&json!(false))
         );
     }
 
@@ -1558,4 +1636,26 @@ mod development_authoring_tests {
             DevEnvironmentProfile::EvidenceGrade
         );
     }
+}
+
+#[test]
+fn development_signing_refuses_the_runtime_secret_root() {
+    let temporary = tempfile::tempdir().unwrap();
+    let embedded = PROJECT_STARTERS.get_dir("bounded-http").unwrap();
+    copy_embedded_dir(embedded, temporary.path()).unwrap();
+    let project = temporary.path();
+    let authoring = compile_dev_runtime_authoring(project, "local").unwrap();
+    let credentials =
+        PreparedDevCredentialClosure::generate(authoring.credential_requirements()).unwrap();
+
+    let error = compile_and_sign_dev_lanes(
+        project,
+        "local",
+        &credentials,
+        &project.join(".registry-stack/dev/test/signed-lanes"),
+    )
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("must remain under .registry-stack/dev-artifacts"));
 }

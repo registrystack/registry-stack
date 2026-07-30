@@ -409,6 +409,22 @@ impl ServiceHopDataDestinationPolicy {
             .map(|policy| Self { policy })
     }
 
+    /// Mark this fixed service hop as fail-closed until configured TLS
+    /// material has been loaded by the deployment runtime.
+    #[must_use]
+    pub fn require_configured_tls(mut self) -> Self {
+        self.policy = self.policy.require_configured_tls();
+        self
+    }
+
+    /// Install already parsed configured TLS material for this service hop.
+    pub fn install_configured_tls(
+        &mut self,
+        material: DestinationTlsMaterial,
+    ) -> Result<(), DestinationTlsMaterialError> {
+        self.policy.install_configured_tls(material)
+    }
+
     /// Resolve, validate, pin, and send under one existing absolute deadline.
     ///
     /// DNS, connect, send, and the bounded response-body read share the same
@@ -3841,6 +3857,21 @@ mod tests {
             production(&[]).install_configured_tls(material),
             Err(DestinationTlsMaterialError::NotRequired)
         );
+
+        let service_material =
+            DestinationTlsMaterial::from_pem(Some(certificate_pem.as_bytes()), None)
+                .expect("valid service-hop private root");
+        let mut service = ServiceHopDataDestinationPolicy::new(
+            "registry-service",
+            "https://registry.example.test/",
+            DestinationProfile::ProductionHttps,
+            &[],
+        )
+        .expect("service-hop policy validates")
+        .require_configured_tls();
+        service
+            .install_configured_tls(service_material)
+            .expect("required service-hop material installs");
     }
 
     #[tokio::test]

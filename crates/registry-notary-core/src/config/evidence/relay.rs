@@ -24,6 +24,13 @@ pub struct RelayConnectionConfig {
     pub base_url: String,
     pub workload_client_id: String,
     pub token_file: PathBuf,
+    /// Optional private root bundle for the exact HTTPS Relay destination.
+    ///
+    /// The deployment must provide a bounded regular file owned by root or
+    /// the Notary effective user, readable by its owner, and inaccessible to
+    /// group and other users (0400 or 0600).
+    #[serde(default)]
+    pub root_certificate_path: Option<PathBuf>,
     #[serde(default)]
     #[schemars(with = "Vec<schema::IpNetSchema>")]
     pub allowed_private_cidrs: Vec<IpNet>,
@@ -39,6 +46,10 @@ impl std::fmt::Debug for RelayConnectionConfig {
             .debug_struct("RelayConnectionConfig")
             .field("base_url", &"<redacted>")
             .field("token_file", &"<redacted>")
+            .field(
+                "custom_root_certificate",
+                &self.root_certificate_path.is_some(),
+            )
             .field(
                 "allowed_private_cidr_count",
                 &self.allowed_private_cidrs.len(),
@@ -79,6 +90,18 @@ impl RelayConnectionConfig {
         }
         if !valid_token_file(&self.token_file) {
             return invalid_relay("token_file must be a bounded absolute canonical file path");
+        }
+        if self
+            .root_certificate_path
+            .as_ref()
+            .is_some_and(|path| !valid_token_file(path))
+        {
+            return invalid_relay(
+                "root_certificate_path must be a bounded absolute canonical file path",
+            );
+        }
+        if self.root_certificate_path.is_some() && origin.scheme() != "https" {
+            return invalid_relay("root_certificate_path requires an https base_url");
         }
         validate_private_cidrs(&self.allowed_private_cidrs)?;
         if !(1..=MAX_RELAY_IN_FLIGHT).contains(&self.max_in_flight) {

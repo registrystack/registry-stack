@@ -4522,6 +4522,16 @@
     },
     {
       "schema": "notary",
+      "pointer": "/$defs/RelayConnectionConfig/properties/root_certificate_path",
+      "key_path": "evidence.relay.root_certificate_path",
+      "path_kind": "property",
+      "profile": "notary_evidence_sensitive",
+      "purpose_source": "profile",
+      "default_source": "schema_default",
+      "schema_facts_reviewed": true
+    },
+    {
+      "schema": "notary",
       "pointer": "/$defs/RelayConnectionConfig/properties/token_file",
       "key_path": "evidence.relay.token_file",
       "path_kind": "property",

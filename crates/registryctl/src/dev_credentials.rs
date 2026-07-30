@@ -29,6 +29,9 @@ const DEV_WORKLOAD_CLIENT: &str = "registryctl-local-notary";
 const DEV_WORKLOAD_AUDIENCE: &str = "registry-relay";
 const DEV_WORKLOAD_SCOPE: &str = "registry:consult:public-works-verification";
 const DEV_WORKLOAD_LIFETIME_SECONDS: u64 = 10 * 365 * 24 * 60 * 60;
+const DEV_SYNTHETIC_SOURCE_PRIVATE_CIDR: &str = "10.89.0.3/32";
+const DEV_RELAY_CONSULTATION_PRIVATE_CIDR: &str = "10.89.0.4/32";
+const DEV_SYNTHETIC_SOURCE_CA_PATH: &str = "/run/registry/dev-public/synthetic-source-tls.crt";
 
 const RELAY_PUBLIC_AUDIT_ENV: &str = "REGISTRY_RELAY_AUDIT_HASH_SECRET";
 const RELAY_CONSULTATION_AUDIT_ENV: &str = "REGISTRY_RELAY_AUDIT_HASH_SECRET";
@@ -72,6 +75,8 @@ const RELAY_CONSULTATION_TLS_CERTIFICATE_FILE: &str = "relay-consultation-tls.cr
 const RELAY_CONSULTATION_TLS_PRIVATE_KEY_FILE: &str = "relay-consultation-tls.key";
 const NOTARY_TLS_CERTIFICATE_FILE: &str = "notary-tls.crt";
 const NOTARY_TLS_PRIVATE_KEY_FILE: &str = "notary-tls.key";
+const NOTARY_SIGNING_KEY_FILE: &str = "notary-signing-key.jwk";
+const POSTGRES_ADMIN_PASSWORD_FILE: &str = "postgres-admin-password";
 const SYNTHETIC_CONTROL_TOKEN_FILE: &str = "control-token";
 const SYNTHETIC_TLS_CERTIFICATE_FILE: &str = "tls.crt";
 const SYNTHETIC_TLS_PRIVATE_KEY_FILE: &str = "tls.key";
@@ -149,6 +154,14 @@ pub(crate) struct DevNotaryRelayProjection {
     pub(crate) base_url: String,
     pub(crate) workload_client_id: String,
     pub(crate) token_file: String,
+    pub(crate) root_certificate_path: String,
+    pub(crate) allowed_private_cidr: String,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub(crate) struct DevSyntheticSourceTransportProjection {
+    pub(crate) root_certificate_path: String,
+    pub(crate) allowed_private_cidr: String,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -246,6 +259,7 @@ pub(crate) struct DevCredentialPublicProjection {
     pub(crate) notary_relay: DevNotaryRelayProjection,
     pub(crate) databases: DevDatabaseCredentialProjection,
     pub(crate) source: DevSourceCredentialProjection,
+    pub(crate) synthetic_source_transport: Option<DevSyntheticSourceTransportProjection>,
     pub(crate) issuance: Option<DevIssuanceCredentialProjection>,
     pub(crate) lane_signers: [DevLaneSignerProjection; 3],
     pub(crate) actions: DevActionCredentialProjection,
@@ -365,6 +379,8 @@ pub(crate) struct PreparedDevCredentialFiles {
     pub(crate) notary_initialize: PreparedDevActionCredentialFile,
     pub(crate) notary_serve: PreparedDevActionCredentialFile,
     pub(crate) postgres_bootstrap: PreparedDevActionCredentialFile,
+    pub(crate) postgres_admin_password: PathBuf,
+    pub(crate) notary_signing_key: PathBuf,
     pub(crate) postgres_tls_certificate: PathBuf,
     pub(crate) postgres_tls_private_key: PathBuf,
     pub(crate) relay_public_tls_certificate: PathBuf,
@@ -443,12 +459,14 @@ impl PreparedDevCredentialClosure {
                 client_id: DEV_WORKLOAD_CLIENT.to_string(),
             },
             notary_relay: DevNotaryRelayProjection {
-                base_url: "http://registry-relay-consultation:8080".to_string(),
+                base_url: "https://10.89.0.4:8080".to_string(),
                 workload_client_id: DEV_WORKLOAD_CLIENT.to_string(),
-                token_file: secret_container_path(WORKLOAD_TOKEN_FILE),
+                token_file: "/run/secrets/relay-workload-token".to_string(),
+                root_certificate_path: "/run/secrets/relay-consultation-ca.pem".to_string(),
+                allowed_private_cidr: DEV_RELAY_CONSULTATION_PRIVATE_CIDR.to_string(),
             },
             databases: DevDatabaseCredentialProjection {
-                root_certificate_path: secret_container_path(POSTGRES_TLS_CERTIFICATE_FILE),
+                root_certificate_path: "/run/secrets/postgresql-ca.pem".to_string(),
                 postgres_admin_role: POSTGRES_ADMIN_ROLE,
                 relay_owner_role: RELAY_OWNER_ROLE,
                 relay_migrator_role: RELAY_MIGRATOR_ROLE,
@@ -470,6 +488,14 @@ impl PreparedDevCredentialClosure {
                 notary_reader_database_env: NOTARY_READER_DATABASE_ENV,
             },
             source: source_projection,
+            synthetic_source_transport: (!matches!(
+                &requirements.source,
+                DevSourceCredentialProfile::OperatorBound
+            ))
+            .then(|| DevSyntheticSourceTransportProjection {
+                root_certificate_path: DEV_SYNTHETIC_SOURCE_CA_PATH.to_string(),
+                allowed_private_cidr: DEV_SYNTHETIC_SOURCE_PRIVATE_CIDR.to_string(),
+            }),
             issuance: issuance
                 .as_ref()
                 .map(|credential| credential.projection.clone()),
@@ -722,6 +748,17 @@ impl PreparedDevCredentialClosure {
             &files.postgres_bootstrap.host_path,
             env_file(&postgres_bootstrap).as_bytes(),
         )?;
+        write_new_owner_only(
+            &files.postgres_admin_password,
+            self.databases.postgres_admin.as_bytes(),
+        )?;
+        let notary_signing_key = self
+            .issuance
+            .as_ref()
+            .map_or(self.lane_signers[2].private_jwk.as_str(), |credential| {
+                credential.private_jwk.as_str()
+            });
+        write_new_owner_only(&files.notary_signing_key, notary_signing_key.as_bytes())?;
 
         write_tls_files(
             &files.relay_public_tls_certificate,
@@ -922,6 +959,8 @@ impl PreparedDevCredentialFiles {
                 POSTGRES_BOOTSTRAP_ENV_FILE,
                 &projection.actions.postgres_bootstrap,
             ),
+            postgres_admin_password: root.join(POSTGRES_ADMIN_PASSWORD_FILE),
+            notary_signing_key: root.join(NOTARY_SIGNING_KEY_FILE),
             postgres_tls_certificate: root.join(POSTGRES_TLS_CERTIFICATE_FILE),
             postgres_tls_private_key: root.join(POSTGRES_TLS_PRIVATE_KEY_FILE),
             relay_public_tls_certificate: root.join(RELAY_PUBLIC_TLS_CERTIFICATE_FILE),
@@ -1362,9 +1401,17 @@ fn sign_dev_workload_jwt(private_jwk: &str) -> Result<String> {
 }
 
 fn generate_tls_credential(service_name: &str) -> Result<TlsCredential> {
-    let (certificate, private_key) =
-        generate_self_signed_tls_identity(vec![service_name.to_string()])
-            .context("failed to generate a disposable development TLS identity")?;
+    let mut subject_alt_names = vec![service_name.to_string()];
+    match service_name {
+        "registry-synthetic-source" => subject_alt_names.push("10.89.0.3".to_string()),
+        "registry-relay-consultation" => subject_alt_names.push("10.89.0.4".to_string()),
+        "registry-relay-public" | "registry-notary" => {
+            subject_alt_names.push("127.0.0.1".to_string());
+        }
+        _ => {}
+    }
+    let (certificate, private_key) = generate_self_signed_tls_identity(subject_alt_names)
+        .context("failed to generate a disposable development TLS identity")?;
     Ok(TlsCredential {
         certificate,
         private_key: Zeroizing::new(private_key),
@@ -1546,8 +1593,20 @@ mod tests {
         );
         assert_eq!(
             projection.notary_relay.token_file,
-            secret_container_path(files.workload_token.file_name().unwrap().to_str().unwrap())
+            "/run/secrets/relay-workload-token"
         );
+        assert_eq!(projection.notary_relay.base_url, "https://10.89.0.4:8080");
+        assert_eq!(
+            projection.notary_relay.root_certificate_path,
+            "/run/secrets/relay-consultation-ca.pem"
+        );
+        assert_eq!(projection.notary_relay.allowed_private_cidr, "10.89.0.4/32");
+        let source_transport = projection.synthetic_source_transport.as_ref().unwrap();
+        assert_eq!(
+            source_transport.root_certificate_path,
+            "/run/registry/dev-public/synthetic-source-tls.crt"
+        );
+        assert_eq!(source_transport.allowed_private_cidr, "10.89.0.3/32");
         assert_eq!(
             projection
                 .actions
@@ -1588,14 +1647,7 @@ mod tests {
         }
         assert_eq!(
             projection.databases.root_certificate_path,
-            secret_container_path(
-                files
-                    .postgres_tls_certificate
-                    .file_name()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-            )
+            "/run/secrets/postgresql-ca.pem"
         );
         for (projected, prepared) in projection.lane_signers.iter().zip(&files.lane_public_jwks) {
             assert_eq!(
