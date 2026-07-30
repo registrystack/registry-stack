@@ -261,6 +261,9 @@ enum DeployCommand {
         /// Absent, empty, or verified managed package directory.
         #[arg(long)]
         output_dir: PathBuf,
+        /// Optional closed deployment binding. Omit for safe loopback defaults.
+        #[arg(long)]
+        binding: Option<PathBuf>,
         /// Output for a person or one strict versioned JSON document.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
@@ -276,9 +279,12 @@ enum DeployCommand {
         /// Optional expected approved baseline set.
         #[arg(long)]
         approved_set: Option<PathBuf>,
-        /// Parent Compose files in effective-model order.
-        #[arg(long, action = clap::ArgAction::Append)]
-        parent_compose: Vec<PathBuf>,
+        /// Generated closure digest recorded outside the package.
+        #[arg(long)]
+        expected_closure_sha256: Option<String>,
+        /// Check operator-file existence, isolation, mode, and owner without reading values.
+        #[arg(long)]
+        check_operator_files: bool,
         /// Output for a person or one strict versioned JSON document.
         #[arg(long, value_enum, default_value = "human")]
         format: OutputFormat,
@@ -492,14 +498,12 @@ enum OutputFormat {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
 enum InitTemplate {
     Http,
-    Spreadsheet,
 }
 
 impl From<InitTemplate> for ProjectStarter {
     fn from(value: InitTemplate) -> Self {
         match value {
             InitTemplate::Http => Self::Http,
-            InitTemplate::Spreadsheet => Self::Spreadsheet,
         }
     }
 }
@@ -607,7 +611,7 @@ fn run(cli: Cli) -> CliResult {
             } else {
                 let report = registryctl::test_registry_project_selected(&options, &selection)
                     .map_err(CliFailure::domain)?;
-                print_project_report(format, "test", &report)?;
+                print_project_report(format, "test", &report, false)?;
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -637,14 +641,14 @@ fn run(cli: Cli) -> CliResult {
                         &options,
                     )
                     .map_err(CliFailure::domain)?;
-                print_project_report(OutputFormat::Human, "check", &checked.report)?;
+                print_project_report(OutputFormat::Human, "check", &checked.report, explain)?;
                 println!("Directly authored non-secret values:");
                 for value in checked.authored_values {
                     println!("  {}", value.terminal_line().map_err(CliFailure::domain)?);
                 }
             } else {
                 match registryctl::check_registry_project(&options) {
-                    Ok(report) => print_project_report(format, "check", &report)?,
+                    Ok(report) => print_project_report(format, "check", &report, explain)?,
                     Err(error) => {
                         if let Some(diagnostics) =
                             error.downcast_ref::<registryctl::ProjectAuthoringDiagnostics>()
@@ -1086,7 +1090,6 @@ fn run_doctor(
                 images.relay(),
                 images.notary(),
                 images.postgresql_state_plane(),
-                images.private_namespace_holder(),
             ]
             .into_iter()
             .all(|image| {
@@ -1181,12 +1184,14 @@ fn run_deploy(command: DeployCommand) -> CliResult {
         DeployCommand::Generate {
             approved_set,
             output_dir,
+            binding,
             format,
         } => {
             let report = registryctl::generate_deployment_package(
                 registryctl::DeploymentGenerateRequestV1 {
                     approved_set_file: approved_set,
                     output_dir,
+                    binding_file: binding,
                 },
             )
             .map_err(CliFailure::domain)?;
@@ -1205,8 +1210,9 @@ fn run_deploy(command: DeployCommand) -> CliResult {
                         report.externally_recorded_closure_sha256
                     );
                     println!(
-                        "Next: registryctl deploy verify --package {}",
-                        report.output_dir.display()
+                        "Next: registryctl deploy verify --package {} --expected-closure-sha256 {}",
+                        report.output_dir.display(),
+                        report.externally_recorded_closure_sha256
                     );
                     println!(
                         "Operator Compose check: cd {} && docker compose --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet",
@@ -1220,7 +1226,7 @@ fn run_deploy(command: DeployCommand) -> CliResult {
                         "source_approved_baseline_set_sha256": report.source_approved_baseline_set_sha256,
                         "externally_recorded_closure_sha256": report.externally_recorded_closure_sha256,
                         "manifest": report.manifest,
-                        "next_action": "registryctl deploy verify --package <directory>"
+                        "next_action": "registryctl deploy verify --package <directory> --expected-closure-sha256 <recorded-sha256>"
                     }))?;
                 }
             }
@@ -1229,15 +1235,16 @@ fn run_deploy(command: DeployCommand) -> CliResult {
         DeployCommand::Verify {
             package,
             approved_set,
-            parent_compose,
+            expected_closure_sha256,
+            check_operator_files,
             format,
         } => {
             let report =
                 registryctl::verify_generated_deployment(registryctl::DeploymentVerifyRequestV1 {
                     package_dir: &package,
                     expected_approved_set_file: approved_set.as_deref(),
-                    parent_compose_files: &parent_compose,
-                    externally_recorded_closure_sha256: None,
+                    externally_recorded_closure_sha256: expected_closure_sha256,
+                    check_operator_files,
                 })
                 .map_err(CliFailure::domain)?;
             let report_value = serde_json::to_value(&report).map_err(|error| {
@@ -1730,6 +1737,7 @@ fn print_project_report(
     format: OutputFormat,
     operation: &str,
     report: &registryctl::ProjectCommandReport,
+    show_explanation: bool,
 ) -> CliResult<()> {
     match format {
         OutputFormat::Json => print_json(report),
@@ -1739,6 +1747,14 @@ fn print_project_report(
                 report.status, report.project
             );
             println!("Fixtures: {}.", report.fixtures.len());
+            if show_explanation {
+                let explanation = report.explanation.as_ref().ok_or_else(|| {
+                    CliFailure::operational(anyhow!(
+                        "check explanation was requested but not generated"
+                    ))
+                })?;
+                print_project_explanation(explanation)?;
+            }
             match operation {
                 "test" => println!("Next: registryctl dev"),
                 "check" => println!("Next: registryctl build"),
@@ -1747,6 +1763,72 @@ fn print_project_report(
             Ok(())
         }
     }
+}
+
+fn print_project_explanation(
+    explanation: &registryctl::ProjectExplanationReportV1,
+) -> CliResult<()> {
+    println!(
+        "Explanation: registry.project.explanation.v1 for {} in {} ({} classifier-safe fields).",
+        explanation.project,
+        explanation.environment,
+        explanation.fields.len()
+    );
+    for field in &explanation.fields {
+        let address = match &field.address {
+            registryctl::ProjectFieldAddress::Project { path } => {
+                format!("project {path}")
+            }
+            registryctl::ProjectFieldAddress::Integration { integration, path } => {
+                format!("integration {integration} {path}")
+            }
+            registryctl::ProjectFieldAddress::Entity { entity, path } => {
+                format!("entity {entity} {path}")
+            }
+            registryctl::ProjectFieldAddress::Environment { environment, path } => {
+                format!("environment {environment} {path}")
+            }
+            registryctl::ProjectFieldAddress::Fixture {
+                integration,
+                fixture,
+                path,
+            } => format!("fixture {integration}.{fixture} {path}"),
+        };
+        let reported = match &field.reported_value {
+            registryctl::ClassifierSafeReportedValue::Public { value } => {
+                serde_json::to_string(value.as_value()).map_err(|error| {
+                    CliFailure::operational(anyhow!(
+                        "cannot render classifier-safe project value: {error}"
+                    ))
+                })?
+            }
+            registryctl::ClassifierSafeReportedValue::Redacted { classification, .. } => {
+                format!("<redacted:{}>", serialized_enum_name(classification)?)
+            }
+            registryctl::ClassifierSafeReportedValue::Absent => "<absent>".to_string(),
+        };
+        println!(
+            "  {address} = {reported} [{}, {}]",
+            serialized_enum_name(&field.state.presence)?,
+            serialized_enum_name(&field.state.effect)?
+        );
+    }
+    println!("Full provenance and constraint metadata: rerun with --format json.");
+    Ok(())
+}
+
+fn serialized_enum_name(value: &impl Serialize) -> CliResult<String> {
+    serde_json::to_value(value)
+        .map_err(|error| {
+            CliFailure::operational(anyhow!(
+                "cannot render classifier-safe project metadata: {error}"
+            ))
+        })?
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| {
+            CliFailure::operational(anyhow!("classifier-safe project metadata is not a string"))
+        })
 }
 
 fn print_serialized_or_debug<T: Serialize + std::fmt::Debug>(

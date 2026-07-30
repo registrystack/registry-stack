@@ -174,7 +174,14 @@ fn stable_flags_have_strict_values_and_documented_meanings() {
     let init_help = stdout(&["init", "--help"]);
     assert!(init_help.contains("<PROJECT_DIRECTORY>"));
     assert!(init_help.contains("--template <TEMPLATE>"));
-    assert!(init_help.contains("possible values: http, spreadsheet"));
+    assert!(init_help.contains("possible values: http"));
+    assert!(!init_help.contains("spreadsheet"), "{init_help}");
+    assert_eq!(
+        run(&["init", "project", "--template", "spreadsheet"])
+            .status
+            .code(),
+        Some(2)
+    );
     for internal_fixture in ["dhis2-tracker", "opencrvs-dci", "fhir-r4", "snapshot"] {
         assert!(!init_help.contains(internal_fixture), "{init_help}");
         assert_eq!(
@@ -193,12 +200,61 @@ fn stable_flags_have_strict_values_and_documented_meanings() {
     let deploy_help = stdout(&["deploy", "generate", "--help"]);
     assert!(deploy_help.contains("--approved-set <APPROVED_SET>"));
     assert!(deploy_help.contains("--output-dir <OUTPUT_DIR>"));
+    assert!(deploy_help.contains("--binding <BINDING>"));
+    let deploy_verify_help = stdout(&["deploy", "verify", "--help"]);
+    assert!(deploy_verify_help.contains("--expected-closure-sha256 <EXPECTED_CLOSURE_SHA256>"));
+    assert!(deploy_verify_help.contains("--check-operator-files"));
+    assert!(!deploy_verify_help.contains("--parent-compose"));
 
     let anchor_help = stdout(&["trust", "anchor", "create", "--help"]);
     assert!(anchor_help.contains("--output-file <OUTPUT_FILE>"));
 
     assert_eq!(run(&["check", "--format", "yaml"]).status.code(), Some(2));
     assert_eq!(run(&["check", "--format", "jsonl"]).status.code(), Some(2));
+}
+
+#[test]
+fn check_explain_adds_the_classifier_safe_review_to_human_output() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("project");
+    let project_argument = project.to_str().expect("temporary path is UTF-8");
+    let initialized = run(&["init", project_argument, "--template", "http"]);
+    assert!(
+        initialized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+
+    let ordinary = run(&["-C", project_argument, "check"]);
+    assert!(
+        ordinary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ordinary.stderr)
+    );
+    let ordinary_stdout = String::from_utf8(ordinary.stdout).expect("check output is UTF-8");
+    assert!(!ordinary_stdout.contains("Explanation:"));
+
+    let explained = run(&["-C", project_argument, "check", "--explain"]);
+    assert!(
+        explained.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explained.stderr)
+    );
+    let explained_stdout = String::from_utf8(explained.stdout).expect("check output is UTF-8");
+    for expected in [
+        "Explanation: registry.project.explanation.v1 for fictional-citizen-registry in local",
+        "integration person-record",
+        "[authored, effective]",
+        "<redacted:secret_reference>",
+        "Full provenance and constraint metadata: rerun with --format json.",
+        "Next: registryctl build",
+    ] {
+        assert!(
+            explained_stdout.contains(expected),
+            "{expected:?} is missing from {explained_stdout}"
+        );
+    }
+    assert!(!explained_stdout.contains("\"reported_value\""));
 }
 
 #[test]
@@ -323,46 +379,43 @@ fn trace_and_watch_are_composable_human_test_options() {
 }
 
 #[test]
-fn shipped_starter_readmes_use_the_1_0_hierarchy_and_runtime_ownership() {
-    let http = include_str!("../assets/project-starters/bounded-http/README.md");
-    let spreadsheet = include_str!("../assets/project-starters/spreadsheet/README.md");
+fn shipped_http_starter_readme_uses_the_1_0_hierarchy_and_runtime_ownership() {
+    let readme = include_str!("../assets/project-starters/bounded-http/README.md");
 
-    for readme in [http, spreadsheet] {
-        for obsolete in [
-            "registryctl authoring",
-            "registryctl preflight",
-            "--project-dir .",
-        ] {
-            assert!(
-                !readme.contains(obsolete),
-                "{obsolete:?} remains in {readme}"
-            );
-        }
-        for current in [
-            "registryctl -C . tooling editor",
-            "registryctl -C . test",
-            "registryctl -C . check --environment local --explain",
-            "registryctl -C . build --environment local",
-            "registryctl -C . dev --environment local --detach",
-            "registryctl -C . dev --environment local smoke",
-            "registryctl -C . dev --environment local down",
-            ".registry-stack/dev-artifacts/",
-            ".registry-stack/dev/",
-            "not production",
-        ] {
-            assert!(
-                readme.contains(current),
-                "{current:?} is missing from {readme}"
-            );
-        }
+    for obsolete in [
+        "registryctl authoring",
+        "registryctl preflight",
+        "--project-dir .",
+    ] {
         assert!(
-            readme.find("registryctl -C . test").unwrap()
-                < readme
-                    .find("registryctl -C . dev --environment local --detach")
-                    .unwrap(),
-            "starter begins dev before offline validation: {readme}"
+            !readme.contains(obsolete),
+            "{obsolete:?} remains in {readme}"
         );
     }
+    for current in [
+        "registryctl -C . tooling editor",
+        "registryctl -C . test",
+        "registryctl -C . check --environment local --explain",
+        "registryctl -C . build --environment local",
+        "registryctl -C . dev --environment local --detach",
+        "registryctl -C . dev --environment local smoke",
+        "registryctl -C . dev --environment local down",
+        ".registry-stack/dev-artifacts/",
+        ".registry-stack/dev/",
+        "not production",
+    ] {
+        assert!(
+            readme.contains(current),
+            "{current:?} is missing from {readme}"
+        );
+    }
+    assert!(
+        readme.find("registryctl -C . test").unwrap()
+            < readme
+                .find("registryctl -C . dev --environment local --detach")
+                .unwrap(),
+        "starter begins dev before offline validation: {readme}"
+    );
 }
 
 #[test]
