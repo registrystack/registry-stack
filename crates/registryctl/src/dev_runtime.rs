@@ -2342,6 +2342,8 @@ fn postgresql_staging_action(
         read_only: false,
         kind: DevWorkloadMountKind::Bind,
     });
+    // Linux bind mounts preserve host ownership. This networkless stager needs
+    // a read-only DAC bypass for its closed inputs and CHOWN for allowlisted outputs.
     Ok(DevProductActionPlan {
         compose_service: "registry-postgres-stage-secrets".to_string(),
         command: vec!["/bin/sh".to_string(), "-ceu".to_string(), script],
@@ -2351,7 +2353,7 @@ fn postgresql_staging_action(
             user: "0:0".to_string(),
             read_only_root_filesystem: true,
             cap_drop: vec!["ALL".to_string()],
-            cap_add: vec!["CHOWN".to_string()],
+            cap_add: vec!["CHOWN".to_string(), "DAC_READ_SEARCH".to_string()],
             security_opt: vec!["no-new-privileges:true".to_string()],
             tmpfs: vec!["/tmp".to_string()],
         }),

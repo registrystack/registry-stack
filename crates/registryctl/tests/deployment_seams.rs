@@ -1056,7 +1056,7 @@ fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
         assert_eq!(stager["network_mode"], "none");
         assert_eq!(stager["user"], "0:0");
         assert_eq!(stager["cap_drop"], json!(["ALL"]));
-        assert_eq!(stager["cap_add"], json!(["CHOWN"]));
+        assert_eq!(stager["cap_add"], json!(["CHOWN", "DAC_READ_SEARCH"]));
         assert_eq!(stager["read_only"], true);
         assert_eq!(stager["security_opt"], json!(["no-new-privileges:true"]));
         let mounts = stager["volumes"].as_array().unwrap();

@@ -843,14 +843,16 @@ def _assert_stager(
         or service.get("user") != "0:0"
         or service.get("read_only") is not True
         or service.get("cap_drop") != ["ALL"]
-        or service.get("cap_add") != ["CHOWN"]
+        or service.get("cap_add") != ["CHOWN", "DAC_READ_SEARCH"]
         or service.get("security_opt") != ["no-new-privileges:true"]
         or service.get("tmpfs") != ["/tmp"]
         or service.get("network_mode") != "none"
         or service.get("restart") != "no"
         or service.get("privileged", False) is not False
     ):
-        raise ContractError(f"{name} lost its isolated CHOWN contract")
+        raise ContractError(
+            f"{name} lost its isolated secret-staging capability contract"
+        )
     for forbidden in (
         "depends_on",
         "env_file",

@@ -19,7 +19,7 @@ x-stager-hardening: &stager-hardening
   user: "0:0"
   read_only: true
   cap_drop: [ALL]
-  cap_add: [CHOWN]
+  cap_add: [CHOWN, DAC_READ_SEARCH]
   security_opt: [no-new-privileges:true]
   tmpfs: [/tmp]
   network_mode: none

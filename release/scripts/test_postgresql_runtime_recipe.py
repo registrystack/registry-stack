@@ -60,7 +60,7 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
             root = Path(temporary)
             certificate = root / "postgresql-tls.crt"
             private_key = root / "postgresql-tls.key"
-            admin_password = root / "postgresql-admin-password"
+            admin_credential = root / "postgresql-admin-credential"
             bootstrap_environment = root / "postgresql-bootstrap.env"
             server_environment = root / "postgresql-server.env"
             compose_file = root / "compose.json"
@@ -86,7 +86,7 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                 ],
                 cwd=root,
             )
-            admin_password.write_text(
+            admin_credential.write_text(
                 secrets.token_urlsafe(32), encoding="utf-8"
             )
             bootstrap_environment.write_text(
@@ -104,7 +104,7 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
             for path in [
                 certificate,
                 private_key,
-                admin_password,
+                admin_credential,
                 bootstrap_environment,
                 server_environment,
             ]:
@@ -179,7 +179,7 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                         "user": "0:0",
                         "read_only": True,
                         "cap_drop": ["ALL"],
-                        "cap_add": ["CHOWN"],
+                        "cap_add": ["CHOWN", "DAC_READ_SEARCH"],
                         "security_opt": ["no-new-privileges:true"],
                         "tmpfs": ["/tmp"],
                         "network_mode": "none",
@@ -250,7 +250,7 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                 },
                 "secrets": {
                     "postgresql-admin-password": {
-                        "file": str(admin_password)
+                        "file": str(admin_credential)
                     },
                     "postgresql-tls-certificate": {
                         "file": str(certificate)
@@ -355,8 +355,15 @@ class PostgresqlRuntimeRecipeDockerProof(unittest.TestCase):
                     )
                 )[0]
                 self.assertEqual(stage_inspect["HostConfig"]["NetworkMode"], "none")
-                self.assertEqual(stage_inspect["HostConfig"]["CapAdd"], ["CAP_CHOWN"])
+                self.assertEqual(
+                    stage_inspect["HostConfig"]["CapAdd"],
+                    ["CAP_CHOWN", "CAP_DAC_READ_SEARCH"],
+                )
                 self.assertNotIn("CAP_CHOWN", inspect["HostConfig"]["CapAdd"] or [])
+                self.assertNotIn(
+                    "CAP_DAC_READ_SEARCH",
+                    inspect["HostConfig"]["CapAdd"] or [],
+                )
                 secret_mount = next(
                     mount
                     for mount in inspect["Mounts"]

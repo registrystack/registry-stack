@@ -2711,6 +2711,9 @@ fn secret_staging_service(
             ));
         }
     }
+    // Linux Compose preserves host ownership on file-backed secrets. The
+    // networkless stager needs a read-only DAC bypass for its explicitly mounted
+    // lane inputs; closed mounts and allowlisted output files bound that capability.
     Ok(json!({
         "image": image.as_str(),
         "entrypoint": ["/bin/sh", "-ceu"],
@@ -2718,7 +2721,7 @@ fn secret_staging_service(
         "user": "0:0",
         "read_only": true,
         "cap_drop": ["ALL"],
-        "cap_add": ["CHOWN"],
+        "cap_add": ["CHOWN", "DAC_READ_SEARCH"],
         "security_opt": ["no-new-privileges:true"],
         "tmpfs": ["/tmp"],
         "network_mode": "none",
@@ -3159,14 +3162,14 @@ fn validate_hard_effective_model(
             .map(Vec::as_slice)
             .unwrap_or_default();
         if actual_stage.get("network_mode") != Some(&json!("none"))
-            || actual_stage.get("cap_add") != Some(&json!(["CHOWN"]))
+            || actual_stage.get("cap_add") != Some(&json!(["CHOWN", "DAC_READ_SEARCH"]))
             || output_mounts.is_empty()
             || output_mounts
                 .iter()
                 .any(|mount| mount.get("read_only") != Some(&json!(false)))
         {
             violations.push(format!(
-                "{service_name} lost its isolated lane-output CHOWN contract"
+                "{service_name} lost its isolated secret-staging capability contract"
             ));
         }
     }
@@ -3178,10 +3181,13 @@ fn validate_hard_effective_model(
             && service
                 .get("cap_add")
                 .and_then(Value::as_array)
-                .is_some_and(|caps| caps.iter().any(|cap| cap == "CHOWN"))
+                .is_some_and(|caps| {
+                    caps.iter()
+                        .any(|cap| cap == "CHOWN" || cap == "DAC_READ_SEARCH")
+                })
         {
             violations.push(format!(
-                "{service_name} inherited the secret stager CHOWN capability"
+                "{service_name} inherited a secret-staging capability"
             ));
         }
     }

@@ -113,7 +113,7 @@ def stager(name: str) -> dict:
         "user": "0:0",
         "read_only": True,
         "cap_drop": ["ALL"],
-        "cap_add": ["CHOWN"],
+        "cap_add": ["CHOWN", "DAC_READ_SEARCH"],
         "security_opt": ["no-new-privileges:true"],
         "tmpfs": ["/tmp"],
         "network_mode": "none",
@@ -545,7 +545,7 @@ class AdopterComposeContractTests(unittest.TestCase):
             ].update({"network_mode": "service:registry-postgres"}),
             "capability": lambda model: model["services"][
                 "registry-relay-public-stage-secrets"
-            ].pop("cap_add"),
+            ].update({"cap_add": ["CHOWN", "DAC_OVERRIDE"]}),
             "secret-target": lambda model: model["services"][
                 "registry-relay-public-stage-secrets"
             ]["secrets"][0].update({"target": "/tmp/escaped"}),

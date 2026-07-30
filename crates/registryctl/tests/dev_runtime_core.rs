@@ -1119,7 +1119,10 @@ fn compose_networks_close_synthetic_mode_and_scope_operator_egress_and_secrets()
                 "registry-postgres-stage-secrets" => {
                     assert_eq!(document["user"], "0:0");
                     assert_eq!(document["network_mode"], "none");
-                    assert_eq!(document["cap_add"], serde_json::json!(["CHOWN"]));
+                    assert_eq!(
+                        document["cap_add"],
+                        serde_json::json!(["CHOWN", "DAC_READ_SEARCH"])
+                    );
                 }
                 _ => {
                     assert_eq!(document["user"], expected_user);

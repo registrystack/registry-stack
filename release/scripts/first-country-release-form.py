@@ -2720,7 +2720,7 @@ def stable_secret_staging_summary(
             service.get("network_mode") != "none"
             or service.get("user") != "0:0"
             or service.get("read_only") is not True
-            or service.get("cap_add") != ["CHOWN"]
+            or service.get("cap_add") != ["CHOWN", "DAC_READ_SEARCH"]
             or service.get("cap_drop") != ["ALL"]
             or service.get("security_opt") != ["no-new-privileges:true"]
             or service.get("tmpfs") != ["/tmp"]

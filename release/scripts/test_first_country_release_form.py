@@ -177,7 +177,7 @@ class FirstCountryReleaseFormTest(TestCase):
                 "network_mode": "none",
                 "user": "0:0",
                 "read_only": True,
-                "cap_add": ["CHOWN"],
+                "cap_add": ["CHOWN", "DAC_READ_SEARCH"],
                 "cap_drop": ["ALL"],
                 "security_opt": ["no-new-privileges:true"],
                 "tmpfs": ["/tmp"],
