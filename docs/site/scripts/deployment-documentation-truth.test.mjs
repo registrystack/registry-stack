@@ -41,10 +41,19 @@ test('current docs stay under /dev/ while v0.15.2 is the released archive', asyn
   assert.equal(current.status, 'current');
   assert.equal(current.availability, 'unreleased');
   assert.equal(current.source, 'registry-stack-main');
-  assert.ok(
-    readme.includes('https://docs.registrystack.org/dev/tutorials/author-registry-project/'),
+  const readmeLines = new Set(readme.split(/\r?\n/));
+  assert.equal(
+    readmeLines.has(
+      '| Build and run the maintained HTTP project | [Registry Stack 1.0 first run](https://docs.registrystack.org/dev/tutorials/author-registry-project/) |',
+    ),
+    true,
   );
-  assert.ok(readme.includes('https://docs.registrystack.org/dev/start/pre-1.0-cutover/'));
+  assert.equal(
+    readmeLines.has(
+      '| Move a pre-1.0 project | [Pre-1.0 cutover](https://docs.registrystack.org/dev/start/pre-1.0-cutover/) |',
+    ),
+    true,
+  );
   assert.equal(
     current.description,
     'Unreleased Registry Stack documentation built from the main branch.',

@@ -34,6 +34,10 @@ function read(relativePath) {
   return readFileSync(resolve(siteRoot, relativePath), 'utf8');
 }
 
+function exactLines(source) {
+  return new Set(source.split(/\r?\n/));
+}
+
 function fence(markdown, heading, language, occurrence = 1) {
   const match = extractFencedBlocks(markdown).find(
     (block) =>
@@ -140,12 +144,14 @@ test('public OAuth and Rhai journey applies a generated docs asset to a fresh HT
   const overlay = read('public/examples/registryctl/opencrvs-events-api-overlay-v1.sh');
 
   for (const page of [oauth, opencrvs]) {
+    const pageLines = exactLines(page);
     assert.match(page, /registryctl init .* --template http/);
     assert.match(page, /opencrvs-events-api-overlay-v1\.sh/);
-    assert.ok(
-      page.includes(
-        'https://docs.registrystack.org/v/$REGISTRYCTL_VERSION/examples/registryctl/$OVERLAY',
+    assert.equal(
+      pageLines.has(
+        '  OVERLAY_URL="https://docs.registrystack.org/v/$REGISTRYCTL_VERSION/examples/registryctl/$OVERLAY"',
       ),
+      true,
     );
     assert.match(page, /curl -fsS "\$OVERLAY_URL\.sha256" -o "\$OVERLAY\.sha256"/);
     assert.match(page, /hmac\.compare_digest\(actual, expected\)/);
@@ -181,13 +187,17 @@ test('optional public-source continuation has exact offline and opt-in live gate
   const page = read('src/content/docs/tutorials/author-registry-project.mdx');
   const gate = read('scripts/check-registryctl-public-source-live.sh');
   const overlay = read('public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh');
+  const pageLines = exactLines(page);
+  const gateLines = exactLines(gate);
+  const overlayLines = exactLines(overlay);
 
   assert.match(page, /registryctl init public-json-live-demo --template http/);
   assert.match(page, /jsonplaceholder-todo-live-overlay-v1\.sh/);
-  assert.ok(
-    page.includes(
-      'https://docs.registrystack.org/v/$REGISTRYCTL_VERSION/examples/registryctl/$OVERLAY',
+  assert.equal(
+    pageLines.has(
+      '  OVERLAY_URL="https://docs.registrystack.org/v/$REGISTRYCTL_VERSION/examples/registryctl/$OVERLAY"',
     ),
+    true,
   );
   assert.match(page, /curl -fsS "\$OVERLAY_URL\.sha256" -o "\$OVERLAY\.sha256"/);
   assert.match(page, /hmac\.compare_digest\(actual, expected\)/);
@@ -207,15 +217,15 @@ test('optional public-source continuation has exact offline and opt-in live gate
     gate,
     /RELEASED_DOCS_ROOT\/examples\/registryctl\/jsonplaceholder-todo-live-overlay-v1\.sh/,
   );
-  assert.ok(gate.includes('https://jsonplaceholder.typicode.com/todos/4'));
-  assert.ok(gate.includes('https://jsonplaceholder.typicode.com/todos/999999'));
+  assert.equal(gateLines.has('  https://jsonplaceholder.typicode.com/todos/4)'), true);
+  assert.equal(gateLines.has('  https://jsonplaceholder.typicode.com/todos/999999)'), true);
   assert.match(gate, /expected 200/);
   assert.match(gate, /expected 404/);
   assert.match(gate, /--environment "\$environment" smoke/);
   assert.doesNotMatch(gate, /rm -r "\$PROJECT\/integrations\/person-record"/);
 
   assert.match(overlay, /source_mode: operator_bound/);
-  assert.ok(overlay.includes('origin: https://jsonplaceholder.typicode.com'));
+  assert.equal(overlayLines.has('      origin: https://jsonplaceholder.typicode.com'), true);
   assert.match(overlay, /auth: \{ type: none \}/);
   assert.match(overlay, /default_fixture: completed-todo/);
   assert.match(overlay, /default_fixture: no-todo/);
