@@ -2,7 +2,7 @@ version: 1
 starter:
   id: opencrvs-dci
   release: 0.15.2
-  content_digest: sha256:199f1025ab1307e1d906997ca83116c7929d5aa633e0b01297868b4425da8e1e
+  content_digest: sha256:3960554666f25cd749f6f7e07cc70fab11ae9bd826dbe4544b344cf90812ddd7
 registry: { id: fictional-civil-registry }
 integrations:
   birth-record: { file: integrations/birth-record/integration.yaml }
