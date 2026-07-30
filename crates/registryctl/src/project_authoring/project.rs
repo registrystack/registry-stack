@@ -889,7 +889,7 @@ fn semantic_digests(
 // A schema or knowledge change must therefore be reviewed for promotion
 // semantics before a new projection can be emitted.
 const PROMOTION_FIELD_KNOWLEDGE_REVISION: &str =
-    "sha256:5f2fa5cff59147791a8d8af3d4ee5fc3c8cfdd053877e681a0d1b9a06b1601bf";
+    "sha256:4786c06e3df696c38999ae8474b633672d2c38f46f010c7ee1873cac67dc0a53";
 
 fn project_promotion_projection(
     loaded: &LoadedRegistryProject,
@@ -3239,6 +3239,11 @@ fn validate_oid4vci_binding(
         bail!("OID4VCI credential profiles require registry-backed claim evidence");
     }
     if let Some(representative) = &binding.representative_issuance {
+        if !binding.registrar_clients.is_empty() {
+            bail!(
+                "OID4VCI representative_issuance cannot be combined with registrar_clients in Registryctl's single-credential binding"
+            );
+        }
         validate_stable_id(
             &representative.relationship,
             "OID4VCI representative relationship",

@@ -1887,6 +1887,16 @@
                 },
                 "type": "array"
               },
+              "representative_issuance": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Oid4vciRepresentativeIssuanceBinding"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "sensitive_state_key": {
                 "$ref": "#/$defs/SecretReference"
               },
@@ -1946,6 +1956,32 @@
             "required": [
               "service",
               "profile"
+            ],
+            "type": "object"
+          },
+          "Oid4vciRepresentativeIssuanceBinding": {
+            "additionalProperties": false,
+            "properties": {
+              "max_proof_age_seconds": {
+                "default": 300,
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "proof_claim": {
+                "type": "string"
+              },
+              "relationship": {
+                "type": "string"
+              },
+              "target_id_type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "relationship",
+              "proof_claim",
+              "target_id_type"
             ],
             "type": "object"
           },
@@ -3783,6 +3819,16 @@
               },
               "purpose": {
                 "type": "string"
+              },
+              "requester": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GovernedLiveTarget"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "target": {
                 "$ref": "#/$defs/GovernedLiveTarget"

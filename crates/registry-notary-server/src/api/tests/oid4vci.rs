@@ -1972,8 +1972,18 @@ async fn registry_offer_fixture_with(
     evidence: EvidenceConfig,
     preauth: Arc<PreAuthRuntime>,
 ) -> RegistryOfferTestFixture {
+    registry_offer_fixture_with_configuration(evidence, preauth, registry_offer_test_oid4vci())
+        .await
+}
+
+#[cfg(feature = "registry-notary-cel")]
+async fn registry_offer_fixture_with_configuration(
+    evidence: EvidenceConfig,
+    preauth: Arc<PreAuthRuntime>,
+    oid4vci: Oid4vciConfig,
+) -> RegistryOfferTestFixture {
     let evidence = Arc::new(evidence);
-    let oid4vci = Arc::new(registry_offer_test_oid4vci());
+    let oid4vci = Arc::new(oid4vci);
     let store = Arc::new(EvidenceStore::default());
     let mut subject_access = subject_access_config();
     subject_access
@@ -2232,8 +2242,12 @@ fn oid4vci_registry_offer_unavailable_response_is_explicitly_retryable() {
 #[test]
 fn oid4vci_token_audit_mode_follows_issuance_authority_without_exposing_values() {
     assert_eq!(
-        issuance_authority_access_mode(&IssuanceAuthority::SubjectAccess),
+        issuance_authority_access_mode(&IssuanceAuthority::SubjectAccess, false),
         AccessMode::SubjectBound
+    );
+    assert_eq!(
+        issuance_authority_access_mode(&IssuanceAuthority::SubjectAccess, true),
+        AccessMode::DelegatedAttestation
     );
     let authority = IssuanceAuthority::RegistryClient {
         initiating_client_id: "registrar-audit-secret".to_string(),
@@ -2250,7 +2264,11 @@ fn oid4vci_token_audit_mode_follows_issuance_authority_without_exposing_values()
         purpose: "audit-purpose-secret".to_string(),
     };
     assert_eq!(
-        issuance_authority_access_mode(&authority),
+        issuance_authority_access_mode(&authority, false),
+        AccessMode::MachineClient
+    );
+    assert_eq!(
+        issuance_authority_access_mode(&authority, true),
         AccessMode::MachineClient
     );
     let debug = format!("{authority:?}");
@@ -3407,6 +3425,48 @@ async fn oid4vci_registry_offer_denies_unbound_authority_and_mutated_evidence() 
     )
     .await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[cfg(feature = "registry-notary-cel")]
+#[tokio::test]
+async fn oid4vci_registry_offer_rejects_representative_credential_configurations() {
+    let mut oid4vci = registry_offer_test_oid4vci();
+    oid4vci
+        .credential_configurations
+        .get_mut(REGISTRY_OFFER_CONFIGURATION_ID)
+        .expect("registry offer credential configuration exists")
+        .representative_issuance =
+        Some(registry_notary_core::Oid4vciRepresentativeIssuanceConfig {
+            ceremony: registry_notary_core::Oid4vciRepresentativeIssuanceCeremony::DigitallyAuthenticatedRepresentative,
+            relationship: "authorized-representative".to_string(),
+        });
+    let fixture = registry_offer_fixture_with_configuration(
+        registry_offer_test_evidence(),
+        oid4vci_test_preauth_runtime(registry_notary_core::tokens::NOTARY_ACCESS_TOKEN_JWT_TYP),
+        oid4vci,
+    )
+    .await;
+    let evaluation_id = registry_offer_evaluate(&fixture, "NAT-REPRESENTATIVE-DENIED").await;
+    let mut principal = fixture.principal.clone();
+    principal.authorization_details = Some(registry_offer_authorization_details(
+        &fixture.state,
+        "NAT-REPRESENTATIVE-DENIED",
+    ));
+
+    let response = registry_offer_create(
+        &fixture,
+        principal,
+        &evaluation_id,
+        "representative-configuration",
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = registry_offer_response_json(response).await;
+    assert_eq!(
+        body["code"],
+        json!("representative_offer_requires_authenticated_ceremony")
+    );
 }
 
 #[cfg(feature = "registry-notary-cel")]
