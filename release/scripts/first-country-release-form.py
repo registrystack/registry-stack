@@ -14,8 +14,9 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 
@@ -278,6 +279,29 @@ SECRET_STAGE_CONSUMERS = {
 MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_LOG_BYTES = 1024 * 1024
 MAX_AUTHENTICATED_RESPONSE_BYTES = 1024 * 1024
+DOCS_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024
+DOCS_ARCHIVE_MAX_ENTRY_BYTES = 128 * 1024 * 1024
+DOCS_ARCHIVE_MAX_EXTRACTED_BYTES = 1024 * 1024 * 1024
+DOCS_ARCHIVE_MAX_ENTRIES = 100_000
+DOCS_ARCHIVE_MAX_PATH_BYTES = 1024
+DOCS_ARCHIVE_MAX_PATH_PARTS = 64
+RELEASED_DOCS_REQUIRED_FILES = {
+    "configure/oauth-client-credentials.md",
+    "examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh",
+    "examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh.sha256",
+    "examples/registryctl/opencrvs-events-api-overlay-v1.sh",
+    "examples/registryctl/opencrvs-events-api-overlay-v1.sh.sha256",
+    "operate/approve-initial-baseline.md",
+    "tutorials/author-registry-project.md",
+    "tutorials/configure-project-script-adapter.md",
+    "tutorials/verify-opencrvs-claims.md",
+}
+RELEASED_DOCS_OVERLAYS = (
+    "jsonplaceholder-todo-live-overlay-v1.sh",
+    "opencrvs-events-api-overlay-v1.sh",
+)
+FAILED_ACTIVATION_OUTPUT_CLASSIFICATION = "notary-tls-private-key"
+FAILED_ACTIVATION_EXIT_CLASS = "notary_tls_private_key_missing"
 RECORDS_URL = "http://127.0.0.1:4242/v1/datasets/projects/entities/projects/records"
 RELAY_LISTENER = "127.0.0.1:4242"
 NOTARY_LISTENER = "127.0.0.1:4255"
@@ -437,12 +461,26 @@ def verify_asset_set(asset_dir: Path, tag: str) -> dict[str, Any]:
     binary_name = platform_asset(tag)
     lock_name = f"registryctl-{tag}-image-lock.json"
     release_lock_name = "registry-release-lock.v1.json"
-    names = [installer_name, binary_name, lock_name, release_lock_name]
+    docs_archive_name = f"registry-docs-{tag}.tar.gz"
+    names = [
+        installer_name,
+        binary_name,
+        lock_name,
+        release_lock_name,
+        docs_archive_name,
+    ]
     checksums = parse_checksums(asset_dir / "SHA256SUMS")
     assets: dict[str, str] = {}
     for name in names:
         path = asset_dir / name
-        require_regular(path)
+        require_regular(
+            path,
+            max_bytes=(
+                DOCS_ARCHIVE_MAX_BYTES
+                if name == docs_archive_name
+                else MAX_FILE_BYTES
+            ),
+        )
         expected = checksums.get(name)
         actual = sha256(path)
         if expected is None or expected != actual:
@@ -503,12 +541,185 @@ def verify_asset_set(asset_dir: Path, tag: str) -> dict[str, Any]:
         "binary_name": binary_name,
         "lock_name": lock_name,
         "release_lock_name": release_lock_name,
+        "docs_archive_name": docs_archive_name,
         "assets": assets,
         "lock": lock,
         "relay_image": relay_image,
         "notary_image": notary_image,
         "postgresql_image": postgresql_image,
     }
+
+
+def released_docs_member_name(raw_name: str) -> str:
+    if (
+        not raw_name
+        or "\0" in raw_name
+        or "\\" in raw_name
+        or len(raw_name.encode("utf-8")) > DOCS_ARCHIVE_MAX_PATH_BYTES
+    ):
+        raise ReleaseFormError("released docs archive contains an unsafe path")
+    name = raw_name.removesuffix("/")
+    path = PurePosixPath(name)
+    if (
+        not name
+        or path.is_absolute()
+        or path.as_posix() != name
+        or len(path.parts) > DOCS_ARCHIVE_MAX_PATH_PARTS
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or path.parts[0] not in {"metadata.json", "root", "version"}
+        or (path.parts[0] == "metadata.json" and len(path.parts) != 1)
+    ):
+        raise ReleaseFormError("released docs archive contains an unsafe path")
+    return name
+
+
+def verify_released_docs_overlay(version_root: Path, name: str) -> None:
+    overlay = version_root / "examples" / "registryctl" / name
+    checksum = overlay.with_name(f"{name}.sha256")
+    require_regular(overlay)
+    require_regular(checksum, max_bytes=1024)
+    try:
+        lines = checksum.read_text(encoding="ascii").splitlines()
+    except UnicodeDecodeError as error:
+        raise ReleaseFormError(
+            f"released docs overlay checksum is not ASCII: {name}"
+        ) from error
+    expected_line = (
+        f"{sha256(overlay)}  {name}"
+    )
+    if lines != [expected_line]:
+        raise ReleaseFormError(
+            f"released docs overlay checksum does not bind exact asset {name}"
+        )
+
+
+def extract_released_docs_archive(
+    archive_path: Path,
+    destination: Path,
+    *,
+    tag: str,
+) -> Path:
+    """Safely extract and verify the checksum-bound released docs version tree."""
+
+    require_regular(archive_path, max_bytes=DOCS_ARCHIVE_MAX_BYTES)
+    if destination.is_symlink() or (
+        destination.exists()
+        and (not destination.is_dir() or any(destination.iterdir()))
+    ):
+        raise ReleaseFormError(
+            "released docs extraction destination must be absent or an empty real directory"
+        )
+    destination.mkdir(parents=True, mode=0o700, exist_ok=True)
+    seen: set[str] = set()
+    total_size = 0
+    member_count = 0
+    top_level: set[str] = set()
+    try:
+        with tarfile.open(archive_path, mode="r:gz") as archive:
+            for member in archive:
+                member_count += 1
+                if member_count > DOCS_ARCHIVE_MAX_ENTRIES:
+                    raise ReleaseFormError(
+                        "released docs archive has too many entries"
+                    )
+                name = released_docs_member_name(member.name)
+                if name in seen:
+                    raise ReleaseFormError(
+                        "released docs archive contains a duplicate path"
+                    )
+                seen.add(name)
+                top_level.add(PurePosixPath(name).parts[0])
+                if member.isdir():
+                    if member.size != 0:
+                        raise ReleaseFormError(
+                            "released docs archive directory has a nonzero size"
+                        )
+                    target = destination.joinpath(*PurePosixPath(name).parts)
+                    target.mkdir(parents=True, mode=0o700, exist_ok=True)
+                    target.chmod(0o700)
+                    continue
+                if member.type not in {tarfile.REGTYPE, tarfile.AREGTYPE}:
+                    raise ReleaseFormError(
+                        "released docs archive contains a non-regular entry"
+                    )
+                if member.size < 0 or member.size > DOCS_ARCHIVE_MAX_ENTRY_BYTES:
+                    raise ReleaseFormError(
+                        "released docs archive entry exceeds its size bound"
+                    )
+                total_size += member.size
+                if total_size > DOCS_ARCHIVE_MAX_EXTRACTED_BYTES:
+                    raise ReleaseFormError(
+                        "released docs archive exceeds its extracted size bound"
+                    )
+                source = archive.extractfile(member)
+                if source is None:
+                    raise ReleaseFormError(
+                        "released docs archive member cannot be read"
+                    )
+                payload = source.read(DOCS_ARCHIVE_MAX_ENTRY_BYTES + 1)
+                if len(payload) != member.size:
+                    raise ReleaseFormError(
+                        "released docs archive contains a truncated member"
+                    )
+                target = destination.joinpath(*PurePosixPath(name).parts)
+                target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+                with target.open("xb") as handle:
+                    handle.write(payload)
+                target.chmod(0o700 if member.mode & 0o111 else 0o600)
+    except (OSError, tarfile.TarError) as error:
+        raise ReleaseFormError(
+            f"cannot extract released docs archive: {error}"
+        ) from error
+    if not seen or top_level != {"metadata.json", "root", "version"}:
+        raise ReleaseFormError(
+            "released docs archive has an unexpected top-level structure"
+        )
+    metadata = read_closed_json(
+        destination / "metadata.json", "released docs archive metadata"
+    )
+    expected_metadata_keys = {
+        "schema_version",
+        "release_tag",
+        "root_tree_sha256",
+        "version_path",
+        "version_tree_sha256",
+    }
+    if (
+        not isinstance(metadata, dict)
+        or set(metadata) != expected_metadata_keys
+        or metadata.get("schema_version") != "registry-docs.archive-bundle.v3"
+        or metadata.get("release_tag") != tag
+        or metadata.get("version_path") != f"/v/{tag.removeprefix('v')}/"
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", str(metadata.get(name))) is None
+            for name in ("root_tree_sha256", "version_tree_sha256")
+        )
+    ):
+        raise ReleaseFormError(
+            "released docs archive metadata does not match the release tag"
+        )
+    version_tree = destination / "version"
+    for tree in (destination / "root", version_tree):
+        tree_metadata = tree.lstat()
+        if stat.S_ISLNK(tree_metadata.st_mode) or not stat.S_ISDIR(
+            tree_metadata.st_mode
+        ):
+            raise ReleaseFormError(
+                "released docs archive tree must be a real directory"
+            )
+    observed_version_files = {
+        path.relative_to(version_tree).as_posix()
+        for path in version_tree.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    }
+    missing = RELEASED_DOCS_REQUIRED_FILES - observed_version_files
+    if missing:
+        raise ReleaseFormError(
+            f"released docs archive is missing required public reader input {sorted(missing)[0]}"
+        )
+    for name in RELEASED_DOCS_OVERLAYS:
+        verify_released_docs_overlay(version_tree, name)
+    return version_tree
 
 
 def run_command(
@@ -2144,6 +2355,24 @@ def run_expected_failure(
     }
 
 
+def run_failed_activation(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    logs: Path,
+) -> dict[str, Any]:
+    return run_expected_failure(
+        "failed_activation",
+        command,
+        cwd=cwd,
+        env=env,
+        logs=logs,
+        expected_output_fragment=FAILED_ACTIVATION_OUTPUT_CLASSIFICATION,
+        observed_exit_class=FAILED_ACTIVATION_EXIT_CLASS,
+    )
+
+
 def run_expected_rollbacks(
     name: str,
     lane_commands: list[tuple[str, list[str]]],
@@ -2967,6 +3196,11 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
         reader_evidence = evidence_dir / "reader-journeys"
         public_source_evidence = evidence_dir / "public-source-live"
         install_dir.mkdir()
+        released_docs_root = extract_released_docs_archive(
+            asset_dir / verified["docs_archive_name"],
+            root / "released-docs",
+            tag=args.tag,
+        )
         environment = sealed_release_environment(dict(os.environ))
         environment.update(
             {
@@ -3028,6 +3262,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     "REGISTRYCTL_TUTORIAL_EVIDENCE_DIR": str(reader_evidence),
                     "REGISTRYCTL_TUTORIAL_PROJECT_DIR": str(project),
                     "REGISTRYCTL_TUTORIAL_OAUTH_PROJECT_DIR": str(oauth_project),
+                    "REGISTRYCTL_RELEASED_DOCS_ROOT": str(released_docs_root),
                 }
             )
             commands.append(
@@ -3078,6 +3313,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
                     "REGISTRYCTL_PUBLIC_SOURCE_EVIDENCE_DIR": str(
                         public_source_evidence
                     ),
+                    "REGISTRYCTL_RELEASED_DOCS_ROOT": str(released_docs_root),
                 }
             )
             commands.append(
@@ -4019,8 +4255,7 @@ def run_stable_release_form(args: argparse.Namespace) -> Path:
             held_notary_key = governed_private / "held-notary-tls-private-key"
             move_privileged(notary_key, held_notary_key)
             commands.append(
-                run_expected_failure(
-                    "failed_activation",
+                run_failed_activation(
                     compose_secret_stage_commands(
                         package,
                         ("registry-notary-stage-secrets",),

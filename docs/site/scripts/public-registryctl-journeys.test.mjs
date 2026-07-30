@@ -165,6 +165,11 @@ test('optional public-source continuation has exact offline and opt-in live gate
 
   assert.match(gate, /REGISTRYCTL_PUBLIC_SOURCE_LIVE/);
   assert.match(gate, /REGISTRYCTL_PUBLIC_SOURCE_EVIDENCE_DIR/);
+  assert.match(gate, /REGISTRYCTL_RELEASED_DOCS_ROOT/);
+  assert.match(
+    gate,
+    /RELEASED_DOCS_ROOT\/examples\/registryctl\/jsonplaceholder-todo-live-overlay-v1\.sh/,
+  );
   assert.match(gate, /https:\/\/jsonplaceholder\.typicode\.com\/todos\/4/);
   assert.match(gate, /https:\/\/jsonplaceholder\.typicode\.com\/todos\/999999/);
   assert.match(gate, /expected 200/);

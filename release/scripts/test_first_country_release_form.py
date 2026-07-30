@@ -4,11 +4,13 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import platform
 import shutil
 import subprocess
+import tarfile
 import tempfile
 from pathlib import Path
 from unittest import TestCase, main, mock
@@ -41,6 +43,7 @@ class FirstCountryReleaseFormTest(TestCase):
         self.installer = f"registryctl-{self.tag}-install.sh"
         self.lock = f"registryctl-{self.tag}-image-lock.json"
         self.release_lock = "registry-release-lock.v1.json"
+        self.docs_archive = f"registry-docs-{self.tag}.tar.gz"
         self.relay = "ghcr.io/registrystack/registry-relay@sha256:" + "a" * 64
         self.notary = "ghcr.io/registrystack/registry-notary@sha256:" + "b" * 64
         self.postgresql = "docker.io/library/postgres@sha256:" + "c" * 64
@@ -67,8 +70,89 @@ class FirstCountryReleaseFormTest(TestCase):
         (self.assets / self.release_lock).write_text(
             '{"signed_payload":"fixture"}\n', encoding="utf-8"
         )
+        opencrvs_name = "opencrvs-events-api-overlay-v1.sh"
+        public_source_name = "jsonplaceholder-todo-live-overlay-v1.sh"
+        opencrvs_overlay = b"#!/bin/sh\nprintf 'opencrvs fixture\\n'\n"
+        public_source_overlay = b"#!/bin/sh\nprintf 'public source fixture\\n'\n"
+        self.docs_files = {
+            "configure/oauth-client-credentials.md": b"# OAuth fixture\n",
+            "examples/registryctl/opencrvs-events-api-overlay-v1.sh": (
+                opencrvs_overlay
+            ),
+            "examples/registryctl/opencrvs-events-api-overlay-v1.sh.sha256": (
+                f"{hashlib.sha256(opencrvs_overlay).hexdigest()}  {opencrvs_name}\n".encode()
+            ),
+            "examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh": (
+                public_source_overlay
+            ),
+            "examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh.sha256": (
+                f"{hashlib.sha256(public_source_overlay).hexdigest()}  {public_source_name}\n".encode()
+            ),
+            "operate/approve-initial-baseline.md": b"# Approval fixture\n",
+            "tutorials/author-registry-project.md": b"# HTTP fixture\n",
+            "tutorials/configure-project-script-adapter.md": (
+                b"# Script adapter fixture\n"
+            ),
+            "tutorials/verify-opencrvs-claims.md": b"# OpenCRVS fixture\n",
+        }
+        self.write_docs_archive()
+        self.write_checksums()
+
+    @staticmethod
+    def docs_tree_digest(files):
+        digest = hashlib.sha256()
+        for name, contents in sorted(files.items()):
+            digest.update(f"{name}\0-\0".encode())
+            digest.update(contents)
+            digest.update(b"\0")
+        return digest.hexdigest()
+
+    def write_docs_archive(self, *, files=None, unsafe_member=None) -> None:
+        files = dict(self.docs_files if files is None else files)
+        metadata = {
+            "schema_version": "registry-docs.archive-bundle.v3",
+            "release_tag": self.tag,
+            "root_tree_sha256": self.docs_tree_digest(files),
+            "version_path": f"/v/{self.tag.removeprefix('v')}/",
+            "version_tree_sha256": self.docs_tree_digest(files),
+        }
+        archive_path = self.assets / self.docs_archive
+        with tarfile.open(archive_path, "w:gz") as archive:
+            metadata_bytes = (json.dumps(metadata, sort_keys=True) + "\n").encode()
+            metadata_entry = tarfile.TarInfo("metadata.json")
+            metadata_entry.mode = 0o644
+            metadata_entry.size = len(metadata_bytes)
+            archive.addfile(metadata_entry, io.BytesIO(metadata_bytes))
+            for tree in ("root", "version"):
+                directories = {tree}
+                for name in files:
+                    parts = Path(name).parts
+                    directories.update(
+                        f"{tree}/{'/'.join(parts[:index])}"
+                        for index in range(1, len(parts))
+                    )
+                for directory in sorted(directories):
+                    entry = tarfile.TarInfo(directory)
+                    entry.type = tarfile.DIRTYPE
+                    entry.mode = 0o755
+                    archive.addfile(entry)
+                for name, contents in sorted(files.items()):
+                    entry = tarfile.TarInfo(f"{tree}/{name}")
+                    entry.mode = 0o644
+                    entry.size = len(contents)
+                    archive.addfile(entry, io.BytesIO(contents))
+            if unsafe_member is not None:
+                archive.addfile(unsafe_member)
+
+    def write_checksums(self) -> None:
         checksums = []
-        for name in (self.installer, self.binary, self.lock, self.release_lock):
+        for name in (
+            self.installer,
+            self.binary,
+            self.lock,
+            self.release_lock,
+            self.docs_archive,
+        ):
             digest = hashlib.sha256((self.assets / name).read_bytes()).hexdigest()
             checksums.append(f"{digest}  {name}")
         (self.assets / "SHA256SUMS").write_text(
@@ -515,6 +599,138 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertEqual(verified["notary_image"], self.notary)
         self.assertEqual(verified["postgresql_image"], self.postgresql)
         self.assertEqual(verified["release_lock_name"], self.release_lock)
+        self.assertEqual(verified["docs_archive_name"], self.docs_archive)
+
+    def test_released_docs_archive_extracts_exact_public_reader_inputs(self) -> None:
+        verified = self.verify_assets()
+        destination = self.root / "released-docs"
+        version_root = self.module.extract_released_docs_archive(
+            self.assets / verified["docs_archive_name"],
+            destination,
+            tag=self.tag,
+        )
+        self.assertEqual(version_root, destination / "version")
+        self.assertEqual(
+            {
+                path.relative_to(version_root).as_posix()
+                for path in version_root.rglob("*")
+                if path.is_file()
+            },
+            set(self.docs_files),
+        )
+
+    def test_released_docs_archive_is_checksum_bound(self) -> None:
+        with (self.assets / self.docs_archive).open("ab") as archive:
+            archive.write(b"altered transport\n")
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError,
+            f"release checksum does not bind exact asset {self.docs_archive}",
+        ):
+            self.verify_assets()
+
+    def test_released_docs_archive_rejects_missing_archived_overlay(self) -> None:
+        files = dict(self.docs_files)
+        files.pop(
+            "examples/registryctl/opencrvs-events-api-overlay-v1.sh"
+        )
+        self.write_docs_archive(files=files)
+        self.write_checksums()
+        self.verify_assets()
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError,
+            "missing required public reader input",
+        ):
+            self.module.extract_released_docs_archive(
+                self.assets / self.docs_archive,
+                self.root / "missing-overlay",
+                tag=self.tag,
+            )
+
+    def test_released_docs_archive_rejects_nonempty_destination(self) -> None:
+        destination = self.root / "nonempty-destination"
+        destination.mkdir()
+        (destination / "existing").write_text("do not replace\n", encoding="utf-8")
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError,
+            "absent or an empty real directory",
+        ):
+            self.module.extract_released_docs_archive(
+                self.assets / self.docs_archive,
+                destination,
+                tag=self.tag,
+            )
+        self.assertEqual(
+            (destination / "existing").read_text(encoding="utf-8"),
+            "do not replace\n",
+        )
+
+    def test_released_docs_archive_enforces_path_and_size_bounds(self) -> None:
+        unsafe = tarfile.TarInfo("../escaped")
+        unsafe.mode = 0o644
+        self.write_docs_archive(unsafe_member=unsafe)
+        self.write_checksums()
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError,
+            "unsafe path",
+        ):
+            self.module.extract_released_docs_archive(
+                self.assets / self.docs_archive,
+                self.root / "unsafe-path",
+                tag=self.tag,
+            )
+
+        self.write_docs_archive()
+        self.write_checksums()
+        with (
+            mock.patch.object(
+                self.module,
+                "DOCS_ARCHIVE_MAX_ENTRY_BYTES",
+                1,
+            ),
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError,
+                "entry exceeds its size bound",
+            ),
+        ):
+            self.module.extract_released_docs_archive(
+                self.assets / self.docs_archive,
+                self.root / "oversized-entry",
+                tag=self.tag,
+            )
+
+    def test_released_docs_archive_rejects_altered_archived_overlay(self) -> None:
+        files = dict(self.docs_files)
+        files[
+            "examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh"
+        ] += b"altered\n"
+        self.write_docs_archive(files=files)
+        self.write_checksums()
+        self.verify_assets()
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError,
+            "checksum does not bind exact asset",
+        ):
+            self.module.extract_released_docs_archive(
+                self.assets / self.docs_archive,
+                self.root / "altered-overlay",
+                tag=self.tag,
+            )
+
+    def test_released_docs_archive_rejects_symlink_entry(self) -> None:
+        symlink = tarfile.TarInfo("version/unsafe-link")
+        symlink.type = tarfile.SYMTYPE
+        symlink.linkname = "../metadata.json"
+        self.write_docs_archive(unsafe_member=symlink)
+        self.write_checksums()
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError,
+            "non-regular entry",
+        ):
+            self.module.extract_released_docs_archive(
+                self.assets / self.docs_archive,
+                self.root / "symlink-entry",
+                tag=self.tag,
+            )
 
     def test_v1_asset_set_requires_signed_release_lock(self) -> None:
         (self.assets / self.release_lock).unlink()
@@ -578,6 +794,7 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertIn(
             "check-registryctl-public-source-live.sh", stable_source
         )
+        self.assertNotIn("git clone", stable_source)
         self.assertNotIn('"spreadsheet"', stable_source)
 
     def test_expected_failure_requires_its_value_free_classification(self) -> None:
@@ -638,6 +855,33 @@ class FirstCountryReleaseFormTest(TestCase):
                 logs=logs,
                 expected_output_fragment="registry_stack_bootstrap_marker",
             )
+
+    def test_failed_activation_rejects_unrelated_nonzero_failure(self) -> None:
+        logs = self.root / "failed-activation-logs"
+        logs.mkdir(mode=0o700)
+        with (
+            mock.patch.object(
+                self.module.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    ["fixture"],
+                    1,
+                    "unrelated runtime failure",
+                    "",
+                ),
+            ),
+            self.assertRaisesRegex(
+                self.module.ReleaseFormError,
+                "without the expected classification",
+            ),
+        ):
+            self.module.run_failed_activation(
+                ["fixture"],
+                cwd=self.root,
+                env={},
+                logs=logs,
+            )
+        self.assertFalse((logs / "failed_activation.log").exists())
 
     def test_secret_stage_commands_precede_each_consumer_sequence(self) -> None:
         package = self.root / "package"

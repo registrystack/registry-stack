@@ -26,7 +26,25 @@ done
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SITE_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-OVERLAY="$SITE_ROOT/public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh"
+RELEASED_DOCS_ROOT=${REGISTRYCTL_RELEASED_DOCS_ROOT:-}
+if [ -n "$RELEASED_DOCS_ROOT" ]; then
+  case "$RELEASED_DOCS_ROOT" in
+    /*) ;;
+    *)
+      printf '%s\n' \
+        "REGISTRYCTL_RELEASED_DOCS_ROOT must be an absolute real directory: $RELEASED_DOCS_ROOT" >&2
+      exit 1
+      ;;
+  esac
+  if [ -L "$RELEASED_DOCS_ROOT" ] || [ ! -d "$RELEASED_DOCS_ROOT" ]; then
+    printf '%s\n' \
+      "REGISTRYCTL_RELEASED_DOCS_ROOT must be an absolute real directory: $RELEASED_DOCS_ROOT" >&2
+    exit 1
+  fi
+  OVERLAY="$RELEASED_DOCS_ROOT/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh"
+else
+  OVERLAY="$SITE_ROOT/public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh"
+fi
 WORK_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/registryctl-public-source.XXXXXX")
 PROJECT="$WORK_ROOT/public-json-live-demo"
 EVIDENCE_ROOT="${REGISTRYCTL_PUBLIC_SOURCE_EVIDENCE_DIR:-$WORK_ROOT/evidence}"

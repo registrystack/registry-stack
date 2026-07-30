@@ -205,6 +205,12 @@ test('reader gate uses current commands, a public overlay, and leaves runtime ev
   assert.match(script, /REGISTRYCTL_TUTORIAL_EVIDENCE_DIR/);
   assert.match(script, /REGISTRYCTL_TUTORIAL_PROJECT_DIR/);
   assert.match(script, /REGISTRYCTL_TUTORIAL_OAUTH_PROJECT_DIR/);
+  assert.match(script, /REGISTRYCTL_RELEASED_DOCS_ROOT/);
+  assert.match(script, /RELEASED_DOCS_ROOT\/tutorials\/author-registry-project\.md/);
+  assert.match(script, /RELEASED_DOCS_ROOT\/operate\/approve-initial-baseline\.md/);
+  assert.match(script, /RELEASED_DOCS_ROOT\/configure\/oauth-client-credentials\.md/);
+  assert.match(script, /RELEASED_DOCS_ROOT\/examples\/registryctl\/opencrvs-events-api-overlay-v1\.sh/);
+  assert.match(script, /RELEASED_DOCS_ROOT\/examples\/registryctl\/jsonplaceholder-todo-live-overlay-v1\.sh/);
   assert.match(script, /OPENCRVS_PROJECT="\$\{RETAINED_OAUTH_PROJECT:-\$WORK_ROOT\/opencrvs-reader\}"/);
   assert.match(script, /"\$RETAINED_OAUTH_PROJECT"/);
   assert.match(script, /exact runtime sequence is release-gated from the sealed candidate payload/);

@@ -12,13 +12,29 @@ set -euo pipefail
 SITE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$SITE_ROOT/../.." && pwd)"
 HELPER="$SITE_ROOT/scripts/registryctl-tutorial.mjs"
-HTTP_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/author-registry-project.mdx"
-APPROVAL_TUTORIAL="$SITE_ROOT/src/content/docs/operate/approve-initial-baseline.mdx"
-OAUTH_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx"
-OAUTH_HOWTO="$SITE_ROOT/src/content/docs/configure/oauth-client-credentials.mdx"
-OPENCRVS_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx"
-OPENCRVS_OVERLAY="$SITE_ROOT/public/examples/registryctl/opencrvs-events-api-overlay-v1.sh"
-PUBLIC_SOURCE_OVERLAY="$SITE_ROOT/public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh"
+RELEASED_DOCS_ROOT="${REGISTRYCTL_RELEASED_DOCS_ROOT:-}"
+if [[ -n "$RELEASED_DOCS_ROOT" ]]; then
+	if [[ "$RELEASED_DOCS_ROOT" != /* || -L "$RELEASED_DOCS_ROOT" || ! -d "$RELEASED_DOCS_ROOT" ]]; then
+		printf 'REGISTRYCTL_RELEASED_DOCS_ROOT must be an absolute real directory: %s\n' \
+			"$RELEASED_DOCS_ROOT" >&2
+		exit 1
+	fi
+	HTTP_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/author-registry-project.md"
+	APPROVAL_TUTORIAL="$RELEASED_DOCS_ROOT/operate/approve-initial-baseline.md"
+	OAUTH_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/configure-project-script-adapter.md"
+	OAUTH_HOWTO="$RELEASED_DOCS_ROOT/configure/oauth-client-credentials.md"
+	OPENCRVS_TUTORIAL="$RELEASED_DOCS_ROOT/tutorials/verify-opencrvs-claims.md"
+	OPENCRVS_OVERLAY="$RELEASED_DOCS_ROOT/examples/registryctl/opencrvs-events-api-overlay-v1.sh"
+	PUBLIC_SOURCE_OVERLAY="$RELEASED_DOCS_ROOT/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh"
+else
+	HTTP_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/author-registry-project.mdx"
+	APPROVAL_TUTORIAL="$SITE_ROOT/src/content/docs/operate/approve-initial-baseline.mdx"
+	OAUTH_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx"
+	OAUTH_HOWTO="$SITE_ROOT/src/content/docs/configure/oauth-client-credentials.mdx"
+	OPENCRVS_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/verify-opencrvs-claims.mdx"
+	OPENCRVS_OVERLAY="$SITE_ROOT/public/examples/registryctl/opencrvs-events-api-overlay-v1.sh"
+	PUBLIC_SOURCE_OVERLAY="$SITE_ROOT/public/examples/registryctl/jsonplaceholder-todo-live-overlay-v1.sh"
+fi
 TARGET_DIR="$REPO_ROOT/target/registryctl-tutorial-source"
 BUILD_PROFILE="${REGISTRYCTL_TUTORIAL_CARGO_PROFILE:-ci}"
 WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/registryctl-tutorial-source.XXXXXX")"
