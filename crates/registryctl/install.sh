@@ -307,9 +307,9 @@ fi
 cat <<EOF
 
 Try it:
-  registryctl init --from spreadsheet --project-dir my-first-api
+  registryctl init my-first-api --template http
   cd my-first-api
-  registryctl doctor --profile local
+  registryctl test
 
 EOF
 
