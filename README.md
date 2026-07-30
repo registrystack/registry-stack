@@ -14,9 +14,10 @@ audit records, without turning the registry into a shared database.
 This repository is the monorepo source of truth for Registry Stack product code,
 release manifests, and docs.
 
-> **Status:** The current source implements the Registry Stack 1.0 command and
-> deployment cutover. Use matching released Registryctl, signed release lock,
-> and documentation artifacts for an adopter journey.
+> **Status:** The current source implements the unreleased Registry Stack 1.0
+> command and deployment cutover. Review it in the development documentation.
+> Adopters should use matching released Registryctl, signed release lock, and
+> documentation artifacts.
 
 ## Start Here
 
@@ -24,8 +25,8 @@ release manifests, and docs.
 |---|---|
 | Understand the product | [registrystack.org](https://registrystack.org/) |
 | Read the technical docs | [docs.registrystack.org](https://docs.registrystack.org/) |
-| Build and run the maintained HTTP project | [Registry Stack 1.0 first run](https://docs.registrystack.org/tutorials/author-registry-project/) |
-| Move a pre-1.0 project | [Pre-1.0 cutover](https://docs.registrystack.org/start/pre-1.0-cutover/) |
+| Build and run the maintained HTTP project | [Registry Stack 1.0 first run](https://docs.registrystack.org/dev/tutorials/author-registry-project/) |
+| Move a pre-1.0 project | [Pre-1.0 cutover](https://docs.registrystack.org/dev/start/pre-1.0-cutover/) |
 | Install VS Code or Zed integration | [Editor integrations](editors/README.md) |
 | Work on the monorepo | See [Development](#development) |
 | Review the public roadmap | [ROADMAP.md](ROADMAP.md) |

@@ -1,13 +1,13 @@
 ---
 title: Back up and restore a deployment
 description: How to preserve a generated deployment package and its complete recovery consistency groups.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-19"
+last_reviewed: "2026-07-31"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -22,9 +22,9 @@ Registryctl verifies the generated package. It does not create, schedule, coordi
 encrypt, retain, or restore backups. Keep Registryctl out of backup automation. The
 deployment operator owns those controls and the recovery decision.
 
-This page is draft. It describes the package and fail-closed recovery boundaries
-implemented by the 1.0 deployment runbook, but it is not evidence that a particular
-backup platform captured a coherent recovery point.
+This procedure describes the package and fail-closed recovery boundaries implemented
+by the 1.0 deployment runbook. It is not evidence that a particular backup platform
+captured a coherent recovery point.
 
 ## When to use this
 

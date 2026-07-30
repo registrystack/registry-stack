@@ -23,10 +23,11 @@ const currentActivationPages = [
 ];
 
 test('current docs stay under /dev/ while v0.15.2 is the released archive', async () => {
-  const [docsets, repoDocs, generatedDocsets] = await Promise.all([
+  const [docsets, repoDocs, generatedDocsets, readme] = await Promise.all([
     readYaml('docs/site/src/data/docsets.yaml'),
     readYaml('docs/site/src/data/repo-docs.yaml'),
     readRepo('docs/site/src/data/generated/docsets.json').then(JSON.parse),
+    readRepo('README.md'),
   ]);
   assert.deepEqual(generatedDocsets, docsets, 'generated docset metadata must match its source');
   const current = docsets.docsets.find((docset) => docset.id === docsets.current);
@@ -40,6 +41,11 @@ test('current docs stay under /dev/ while v0.15.2 is the released archive', asyn
   assert.equal(current.status, 'current');
   assert.equal(current.availability, 'unreleased');
   assert.equal(current.source, 'registry-stack-main');
+  assert.match(
+    readme,
+    /https:\/\/docs\.registrystack\.org\/dev\/tutorials\/author-registry-project\//,
+  );
+  assert.match(readme, /https:\/\/docs\.registrystack\.org\/dev\/start\/pre-1\.0-cutover\//);
   assert.equal(
     current.description,
     'Unreleased Registry Stack documentation built from the main branch.',
@@ -89,6 +95,17 @@ test('current docs stay under /dev/ while v0.15.2 is the released archive', asyn
       expectedAvailability,
       `${docset.id} must expose release availability`,
     );
+  }
+});
+
+test('current deployment recovery pages do not present draft procedures as supported paths', async () => {
+  for (const path of [
+    'docs/site/src/content/docs/operate/backup-and-restore.mdx',
+    'docs/site/src/content/docs/operate/upgrade-and-rollback.mdx',
+  ]) {
+    const source = await readRepo(path);
+    assert.match(source, /^status: current$/m, path);
+    assert.doesNotMatch(source, /This page is draft\./, path);
   }
 });
 
