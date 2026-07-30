@@ -210,6 +210,7 @@ pub(crate) fn load_direct_signed_bundle_server_config(
         let code = log_bundle_verification_error(&error);
         bundle_verification_failure(code)
     })?;
+    ensure_direct_config_bundle_instance_binding(&verified)?;
     load_verified_bundle_server_config_with_state(state_path, None, initialize_state, verified)
 }
 
@@ -322,6 +323,29 @@ fn ensure_notary_config_bundle_product(
     Err(bundle_verification_failure(
         BundleVerificationCode::REJECTED_BINDING,
     ))
+}
+
+fn ensure_direct_config_bundle_instance_binding(
+    verified: &VerifiedConfigBundle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    verify_notary_direct_config_bundle_binding(verified).map_err(|code| {
+        log_safe_bundle_rejection("config.bundle_rejected", code, None);
+        bundle_verification_failure(code)
+    })
+}
+
+pub(crate) fn verify_notary_direct_config_bundle_binding(
+    verified: &VerifiedConfigBundle,
+) -> Result<(), BundleVerificationCode> {
+    // Direct startup has no bootstrap identity to narrow a fleet-wide bundle.
+    // Requiring the signed instance binding prevents different anchors from
+    // resolving through the same empty-instance anti-rollback lane.
+    if verified.manifest.product != NOTARY_CONFIG_BUNDLE_PRODUCT
+        || verified.manifest.instance_id.is_none()
+    {
+        return Err(BundleVerificationCode::REJECTED_BINDING);
+    }
+    Ok(())
 }
 
 pub(crate) fn load_unsigned_break_glass_or_pin_server_config(

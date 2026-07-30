@@ -130,6 +130,35 @@ async fn boot_configuration_boundary_redacts_paths_and_parser_values() {
 }
 
 #[tokio::test]
+async fn direct_signed_bundle_without_instance_id_cannot_start_or_initialize_state() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    rewrite_signed_bundle_instance_id(&fixture, None);
+    let input = ServerConfigInput::SignedBundle {
+        bundle_dir: fixture.bundle_dir.clone(),
+        anchor_path: fixture.anchor_path.clone(),
+        state_path: fixture.state_path.clone(),
+    };
+
+    let error = run_server(input, None, true)
+        .await
+        .expect_err("instance-unbound direct bundle must not start");
+
+    let failure = error
+        .downcast_ref::<BundleVerificationFailure>()
+        .expect("missing instance binding failure is typed");
+    assert_eq!(failure.code(), BundleVerificationCode::REJECTED_BINDING);
+    let rendered = format!("{failure} {failure:?}");
+    assert!(!rendered.contains(fixture.bundle_dir.to_string_lossy().as_ref()));
+    assert!(!rendered.contains(fixture.anchor_path.to_string_lossy().as_ref()));
+    assert!(!rendered.contains(fixture.state_path.to_string_lossy().as_ref()));
+    assert!(
+        !fixture.state_path.exists(),
+        "failed startup must not initialize anti-rollback state"
+    );
+}
+
+#[tokio::test]
 #[allow(clippy::await_holding_lock)]
 async fn governed_boot_integrity_failure_persists_nothing_and_serves_nothing() {
     let _guard = ENV_LOCK.lock().expect("env lock");
@@ -203,7 +232,7 @@ async fn governed_boot_integrity_failure_persists_nothing_and_serves_nothing() {
     );
     let key = registry_platform_ops::AntiRollbackKey {
         product: "registry-notary".to_string(),
-        instance_id: String::new(),
+        instance_id: "notary-loader".to_string(),
         environment: "development".to_string(),
         stream_id: "notary-loader-test".to_string(),
     };
@@ -275,7 +304,7 @@ async fn boot_listener_bind_failure_aborts_before_antirollback_persist() {
     );
     let key = registry_platform_ops::AntiRollbackKey {
         product: "registry-notary".to_string(),
-        instance_id: String::new(),
+        instance_id: "notary-loader".to_string(),
         environment: "development".to_string(),
         stream_id: "notary-loader-test".to_string(),
     };

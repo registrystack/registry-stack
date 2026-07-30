@@ -48,7 +48,9 @@ registry-notary \
 ```
 
 Omit `--initialize-state` after first acceptance. Direct bundle startup rejects
-partial or mixed local inputs and has no unsigned or break-glass fallback.
+partial or mixed local inputs and has no unsigned or break-glass fallback. The
+signed manifest must include an `instance_id` that matches the trust anchor so
+each runtime instance has a distinct anti-rollback lane.
 
 Print the OpenAPI document:
 

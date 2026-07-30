@@ -404,6 +404,87 @@ fn direct_signed_bundle_server_config_loads_without_bootstrap_config() {
 }
 
 #[test]
+fn direct_startup_rejects_missing_instance_id_before_state_resolution() {
+    const STATE_SENTINEL: &str = "SENTINEL_PRIVATE_ANTIROLLBACK_STATE";
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    rewrite_signed_bundle_instance_id(&fixture, None);
+    std::fs::write(&fixture.state_path, STATE_SENTINEL).expect("malformed state writes");
+
+    let error = load_direct_signed_bundle_server_config(
+        &fixture.bundle_dir,
+        &fixture.anchor_path,
+        &fixture.state_path,
+        true,
+    )
+    .expect_err("instance-unbound bundle must reject before reading direct startup state");
+
+    let failure = error
+        .downcast_ref::<BundleVerificationFailure>()
+        .expect("missing instance binding failure is typed");
+    assert_eq!(failure.code(), BundleVerificationCode::REJECTED_BINDING);
+    let rendered = format!("{failure} {failure:?}");
+    assert!(!rendered.contains(fixture.bundle_dir.to_string_lossy().as_ref()));
+    assert!(!rendered.contains(fixture.anchor_path.to_string_lossy().as_ref()));
+    assert!(!rendered.contains(fixture.state_path.to_string_lossy().as_ref()));
+    assert!(!rendered.contains(STATE_SENTINEL));
+    assert_eq!(
+        std::fs::read_to_string(&fixture.state_path).expect("state remains readable"),
+        STATE_SENTINEL,
+        "missing instance binding must reject without consulting or changing anti-rollback state"
+    );
+}
+
+#[test]
+fn direct_startup_missing_instance_id_cannot_share_state_across_instance_anchors() {
+    const FIRST_INSTANCE_SENTINEL: &str = "SENTINEL_PRIVATE_NOTARY_INSTANCE_ALPHA";
+    const SECOND_INSTANCE_SENTINEL: &str = "SENTINEL_PRIVATE_NOTARY_INSTANCE_BRAVO";
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture = write_signed_notary_bundle(&tmp);
+    rewrite_signed_bundle_instance_id(&fixture, None);
+    let anchor: ConfigTrustAnchor =
+        serde_json::from_slice(&std::fs::read(&fixture.anchor_path).expect("anchor reads"))
+            .expect("anchor parses");
+    let first_anchor_path = tmp.path().join("first-trust-anchor.json");
+    let second_anchor_path = tmp.path().join("second-trust-anchor.json");
+    for (path, instance_id) in [
+        (&first_anchor_path, FIRST_INSTANCE_SENTINEL),
+        (&second_anchor_path, SECOND_INSTANCE_SENTINEL),
+    ] {
+        let mut instance_anchor = anchor.clone();
+        instance_anchor.instance_id = instance_id.to_string();
+        std::fs::write(
+            path,
+            serde_json::to_vec_pretty(&instance_anchor).expect("anchor serializes"),
+        )
+        .expect("anchor writes");
+    }
+
+    for anchor_path in [&first_anchor_path, &second_anchor_path] {
+        let error = load_direct_signed_bundle_server_config(
+            &fixture.bundle_dir,
+            anchor_path,
+            &fixture.state_path,
+            true,
+        )
+        .expect_err("instance-unbound bundle must reject every direct instance anchor");
+        let failure = error
+            .downcast_ref::<BundleVerificationFailure>()
+            .expect("missing instance binding failure is typed");
+        assert_eq!(failure.code(), BundleVerificationCode::REJECTED_BINDING);
+        let rendered = format!("{failure} {failure:?}");
+        assert!(!rendered.contains(FIRST_INSTANCE_SENTINEL));
+        assert!(!rendered.contains(SECOND_INSTANCE_SENTINEL));
+    }
+    assert!(
+        !fixture.state_path.exists(),
+        "different anchors must not converge on an empty-instance anti-rollback lane"
+    );
+}
+
+#[test]
 fn direct_startup_rejects_verified_cross_product_bundle_before_state_resolution() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let fixture = write_signed_notary_bundle(&tmp);
@@ -535,7 +616,7 @@ fn direct_signed_bundle_rejects_signature_and_binding_failures_exactly() {
     let mut anchor: ConfigTrustAnchor =
         serde_json::from_slice(&std::fs::read(&binding_fixture.anchor_path).expect("anchor reads"))
             .expect("anchor parses");
-    anchor.environment = "SENTINEL_WRONG_PRIVATE_ENVIRONMENT".to_string();
+    anchor.instance_id = "SENTINEL_WRONG_PRIVATE_INSTANCE".to_string();
     std::fs::write(
         &binding_fixture.anchor_path,
         serde_json::to_vec_pretty(&anchor).expect("anchor serializes"),
@@ -555,6 +636,9 @@ fn direct_signed_bundle_rejects_signature_and_binding_failures_exactly() {
             .expect("binding failure is typed")
             .code(),
         BundleVerificationCode::REJECTED_BINDING
+    );
+    assert!(
+        !format!("{binding_error} {binding_error:?}").contains("SENTINEL_WRONG_PRIVATE_INSTANCE")
     );
 }
 

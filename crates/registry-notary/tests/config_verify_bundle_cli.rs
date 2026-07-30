@@ -157,6 +157,30 @@ fn config_verify_bundle_cli_reports_rejected_binding() {
 }
 
 #[test]
+fn config_verify_bundle_cli_rejects_missing_instance_binding_value_free() {
+    let temp = TempDir::new().expect("tempdir");
+    let fixture = write_bundle_fixture(&temp, "registry-notary", 0);
+    rewrite_manifest_instance_id(&fixture, None);
+
+    let output = verify_bundle_command(&fixture)
+        .output()
+        .expect("command runs");
+
+    assert!(!output.status.success());
+    let report = stdout_json(&output);
+    assert_rejected_output_boundary(&output, &report, "rejected_binding", &fixture, &[]);
+    let record = FileAntiRollbackStore::new(&fixture.state_path)
+        .load(&AntiRollbackKey {
+            product: "registry-notary".to_string(),
+            instance_id: "notary-cli".to_string(),
+            environment: "development".to_string(),
+            stream_id: STREAM_ID.to_string(),
+        })
+        .expect("existing instance lane remains readable");
+    assert_eq!(record.last_sequence, 0);
+}
+
+#[test]
 fn config_verify_bundle_cli_reports_rejected_signature_for_hash_mismatch() {
     let temp = TempDir::new().expect("tempdir");
     let fixture = write_bundle_fixture(&temp, "registry-notary", 0);
@@ -522,7 +546,7 @@ fn write_bundle_fixture_with_config(
         product: manifest_product.to_string(),
         environment: "development".to_string(),
         stream_id: STREAM_ID.to_string(),
-        instance_id: None,
+        instance_id: Some("notary-cli".to_string()),
         bundle_id: BUNDLE_ID.to_string(),
         sequence: 1,
         previous_config_hash: Some(ZERO_HASH.to_string()),
@@ -587,6 +611,21 @@ fn write_bundle_fixture_with_config(
         config_hash,
         signer_kid: kid,
     }
+}
+
+fn rewrite_manifest_instance_id(fixture: &BundleFixture, instance_id: Option<&str>) {
+    let manifest_path = fixture.bundle_dir.join("manifest.json");
+    let mut manifest: ConfigBundleManifest =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest reads"))
+            .expect("manifest parses");
+    manifest.instance_id = instance_id.map(str::to_string);
+    let private = PrivateJwk::parse(PRIVATE_JWK).expect("private JWK parses");
+    write_manifest_and_signature(
+        &fixture.bundle_dir,
+        &manifest,
+        &private,
+        &fixture.signer_kid,
+    );
 }
 
 fn resign_config_bytes(fixture: &mut BundleFixture, config_bytes: &[u8]) {

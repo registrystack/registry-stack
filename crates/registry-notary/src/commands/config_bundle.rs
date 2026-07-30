@@ -14,6 +14,9 @@ pub(crate) async fn config_verify_bundle(
             return reject_config_verify_bundle(code);
         }
     };
+    if let Err(code) = verify_notary_direct_config_bundle_binding(&verified) {
+        return reject_config_verify_bundle(code);
+    }
     let key = antirollback_key_from_verified_bundle(&verified);
     if let Err(error) = verify_bundle_state_read_only(
         &args.state_path,

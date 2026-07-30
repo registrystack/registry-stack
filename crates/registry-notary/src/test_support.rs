@@ -42,7 +42,7 @@ pub(crate) fn write_signed_notary_bundle_with_config(
         product: "registry-notary".to_string(),
         environment: "development".to_string(),
         stream_id: "notary-loader-test".to_string(),
-        instance_id: None,
+        instance_id: Some("notary-loader".to_string()),
         bundle_id: "notary-loader-bundle".to_string(),
         sequence: 1,
         previous_config_hash: None,
@@ -107,6 +107,20 @@ pub(crate) fn write_manifest_and_signature(
         serde_json::to_vec_pretty(&envelope).expect("signature serializes"),
     )
     .expect("signature writes");
+}
+
+pub(crate) fn rewrite_signed_bundle_instance_id(
+    fixture: &SignedBundleFixture,
+    instance_id: Option<&str>,
+) {
+    let mut manifest: ConfigBundleManifest = serde_json::from_slice(
+        &std::fs::read(fixture.bundle_dir.join("manifest.json")).expect("manifest reads"),
+    )
+    .expect("manifest parses");
+    manifest.instance_id = instance_id.map(str::to_string);
+    let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private JWK parses");
+    let kid = private.public().jkt().expect("signer thumbprint");
+    write_manifest_and_signature(&fixture.bundle_dir, &manifest, &private, &kid);
 }
 
 pub(crate) fn notary_bundle_runtime_config() -> String {
