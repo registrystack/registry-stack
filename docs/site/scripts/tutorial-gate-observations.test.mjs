@@ -13,7 +13,7 @@ const claimTutorial = readFileSync(
   'utf8',
 );
 
-const gateCommandPattern = /^registryctl (test|preflight|check|compare|build|doctor|start)\b/gm;
+const gateCommandPattern = /^registryctl (test|check|build|doctor|dev)\b/gm;
 
 function assertSingleGatePerShellBlock(source) {
   for (const match of source.matchAll(/```sh\n([\s\S]*?)\n```/g)) {
@@ -50,88 +50,117 @@ function assertProgressiveObservations(source, expectations) {
   }
 }
 
-test('spreadsheet tutorial uses one complete validation gate before the live result', () => {
+test('spreadsheet tutorial observes each offline and development gate progressively', () => {
   assertSingleGatePerShellBlock(spreadsheetTutorial);
   assertProgressiveObservations(spreadsheetTutorial, [
     {
-      command: 'registryctl doctor --profile local',
+      command: 'registryctl test',
       observations: [
-        /selected worksheet and headers exist/,
-        /every selected row matches/,
-        /required keys are present and unique/,
-        /matching release runtime can start/,
+        /synthetic match, planned, and no-match observations/,
+        /authorization and minimization cases/,
       ],
     },
     {
-      command: 'registryctl start',
-      observations: [/parses the workbook again/, /127\.0\.0\.1:4242/, /mounted read-only/],
+      command: 'registryctl check --explain',
+      observations: [/workbook path/, /principal-bound filter/, /minimized output/],
+    },
+    {
+      command: 'registryctl dev --detach',
+      observations: [/local HTTPS endpoints/, /owner-only request configuration/],
+    },
+    {
+      command: 'registryctl dev smoke',
+      observations: [
+        /denial scenario must report zero source work/,
+        /authorized scenario must report one snapshot lookup/,
+        /does not retain workbook rows or raw credentials/,
+      ],
+    },
+    {
+      command: 'registryctl dev down',
+      observations: [/authored workbook and project files remain/],
+    },
+    {
+      command: 'registryctl build',
+      observations: [/complete generated closure together/, /remain\s+author-owned/],
     },
   ]);
-  assert.match(spreadsheetTutorial, /Do not run `registryctl smoke` for this adapted project/);
 });
 
 test('claim continuation distinguishes offline fixtures from live runtime evidence', () => {
   assertSingleGatePerShellBlock(claimTutorial);
   assertProgressiveObservations(claimTutorial, [
     {
-      command: 'registryctl add notary',
+      command: 'registryctl test \\',
       observations: [
-        /same human-owned project/,
-        /three synthetic fixtures/,
-        /generated\s+Relay or Notary files/,
+        /matched synthetic record with `status: planned`/,
+        /project-status-accepted: false/,
+        /distinct from the `no-match` fixture/,
       ],
     },
     {
-      command: 'registryctl test --project-dir .',
+      command: 'registryctl test \\',
+      observations: [/planned fixture now reports both claims as true/],
+    },
+    {
+      command: 'registryctl test',
       observations: [
-        /authored lookup and claim meanings offline/,
-        /requests[\s\S]*separately prove/,
+        /match and no-match fixtures plus their derived security cases must still pass/,
+        /false existence predicate means no match in that source snapshot/,
       ],
     },
     {
-      command: 'registryctl start',
+      command: 'registryctl dev --detach',
       observations: [
-        /Relay remains the only product that reads the workbook/,
-        /private consultation binding/,
+        /owner-only `curl --config` request/,
+        /generated credential file/,
       ],
     },
     {
-      command: 'registryctl restart',
+      command: 'registryctl dev smoke',
       observations: [
-        /regenerates the Relay and Notary inputs/,
-        /unchanged planned-project request/,
-        /do\s+not edit `?\.registry-stack\//,
+        /denial scenario must report zero source work/,
+        /authorized scenario must report one snapshot lookup/,
+        /minimized claim identifiers/,
       ],
     },
     {
-      command: 'registryctl stop',
-      observations: [
-        /authored workbook[\s\S]*remain/,
-        /Generated\s+runtime files[\s\S]*disposable/,
-      ],
+      command: 'registryctl check --explain',
+      observations: [/exact snapshot selector/, /consultation output remains only `status`/],
+    },
+    {
+      command: 'registryctl build',
+      observations: [/does not sign or activate/],
+    },
+    {
+      command: 'registryctl dev down',
+      observations: [/authored policy and fixture edit remain/],
     },
   ]);
 });
 
-test('claim continuation observes scoped denial, distinct outcomes, and policy change', () => {
-  const authorization = claimTutorial.indexOf('HTTP 403');
-  const active = claimTutorial.indexOf('## Evaluate the active project', authorization);
-  const planned = claimTutorial.indexOf('## Evaluate the planned project', active);
-  const absent = claimTutorial.indexOf('## Check an absent record', planned);
-  const authoredEdit = claimTutorial.indexOf('## Change the status policy', absent);
-  const restart = claimTutorial.indexOf('registryctl restart', authoredEdit);
-  const changedResult = claimTutorial.indexOf('"value": true', restart);
+test('claim continuation orders the policy change before bounded runtime evidence', () => {
+  const initialFalse = claimTutorial.indexOf('project-status-accepted: false');
+  const authoredEdit = claimTutorial.indexOf('## Change the authored policy', initialFalse);
+  const changedExpectation = claimTutorial.indexOf('project-status-accepted: true', authoredEdit);
+  const focusedRerun = claimTutorial.indexOf('registryctl test \\', changedExpectation);
+  const completeRerun = claimTutorial.indexOf('registryctl test\n', focusedRerun + 1);
+  const runtime = claimTutorial.indexOf('registryctl dev smoke', completeRerun);
+  const review = claimTutorial.indexOf('registryctl check --explain', runtime);
+  const build = claimTutorial.indexOf('registryctl build', review);
 
-  assert.ok(authorization >= 0, 'under-scoped denial is absent');
-  assert.ok(active > authorization, 'active-project result must follow scoped denial');
-  assert.ok(planned > active, 'planned-project result must follow the active result');
-  assert.ok(absent > planned, 'absent-record result must follow the planned result');
-  assert.ok(authoredEdit > absent, 'authored policy change must follow the live results');
-  assert.ok(restart > authoredEdit, 'restart must follow the authored policy change');
-  assert.ok(changedResult > restart, 'changed live result must follow restart');
-  assert.match(claimTutorial, /evidence:projects:read/);
-  assert.match(claimTutorial, /public-works-case-management/);
-  assert.match(claimTutorial, /http:\/\/127\.0\.0\.1:4255\/v1\/evaluations/);
+  assert.ok(initialFalse >= 0, 'initial policy non-match is absent');
+  assert.ok(authoredEdit > initialFalse, 'authored policy edit must follow the initial result');
+  assert.ok(changedExpectation > authoredEdit, 'changed expectation must follow the policy edit');
+  assert.ok(focusedRerun > changedExpectation, 'focused fixture rerun must follow the edit');
+  assert.ok(completeRerun > focusedRerun, 'complete fixture gate must follow the focused rerun');
+  assert.ok(runtime > completeRerun, 'runtime evidence must follow offline fixture evidence');
+  assert.ok(review > runtime, 'redacted review must follow runtime evidence');
+  assert.ok(build > review, 'build must follow the redacted review');
+  assert.match(claimTutorial, /single `project` consultation/);
+  assert.match(claimTutorial, /zero source work/);
+  assert.match(claimTutorial, /project-record-exists,project-status-accepted/);
+  assert.match(claimTutorial, /Do not replace it with a caller-supplied value or source-free assertion/);
 });
 
 test('progressive gate control rejects a batched command block', () => {

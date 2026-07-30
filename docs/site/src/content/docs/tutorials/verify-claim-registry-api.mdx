@@ -125,17 +125,23 @@ Only the authored policy and its expectation changed.
 
 ## Verify the policy change offline
 
-Run the focused trace and then the complete fixture set:
+Run the focused trace:
 
 ```sh
 registryctl test \
   --integration project-record-snapshot \
   --fixture planned \
   --trace
-registryctl test
 ```
 
 The planned fixture now reports both claims as true.
+
+Run the complete fixture set:
+
+```sh
+registryctl test
+```
+
 The match and no-match fixtures plus their derived security cases must still pass.
 
 Fixture evidence is bounded to the synthetic workbook and declared lookup.
@@ -158,10 +164,19 @@ Registryctl does not use a command-line fixture selector for `dev`.
 
 ## Run the changed product path
 
-Start the disposable environment and run its maintained checks:
+Start the disposable environment:
 
 ```sh
 registryctl dev --detach
+```
+
+Registryctl prints an owner-only `curl --config` request after startup.
+That standard HTTP request uses a generated credential file without placing the credential in
+the shell command or Registryctl report.
+
+Run the maintained denial and authorized scenarios:
+
+```sh
 registryctl dev smoke
 ```
 
@@ -169,9 +184,6 @@ The denial scenario must report zero source work.
 The authorized scenario must report one snapshot lookup and only
 `project-record-exists,project-status-accepted` as minimized claim identifiers.
 
-Registryctl prints an owner-only `curl --config` request after startup.
-That standard HTTP request uses a generated credential file without placing the credential in
-the shell command or Registryctl report.
 It is a local development request, not a deployed-system compatibility runner.
 
 ## Review the effective change

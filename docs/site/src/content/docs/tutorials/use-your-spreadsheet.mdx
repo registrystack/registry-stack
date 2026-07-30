@@ -247,10 +247,18 @@ Update `development.default_integration` to `reviewed-record-snapshot` and keep 
 
 ## Validate the adaptation
 
-Run the offline fixtures and redacted plan review:
+Run the offline fixtures:
 
 ```sh
 registryctl test
+```
+
+A passing result proves the synthetic match, planned, and no-match observations plus their
+derived authorization and minimization cases.
+
+Inspect the redacted plan:
+
+```sh
 registryctl check --explain
 ```
 
@@ -260,17 +268,31 @@ Fix the authored workbook or YAML named by a diagnostic.
 
 ## Run the local path
 
-Start the disposable runtime and execute its default scenarios:
+Start the disposable runtime:
 
 ```sh
 registryctl dev --detach
+```
+
+Registryctl reports the local HTTPS endpoints and the generated owner-only request configuration.
+
+Run the default denial and authorized scenarios:
+
+```sh
 registryctl dev smoke
-registryctl dev down
 ```
 
 The denial scenario must report zero source work.
 The authorized scenario must report one snapshot lookup and only the two declared claim ids.
 The smoke report does not retain workbook rows or raw credentials.
+
+Stop the disposable runtime:
+
+```sh
+registryctl dev down
+```
+
+The authored workbook and project files remain available for the next build or development run.
 
 ## Build the reviewed inputs
 
