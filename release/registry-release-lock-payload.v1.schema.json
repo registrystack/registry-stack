@@ -40,8 +40,7 @@
       "required": [
         "relay",
         "notary",
-        "postgresql_state_plane",
-        "private_namespace_holder"
+        "postgresql_state_plane"
       ],
       "properties": {
         "relay": {
@@ -51,9 +50,6 @@
           "$ref": "#/$defs/image"
         },
         "postgresql_state_plane": {
-          "$ref": "#/$defs/image"
-        },
-        "private_namespace_holder": {
           "$ref": "#/$defs/image"
         }
       }
@@ -66,7 +62,6 @@
         "relay_consultation",
         "notary",
         "postgresql_state_plane",
-        "private_namespace_holder",
         "operator_files"
       ],
       "properties": {
@@ -82,13 +77,10 @@
         "postgresql_state_plane": {
           "$ref": "#/$defs/postgresql_runtime"
         },
-        "private_namespace_holder": {
-          "$ref": "#/$defs/supporting_runtime"
-        },
         "operator_files": {
           "type": "array",
-          "minItems": 21,
-          "maxItems": 21,
+          "minItems": 15,
+          "maxItems": 15,
           "items": {
             "$ref": "#/$defs/operator_file"
           }
@@ -100,8 +92,8 @@
     },
     "embedded_starters": {
       "type": "array",
-      "minItems": 6,
-      "maxItems": 6,
+      "minItems": 5,
+      "maxItems": 5,
       "items": {
         "$ref": "#/$defs/starter"
       }
@@ -488,22 +480,6 @@
         }
       }
     },
-    "supporting_runtime": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "command",
-        "health_probe"
-      ],
-      "properties": {
-        "command": {
-          "$ref": "#/$defs/command"
-        },
-        "health_probe": {
-          "$ref": "#/$defs/command"
-        }
-      }
-    },
     "supported_contracts": {
       "type": "object",
       "additionalProperties": false,
@@ -551,8 +527,7 @@
             "fhir-r4",
             "http",
             "opencrvs-dci",
-            "snapshot",
-            "spreadsheet"
+            "snapshot"
           ]
         },
         "release": {

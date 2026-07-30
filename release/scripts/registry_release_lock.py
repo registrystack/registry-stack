@@ -24,8 +24,6 @@ IMAGE = re.compile(r"^[^@\s]+@(?P<digest>sha256:[0-9a-f]{64})$")
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 STARTERS = {
     "http": ROOT / "crates/registryctl/assets/project-starters/bounded-http/registry-stack.yaml",
-    "spreadsheet": ROOT
-    / "crates/registryctl/assets/project-starters/spreadsheet/registry-stack.yaml",
     "dhis2-tracker": ROOT
     / "crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker/registry-stack.yaml",
     "opencrvs-dci": ROOT
@@ -197,13 +195,12 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
     def action(
         name: str,
         mounts: list[dict[str, Any]],
-        environment: str,
         secrets: list[dict[str, str]],
     ) -> dict[str, Any]:
         return {
             "command": [*prefix, name],
             "mounts": mounts,
-            "environment_files": [environment],
+            "environment_files": [f"{lane}-environment"],
             "secret_files": secrets,
         }
 
@@ -211,25 +208,21 @@ def product_recipe(product: str, lane: str | None = None) -> dict[str, Any]:
         "serve": action(
             "serve",
             [*common_mounts, state, audit],
-            f"{lane}-serve-environment",
             serve_secrets,
         ),
         "prepare_state_store": action(
             "prepare_state_store",
             [*common_mounts, audit],
-            f"{lane}-prepare-environment",
             preparation_secrets,
         ),
         "initialize_state": action(
             "initialize_state",
             [*common_mounts, state, audit],
-            f"{lane}-initialize-environment",
             preparation_secrets,
         ),
         "verify_state": action(
             "verify_state",
             [*common_mounts, state, audit],
-            f"{lane}-serve-environment",
             serve_secrets,
         ),
         "health_probe": ["CMD", f"/usr/local/bin/{product}", "healthcheck"],
@@ -401,16 +394,15 @@ def operator_files() -> list[dict[str, Any]]:
     files: list[dict[str, Any]] = []
     product_owners = ["root:root", "65532:65532"]
     for lane in ["relay-public", "relay-consultation", "notary"]:
-        for action in ["prepare", "initialize", "serve"]:
-            files.append(
-                {
-                    "id": f"{lane}-{action}-environment",
-                    "format": "dotenv",
-                    "mode": "0600",
-                    "allowed_owners": product_owners,
-                    "required_keys": [],
-                }
-            )
+        files.append(
+            {
+                "id": f"{lane}-environment",
+                "format": "dotenv",
+                "mode": "0600",
+                "allowed_owners": product_owners,
+                "required_keys": [],
+            }
+        )
     for file_id, file_format, owners in [
         (
             "relay-public-tls-certificate",
@@ -539,11 +531,6 @@ def create_payload(args: argparse.Namespace) -> int:
             "relay": locked_image(relay, relay_digest),
             "notary": locked_image(notary, notary_digest),
             "postgresql_state_plane": locked_image(postgresql, postgresql_digest),
-            # The reviewed PostgreSQL image supplies `sleep` without introducing
-            # another mutable or separately trusted supporting image.
-            "private_namespace_holder": locked_image(
-                postgresql, postgresql_digest
-            ),
         },
         "runtime": {
             "relay_public": product_recipe("registry-relay", "relay-public"),
@@ -552,10 +539,6 @@ def create_payload(args: argparse.Namespace) -> int:
             ),
             "notary": product_recipe("registry-notary", "notary"),
             "postgresql_state_plane": postgresql_recipe(),
-            "private_namespace_holder": {
-                "command": ["sleep", "infinity"],
-                "health_probe": ["CMD-SHELL", "kill -0 1"],
-            },
             "operator_files": operator_files(),
         },
         "supported_contracts": {

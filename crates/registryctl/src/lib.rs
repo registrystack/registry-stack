@@ -66,11 +66,10 @@ mod release_lock;
 pub use release_lock::{
     verify_installed_release_lock, verify_release_lock_for_package, LockedEmbeddedStarterV1,
     LockedManagedImagesV1, LockedOciImageV1, LockedOciPlatformV1, LockedProductRecipeV1,
-    LockedRegistryctlArtifactV1, LockedReleaseIdentityV1, LockedRuntimeRecipesV1,
-    LockedSupportingRecipeV1, OciPlatformV1, RegistryReleaseLockV1, RegistryctlPlatformV1,
-    SupportedContractsV1, VerifiedManagedImagesV1, VerifiedProductRuntimeV1, VerifiedReleaseLockV1,
-    VerifiedRuntimeMappingV1, VerifiedSupportingRuntimeV1, RELEASE_LOCK_SCHEMA_ID,
-    RELEASE_LOCK_SCHEMA_VERSION,
+    LockedRegistryctlArtifactV1, LockedReleaseIdentityV1, LockedRuntimeRecipesV1, OciPlatformV1,
+    RegistryReleaseLockV1, RegistryctlPlatformV1, SupportedContractsV1, VerifiedManagedImagesV1,
+    VerifiedProductRuntimeV1, VerifiedReleaseLockV1, VerifiedRuntimeMappingV1,
+    RELEASE_LOCK_SCHEMA_ID, RELEASE_LOCK_SCHEMA_VERSION,
 };
 
 mod project_authoring;

@@ -108,13 +108,27 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 set(schema["properties"]["images"]["properties"]),
             )
             self.assertEqual(
+                set(payload["images"]),
+                {"relay", "notary", "postgresql_state_plane"},
+            )
+            self.assertEqual(
+                set(payload["images"]),
+                set(schema["properties"]["images"]["required"]),
+            )
+            self.assertEqual(
                 set(schema["properties"]["runtime"]["required"]),
                 set(schema["properties"]["runtime"]["properties"]),
             )
+            self.assertNotIn("private_namespace_holder", payload["runtime"])
+            self.assertNotIn("supporting_runtime", schema["$defs"])
             self.assertTrue(
                 set(schema["properties"]["runtime"]["required"]).issubset(
                     payload["runtime"]
                 )
+            )
+            self.assertEqual(
+                set(payload["runtime"]),
+                set(schema["properties"]["runtime"]["required"]),
             )
             missing_inventory = copy.deepcopy(payload)
             missing_inventory["runtime"].pop("operator_files")
@@ -124,7 +138,29 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 )
             )
             self.assertEqual(len(payload["registryctl_artifacts"]), 3)
-            self.assertEqual(len(payload["embedded_starters"]), 6)
+            self.assertEqual(
+                schema["properties"]["embedded_starters"]["minItems"],
+                len(payload["embedded_starters"]),
+            )
+            self.assertEqual(
+                schema["properties"]["embedded_starters"]["maxItems"],
+                len(payload["embedded_starters"]),
+            )
+            expected_starter_ids = {
+                "dhis2-tracker",
+                "fhir-r4",
+                "http",
+                "opencrvs-dci",
+                "snapshot",
+            }
+            self.assertEqual(
+                {starter["id"] for starter in payload["embedded_starters"]},
+                expected_starter_ids,
+            )
+            self.assertEqual(
+                set(schema["$defs"]["starter"]["properties"]["id"]["enum"]),
+                expected_starter_ids,
+            )
             self.assertEqual(
                 payload["runtime"]["relay_consultation"]["serve"]["command"],
                 ["product-action", "relay-consultation", "serve"],
@@ -161,6 +197,34 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 },
             )
             postgresql = payload["runtime"]["postgresql_state_plane"]
+            lane_secrets = {
+                "relay-public": {
+                    "preparation": [],
+                    "serve": [
+                        "relay-public-tls-certificate",
+                        "relay-public-tls-private-key",
+                    ],
+                },
+                "relay-consultation": {
+                    "preparation": ["postgresql-tls-certificate"],
+                    "serve": [
+                        "postgresql-tls-certificate",
+                        "relay-consultation-tls-certificate",
+                        "relay-consultation-tls-private-key",
+                    ],
+                },
+                "notary": {
+                    "preparation": ["postgresql-tls-certificate"],
+                    "serve": [
+                        "postgresql-tls-certificate",
+                        "relay-consultation-tls-certificate",
+                        "notary-relay-workload-credential",
+                        "notary-signing-key",
+                        "notary-tls-certificate",
+                        "notary-tls-private-key",
+                    ],
+                },
+            }
             for lane, product in [
                 ("relay-public", "registry-relay"),
                 ("relay-consultation", "registry-relay"),
@@ -179,6 +243,22 @@ class RegistryReleaseLockTests(unittest.TestCase):
                     self.assertEqual(
                         recipe[action]["command"],
                         [*prefix, action],
+                    )
+                    self.assertEqual(
+                        recipe[action]["environment_files"],
+                        [f"{lane}-environment"],
+                    )
+                    expected_secrets = lane_secrets[lane][
+                        "preparation"
+                        if action in ["prepare_state_store", "initialize_state"]
+                        else "serve"
+                    ]
+                    self.assertEqual(
+                        [
+                            projection["file_id"]
+                            for projection in recipe[action]["secret_files"]
+                        ],
+                        expected_secrets,
                     )
                 self.assertEqual(
                     recipe["health_probe"],
@@ -208,9 +288,64 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 bootstrap_file["required_keys"],
                 release_lock.POSTGRESQL_BOOTSTRAP_KEYS,
             )
+            product_environment_ids = {
+                "relay-public-environment",
+                "relay-consultation-environment",
+                "notary-environment",
+            }
+            operator_files = payload["runtime"]["operator_files"]
             self.assertEqual(
-                payload["images"]["private_namespace_holder"]["identity"],
-                payload["images"]["postgresql_state_plane"]["identity"],
+                {file["id"] for file in operator_files},
+                product_environment_ids
+                | {
+                    "relay-public-tls-certificate",
+                    "relay-public-tls-private-key",
+                    "relay-consultation-tls-certificate",
+                    "relay-consultation-tls-private-key",
+                    "notary-tls-certificate",
+                    "notary-tls-private-key",
+                    "notary-signing-key",
+                    "notary-relay-workload-credential",
+                    "postgresql-tls-certificate",
+                    "postgresql-tls-private-key",
+                    "postgresql-admin-password",
+                    "postgresql-bootstrap-environment",
+                },
+            )
+            self.assertEqual(
+                schema["properties"]["runtime"]["properties"]["operator_files"][
+                    "minItems"
+                ],
+                len(operator_files),
+            )
+            self.assertEqual(
+                schema["properties"]["runtime"]["properties"]["operator_files"][
+                    "maxItems"
+                ],
+                len(operator_files),
+            )
+            self.assertEqual(
+                {
+                    file["id"]
+                    for file in operator_files
+                    if file["id"] in product_environment_ids
+                },
+                product_environment_ids,
+            )
+            for file in operator_files:
+                if file["id"] in product_environment_ids:
+                    self.assertEqual(file["format"], "dotenv")
+                    self.assertEqual(file["required_keys"], [])
+            self.assertFalse(
+                any(
+                    action in file["id"]
+                    for file in operator_files
+                    for action in [
+                        "-prepare-environment",
+                        "-initialize-environment",
+                        "-serve-environment",
+                    ]
+                )
             )
 
     def test_assemble_carries_exact_payload_and_cosign_v3_bundle(self) -> None:

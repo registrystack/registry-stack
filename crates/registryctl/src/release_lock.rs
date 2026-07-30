@@ -156,7 +156,6 @@ pub struct LockedManagedImagesV1 {
     pub relay: LockedOciImageV1,
     pub notary: LockedOciImageV1,
     pub postgresql_state_plane: LockedOciImageV1,
-    pub private_namespace_holder: LockedOciImageV1,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -166,13 +165,6 @@ pub struct LockedProductRecipeV1 {
     pub prepare_state_store: LockedRuntimeActionV1,
     pub initialize_state: LockedRuntimeActionV1,
     pub verify_state: LockedRuntimeActionV1,
-    pub health_probe: Vec<String>,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct LockedSupportingRecipeV1 {
-    pub command: Vec<String>,
     pub health_probe: Vec<String>,
 }
 
@@ -261,7 +253,6 @@ pub struct LockedRuntimeRecipesV1 {
     pub relay_consultation: LockedProductRecipeV1,
     pub notary: LockedProductRecipeV1,
     pub postgresql_state_plane: LockedPostgresqlRecipeV1,
-    pub private_namespace_holder: LockedSupportingRecipeV1,
     pub operator_files: Vec<LockedOperatorFileV1>,
 }
 
@@ -313,7 +304,6 @@ pub struct VerifiedManagedImagesV1 {
     relay: String,
     notary: String,
     postgresql_state_plane: String,
-    private_namespace_holder: String,
 }
 
 impl VerifiedManagedImagesV1 {
@@ -327,10 +317,6 @@ impl VerifiedManagedImagesV1 {
 
     pub fn postgresql_state_plane(&self) -> &str {
         &self.postgresql_state_plane
-    }
-
-    pub fn private_namespace_holder(&self) -> &str {
-        &self.private_namespace_holder
     }
 }
 
@@ -417,28 +403,11 @@ impl VerifiedPostgresqlRuntimeV1 {
 }
 
 #[derive(Clone, Eq, PartialEq)]
-pub struct VerifiedSupportingRuntimeV1 {
-    command: Vec<String>,
-    health_probe: Vec<String>,
-}
-
-impl VerifiedSupportingRuntimeV1 {
-    pub fn command(&self) -> &[String] {
-        &self.command
-    }
-
-    pub fn health_probe(&self) -> &[String] {
-        &self.health_probe
-    }
-}
-
-#[derive(Clone, Eq, PartialEq)]
 pub struct VerifiedRuntimeMappingV1 {
     relay_public: VerifiedProductRuntimeV1,
     relay_consultation: VerifiedProductRuntimeV1,
     notary: VerifiedProductRuntimeV1,
     postgresql_state_plane: VerifiedPostgresqlRuntimeV1,
-    private_namespace_holder: VerifiedSupportingRuntimeV1,
     operator_files: Vec<LockedOperatorFileV1>,
 }
 
@@ -457,10 +426,6 @@ impl VerifiedRuntimeMappingV1 {
 
     pub fn postgresql_state_plane(&self) -> &VerifiedPostgresqlRuntimeV1 {
         &self.postgresql_state_plane
-    }
-
-    pub fn private_namespace_holder(&self) -> &VerifiedSupportingRuntimeV1 {
-        &self.private_namespace_holder
     }
 
     pub fn operator_files(&self) -> &[LockedOperatorFileV1] {
@@ -528,7 +493,6 @@ impl VerifiedReleaseLockV1 {
             relay: self.lock.images.relay.identity.clone(),
             notary: self.lock.images.notary.identity.clone(),
             postgresql_state_plane: self.lock.images.postgresql_state_plane.identity.clone(),
-            private_namespace_holder: self.lock.images.private_namespace_holder.identity.clone(),
         }
     }
 
@@ -538,7 +502,6 @@ impl VerifiedReleaseLockV1 {
             relay_consultation: self.lock.runtime.relay_consultation.clone().into(),
             notary: self.lock.runtime.notary.clone().into(),
             postgresql_state_plane: self.lock.runtime.postgresql_state_plane.clone().into(),
-            private_namespace_holder: self.lock.runtime.private_namespace_holder.clone().into(),
             operator_files: self.lock.runtime.operator_files.clone(),
         }
     }
@@ -563,15 +526,6 @@ impl From<LockedProductRecipeV1> for VerifiedProductRuntimeV1 {
             prepare_state_store: value.prepare_state_store,
             initialize_state: value.initialize_state,
             verify_state: value.verify_state,
-            health_probe: value.health_probe,
-        }
-    }
-}
-
-impl From<LockedSupportingRecipeV1> for VerifiedSupportingRuntimeV1 {
-    fn from(value: LockedSupportingRecipeV1) -> Self {
-        Self {
-            command: value.command,
             health_probe: value.health_probe,
         }
     }
@@ -799,9 +753,7 @@ impl LockedManagedImagesV1 {
         self.relay.validate("Relay")?;
         self.notary.validate("Notary")?;
         self.postgresql_state_plane
-            .validate("PostgreSQL state plane")?;
-        self.private_namespace_holder
-            .validate("private namespace holder")
+            .validate("PostgreSQL state plane")
     }
 }
 
@@ -843,8 +795,6 @@ impl LockedRuntimeRecipesV1 {
         self.notary.validate("Notary")?;
         self.postgresql_state_plane
             .validate("PostgreSQL state plane")?;
-        self.private_namespace_holder
-            .validate("private namespace holder")?;
         validate_operator_files(self)?;
         Ok(())
     }
@@ -863,26 +813,6 @@ impl LockedProductRecipeV1 {
         validate_command(&self.health_probe, &format!("{label} health_probe"))?;
         validate_product_recipe_commands(self, label)?;
         validate_product_recipe_shape(self, label)
-    }
-}
-
-impl LockedSupportingRecipeV1 {
-    fn validate(&self, label: &str) -> Result<()> {
-        validate_command(&self.command, &format!("{label} command"))?;
-        validate_command(&self.health_probe, &format!("{label} health probe"))?;
-        if label != "private namespace holder" {
-            bail!("supporting runtime recipe label is unsupported");
-        }
-        validate_exact_command(
-            &self.command,
-            &["sleep", "infinity"],
-            "private namespace holder command",
-        )?;
-        validate_exact_command(
-            &self.health_probe,
-            &["CMD-SHELL", "kill -0 1"],
-            "private namespace holder health probe",
-        )
     }
 }
 
@@ -986,9 +916,7 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
         "Notary" => "notary",
         _ => bail!("product runtime recipe label is unsupported"),
     };
-    let prepare_environment = format!("{id}-prepare-environment");
-    let initialize_environment = format!("{id}-initialize-environment");
-    let serve_environment = format!("{id}-serve-environment");
+    let environment = format!("{id}-environment");
     validate_action_shape(
         &recipe.prepare_state_store,
         &[
@@ -996,7 +924,7 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
             LockedMountSourceV1::Anchor,
             LockedMountSourceV1::Audit,
         ],
-        &[prepare_environment.as_str()],
+        &[environment.as_str()],
         if id == "relay-public" {
             &[]
         } else {
@@ -1012,7 +940,7 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
             LockedMountSourceV1::AntiRollbackState,
             LockedMountSourceV1::Audit,
         ],
-        &[initialize_environment.as_str()],
+        &[environment.as_str()],
         if id == "relay-public" {
             &[]
         } else {
@@ -1052,7 +980,7 @@ fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) ->
                 LockedMountSourceV1::AntiRollbackState,
                 LockedMountSourceV1::Audit,
             ],
-            &[serve_environment.as_str()],
+            &[environment.as_str()],
             serve_secrets,
             &format!("{label} {name}"),
         )?;
@@ -1198,11 +1126,7 @@ fn validate_operator_files(runtime: &LockedRuntimeRecipesV1) -> Result<()> {
         {
             bail!("release lock operator-file schema is invalid");
         }
-        if file.id == "postgresql-bootstrap-environment"
-            && file.required_keys != POSTGRESQL_BOOTSTRAP_KEYS.map(str::to_string)
-        {
-            bail!("PostgreSQL bootstrap credential schema is incomplete");
-        }
+        validate_operator_file_contract(file)?;
     }
     let mut referenced = BTreeSet::new();
     let mut collect = |action: &LockedRuntimeActionV1| {
@@ -1228,6 +1152,79 @@ fn validate_operator_files(runtime: &LockedRuntimeRecipesV1) -> Result<()> {
     collect(&runtime.postgresql_state_plane.bootstrap);
     if files != referenced {
         bail!("release lock operator-file inventory does not match runtime consumers");
+    }
+    Ok(())
+}
+
+fn validate_operator_file_contract(file: &LockedOperatorFileV1) -> Result<()> {
+    let (format, allowed_owners, required_keys): (LockedOperatorFileFormatV1, &[&str], &[&str]) =
+        match file.id.as_str() {
+            "relay-public-environment"
+            | "relay-consultation-environment"
+            | "notary-environment" => (
+                LockedOperatorFileFormatV1::Dotenv,
+                &["root:root", "65532:65532"],
+                &[],
+            ),
+            "relay-public-tls-certificate"
+            | "relay-consultation-tls-certificate"
+            | "notary-tls-certificate" => (
+                LockedOperatorFileFormatV1::PemCertificate,
+                &["root:root", "65532:65532"],
+                &[],
+            ),
+            "relay-public-tls-private-key"
+            | "relay-consultation-tls-private-key"
+            | "notary-tls-private-key" => (
+                LockedOperatorFileFormatV1::PemPrivateKey,
+                &["root:root", "65532:65532"],
+                &[],
+            ),
+            "notary-signing-key" => (
+                LockedOperatorFileFormatV1::JsonWebKey,
+                &["root:root", "65532:65532"],
+                &[],
+            ),
+            "notary-relay-workload-credential" => (
+                LockedOperatorFileFormatV1::CompactJwt,
+                &["root:root", "65532:65532"],
+                &[],
+            ),
+            "postgresql-tls-certificate" => (
+                LockedOperatorFileFormatV1::PemCertificate,
+                &["root:root", "65532:65532", "999:999"],
+                &[],
+            ),
+            "postgresql-tls-private-key" => (
+                LockedOperatorFileFormatV1::PemPrivateKey,
+                &["root:root", "999:999"],
+                &[],
+            ),
+            "postgresql-admin-password" => (
+                LockedOperatorFileFormatV1::Opaque,
+                &["root:root", "999:999"],
+                &[],
+            ),
+            "postgresql-bootstrap-environment" => (
+                LockedOperatorFileFormatV1::Dotenv,
+                &["root:root", "999:999"],
+                &POSTGRESQL_BOOTSTRAP_KEYS,
+            ),
+            _ => bail!("release lock operator-file inventory is unsupported"),
+        };
+    if file.format != format
+        || !file
+            .allowed_owners
+            .iter()
+            .map(String::as_str)
+            .eq(allowed_owners.iter().copied())
+        || !file
+            .required_keys
+            .iter()
+            .map(String::as_str)
+            .eq(required_keys.iter().copied())
+    {
+        bail!("release lock operator-file contract is unsupported");
     }
     Ok(())
 }
@@ -1313,7 +1310,6 @@ fn validate_starters(starters: &[LockedEmbeddedStarterV1], product_version: &str
         "http",
         "opencrvs-dci",
         "snapshot",
-        "spreadsheet",
     ]);
     let mut actual = BTreeSet::new();
     for starter in starters {
@@ -1519,25 +1515,6 @@ mod tests {
     }
 
     #[test]
-    fn private_namespace_holder_recipe_is_exact() {
-        let recipe = LockedSupportingRecipeV1 {
-            command: vec!["sleep".to_string(), "infinity".to_string()],
-            health_probe: vec!["CMD-SHELL".to_string(), "kill -0 1".to_string()],
-        };
-        recipe
-            .validate("private namespace holder")
-            .expect("the exact namespace-holder recipe is accepted");
-
-        let mut wrong_command = recipe.clone();
-        wrong_command.command[0] = "sh".to_string();
-        assert!(wrong_command.validate("private namespace holder").is_err());
-
-        let mut wrong_probe = recipe;
-        wrong_probe.health_probe[1] = "true".to_string();
-        assert!(wrong_probe.validate("private namespace holder").is_err());
-    }
-
-    #[test]
     fn reviewed_trust_root_digest_remains_pinned() {
         assert_eq!(
             hex::encode(Sha256::digest(SIGSTORE_PRODUCTION_TRUSTED_ROOT.as_bytes())),
@@ -1562,6 +1539,61 @@ mod tests {
         for valid in ["1.0.0", "1.0.0-rc.1"] {
             assert!(validate_release_version(valid).is_ok(), "{valid}");
         }
+    }
+
+    #[test]
+    fn signed_lock_starter_roster_excludes_the_unshipped_spreadsheet_starter() {
+        let starter = |id: &str| LockedEmbeddedStarterV1 {
+            id: id.to_string(),
+            release: "1.0.0".to_string(),
+            content_digest: format!("sha256:{}", "a".repeat(64)),
+        };
+        let mut starters = [
+            "dhis2-tracker",
+            "fhir-r4",
+            "http",
+            "opencrvs-dci",
+            "snapshot",
+        ]
+        .map(starter)
+        .to_vec();
+        validate_starters(&starters, "1.0.0").expect("the closed 1.0 starter roster is accepted");
+
+        starters.push(starter("spreadsheet"));
+        assert!(validate_starters(&starters, "1.0.0").is_err());
+    }
+
+    #[test]
+    fn operator_file_contract_uses_one_semantically_parsed_dotenv_per_lane() {
+        let mut environment = LockedOperatorFileV1 {
+            id: "relay-consultation-environment".to_string(),
+            format: LockedOperatorFileFormatV1::Dotenv,
+            mode: "0600".to_string(),
+            allowed_owners: vec!["root:root".to_string(), "65532:65532".to_string()],
+            required_keys: Vec::new(),
+        };
+        validate_operator_file_contract(&environment)
+            .expect("the lane-owned product environment is accepted");
+
+        environment.id = "relay-consultation-serve-environment".to_string();
+        assert!(validate_operator_file_contract(&environment).is_err());
+        environment.id = "relay-consultation-environment".to_string();
+        environment.required_keys.push("DATABASE_URL".to_string());
+        assert!(validate_operator_file_contract(&environment).is_err());
+
+        let mut notary_signing_key = LockedOperatorFileV1 {
+            id: "notary-signing-key".to_string(),
+            format: LockedOperatorFileFormatV1::JsonWebKey,
+            mode: "0600".to_string(),
+            allowed_owners: vec!["root:root".to_string(), "65532:65532".to_string()],
+            required_keys: Vec::new(),
+        };
+        validate_operator_file_contract(&notary_signing_key)
+            .expect("the Notary-only signing-key projection is accepted");
+        notary_signing_key
+            .allowed_owners
+            .push("999:999".to_string());
+        assert!(validate_operator_file_contract(&notary_signing_key).is_err());
     }
 
     #[test]
