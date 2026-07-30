@@ -774,7 +774,11 @@ impl LockedReleaseIdentityV1 {
             bail!("release lock source ref must be its immutable release tag");
         }
         validate_lower_hex(&self.manifest_source_ref, 40, "release manifest source ref")?;
-        validate_lower_hex(&self.tag_target, 40, "release tag target")
+        validate_lower_hex(&self.tag_target, 40, "release tag target")?;
+        if self.manifest_source_ref != self.tag_target {
+            bail!("release lock manifest source ref and tag target must be identical");
+        }
+        Ok(())
     }
 }
 
@@ -1581,6 +1585,28 @@ mod tests {
         for valid in ["1.0.0", "1.0.0-rc.1"] {
             assert!(validate_release_version(valid).is_ok(), "{valid}");
         }
+    }
+
+    #[test]
+    fn release_identity_uses_one_exact_candidate_and_tag_revision() {
+        let mut identity = LockedReleaseIdentityV1 {
+            product_version: "1.0.0".to_string(),
+            release_tag: "v1.0.0".to_string(),
+            source_repository: RELEASE_REPOSITORY.to_string(),
+            source_workflow: RELEASE_WORKFLOW.to_string(),
+            source_ref: "refs/tags/v1.0.0".to_string(),
+            manifest_source_ref: "a".repeat(40),
+            tag_target: "a".repeat(40),
+        };
+        identity
+            .validate()
+            .expect("one exact candidate and tag revision is accepted");
+
+        identity.tag_target = "b".repeat(40);
+        let error = identity
+            .validate()
+            .expect_err("a distinct tag target must be rejected");
+        assert!(error.to_string().contains("must be identical"), "{error:#}");
     }
 
     #[test]

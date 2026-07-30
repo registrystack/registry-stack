@@ -469,6 +469,8 @@ def create_payload(args: argparse.Namespace) -> int:
         )
     if HEX40.fullmatch(args.tag_target) is None:
         raise ValueError("tag target must be 40 lowercase hexadecimal characters")
+    if args.manifest_source_ref != args.tag_target:
+        raise ValueError("manifest source ref and tag target must be identical")
     tag = f"v{args.version}"
     image_lock = read_json(args.image_lock)
     if not isinstance(image_lock, dict):

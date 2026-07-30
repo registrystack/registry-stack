@@ -2429,6 +2429,10 @@ def main(argv: list[str] | None = None) -> int:
                     raise CandidateError(
                         "v2 tag verification requires " + ", ".join(missing)
                     )
+                if args.tag_target != args.workflow_revision:
+                    raise CandidateError(
+                        "v2 tag target must equal the candidate workflow revision"
+                    )
                 manifest_sha = sha256_file(args.manifest)
                 if binding.get("manifest_sha256") != manifest_sha:
                     raise CandidateError(

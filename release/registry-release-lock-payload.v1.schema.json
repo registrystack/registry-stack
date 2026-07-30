@@ -153,10 +153,12 @@
         },
         "manifest_source_ref": {
           "type": "string",
+          "description": "Exact candidate source commit; it must equal tag_target.",
           "pattern": "^[0-9a-f]{40}$"
         },
         "tag_target": {
           "type": "string",
+          "description": "Exact annotated-tag target commit; it must equal manifest_source_ref.",
           "pattern": "^[0-9a-f]{40}$"
         }
       }

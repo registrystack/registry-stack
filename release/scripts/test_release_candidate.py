@@ -1474,7 +1474,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                         changed, workflow_revision="b" * 40, now=self.now
                     )
 
-    def test_verify_tag_binding_cli_rechecks_expiry_before_public_write(
+    def test_verify_tag_binding_cli_rechecks_identity_and_expiry_before_public_write(
         self,
     ) -> None:
         candidate, bundle_path, bundle_root, run = self.make_v2_candidate()
@@ -1495,7 +1495,7 @@ class ReleaseCandidateTest(unittest.TestCase):
         message_path = self.root.parent / "tag-message.txt"
         metadata_path.write_text(json.dumps(run), encoding="utf-8")
 
-        def invoke(document: dict) -> int:
+        def invoke(document: dict, *, tag_target: str = SOURCE_SHA) -> int:
             manifest_path.write_bytes(self.module.canonical_json(document))
             message_path.write_text(
                 self.module.render_tag_binding(
@@ -1520,7 +1520,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                         "--trusted-run-metadata",
                         str(metadata_path),
                         "--tag-target",
-                        "f" * 40,
+                        tag_target,
                         "--workflow-revision",
                         SOURCE_SHA,
                         "--version",
@@ -1531,6 +1531,7 @@ class ReleaseCandidateTest(unittest.TestCase):
                 )
 
         self.assertEqual(0, invoke(candidate))
+        self.assertEqual(1, invoke(candidate, tag_target="f" * 40))
         expired = copy.deepcopy(candidate)
         expired["validity"] = {
             "created_at": (current - timedelta(hours=24)).strftime(

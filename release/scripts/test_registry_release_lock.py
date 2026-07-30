@@ -31,7 +31,7 @@ class RegistryReleaseLockTests(unittest.TestCase):
             version = "1.0.0"
             tag = f"v{version}"
             manifest_source_ref = "1" * 40
-            tag_target = "2" * 40
+            tag_target = manifest_source_ref
             for platform in release_lock.PLATFORMS:
                 (assets / f"registryctl-{tag}-{platform}").write_bytes(
                     f"registryctl {platform}".encode()
@@ -367,6 +367,19 @@ class RegistryReleaseLockTests(unittest.TestCase):
             "GRANT CONNECT ON DATABASE",
         ]:
             self.assertLess(marker_position, script.index(mutation), mutation)
+
+    def test_create_payload_rejects_a_distinct_tag_target(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be identical"):
+            release_lock.create_payload(
+                argparse.Namespace(
+                    version="1.0.0",
+                    manifest_source_ref="1" * 40,
+                    tag_target="2" * 40,
+                    asset_dir=Path("unused-assets"),
+                    image_lock=Path("unused-image-lock.json"),
+                    output=Path("unused-output.json"),
+                )
+            )
 
     def test_assemble_carries_exact_payload_and_cosign_v3_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

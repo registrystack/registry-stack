@@ -14,7 +14,7 @@ import registry_release_lock
 
 VERSION = "1.0.0"
 MANIFEST_SOURCE_REF = "1" * 40
-TAG_TARGET = "2" * 40
+TAG_TARGET = MANIFEST_SOURCE_REF
 
 
 def create_payload(output: Path) -> None:

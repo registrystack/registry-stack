@@ -226,7 +226,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertLess(expiry, login)
         self.assertLess(login, copy)
 
-    def test_candidate_is_bound_to_p_and_final_lock_to_p_and_t(self) -> None:
+    def test_candidate_tag_and_final_lock_use_one_exact_source_revision(self) -> None:
         text, _ = workflow("release.yml")
         candidate, _ = workflow("release-candidate.yml")
         self.assertIn(
@@ -234,8 +234,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             text,
         )
         self.assertIn(
-            'git merge-base --is-ancestor \\\n'
-            '            "${workflow_revision}" "${{ steps.identity.outputs.source_sha }}"',
+            'test "${workflow_revision}" = "${{ steps.identity.outputs.source_sha }}"',
             text,
         )
         self.assertIn(

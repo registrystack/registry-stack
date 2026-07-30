@@ -55,7 +55,7 @@ class FirstCountryReleaseFormTest(TestCase):
                     "schema_version": "registryctl.release_image_lock.v2",
                     "release_tag": self.tag,
                     "manifest_source_ref": "1" * 40,
-                    "tag_target": "2" * 40,
+                    "tag_target": "1" * 40,
                     "platform": "linux/amd64",
                     "images": {
                         "registry-relay": self.relay,
@@ -481,7 +481,7 @@ class FirstCountryReleaseFormTest(TestCase):
             "status": "passed",
             "release_tag": self.tag,
             "manifest_source_ref": "1" * 40,
-            "tag_target": "2" * 40,
+            "tag_target": "1" * 40,
             "platform_asset": self.binary,
             "asset_sha256": verified["assets"],
             "release_image_lock_sha256": verified["assets"][self.lock],
@@ -600,6 +600,26 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertEqual(verified["postgresql_image"], self.postgresql)
         self.assertEqual(verified["release_lock_name"], self.release_lock)
         self.assertEqual(verified["docs_archive_name"], self.docs_archive)
+
+    def test_closed_assets_reject_a_distinct_tag_target(self) -> None:
+        lock_path = self.assets / self.lock
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        lock["tag_target"] = "2" * 40
+        lock_path.write_text(json.dumps(lock), encoding="utf-8")
+        digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+        lines = (self.assets / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
+        (self.assets / "SHA256SUMS").write_text(
+            "\n".join(
+                f"{digest}  {self.lock}" if self.lock in line else line
+                for line in lines
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "one exact candidate and tag revision"
+        ):
+            self.verify_assets()
 
     def test_released_docs_archive_extracts_exact_public_reader_inputs(self) -> None:
         verified = self.verify_assets()

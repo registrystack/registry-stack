@@ -169,8 +169,7 @@ jobs:
             --workflow-revision "${workflow_revision}" \
             --version "${{ steps.identity.outputs.version }}" \
             --release-id "${release_id}"
-          git merge-base --is-ancestor \
-            "${workflow_revision}" "${{ steps.identity.outputs.source_sha }}"
+          test "${workflow_revision}" = "${{ steps.identity.outputs.source_sha }}"
           python3 release/scripts/release_candidate.py verify-candidate \
             --manifest "${manifest}" \
             --bundle "${bundle}" \

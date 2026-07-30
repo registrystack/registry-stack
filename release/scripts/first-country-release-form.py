@@ -576,6 +576,10 @@ def verify_asset_set(asset_dir: Path, tag: str) -> dict[str, Any]:
         raise ReleaseFormError(
             "release image lock does not match the current Linux amd64 runtime contract"
         )
+    if lock.get("manifest_source_ref") != lock.get("tag_target"):
+        raise ReleaseFormError(
+            "release image lock must bind one exact candidate and tag revision"
+        )
     images = lock.get("images")
     relay_image = images.get("registry-relay") if isinstance(images, dict) else None
     notary_image = images.get("registry-notary") if isinstance(images, dict) else None
