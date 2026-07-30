@@ -102,7 +102,7 @@ authoring surface. `registryctl` diagnostics apply to the project sources that
 produced that output. Hand-editing compiled configuration is unsupported and
 has no project-level diagnostic path; change the project and regenerate it.
 When a project includes consultation profiles, the build emits separate
-`private/relay` and `private/relay-consultation` signing inputs. Each contains
+`private/relay-public` and `private/relay-consultation` signing inputs. Each contains
 one primary `config/relay.yaml` plus only that runtime instance's artifacts,
 operations, and secret-consumer descriptor. The matching Notary input remains
 under `private/notary`.

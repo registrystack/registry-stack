@@ -42,9 +42,9 @@
         }
       ],
       "requirements": {
-        "signing": ["relay_public"],
-        "activation": ["relay_public"],
-        "restart": ["relay_public"]
+        "signing": ["relay-public"],
+        "activation": ["relay-public"],
+        "restart": ["relay-public"]
       }
     }
   ]

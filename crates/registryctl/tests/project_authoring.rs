@@ -1333,7 +1333,7 @@ fn every_cataloged_supported_project_authoring_command_is_automated() {
         .unwrap_or_else(|error| panic!("{} build failed: {error:#}", journey.id));
         assert_eq!(build.status, "built", "{} build", journey.id);
         let output = resolve_build_output(&project, build.output.expect("catalog build output"));
-        let relay = output.join("private/relay");
+        let relay = output.join("private/relay-public");
         let notary = output.join("private/notary");
         match journey.topology.as_str() {
             "relay-only" => {
@@ -2330,7 +2330,7 @@ fn spreadsheet_starter_builds_sensitive_projected_fields_without_emitting_projec
     })
     .expect("spreadsheet starter builds");
     let output = resolve_build_output(&project, build.output.expect("build output"));
-    let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
+    let relay = read_yaml(&output.join("private/relay-public/config/relay.yaml"));
     assert_eq!(relay["auth"]["mode"], "api_key");
     let api_keys = relay["auth"]["api_keys"]
         .as_sequence()
@@ -2355,7 +2355,7 @@ fn spreadsheet_starter_builds_sensitive_projected_fields_without_emitting_projec
                 .expect("expected scopes parse")
         );
     }
-    let relay_text = std::fs::read_to_string(output.join("private/relay/config/relay.yaml"))
+    let relay_text = std::fs::read_to_string(output.join("private/relay-public/config/relay.yaml"))
         .expect("Relay config reads");
     assert!(!relay_text.contains("_RAW"));
     assert!(!relay_text.contains("pw_001="));
@@ -2409,7 +2409,7 @@ fn spreadsheet_starter_builds_sensitive_projected_fields_without_emitting_projec
         .expect("spreadsheet generated artifacts")
         .iter()
         .all(|artifact| artifact["path"] != "data/public_works_projects.xlsx"));
-    let first_relay_bytes = std::fs::read(output.join("private/relay/config/relay.yaml"))
+    let first_relay_bytes = std::fs::read(output.join("private/relay-public/config/relay.yaml"))
         .expect("first Relay output reads");
     let repeated_build = build_registry_project(&ProjectBuildOptions {
         project_directory: project.clone(),
@@ -2424,7 +2424,7 @@ fn spreadsheet_starter_builds_sensitive_projected_fields_without_emitting_projec
     );
     assert_eq!(
         first_relay_bytes,
-        std::fs::read(repeated_output.join("private/relay/config/relay.yaml"))
+        std::fs::read(repeated_output.join("private/relay-public/config/relay.yaml"))
             .expect("repeated Relay output reads")
     );
 }
@@ -5936,7 +5936,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "c5d5526fcf341fc8557aad455e07bdb95a7ba9b316588cd24d3f8e0f29582a2d",
+        "e9d0c2d4ebface1579ab6b340811bd6f6ea1af59f1e90884f5b6b2ba751dc430",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }
@@ -6055,7 +6055,7 @@ fn build_artifact_manifest_is_complete_relative_private_and_deterministic() {
             .as_array()
             .expect("artifact consumers");
         assert!(!consumers.is_empty());
-        if payload_relative.starts_with("private/relay/")
+        if payload_relative.starts_with("private/relay-public/")
             || payload_relative.starts_with("private/relay-consultation/")
         {
             assert!(!consumers
@@ -6069,7 +6069,7 @@ fn build_artifact_manifest_is_complete_relative_private_and_deterministic() {
         }
         if matches!(
             payload_relative,
-            "private/relay/config/relay.yaml"
+            "private/relay-public/config/relay.yaml"
                 | "private/relay-consultation/config/relay.yaml"
                 | "private/notary/config/notary.yaml"
         ) {
@@ -6412,7 +6412,7 @@ fn records_and_snapshot_share_one_generated_materialization() {
     })
     .expect("records plus evidence golden builds through production validation");
     let output = resolve_build_output(&project, build.output.expect("build output"));
-    let relay_root = output.join("private/relay");
+    let relay_root = output.join("private/relay-public");
     let relay: serde_json::Value = serde_norway::from_slice(
         &std::fs::read(relay_root.join("config/relay.yaml")).expect("Relay config reads"),
     )
@@ -6484,9 +6484,21 @@ fn records_and_snapshot_share_one_generated_materialization() {
 
 #[test]
 fn relay_only_and_notary_only_projects_emit_only_selected_products() {
-    for (project_name, present, absent) in [
-        ("relay-only-records", "relay", "notary"),
-        ("notary-only-evaluation", "notary", "relay"),
+    for (project_name, present_directory, present_closure, absent_directory, absent_closure) in [
+        (
+            "relay-only-records",
+            "relay-public",
+            "relay",
+            "notary",
+            "notary",
+        ),
+        (
+            "notary-only-evaluation",
+            "notary",
+            "notary",
+            "relay-public",
+            "relay",
+        ),
     ] {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let project = copy_project(project_name, temporary.path());
@@ -6499,12 +6511,12 @@ fn relay_only_and_notary_only_projects_emit_only_selected_products() {
         .unwrap_or_else(|error| panic!("{project_name} build failed: {error:#}"));
         let output = resolve_build_output(&project, build.output.expect("build output"));
         assert!(
-            output.join("private").join(present).is_dir(),
+            output.join("private").join(present_directory).is_dir(),
             "{project_name}"
         );
         assert!(
-            !output.join("private").join(absent).exists(),
-            "{project_name} emitted unselected {absent} configuration"
+            !output.join("private").join(absent_directory).exists(),
+            "{project_name} emitted unselected {absent_directory} configuration"
         );
         assert!(
             !output.join("private/relay-consultation").exists(),
@@ -6514,14 +6526,14 @@ fn relay_only_and_notary_only_projects_emit_only_selected_products() {
             &std::fs::read(
                 output
                     .join("private")
-                    .join(present)
+                    .join(present_directory)
                     .join("approval/project-state.json"),
             )
             .expect("approval state reads"),
         )
         .expect("approval state parses");
-        assert!(approval_state["generated_closure_digests"][present].is_string());
-        assert!(approval_state["generated_closure_digests"][absent].is_null());
+        assert!(approval_state["generated_closure_digests"][present_closure].is_string());
+        assert!(approval_state["generated_closure_digests"][absent_closure].is_null());
         assert!(approval_state["generated_closure_digests"]["relay_consultation"].is_null());
     }
 }
@@ -6577,11 +6589,11 @@ fn materialization_only_project_emits_private_relay_table_without_public_records
     })
     .expect("materialization-only Relay project builds");
     let output = resolve_build_output(&project, build.output.expect("build output"));
-    assert!(output.join("private/relay").is_dir());
+    assert!(output.join("private/relay-public").is_dir());
     assert!(!output.join("private/relay-consultation").exists());
     assert!(!output.join("private/notary").exists());
 
-    let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
+    let relay = read_yaml(&output.join("private/relay-public/config/relay.yaml"));
     let datasets = relay["datasets"].as_sequence().expect("Relay datasets");
     assert_eq!(datasets.len(), 1);
     assert_eq!(
@@ -6594,7 +6606,7 @@ fn materialization_only_project_emits_private_relay_table_without_public_records
     assert!(relay.get("consultation").is_none());
 
     let approval_state: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(output.join("private/relay/approval/project-state.json"))
+        &std::fs::read(output.join("private/relay-public/approval/project-state.json"))
             .expect("approval state reads"),
     )
     .expect("approval state parses");
@@ -6615,7 +6627,7 @@ fn relay_oidc_clients_are_separate_from_the_notary_consultation_workload() {
     })
     .expect("combined project builds with separate Relay identities");
     let output = resolve_build_output(&project, build.output.expect("build output"));
-    let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
+    let relay = read_yaml(&output.join("private/relay-public/config/relay.yaml"));
     let consultation_relay =
         read_yaml(&output.join("private/relay-consultation/config/relay.yaml"));
     let allowed_clients = relay["auth"]["oidc"]["allowed_clients"]
@@ -6685,7 +6697,7 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
     })
     .expect("local IP-loopback Relay, issuer, and JWKS build");
     let output = resolve_build_output(&project, build.output.expect("build output"));
-    let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
+    let relay = read_yaml(&output.join("private/relay-public/config/relay.yaml"));
     assert_eq!(
         relay["auth"]["oidc"]["allow_dev_insecure_fetch_urls"].as_bool(),
         Some(true)
@@ -6791,7 +6803,7 @@ fn hosted_notary_can_use_an_explicit_loopback_relay_connection() {
     })
     .expect("hosted project builds with a private loopback Notary-to-Relay connection");
     let output = resolve_build_output(&project, build.output.expect("build output"));
-    let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
+    let relay = read_yaml(&output.join("private/relay-public/config/relay.yaml"));
     assert_eq!(
         relay["catalog"]["base_url"].as_str(),
         Some("https://household-relay.internal.invalid")
@@ -7720,7 +7732,8 @@ response_fields: { residency_confirmed: residency_confirmed }
     .expect("enabled records standards build through Relay production validation");
     let output = resolve_build_output(&project, build.output.expect("build output"));
     let relay: serde_json::Value = serde_norway::from_slice(
-        &std::fs::read(output.join("private/relay/config/relay.yaml")).expect("Relay config reads"),
+        &std::fs::read(output.join("private/relay-public/config/relay.yaml"))
+            .expect("Relay config reads"),
     )
     .expect("Relay config parses");
     let dataset = &relay["datasets"][0];
@@ -7907,9 +7920,11 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
         let output = resolve_build_output(&project, build.output.expect("build output"));
         assert!(output.join("reviewable/review.json").is_file());
         assert!(output
-            .join("private/relay/approval/project-state.json")
+            .join("private/relay-public/approval/project-state.json")
             .is_file());
-        assert!(output.join("private/relay/config/relay.yaml").is_file());
+        assert!(output
+            .join("private/relay-public/config/relay.yaml")
+            .is_file());
         assert!(output
             .join("private/relay-consultation/approval/project-state.json")
             .is_file());
@@ -7929,7 +7944,7 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
                 "{project_name} generated Notary config must not contain {forbidden}"
             );
         }
-        for product in ["relay", "relay-consultation", "notary"] {
+        for product in ["relay-public", "relay-consultation", "notary"] {
             assert!(output
                 .join(format!("private/{product}/descriptors/operations.json"))
                 .is_file());
@@ -7944,7 +7959,7 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
         let review: serde_json::Value =
             serde_json::from_slice(&review_bytes).expect("human review parses");
         assert_public_review_has_only_contract_hashes(&review);
-        for product in ["relay", "relay-consultation", "notary"] {
+        for product in ["relay-public", "relay-consultation", "notary"] {
             assert_eq!(
                 std::fs::read(output.join(format!("private/{product}/approval/review.json")))
                     .expect("signed review input reads"),
@@ -7953,21 +7968,21 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
             );
         }
         assert_eq!(
-            std::fs::read(output.join("private/relay/approval/project-state.json"))
+            std::fs::read(output.join("private/relay-public/approval/project-state.json"))
                 .expect("Relay approval state reads"),
             std::fs::read(output.join("private/relay-consultation/approval/project-state.json"))
                 .expect("consultation Relay approval state reads"),
             "{project_name} Relay instances carry identical approval state"
         );
         assert_eq!(
-            std::fs::read(output.join("private/relay/approval/project-state.json"))
+            std::fs::read(output.join("private/relay-public/approval/project-state.json"))
                 .expect("Relay approval state reads"),
             std::fs::read(output.join("private/notary/approval/project-state.json"))
                 .expect("Notary approval state reads"),
             "{project_name} products carry identical approval state"
         );
         let relay_descriptor: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(output.join("private/relay/descriptors/secret-consumers.json"))
+            &std::fs::read(output.join("private/relay-public/descriptors/secret-consumers.json"))
                 .expect("Relay secret descriptor reads"),
         )
         .expect("Relay secret descriptor parses");
@@ -8053,7 +8068,11 @@ fn generated_product_inputs_sign_and_verify_without_secret_values() {
     std::fs::write(&private_key, TEST_PRIVATE_JWK).expect("private test key writes");
     std::fs::write(&public_key, TEST_PUBLIC_JWK).expect("public test key writes");
     for (label, product, input) in [
-        ("relay", "registry-relay", output.join("private/relay")),
+        (
+            "relay",
+            "registry-relay",
+            output.join("private/relay-public"),
+        ),
         (
             "relay-consultation",
             "registry-relay",
@@ -8212,7 +8231,7 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     .expect("Relay baseline anchor initializes");
     add_config_anchor_key(&relay_anchor, &public_key, true).expect("Relay baseline key adds");
     sign_config_bundle(BundleSignOptions {
-        input: output.join("private/relay"),
+        input: output.join("private/relay-public"),
         key: private_key.display().to_string(),
         product: "registry-relay".to_string(),
         environment: "local".to_string(),

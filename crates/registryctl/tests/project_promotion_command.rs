@@ -93,7 +93,13 @@ fn sign_product_baseline(
 fn signed_baselines(project: &Path, temporary: &Path) -> SignedBaselines {
     let output = build_project_output(project);
     SignedBaselines {
-        relay: sign_product_baseline(&output, temporary, "registry-relay", "relay", "relay"),
+        relay: sign_product_baseline(
+            &output,
+            temporary,
+            "registry-relay",
+            "relay-public",
+            "relay",
+        ),
         relay_consultation: sign_product_baseline(
             &output,
             temporary,
@@ -495,15 +501,15 @@ fn verified_baseline_supports_safe_actions_and_cli_exit_and_format_contracts() {
     assert_eq!(changed_json["disposition"], "ready_after_required_actions");
     assert_eq!(
         changed_json["required_actions"]["re_sign"],
-        serde_json::json!(["relay_consultation"])
+        serde_json::json!(["relay-consultation"])
     );
     assert_eq!(
         changed_json["required_actions"]["restart"],
-        serde_json::json!(["relay_consultation"])
+        serde_json::json!(["relay-consultation"])
     );
     assert_eq!(
         changed_json["required_actions"]["reactivate"],
-        serde_json::json!(["relay_consultation"])
+        serde_json::json!(["relay-consultation"])
     );
 
     let changed_human = run_promote(&project, &baselines, "human");
@@ -608,6 +614,47 @@ fn combined_topology_requires_separate_product_owned_baselines() {
     })
     .expect("wrong-product baselines fail closed as a report");
     assert_conservative_blocked_report(&wrong_owner, &forbidden);
+}
+
+#[test]
+fn relay_only_and_notary_only_topologies_accept_their_product_baseline() {
+    let fixture_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-authoring");
+    for (fixture, product, product_directory) in [
+        (
+            "relay-only-materialization",
+            "registry-relay",
+            "relay-public",
+        ),
+        ("notary-only-evaluation", "registry-notary", "notary"),
+    ] {
+        let temporary = tempfile::tempdir().expect("temporary directory creates");
+        let project = temporary.path().join(fixture);
+        copy_tree(&fixture_root.join(fixture), &project);
+        let output = build_project_output(&project);
+        let baseline = sign_product_baseline(
+            &output,
+            temporary.path(),
+            product,
+            product_directory,
+            product_directory,
+        );
+
+        let ready = run_promote_legacy(&project, &baseline, "json");
+        assert_eq!(
+            ready.status.code(),
+            Some(0),
+            "{fixture}: {}",
+            String::from_utf8_lossy(&ready.stderr)
+        );
+        let ready: serde_json::Value =
+            serde_json::from_slice(&ready.stdout).expect("single-product JSON parses");
+        assert_eq!(ready["disposition"], "ready", "{fixture}");
+        assert_eq!(
+            ready["compatibility"][0]["state"], "compatible",
+            "{fixture}"
+        );
+    }
 }
 
 #[test]
@@ -798,7 +845,7 @@ fn invalid_signed_baselines_fail_closed_with_valid_value_free_reports() {
          \u{20}\u{20}- TrustUnresolved\n\
          \u{20}\u{20}- CompatibilityUnresolved\n\
          \u{20}\u{20}- LegacyRelayConsultationBaselineMigrationRequired\n\
-         \u{20}\u{20}Baseline migration: re-review the project and sign separate private/relay and private/relay-consultation inputs before promoting\n\
+         \u{20}\u{20}Baseline migration: re-review the project and sign separate private/relay-public and private/relay-consultation inputs before promoting\n\
          \u{20}\u{20}Required reviews: none\n\
          \u{20}\u{20}Re-sign: none; restart: none; reactivate: none\n"
     );

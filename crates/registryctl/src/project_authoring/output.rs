@@ -620,7 +620,7 @@ fn write_compiled_project(
     let approval_state_bytes = canonical_json_line(&compiled.approval_state)?;
     write_private_file(&reviewable_root.join("review.json"), &review_bytes)?;
     if !compiled.relay_private.is_empty() {
-        let relay_root = temporary.join("private/relay");
+        let relay_root = temporary.join("private/relay-public");
         create_dir_owner_only(&relay_root)?;
         write_file_map(&relay_root, &compiled.relay_private)?;
         write_private_file(&relay_root.join(APPROVAL_REVIEW_PATH), &review_bytes)?;
@@ -649,7 +649,7 @@ fn write_compiled_project(
         // are confined to the selected config trees mounted into containers, so a
         // failure leaves the prior published build untouched.
         for relative in [
-            "private/relay/config",
+            "private/relay-public/config",
             "private/relay-consultation/config",
             "private/notary/config",
         ] {

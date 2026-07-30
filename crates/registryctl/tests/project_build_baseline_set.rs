@@ -95,7 +95,7 @@ fn sign_common_set(
         output,
         temporary,
         "registry-relay",
-        "relay",
+        "relay-public",
         "local",
         &format!("{suffix}-relay"),
     );
@@ -169,8 +169,9 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
     let temporary = tempfile::tempdir().expect("temporary directory creates");
     let project = initialize_project(temporary.path());
     let output = initial_build(&project);
-    let relay_initial = std::fs::read(output.join("private/relay/approval/project-state.json"))
-        .expect("initial Relay approval state reads");
+    let relay_initial =
+        std::fs::read(output.join("private/relay-public/approval/project-state.json"))
+            .expect("initial Relay approval state reads");
     let relay_consultation_initial =
         std::fs::read(output.join("private/relay-consultation/approval/project-state.json"))
             .expect("initial consultation Relay approval state reads");
@@ -232,8 +233,9 @@ fn initial_and_common_approved_baseline_builds_are_distinct_and_lineage_is_produ
     assert_eq!(report.baseline, "verified_signed_bundle");
 
     let next_output = project.join(report.output.expect("reviewed build output is reported"));
-    let relay_next = std::fs::read(next_output.join("private/relay/approval/project-state.json"))
-        .expect("next Relay approval state reads");
+    let relay_next =
+        std::fs::read(next_output.join("private/relay-public/approval/project-state.json"))
+            .expect("next Relay approval state reads");
     let relay_consultation_next =
         std::fs::read(next_output.join("private/relay-consultation/approval/project-state.json"))
             .expect("next consultation Relay approval state reads");
@@ -274,8 +276,9 @@ fn partial_swapped_tampered_and_wrong_environment_sets_fail_before_publication()
     let temporary = tempfile::tempdir().expect("temporary directory creates");
     let project = initialize_project(temporary.path());
     let output = initial_build(&project);
-    let original_state = std::fs::read(output.join("private/relay/approval/project-state.json"))
-        .expect("initial approval state reads");
+    let original_state =
+        std::fs::read(output.join("private/relay-public/approval/project-state.json"))
+            .expect("initial approval state reads");
     let baselines = sign_common_set(&output, temporary.path(), "rejection");
 
     let partial = ProjectBuildBaselineSetOptions {
@@ -285,7 +288,7 @@ fn partial_swapped_tampered_and_wrong_environment_sets_fail_before_publication()
     };
     assert_value_free_rejection(&project, &partial, temporary.path());
     assert_eq!(
-        std::fs::read(output.join("private/relay/approval/project-state.json"))
+        std::fs::read(output.join("private/relay-public/approval/project-state.json"))
             .expect("published approval state rereads"),
         original_state
     );
@@ -329,7 +332,7 @@ fn partial_swapped_tampered_and_wrong_environment_sets_fail_before_publication()
         &output,
         temporary.path(),
         "registry-relay",
-        "relay",
+        "relay-public",
         "other",
         "wrong-environment-relay",
     );
@@ -353,7 +356,7 @@ fn independently_valid_but_divergent_product_approval_states_are_rejected() {
         &first_output,
         temporary.path(),
         "registry-relay",
-        "relay",
+        "relay-public",
         "local",
         "divergent-relay",
     );
@@ -405,7 +408,7 @@ fn legacy_v3_relay_baseline_requires_split_lane_re_review() {
     let legacy_output = temporary.path().join("legacy-v3-output");
     copy_tree(&output, &legacy_output);
 
-    let state_path = legacy_output.join("private/relay/approval/project-state.json");
+    let state_path = legacy_output.join("private/relay-public/approval/project-state.json");
     let mut state: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&state_path).expect("current approval state reads"))
             .expect("current approval state parses");
@@ -416,7 +419,7 @@ fn legacy_v3_relay_baseline_requires_split_lane_re_review() {
         .remove("relay_consultation");
     let mut state_bytes = serde_json::to_vec_pretty(&state).expect("legacy state serializes");
     state_bytes.push(b'\n');
-    for product_directory in ["relay", "notary"] {
+    for product_directory in ["relay-public", "notary"] {
         std::fs::write(
             legacy_output
                 .join("private")
@@ -431,7 +434,7 @@ fn legacy_v3_relay_baseline_requires_split_lane_re_review() {
         &legacy_output,
         temporary.path(),
         "registry-relay",
-        "relay",
+        "relay-public",
         "local",
         "legacy-v3-relay",
     );

@@ -184,7 +184,8 @@ const CANONICAL_PROJECT_FILE: &str = "registry-stack.yaml";
 const CANONICAL_LOCAL_ENVIRONMENT_FILE: &str = "environments/local.yaml";
 const CANONICAL_LOCAL_ENVIRONMENT: &str = "local";
 const CANONICAL_BUILD_ROOT: &str = ".registry-stack/build/local";
-const CANONICAL_RELAY_CONFIG: &str = ".registry-stack/build/local/private/relay/config/relay.yaml";
+const CANONICAL_RELAY_CONFIG: &str =
+    ".registry-stack/build/local/private/relay-public/config/relay.yaml";
 const CANONICAL_CONSULTATION_RELAY_CONFIG: &str =
     ".registry-stack/build/local/private/relay-consultation/config/relay.yaml";
 const CANONICAL_COMPILED_NOTARY_CONFIG: &str =
@@ -207,16 +208,16 @@ const CANONICAL_RUNTIME_WORKLOAD_TOKEN: &str =
 const CANONICAL_RUNTIME_NOTARY_CONFIG: &str =
     ".registry-stack/runtime/local/private/notary/config/notary.yaml";
 const CANONICAL_RUNTIME_CONSULTATION_RELAY_CONFIG: &str =
-    ".registry-stack/runtime/local/private/relay/config/relay-consultation.yaml";
+    ".registry-stack/runtime/local/private/relay-consultation/config/relay.yaml";
 const CANONICAL_RUNTIME_POSTGRES_CA: &str =
-    ".registry-stack/runtime/local/private/relay/config/state-plane-ca.pem";
+    ".registry-stack/runtime/local/private/relay-consultation/config/state-plane-ca.pem";
 const CANONICAL_RUNTIME_DB_INIT: &str = ".registry-stack/runtime/local/private/db/init.sh";
 const CANONICAL_RUNTIME_WORKLOAD_JWKS: &str =
     ".registry-stack/runtime/local/private/workload/jwks.json";
 const CANONICAL_RUNTIME_WORKLOAD_PRIVATE_JWK: &str =
     ".registry-stack/runtime/local/secrets/workload-private.jwk";
 const CANONICAL_RUNTIME_RELAY_CONFIG: &str =
-    ".registry-stack/runtime/local/private/relay/config/relay.yaml";
+    ".registry-stack/runtime/local/private/relay-public/config/relay.yaml";
 const CANONICAL_RUNTIME_WORKBOOK: &str = ".registry-stack/runtime/local/private/data/workbook.xlsx";
 const CANONICAL_RUNTIME_MANIFEST_SCHEMA: &str = "registryctl.local_runtime.v2";
 const CANONICAL_RUNTIME_LEGACY_MANIFEST_SCHEMA: &str = "registryctl.local_runtime.v1";
@@ -280,8 +281,7 @@ const CANONICAL_RUNTIME_NO_MATCH_PRINCIPAL: &str = "registryctl_local_no_match";
 const REGISTRYCTL_RELAY_STAGING_IMAGE_ENV: &str = "REGISTRYCTL_RELAY_STAGING_IMAGE";
 const REGISTRYCTL_NOTARY_STAGING_IMAGE_ENV: &str = "REGISTRYCTL_NOTARY_STAGING_IMAGE";
 const CANONICAL_RELAY_CONFIG_MOUNT: &str = "/etc/registry-relay/config.yaml";
-const CANONICAL_CONSULTATION_RELAY_CONFIG_MOUNT: &str =
-    "/etc/registry-relay/config/relay-consultation.yaml";
+const CANONICAL_CONSULTATION_RELAY_CONFIG_MOUNT: &str = "/etc/registry-relay/config/relay.yaml";
 const CANONICAL_POSTGRES_CA_MOUNT: &str = "/etc/registry-relay/config/state-plane-ca.pem";
 const CANONICAL_NOTARY_CONFIG_MOUNT: &str = "/etc/registry-notary/config.yaml";
 const CANONICAL_RELAY_CONTAINER_PORT: &str = "0.0.0.0:8080";
@@ -2221,7 +2221,7 @@ fn canonical_compose_document(
                 "ports": [CANONICAL_RELAY_HOST_PORT],
                 "networks": ["public"],
                 "volumes": [
-                    format!("./private/relay/config/relay.yaml:{CANONICAL_RELAY_CONFIG_MOUNT}:ro"),
+                    format!("./private/relay-public/config/relay.yaml:{CANONICAL_RELAY_CONFIG_MOUNT}:ro"),
                     format!("./private/data/workbook.xlsx:{}:ro", binding.runtime_path),
                 ],
                 "read_only": true,
@@ -2329,7 +2329,7 @@ fn canonical_compose_document(
                 ],
                 "env_file": ["secrets/relay-bootstrap.env"],
                 "volumes": [
-                    "./private/relay/config:/etc/registry-relay/config:ro",
+                    "./private/relay-consultation/config:/etc/registry-relay/config:ro",
                 ],
                 "depends_on": {
                     "postgresql": {"condition": "service_healthy"},
@@ -2393,7 +2393,7 @@ fn canonical_compose_document(
                 "network_mode": "service:notary-network",
                 "volumes": [
                     format!("./private/data/workbook.xlsx:{}:ro", binding.runtime_path),
-                    "./private/relay/config:/etc/registry-relay/config:ro",
+                    "./private/relay-consultation/config:/etc/registry-relay/config:ro",
                 ],
                 "depends_on": {
                     "postgresql": {"condition": "service_healthy"},
@@ -3743,8 +3743,8 @@ fn publish_canonical_runtime(
     create_private_dir_all(&staging.path().join("secrets"))?;
     create_private_dir_all(&staging.path().join("private/data"))?;
     copy_private_runtime_tree(
-        &project_dir.join(".registry-stack/build/local/private/relay/config"),
-        &staging.path().join("private/relay/config"),
+        &project_dir.join(".registry-stack/build/local/private/relay-public/config"),
+        &staging.path().join("private/relay-public/config"),
     )?;
     write_private_bytes(
         &staging.path().join("private/data/workbook.xlsx"),
@@ -3764,9 +3764,8 @@ fn publish_canonical_runtime(
     )?;
     let notary_manifest = if let Some(notary) = credentials.notary.as_ref() {
         copy_private_runtime_tree(
-            &project_dir
-                .join(".registry-stack/build/local/private/relay-consultation/config/artifacts"),
-            &staging.path().join("private/relay/config/artifacts"),
+            &project_dir.join(".registry-stack/build/local/private/relay-consultation/config"),
+            &staging.path().join("private/relay-consultation/config"),
         )?;
         for relative in [
             "private",
@@ -3814,13 +3813,13 @@ fn publish_canonical_runtime(
         write_private_text(
             &staging
                 .path()
-                .join("private/relay/config/relay-consultation.yaml"),
+                .join("private/relay-consultation/config/relay.yaml"),
             &runtime_consultation_relay_config,
         )?;
         write_private_text(
             &staging
                 .path()
-                .join("private/relay/config/state-plane-ca.pem"),
+                .join("private/relay-consultation/config/state-plane-ca.pem"),
             &notary.postgres_tls_certificate,
         )?;
         write_private_text(
@@ -3862,8 +3861,12 @@ fn publish_canonical_runtime(
         None
     };
     set_runtime_bind_input_owner(&staging.path().join("private/data/workbook.xlsx"), binding)?;
-    set_runtime_bind_input_owner(&staging.path().join("private/relay/config"), binding)?;
+    set_runtime_bind_input_owner(&staging.path().join("private/relay-public/config"), binding)?;
     if binding.topology.has_notary() {
+        set_runtime_bind_input_owner(
+            &staging.path().join("private/relay-consultation/config"),
+            binding,
+        )?;
         set_runtime_bind_input_owner(
             &staging.path().join("private/notary/config/notary.yaml"),
             binding,
@@ -4168,7 +4171,7 @@ fn load_canonical_runtime(
     validate_runtime_bind_input_owner(
         &project_dir
             .join(CANONICAL_RUNTIME_ROOT)
-            .join("private/relay/config"),
+            .join("private/relay-public/config"),
         &binding,
     )?;
     if digest_path(&relay_config, "staged Relay config")? != manifest.relay_config_digest {
@@ -4192,6 +4195,12 @@ fn load_canonical_runtime(
         validate_private_file_mode(&runtime_notary_config)?;
         validate_private_file_mode(&runtime_consultation_config)?;
         validate_private_file_mode(&postgres_ca)?;
+        validate_runtime_bind_input_owner(
+            &project_dir
+                .join(CANONICAL_RUNTIME_ROOT)
+                .join("private/relay-consultation/config"),
+            &binding,
+        )?;
         validate_runtime_bind_input_owner(&runtime_notary_config, &binding)?;
         validate_runtime_bind_input_owner(
             &project_dir.join(CANONICAL_RUNTIME_WORKLOAD_TOKEN),
@@ -4261,7 +4270,7 @@ fn validate_runtime_file_closure(
         "secrets/local.env",
         "secrets/relay.env",
         "private/data/workbook.xlsx",
-        "private/relay/config/relay.yaml",
+        "private/relay-public/config/relay.yaml",
     ]);
     if manifest.topology.has_notary() {
         required.extend([
@@ -4273,8 +4282,8 @@ fn validate_runtime_file_closure(
             "secrets/workload-private.jwk",
             "private/db/init.sh",
             "private/notary/config/notary.yaml",
-            "private/relay/config/relay-consultation.yaml",
-            "private/relay/config/state-plane-ca.pem",
+            "private/relay-consultation/config/relay.yaml",
+            "private/relay-consultation/config/state-plane-ca.pem",
             "private/workload/jwks.json",
         ]);
     }
@@ -9425,6 +9434,16 @@ mod tests {
             "./private/data/workbook.xlsx:/var/lib/registry/public_works_projects.xlsx:ro"
         );
         assert_eq!(
+            services["registry-relay-consultation"]["volumes"][1],
+            "./private/relay-consultation/config:/etc/registry-relay/config:ro"
+        );
+        assert_eq!(
+            services["registry-relay-bootstrap"]["volumes"],
+            serde_json::json!([
+                "./private/relay-consultation/config:/etc/registry-relay/config:ro"
+            ])
+        );
+        assert_eq!(
             services["registry-relay-consultation"]["command"][1],
             CANONICAL_CONSULTATION_RELAY_CONFIG_MOUNT
         );
@@ -9579,9 +9598,11 @@ mod tests {
             ".registry-stack/runtime/local/private/db",
             ".registry-stack/runtime/local/private/notary",
             ".registry-stack/runtime/local/private/notary/config",
-            ".registry-stack/runtime/local/private/relay",
-            ".registry-stack/runtime/local/private/relay/config",
-            ".registry-stack/runtime/local/private/relay/config/artifacts",
+            ".registry-stack/runtime/local/private/relay-public",
+            ".registry-stack/runtime/local/private/relay-public/config",
+            ".registry-stack/runtime/local/private/relay-consultation",
+            ".registry-stack/runtime/local/private/relay-consultation/config",
+            ".registry-stack/runtime/local/private/relay-consultation/config/artifacts",
             ".registry-stack/runtime/local/private/workload",
         ] {
             assert_eq!(
@@ -9594,6 +9615,9 @@ mod tests {
                 "{relative}"
             );
         }
+        assert!(!project
+            .join(".registry-stack/runtime/local/private/relay-public/config/artifacts")
+            .exists());
         for relative in [
             CANONICAL_RUNTIME_ENV,
             CANONICAL_RUNTIME_RELAY_ENV,
@@ -9856,7 +9880,7 @@ mod tests {
         assert_eq!(
             document["services"]["registry-relay"]["volumes"],
             serde_json::json!([
-                "./private/relay/config/relay.yaml:/etc/registry-relay/config.yaml:ro",
+                "./private/relay-public/config/relay.yaml:/etc/registry-relay/config.yaml:ro",
                 "./private/data/workbook.xlsx:/var/lib/registry/public_works_projects.xlsx:ro"
             ])
         );

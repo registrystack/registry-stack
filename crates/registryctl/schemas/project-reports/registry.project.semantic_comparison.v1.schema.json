@@ -306,7 +306,7 @@
       "maxItems": 3,
       "uniqueItems": true,
       "items": {
-        "enum": ["relay_public", "relay_consultation", "notary"]
+        "enum": ["relay-public", "relay-consultation", "notary"]
       }
     },
     "change": {

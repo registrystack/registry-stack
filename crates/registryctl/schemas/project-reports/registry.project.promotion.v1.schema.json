@@ -824,8 +824,8 @@
     },
     "product_action": {
       "enum": [
-        "relay_public",
-        "relay_consultation",
+        "relay-public",
+        "relay-consultation",
         "notary"
       ]
     },

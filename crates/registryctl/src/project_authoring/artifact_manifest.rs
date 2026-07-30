@@ -236,8 +236,7 @@ fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClass
                 ArtifactConsumer::ProjectDocumentation,
             ],
         )
-    } else if path == "private/relay/config/relay.yaml"
-        || path == "private/relay/config/relay-consultation.yaml"
+    } else if path == "private/relay-public/config/relay.yaml"
         || path == "private/relay-consultation/config/relay.yaml"
     {
         artifact_classification(
@@ -255,11 +254,10 @@ fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClass
                 ArtifactConsumer::Operator,
             ],
         )
-    } else if single_json_child(&path, "private/relay/config/artifacts/integration-packs/")
-        || single_json_child(
-            &path,
-            "private/relay-consultation/config/artifacts/integration-packs/",
-        )
+    } else if single_json_child(
+        &path,
+        "private/relay-consultation/config/artifacts/integration-packs/",
+    )
     {
         artifact_classification(
             "registry.relay.integration-pack.v1",
@@ -276,9 +274,6 @@ fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClass
             ],
         )
     } else if single_json_child(
-        &path,
-        "private/relay/config/artifacts/consultation-contracts/",
-    ) || single_json_child(
         &path,
         "private/relay-consultation/config/artifacts/consultation-contracts/",
     ) {
@@ -299,11 +294,10 @@ fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClass
                 ArtifactConsumer::DeploymentTooling,
             ],
         )
-    } else if single_json_child(&path, "private/relay/config/artifacts/private-bindings/")
-        || single_json_child(
-            &path,
-            "private/relay-consultation/config/artifacts/private-bindings/",
-        )
+    } else if single_json_child(
+        &path,
+        "private/relay-consultation/config/artifacts/private-bindings/",
+    )
     {
         artifact_classification(
             "registry.relay.consultation-binding.v1",
@@ -319,11 +313,10 @@ fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClass
                 ArtifactConsumer::DeploymentTooling,
             ],
         )
-    } else if two_level_json_child(&path, "private/relay/config/artifacts/evidence/")
-        || two_level_json_child(
-            &path,
-            "private/relay-consultation/config/artifacts/evidence/",
-        )
+    } else if two_level_json_child(
+        &path,
+        "private/relay-consultation/config/artifacts/evidence/",
+    )
     {
         artifact_classification(
             "registry.project.integration-evidence.v1",
@@ -339,12 +332,11 @@ fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClass
                 ArtifactConsumer::DeploymentTooling,
             ],
         )
-    } else if single_child_with_suffix(&path, "private/relay/config/artifacts/rhai/", ".rhai")
-        || single_child_with_suffix(
-            &path,
-            "private/relay-consultation/config/artifacts/rhai/",
-            ".rhai",
-        )
+    } else if single_child_with_suffix(
+        &path,
+        "private/relay-consultation/config/artifacts/rhai/",
+        ".rhai",
+    )
     {
         artifact_classification(
             "registry.relay.rhai-source.v1",
@@ -360,7 +352,7 @@ fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClass
                 ArtifactConsumer::DeploymentTooling,
             ],
         )
-    } else if path == "private/relay/descriptors/operations.json"
+    } else if path == "private/relay-public/descriptors/operations.json"
         || path == "private/relay-consultation/descriptors/operations.json"
     {
         operational_descriptor_classification(&[
@@ -376,7 +368,7 @@ fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClass
             ArtifactConsumer::DeploymentTooling,
             ArtifactConsumer::Operator,
         ])
-    } else if path == "private/relay/descriptors/secret-consumers.json"
+    } else if path == "private/relay-public/descriptors/secret-consumers.json"
         || path == "private/relay-consultation/descriptors/secret-consumers.json"
     {
         secret_consumer_descriptor_classification(&[
@@ -392,7 +384,7 @@ fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClass
             ArtifactConsumer::DeploymentTooling,
             ArtifactConsumer::Operator,
         ])
-    } else if path == "private/relay/approval/review.json"
+    } else if path == "private/relay-public/approval/review.json"
         || path == "private/relay-consultation/approval/review.json"
     {
         product_review_classification(
@@ -406,7 +398,7 @@ fn classify_generated_artifact(relative: &Path) -> Result<GeneratedArtifactClass
             ArtifactReviewState::NeedsReview,
             ArtifactConsumer::RegistryNotary,
         )
-    } else if path == "private/relay/approval/project-state.json"
+    } else if path == "private/relay-public/approval/project-state.json"
         || path == "private/relay-consultation/approval/project-state.json"
     {
         product_review_classification(
@@ -593,9 +585,28 @@ mod artifact_manifest_tests {
     #[test]
     fn unclassified_generated_path_fails_closed() {
         let error = classify_generated_artifact(Path::new(
-            "private/relay/config/artifacts/future/output.json",
+            "private/relay-public/config/artifacts/future/output.json",
         ))
         .expect_err("new generated path family must require an explicit classification");
         assert!(format!("{error:#}").contains("has no reviewed classification"));
+    }
+
+    #[test]
+    fn public_relay_tree_rejects_consultation_outputs() {
+        for path in [
+            "private/relay-public/config/relay-consultation.yaml",
+            "private/relay-public/config/artifacts/integration-packs/example.json",
+            "private/relay-public/config/artifacts/consultation-contracts/example.json",
+            "private/relay-public/config/artifacts/private-bindings/example.json",
+            "private/relay-public/config/artifacts/evidence/example/output.json",
+            "private/relay-public/config/artifacts/rhai/example.rhai",
+        ] {
+            let error = classify_generated_artifact(Path::new(path))
+                .expect_err("public Relay tree must not accept consultation output");
+            assert!(
+                format!("{error:#}").contains("has no reviewed classification"),
+                "unexpected classification error for {path}: {error:#}"
+            );
+        }
     }
 }

@@ -111,9 +111,9 @@
       ],
       "occurrences": 1,
       "requirements": {
-        "signing": ["relay_public", "relay_consultation", "notary"],
-        "activation": ["relay_public", "relay_consultation", "notary"],
-        "restart": ["relay_public", "relay_consultation", "notary"]
+        "signing": ["relay-public", "relay-consultation", "notary"],
+        "activation": ["relay-public", "relay-consultation", "notary"],
+        "restart": ["relay-public", "relay-consultation", "notary"]
       }
     }
   ],

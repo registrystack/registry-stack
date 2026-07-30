@@ -6,8 +6,8 @@
   "disposition": "ready_after_required_actions",
   "reviewed_revision": "different_reviewed_semantic_revision",
   "product_lanes": [
-    "relay_public",
-    "relay_consultation",
+    "relay-public",
+    "relay-consultation",
     "notary"
   ],
   "baseline_migration": "not_required",
@@ -178,18 +178,18 @@
       "release"
     ],
     "re_sign": [
-      "relay_public",
-      "relay_consultation",
+      "relay-public",
+      "relay-consultation",
       "notary"
     ],
     "reactivate": [
-      "relay_public",
-      "relay_consultation",
+      "relay-public",
+      "relay-consultation",
       "notary"
     ],
     "restart": [
-      "relay_public",
-      "relay_consultation",
+      "relay-public",
+      "relay-consultation",
       "notary"
     ]
   },

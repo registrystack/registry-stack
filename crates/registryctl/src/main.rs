@@ -701,7 +701,7 @@ fn render_semantic_comparison_report(report: &ProjectSemanticComparisonReportV1)
                         "regenerate generated artifacts"
                     }
                     SemanticComparisonRequiredAction::ResignRelayPublicBundle => {
-                        "re-sign private/relay"
+                        "re-sign private/relay-public"
                     }
                     SemanticComparisonRequiredAction::ResignRelayConsultationBundle => {
                         "re-sign private/relay-consultation"
@@ -710,7 +710,7 @@ fn render_semantic_comparison_report(report: &ProjectSemanticComparisonReportV1)
                         "re-sign private/notary"
                     }
                     SemanticComparisonRequiredAction::ReactivateRelayPublicConfiguration => {
-                        "reactivate private/relay"
+                        "reactivate private/relay-public"
                     }
                     SemanticComparisonRequiredAction::ReactivateRelayConsultationConfiguration => {
                         "reactivate private/relay-consultation"
@@ -719,7 +719,7 @@ fn render_semantic_comparison_report(report: &ProjectSemanticComparisonReportV1)
                         "reactivate private/notary"
                     }
                     SemanticComparisonRequiredAction::RestartRegistryRelayPublic => {
-                        "restart the public Relay instance using private/relay"
+                        "restart the public Relay instance using private/relay-public"
                     }
                     SemanticComparisonRequiredAction::RestartRegistryRelayConsultation => {
                         "restart the consultation Relay instance using private/relay-consultation"
@@ -990,7 +990,7 @@ fn render_promotion_report(report: &ProjectPromotionReportV1) -> Result<String> 
     {
         writeln!(
             output,
-            "  Baseline migration: re-review the project and sign separate private/relay and \
+            "  Baseline migration: re-review the project and sign separate private/relay-public and \
              private/relay-consultation inputs before promoting"
         )?;
     }
@@ -1026,7 +1026,7 @@ fn render_required_product_actions(actions: &[registryctl::RequiredProductAction
     actions
         .iter()
         .map(|action| match action {
-            registryctl::RequiredProductAction::RelayPublic => "private/relay",
+            registryctl::RequiredProductAction::RelayPublic => "private/relay-public",
             registryctl::RequiredProductAction::RelayConsultation => "private/relay-consultation",
             registryctl::RequiredProductAction::Notary => "private/notary",
         })

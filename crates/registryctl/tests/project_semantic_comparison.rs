@@ -814,10 +814,10 @@ fn compare_cli_emits_value_free_human_and_strict_json_reports() {
     let changed_human =
         String::from_utf8(changed_human_output.stdout).expect("changed human output is UTF-8");
     for expected in [
-        "re-sign private/relay",
+        "re-sign private/relay-public",
         "re-sign private/relay-consultation",
         "re-sign private/notary",
-        "restart the public Relay instance using private/relay",
+        "restart the public Relay instance using private/relay-public",
         "restart the consultation Relay instance using private/relay-consultation",
         "restart Registry Notary using private/notary",
     ] {
