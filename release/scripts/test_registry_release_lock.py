@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib.util
 import json
 import tempfile
@@ -28,7 +29,8 @@ class RegistryReleaseLockTests(unittest.TestCase):
             starters.mkdir()
             version = "1.0.0"
             tag = f"v{version}"
-            source_sha = "1" * 40
+            manifest_source_ref = "1" * 40
+            tag_target = "2" * 40
             for platform in release_lock.PLATFORMS:
                 (assets / f"registryctl-{tag}-{platform}").write_bytes(
                     f"registryctl {platform}".encode()
@@ -49,7 +51,8 @@ class RegistryReleaseLockTests(unittest.TestCase):
                 json.dumps(
                     {
                         "release_tag": tag,
-                        "manifest_source_ref": source_sha,
+                        "manifest_source_ref": manifest_source_ref,
+                        "tag_target": tag_target,
                         "images": {
                             "registry-relay": (
                                 f"ghcr.io/registrystack/registry-relay@sha256:{'a' * 64}"
@@ -73,7 +76,8 @@ class RegistryReleaseLockTests(unittest.TestCase):
                     release_lock.create_payload(
                         argparse.Namespace(
                             version=version,
-                            source_sha=source_sha,
+                            manifest_source_ref=manifest_source_ref,
+                            tag_target=tag_target,
                             asset_dir=assets,
                             image_lock=image_lock,
                             output=output,
@@ -93,11 +97,86 @@ class RegistryReleaseLockTests(unittest.TestCase):
             self.assertEqual(output.read_bytes(), release_lock.canonical_json(payload))
             self.assertFalse(schema["additionalProperties"])
             self.assertEqual(set(payload), set(schema["required"]))
+            self.assertEqual(
+                payload["release"]["manifest_source_ref"],
+                manifest_source_ref,
+            )
+            self.assertEqual(payload["release"]["tag_target"], tag_target)
+            self.assertEqual(
+                set(schema["properties"]["images"]["required"]),
+                set(schema["properties"]["images"]["properties"]),
+            )
+            self.assertEqual(
+                set(schema["properties"]["runtime"]["required"]),
+                set(schema["properties"]["runtime"]["properties"]),
+            )
+            self.assertTrue(
+                set(schema["properties"]["runtime"]["required"]).issubset(
+                    payload["runtime"]
+                )
+            )
+            missing_inventory = copy.deepcopy(payload)
+            missing_inventory["runtime"].pop("operator_files")
+            self.assertFalse(
+                set(schema["properties"]["runtime"]["required"]).issubset(
+                    missing_inventory["runtime"]
+                )
+            )
             self.assertEqual(len(payload["registryctl_artifacts"]), 3)
             self.assertEqual(len(payload["embedded_starters"]), 6)
             self.assertEqual(
-                payload["runtime"]["relay_consultation"]["serve"],
+                payload["runtime"]["relay_consultation"]["serve"]["command"],
                 ["product-action", "relay-consultation", "serve"],
+            )
+            self.assertEqual(
+                payload["runtime"]["relay_consultation"][
+                    "prepare_state_store"
+                ]["mounts"],
+                [
+                    {
+                        "source": "bundle",
+                        "target": "/run/registry/bundle",
+                        "read_only": True,
+                    },
+                    {
+                        "source": "anchor",
+                        "target": "/run/registry/anchor",
+                        "read_only": True,
+                    },
+                    {
+                        "source": "audit",
+                        "target": "/var/lib/registry/audit",
+                        "read_only": False,
+                    },
+                ],
+            )
+            self.assertNotIn(
+                "anti_rollback_state",
+                {
+                    mount["source"]
+                    for mount in payload["runtime"]["relay_consultation"][
+                        "prepare_state_store"
+                    ]["mounts"]
+                },
+            )
+            postgresql = payload["runtime"]["postgresql_state_plane"]
+            self.assertEqual(postgresql["hardening"]["user"], "999:999")
+            self.assertEqual(
+                postgresql["bootstrap"]["environment_files"],
+                ["postgresql-bootstrap-environment"],
+            )
+            self.assertIn(
+                "ssl_cert_file=/run/secrets/postgresql-tls.crt",
+                postgresql["serve"]["command"],
+            )
+            bootstrap_file = next(
+                file
+                for file in payload["runtime"]["operator_files"]
+                if file["id"] == "postgresql-bootstrap-environment"
+            )
+            self.assertEqual(
+                bootstrap_file["required_keys"],
+                release_lock.POSTGRESQL_BOOTSTRAP_KEYS,
             )
             self.assertEqual(
                 payload["images"]["private_namespace_holder"]["identity"],

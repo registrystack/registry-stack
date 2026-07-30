@@ -247,6 +247,11 @@ INITIALIZATION_COMMANDS = {
     "registry-notary-initialize": ["product-action", "initialize_state"],
 }
 EXPECTED_INITIALIZATION_ACTIONS = (
+    (
+        "bootstrap-postgresql-state-plane",
+        "postgresql-state-plane",
+        "bootstrap_state_plane",
+    ),
     ("prepare-relay-public-state", "relay-public", "prepare_state_store"),
     (
         "prepare-relay-consultation-state",

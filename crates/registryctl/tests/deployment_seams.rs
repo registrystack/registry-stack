@@ -21,8 +21,13 @@ use deployment::{
     verify_deployment_package_with_test_inputs, DeploymentBindingV1, DeploymentGenerateRequestV1,
     DeploymentOwnershipStateV1, DeploymentPackageVerificationRequestV1, DeploymentPlanV1,
     DeploymentReleaseMetadataV1, EffectiveComposeModelsV1, ExpectedGenerationInputsV1,
-    ImageIdentityV1, LockedProductRuntimeV1, LockedRuntimeMappingV1, LockedSupportingRuntimeV1,
-    ManagedTopologyImagesV1, PackageFreshnessV1, VerifiedDeploymentInputsV1,
+    ImageIdentityV1, LockedPostgresqlRuntimeV1, LockedProductRuntimeV1, LockedRuntimeMappingV1,
+    LockedSupportingRuntimeV1, ManagedTopologyImagesV1, PackageFreshnessV1,
+    VerifiedDeploymentInputsV1,
+};
+use release_lock::{
+    LockedMountSourceV1, LockedOperatorFileFormatV1, LockedOperatorFileV1, LockedRuntimeActionV1,
+    LockedRuntimeMountV1, LockedSecretProjectionV1, LockedServiceHardeningV1,
 };
 use serde_json::{json, Value};
 
@@ -43,12 +48,145 @@ fn plan() -> DeploymentPlanV1 {
     })
 }
 
-fn product_runtime(product: &str) -> LockedProductRuntimeV1 {
+fn mount(source: LockedMountSourceV1, target: &str, read_only: bool) -> LockedRuntimeMountV1 {
+    LockedRuntimeMountV1 {
+        source,
+        target: target.to_string(),
+        read_only,
+    }
+}
+
+fn secret(file_id: &str, target: &str, uid: &str) -> LockedSecretProjectionV1 {
+    LockedSecretProjectionV1 {
+        file_id: file_id.to_string(),
+        target: target.to_string(),
+        mode: "0400".to_string(),
+        uid: uid.to_string(),
+        gid: uid.to_string(),
+    }
+}
+
+fn action(
+    command: Vec<String>,
+    mounts: Vec<LockedRuntimeMountV1>,
+    environment: &str,
+    secrets: Vec<LockedSecretProjectionV1>,
+) -> LockedRuntimeActionV1 {
+    LockedRuntimeActionV1 {
+        command,
+        mounts,
+        environment_files: vec![environment.to_string()],
+        secret_files: secrets,
+    }
+}
+
+fn product_runtime(product: &str, lane: &str) -> LockedProductRuntimeV1 {
+    let common = vec![
+        mount(LockedMountSourceV1::Bundle, "/run/registry/bundle", true),
+        mount(LockedMountSourceV1::Anchor, "/run/registry/anchor", true),
+    ];
+    let audit = mount(LockedMountSourceV1::Audit, "/var/lib/registry/audit", false);
+    let state = mount(
+        LockedMountSourceV1::AntiRollbackState,
+        "/var/lib/registry/state",
+        false,
+    );
+    let database_ca = secret(
+        "postgresql-tls-certificate",
+        "/run/secrets/postgresql-ca.pem",
+        "65532",
+    );
+    let (prepare_secrets, serve_secrets) = match lane {
+        "relay-public" => (
+            vec![],
+            vec![
+                secret(
+                    "relay-public-tls-certificate",
+                    "/run/secrets/relay-public-tls.crt",
+                    "65532",
+                ),
+                secret(
+                    "relay-public-tls-private-key",
+                    "/run/secrets/relay-public-tls.key",
+                    "65532",
+                ),
+            ],
+        ),
+        "relay-consultation" => (
+            vec![database_ca.clone()],
+            vec![
+                database_ca.clone(),
+                secret(
+                    "relay-consultation-tls-certificate",
+                    "/run/secrets/relay-consultation-tls.crt",
+                    "65532",
+                ),
+                secret(
+                    "relay-consultation-tls-private-key",
+                    "/run/secrets/relay-consultation-tls.key",
+                    "65532",
+                ),
+            ],
+        ),
+        "notary" => (
+            vec![database_ca.clone()],
+            vec![
+                database_ca,
+                secret(
+                    "relay-consultation-tls-certificate",
+                    "/run/secrets/relay-consultation-ca.pem",
+                    "65532",
+                ),
+                secret(
+                    "notary-relay-workload-credential",
+                    "/run/secrets/relay-workload-token",
+                    "65532",
+                ),
+                secret(
+                    "notary-signing-key",
+                    "/run/secrets/notary-signing-key.jwk",
+                    "65532",
+                ),
+                secret(
+                    "notary-tls-certificate",
+                    "/run/secrets/notary-tls.crt",
+                    "65532",
+                ),
+                secret(
+                    "notary-tls-private-key",
+                    "/run/secrets/notary-tls.key",
+                    "65532",
+                ),
+            ],
+        ),
+        _ => unreachable!(),
+    };
+    let command = |name: &str| vec![format!("/{product}"), name.to_string()];
     LockedProductRuntimeV1 {
-        serve: vec![format!("/{product}"), "serve".to_string()],
-        prepare_state_store: vec![format!("/{product}"), "prepare-state-store".to_string()],
-        initialize_state: vec![format!("/{product}"), "initialize-state".to_string()],
-        verify_state: vec![format!("/{product}"), "verify-state".to_string()],
+        serve: action(
+            command("serve"),
+            [common.clone(), vec![state.clone(), audit.clone()]].concat(),
+            &format!("{lane}-serve-environment"),
+            serve_secrets.clone(),
+        ),
+        prepare_state_store: action(
+            command("prepare-state-store"),
+            [common.clone(), vec![audit.clone()]].concat(),
+            &format!("{lane}-prepare-environment"),
+            prepare_secrets.clone(),
+        ),
+        initialize_state: action(
+            command("initialize-state"),
+            [common.clone(), vec![state.clone(), audit.clone()]].concat(),
+            &format!("{lane}-initialize-environment"),
+            prepare_secrets,
+        ),
+        verify_state: action(
+            command("verify-state"),
+            [common, vec![state, audit]].concat(),
+            &format!("{lane}-serve-environment"),
+            serve_secrets,
+        ),
         health_probe: vec![
             "CMD".to_string(),
             format!("/{product}"),
@@ -57,19 +195,125 @@ fn product_runtime(product: &str) -> LockedProductRuntimeV1 {
     }
 }
 
+fn operator_files() -> Vec<LockedOperatorFileV1> {
+    let bootstrap_keys = [
+        "REGISTRY_RELAY_MIGRATOR_PASSWORD",
+        "REGISTRY_RELAY_RUNTIME_PASSWORD",
+        "REGISTRY_RELAY_MAINTENANCE_PASSWORD",
+        "REGISTRY_RELAY_READER_PASSWORD",
+        "REGISTRY_NOTARY_MIGRATOR_PASSWORD",
+        "REGISTRY_NOTARY_RUNTIME_PASSWORD",
+        "REGISTRY_NOTARY_MAINTENANCE_PASSWORD",
+        "REGISTRY_NOTARY_READER_PASSWORD",
+    ];
+    deployment::OPERATOR_FILE_IDS
+        .iter()
+        .map(|id| {
+            let format = if id.ends_with("-environment") {
+                LockedOperatorFileFormatV1::Dotenv
+            } else if id.ends_with("-certificate") {
+                LockedOperatorFileFormatV1::PemCertificate
+            } else if id.ends_with("-private-key") {
+                LockedOperatorFileFormatV1::PemPrivateKey
+            } else if *id == "notary-signing-key" {
+                LockedOperatorFileFormatV1::JsonWebKey
+            } else if *id == "notary-relay-workload-credential" {
+                LockedOperatorFileFormatV1::CompactJwt
+            } else {
+                LockedOperatorFileFormatV1::Opaque
+            };
+            let postgresql = id.starts_with("postgresql-");
+            LockedOperatorFileV1 {
+                id: (*id).to_string(),
+                format,
+                mode: "0600".to_string(),
+                allowed_owners: if postgresql {
+                    vec!["root:root".to_string(), "999:999".to_string()]
+                } else {
+                    vec!["root:root".to_string(), "65532:65532".to_string()]
+                },
+                required_keys: if *id == "postgresql-bootstrap-environment" {
+                    bootstrap_keys.map(str::to_string).to_vec()
+                } else {
+                    vec![]
+                },
+            }
+        })
+        .collect()
+}
+
 fn runtime() -> LockedRuntimeMappingV1 {
     LockedRuntimeMappingV1 {
-        relay_public: product_runtime("registry-relay"),
-        relay_consultation: product_runtime("registry-relay"),
-        notary: product_runtime("registry-notary"),
-        postgresql_state_plane: LockedSupportingRuntimeV1 {
-            command: vec!["/postgresql-state-plane".to_string()],
+        relay_public: product_runtime("registry-relay", "relay-public"),
+        relay_consultation: product_runtime("registry-relay", "relay-consultation"),
+        notary: product_runtime("registry-notary", "notary"),
+        postgresql_state_plane: LockedPostgresqlRuntimeV1 {
+            serve: LockedRuntimeActionV1 {
+                command: vec!["/postgresql-state-plane".to_string()],
+                mounts: vec![mount(
+                    LockedMountSourceV1::PostgresqlData,
+                    "/var/lib/postgresql/data",
+                    false,
+                )],
+                environment_files: vec![],
+                secret_files: vec![
+                    secret(
+                        "postgresql-admin-password",
+                        "/run/secrets/postgresql-admin-password",
+                        "999",
+                    ),
+                    secret(
+                        "postgresql-tls-certificate",
+                        "/run/secrets/postgresql-tls.crt",
+                        "999",
+                    ),
+                    secret(
+                        "postgresql-tls-private-key",
+                        "/run/secrets/postgresql-tls.key",
+                        "999",
+                    ),
+                ],
+            },
+            bootstrap: action(
+                vec!["/postgresql-bootstrap".to_string()],
+                vec![],
+                "postgresql-bootstrap-environment",
+                vec![
+                    secret(
+                        "postgresql-admin-password",
+                        "/run/secrets/postgresql-admin-password",
+                        "999",
+                    ),
+                    secret(
+                        "postgresql-tls-certificate",
+                        "/run/secrets/postgresql-ca.pem",
+                        "999",
+                    ),
+                ],
+            ),
             health_probe: vec!["CMD".to_string(), "/postgresql-health".to_string()],
+            server_environment: vec![
+                "POSTGRES_USER=registry_stack_bootstrap".to_string(),
+                "POSTGRES_DB=postgres".to_string(),
+                "POSTGRES_PASSWORD_FILE=/run/secrets/postgresql-admin-password".to_string(),
+                "POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=trust".to_string(),
+            ],
+            hardening: LockedServiceHardeningV1 {
+                user: "999:999".to_string(),
+                read_only_root_filesystem: true,
+                cap_drop: vec!["ALL".to_string()],
+                security_opt: vec!["no-new-privileges:true".to_string()],
+                tmpfs: vec![
+                    "/tmp".to_string(),
+                    "/var/run/postgresql:uid=999,gid=999,mode=0750".to_string(),
+                ],
+            },
         },
         private_namespace_holder: LockedSupportingRuntimeV1 {
             command: vec!["/private-namespace-holder".to_string()],
             health_probe: vec!["CMD".to_string(), "/namespace-health".to_string()],
         },
+        operator_files: operator_files(),
     }
 }
 
@@ -305,7 +549,12 @@ fn managed_package_is_current_for_standalone_and_included_models() {
         parent: Some(included_parent(&fixture.models.ordinary)),
     };
     let report = verify(&fixture, &effective);
-    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Managed);
+    assert_eq!(
+        report.ownership,
+        DeploymentOwnershipStateV1::Managed,
+        "{:?}",
+        report.violations
+    );
     assert_eq!(report.package_freshness, PackageFreshnessV1::Current);
     assert!(report.violations.is_empty());
     assert!(report.in_place_regeneration_safe);
@@ -340,7 +589,12 @@ fn changed_binding_is_managed_but_stale() {
         parent: None,
     };
     let report = verify(&fixture, &effective);
-    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Managed);
+    assert_eq!(
+        report.ownership,
+        DeploymentOwnershipStateV1::Managed,
+        "{:?}",
+        report.violations
+    );
     assert_eq!(report.package_freshness, PackageFreshnessV1::Stale);
 }
 
@@ -469,6 +723,7 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
         vec![
             "registry-notary-initialize",
             "registry-notary-prepare-state",
+            "registry-postgres-bootstrap",
             "registry-relay-consultation-initialize",
             "registry-relay-consultation-prepare-state",
             "registry-relay-public-initialize",
@@ -481,8 +736,16 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
         "registry-notary-prepare-state",
     ] {
         let service = &delta_services[service];
-        assert!(service.get("volumes").is_none());
-        assert!(service.get("secrets").is_none());
+        let targets = service["volumes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|mount| mount["target"].as_str())
+            .collect::<Vec<_>>();
+        assert!(targets.contains(&"/run/registry/bundle"));
+        assert!(targets.contains(&"/run/registry/anchor"));
+        assert!(targets.contains(&"/var/lib/registry/audit"));
+        assert!(!targets.contains(&"/var/lib/registry/state"));
     }
     for service in [
         "registry-relay-public-initialize",
@@ -491,7 +754,53 @@ fn initialization_is_a_delta_and_prepare_state_has_no_acceptance_authority() {
     ] {
         let service = &delta_services[service];
         assert!(service.get("volumes").is_some());
+        assert!(service.get("env_file").is_some());
+    }
+    let bootstrap = &delta_services["registry-postgres-bootstrap"];
+    assert_eq!(bootstrap["networks"], json!({"registry-private": {}}));
+    assert!(bootstrap.get("network_mode").is_none());
+    assert_eq!(
+        bootstrap["depends_on"]["registry-postgres"]["condition"],
+        "service_healthy"
+    );
+}
+
+#[test]
+fn secret_staging_is_isolated_and_consumers_receive_only_read_only_volumes() {
+    let fixture = package_fixture();
+    let services = fixture.models.ordinary["services"].as_object().unwrap();
+    let stager = &services["registry-runtime-stage-secrets"];
+    assert_eq!(stager["network_mode"], "none");
+    assert_eq!(stager["user"], "0:0");
+    assert_eq!(stager["cap_drop"], json!(["ALL"]));
+    assert_eq!(stager["cap_add"], json!(["CHOWN"]));
+    assert_eq!(stager["read_only"], true);
+    assert_eq!(stager["security_opt"], json!(["no-new-privileges:true"]));
+    for service_name in [
+        "registry-private-namespace",
+        "registry-postgres",
+        "registry-relay-public",
+        "registry-relay-consultation",
+        "registry-notary",
+    ] {
+        let service = &services[service_name];
+        assert!(service.get("cap_add").is_none());
         assert!(service.get("secrets").is_none());
+    }
+    for service_name in [
+        "registry-postgres",
+        "registry-relay-public",
+        "registry-relay-consultation",
+        "registry-notary",
+    ] {
+        let secret_mount = services[service_name]["volumes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|mount| mount["target"] == "/run/secrets")
+            .unwrap();
+        assert_eq!(secret_mount["type"], "volume");
+        assert_eq!(secret_mount["read_only"], true);
     }
 }
 
@@ -643,7 +952,12 @@ fn generated_closure_is_re_rendered_and_external_root_is_enforced() {
         &effective,
     )
     .unwrap();
-    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Managed);
+    assert_eq!(
+        report.ownership,
+        DeploymentOwnershipStateV1::Managed,
+        "{:?}",
+        report.violations
+    );
 
     let mismatched = verify_deployment_package_with_models(
         &DeploymentPackageVerificationRequestV1 {
@@ -710,7 +1024,12 @@ fn production_verifier_owns_real_compose_normalization() {
             },
         })
         .unwrap();
-    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Managed);
+    assert_eq!(
+        report.ownership,
+        DeploymentOwnershipStateV1::Managed,
+        "{:?}",
+        report.violations
+    );
     assert_eq!(report.package_freshness, PackageFreshnessV1::Current);
 }
 
@@ -739,7 +1058,12 @@ fn production_verifier_parses_local_parent_includes_and_rejects_private_access()
             expected_inputs: ExpectedGenerationInputsV1::default(),
         })
         .unwrap();
-    assert_eq!(report.ownership, DeploymentOwnershipStateV1::Managed);
+    assert_eq!(
+        report.ownership,
+        DeploymentOwnershipStateV1::Managed,
+        "{:?}",
+        report.violations
+    );
     assert_eq!(
         report.verification_scope,
         deployment::DeploymentVerificationScopeV1::PackageAndParent

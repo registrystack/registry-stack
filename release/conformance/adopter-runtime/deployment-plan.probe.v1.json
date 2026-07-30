@@ -83,6 +83,7 @@
     }
   ],
   "initialization_actions": [
+    {"id": "bootstrap-postgresql-state-plane", "workload": "postgresql-state-plane", "action": "bootstrap_state_plane"},
     {"id": "prepare-relay-public-state", "workload": "relay-public", "action": "prepare_state_store"},
     {"id": "prepare-relay-consultation-state", "workload": "relay-consultation", "action": "prepare_state_store"},
     {"id": "prepare-notary-state", "workload": "notary", "action": "prepare_state_store"},

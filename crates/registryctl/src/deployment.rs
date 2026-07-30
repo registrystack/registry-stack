@@ -6,8 +6,10 @@ use std::process::{Command, Stdio};
 
 use crate::approved_set::{ApprovedBaselineSetV1, ApprovedLaneV1, PortableArtifactLocator};
 use crate::release_lock::{
-    verify_installed_release_lock, verify_release_lock_for_package, VerifiedProductRuntimeV1,
-    VerifiedReleaseLockV1, VerifiedRuntimeMappingV1, VerifiedSupportingRuntimeV1,
+    verify_installed_release_lock, verify_release_lock_for_package, LockedOperatorFileFormatV1,
+    LockedOperatorFileV1, LockedRuntimeActionV1, LockedRuntimeMountV1, LockedServiceHardeningV1,
+    VerifiedPostgresqlRuntimeV1, VerifiedProductRuntimeV1, VerifiedReleaseLockV1,
+    VerifiedRuntimeMappingV1, VerifiedSupportingRuntimeV1,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use registry_platform_config::ProductAcceptanceIdentityV1;
@@ -25,6 +27,8 @@ pub const DEPLOYMENT_MANIFEST_SCHEMA_VERSION: &str = "1.0";
 pub const DEPLOYMENT_OWNERSHIP_REPORT_SCHEMA_ID: &str =
     "io.registrystack.deployment_ownership_report";
 pub const DEPLOYMENT_OWNERSHIP_REPORT_SCHEMA_VERSION: &str = "1.0";
+pub const DEPLOYMENT_OPERATOR_FILES_SCHEMA_ID: &str = "io.registrystack.deployment_operator_files";
+pub const DEPLOYMENT_OPERATOR_FILES_SCHEMA_VERSION: &str = "1.0";
 
 const MAX_PORTABLE_DOCUMENT_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_PACKAGE_FILE_BYTES: u64 = 256 * 1024 * 1024;
@@ -39,13 +43,40 @@ const SERVICE_RELAY_PUBLIC: &str = "registry-relay-public";
 const SERVICE_RELAY_CONSULTATION: &str = "registry-relay-consultation";
 const SERVICE_NOTARY: &str = "registry-notary";
 const SERVICE_POSTGRESQL: &str = "registry-postgres";
+const SERVICE_RUNTIME_SECRET_STAGER: &str = "registry-runtime-stage-secrets";
 const SERVICE_NAMESPACE_HOLDER: &str = "registry-private-namespace";
 const NETWORK_EDGE: &str = "registry-edge";
 const NETWORK_PRIVATE: &str = "registry-private";
 const PRIVATE_NETWORK_MODE: &str = "service:registry-private-namespace";
 const COMPOSE_MINIMUM_VERSION: [u16; 3] = [2, 35, 0];
+pub(crate) const OPERATOR_FILE_IDS: [&str; 21] = [
+    "notary-initialize-environment",
+    "notary-prepare-environment",
+    "notary-relay-workload-credential",
+    "notary-serve-environment",
+    "notary-signing-key",
+    "notary-tls-certificate",
+    "notary-tls-private-key",
+    "postgresql-admin-password",
+    "postgresql-bootstrap-environment",
+    "postgresql-tls-certificate",
+    "postgresql-tls-private-key",
+    "relay-consultation-initialize-environment",
+    "relay-consultation-prepare-environment",
+    "relay-consultation-serve-environment",
+    "relay-consultation-tls-certificate",
+    "relay-consultation-tls-private-key",
+    "relay-public-initialize-environment",
+    "relay-public-prepare-environment",
+    "relay-public-serve-environment",
+    "relay-public-tls-certificate",
+    "relay-public-tls-private-key",
+];
 
-const INITIALIZATION_SERVICES: [&str; 6] = [
+const SERVICE_POSTGRESQL_BOOTSTRAP: &str = "registry-postgres-bootstrap";
+
+const INITIALIZATION_SERVICES: [&str; 7] = [
+    SERVICE_POSTGRESQL_BOOTSTRAP,
     "registry-relay-public-prepare-state",
     "registry-relay-consultation-prepare-state",
     "registry-notary-prepare-state",
@@ -136,6 +167,7 @@ impl ProductLaneV1 {
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeActionV1 {
+    BootstrapStatePlane,
     PrepareStateStore,
     Serve,
     InitializeState,
@@ -418,6 +450,11 @@ impl DeploymentPlanV1 {
             ],
             initialization_actions: vec![
                 initialization(
+                    "bootstrap-postgresql-state-plane",
+                    POSTGRESQL,
+                    RuntimeActionV1::BootstrapStatePlane,
+                ),
+                initialization(
                     "prepare-relay-public-state",
                     RELAY_PUBLIC,
                     RuntimeActionV1::PrepareStateStore,
@@ -544,6 +581,11 @@ impl DeploymentPlanV1 {
             }
         }
         let expected_initialization = [
+            (
+                "bootstrap-postgresql-state-plane",
+                POSTGRESQL,
+                RuntimeActionV1::BootstrapStatePlane,
+            ),
             (
                 "prepare-relay-public-state",
                 RELAY_PUBLIC,
@@ -720,32 +762,10 @@ impl DeploymentBindingV1 {
                 notary_metrics: 9255,
             },
             edge_network_name: None,
-            secret_files: BTreeMap::from([
-                (
-                    "relay-public-tls".to_string(),
-                    "operator/secrets/relay-public-tls".to_string(),
-                ),
-                (
-                    "relay-consultation-tls".to_string(),
-                    "operator/secrets/relay-consultation-tls".to_string(),
-                ),
-                (
-                    "notary-tls".to_string(),
-                    "operator/secrets/notary-tls".to_string(),
-                ),
-                (
-                    "notary-signing-key".to_string(),
-                    "operator/secrets/notary-signing-key".to_string(),
-                ),
-                (
-                    "postgresql-credentials".to_string(),
-                    "operator/secrets/postgresql-credentials".to_string(),
-                ),
-                (
-                    "postgresql-tls".to_string(),
-                    "operator/secrets/postgresql-tls".to_string(),
-                ),
-            ]),
+            secret_files: OPERATOR_FILE_IDS
+                .into_iter()
+                .map(|id| (id.to_string(), format!("operator/secrets/{id}")))
+                .collect(),
             certificate_files: BTreeMap::new(),
             durable_volume_prefix: "registry".to_string(),
             restart_policy: "unless-stopped".to_string(),
@@ -779,14 +799,7 @@ impl DeploymentBindingV1 {
         if self.restart_policy != "unless-stopped" || self.logging_policy != "local-bounded" {
             bail!("deployment binding selects an unsupported managed policy");
         }
-        let expected_secrets = BTreeSet::from([
-            "relay-public-tls",
-            "relay-consultation-tls",
-            "notary-tls",
-            "notary-signing-key",
-            "postgresql-credentials",
-            "postgresql-tls",
-        ]);
+        let expected_secrets = BTreeSet::from(OPERATOR_FILE_IDS);
         if self
             .secret_files
             .keys()
@@ -815,10 +828,10 @@ impl DeploymentBindingV1 {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct LockedProductRuntimeV1 {
-    pub serve: Vec<String>,
-    pub prepare_state_store: Vec<String>,
-    pub initialize_state: Vec<String>,
-    pub verify_state: Vec<String>,
+    pub serve: LockedRuntimeActionV1,
+    pub prepare_state_store: LockedRuntimeActionV1,
+    pub initialize_state: LockedRuntimeActionV1,
+    pub verify_state: LockedRuntimeActionV1,
     pub health_probe: Vec<String>,
 }
 
@@ -829,56 +842,79 @@ pub struct LockedSupportingRuntimeV1 {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+pub struct LockedPostgresqlRuntimeV1 {
+    pub serve: LockedRuntimeActionV1,
+    pub bootstrap: LockedRuntimeActionV1,
+    pub health_probe: Vec<String>,
+    pub server_environment: Vec<String>,
+    pub hardening: LockedServiceHardeningV1,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct LockedRuntimeMappingV1 {
     pub relay_public: LockedProductRuntimeV1,
     pub relay_consultation: LockedProductRuntimeV1,
     pub notary: LockedProductRuntimeV1,
-    pub postgresql_state_plane: LockedSupportingRuntimeV1,
+    pub postgresql_state_plane: LockedPostgresqlRuntimeV1,
     pub private_namespace_holder: LockedSupportingRuntimeV1,
+    pub operator_files: Vec<LockedOperatorFileV1>,
 }
 
 impl LockedRuntimeMappingV1 {
     pub fn validate(&self) -> Result<()> {
         for (label, command) in [
-            ("public Relay serve", &self.relay_public.serve),
+            ("public Relay serve", &self.relay_public.serve.command),
             (
                 "public Relay prepare_state_store",
-                &self.relay_public.prepare_state_store,
+                &self.relay_public.prepare_state_store.command,
             ),
             (
                 "public Relay initialize_state",
-                &self.relay_public.initialize_state,
+                &self.relay_public.initialize_state.command,
             ),
-            ("public Relay verify_state", &self.relay_public.verify_state),
+            (
+                "public Relay verify_state",
+                &self.relay_public.verify_state.command,
+            ),
             ("public Relay health", &self.relay_public.health_probe),
-            ("consultation Relay serve", &self.relay_consultation.serve),
+            (
+                "consultation Relay serve",
+                &self.relay_consultation.serve.command,
+            ),
             (
                 "consultation Relay prepare_state_store",
-                &self.relay_consultation.prepare_state_store,
+                &self.relay_consultation.prepare_state_store.command,
             ),
             (
                 "consultation Relay initialize_state",
-                &self.relay_consultation.initialize_state,
+                &self.relay_consultation.initialize_state.command,
             ),
             (
                 "consultation Relay verify_state",
-                &self.relay_consultation.verify_state,
+                &self.relay_consultation.verify_state.command,
             ),
             (
                 "consultation Relay health",
                 &self.relay_consultation.health_probe,
             ),
-            ("Notary serve", &self.notary.serve),
+            ("Notary serve", &self.notary.serve.command),
             (
                 "Notary prepare_state_store",
-                &self.notary.prepare_state_store,
+                &self.notary.prepare_state_store.command,
             ),
-            ("Notary initialize_state", &self.notary.initialize_state),
-            ("Notary verify_state", &self.notary.verify_state),
+            (
+                "Notary initialize_state",
+                &self.notary.initialize_state.command,
+            ),
+            ("Notary verify_state", &self.notary.verify_state.command),
             ("Notary health", &self.notary.health_probe),
             (
                 "PostgreSQL state-plane recipe",
-                &self.postgresql_state_plane.command,
+                &self.postgresql_state_plane.serve.command,
+            ),
+            (
+                "PostgreSQL state-plane bootstrap",
+                &self.postgresql_state_plane.bootstrap.command,
             ),
             (
                 "PostgreSQL state-plane health",
@@ -913,12 +949,13 @@ impl LockedRuntimeMappingV1 {
             relay_public: LockedProductRuntimeV1::from_verified(value.relay_public()),
             relay_consultation: LockedProductRuntimeV1::from_verified(value.relay_consultation()),
             notary: LockedProductRuntimeV1::from_verified(value.notary()),
-            postgresql_state_plane: LockedSupportingRuntimeV1::from_verified(
+            postgresql_state_plane: LockedPostgresqlRuntimeV1::from_verified(
                 value.postgresql_state_plane(),
             ),
             private_namespace_holder: LockedSupportingRuntimeV1::from_verified(
                 value.private_namespace_holder(),
             ),
+            operator_files: value.operator_files().to_vec(),
         }
     }
 }
@@ -926,11 +963,23 @@ impl LockedRuntimeMappingV1 {
 impl LockedProductRuntimeV1 {
     fn from_verified(value: &VerifiedProductRuntimeV1) -> Self {
         Self {
-            serve: value.serve().to_vec(),
-            prepare_state_store: value.prepare_state_store().to_vec(),
-            initialize_state: value.initialize_state().to_vec(),
-            verify_state: value.verify_state().to_vec(),
+            serve: value.serve_action().clone(),
+            prepare_state_store: value.prepare_state_store_action().clone(),
+            initialize_state: value.initialize_state_action().clone(),
+            verify_state: value.verify_state_action().clone(),
             health_probe: value.health_probe().to_vec(),
+        }
+    }
+}
+
+impl LockedPostgresqlRuntimeV1 {
+    fn from_verified(value: &VerifiedPostgresqlRuntimeV1) -> Self {
+        Self {
+            serve: value.serve().clone(),
+            bootstrap: value.bootstrap().clone(),
+            health_probe: value.health_probe().to_vec(),
+            server_environment: value.server_environment().to_vec(),
+            hardening: value.hardening().clone(),
         }
     }
 }
@@ -954,7 +1003,108 @@ pub struct RenderedComposeModelsV1 {
 pub struct RenderedComposePackageV1 {
     pub compose_yaml: String,
     pub initialization_yaml: String,
+    pub postgresql_server_environment: String,
     pub models: RenderedComposeModelsV1,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentOperatorFileInventoryV1 {
+    pub schema_id: String,
+    pub schema_version: String,
+    pub files: Vec<DeploymentOperatorFileV1>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentOperatorFileV1 {
+    pub id: String,
+    pub path: String,
+    pub consumers: Vec<String>,
+    pub format: LockedOperatorFileFormatV1,
+    pub mode: String,
+    pub allowed_owners: Vec<String>,
+    pub required_keys: Vec<String>,
+}
+
+fn operator_file_inventory(
+    runtime: &LockedRuntimeMappingV1,
+    binding: &DeploymentBindingV1,
+) -> Result<DeploymentOperatorFileInventoryV1> {
+    let mut consumers = BTreeMap::<String, BTreeSet<String>>::new();
+    for (lane, product) in [
+        ("relay-public", &runtime.relay_public),
+        ("relay-consultation", &runtime.relay_consultation),
+        ("notary", &runtime.notary),
+    ] {
+        for (action_name, action) in [
+            ("serve", &product.serve),
+            ("prepare_state_store", &product.prepare_state_store),
+            ("initialize_state", &product.initialize_state),
+            ("verify_state", &product.verify_state),
+        ] {
+            add_action_consumers(&mut consumers, &format!("{lane}:{action_name}"), action);
+        }
+    }
+    add_action_consumers(
+        &mut consumers,
+        "postgresql-state-plane:serve",
+        &runtime.postgresql_state_plane.serve,
+    );
+    add_action_consumers(
+        &mut consumers,
+        "postgresql-state-plane:bootstrap",
+        &runtime.postgresql_state_plane.bootstrap,
+    );
+    let files = runtime
+        .operator_files
+        .iter()
+        .map(|file| {
+            let path = binding
+                .secret_files
+                .get(&file.id)
+                .ok_or_else(|| anyhow!("binding is missing operator file {}", file.id))?;
+            let file_consumers = consumers
+                .remove(&file.id)
+                .ok_or_else(|| anyhow!("operator file {} has no runtime consumer", file.id))?;
+            Ok(DeploymentOperatorFileV1 {
+                id: file.id.clone(),
+                path: path.clone(),
+                consumers: file_consumers.into_iter().collect(),
+                format: file.format,
+                mode: file.mode.clone(),
+                allowed_owners: file.allowed_owners.clone(),
+                required_keys: file.required_keys.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if !consumers.is_empty() {
+        bail!("runtime action references an operator file outside the signed inventory");
+    }
+    Ok(DeploymentOperatorFileInventoryV1 {
+        schema_id: DEPLOYMENT_OPERATOR_FILES_SCHEMA_ID.to_string(),
+        schema_version: DEPLOYMENT_OPERATOR_FILES_SCHEMA_VERSION.to_string(),
+        files,
+    })
+}
+
+fn add_action_consumers(
+    consumers: &mut BTreeMap<String, BTreeSet<String>>,
+    action_name: &str,
+    action: &LockedRuntimeActionV1,
+) {
+    for file_id in &action.environment_files {
+        consumers
+            .entry(file_id.clone())
+            .or_default()
+            .insert(format!("{action_name}:environment"));
+    }
+    for projection in &action.secret_files {
+        consumers
+            .entry(projection.file_id.clone())
+            .or_default()
+            .insert(format!("{action_name}:{}", projection.target));
+    }
 }
 
 pub fn render_compose_package(
@@ -975,6 +1125,10 @@ pub fn render_compose_package(
             .context("failed to serialize managed Compose model")?,
         initialization_yaml: serde_norway::to_string(&initialization)
             .context("failed to serialize managed initialization model")?,
+        postgresql_server_environment: format!(
+            "{}\n",
+            runtime.postgresql_state_plane.server_environment.join("\n")
+        ),
         models: RenderedComposeModelsV1 {
             ordinary,
             initialization,
@@ -1417,7 +1571,11 @@ fn generate_deployment_package_core(
     let preceding_report = if use_production_verifier {
         verify_deployment_package(&verification_request)?
     } else {
-        verify_deployment_package_with_package_inputs(&verification_request, &preceding_inputs)?
+        verify_deployment_package_with_package_inputs(
+            &verification_request,
+            &preceding_inputs,
+            false,
+        )?
     };
     let may_regenerate = preceding_report.ownership == DeploymentOwnershipStateV1::Managed
         || (preceding_report.ownership == DeploymentOwnershipStateV1::Adapted
@@ -1478,9 +1636,22 @@ fn generate_deployment_package_core(
         },
     };
     let candidate_ownership = if use_production_verifier {
-        verify_deployment_package(&candidate_verification)?
+        let candidate_inventory = operator_file_inventory(&verified_inputs.runtime, &binding)?;
+        let operator_violations = verify_operator_files(&request.output_dir, &candidate_inventory);
+        if !operator_violations.is_empty() {
+            bail!("candidate operator-file inventory is not satisfied by the current package");
+        }
+        verify_deployment_package_with_package_inputs(
+            &candidate_verification,
+            &verified_inputs,
+            false,
+        )?
     } else {
-        verify_deployment_package_with_package_inputs(&candidate_verification, &verified_inputs)?
+        verify_deployment_package_with_package_inputs(
+            &candidate_verification,
+            &verified_inputs,
+            false,
+        )?
     };
     if !(candidate_ownership.ownership == DeploymentOwnershipStateV1::Managed
         || (candidate_ownership.ownership == DeploymentOwnershipStateV1::Adapted
@@ -1612,6 +1783,7 @@ pub fn render_deployment_package(
     validate_first_generation_target(&request.output_dir)?;
 
     let rendered = render_compose_package(inputs, &request.binding)?;
+    let operator_inventory = operator_file_inventory(&inputs.runtime, &request.binding)?;
     let parent = request
         .output_dir
         .parent()
@@ -1634,6 +1806,10 @@ pub fn render_deployment_package(
     write_yaml(root.join("binding.yaml"), &request.binding)?;
     write_bytes(root.join("generated/compose.empty.env"), b"")?;
     write_bytes(
+        root.join("generated/postgresql-server.env"),
+        rendered.postgresql_server_environment.as_bytes(),
+    )?;
+    write_bytes(
         root.join("generated/compose.yaml"),
         rendered.compose_yaml.as_bytes(),
     )?;
@@ -1642,6 +1818,10 @@ pub fn render_deployment_package(
         rendered.initialization_yaml.as_bytes(),
     )?;
     write_json(root.join("generated/deployment-plan.v1.json"), &inputs.plan)?;
+    write_json(
+        root.join("generated/operator-files.v1.json"),
+        &operator_inventory,
+    )?;
     write_bytes(
         root.join("generated/RUNBOOK.md"),
         runbook(
@@ -1650,6 +1830,7 @@ pub fn render_deployment_package(
                 .file_name()
                 .and_then(|name| name.to_str()),
             &inputs.runtime,
+            &operator_inventory,
         )
         .as_bytes(),
     )?;
@@ -1833,19 +2014,20 @@ pub fn verify_deployment_package(
         &package_release_lock,
     )
     .context("package deployment inputs failed independent verification")?;
-    verify_deployment_package_with_package_inputs(request, &package_inputs)
+    verify_deployment_package_with_package_inputs(request, &package_inputs, true)
 }
 
 #[cfg(test)]
 pub(crate) fn verify_deployment_package_with_test_inputs(
     request: &DeploymentPackageVerificationRequestV1<'_>,
 ) -> Result<DeploymentOwnershipReportV1> {
-    verify_deployment_package_with_package_inputs(request, request.verified_inputs)
+    verify_deployment_package_with_package_inputs(request, request.verified_inputs, false)
 }
 
 fn verify_deployment_package_with_package_inputs(
     request: &DeploymentPackageVerificationRequestV1<'_>,
     package_inputs: &VerifiedDeploymentInputsV1,
+    verify_operator_material: bool,
 ) -> Result<DeploymentOwnershipReportV1> {
     let binding_bytes = read_bounded_regular_file(
         &request.package_dir.join("binding.yaml"),
@@ -1868,7 +2050,13 @@ fn verify_deployment_package_with_package_inputs(
     };
     let effective_models =
         normalize_package_models(request.package_dir, request.parent_compose_files)?;
-    verify_deployment_package_core(request, package_inputs, &effective_models, &expected_models)
+    verify_deployment_package_core(
+        request,
+        package_inputs,
+        &effective_models,
+        &expected_models,
+        verify_operator_material,
+    )
 }
 
 #[cfg(test)]
@@ -1908,6 +2096,7 @@ pub(crate) fn verify_deployment_package_with_models(
         request.verified_inputs,
         effective_models,
         &expected_models,
+        false,
     )
 }
 
@@ -1916,6 +2105,7 @@ fn verify_deployment_package_core(
     package_inputs: &VerifiedDeploymentInputsV1,
     effective_models: &EffectiveComposeModelsV1,
     expected_models: &EffectiveComposeModelsV1,
+    verify_operator_material: bool,
 ) -> Result<DeploymentOwnershipReportV1> {
     let inputs = package_inputs;
     let installed_inputs = request.verified_inputs;
@@ -1954,6 +2144,7 @@ fn verify_deployment_package_core(
         unreachable!("invalid package bindings return before rendering");
     };
     let canonical = render_compose_package(inputs, &package_binding)?;
+    let operator_inventory = operator_file_inventory(&inputs.runtime, &package_binding)?;
     let manifest: DeploymentManifestV1 = read_json(
         &request
             .package_dir
@@ -1980,6 +2171,7 @@ fn verify_deployment_package_core(
     let expected_fixed_files = expected_fixed_generated_files(
         &canonical,
         inputs,
+        &package_binding,
         request
             .package_dir
             .file_name()
@@ -2086,6 +2278,12 @@ fn verify_deployment_package_core(
         || request.package_dir.join("generated/.env").exists()
     {
         violations.push("deployment package contains an unexpected implicit .env".to_string());
+    }
+    if verify_operator_material {
+        violations.extend(verify_operator_files(
+            request.package_dir,
+            &operator_inventory,
+        ));
     }
     stale |= manifest.registry_release_lock_sha256 != installed_inputs.registry_release_lock_sha256;
     if let Some(expected) = &request.expected_inputs.source_approved_baseline_set_sha256 {
@@ -2205,7 +2403,14 @@ fn verify_deployment_package_core(
                 "generator-owned closure matches its manifest".to_string(),
                 "ordinary and initialization effective models preserve hard invariants".to_string(),
             ],
-            operator_owned_guarantees: Vec::new(),
+            operator_owned_guarantees: if verify_operator_material {
+                vec![
+                    "operator files have the signed format, mode, owner, and consumer inventory"
+                        .to_string(),
+                ]
+            } else {
+                Vec::new()
+            },
             violations: Vec::new(),
             in_place_regeneration_safe: true,
         },
@@ -2228,7 +2433,7 @@ fn render_ordinary_model(
     let mut namespace_holder = supporting_service(
         &namespace.image_identity,
         &runtime.private_namespace_holder,
-        json!({NETWORK_PRIVATE: {}}),
+        json!({NETWORK_PRIVATE: {"aliases": [SERVICE_POSTGRESQL]}}),
         None,
         json!({}),
         &binding.restart_policy,
@@ -2248,19 +2453,35 @@ fn render_ordinary_model(
         )
     ]);
     services.insert(SERVICE_NAMESPACE_HOLDER.to_string(), namespace_holder);
-    let mut postgres = supporting_service(
+    services.insert(
+        SERVICE_RUNTIME_SECRET_STAGER.to_string(),
+        secret_staging_service(&postgresql.image_identity, runtime, binding)?,
+    );
+    let mut postgres = hardened_service(
         &postgresql.image_identity,
-        &runtime.postgresql_state_plane,
+        &runtime.postgresql_state_plane.serve.command,
+        &runtime.postgresql_state_plane.health_probe,
         json!({}),
         Some(PRIVATE_NETWORK_MODE),
-        dependency_map(&[(SERVICE_NAMESPACE_HOLDER, "service_healthy")]),
+        dependency_map(&[
+            (SERVICE_NAMESPACE_HOLDER, "service_healthy"),
+            (
+                SERVICE_RUNTIME_SECRET_STAGER,
+                "service_completed_successfully",
+            ),
+        ]),
         &binding.restart_policy,
     );
-    postgres["volumes"] = json!([named_volume(
-        format!("{}-postgresql-data", binding.durable_volume_prefix),
-        "/var/lib/postgresql/data",
-    )]);
-    postgres["secrets"] = json!(["registry-postgresql-tls", "registry-postgresql-credentials"]);
+    apply_hardening(&mut postgres, &runtime.postgresql_state_plane.hardening);
+    apply_runtime_action_inputs(
+        &mut postgres,
+        &runtime.postgresql_state_plane.serve,
+        None,
+        binding,
+        None,
+        "postgresql-serve",
+    )?;
+    postgres["env_file"] = json!(["./postgresql-server.env"]);
     services.insert(SERVICE_POSTGRESQL.to_string(), postgres);
     services.insert(
         SERVICE_RELAY_PUBLIC.to_string(),
@@ -2271,8 +2492,11 @@ fn render_ordinary_model(
             bundle_source(lanes, ProductLaneV1::RelayPublic)?,
             json!({NETWORK_EDGE: {}}),
             None,
-            json!({}),
-        ),
+            dependency_map(&[(
+                SERVICE_RUNTIME_SECRET_STAGER,
+                "service_completed_successfully",
+            )]),
+        )?,
     );
     services.insert(
         SERVICE_RELAY_CONSULTATION.to_string(),
@@ -2286,8 +2510,12 @@ fn render_ordinary_model(
             dependency_map(&[
                 (SERVICE_NAMESPACE_HOLDER, "service_healthy"),
                 (SERVICE_POSTGRESQL, "service_healthy"),
+                (
+                    SERVICE_RUNTIME_SECRET_STAGER,
+                    "service_completed_successfully",
+                ),
             ]),
-        ),
+        )?,
     );
     services.insert(
         SERVICE_NOTARY.to_string(),
@@ -2302,14 +2530,49 @@ fn render_ordinary_model(
                 (SERVICE_NAMESPACE_HOLDER, "service_healthy"),
                 (SERVICE_POSTGRESQL, "service_healthy"),
                 (SERVICE_RELAY_CONSULTATION, "service_healthy"),
+                (
+                    SERVICE_RUNTIME_SECRET_STAGER,
+                    "service_completed_successfully",
+                ),
             ]),
-        ),
+        )?,
     );
 
     let edge = binding
         .edge_network_name
         .as_ref()
         .map_or_else(|| json!({}), |name| json!({"external": true, "name": name}));
+    let mut volumes = Map::from_iter([
+        (
+            format!("{}-postgresql-data", binding.durable_volume_prefix),
+            json!({}),
+        ),
+        (
+            format!("{}-relay-public-state", binding.durable_volume_prefix),
+            json!({}),
+        ),
+        (
+            format!("{}-relay-public-audit", binding.durable_volume_prefix),
+            json!({}),
+        ),
+        (
+            format!("{}-relay-consultation-state", binding.durable_volume_prefix),
+            json!({}),
+        ),
+        (
+            format!("{}-relay-consultation-audit", binding.durable_volume_prefix),
+            json!({}),
+        ),
+        (
+            format!("{}-notary-state", binding.durable_volume_prefix),
+            json!({}),
+        ),
+        (
+            format!("{}-notary-audit", binding.durable_volume_prefix),
+            json!({}),
+        ),
+    ]);
+    volumes.extend(secret_stage_volumes(runtime, binding));
     Ok(json!({
         "name": binding.package_id,
         "services": services,
@@ -2317,15 +2580,7 @@ fn render_ordinary_model(
             NETWORK_EDGE: edge,
             NETWORK_PRIVATE: {"internal": true}
         },
-        "volumes": {
-            format!("{}-postgresql-data", binding.durable_volume_prefix): {},
-            format!("{}-relay-public-state", binding.durable_volume_prefix): {},
-            format!("{}-relay-public-audit", binding.durable_volume_prefix): {},
-            format!("{}-relay-consultation-state", binding.durable_volume_prefix): {},
-            format!("{}-relay-consultation-audit", binding.durable_volume_prefix): {},
-            format!("{}-notary-state", binding.durable_volume_prefix): {},
-            format!("{}-notary-audit", binding.durable_volume_prefix): {}
-        },
+        "volumes": volumes,
         "secrets": render_secrets(binding)
     }))
 }
@@ -2344,6 +2599,43 @@ fn render_initialization_model(
         .and_then(Value::as_object_mut)
         .ok_or_else(|| anyhow!("internal rendered Compose model has no services"))?;
     for action in &plan.initialization_actions {
+        if action.action == RuntimeActionV1::BootstrapStatePlane {
+            if action.workload != POSTGRESQL {
+                bail!("state-plane bootstrap targets an unknown supporting workload");
+            }
+            let postgresql = plan.supporting(SupportingWorkloadRecipeV1::PostgresqlStatePlane)?;
+            let recipe = &runtime.postgresql_state_plane;
+            let mut service = hardened_service(
+                &postgresql.image_identity,
+                &recipe.bootstrap.command,
+                &recipe.health_probe,
+                json!({NETWORK_PRIVATE: {}}),
+                None,
+                dependency_map(&[
+                    (SERVICE_POSTGRESQL, "service_healthy"),
+                    (
+                        SERVICE_RUNTIME_SECRET_STAGER,
+                        "service_completed_successfully",
+                    ),
+                ]),
+                "no",
+            );
+            apply_hardening(&mut service, &recipe.hardening);
+            apply_runtime_action_inputs(
+                &mut service,
+                &recipe.bootstrap,
+                None,
+                binding,
+                None,
+                "postgresql-bootstrap",
+            )?;
+            service
+                .as_object_mut()
+                .expect("service object")
+                .remove("healthcheck");
+            services.insert(SERVICE_POSTGRESQL_BOOTSTRAP.to_string(), service);
+            continue;
+        }
         let lane = match action.workload.as_str() {
             RELAY_PUBLIC => ProductLaneV1::RelayPublic,
             RELAY_CONSULTATION => ProductLaneV1::RelayConsultation,
@@ -2364,7 +2656,14 @@ fn render_initialization_model(
             _ => bail!("initialization model contains a non-initialization action"),
         };
         let (networks, network_mode, dependencies) = if lane == ProductLaneV1::RelayPublic {
-            (json!({NETWORK_EDGE: {}}), None, json!({}))
+            (
+                json!({NETWORK_EDGE: {}}),
+                None,
+                dependency_map(&[(
+                    SERVICE_RUNTIME_SECRET_STAGER,
+                    "service_completed_successfully",
+                )]),
+            )
         } else {
             (
                 json!({}),
@@ -2372,30 +2671,46 @@ fn render_initialization_model(
                 dependency_map(&[
                     (SERVICE_NAMESPACE_HOLDER, "service_started"),
                     (SERVICE_POSTGRESQL, "service_healthy"),
+                    (
+                        SERVICE_RUNTIME_SECRET_STAGER,
+                        "service_completed_successfully",
+                    ),
                 ]),
             )
         };
         let mut service = hardened_service(
             &product.image_identity,
-            command,
+            &command.command,
             &runtime.health_probe,
             networks,
             network_mode,
             dependencies,
             "no",
         );
+        apply_runtime_action_inputs(
+            &mut service,
+            command,
+            Some(lane),
+            binding,
+            Some(bundle_source(lanes, lane)?),
+            &format!(
+                "{}-{}",
+                lane.id(),
+                match action.action {
+                    RuntimeActionV1::PrepareStateStore => "prepare",
+                    RuntimeActionV1::InitializeState => "initialize",
+                    _ => unreachable!(),
+                }
+            ),
+        )?;
         match action.action {
             RuntimeActionV1::PrepareStateStore => {
-                // Database preparation has no bundle acceptance, anchor,
-                // signing-key, or anti-rollback authority.
                 service
                     .as_object_mut()
                     .expect("service object")
                     .remove("healthcheck");
             }
             RuntimeActionV1::InitializeState => {
-                service["volumes"] =
-                    initialization_mounts(lane, binding, bundle_source(lanes, lane)?);
                 service
                     .as_object_mut()
                     .expect("service object")
@@ -2408,26 +2723,6 @@ fn render_initialization_model(
     Ok(model)
 }
 
-fn initialization_mounts(
-    lane: ProductLaneV1,
-    binding: &DeploymentBindingV1,
-    bundle_source: String,
-) -> Value {
-    let id = lane.id();
-    json!([
-        immutable_bind(bundle_source, "/run/registry/bundle"),
-        immutable_bind(format!("./anchors/{id}"), "/run/registry/anchor"),
-        named_volume(
-            format!("{}-{id}-state", binding.durable_volume_prefix),
-            "/var/lib/registry/state",
-        ),
-        named_volume(
-            format!("{}-{id}-audit", binding.durable_volume_prefix),
-            "/var/lib/registry/audit",
-        )
-    ])
-}
-
 fn product_service(
     workload: &ProductWorkloadV1,
     runtime: &LockedProductRuntimeV1,
@@ -2436,19 +2731,25 @@ fn product_service(
     networks: Value,
     network_mode: Option<&str>,
     dependencies: Value,
-) -> Value {
+) -> Result<Value> {
     let lane = workload.product_lane;
     let mut service = hardened_service(
         &workload.image_identity,
-        &runtime.serve,
+        &runtime.serve.command,
         &runtime.health_probe,
         networks,
         network_mode,
         dependencies,
         &binding.restart_policy,
     );
-    service["volumes"] = product_mounts(lane, binding, bundle_source);
-    service["secrets"] = product_secrets(lane);
+    apply_runtime_action_inputs(
+        &mut service,
+        &runtime.serve,
+        Some(lane),
+        binding,
+        Some(bundle_source),
+        &format!("{}-serve", lane.id()),
+    )?;
     if lane == ProductLaneV1::RelayPublic {
         service["ports"] = json!([
             format!(
@@ -2461,7 +2762,217 @@ fn product_service(
             )
         ]);
     }
-    service
+    Ok(service)
+}
+
+fn apply_hardening(service: &mut Value, hardening: &LockedServiceHardeningV1) {
+    service["user"] = json!(hardening.user);
+    service["read_only"] = json!(hardening.read_only_root_filesystem);
+    service["cap_drop"] = json!(hardening.cap_drop);
+    service["security_opt"] = json!(hardening.security_opt);
+    service["tmpfs"] = json!(hardening.tmpfs);
+}
+
+fn secret_staging_service(
+    image: &ImageIdentityV1,
+    runtime: &LockedRuntimeMappingV1,
+    binding: &DeploymentBindingV1,
+) -> Result<Value> {
+    let stages = secret_stage_actions(runtime);
+    let mut script = String::from("umask 077\n");
+    let mut mounts = Vec::new();
+    let mut source_files = BTreeSet::new();
+    for (stage_id, action) in stages {
+        if action.secret_files.is_empty() {
+            continue;
+        }
+        let output = format!("/registryctl-stage/output/{stage_id}");
+        mounts.push(named_volume(
+            staged_secret_volume_name(binding, stage_id),
+            &output,
+        ));
+        for projection in &action.secret_files {
+            let target = projection
+                .target
+                .strip_prefix("/run/secrets/")
+                .filter(|target| !target.is_empty() && !target.contains('/'))
+                .ok_or_else(|| anyhow!("secret target is outside /run/secrets"))?;
+            source_files.insert(projection.file_id.clone());
+            script.push_str(&format!(
+                "/usr/bin/install -m {} /run/secrets/{} {}/{}\n",
+                projection.mode, projection.file_id, output, target
+            ));
+            script.push_str(&format!(
+                "/usr/bin/chown {}:{} {}/{}\n",
+                projection.uid, projection.gid, output, target
+            ));
+        }
+    }
+    Ok(json!({
+        "image": image.as_str(),
+        "entrypoint": ["/bin/sh", "-ceu"],
+        "command": [script],
+        "user": "0:0",
+        "read_only": true,
+        "cap_drop": ["ALL"],
+        "cap_add": ["CHOWN"],
+        "security_opt": ["no-new-privileges:true"],
+        "tmpfs": ["/tmp"],
+        "network_mode": "none",
+        "volumes": mounts,
+        "secrets": source_files
+            .into_iter()
+            .map(|file_id| json!({
+                "source": format!("registry-{file_id}"),
+                "target": file_id
+            }))
+            .collect::<Vec<_>>(),
+        "restart": "no"
+    }))
+}
+
+fn secret_stage_actions(
+    runtime: &LockedRuntimeMappingV1,
+) -> Vec<(&'static str, &LockedRuntimeActionV1)> {
+    vec![
+        ("relay-public-serve", &runtime.relay_public.serve),
+        (
+            "relay-public-prepare",
+            &runtime.relay_public.prepare_state_store,
+        ),
+        (
+            "relay-public-initialize",
+            &runtime.relay_public.initialize_state,
+        ),
+        (
+            "relay-consultation-serve",
+            &runtime.relay_consultation.serve,
+        ),
+        (
+            "relay-consultation-prepare",
+            &runtime.relay_consultation.prepare_state_store,
+        ),
+        (
+            "relay-consultation-initialize",
+            &runtime.relay_consultation.initialize_state,
+        ),
+        ("notary-serve", &runtime.notary.serve),
+        ("notary-prepare", &runtime.notary.prepare_state_store),
+        ("notary-initialize", &runtime.notary.initialize_state),
+        ("postgresql-serve", &runtime.postgresql_state_plane.serve),
+        (
+            "postgresql-bootstrap",
+            &runtime.postgresql_state_plane.bootstrap,
+        ),
+    ]
+}
+
+fn staged_secret_volume_name(binding: &DeploymentBindingV1, stage_id: &str) -> String {
+    format!(
+        "{}-operator-files-{stage_id}",
+        binding.durable_volume_prefix
+    )
+}
+
+fn secret_stage_volumes(
+    runtime: &LockedRuntimeMappingV1,
+    binding: &DeploymentBindingV1,
+) -> Map<String, Value> {
+    secret_stage_actions(runtime)
+        .into_iter()
+        .filter(|(_, action)| !action.secret_files.is_empty())
+        .map(|(stage_id, _)| (staged_secret_volume_name(binding, stage_id), json!({})))
+        .collect()
+}
+
+fn apply_runtime_action_inputs(
+    service: &mut Value,
+    action: &LockedRuntimeActionV1,
+    lane: Option<ProductLaneV1>,
+    binding: &DeploymentBindingV1,
+    bundle_source: Option<String>,
+    stage_id: &str,
+) -> Result<()> {
+    let mut mounts = action
+        .mounts
+        .iter()
+        .map(|mount| runtime_mount(mount, lane, binding, bundle_source.as_deref()))
+        .collect::<Result<Vec<_>>>()?;
+    if !action.environment_files.is_empty() {
+        service["env_file"] = json!(action
+            .environment_files
+            .iter()
+            .map(|id| operator_file_path(binding, id))
+            .collect::<Result<Vec<_>>>()?);
+    }
+    if !action.secret_files.is_empty() {
+        mounts.push(named_volume_read_only(
+            staged_secret_volume_name(binding, stage_id),
+            "/run/secrets",
+        ));
+    }
+    if !mounts.is_empty() {
+        service["volumes"] = json!(mounts);
+    }
+    Ok(())
+}
+
+fn runtime_mount(
+    mount: &LockedRuntimeMountV1,
+    lane: Option<ProductLaneV1>,
+    binding: &DeploymentBindingV1,
+    bundle_source: Option<&str>,
+) -> Result<Value> {
+    let source = match mount.source {
+        crate::release_lock::LockedMountSourceV1::Bundle => bundle_source
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("bundle mount is missing its verified source"))?,
+        crate::release_lock::LockedMountSourceV1::Anchor => {
+            format!(
+                "./anchors/{}",
+                lane.ok_or_else(|| anyhow!("anchor mount is missing a product lane"))?
+                    .id()
+            )
+        }
+        crate::release_lock::LockedMountSourceV1::AntiRollbackState => format!(
+            "{}-{}-state",
+            binding.durable_volume_prefix,
+            lane.ok_or_else(|| anyhow!("state mount is missing a product lane"))?
+                .id()
+        ),
+        crate::release_lock::LockedMountSourceV1::Audit => format!(
+            "{}-{}-audit",
+            binding.durable_volume_prefix,
+            lane.ok_or_else(|| anyhow!("audit mount is missing a product lane"))?
+                .id()
+        ),
+        crate::release_lock::LockedMountSourceV1::PostgresqlData => {
+            format!("{}-postgresql-data", binding.durable_volume_prefix)
+        }
+    };
+    Ok(
+        if matches!(
+            mount.source,
+            crate::release_lock::LockedMountSourceV1::Bundle
+                | crate::release_lock::LockedMountSourceV1::Anchor
+        ) {
+            let mut value = immutable_bind(source, &mount.target);
+            value["read_only"] = json!(mount.read_only);
+            value
+        } else {
+            let mut value = named_volume(source, &mount.target);
+            value["read_only"] = json!(mount.read_only);
+            value
+        },
+    )
+}
+
+fn operator_file_path(binding: &DeploymentBindingV1, id: &str) -> Result<String> {
+    binding
+        .secret_files
+        .get(id)
+        .map(|path| format!("../{path}"))
+        .ok_or_else(|| anyhow!("binding is missing operator file {id}"))
 }
 
 fn supporting_service(
@@ -2517,26 +3028,6 @@ fn hardened_service(
     value
 }
 
-fn product_mounts(
-    lane: ProductLaneV1,
-    binding: &DeploymentBindingV1,
-    bundle_source: String,
-) -> Value {
-    let id = lane.id();
-    json!([
-        immutable_bind(bundle_source, "/run/registry/bundle"),
-        immutable_bind(format!("./anchors/{id}"), "/run/registry/anchor"),
-        named_volume(
-            format!("{}-{id}-state", binding.durable_volume_prefix),
-            "/var/lib/registry/state",
-        ),
-        named_volume(
-            format!("{}-{id}-audit", binding.durable_volume_prefix),
-            "/var/lib/registry/audit",
-        )
-    ])
-}
-
 fn immutable_bind(source: String, target: &str) -> Value {
     json!({
         "type": "bind",
@@ -2556,6 +3047,12 @@ fn named_volume(source: String, target: &str) -> Value {
     })
 }
 
+fn named_volume_read_only(source: String, target: &str) -> Value {
+    let mut value = named_volume(source, target);
+    value["read_only"] = json!(true);
+    value
+}
+
 fn bundle_source(lanes: &[VerifiedLanePackageSourceV1], lane: ProductLaneV1) -> Result<String> {
     let source = lanes
         .iter()
@@ -2566,16 +3063,6 @@ fn bundle_source(lanes: &[VerifiedLanePackageSourceV1], lane: ProductLaneV1) -> 
         lane.id(),
         source.manifest_digest_component
     ))
-}
-
-fn product_secrets(lane: ProductLaneV1) -> Value {
-    match lane {
-        ProductLaneV1::RelayPublic => json!(["registry-relay-public-tls"]),
-        ProductLaneV1::RelayConsultation => json!(["registry-relay-consultation-tls"]),
-        ProductLaneV1::Notary => {
-            json!(["registry-notary-tls", "registry-notary-signing-key"])
-        }
-    }
 }
 
 fn render_secrets(binding: &DeploymentBindingV1) -> Value {
@@ -2615,6 +3102,10 @@ fn normalize_rendered_models(
     let generated = temporary.path().join("generated");
     fs::create_dir_all(&generated)?;
     write_bytes(generated.join("compose.empty.env"), b"")?;
+    write_bytes(
+        generated.join("postgresql-server.env"),
+        rendered.postgresql_server_environment.as_bytes(),
+    )?;
     write_bytes(
         generated.join("compose.yaml"),
         rendered.compose_yaml.as_bytes(),
@@ -2926,18 +3417,36 @@ fn contains_ordered_paths(actual: &[PathBuf], expected: &[PathBuf]) -> bool {
 fn scrub_normalized_bind_sources(mut model: Value) -> Value {
     if let Some(services) = model.get_mut("services").and_then(Value::as_object_mut) {
         for service in services.values_mut() {
-            let Some(mounts) = service.get_mut("volumes").and_then(Value::as_array_mut) else {
-                continue;
-            };
-            for mount in mounts {
-                if mount.get("type").and_then(Value::as_str) != Some("bind") {
-                    continue;
+            if let Some(environment_files) =
+                service.get_mut("env_file").and_then(Value::as_array_mut)
+            {
+                for environment_file in environment_files {
+                    let file = match environment_file {
+                        Value::String(file) => file,
+                        Value::Object(item) => {
+                            let Some(file) = item.get("path").and_then(Value::as_str) else {
+                                continue;
+                            };
+                            let normalized = normalized_operator_or_generated_path(file);
+                            item["path"] = Value::String(normalized);
+                            continue;
+                        }
+                        _ => continue,
+                    };
+                    *file = normalized_operator_or_generated_path(file);
                 }
-                let Some(source) = mount.get("source").and_then(Value::as_str) else {
-                    continue;
-                };
-                if let Some((_, suffix)) = source.rsplit_once("/generated/") {
-                    mount["source"] = Value::String(format!("./{suffix}"));
+            }
+            if let Some(mounts) = service.get_mut("volumes").and_then(Value::as_array_mut) {
+                for mount in mounts {
+                    if mount.get("type").and_then(Value::as_str) != Some("bind") {
+                        continue;
+                    }
+                    let Some(source) = mount.get("source").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    if let Some((_, suffix)) = source.rsplit_once("/generated/") {
+                        mount["source"] = Value::String(format!("./{suffix}"));
+                    }
                 }
             }
         }
@@ -2953,6 +3462,16 @@ fn scrub_normalized_bind_sources(mut model: Value) -> Value {
         }
     }
     model
+}
+
+fn normalized_operator_or_generated_path(file: &str) -> String {
+    if let Some((_, suffix)) = file.rsplit_once("/operator/") {
+        format!("../operator/{suffix}")
+    } else if let Some((_, suffix)) = file.rsplit_once("/generated/") {
+        format!("./{suffix}")
+    } else {
+        file.to_string()
+    }
 }
 
 fn validate_hard_effective_model(
@@ -2993,7 +3512,7 @@ fn validate_hard_effective_model(
         check_equal(
             service,
             "command",
-            &json!(runtime.product(lane).serve),
+            &json!(runtime.product(lane).serve.command),
             service_name,
             violations,
         );
@@ -3025,11 +3544,44 @@ fn validate_hard_effective_model(
             violations,
         );
     }
+    match (
+        expected_services.get(SERVICE_RUNTIME_SECRET_STAGER),
+        actual_services.get(SERVICE_RUNTIME_SECRET_STAGER),
+    ) {
+        (Some(expected_stage), Some(actual_stage)) => {
+            check_security_owned_projection(
+                Some(expected_stage),
+                actual_stage,
+                SERVICE_RUNTIME_SECRET_STAGER,
+                violations,
+            );
+            if actual_stage.get("network_mode") != Some(&json!("none"))
+                || actual_stage.get("cap_add") != Some(&json!(["CHOWN"]))
+            {
+                violations.push(
+                    "runtime secret stager lost its isolated narrow CHOWN contract".to_string(),
+                );
+            }
+        }
+        _ => violations.push("ordinary effective model omits runtime secret staging".to_string()),
+    }
+    for (service_name, service) in actual_services {
+        if service_name != SERVICE_RUNTIME_SECRET_STAGER
+            && service
+                .get("cap_add")
+                .and_then(Value::as_array)
+                .is_some_and(|caps| caps.iter().any(|cap| cap == "CHOWN"))
+        {
+            violations.push(format!(
+                "{service_name} inherited the secret stager CHOWN capability"
+            ));
+        }
+    }
     for (recipe, service_name, command) in [
         (
             SupportingWorkloadRecipeV1::PostgresqlStatePlane,
             SERVICE_POSTGRESQL,
-            &runtime.postgresql_state_plane.command,
+            &runtime.postgresql_state_plane.serve.command,
         ),
         (
             SupportingWorkloadRecipeV1::PrivateNamespaceHolder,
@@ -3484,22 +4036,31 @@ fn digest_generated_files(
 fn expected_fixed_generated_files(
     rendered: &RenderedComposePackageV1,
     inputs: &VerifiedDeploymentInputsV1,
+    binding: &DeploymentBindingV1,
     package_name: Option<&str>,
 ) -> Result<BTreeMap<String, String>> {
     let mut plan = serde_json::to_vec_pretty(&inputs.plan)?;
     plan.push(b'\n');
     let approved = canonicalize_json(&serde_json::to_value(&inputs.normalized_approved_set)?)?;
+    let inventory = operator_file_inventory(&inputs.runtime, binding)?;
+    let mut inventory_bytes = serde_json::to_vec_pretty(&inventory)?;
+    inventory_bytes.push(b'\n');
     let files = [
         ("compose.empty.env", Vec::new()),
+        (
+            "postgresql-server.env",
+            rendered.postgresql_server_environment.as_bytes().to_vec(),
+        ),
         ("compose.yaml", rendered.compose_yaml.as_bytes().to_vec()),
         (
             "compose.initialize.yaml",
             rendered.initialization_yaml.as_bytes().to_vec(),
         ),
         ("deployment-plan.v1.json", plan),
+        ("operator-files.v1.json", inventory_bytes),
         (
             "RUNBOOK.md",
-            runbook(package_name, &inputs.runtime).into_bytes(),
+            runbook(package_name, &inputs.runtime, &inventory).into_bytes(),
         ),
         ("inputs/approved-baseline-set.v1.json", approved),
         (
@@ -3911,6 +4472,160 @@ fn write_bytes(path: PathBuf, bytes: &[u8]) -> Result<()> {
     fs::write(&path, bytes).with_context(|| format!("failed to write {}", path.display()))
 }
 
+fn verify_operator_files(
+    package_dir: &Path,
+    inventory: &DeploymentOperatorFileInventoryV1,
+) -> Vec<String> {
+    let mut violations = Vec::new();
+    for file in &inventory.files {
+        let path = package_dir.join(&file.path);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => metadata,
+            Ok(_) => {
+                violations.push(format!(
+                    "operator file {} is not a regular non-symlink file",
+                    file.id
+                ));
+                continue;
+            }
+            Err(_) => {
+                violations.push(format!("operator file {} is missing", file.id));
+                continue;
+            }
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let expected_mode = u32::from_str_radix(&file.mode, 8).unwrap_or(u32::MAX);
+            if metadata.mode() & 0o777 != expected_mode {
+                violations.push(format!(
+                    "operator file {} does not have mode {}",
+                    file.id, file.mode
+                ));
+            }
+            let owner = format!("{}:{}", metadata.uid(), metadata.gid());
+            let allowed = file.allowed_owners.iter().any(|expected| {
+                let numeric = match expected.as_str() {
+                    "root:root" => "0:0",
+                    "65532:65532" => "65532:65532",
+                    "999:999" => "999:999",
+                    _ => "",
+                };
+                owner == numeric
+            });
+            if !allowed {
+                violations.push(format!(
+                    "operator file {} is not owned by an allowed runtime identity",
+                    file.id
+                ));
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = metadata;
+            violations.push(format!(
+                "operator file {} ownership cannot be verified on this platform",
+                file.id
+            ));
+        }
+        match read_bounded_regular_file(&path, MAX_PORTABLE_DOCUMENT_BYTES) {
+            Ok(bytes) if operator_file_content_is_valid(file, &bytes) => {}
+            Ok(_) | Err(_) => violations.push(format!(
+                "operator file {} does not match its signed value-free format schema",
+                file.id
+            )),
+        }
+    }
+    violations
+}
+
+fn operator_file_content_is_valid(file: &DeploymentOperatorFileV1, bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+    match file.format {
+        LockedOperatorFileFormatV1::Dotenv => valid_operator_dotenv(bytes, &file.required_keys),
+        LockedOperatorFileFormatV1::PemCertificate => {
+            let Ok(text) = std::str::from_utf8(bytes) else {
+                return false;
+            };
+            text.contains("-----BEGIN CERTIFICATE-----")
+                && text.contains("-----END CERTIFICATE-----")
+                && !text.contains("PRIVATE KEY")
+        }
+        LockedOperatorFileFormatV1::PemPrivateKey => {
+            let Ok(text) = std::str::from_utf8(bytes) else {
+                return false;
+            };
+            [
+                "-----BEGIN PRIVATE KEY-----",
+                "-----BEGIN ENCRYPTED PRIVATE KEY-----",
+                "-----BEGIN RSA PRIVATE KEY-----",
+                "-----BEGIN EC PRIVATE KEY-----",
+            ]
+            .iter()
+            .any(|marker| text.contains(marker))
+                && text.contains("-----END ")
+        }
+        LockedOperatorFileFormatV1::JsonWebKey => serde_json::from_slice::<Value>(bytes)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .is_some_and(|object| {
+                object.get("kty").and_then(Value::as_str).is_some() && object.len() >= 2
+            }),
+        LockedOperatorFileFormatV1::CompactJwt => std::str::from_utf8(bytes)
+            .ok()
+            .map(str::trim_end)
+            .is_some_and(|token| {
+                let parts = token.split('.').collect::<Vec<_>>();
+                parts.len() == 3
+                    && parts.iter().all(|part| {
+                        !part.is_empty()
+                            && part.bytes().all(|byte| {
+                                byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'
+                            })
+                    })
+            }),
+        LockedOperatorFileFormatV1::Opaque => bytes
+            .iter()
+            .all(|byte| !byte.is_ascii_control() && !byte.is_ascii_whitespace()),
+    }
+}
+
+fn valid_operator_dotenv(bytes: &[u8], required_keys: &[String]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let mut keys = BTreeSet::new();
+    for line in text.lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return false;
+        };
+        if value.is_empty()
+            || key.is_empty()
+            || !key
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_uppercase() || byte == b'_')
+            || !key
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+            || !keys.insert(key)
+            || value.bytes().any(|byte| byte == 0)
+        {
+            return false;
+        }
+    }
+    if required_keys.is_empty() {
+        !keys.is_empty()
+    } else {
+        keys == required_keys.iter().map(String::as_str).collect()
+    }
+}
+
 fn create_owner_only_dir(path: &Path) -> Result<()> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
@@ -3956,42 +4671,71 @@ fn ownership_report(
     }
 }
 
-fn runbook(package_name: Option<&str>, runtime: &LockedRuntimeMappingV1) -> String {
+fn runbook(
+    package_name: Option<&str>,
+    runtime: &LockedRuntimeMappingV1,
+    inventory: &DeploymentOperatorFileInventoryV1,
+) -> String {
     let package_name = package_name.unwrap_or("registry-stack");
-    let relay_public_verify = shell_command(&runtime.relay_public.verify_state);
-    let relay_consultation_verify = shell_command(&runtime.relay_consultation.verify_state);
-    let notary_verify = shell_command(&runtime.notary.verify_state);
+    let relay_public_verify = shell_command(&runtime.relay_public.verify_state.command);
+    let relay_consultation_verify = shell_command(&runtime.relay_consultation.verify_state.command);
+    let notary_verify = shell_command(&runtime.notary.verify_state.command);
+    let operator_files = inventory
+        .files
+        .iter()
+        .map(|file| {
+            format!(
+                "| `{}` | {} | `{}` | `{}` | `{}` |",
+                file.path,
+                file.consumers
+                    .iter()
+                    .map(|consumer| format!("`{consumer}`"))
+                    .collect::<Vec<_>>()
+                    .join("<br>"),
+                operator_file_format(file.format),
+                file.mode,
+                file.allowed_owners.join(", ")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
         "# Registry Stack deployment\n\n\
 Package: `{package_name}`\n\n\
 Record the approved-set digest and generated closure root printed by `registryctl deploy generate` outside this package. After transfer, run `registryctl deploy verify --package .` and compare both externally recorded values before any initialization.\n\n\
 ## Required operator files\n\n\
-Place owner-only regular files at every path named by `binding.yaml` under `operator/secrets/` and `operator/certificates/`. Do not create placeholder secret files. Add `-f operator-override.yaml` as the final file argument to every command below when that file exists.\n\n\
+The signed inventory is also recorded at `generated/operator-files.v1.json`. Before any first-install command, create every owner-only regular file below, then run `registryctl deploy verify --package .`. Do not create placeholders or print file values. Add `-f operator-override.yaml` as the final file argument to every command below when that file exists.\n\n\
+| Path | Consumers and targets | Format | Mode | Allowed owners |\n\
+|---|---|---|---|---|\n\
+{operator_files}\n\n\
 ## First installation only\n\n\
 ```text\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml config --no-interpolate --no-env-resolution --quiet\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-runtime-stage-secrets\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-postgres-bootstrap\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-public-prepare-state\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-consultation-prepare-state\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-notary-prepare-state\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-public-initialize\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-consultation-initialize\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-notary-initialize\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up -d\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml ps\n\
 ```\n\n\
 Never run an initialize service for an existing instance. Ordinary startup fails closed when anti-rollback state is missing.\n\n\
 ## Ordinary start and stop\n\n\
 ```text\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-runtime-stage-secrets\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public {relay_public_verify}\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation {relay_consultation_verify}\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary {notary_verify}\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up -d\n\
+docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml ps\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml down\n\
 ```\n\n\
 ## Product or image update\n\n\
-Before shutdown, verify the candidate package, its effective Compose model, every operator file, and all three current product states. Stop externally reachable dependent services before a private-lane contract change. The manual abort boundary is the first successful product start that accepts and advances durable anti-rollback state. Before that boundary, restore the intact `generated.previous/` closure and restart it. After that boundary, only complete the forward update, restore a coherent snapshot at the same or newer accepted sequence, or replace the affected instance identity. Never start an older closure or restore a pre-update sequence. Start consultation Relay before Notary, verify readiness, then resume external dependants. Remove `generated.previous/` only after all affected lanes report the new accepted sequence.\n\n\
+Before shutdown, run `registryctl deploy verify --package .` against the current package and the candidate package, render and verify the candidate effective Compose model, verify every operator file against `generated/operator-files.v1.json`, verify each current and candidate bundle and anchor, and run all three current `verify_state` actions above. Preserve the intact current closure as `generated.previous/` before publishing the candidate. Stop externally reachable dependent services before a private-lane contract change. Start and verify PostgreSQL and the consultation Relay before starting Notary or any externally reachable dependant. The manual abort boundary is the first successful product acceptance that advances durable anti-rollback state. Before that boundary, restore the intact `generated.previous/` closure and restart it. After that boundary, only complete the forward update, restore a coherent snapshot at the same or newer accepted sequence, or replace the affected instance identity. Never start an older closure or restore a pre-update sequence. Remove `generated.previous/` only after all affected lanes report the new accepted sequence.\n\n\
 ## State recovery\n\n\
 Quiesce the complete `relay-public-state` or `consultation-state` recovery consistency group before snapshot or restore. A coherent backup includes the lane anti-rollback and audit state, PostgreSQL data where declared, this package, approved set, bundle, anchor, instance, stream, and accepted sequence identities. After restoring the exact lane, instance, and stream, run the three read-only `verify_state` commands above before ordinary startup. Partial or older recovery must be manually aborted.\n\n\
 If no coherent backup exists, provision a new instance identity, review and sign every affected lane, generate a new package, and follow first installation. Reinitializing the same identity is not recovery and is unsupported. Rollback is unsupported.\n\n\
@@ -3999,6 +4743,17 @@ If no coherent backup exists, provision a new instance identity, review and sign
 Use `docker compose ... ps` for value-free health and `docker compose ... logs <registry-service>` for product-separated logs. Metrics are published only on the configured loopback ports. Administration and posture remain private. Resolve a documented readiness latch before using the product-owned clear action. Preserve signed audit retention policy, and treat storage exhaustion as a fail-closed incident requiring a coherent recovery-group snapshot or restore.\n\
 "
     )
+}
+
+fn operator_file_format(format: LockedOperatorFileFormatV1) -> &'static str {
+    match format {
+        LockedOperatorFileFormatV1::Dotenv => "dotenv",
+        LockedOperatorFileFormatV1::PemCertificate => "pem_certificate",
+        LockedOperatorFileFormatV1::PemPrivateKey => "pem_private_key",
+        LockedOperatorFileFormatV1::JsonWebKey => "json_web_key",
+        LockedOperatorFileFormatV1::CompactJwt => "compact_jwt",
+        LockedOperatorFileFormatV1::Opaque => "opaque",
+    }
 }
 
 fn shell_command(parts: &[String]) -> String {

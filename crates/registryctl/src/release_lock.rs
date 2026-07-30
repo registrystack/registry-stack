@@ -39,6 +39,21 @@ const RELAY_CONFIG_SCHEMA: &str =
     "https://id.registrystack.org/schemas/registry-relay/registry-relay.config.schema.json";
 const NOTARY_CONFIG_SCHEMA: &str =
     "https://id.registrystack.org/schemas/registry-notary/registry-notary.config.schema.json";
+const PRODUCT_BUNDLE_TARGET: &str = "/run/registry/bundle";
+const PRODUCT_ANCHOR_TARGET: &str = "/run/registry/anchor";
+const PRODUCT_STATE_TARGET: &str = "/var/lib/registry/state";
+const PRODUCT_AUDIT_TARGET: &str = "/var/lib/registry/audit";
+const POSTGRESQL_DATA_TARGET: &str = "/var/lib/postgresql/data";
+const POSTGRESQL_BOOTSTRAP_KEYS: [&str; 8] = [
+    "REGISTRY_RELAY_MIGRATOR_PASSWORD",
+    "REGISTRY_RELAY_RUNTIME_PASSWORD",
+    "REGISTRY_RELAY_MAINTENANCE_PASSWORD",
+    "REGISTRY_RELAY_READER_PASSWORD",
+    "REGISTRY_NOTARY_MIGRATOR_PASSWORD",
+    "REGISTRY_NOTARY_RUNTIME_PASSWORD",
+    "REGISTRY_NOTARY_MAINTENANCE_PASSWORD",
+    "REGISTRY_NOTARY_READER_PASSWORD",
+];
 
 /// The strict, self-contained wire envelope shipped as
 /// `registry-release-lock.v1.json`.
@@ -78,10 +93,11 @@ pub struct LockedReleaseIdentityV1 {
     pub source_repository: String,
     pub source_workflow: String,
     pub source_ref: String,
-    pub source_sha: String,
+    pub manifest_source_ref: String,
+    pub tag_target: String,
 }
 
-#[derive(Clone, Copy, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RegistryctlPlatformV1 {
     LinuxAmd64,
@@ -107,7 +123,7 @@ pub struct LockedRegistryctlArtifactV1 {
     pub sha256: String,
 }
 
-#[derive(Clone, Copy, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum OciPlatformV1 {
     LinuxAmd64,
@@ -140,10 +156,10 @@ pub struct LockedManagedImagesV1 {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LockedProductRecipeV1 {
-    pub serve: Vec<String>,
-    pub prepare_state_store: Vec<String>,
-    pub initialize_state: Vec<String>,
-    pub verify_state: Vec<String>,
+    pub serve: LockedRuntimeActionV1,
+    pub prepare_state_store: LockedRuntimeActionV1,
+    pub initialize_state: LockedRuntimeActionV1,
+    pub verify_state: LockedRuntimeActionV1,
     pub health_probe: Vec<String>,
 }
 
@@ -154,14 +170,93 @@ pub struct LockedSupportingRecipeV1 {
     pub health_probe: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LockedMountSourceV1 {
+    Bundle,
+    Anchor,
+    AntiRollbackState,
+    Audit,
+    PostgresqlData,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedRuntimeMountV1 {
+    pub source: LockedMountSourceV1,
+    pub target: String,
+    pub read_only: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedSecretProjectionV1 {
+    pub file_id: String,
+    pub target: String,
+    pub mode: String,
+    pub uid: String,
+    pub gid: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedRuntimeActionV1 {
+    pub command: Vec<String>,
+    pub mounts: Vec<LockedRuntimeMountV1>,
+    pub environment_files: Vec<String>,
+    pub secret_files: Vec<LockedSecretProjectionV1>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LockedOperatorFileFormatV1 {
+    Dotenv,
+    PemCertificate,
+    PemPrivateKey,
+    JsonWebKey,
+    CompactJwt,
+    Opaque,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedOperatorFileV1 {
+    pub id: String,
+    pub format: LockedOperatorFileFormatV1,
+    pub mode: String,
+    pub allowed_owners: Vec<String>,
+    pub required_keys: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedServiceHardeningV1 {
+    pub user: String,
+    pub read_only_root_filesystem: bool,
+    pub cap_drop: Vec<String>,
+    pub security_opt: Vec<String>,
+    pub tmpfs: Vec<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedPostgresqlRecipeV1 {
+    pub serve: LockedRuntimeActionV1,
+    pub bootstrap: LockedRuntimeActionV1,
+    pub health_probe: Vec<String>,
+    pub server_environment: Vec<String>,
+    pub hardening: LockedServiceHardeningV1,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LockedRuntimeRecipesV1 {
     pub relay_public: LockedProductRecipeV1,
     pub relay_consultation: LockedProductRecipeV1,
     pub notary: LockedProductRecipeV1,
-    pub postgresql_state_plane: LockedSupportingRecipeV1,
+    pub postgresql_state_plane: LockedPostgresqlRecipeV1,
     pub private_namespace_holder: LockedSupportingRecipeV1,
+    pub operator_files: Vec<LockedOperatorFileV1>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -235,32 +330,83 @@ impl VerifiedManagedImagesV1 {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct VerifiedProductRuntimeV1 {
-    serve: Vec<String>,
-    prepare_state_store: Vec<String>,
-    initialize_state: Vec<String>,
-    verify_state: Vec<String>,
+    serve: LockedRuntimeActionV1,
+    prepare_state_store: LockedRuntimeActionV1,
+    initialize_state: LockedRuntimeActionV1,
+    verify_state: LockedRuntimeActionV1,
     health_probe: Vec<String>,
 }
 
 impl VerifiedProductRuntimeV1 {
     pub fn serve(&self) -> &[String] {
-        &self.serve
+        &self.serve.command
     }
 
     pub fn prepare_state_store(&self) -> &[String] {
-        &self.prepare_state_store
+        &self.prepare_state_store.command
     }
 
     pub fn initialize_state(&self) -> &[String] {
-        &self.initialize_state
+        &self.initialize_state.command
     }
 
     pub fn verify_state(&self) -> &[String] {
+        &self.verify_state.command
+    }
+
+    pub fn serve_action(&self) -> &LockedRuntimeActionV1 {
+        &self.serve
+    }
+
+    pub fn prepare_state_store_action(&self) -> &LockedRuntimeActionV1 {
+        &self.prepare_state_store
+    }
+
+    pub fn initialize_state_action(&self) -> &LockedRuntimeActionV1 {
+        &self.initialize_state
+    }
+
+    pub fn verify_state_action(&self) -> &LockedRuntimeActionV1 {
         &self.verify_state
     }
 
     pub fn health_probe(&self) -> &[String] {
         &self.health_probe
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct VerifiedPostgresqlRuntimeV1 {
+    serve: LockedRuntimeActionV1,
+    bootstrap: LockedRuntimeActionV1,
+    health_probe: Vec<String>,
+    server_environment: Vec<String>,
+    hardening: LockedServiceHardeningV1,
+}
+
+impl VerifiedPostgresqlRuntimeV1 {
+    pub fn command(&self) -> &[String] {
+        &self.serve.command
+    }
+
+    pub fn serve(&self) -> &LockedRuntimeActionV1 {
+        &self.serve
+    }
+
+    pub fn bootstrap(&self) -> &LockedRuntimeActionV1 {
+        &self.bootstrap
+    }
+
+    pub fn health_probe(&self) -> &[String] {
+        &self.health_probe
+    }
+
+    pub fn server_environment(&self) -> &[String] {
+        &self.server_environment
+    }
+
+    pub fn hardening(&self) -> &LockedServiceHardeningV1 {
+        &self.hardening
     }
 }
 
@@ -285,8 +431,9 @@ pub struct VerifiedRuntimeMappingV1 {
     relay_public: VerifiedProductRuntimeV1,
     relay_consultation: VerifiedProductRuntimeV1,
     notary: VerifiedProductRuntimeV1,
-    postgresql_state_plane: VerifiedSupportingRuntimeV1,
+    postgresql_state_plane: VerifiedPostgresqlRuntimeV1,
     private_namespace_holder: VerifiedSupportingRuntimeV1,
+    operator_files: Vec<LockedOperatorFileV1>,
 }
 
 impl VerifiedRuntimeMappingV1 {
@@ -302,12 +449,16 @@ impl VerifiedRuntimeMappingV1 {
         &self.notary
     }
 
-    pub fn postgresql_state_plane(&self) -> &VerifiedSupportingRuntimeV1 {
+    pub fn postgresql_state_plane(&self) -> &VerifiedPostgresqlRuntimeV1 {
         &self.postgresql_state_plane
     }
 
     pub fn private_namespace_holder(&self) -> &VerifiedSupportingRuntimeV1 {
         &self.private_namespace_holder
+    }
+
+    pub fn operator_files(&self) -> &[LockedOperatorFileV1] {
+        &self.operator_files
     }
 }
 
@@ -320,8 +471,12 @@ impl VerifiedReleaseLockV1 {
         &self.lock.release.release_tag
     }
 
-    pub fn source_sha(&self) -> &str {
-        &self.lock.release.source_sha
+    pub fn manifest_source_ref(&self) -> &str {
+        &self.lock.release.manifest_source_ref
+    }
+
+    pub fn tag_target(&self) -> &str {
+        &self.lock.release.tag_target
     }
 
     pub fn signed_payload_sha256(&self) -> &str {
@@ -378,6 +533,19 @@ impl VerifiedReleaseLockV1 {
             notary: self.lock.runtime.notary.clone().into(),
             postgresql_state_plane: self.lock.runtime.postgresql_state_plane.clone().into(),
             private_namespace_holder: self.lock.runtime.private_namespace_holder.clone().into(),
+            operator_files: self.lock.runtime.operator_files.clone(),
+        }
+    }
+}
+
+impl From<LockedPostgresqlRecipeV1> for VerifiedPostgresqlRuntimeV1 {
+    fn from(value: LockedPostgresqlRecipeV1) -> Self {
+        Self {
+            serve: value.serve,
+            bootstrap: value.bootstrap,
+            health_probe: value.health_probe,
+            server_environment: value.server_environment,
+            hardening: value.hardening,
         }
     }
 }
@@ -615,7 +783,8 @@ impl LockedReleaseIdentityV1 {
         if self.source_ref != format!("refs/tags/{}", self.release_tag) {
             bail!("release lock source ref must be its immutable release tag");
         }
-        validate_lower_hex(&self.source_sha, 40, "release source SHA")
+        validate_lower_hex(&self.manifest_source_ref, 40, "release manifest source ref")?;
+        validate_lower_hex(&self.tag_target, 40, "release tag target")
     }
 }
 
@@ -670,22 +839,23 @@ impl LockedRuntimeRecipesV1 {
             .validate("PostgreSQL state plane")?;
         self.private_namespace_holder
             .validate("private namespace holder")?;
+        validate_operator_files(self)?;
         Ok(())
     }
 }
 
 impl LockedProductRecipeV1 {
     fn validate(&self, label: &str) -> Result<()> {
-        for (action, command) in [
+        for (action, recipe) in [
             ("serve", &self.serve),
             ("prepare_state_store", &self.prepare_state_store),
             ("initialize_state", &self.initialize_state),
             ("verify_state", &self.verify_state),
-            ("health_probe", &self.health_probe),
         ] {
-            validate_command(command, &format!("{label} {action}"))?;
+            recipe.validate(&format!("{label} {action}"))?;
         }
-        Ok(())
+        validate_command(&self.health_probe, &format!("{label} health_probe"))?;
+        validate_product_recipe_shape(self, label)
     }
 }
 
@@ -694,6 +864,321 @@ impl LockedSupportingRecipeV1 {
         validate_command(&self.command, &format!("{label} command"))?;
         validate_command(&self.health_probe, &format!("{label} health probe"))
     }
+}
+
+impl LockedPostgresqlRecipeV1 {
+    fn validate(&self, label: &str) -> Result<()> {
+        self.serve.validate(&format!("{label} serve"))?;
+        self.bootstrap.validate(&format!("{label} bootstrap"))?;
+        validate_command(&self.health_probe, &format!("{label} health probe"))?;
+        if self.server_environment
+            != [
+                "POSTGRES_USER=registry_stack_bootstrap",
+                "POSTGRES_DB=postgres",
+                "POSTGRES_PASSWORD_FILE=/run/secrets/postgresql-admin-password",
+                "POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 --auth-local=trust",
+            ]
+        {
+            bail!("PostgreSQL state plane server environment is unsupported");
+        }
+        if self.hardening.user != "999:999"
+            || !self.hardening.read_only_root_filesystem
+            || self.hardening.cap_drop != ["ALL"]
+            || self.hardening.security_opt != ["no-new-privileges:true"]
+            || self.hardening.tmpfs != ["/tmp", "/var/run/postgresql:uid=999,gid=999,mode=0750"]
+        {
+            bail!("PostgreSQL state plane hardening is unsupported");
+        }
+        validate_action_shape(
+            &self.serve,
+            &[LockedMountSourceV1::PostgresqlData],
+            &[],
+            &[
+                "postgresql-admin-password",
+                "postgresql-tls-certificate",
+                "postgresql-tls-private-key",
+            ],
+            "PostgreSQL state plane serve",
+        )?;
+        validate_action_shape(
+            &self.bootstrap,
+            &[],
+            &["postgresql-bootstrap-environment"],
+            &["postgresql-admin-password", "postgresql-tls-certificate"],
+            "PostgreSQL state plane bootstrap",
+        )?;
+        if self.bootstrap.command.len() != 3
+            || self.bootstrap.command[0] != "/bin/bash"
+            || self.bootstrap.command[1] != "-ceu"
+        {
+            bail!("PostgreSQL state plane bootstrap must use the closed bash recipe");
+        }
+        let script = &self.bootstrap.command[2];
+        for required in [
+            "sslmode=verify-full",
+            "registry_relay_owner",
+            "registry_relay_migrator",
+            "registry_relay_runtime",
+            "registry_relay_maintenance",
+            "registry_relay_reader",
+            "registry_notary_owner",
+            "registry_notary_migrator",
+            "registry_notary_runtime",
+            "registry_notary_maintenance",
+            "registry_notary_reader",
+            "REVOKE ALL ON DATABASE",
+            "REVOKE ALL ON SCHEMA public FROM PUBLIC",
+        ] {
+            if !script.contains(required) {
+                bail!("PostgreSQL state plane bootstrap recipe is incomplete");
+            }
+        }
+        Ok(())
+    }
+}
+
+impl LockedRuntimeActionV1 {
+    fn validate(&self, label: &str) -> Result<()> {
+        validate_command(&self.command, &format!("{label} command"))?;
+        if self.mounts.len() > 8 || self.environment_files.len() > 2 || self.secret_files.len() > 8
+        {
+            bail!("{label} input projection exceeds its closed bound");
+        }
+        let mut sources = BTreeSet::new();
+        for mount in &self.mounts {
+            if !sources.insert(mount.source) {
+                bail!("{label} repeats a runtime mount source");
+            }
+            let (target, read_only) = match mount.source {
+                LockedMountSourceV1::Bundle => (PRODUCT_BUNDLE_TARGET, true),
+                LockedMountSourceV1::Anchor => (PRODUCT_ANCHOR_TARGET, true),
+                LockedMountSourceV1::AntiRollbackState => (PRODUCT_STATE_TARGET, false),
+                LockedMountSourceV1::Audit => (PRODUCT_AUDIT_TARGET, false),
+                LockedMountSourceV1::PostgresqlData => (POSTGRESQL_DATA_TARGET, false),
+            };
+            if mount.target != target || mount.read_only != read_only {
+                bail!("{label} contains an unsupported runtime mount");
+            }
+        }
+        let mut environment_files = BTreeSet::new();
+        for file_id in &self.environment_files {
+            validate_runtime_id(file_id, label)?;
+            if !environment_files.insert(file_id) {
+                bail!("{label} repeats an environment file");
+            }
+        }
+        let mut secret_targets = BTreeSet::new();
+        for projection in &self.secret_files {
+            validate_runtime_id(&projection.file_id, label)?;
+            if !projection.target.starts_with("/run/secrets/")
+                || projection.target.contains("..")
+                || projection.mode != "0400"
+                || !matches!(projection.uid.as_str(), "65532" | "999")
+                || projection.gid != projection.uid
+                || !secret_targets.insert(projection.target.as_str())
+            {
+                bail!("{label} contains an unsupported secret-file projection");
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_product_recipe_shape(recipe: &LockedProductRecipeV1, label: &str) -> Result<()> {
+    let id = match label {
+        "Relay public" => "relay-public",
+        "Relay consultation" => "relay-consultation",
+        "Notary" => "notary",
+        _ => bail!("product runtime recipe label is unsupported"),
+    };
+    let prepare_environment = format!("{id}-prepare-environment");
+    let initialize_environment = format!("{id}-initialize-environment");
+    let serve_environment = format!("{id}-serve-environment");
+    validate_action_shape(
+        &recipe.prepare_state_store,
+        &[
+            LockedMountSourceV1::Bundle,
+            LockedMountSourceV1::Anchor,
+            LockedMountSourceV1::Audit,
+        ],
+        &[prepare_environment.as_str()],
+        if id == "relay-public" {
+            &[]
+        } else {
+            &["postgresql-tls-certificate"]
+        },
+        &format!("{label} prepare_state_store"),
+    )?;
+    validate_action_shape(
+        &recipe.initialize_state,
+        &[
+            LockedMountSourceV1::Bundle,
+            LockedMountSourceV1::Anchor,
+            LockedMountSourceV1::AntiRollbackState,
+            LockedMountSourceV1::Audit,
+        ],
+        &[initialize_environment.as_str()],
+        if id == "relay-public" {
+            &[]
+        } else {
+            &["postgresql-tls-certificate"]
+        },
+        &format!("{label} initialize_state"),
+    )?;
+    let serve_secrets: &[&str] = match id {
+        "relay-public" => &[
+            "relay-public-tls-certificate",
+            "relay-public-tls-private-key",
+        ],
+        "relay-consultation" => &[
+            "postgresql-tls-certificate",
+            "relay-consultation-tls-certificate",
+            "relay-consultation-tls-private-key",
+        ],
+        "notary" => &[
+            "postgresql-tls-certificate",
+            "relay-consultation-tls-certificate",
+            "notary-relay-workload-credential",
+            "notary-signing-key",
+            "notary-tls-certificate",
+            "notary-tls-private-key",
+        ],
+        _ => unreachable!(),
+    };
+    for (name, action) in [
+        ("serve", &recipe.serve),
+        ("verify_state", &recipe.verify_state),
+    ] {
+        validate_action_shape(
+            action,
+            &[
+                LockedMountSourceV1::Bundle,
+                LockedMountSourceV1::Anchor,
+                LockedMountSourceV1::AntiRollbackState,
+                LockedMountSourceV1::Audit,
+            ],
+            &[serve_environment.as_str()],
+            serve_secrets,
+            &format!("{label} {name}"),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_action_shape(
+    action: &LockedRuntimeActionV1,
+    mounts: &[LockedMountSourceV1],
+    environment_files: &[&str],
+    secret_files: &[&str],
+    label: &str,
+) -> Result<()> {
+    if action
+        .mounts
+        .iter()
+        .map(|mount| mount.source)
+        .collect::<Vec<_>>()
+        != mounts
+        || action
+            .environment_files
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            != environment_files
+        || action
+            .secret_files
+            .iter()
+            .map(|projection| projection.file_id.as_str())
+            .collect::<Vec<_>>()
+            != secret_files
+    {
+        bail!("{label} input projection is not the supported closed recipe");
+    }
+    Ok(())
+}
+
+fn validate_operator_files(runtime: &LockedRuntimeRecipesV1) -> Result<()> {
+    let mut files = BTreeSet::new();
+    for file in &runtime.operator_files {
+        validate_runtime_id(&file.id, "operator file")?;
+        if !files.insert(file.id.clone())
+            || file.mode != "0600"
+            || file.allowed_owners.is_empty()
+            || file
+                .allowed_owners
+                .iter()
+                .any(|owner| !matches!(owner.as_str(), "root:root" | "65532:65532" | "999:999"))
+        {
+            bail!("release lock operator-file inventory is invalid");
+        }
+        let keys = file
+            .required_keys
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if keys.len() != file.required_keys.len()
+            || file
+                .required_keys
+                .iter()
+                .any(|key| !valid_environment_key(key))
+            || (file.format != LockedOperatorFileFormatV1::Dotenv && !keys.is_empty())
+        {
+            bail!("release lock operator-file schema is invalid");
+        }
+        if file.id == "postgresql-bootstrap-environment"
+            && file.required_keys != POSTGRESQL_BOOTSTRAP_KEYS.map(str::to_string)
+        {
+            bail!("PostgreSQL bootstrap credential schema is incomplete");
+        }
+    }
+    let mut referenced = BTreeSet::new();
+    let mut collect = |action: &LockedRuntimeActionV1| {
+        referenced.extend(action.environment_files.iter().cloned());
+        referenced.extend(
+            action
+                .secret_files
+                .iter()
+                .map(|projection| projection.file_id.clone()),
+        );
+    };
+    for product in [
+        &runtime.relay_public,
+        &runtime.relay_consultation,
+        &runtime.notary,
+    ] {
+        collect(&product.prepare_state_store);
+        collect(&product.initialize_state);
+        collect(&product.verify_state);
+        collect(&product.serve);
+    }
+    collect(&runtime.postgresql_state_plane.serve);
+    collect(&runtime.postgresql_state_plane.bootstrap);
+    if files != referenced {
+        bail!("release lock operator-file inventory does not match runtime consumers");
+    }
+    Ok(())
+}
+
+fn validate_runtime_id(value: &str, label: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        bail!("{label} contains an invalid closed identifier");
+    }
+    Ok(())
+}
+
+fn valid_environment_key(value: &str) -> bool {
+    value.len() <= 128
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_uppercase() || byte == b'_')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 impl SupportedContractsV1 {
@@ -807,7 +1292,7 @@ fn validate_command(command: &[String], label: &str) -> Result<()> {
         || command.len() > 32
         || command.iter().any(|part| {
             part.is_empty()
-                || part.len() > 1024
+                || part.len() > 32 * 1024
                 || part
                     .bytes()
                     .any(|byte| byte == 0 || byte.is_ascii_control())
