@@ -868,6 +868,12 @@ async fn source_with_timeout(
 ) -> Response<Body> {
     increment_counter(&state.counters.source_requests);
     let (parts, body) = request.into_parts();
+    if !source_authorization_matches(&state, &parts.headers) {
+        return static_json_response(
+            StatusCode::UNAUTHORIZED,
+            br#"{"error":"source_credential_required"}"#,
+        );
+    }
     let body = match read_request_body(body, body_timeout).await {
         Ok(body) => body,
         Err(RequestBodyFailure::TooLarge) => {
@@ -881,26 +887,6 @@ async fn source_with_timeout(
         return static_json_response(
             StatusCode::BAD_REQUEST,
             br#"{"error":"source_request_mismatch"}"#,
-        );
-    }
-    if let Some(oauth) = &state.oauth {
-        if !bearer_matches(&parts.headers, oauth.access_token.as_slice()) {
-            return static_json_response(
-                StatusCode::UNAUTHORIZED,
-                br#"{"error":"source_credential_required"}"#,
-            );
-        }
-    } else if let Some(static_bearer) = &state.static_bearer {
-        if !bearer_matches(&parts.headers, static_bearer.as_slice()) {
-            return static_json_response(
-                StatusCode::UNAUTHORIZED,
-                br#"{"error":"source_credential_required"}"#,
-            );
-        }
-    } else if parts.headers.contains_key(AUTHORIZATION) {
-        return static_json_response(
-            StatusCode::UNAUTHORIZED,
-            br#"{"error":"source_credential_not_allowed"}"#,
         );
     }
     match state.scenario {
@@ -942,6 +928,16 @@ async fn source_with_timeout(
         SourceScenario::SourceOversize => {
             json_response(StatusCode::OK, state.oversize_body.clone())
         }
+    }
+}
+
+fn source_authorization_matches(state: &SyntheticSourceState, headers: &HeaderMap) -> bool {
+    if let Some(oauth) = &state.oauth {
+        exact_bearer_matches(headers, oauth.access_token.as_slice())
+    } else if let Some(static_bearer) = &state.static_bearer {
+        exact_bearer_matches(headers, static_bearer.as_slice())
+    } else {
+        headers.get_all(AUTHORIZATION).iter().next().is_none()
     }
 }
 
@@ -1390,9 +1386,17 @@ fn json_response(status: StatusCode, body: Bytes) -> Response<Body> {
 }
 
 fn bearer_matches(headers: &HeaderMap, expected: &[u8]) -> bool {
-    let Some(value) = headers.get(AUTHORIZATION) else {
+    exact_bearer_matches(headers, expected)
+}
+
+fn exact_bearer_matches(headers: &HeaderMap, expected: &[u8]) -> bool {
+    let mut values = headers.get_all(AUTHORIZATION).iter();
+    let Some(value) = values.next() else {
         return false;
     };
+    if values.next().is_some() {
+        return false;
+    }
     let value = value.as_bytes();
     value
         .strip_prefix(b"Bearer ")
@@ -2180,6 +2184,119 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_auth_mode_is_enforced_before_body_or_request_shape() {
+        let oauth_state = state(
+            SourceScenario::AuthoredResponse,
+            Some(OAuthResponseProfile::Oauth2Bearer),
+        );
+        let oauth_app = router(Arc::clone(&oauth_state));
+        let expected_denial = br#"{"error":"source_credential_required"}"#;
+
+        let mut duplicate = Request::get(EXPECTED_SOURCE_URI)
+            .header(AUTHORIZATION, "Bearer access-token-canary")
+            .body(Body::empty())
+            .unwrap();
+        duplicate.headers_mut().append(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer second-token"),
+        );
+        let oauth_denials = [
+            Request::get(EXPECTED_SOURCE_URI)
+                .body(Body::empty())
+                .unwrap(),
+            Request::get(EXPECTED_SOURCE_URI)
+                .header(AUTHORIZATION, "Basic access-token-canary")
+                .body(Body::empty())
+                .unwrap(),
+            Request::get(EXPECTED_SOURCE_URI)
+                .header(AUTHORIZATION, "Bearer wrong-token")
+                .body(Body::empty())
+                .unwrap(),
+            Request::get(EXPECTED_SOURCE_URI)
+                .header(AUTHORIZATION, "Bearer")
+                .body(Body::empty())
+                .unwrap(),
+            duplicate,
+            Request::post("/wrong-shape")
+                .header(AUTHORIZATION, "Bearer wrong-token")
+                .body(Body::from(vec![b'x'; MAX_REQUEST_BODY_BYTES + 1]))
+                .unwrap(),
+        ];
+        for request in oauth_denials {
+            let response = oauth_app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(response_body(response, 1024).await, expected_denial);
+        }
+
+        let never_polled = Body::from_stream(futures::stream::poll_fn(
+            |_| -> std::task::Poll<Option<Result<Bytes, Infallible>>> {
+                panic!("unauthenticated source body must not be polled")
+            },
+        ));
+        let response = source_with_timeout(
+            Arc::clone(&oauth_state),
+            Request::post("/wrong-shape").body(never_polled).unwrap(),
+            Duration::from_millis(10),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response_body(response, 1024).await, expected_denial);
+
+        let authenticated_wrong_shape = oauth_app
+            .oneshot(
+                Request::post("/wrong-shape")
+                    .header(AUTHORIZATION, "Bearer access-token-canary")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authenticated_wrong_shape.status(), StatusCode::BAD_REQUEST);
+
+        let mut static_state = state(SourceScenario::AuthoredResponse, None);
+        Arc::get_mut(&mut static_state).unwrap().static_bearer =
+            Some(Zeroizing::new(b"static-bearer-canary".to_vec()));
+        for request in [
+            Request::get(EXPECTED_SOURCE_URI)
+                .body(Body::empty())
+                .unwrap(),
+            Request::get(EXPECTED_SOURCE_URI)
+                .header(AUTHORIZATION, "Bearer wrong-token")
+                .body(Body::empty())
+                .unwrap(),
+        ] {
+            let response = router(Arc::clone(&static_state))
+                .oneshot(request)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(response_body(response, 1024).await, expected_denial);
+        }
+
+        let unauthenticated_state = state(SourceScenario::AuthoredResponse, None);
+        let disallowed = router(Arc::clone(&unauthenticated_state))
+            .oneshot(
+                Request::post("/wrong-shape")
+                    .header(AUTHORIZATION, "Bearer any-token")
+                    .body(Body::from(vec![b'x'; MAX_REQUEST_BODY_BYTES + 1]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(disallowed.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response_body(disallowed, 1024).await, expected_denial);
+
+        let unauthenticated_wrong_shape = router(unauthenticated_state)
+            .oneshot(Request::post("/wrong-shape").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            unauthenticated_wrong_shape.status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
     async fn oauth_request_encoding_accepts_only_the_selected_closed_shape() {
         let json_state = state(
             SourceScenario::AuthoredResponse,
@@ -2335,7 +2452,12 @@ mod tests {
         let app = router(Arc::clone(&state));
         let absent = app
             .clone()
-            .oneshot(Request::post("/proxy").body(Body::from("ignored")).unwrap())
+            .oneshot(
+                Request::post("/proxy")
+                    .header(AUTHORIZATION, "Bearer access-token-canary")
+                    .body(Body::from("ignored"))
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(absent.status(), StatusCode::BAD_REQUEST);
@@ -2374,6 +2496,7 @@ mod tests {
         let source = source_with_timeout(
             Arc::clone(&state),
             Request::post(EXPECTED_SOURCE_URI)
+                .header(AUTHORIZATION, "Bearer access-token-canary")
                 .body(pending_body())
                 .unwrap(),
             Duration::from_millis(10),

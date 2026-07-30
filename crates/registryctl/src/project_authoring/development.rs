@@ -125,7 +125,7 @@ pub(crate) fn compile_dev_runtime_authoring(
         .unwrap_or(&fixture.0)
         .to_string_lossy();
     let fixture_document = &fixture.1;
-    let (caller_id, caller_fingerprint_locator) = select_development_caller(
+    let (caller_id, caller_fingerprint_locator, service_id) = select_development_caller(
         &loaded,
         environment_id,
         default_integration,
@@ -159,6 +159,7 @@ pub(crate) fn compile_dev_runtime_authoring(
     let credential_requirements = development_credential_requirements(
         &loaded,
         environment_id,
+        &service_id,
         default_integration,
         source_mode,
         credential,
@@ -253,6 +254,7 @@ fn operator_source_secret_env(
 fn development_credential_requirements(
     loaded: &LoadedRegistryProject,
     environment_id: &str,
+    service_id: &str,
     integration_id: &str,
     source_mode: DevelopmentSourceMode,
     credential: &CredentialInterface,
@@ -342,6 +344,7 @@ fn development_credential_requirements(
     Ok(DevCredentialRequirements {
         project_id: loaded.project.registry.id.clone(),
         environment_id: environment_id.to_owned(),
+        service_id: service_id.to_owned(),
         caller_id: caller_id.to_owned(),
         caller_fingerprint_env: caller_fingerprint_env.to_owned(),
         source,
@@ -440,31 +443,45 @@ fn select_development_caller(
     integration_id: &str,
     fixture_id: &str,
     fixture: &FixtureDocument,
-) -> Result<(String, String)> {
+) -> Result<(String, String, String)> {
     let environment = loaded
         .environment
         .as_ref()
         .expect("selected environment was loaded");
     let expected_claims = fixture.expect.claims.keys().collect::<BTreeSet<_>>();
-    let mut required_scopes = BTreeSet::new();
-    for service in loaded.project.services.values().filter(|service| {
-        service.kind == ServiceKind::Evidence
-            && service
-                .consultations
-                .values()
-                .any(|consultation| consultation.integration == integration_id)
-            && service
-                .claims
-                .keys()
-                .any(|claim| expected_claims.contains(claim))
-    }) {
-        required_scopes.extend(service.access.scopes.iter().cloned());
-    }
-    if required_scopes.is_empty() {
+    let matching_services = loaded
+        .project
+        .services
+        .iter()
+        .filter(|(_, service)| {
+            service.kind == ServiceKind::Evidence
+                && service
+                    .consultations
+                    .values()
+                    .any(|consultation| consultation.integration == integration_id)
+                && service
+                    .claims
+                    .keys()
+                    .any(|claim| expected_claims.contains(claim))
+        })
+        .collect::<Vec<_>>();
+    if matching_services.is_empty() {
         bail!(
             "environments/{environment_id}.yaml#/development/default_integration and environments/{environment_id}.yaml#/development/default_fixture select {integration_id}.{fixture_id}, which has no evidence service scope contract"
         );
     }
+    if matching_services.len() != 1 {
+        let service_ids = matching_services
+            .iter()
+            .map(|(service_id, _)| service_id.as_str())
+            .collect::<Vec<_>>();
+        bail!(
+            "environments/{environment_id}.yaml#/development/default_integration and environments/{environment_id}.yaml#/development/default_fixture select {integration_id}.{fixture_id}, which must resolve to one exact evidence service; matching service ids: {}",
+            service_ids.join(", ")
+        );
+    }
+    let (service_id, service) = matching_services[0];
+    let required_scopes = service.access.scopes.iter().collect::<BTreeSet<_>>();
 
     let mut candidates = environment
         .callers
@@ -502,7 +519,8 @@ fn select_development_caller(
             }
         );
     }
-    Ok(candidates.remove(0))
+    let (caller_id, fingerprint_locator) = candidates.remove(0);
+    Ok((caller_id, fingerprint_locator, service_id.to_string()))
 }
 
 fn validate_development_source_mode(
@@ -1324,6 +1342,10 @@ mod development_authoring_tests {
             projection.caller_fingerprint_locator,
             "EVIDENCE_CLIENT_TOKEN_HASH"
         );
+        assert_eq!(
+            projection.credential_requirements().service_id,
+            "person-verification"
+        );
         assert_eq!(projection.scenarios.len(), 1);
         let scenario = &projection.scenarios[0];
         assert_eq!(scenario.integration_id, "person-record");
@@ -1372,6 +1394,10 @@ mod development_authoring_tests {
         let projection = compile_dev_runtime_authoring(project, "local").unwrap();
         assert_eq!(projection.environment_profile, DevEnvironmentProfile::Local);
         assert_eq!(projection.caller_id, "public-works-service");
+        assert_eq!(
+            projection.credential_requirements().service_id,
+            "public-works-verification"
+        );
         let scenario = &projection.scenarios[0];
         assert_eq!(scenario.integration_id, "project-record-snapshot");
         assert_eq!(scenario.fixture_id, "match");
@@ -1395,6 +1421,44 @@ mod development_authoring_tests {
         )
         .unwrap();
         assert_eq!(signed.lane_config_digests.len(), 3);
+    }
+
+    #[test]
+    fn opencrvs_oauth_development_scope_uses_its_compiled_service() {
+        let project = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/project-authoring/opencrvs-events-api");
+        let loaded = load_registry_project(&project, Some("local")).unwrap();
+        let (integration, fixture) =
+            selected_development_fixture(&loaded, "birth-event-search", "birth-event-match")
+                .unwrap();
+        let (caller_id, caller_fingerprint_locator, service_id) = select_development_caller(
+            &loaded,
+            "local",
+            "birth-event-search",
+            "birth-event-match",
+            &fixture.1,
+        )
+        .unwrap();
+        let (_, credential) = development_provider_and_credential(integration);
+        let requirements = development_credential_requirements(
+            &loaded,
+            "local",
+            &service_id,
+            "birth-event-search",
+            DevelopmentSourceMode::Synthetic,
+            credential,
+            &caller_id,
+            &caller_fingerprint_locator,
+        )
+        .unwrap();
+        assert_eq!(requirements.service_id, "birth-event-verification");
+        assert!(matches!(
+            requirements.source,
+            DevSourceCredentialProfile::SyntheticOAuthClientCredentials {
+                profile: DevOAuthCredentialProfile::Oauth2BearerNoExpiry,
+                ..
+            }
+        ));
     }
 
     #[test]

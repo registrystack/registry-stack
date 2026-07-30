@@ -27,7 +27,6 @@ const DEV_WORKLOAD_JWKS_URL: &str = "http://registry-notary:8081/.well-known/evi
 const DEV_WORKLOAD_KID: &str = "registryctl-local-workload";
 const DEV_WORKLOAD_CLIENT: &str = "registryctl-local-notary";
 const DEV_WORKLOAD_AUDIENCE: &str = "registry-relay";
-const DEV_WORKLOAD_SCOPE: &str = "registry:consult:public-works-verification";
 const DEV_WORKLOAD_LIFETIME_SECONDS: u64 = 10 * 365 * 24 * 60 * 60;
 const DEV_SYNTHETIC_SOURCE_PRIVATE_CIDR: &str = "10.89.0.3/32";
 const DEV_RELAY_CONSULTATION_PRIVATE_CIDR: &str = "10.89.0.4/32";
@@ -126,6 +125,7 @@ pub(crate) struct DevIssuanceCredentialRequirement {
 pub(crate) struct DevCredentialRequirements {
     pub(crate) project_id: String,
     pub(crate) environment_id: String,
+    pub(crate) service_id: String,
     pub(crate) caller_id: String,
     pub(crate) caller_fingerprint_env: String,
     pub(crate) source: DevSourceCredentialProfile,
@@ -406,7 +406,8 @@ impl PreparedDevCredentialClosure {
             .context("failed to generate the development workload identity")?;
         let workload_jwks = workload_jwks_from_private(&workload_private_jwk)
             .context("failed to project the development workload identity")?;
-        let workload_token = sign_dev_workload_jwt(&workload_private_jwk)?;
+        let workload_token =
+            sign_dev_workload_jwt(&workload_private_jwk, &requirements.service_id)?;
 
         let lane_signers = [
             generate_lane_signer(
@@ -987,6 +988,7 @@ fn validate_requirements(requirements: &DevCredentialRequirements) -> Result<()>
     for (name, value) in [
         ("project id", requirements.project_id.as_str()),
         ("environment id", requirements.environment_id.as_str()),
+        ("service id", requirements.service_id.as_str()),
         ("caller id", requirements.caller_id.as_str()),
     ] {
         if value.is_empty()
@@ -1374,7 +1376,7 @@ fn pem_block(label: &str, der: &[u8]) -> String {
     format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
 }
 
-fn sign_dev_workload_jwt(private_jwk: &str) -> Result<String> {
+fn sign_dev_workload_jwt(private_jwk: &str, service_id: &str) -> Result<String> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| anyhow!("system clock cannot issue a development workload credential"))?
@@ -1384,13 +1386,14 @@ fn sign_dev_workload_jwt(private_jwk: &str) -> Result<String> {
         "kid": DEV_WORKLOAD_KID,
         "typ": "at+jwt",
     });
+    let scope = format!("registry:consult:{service_id}");
     let claims = serde_json::json!({
         "iss": DEV_WORKLOAD_ISSUER,
         "sub": DEV_WORKLOAD_CLIENT,
         "aud": DEV_WORKLOAD_AUDIENCE,
         "client_id": DEV_WORKLOAD_CLIENT,
         "azp": DEV_WORKLOAD_CLIENT,
-        "scope": DEV_WORKLOAD_SCOPE,
+        "scope": scope,
         "iat": now,
         "nbf": now.saturating_sub(1),
         "exp": now + DEV_WORKLOAD_LIFETIME_SECONDS,
@@ -1534,6 +1537,7 @@ mod tests {
         DevCredentialRequirements {
             project_id: "example-project".to_string(),
             environment_id: "local".to_string(),
+            service_id: "example-service".to_string(),
             caller_id: "local-developer".to_string(),
             caller_fingerprint_env: "REGISTRY_DEV_CALLER_FINGERPRINT".to_string(),
             source,
@@ -1806,6 +1810,7 @@ mod tests {
         assert_eq!(claims["iss"], closure.projection.relay_oidc.issuer);
         assert_eq!(claims["aud"], closure.projection.relay_oidc.audience);
         assert_eq!(claims["azp"], closure.projection.relay_oidc.client_id);
+        assert_eq!(claims["scope"], "registry:consult:example-service");
 
         let x: [u8; 32] = URL_SAFE_NO_PAD
             .decode(public["x"].as_str().unwrap())
