@@ -98,6 +98,7 @@ const CONFIG_FLAG: &str = "--config";
 const ENV_FILE_FLAG: &str = "--env-file";
 const BIND_FLAG: &str = "--bind";
 const ID_FLAG: &str = "--id";
+const PLAN_FLAG: &str = "--plan";
 
 /// Top-level command for shell-free container liveness probing.
 const HEALTHCHECK_COMMAND: &str = "healthcheck";
@@ -107,6 +108,10 @@ const GENERATE_API_KEY_COMMAND: &str = "generate-api-key";
 
 /// Top-level command for generating the OpenAPI release artifact.
 const OPENAPI_COMMAND: &str = "openapi";
+
+/// Internal fixed-purpose development source. Registryctl is its only
+/// supported caller and supplies one compiler-owned closed plan.
+const SYNTHETIC_SOURCE_COMMAND: &str = "synthetic-source";
 
 /// Offline operator diagnostics for config, env, and metadata readiness.
 const DOCTOR_COMMAND: &str = "doctor";
@@ -185,6 +190,9 @@ enum CliCommand {
     Openapi {
         config_path: PathBuf,
         env_file: Option<PathBuf>,
+    },
+    SyntheticSource {
+        plan_path: PathBuf,
     },
     Doctor {
         config_path: PathBuf,
@@ -422,6 +430,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             config_path,
             env_file,
         } => run_openapi(config_path, env_file).await,
+        CliCommand::SyntheticSource { plan_path } => {
+            registry_relay::synthetic_source::run(&plan_path).await?;
+            Ok(())
+        }
         CliCommand::Doctor {
             config_path,
             env_file,
@@ -2132,6 +2144,11 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
         parse_generate_api_key_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == OPENAPI_COMMAND) {
         parse_openapi_command(&rest[1..])
+    } else if rest
+        .first()
+        .is_some_and(|arg| arg == SYNTHETIC_SOURCE_COMMAND)
+    {
+        parse_synthetic_source_command(&rest[1..])
     } else if rest.first().is_some_and(|arg| arg == DOCTOR_COMMAND) {
         parse_doctor_command(&rest[1..])
     } else if rest
@@ -2157,6 +2174,17 @@ fn parse_cli_command_from(args: Vec<String>) -> Result<CliCommand, CliError> {
     } else {
         parse_serve_command(&rest)
     }
+}
+
+fn parse_synthetic_source_command(args: &[String]) -> Result<CliCommand, CliError> {
+    if args.len() != 2 || args[0] != PLAN_FLAG {
+        return Err(CliError(format!(
+            "{SYNTHETIC_SOURCE_COMMAND} requires exactly {PLAN_FLAG} <path>"
+        )));
+    }
+    Ok(CliCommand::SyntheticSource {
+        plan_path: required_path_value(PLAN_FLAG, &args[1])?,
+    })
 }
 
 fn parse_product_action_command(args: &[String]) -> Result<CliCommand, CliError> {
@@ -4271,6 +4299,54 @@ audit:
         .expect_err("openapi command rejects serve-only flag");
 
         assert_eq!(err.to_string(), "unknown openapi argument: --bind");
+    }
+
+    #[test]
+    fn synthetic_source_cli_accepts_only_one_closed_plan() {
+        let command = parse_cli_command_from(command_args(&[
+            "registry-relay",
+            "synthetic-source",
+            "--plan",
+            "/run/registry/synthetic-source-plan.json",
+        ]))
+        .expect("synthetic-source command parses");
+
+        assert_eq!(
+            command,
+            CliCommand::SyntheticSource {
+                plan_path: PathBuf::from("/run/registry/synthetic-source-plan.json"),
+            }
+        );
+
+        for args in [
+            vec!["registry-relay", "synthetic-source"],
+            vec![
+                "registry-relay",
+                "synthetic-source",
+                "--bind",
+                "127.0.0.1:0",
+            ],
+            vec![
+                "registry-relay",
+                "synthetic-source",
+                "--plan=/tmp/plan.json",
+            ],
+            vec![
+                "registry-relay",
+                "synthetic-source",
+                "--plan",
+                "/tmp/plan.json",
+                "--route",
+                "/proxy",
+            ],
+        ] {
+            let error = parse_cli_command_from(command_args(&args))
+                .expect_err("synthetic-source extension argument is rejected");
+            assert_eq!(
+                error.to_string(),
+                "synthetic-source requires exactly --plan <path>"
+            );
+        }
     }
 
     #[test]

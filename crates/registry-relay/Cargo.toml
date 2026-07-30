@@ -76,6 +76,7 @@ arc-swap = { version = "1" }
 async-trait = { version = "0.1" }
 # CancellationToken for refresh-loop shutdown.
 tokio-util = { version = "0.7" }
+tokio-rustls.workspace = true
 
 # ─── serialization / config ──────────────────────────────────────────────────
 serde = { version = "1", features = ["derive"] }
