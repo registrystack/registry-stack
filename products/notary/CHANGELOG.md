@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /oid4vci/offers`. Exact retries return one stored response, the
   required transaction-code value remains outside the offer URI, and the
   wallet ceremony remains bound to one immutable transaction.
+- This release advances the PostgreSQL state-plane catalog. Stop all Notary
+  writers, take a verified backup, then run the target release's `state
+  install` and `state doctor` commands before admitting traffic. The installer
+  upgrades only the immediately preceding attested v1 catalog; older or
+  drifted schemas require a sequential upgrade, a matching backup and binary,
+  or a fresh installation.
 
 ## [0.15.2] - 2026-07-28
 
