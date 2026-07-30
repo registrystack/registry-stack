@@ -1,0 +1,56 @@
+name: birth-event-match
+classification: synthetic
+request:
+  target:
+    type: Person
+    identifiers:
+      - { scheme: opencrvs_tracking_id, value: TRK-SYNTH000001 }
+  claims: [birth-event-found, birth-event-registered]
+  disclosure: predicate
+  format: application/vnd.registry-notary.claim-result+json
+  purpose: birth-event-registration-verification
+input: { tracking_id: TRK-SYNTH000001 }
+interactions:
+  - expect:
+      method: POST
+      path: /oauth/token
+      headers: { Accept: application/json, Content-Type: application/json }
+      body: { grant_type: client_credentials }
+    respond:
+      status: 200
+      headers: { Content-Type: application/json }
+      body:
+        access_token: SYNTHETIC_FIXTURE_TOKEN
+        token_type: Bearer
+  - expect:
+      method: POST
+      path: /api/events/events/search
+      body:
+        query:
+          type: and
+          clauses:
+            - eventType: birth
+              trackingId: { type: exact, term: TRK-SYNTH000001 }
+        limit: 2
+        offset: 0
+    respond:
+      status: 200
+      body:
+        total: 1
+        results:
+          - id: 00000000-0000-4000-8000-000000000001
+            type: birth
+            status: REGISTERED
+            trackingId: TRK-SYNTH000001
+            declaration:
+              child:
+                name: Synthetic Source-Only Name
+            ignored_source_metadata: synthetic-source-only
+expect:
+  outcome: match
+  outputs:
+    event_type: birth
+    registered: true
+  claims:
+    birth-event-found: true
+    birth-event-registered: true

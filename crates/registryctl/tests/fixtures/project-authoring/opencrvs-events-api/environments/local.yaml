@@ -1,0 +1,41 @@
+version: 1
+
+development:
+  source_mode: synthetic
+  default_integration: birth-event-search
+  default_fixture: birth-event-match
+
+integrations:
+  birth-event-search:
+    source:
+      origin: https://events.opencrvs.invalid
+      credential:
+        client_id: { secret: OPENCRVS_EVENTS_CLIENT_ID }
+        client_secret: { secret: OPENCRVS_EVENTS_CLIENT_SECRET }
+        generation: 1
+      oauth:
+        origin: https://identity.opencrvs.invalid
+        path: /oauth/token
+        generation: 1
+
+callers:
+  synthetic-case-client:
+    api_key_fingerprint: { secret: SYNTHETIC_CASE_CLIENT_TOKEN_HASH }
+    scopes: ["evidence:birth-event:read"]
+
+relay:
+  origin: https://relay.opencrvs.invalid
+  issuer: https://workload-issuer.opencrvs.invalid
+  jwks_url: https://workload-issuer.opencrvs.invalid/.well-known/jwks.json
+  audience: registry-relay
+  allowed_clients: [synthetic-opencrvs-relay-client]
+
+notary_relay:
+  base_url: http://127.0.0.1:8080
+  workload_client_id: synthetic-opencrvs-notary
+  token_file: /run/secrets/relay-workload-token
+
+deployment:
+  profile: local
+  relay: { service: synthetic-opencrvs-relay }
+  notary: { service: synthetic-opencrvs-notary }
