@@ -44,6 +44,7 @@ services:
     labels:
       io.registrystack.probe.owner: renderer
       io.registrystack.probe.role: relay-public
+    command: [product-action, relay-public, serve]
     networks: [registry-edge]
     volumes:
       - type: bind
@@ -68,6 +69,7 @@ services:
     labels:
       io.registrystack.probe.owner: renderer
       io.registrystack.probe.role: relay-consultation
+    command: [product-action, relay-consultation, serve]
     network_mode: service:registry-private-namespace
     depends_on:
       registry-private-namespace:
@@ -97,6 +99,7 @@ services:
     labels:
       io.registrystack.probe.owner: renderer
       io.registrystack.probe.role: notary
+    command: [product-action, serve]
     network_mode: service:registry-private-namespace
     depends_on:
       registry-private-namespace:

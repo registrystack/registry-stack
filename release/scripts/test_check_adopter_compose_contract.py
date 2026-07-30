@@ -198,6 +198,26 @@ class AdopterComposeContractTests(unittest.TestCase):
                 expected_parent=None,
             )
 
+    def test_parent_boundary_rejects_renderer_resource_mutation(self) -> None:
+        baseline = json.loads(json.dumps(self.baseline))
+        baseline["networks"] = {
+            "registry-private": {
+                "name": "registry-adopter-probe-private",
+                "internal": True,
+            }
+        }
+        model = json.loads(json.dumps(baseline))
+        model["networks"]["registry-private"]["internal"] = False
+        with self.assertRaisesRegex(
+            CHECKER.ContractError,
+            "changed renderer-owned network registry-private",
+        ):
+            CHECKER.assert_parent_boundary(
+                model,
+                baseline,
+                expected_parent=None,
+            )
+
     def test_initialization_model_rejects_ordinary_service_mutation(self) -> None:
         ordinary = json.loads(json.dumps(self.baseline))
         initialized = json.loads(json.dumps(ordinary))
@@ -237,6 +257,27 @@ class AdopterComposeContractTests(unittest.TestCase):
             path = Path(directory) / "plan.json"
             path.write_text(json.dumps(plan), encoding="utf-8")
             with self.assertRaisesRegex(CHECKER.ContractError, "reactivation_action"):
+                CHECKER.validate_plan(path)
+
+    def test_plan_probe_rejects_swapped_workload_relationships(self) -> None:
+        plan = json.loads(
+            (
+                CHECKER.FIXTURE_ROOT / "deployment-plan.probe.v1.json"
+            ).read_text(encoding="utf-8")
+        )
+        public = plan["workloads"][0]
+        consultation = plan["workloads"][1]
+        public["network_relationships"], consultation["network_relationships"] = (
+            consultation["network_relationships"],
+            public["network_relationships"],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            with self.assertRaisesRegex(
+                CHECKER.ContractError,
+                "network_relationships for relay-public",
+            ):
                 CHECKER.validate_plan(path)
 
     def test_plan_probe_rejects_compose_volume_syntax(self) -> None:

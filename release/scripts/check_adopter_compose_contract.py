@@ -101,7 +101,23 @@ EXPECTED_PLAN_WORKLOADS = {
         "kind": "product",
         "product_lane": "relay-public",
         "action": "serve",
+        "immutable_inputs": ["relay-public-bundle", "relay-public-anchor"],
+        "mount_roles": [
+            "bundle",
+            "anchor",
+            "anti-rollback-state",
+            "certificate",
+            "audit",
+        ],
+        "secret_consumers": ["relay-public-tls"],
+        "state_roles": [
+            "relay-public-anti-rollback",
+            "relay-public-audit",
+        ],
+        "endpoint_classes": ["public-application", "metrics", "posture"],
+        "network_relationships": ["edge"],
         "dependencies": [],
+        "health_semantics": "relay-public-health",
         "restart_action": "restart",
         "reactivation_action": "verify_state",
     },
@@ -109,10 +125,29 @@ EXPECTED_PLAN_WORKLOADS = {
         "kind": "product",
         "product_lane": "relay-consultation",
         "action": "serve",
+        "immutable_inputs": [
+            "relay-consultation-bundle",
+            "relay-consultation-anchor",
+        ],
+        "mount_roles": [
+            "bundle",
+            "anchor",
+            "anti-rollback-state",
+            "certificate",
+            "audit",
+        ],
+        "secret_consumers": ["relay-consultation-tls"],
+        "state_roles": [
+            "relay-consultation-anti-rollback",
+            "relay-consultation-audit",
+        ],
+        "endpoint_classes": ["private-application", "metrics", "posture"],
+        "network_relationships": ["private-consultation-namespace"],
         "dependencies": [
             "postgresql-state-plane",
             "private-namespace-holder",
         ],
+        "health_semantics": "relay-consultation-health",
         "restart_action": "restart",
         "reactivation_action": "verify_state",
     },
@@ -120,28 +155,96 @@ EXPECTED_PLAN_WORKLOADS = {
         "kind": "product",
         "product_lane": "notary",
         "action": "serve",
+        "immutable_inputs": ["notary-bundle", "notary-anchor"],
+        "mount_roles": [
+            "bundle",
+            "anchor",
+            "anti-rollback-state",
+            "secret",
+            "certificate",
+            "audit",
+        ],
+        "secret_consumers": ["notary-tls", "notary-signing-key"],
+        "state_roles": ["notary-anti-rollback", "notary-audit"],
+        "endpoint_classes": [
+            "private-application",
+            "administration",
+            "metrics",
+            "posture",
+        ],
+        "network_relationships": ["private-consultation-namespace"],
         "dependencies": [
             "relay-consultation",
             "postgresql-state-plane",
             "private-namespace-holder",
         ],
+        "health_semantics": "notary-health",
         "restart_action": "restart",
         "reactivation_action": "verify_state",
     },
     "postgresql-state-plane": {
         "kind": "supporting",
         "recipe": "postgresql_state_plane",
+        "secret_consumers": [
+            "postgresql-tls",
+            "postgresql-credentials",
+        ],
+        "state_roles": ["postgresql-data"],
+        "endpoint_classes": ["private-application"],
+        "network_relationships": ["private-consultation-namespace"],
         "dependencies": ["private-namespace-holder"],
+        "health_semantics": "postgresql-health",
         "restart_action": "restart",
         "reactivation_action": "restore_consistency_group",
     },
     "private-namespace-holder": {
         "kind": "supporting",
         "recipe": "private_namespace_holder",
+        "secret_consumers": [],
+        "state_roles": [],
+        "endpoint_classes": [],
+        "network_relationships": ["private"],
         "dependencies": [],
+        "health_semantics": "namespace-holder-health",
         "restart_action": "restart",
         "reactivation_action": "restart_consistency_group",
     },
+}
+PRODUCT_COMMANDS = {
+    "registry-relay-public": ["product-action", "relay-public", "serve"],
+    "registry-relay-consultation": [
+        "product-action",
+        "relay-consultation",
+        "serve",
+    ],
+    "registry-notary": ["product-action", "serve"],
+}
+INITIALIZATION_COMMANDS = {
+    "registry-relay-public-prepare-state": [
+        "product-action",
+        "relay-public",
+        "prepare_state_store",
+    ],
+    "registry-relay-consultation-prepare-state": [
+        "product-action",
+        "relay-consultation",
+        "prepare_state_store",
+    ],
+    "registry-notary-prepare-state": [
+        "product-action",
+        "prepare_state_store",
+    ],
+    "registry-relay-public-initialize": [
+        "product-action",
+        "relay-public",
+        "initialize_state",
+    ],
+    "registry-relay-consultation-initialize": [
+        "product-action",
+        "relay-consultation",
+        "initialize_state",
+    ],
+    "registry-notary-initialize": ["product-action", "initialize_state"],
 }
 EXPECTED_INITIALIZATION_ACTIONS = (
     ("prepare-relay-public-state", "relay-public", "prepare_state_store"),
@@ -272,6 +375,12 @@ def assert_ordinary_model(
             or service.get("tmpfs") != ["/tmp"]
         ):
             raise ContractError(f"{name} does not use the product hardening profile")
+        expected_command = PRODUCT_COMMANDS.get(name)
+        if expected_command is not None and (
+            service.get("command") != expected_command
+            or service.get("entrypoint") is not None
+        ):
+            raise ContractError(f"{name} does not use its closed serve action")
         if (
             expected_images is not None
             and service.get("image") != expected_images[name]
@@ -446,12 +555,66 @@ def assert_initialization_model(
                 f"{service_name}"
             )
     for service_name, ordinary_service in INITIALIZATION_IMAGE_SERVICE.items():
-        if services[service_name].get("image") != expected_images[ordinary_service]:
+        service = services[service_name]
+        if service.get("image") != expected_images[ordinary_service]:
             raise ContractError(
                 f"{service_name} does not use its plan image identity"
             )
-        if services[service_name].get("restart") != "no":
+        if service.get("restart") != "no":
             raise ContractError(f"{service_name} is not a one-shot service")
+        if (
+            service.get("command") != INITIALIZATION_COMMANDS[service_name]
+            or service.get("entrypoint") is not None
+        ):
+            raise ContractError(
+                f"{service_name} does not use its closed product action"
+            )
+        if (
+            service.get("read_only") is not True
+            or service.get("user") != "65532:65532"
+            or service.get("cap_drop") != ["ALL"]
+            or service.get("security_opt") != ["no-new-privileges:true"]
+            or service.get("tmpfs") != ["/tmp"]
+        ):
+            raise ContractError(
+                f"{service_name} does not use the one-shot hardening profile"
+            )
+        ordinary = ordinary_services[ordinary_service]
+        ordinary_mounts = {
+            mount.get("target"): mount
+            for mount in ordinary.get("volumes", [])
+            if isinstance(mount, dict)
+        }
+        required_targets = {
+            "/run/registry/bundle",
+            "/run/registry/anchor",
+            "/var/lib/registry/audit",
+        }
+        if service_name.endswith("-initialize"):
+            required_targets.add("/var/lib/registry/state")
+        actual_mounts = {
+            mount.get("target"): mount
+            for mount in service.get("volumes", [])
+            if isinstance(mount, dict)
+        }
+        if set(actual_mounts) != required_targets or any(
+            actual_mounts[target] != ordinary_mounts.get(target)
+            for target in required_targets
+        ):
+            raise ContractError(
+                f"{service_name} has the wrong closed-action mounts"
+            )
+        if service.get("secrets", []) != []:
+            raise ContractError(
+                f"{service_name} received unnecessary serving secrets"
+            )
+        if (
+            service.get("network_mode") != ordinary.get("network_mode")
+            or service.get("networks", {}) != ordinary.get("networks", {})
+        ):
+            raise ContractError(
+                f"{service_name} has the wrong network relationship"
+            )
     initialization_dependencies = {
         "registry-relay-public-prepare-state": {},
         "registry-relay-consultation-prepare-state": {
@@ -497,6 +660,20 @@ def assert_parent_boundary(
     for name in PRODUCT_SERVICES:
         if services[name] != baseline_services[name]:
             raise ContractError(f"parent changed renderer-owned service {name}")
+    for resource_kind in ("networks", "volumes", "secrets"):
+        baseline_resources = baseline.get(resource_kind, {})
+        resources = model.get(resource_kind, {})
+        if not isinstance(baseline_resources, dict) or not isinstance(
+            resources, dict
+        ):
+            raise ContractError(
+                f"included model has an invalid {resource_kind} object"
+            )
+        for name, definition in baseline_resources.items():
+            if resources.get(name) != definition:
+                raise ContractError(
+                    f"parent changed renderer-owned {resource_kind[:-1]} {name}"
+                )
 
     parent_services = set(services).difference(PRODUCT_SERVICES)
     expected = {expected_parent} if expected_parent else set()
@@ -1054,6 +1231,13 @@ def run_contract(compose_command: Sequence[str], fixture_root: Path) -> None:
         fixture_root,
         "package/generated/compose.yaml",
         "package/operator-override.yaml",
+    )
+    assert_ordinary_model(
+        override_baseline,
+        expected_images,
+        expected_secrets,
+        expected_state_mounts,
+        (fixture_root / "package/generated").resolve(),
     )
     assert_parent_boundary(
         override_parent, override_baseline, expected_parent="parent-edge-client"
