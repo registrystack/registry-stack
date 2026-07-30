@@ -796,7 +796,14 @@ impl SourceHost for OfflineRhaiHost<'_> {
                         return Err(HostFailure::SourceAuth);
                     }
                 };
-                require_basic_success(observed, 64 * 1024).map_err(|_| HostFailure::SourceAuth)?;
+                if let Err(error) = require_credential_success(
+                    observed,
+                    credential.parser().max_response_bytes(),
+                    |status, body| credential.parser().parse(status, body),
+                ) {
+                    self.terminal_error = Some(error);
+                    return Err(HostFailure::SourceAuth);
+                }
                 self.credential_used = true;
             }
         }
@@ -950,13 +957,14 @@ impl OfflineRhaiHost<'_> {
                     )
                     .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
             )?;
-            require_basic_success(
+            require_credential_success(
                 self.interactions.take(
                     credential.id().as_str(),
                     credential_request.path.as_str(),
                     &credential_request,
                 )?,
-                64 * 1024,
+                credential.parser().max_response_bytes(),
+                |status, body| credential.parser().parse(status, body),
             )?;
             self.credential_used = true;
         }
@@ -1580,9 +1588,10 @@ fn execute_http(
                         )
                         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
                 )?;
-                require_basic_success(
+                require_credential_success(
                     interactions.take(credential.id().as_str(), request.path.as_str(), &request)?,
-                    64 * 1024,
+                    credential.parser().max_response_bytes(),
+                    |status, body| credential.parser().parse(status, body),
                 )?;
                 credential_used = true;
             }
@@ -1712,13 +1721,14 @@ fn execute_dci(
             )
             .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
     )?;
-    require_basic_success(
+    require_credential_success(
         interactions.take(
             credential.id().as_str(),
             credential_request.path.as_str(),
             &credential_request,
         )?,
-        64 * 1024,
+        credential.parser().max_response_bytes(),
+        |status, body| credential.parser().parse(status, body),
     )?;
     let verification_request = verification
         .transport_template()
@@ -2127,13 +2137,35 @@ fn snapshot_projected_value(
     }
 }
 
-fn require_basic_success(
+fn require_credential_success<T, E>(
     response: OfflineSourceResponse,
     max_bytes: u32,
+    parse: impl FnOnce(u16, &[u8]) -> Result<T, E>,
 ) -> Result<(), OfflineFixtureError> {
     match response {
-        OfflineSourceResponse::CredentialSuccess => Ok(()),
-        other => require_http_body(other, max_bytes).map(drop),
+        OfflineSourceResponse::Http {
+            status: 200, body, ..
+        } if body.len() <= max_bytes as usize => parse(200, &body)
+            .map(drop)
+            .map_err(|_| OfflineFixtureError::SourceResponseMalformed),
+        OfflineSourceResponse::Http { status: 200, .. } => {
+            Err(OfflineFixtureError::SourceResponseTooLarge)
+        }
+        OfflineSourceResponse::DeclaredBodyBytes {
+            status: 200,
+            body_bytes,
+        } if body_bytes > u64::from(max_bytes) => Err(OfflineFixtureError::SourceResponseTooLarge),
+        OfflineSourceResponse::DeclaredBodyBytes { status: 200, .. }
+        | OfflineSourceResponse::CredentialSuccess => {
+            Err(OfflineFixtureError::SourceResponseMalformed)
+        }
+        OfflineSourceResponse::Http { .. } | OfflineSourceResponse::DeclaredBodyBytes { .. } => {
+            Err(OfflineFixtureError::SourceStatusRejected)
+        }
+        OfflineSourceResponse::Timeout => Err(OfflineFixtureError::SourceDeadlineExceeded),
+        OfflineSourceResponse::NoMatch | OfflineSourceResponse::Unavailable => {
+            Err(OfflineFixtureError::SourceUnavailable)
+        }
     }
 }
 
@@ -2787,6 +2819,41 @@ mod tests {
             assert_eq!(
                 host.terminal_error,
                 Some(OfflineFixtureError::SourceResponseMalformed)
+            );
+        }
+    }
+
+    #[test]
+    fn no_expiry_credential_fixture_uses_the_compiled_response_parser() {
+        let plan = crate::source_plan::open_crvs_no_expiry_script_runtime_plan_fixture();
+        let parser = plan
+            .credential_operation()
+            .expect("OpenCRVS plan has a credential operation")
+            .parser();
+        let execute = |body: &[u8]| {
+            require_credential_success(
+                OfflineSourceResponse::Http {
+                    status: 200,
+                    headers: BTreeMap::new(),
+                    body: body.to_vec(),
+                },
+                parser.max_response_bytes(),
+                |status, body| parser.parse(status, body),
+            )
+        };
+
+        assert_eq!(
+            execute(br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"Bearer"}"#),
+            Ok(())
+        );
+        for malformed in [
+            br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"bearer"}"#.as_slice(),
+            br#"{"access_token":"SYNTHETIC_FIXTURE_TOKEN","token_type":"Bearer","expires_in":60}"#
+                .as_slice(),
+        ] {
+            assert_eq!(
+                execute(malformed),
+                Err(OfflineFixtureError::SourceResponseMalformed)
             );
         }
     }

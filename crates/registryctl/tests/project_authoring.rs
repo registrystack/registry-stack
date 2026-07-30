@@ -5719,6 +5719,15 @@ fn oauth_refresh_skew_accepts_explicit_default_and_safe_ceiling() {
             "    response_profile: oauth2_bearer_no_expiry",
             &format!("    response_profile: oauth2_bearer\n    refresh_skew: {authored}"),
         );
+        for fixture_name in ["match.yaml", "no-match.yaml", "ambiguous.yaml"] {
+            let fixture = project
+                .join("integrations/birth-record/fixtures")
+                .join(fixture_name);
+            let mut document = read_yaml(&fixture);
+            document["interactions"][0]["respond"]["body"]["expires_in"] =
+                serde_norway::from_str("60").expect("OAuth fixture expiry");
+            write_yaml(&fixture, &document);
+        }
         let report = build_registry_project(&ProjectBuildOptions {
             project_directory: project.clone(),
             environment: "local".to_string(),
@@ -5815,6 +5824,47 @@ fn oauth_no_expiry_profile_is_exact_and_disables_token_caching() {
     );
     assert!(!rendered.contains("oauth2_bearer_no_expiry"));
     assert!(!rendered.contains("20s"));
+}
+
+#[test]
+fn oauth_no_expiry_offline_fixtures_reject_non_production_response_shapes() {
+    for (case, body) in [
+        (
+            "lowercase token type",
+            "{ access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: bearer }\n",
+        ),
+        (
+            "unexpected expiry",
+            "{ access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: Bearer, expires_in: 60 }\n",
+        ),
+    ] {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = copy_project("opencrvs", temporary.path());
+        let fixture = project.join("integrations/birth-record/fixtures/ambiguous.yaml");
+        let mut document = read_yaml(&fixture);
+        document["interactions"][0]["respond"]["body"] =
+            serde_norway::from_str(body).expect("OAuth response fixture");
+        write_yaml(&fixture, &document);
+
+        let error = test_registry_project_selected(
+            &ProjectTestOptions {
+                project_directory: project,
+                environment: None,
+                live: false,
+            },
+            &ProjectTestSelection {
+                integration: Some("birth-record".to_string()),
+                fixture: Some("birth-record-ambiguous".to_string()),
+                trace: true,
+            },
+        )
+        .unwrap_err();
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("source.response_malformed"),
+            "{case} must fail through the compiled OAuth response parser: {rendered}"
+        );
+    }
 }
 
 fn validate_yaml(schema: &jsonschema::JSONSchema, path: &Path) {
