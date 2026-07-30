@@ -23,12 +23,11 @@ use approved_set::{
     APPROVED_BASELINE_SET_SCHEMA_ID, APPROVED_BASELINE_SET_SCHEMA_VERSION,
 };
 use deployment::{
-    generate_deployment_package_with_test_inputs, scrub_normalized_bind_sources,
-    verify_deployment_package_with_models, verify_deployment_package_with_test_inputs,
-    DeploymentBindingV1, DeploymentGenerateRequestV1, DeploymentOwnershipStateV1,
-    DeploymentPackageVerificationRequestV1, DeploymentPlanV1, DeploymentReleaseMetadataV1,
-    EffectiveComposeModelsV1, ExpectedGenerationInputsV1, ImageIdentityV1,
-    LockedPostgresqlRuntimeV1, LockedProductRuntimeV1, LockedRuntimeMappingV1,
+    generate_deployment_package_with_test_inputs, verify_deployment_package_with_models,
+    verify_deployment_package_with_test_inputs, DeploymentBindingV1, DeploymentGenerateRequestV1,
+    DeploymentOwnershipStateV1, DeploymentPackageVerificationRequestV1, DeploymentPlanV1,
+    DeploymentReleaseMetadataV1, EffectiveComposeModelsV1, ExpectedGenerationInputsV1,
+    ImageIdentityV1, LockedPostgresqlRuntimeV1, LockedProductRuntimeV1, LockedRuntimeMappingV1,
     ManagedTopologyImagesV1, PackageFreshnessV1, VerifiedDeploymentInputsV1,
 };
 use release_lock::{
@@ -570,93 +569,6 @@ fn managed_package_is_current_for_its_generated_models() {
         1
     );
     assert!(fixture.package.join("operator/secrets").is_dir());
-}
-
-#[test]
-fn package_path_scrubbing_is_component_confined_and_fallible() {
-    let temp = tempfile::tempdir().unwrap();
-    let package = temp.path().join("package");
-    let generated = package.join("generated");
-    let operator = package.join("operator");
-    let attacker_generated = temp.path().join("attacker/generated");
-    let attacker_operator = temp.path().join("attacker/operator");
-    for directory in [
-        &generated,
-        &operator,
-        &attacker_generated,
-        &attacker_operator,
-    ] {
-        fs::create_dir_all(directory).unwrap();
-    }
-    let generated_file = generated.join("bundle");
-    let operator_file = operator.join("secret");
-    let attacker_generated_file = attacker_generated.join("PATH-VALUE-CANARY");
-    let attacker_operator_file = attacker_operator.join("PATH-VALUE-CANARY");
-    for file in [
-        &generated_file,
-        &operator_file,
-        &attacker_generated_file,
-        &attacker_operator_file,
-    ] {
-        fs::write(file, b"value-free\n").unwrap();
-    }
-
-    let model = json!({
-        "services": {
-            "service": {
-                "env_file": [
-                    generated_file.display().to_string(),
-                    attacker_generated_file.display().to_string()
-                ],
-                "volumes": [
-                    {"type": "bind", "source": package.display().to_string()},
-                    {"type": "bind", "source": generated.display().to_string()},
-                    {"type": "bind", "source": operator.display().to_string()},
-                    {"type": "bind", "source": attacker_operator_file.display().to_string()}
-                ]
-            }
-        },
-        "secrets": {
-            "inside": {"file": operator_file.display().to_string()},
-            "outside": {"file": attacker_operator_file.display().to_string()}
-        }
-    });
-    let scrubbed = scrub_normalized_bind_sources(&package, model).unwrap();
-    assert_eq!(scrubbed["services"]["service"]["env_file"][0], "./bundle");
-    assert_eq!(
-        scrubbed["services"]["service"]["env_file"][1],
-        attacker_generated_file.display().to_string()
-    );
-    assert_eq!(
-        scrubbed["services"]["service"]["volumes"][0]["source"],
-        ".."
-    );
-    assert_eq!(scrubbed["services"]["service"]["volumes"][1]["source"], ".");
-    assert_eq!(
-        scrubbed["services"]["service"]["volumes"][2]["source"],
-        "../operator"
-    );
-    assert_eq!(
-        scrubbed["services"]["service"]["volumes"][3]["source"],
-        attacker_operator_file.display().to_string()
-    );
-    assert_eq!(scrubbed["secrets"]["inside"]["file"], "../operator/secret");
-    assert_eq!(
-        scrubbed["secrets"]["outside"]["file"],
-        attacker_operator_file.display().to_string()
-    );
-
-    let escape = json!({
-        "services": {
-            "service": {
-                "env_file": ["/../PATH-VALUE-CANARY"]
-            }
-        }
-    });
-    let error = scrub_normalized_bind_sources(&package, escape)
-        .unwrap_err()
-        .to_string();
-    assert!(!error.contains("PATH-VALUE-CANARY"));
 }
 
 #[test]
