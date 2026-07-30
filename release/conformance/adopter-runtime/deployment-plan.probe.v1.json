@@ -1,5 +1,6 @@
 {
-  "schema": "io.registrystack.deployment-plan.probe.v1",
+  "schema_id": "io.registrystack.deployment_plan",
+  "schema_version": "1.0",
   "single_instance": true,
   "workloads": [
     {
@@ -12,8 +13,8 @@
       "mount_roles": ["bundle", "anchor", "anti-rollback-state", "certificate", "audit"],
       "secret_consumers": ["relay-public-tls"],
       "state_roles": ["relay-public-anti-rollback", "relay-public-audit"],
-      "endpoint_classes": ["public-application", "metrics", "posture"],
-      "network_relationships": ["edge"],
+      "endpoint_classes": ["public-application", "posture"],
+      "network_relationships": ["runtime"],
       "dependencies": [],
       "health_semantics": "relay-public-health",
       "restart_action": "restart",
@@ -29,9 +30,9 @@
       "mount_roles": ["bundle", "anchor", "anti-rollback-state", "certificate", "audit"],
       "secret_consumers": ["relay-consultation-tls"],
       "state_roles": ["relay-consultation-anti-rollback", "relay-consultation-audit"],
-      "endpoint_classes": ["private-application", "metrics", "posture"],
-      "network_relationships": ["private-consultation-namespace"],
-      "dependencies": ["postgresql-state-plane", "private-namespace-holder"],
+      "endpoint_classes": ["private-application", "posture"],
+      "network_relationships": ["runtime"],
+      "dependencies": ["postgresql-state-plane"],
       "health_semantics": "relay-consultation-health",
       "restart_action": "restart",
       "reactivation_action": "verify_state"
@@ -46,9 +47,9 @@
       "mount_roles": ["bundle", "anchor", "anti-rollback-state", "secret", "certificate", "audit"],
       "secret_consumers": ["notary-tls", "notary-signing-key"],
       "state_roles": ["notary-anti-rollback", "notary-audit"],
-      "endpoint_classes": ["private-application", "administration", "metrics", "posture"],
-      "network_relationships": ["private-consultation-namespace"],
-      "dependencies": ["relay-consultation", "postgresql-state-plane", "private-namespace-holder"],
+      "endpoint_classes": ["public-application", "administration", "posture"],
+      "network_relationships": ["runtime"],
+      "dependencies": ["relay-consultation", "postgresql-state-plane"],
       "health_semantics": "notary-health",
       "restart_action": "restart",
       "reactivation_action": "verify_state"
@@ -61,25 +62,11 @@
       "secret_consumers": ["postgresql-tls", "postgresql-credentials"],
       "state_roles": ["postgresql-data"],
       "endpoint_classes": ["private-application"],
-      "network_relationships": ["private-consultation-namespace"],
-      "dependencies": ["private-namespace-holder"],
+      "network_relationships": ["runtime"],
+      "dependencies": [],
       "health_semantics": "postgresql-health",
       "restart_action": "restart",
       "reactivation_action": "restore_consistency_group"
-    },
-    {
-      "id": "private-namespace-holder",
-      "kind": "supporting",
-      "recipe": "private_namespace_holder",
-      "image_identity": "example.invalid/registrystack/private-namespace@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      "secret_consumers": [],
-      "state_roles": [],
-      "endpoint_classes": [],
-      "network_relationships": ["private"],
-      "dependencies": [],
-      "health_semantics": "namespace-holder-health",
-      "restart_action": "restart",
-      "reactivation_action": "restart_consistency_group"
     }
   ],
   "initialization_actions": [
@@ -90,12 +77,6 @@
     {"id": "initialize-relay-public", "workload": "relay-public", "action": "initialize_state"},
     {"id": "initialize-relay-consultation", "workload": "relay-consultation", "action": "initialize_state"},
     {"id": "initialize-notary", "workload": "notary", "action": "initialize_state"}
-  ],
-  "private_co_location_groups": [
-    {
-      "id": "private-consultation-namespace",
-      "members": ["relay-consultation", "notary", "postgresql-state-plane", "private-namespace-holder"]
-    }
   ],
   "recovery_consistency_groups": [
     {
@@ -109,9 +90,8 @@
   ],
   "exposure_requirements": [
     {"endpoint_class": "public-application", "exposure": "operator-bound"},
-    {"endpoint_class": "private-application", "exposure": "private-namespace-only"},
-    {"endpoint_class": "administration", "exposure": "loopback-only"},
-    {"endpoint_class": "metrics", "exposure": "loopback-only"},
-    {"endpoint_class": "posture", "exposure": "loopback-only"}
+    {"endpoint_class": "private-application", "exposure": "private-network-only"},
+    {"endpoint_class": "administration", "exposure": "private-network-only"},
+    {"endpoint_class": "posture", "exposure": "private-network-only"}
   ]
 }

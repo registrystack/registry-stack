@@ -1,17 +1,41 @@
 services:
-  registry-relay-public-prepare-state:
+  registry-postgres:
+    entrypoint: [docker-entrypoint.sh]
+
+  registry-postgres-bootstrap:
+    image: example.invalid/registrystack/postgresql@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    command: [postgresql-action, bootstrap]
+    user: "999:999"
     read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql:uid=999,gid=999,mode=0750
+    restart: "no"
+    networks: [registry-runtime]
+    depends_on:
+      registry-postgres:
+        condition: service_healthy
+      registry-postgresql-stage-secrets:
+        condition: service_completed_successfully
+    env_file:
+      - ./postgresql-server.env
+      - ../operator/secrets/postgresql-bootstrap-environment
+    volumes:
+      - registry-operator-files-postgresql-bootstrap:/run/secrets:ro
+
+  registry-relay-public-prepare-state:
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    command: [product-action, relay-public, prepare_state_store]
     user: "65532:65532"
+    read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
-    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-    command: [product-action, relay-public, prepare_state_store]
-    labels:
-      io.registrystack.probe.owner: renderer
-      io.registrystack.probe.role: prepare-state
     restart: "no"
-    networks: [registry-edge]
+    networks: [registry-runtime]
+    env_file: [../operator/secrets/relay-public-environment]
     volumes:
       - type: bind
         source: ./bundles/relay-public
@@ -28,21 +52,21 @@ services:
       - registry-relay-public-audit:/var/lib/registry/audit
 
   registry-relay-consultation-prepare-state:
-    read_only: true
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    command: [product-action, relay-consultation, prepare_state_store]
     user: "65532:65532"
+    read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
-    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-    command: [product-action, relay-consultation, prepare_state_store]
-    labels:
-      io.registrystack.probe.owner: renderer
-      io.registrystack.probe.role: prepare-state
     restart: "no"
-    network_mode: service:registry-private-namespace
+    networks: [registry-runtime]
     depends_on:
       registry-postgres:
         condition: service_healthy
+      registry-relay-consultation-stage-secrets:
+        condition: service_completed_successfully
+    env_file: [../operator/secrets/relay-consultation-environment]
     volumes:
       - type: bind
         source: ./bundles/relay-consultation
@@ -57,23 +81,24 @@ services:
         bind:
           create_host_path: false
       - registry-relay-consultation-audit:/var/lib/registry/audit
+      - registry-operator-files-relay-consultation-prepare:/run/secrets:ro
 
   registry-notary-prepare-state:
-    read_only: true
+    image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    command: [product-action, prepare_state_store]
     user: "65532:65532"
+    read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
-    image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-    command: [product-action, prepare_state_store]
-    labels:
-      io.registrystack.probe.owner: renderer
-      io.registrystack.probe.role: prepare-state
     restart: "no"
-    network_mode: service:registry-private-namespace
+    networks: [registry-runtime]
     depends_on:
       registry-postgres:
         condition: service_healthy
+      registry-notary-stage-secrets:
+        condition: service_completed_successfully
+    env_file: [../operator/secrets/notary-environment]
     volumes:
       - type: bind
         source: ./bundles/notary
@@ -88,20 +113,19 @@ services:
         bind:
           create_host_path: false
       - registry-notary-audit:/var/lib/registry/audit
+      - registry-operator-files-notary-prepare:/run/secrets:ro
 
   registry-relay-public-initialize:
-    read_only: true
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    command: [product-action, relay-public, initialize_state]
     user: "65532:65532"
+    read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
-    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-    command: [product-action, relay-public, initialize_state]
-    labels:
-      io.registrystack.probe.owner: renderer
-      io.registrystack.probe.role: initialize-state
     restart: "no"
-    networks: [registry-edge]
+    networks: [registry-runtime]
+    env_file: [../operator/secrets/relay-public-environment]
     volumes:
       - type: bind
         source: ./bundles/relay-public
@@ -119,21 +143,21 @@ services:
       - registry-relay-public-audit:/var/lib/registry/audit
 
   registry-relay-consultation-initialize:
-    read_only: true
+    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    command: [product-action, relay-consultation, initialize_state]
     user: "65532:65532"
+    read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
-    image: example.invalid/registrystack/registry-relay@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-    command: [product-action, relay-consultation, initialize_state]
-    labels:
-      io.registrystack.probe.owner: renderer
-      io.registrystack.probe.role: initialize-state
     restart: "no"
-    network_mode: service:registry-private-namespace
+    networks: [registry-runtime]
     depends_on:
       registry-postgres:
         condition: service_healthy
+      registry-relay-consultation-stage-secrets:
+        condition: service_completed_successfully
+    env_file: [../operator/secrets/relay-consultation-environment]
     volumes:
       - type: bind
         source: ./bundles/relay-consultation
@@ -149,23 +173,24 @@ services:
           create_host_path: false
       - registry-relay-consultation-state:/var/lib/registry/state
       - registry-relay-consultation-audit:/var/lib/registry/audit
+      - registry-operator-files-relay-consultation-initialize:/run/secrets:ro
 
   registry-notary-initialize:
-    read_only: true
+    image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    command: [product-action, initialize_state]
     user: "65532:65532"
+    read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
-    image: example.invalid/registrystack/registry-notary@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-    command: [product-action, initialize_state]
-    labels:
-      io.registrystack.probe.owner: renderer
-      io.registrystack.probe.role: initialize-state
     restart: "no"
-    network_mode: service:registry-private-namespace
+    networks: [registry-runtime]
     depends_on:
       registry-postgres:
         condition: service_healthy
+      registry-notary-stage-secrets:
+        condition: service_completed_successfully
+    env_file: [../operator/secrets/notary-environment]
     volumes:
       - type: bind
         source: ./bundles/notary
@@ -181,3 +206,4 @@ services:
           create_host_path: false
       - registry-notary-state:/var/lib/registry/state
       - registry-notary-audit:/var/lib/registry/audit
+      - registry-operator-files-notary-initialize:/run/secrets:ro
