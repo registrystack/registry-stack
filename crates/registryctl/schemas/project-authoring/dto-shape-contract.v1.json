@@ -3851,7 +3851,7 @@
           },
           "GovernedFixtureRequest": {
             "additionalProperties": false,
-            "description": "The closed governed request accepted by an independently authored synthetic fixture witness.",
+            "description": "The closed governed request accepted by an independently authored synthetic\nfixture witness.",
             "properties": {
               "claims": {
                 "items": {
