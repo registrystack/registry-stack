@@ -411,6 +411,155 @@ items:
     }
 
     #[test]
+    fn authored_output_count_preserves_the_generic_non_notary_limit() {
+        fn boolean_output() -> AuthoredOutputDeclaration {
+            AuthoredOutputDeclaration::Scalar(AuthoredScalarOutputDeclaration {
+                output_type: AuthoredSchemaType::Single(AuthoredScalarType::Boolean),
+                format: None,
+                max_length: None,
+                minimum: None,
+                maximum: None,
+                source: None,
+            })
+        }
+
+        const {
+            assert!(MAX_OUTPUTS > registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1);
+        }
+        let outputs = |count| {
+            (0..count)
+                .map(|index| (format!("field_{index}"), boolean_output()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        validate_authored_outputs(&outputs(
+            registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1 + 1,
+        ))
+        .expect("generic authoring retains more outputs than a Notary consultation");
+        validate_authored_outputs(&outputs(MAX_OUTPUTS))
+            .expect("the generic integration output limit validates");
+        assert!(validate_authored_outputs(&outputs(MAX_OUTPUTS + 1))
+            .expect_err("one output beyond the generic integration limit rejects")
+            .to_string()
+            .contains(&format!("between one and {MAX_OUTPUTS} fields")));
+    }
+
+    #[test]
+    fn notary_output_count_applies_only_to_evidence_consultations() {
+        let mut evidence =
+            load_registry_project(&project_golden("opencrvs"), None).expect("OpenCRVS project loads");
+        let birth = evidence
+            .integrations
+            .get_mut("birth-record")
+            .expect("birth integration exists");
+        let template = serde_json::to_value(&birth.document.outputs["sex"])
+            .expect("scalar output serializes");
+        while birth.document.outputs.len()
+            <= registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1
+        {
+            let index = birth.document.outputs.len();
+            birth.document.outputs.insert(
+                format!("extra_{index}"),
+                serde_json::from_value(template.clone()).expect("scalar output clones"),
+            );
+        }
+        validate_integration("birth-record", &birth.document)
+            .expect("the generic integration contract still accepts 33 outputs");
+        let error = validate_service_integration_links(&evidence.project, &evidence.integrations)
+            .expect_err("an Evidence consultation cannot exceed the Notary output limit");
+        assert!(error.to_string().contains(&format!(
+            "integration outputs must contain no more than {} entries",
+            registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1
+        )));
+
+        let records_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/project-starters/spreadsheet");
+        let mut records =
+            load_registry_project(&records_root, None).expect("Records API project loads");
+        records.project.integrations.insert(
+            "wide".to_string(),
+            IntegrationReference {
+                file: PathBuf::from("integrations/wide/integration.yaml"),
+            },
+        );
+        records.integrations.insert(
+            "wide".to_string(),
+            evidence
+                .integrations
+                .remove("birth-record")
+                .expect("wide integration remains available"),
+        );
+        validate_project_shape(&records.project)
+            .expect("a Records API-only project may retain the generic integration limit");
+        validate_service_integration_links(&records.project, &records.integrations)
+            .expect("Records API-only integrations are not narrowed to the Notary limit");
+    }
+
+    #[test]
+    fn structured_output_byte_caps_must_encode_a_non_null_value() {
+        fn validate(source: &str) -> Result<()> {
+            let output: AuthoredOutputDeclaration =
+                serde_norway::from_str(source).expect("structured output parses");
+            let mut nodes = OUTPUT_SCHEMA_ENVELOPE_NODES_V1;
+            validate_authored_output("record", &output, &mut nodes).map(|_| ())
+        }
+
+        let required_boolean = |max_bytes| {
+            format!(
+                r#"type: object
+nullable: false
+max_bytes: {max_bytes}
+fields:
+  active:
+    required: true
+    schema: {{ type: boolean }}
+"#
+            )
+        };
+        assert!(validate(&required_boolean(14))
+            .expect_err("a cap below the required-member encoding rejects")
+            .to_string()
+            .contains("must be at least 15"));
+        validate(&required_boolean(15))
+            .expect("the exact compact encoding bound for the required member validates");
+
+        let array = |max_bytes| {
+            format!(
+                r#"type: array
+nullable: false
+max_bytes: {max_bytes}
+max_items: 1
+items: {{ type: boolean }}
+"#
+            )
+        };
+        assert!(validate(&array(1))
+            .expect_err("a cap below the empty-array encoding rejects")
+            .to_string()
+            .contains("must be at least 2"));
+        validate(&array(2)).expect("the empty-array encoding bound validates");
+
+        let nested = r#"type: object
+nullable: false
+max_bytes: 64
+fields:
+  child:
+    required: true
+    schema:
+      type: object
+      nullable: false
+      max_bytes: 1
+      fields:
+        active:
+          required: false
+          schema: { type: boolean }
+"#;
+        assert!(validate(nested)
+            .expect_err("an impossible nested object cap rejects")
+            .to_string()
+            .contains("outputs.record.fields.child.schema.max_bytes must be at least 2"));
+    }
+
+    #[test]
     fn structured_output_limits_reserve_the_notary_result_envelope() {
         fn boolean_schema() -> AuthoredOutputSchema {
             AuthoredOutputSchema::Scalar(AuthoredScalarOutputSchema {
@@ -2874,11 +3023,60 @@ outputs:
             BTreeSet::from(["person".to_string()])
         );
         assert_eq!(
+            cel_references("person.items.exists(item, item.active)")
+                .expect("macro-local CEL members parse"),
+            CelReferences {
+                roots: BTreeSet::from(["person".to_string()]),
+                first_level_members: BTreeMap::from([(
+                "person".to_string(),
+                BTreeSet::from(["items".to_string()])
+                )]),
+                uses_index: false,
+            }
+        );
+        assert_eq!(
             cel_member_roots("person.items.exists(item, item.active) && item.secret == 'outside'")
                 .expect("out-of-scope CEL roots parse"),
             BTreeSet::from(["item".to_string(), "person".to_string()])
         );
         assert!(cel_member_roots("person.exists && 'unterminated").is_err());
+    }
+
+    #[test]
+    fn registry_cel_claims_reject_structured_consultation_members_before_generation() {
+        let mut loaded =
+            load_registry_project(&project_golden("opencrvs"), None).expect("OpenCRVS project loads");
+        let set_claim_expression = |loaded: &mut LoadedRegistryProject, expression: &str| {
+            let claim = loaded
+                .project
+                .services
+                .get_mut("birth-verification")
+                .and_then(|service| service.claims.get_mut("parents"))
+                .expect("structured parents claim exists");
+            claim.output = None;
+            claim.cel = Some(expression.to_string());
+        };
+        set_claim_expression(
+            &mut loaded,
+            "birth.parents.exists(parent, parent.name != '')",
+        );
+
+        let error = validate_service_integration_links(&loaded.project, &loaded.integrations)
+            .expect_err("structured consultation members must not enter authored CEL claims");
+        assert!(error.to_string().contains(
+            "service birth-verification claim parents CEL cannot reference structured consultation output birth.parents"
+        ));
+
+        set_claim_expression(&mut loaded, r#"birth["parents"] != null"#);
+        let error = validate_service_integration_links(&loaded.project, &loaded.integrations)
+            .expect_err("registry-backed CEL index access must fail before generation");
+        assert!(error
+            .to_string()
+            .contains("registry-backed CEL cannot use index access"));
+
+        set_claim_expression(&mut loaded, "['source-free'][0] == 'source-free'");
+        validate_service_integration_links(&loaded.project, &loaded.integrations)
+            .expect("source-free CEL index behavior remains outside this registry boundary");
     }
 
     #[test]

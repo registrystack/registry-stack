@@ -2518,13 +2518,21 @@ fn validate_service_integration_links(
     project: &RegistryProject,
     integrations: &BTreeMap<String, LoadedIntegration>,
 ) -> Result<()> {
-    for service in project
+    for (service_id, service) in project
         .services
-        .values()
-        .filter(|service| service.kind == ServiceKind::Evidence)
+        .iter()
+        .filter(|(_, service)| service.kind == ServiceKind::Evidence)
     {
-        for consultation in service.consultations.values() {
+        for (consultation_name, consultation) in &service.consultations {
             let integration = &integrations[&consultation.integration].document;
+            if integration.outputs.len()
+                > registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1
+            {
+                bail!(
+                    "service {service_id} consultation {consultation_name} integration outputs must contain no more than {} entries",
+                    registry_notary_core::MAX_RELAY_OUTPUT_OBJECT_FIELDS_V1
+                );
+            }
             if consultation.input.keys().ne(integration.input.keys()) {
                 bail!("consultation input must bind the integration input set exactly");
             }
@@ -2532,6 +2540,36 @@ fn validate_service_integration_links(
                 != consultation.input.len()
             {
                 bail!("consultation target mappings must be injective");
+            }
+        }
+        for (claim_id, claim) in &service.claims {
+            let Some(expression) = claim.cel.as_deref() else {
+                continue;
+            };
+            if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
+                continue;
+            }
+            let references = cel_references(expression)
+                .with_context(|| format!("invalid CEL for service {service_id} claim {claim_id}"))?;
+            if references.uses_index {
+                bail!(
+                    "service {service_id} claim {claim_id} registry-backed CEL cannot use index access"
+                );
+            }
+            for (consultation_name, consultation) in &service.consultations {
+                let Some(members) = references.first_level_members.get(consultation_name) else {
+                    continue;
+                };
+                let integration = &integrations[&consultation.integration].document;
+                for member in members {
+                    if integration.outputs.get(member).is_some_and(|output| {
+                        matches!(output.output_type, OutputType::Object | OutputType::Array)
+                    }) {
+                        bail!(
+                            "service {service_id} claim {claim_id} CEL cannot reference structured consultation output {consultation_name}.{member}"
+                        );
+                    }
+                }
             }
         }
     }
@@ -2869,7 +2907,7 @@ fn validate_integration(alias: &str, integration: &IntegrationDocument) -> Resul
     }
     validate_credential_interface(integration)?;
     if integration.outputs.is_empty() || integration.outputs.len() > MAX_OUTPUTS {
-        bail!("integration outputs must contain between one and 64 entries");
+        bail!("integration outputs must contain between one and {MAX_OUTPUTS} entries");
     }
     let operations = integration_operations(integration);
     let http = matches!(integration.capability, CapabilityDeclaration::Http { .. });

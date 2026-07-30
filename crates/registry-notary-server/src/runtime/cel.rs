@@ -396,67 +396,22 @@ fn validate_registry_cel_expression(
 }
 
 #[cfg(feature = "registry-notary-cel")]
-fn cel_first_level_member_references(expression: &str, root: &str) -> BTreeSet<String> {
-    let bytes = expression.as_bytes();
+pub(super) fn cel_first_level_member_references(expression: &str, root: &str) -> BTreeSet<String> {
+    let tokens = cel_tokens(expression);
     let mut members = BTreeSet::new();
-    let mut index = 0;
-    let mut quote: Option<u8> = None;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if let Some(active_quote) = quote {
-            if byte == b'\\' {
-                index = index.saturating_add(2);
-                continue;
-            }
-            if byte == active_quote {
-                quote = None;
-            }
-            index += 1;
+
+    for (index, token) in tokens.iter().enumerate() {
+        let CelToken::Identifier { text } = token else {
+            continue;
+        };
+        if *text != root || matches!(previous_token(&tokens, index), Some(CelToken::Dot)) {
             continue;
         }
-        if matches!(byte, b'\'' | b'"' | b'`') {
-            quote = Some(byte);
-            index += 1;
-            continue;
-        }
-        if !is_cel_identifier_start_byte(byte) {
-            index += 1;
-            continue;
-        }
-        let identifier_start = index;
-        index += 1;
-        while index < bytes.len() && is_cel_identifier_continue_byte(bytes[index]) {
-            index += 1;
-        }
-        let previous = identifier_start
-            .checked_sub(1)
-            .and_then(|previous| bytes.get(previous))
-            .copied();
-        if previous == Some(b'.') || &expression[identifier_start..index] != root {
-            continue;
-        }
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-            index += 1;
-        }
-        if bytes.get(index) != Some(&b'.') {
-            continue;
-        }
-        index += 1;
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-            index += 1;
-        }
-        if bytes
-            .get(index)
-            .is_none_or(|byte| !is_cel_identifier_start_byte(*byte))
+        if let Some([CelToken::Dot, CelToken::Identifier { text: member }]) =
+            next_tokens::<2>(&tokens, index)
         {
-            continue;
+            members.insert((*member).to_string());
         }
-        let member_start = index;
-        index += 1;
-        while index < bytes.len() && is_cel_identifier_continue_byte(bytes[index]) {
-            index += 1;
-        }
-        members.insert(expression[member_start..index].to_string());
     }
     members
 }
@@ -474,114 +429,200 @@ pub(super) fn registry_cel_required_variables<'a>(
 }
 
 fn cel_bare_identifiers(expression: &str) -> BTreeSet<String> {
-    let bytes = expression.as_bytes();
-    let mut identifiers = BTreeSet::new();
-    let mut index = 0;
-    let mut quote = None;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if let Some(active_quote) = quote {
-            if byte == b'\\' {
-                index = index.saturating_add(2);
-                continue;
+    let tokens = cel_tokens(expression);
+    tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| match token {
+            CelToken::Identifier { text }
+                if !matches!(previous_token(&tokens, index), Some(CelToken::Dot)) =>
+            {
+                Some((*text).to_string())
             }
-            if byte == active_quote {
-                quote = None;
-            }
-            index += 1;
-            continue;
-        }
-        if matches!(byte, b'\'' | b'"' | b'`') {
-            quote = Some(byte);
-            index += 1;
-            continue;
-        }
-        if !is_cel_identifier_start_byte(byte) {
-            index += 1;
-            continue;
-        }
-        let start = index;
-        index += 1;
-        while index < bytes.len() && is_cel_identifier_continue_byte(bytes[index]) {
-            index += 1;
-        }
-        if start == 0 || bytes[start - 1] != b'.' {
-            identifiers.insert(expression[start..index].to_string());
-        }
-    }
-    identifiers
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(feature = "registry-notary-cel")]
-fn contains_unquoted_bracket(expression: &str) -> bool {
-    let mut quote = None;
-    let mut escaped = false;
-    for byte in expression.bytes() {
-        if let Some(active_quote) = quote {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == active_quote {
-                quote = None;
-            }
-        } else if matches!(byte, b'\'' | b'"' | b'`') {
-            quote = Some(byte);
-        } else if matches!(byte, b'[' | b']') {
-            return true;
-        }
-    }
-    false
+pub(super) fn contains_unquoted_bracket(expression: &str) -> bool {
+    cel_tokens(expression)
+        .iter()
+        .any(|token| matches!(token, CelToken::Bracket))
 }
 
 #[cfg(feature = "registry-notary-cel")]
 pub(super) fn cel_root_references(expression: &str) -> BTreeSet<String> {
+    let tokens = cel_tokens(expression);
+    tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| match token {
+            CelToken::Identifier { text } => {
+                let is_root = matches!(
+                    next_token(&tokens, index),
+                    Some(CelToken::Dot | CelToken::Bracket)
+                ) && !matches!(previous_token(&tokens, index), Some(CelToken::Dot));
+                is_root.then(|| (*text).to_string())
+            }
+            CelToken::Dot | CelToken::Bracket | CelToken::Other => None,
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+enum CelToken<'a> {
+    Identifier { text: &'a str },
+    Dot,
+    Bracket,
+    Other,
+}
+
+fn cel_tokens(expression: &str) -> Vec<CelToken<'_>> {
     let bytes = expression.as_bytes();
-    let mut roots = BTreeSet::new();
+    let mut tokens = Vec::new();
     let mut index = 0;
-    let mut quote: Option<u8> = None;
     while index < bytes.len() {
-        let byte = bytes[index];
-        if let Some(active_quote) = quote {
-            if byte == b'\\' {
-                index = index.saturating_add(2);
-                continue;
-            }
-            if byte == active_quote {
-                quote = None;
-            }
+        if bytes.get(index..index + 2) == Some(b"//") {
+            index = skip_line_comment(bytes, index + 2);
+            continue;
+        }
+        if let Some(end) = cel_string_literal_end(bytes, index) {
+            tokens.push(CelToken::Other);
+            index = end;
+            continue;
+        }
+        if bytes[index] == b'`' {
+            tokens.push(CelToken::Other);
+            index = escaped_identifier_end(bytes, index);
+            continue;
+        }
+        if bytes[index] == b'.' {
+            tokens.push(CelToken::Dot);
             index += 1;
             continue;
         }
-        if matches!(byte, b'\'' | b'"' | b'`') {
-            quote = Some(byte);
+        if matches!(bytes[index], b'[' | b']') {
+            tokens.push(CelToken::Bracket);
             index += 1;
             continue;
         }
-        if !is_cel_identifier_start_byte(byte) {
-            index += 1;
+        if is_cel_identifier_start_byte(bytes[index]) {
+            let start = index;
+            index = identifier_end(bytes, start);
+            tokens.push(CelToken::Identifier {
+                text: &expression[start..index],
+            });
             continue;
         }
-        let start = index;
+        if !bytes[index].is_ascii_whitespace() {
+            tokens.push(CelToken::Other);
+        }
         index += 1;
-        while index < bytes.len() && is_cel_identifier_continue_byte(bytes[index]) {
-            index += 1;
-        }
-        let mut lookahead = index;
-        while lookahead < bytes.len() && bytes[lookahead].is_ascii_whitespace() {
-            lookahead += 1;
-        }
-        let previous = start
-            .checked_sub(1)
-            .and_then(|previous| bytes.get(previous))
-            .copied();
-        let is_member = previous == Some(b'.');
-        let is_root = matches!(bytes.get(lookahead), Some(b'.' | b'[')) && !is_member;
-        if is_root {
-            roots.insert(expression[start..index].to_string());
-        }
     }
-    roots
+    tokens
+}
+
+fn previous_token<'a>(tokens: &'a [CelToken<'a>], index: usize) -> Option<CelToken<'a>> {
+    index
+        .checked_sub(1)
+        .and_then(|previous| tokens.get(previous))
+        .copied()
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn next_token<'a>(tokens: &'a [CelToken<'a>], index: usize) -> Option<CelToken<'a>> {
+    tokens.get(index + 1).copied()
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn next_tokens<'a, const N: usize>(
+    tokens: &'a [CelToken<'a>],
+    index: usize,
+) -> Option<[CelToken<'a>; N]> {
+    tokens.get(index + 1..index + 1 + N)?.try_into().ok()
+}
+
+fn cel_string_literal_end(bytes: &[u8], index: usize) -> Option<usize> {
+    let (quote_index, raw) = if matches!(bytes.get(index), Some(b'\'' | b'"')) {
+        (index, false)
+    } else if matches!(bytes.get(index), Some(b'r' | b'R'))
+        && matches!(bytes.get(index + 1), Some(b'\'' | b'"'))
+    {
+        (index + 1, true)
+    } else if matches!(bytes.get(index), Some(b'b' | b'B'))
+        && matches!(bytes.get(index + 1), Some(b'\'' | b'"'))
+    {
+        (index + 1, false)
+    } else if matches!(bytes.get(index), Some(b'b' | b'B'))
+        && matches!(bytes.get(index + 1), Some(b'r' | b'R'))
+        && matches!(bytes.get(index + 2), Some(b'\'' | b'"'))
+    {
+        (index + 2, true)
+    } else {
+        return None;
+    };
+    let quote = bytes[quote_index];
+    let triple = bytes.get(quote_index..quote_index + 3) == Some(&[quote, quote, quote]);
+    Some(if triple {
+        skip_triple_quoted_literal(bytes, quote_index + 3, quote, raw)
+    } else {
+        skip_quoted_literal(bytes, quote_index + 1, quote, raw)
+    })
+}
+
+fn skip_quoted_literal(bytes: &[u8], mut index: usize, quote: u8, raw: bool) -> usize {
+    while index < bytes.len() {
+        if !raw && bytes[index] == b'\\' {
+            index = index.saturating_add(2);
+            continue;
+        }
+        if bytes[index] == quote {
+            return index + 1;
+        }
+        index += 1;
+    }
+    bytes.len()
+}
+
+fn skip_triple_quoted_literal(bytes: &[u8], mut index: usize, quote: u8, raw: bool) -> usize {
+    while index < bytes.len() {
+        if !raw && bytes[index] == b'\\' {
+            index = index.saturating_add(2);
+            continue;
+        }
+        if bytes.get(index..index + 3) == Some(&[quote, quote, quote]) {
+            return index + 3;
+        }
+        index += 1;
+    }
+    bytes.len()
+}
+
+fn escaped_identifier_end(bytes: &[u8], mut index: usize) -> usize {
+    index += 1;
+    while index < bytes.len() {
+        if bytes[index] == b'`' {
+            return index + 1;
+        }
+        index += 1;
+    }
+    bytes.len()
+}
+
+fn skip_line_comment(bytes: &[u8], mut index: usize) -> usize {
+    while index < bytes.len() && bytes[index] != b'\n' {
+        index += 1;
+    }
+    index
+}
+
+fn identifier_end(bytes: &[u8], mut index: usize) -> usize {
+    index += 1;
+    while index < bytes.len() && is_cel_identifier_continue_byte(bytes[index]) {
+        index += 1;
+    }
+    index
 }
 
 pub(super) fn is_cel_identifier_start_byte(byte: u8) -> bool {

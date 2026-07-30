@@ -164,6 +164,93 @@ fn cel_policy_validation_rejects_invalid_alias_and_unlisted_dependency() {
 
 #[cfg(feature = "registry-notary-cel")]
 #[test]
+fn cel_reference_scanners_ignore_literal_and_comment_decoys() {
+    for literal in [
+        "'enrollment.parents'",
+        "\"enrollment.parents\"",
+        "'''enrollment.parents'''",
+        r###""""enrollment.parents "" decoy""""###,
+        r"r'enrollment.parents \x'",
+        "r\"enrollment.parents ' decoy\"",
+        "r'''enrollment.parents ' decoy'''",
+        r###"r"""enrollment.parents " decoy""""###,
+        "b'enrollment.parents'",
+        "br'''enrollment.parents ' decoy'''",
+        r###"br"""enrollment.parents " decoy""""###,
+    ] {
+        let expression = format!("{literal} == {literal} && enrollment.matched");
+        assert_eq!(
+            cel_first_level_member_references(&expression, "enrollment"),
+            BTreeSet::from(["matched".to_string()]),
+            "first-level scanner must ignore decoys in {literal}"
+        );
+        assert_eq!(
+            cel_root_references(&expression),
+            BTreeSet::from(["enrollment".to_string()]),
+            "root scanner must ignore decoys in {literal}"
+        );
+        assert!(
+            !contains_unquoted_bracket(&format!("{literal} == {literal}")),
+            "bracket scanner must ignore brackets in {literal}"
+        );
+    }
+
+    let after_raw_triple =
+        r#"r"""embedded " quote""" != "x" || enrollment.parents.size() > 0"#;
+    assert!(
+        cel_first_level_member_references(after_raw_triple, "enrollment").contains("parents"),
+        "raw triple literals with embedded quotes must not hide later composite references"
+    );
+    let after_triple = r#""""embedded " quote""" != "x" || enrollment.parents.size() > 0"#;
+    assert!(
+        cel_first_level_member_references(after_triple, "enrollment").contains("parents"),
+        "triple literals with embedded quotes must not hide later composite references"
+    );
+    let comment_separated = "enrollment // hidden trivia\n . parents.size() > 0";
+    assert!(
+        cel_first_level_member_references(comment_separated, "enrollment").contains("parents"),
+        "line comments between root, dot, and member are trivia"
+    );
+    assert_eq!(
+        registry_cel_required_variables(
+            "r'''as_of_date''' == 'x' || as_of_date < ctx.today",
+            ["as_of_date"]
+        ),
+        BTreeSet::from(["as_of_date".to_string()]),
+        "bare identifier scanner must ignore raw string decoys"
+    );
+    assert!(
+        contains_unquoted_bracket("r'''[not real]''' == 'x' || enrollment[0]"),
+        "bracket scanner must ignore literal brackets and catch real brackets"
+    );
+    let separated_by_punctuation = "(enrollment).date_of_birth";
+    let preview = MappingRuntime::new(RuntimeOptions::default()).preview_cel_expression_with_input(
+        separated_by_punctuation,
+        StandaloneExpressionInput::new(
+            BTreeMap::from([(
+                "enrollment".to_string(),
+                json!({ "date_of_birth": "2000-01-01" }),
+            )])
+            .into_iter()
+            .collect(),
+        ),
+    );
+    assert!(
+        !preview
+            .issues
+            .iter()
+            .any(|issue| issue.severity == ErrorSeverity::Error),
+        "control expression must compile as CEL"
+    );
+    assert!(
+        !cel_first_level_member_references(separated_by_punctuation, "enrollment")
+            .contains("date_of_birth"),
+        "punctuation must prevent synthetic root.member matches"
+    );
+}
+
+#[cfg(feature = "registry-notary-cel")]
+#[test]
 fn registry_cel_startup_is_limited_to_one_output_root_and_declared_variables() {
     let mut claim = typed_registry_claim(
         "age-band",
@@ -239,6 +326,26 @@ fn registry_cel_startup_is_limited_to_one_output_root_and_declared_variables() {
     );
 
     for expression in [
+        "enrollment.matched && 'enrollment.parents' == 'enrollment.parents' ? 1 : 0",
+        "enrollment.matched && \"enrollment.parents\" == \"enrollment.parents\" ? 1 : 0",
+        "enrollment.matched && '''enrollment.parents''' == '''enrollment.parents''' ? 1 : 0",
+        r#"enrollment.matched && """enrollment.parents""" == """enrollment.parents""" ? 1 : 0"#,
+        r"enrollment.matched && r'enrollment.parents \x' == r'enrollment.parents \x' ? 1 : 0",
+        "enrollment.matched && r\"enrollment.parents ' decoy\" == r\"enrollment.parents ' decoy\" ? 1 : 0",
+        "enrollment.matched && b'enrollment.parents' == b'enrollment.parents' ? 1 : 0",
+    ] {
+        claim.rule = RuleConfig::Cel {
+            expression: expression.to_string(),
+            bindings: Default::default(),
+        };
+        evidence.claims[0] = claim.clone();
+        validate_cel_claims_for_startup(&evidence, &RegistryNotaryCelConfig::default())
+            .unwrap_or_else(|error| {
+                panic!("literal decoy references must not trip registry CEL validation: {expression}: {error:?}")
+            });
+    }
+
+    for expression in [
         "caller.scopes.contains('admin')",
         "capability == 'snapshot_exact'",
         "purpose == 'other-purpose'",
@@ -249,6 +356,11 @@ fn registry_cel_startup_is_limited_to_one_output_root_and_declared_variables() {
         "enrollment.parents.size() > 0",
         "enrollment['date_of_birth'] != null",
         "date.age_on(enrollment.date_of_birth, as_of_date)",
+        r#""""embedded " quote""" != "x" || enrollment.parents.size() > 0 ? 1 : 0"#,
+        r#"r"""embedded " quote""" != "x" || enrollment.parents.size() > 0 ? 1 : 0"#,
+        "'''embedded ' quote''' != \"x\" || enrollment.parents.size() > 0 ? 1 : 0",
+        "r'''embedded ' quote''' != \"x\" || enrollment.parents.size() > 0 ? 1 : 0",
+        "enrollment // comment hides trivia\n . parents.size() > 0 ? 1 : 0",
     ] {
         claim.rule = RuleConfig::Cel {
             expression: expression.to_string(),

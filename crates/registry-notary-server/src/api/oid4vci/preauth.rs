@@ -302,6 +302,7 @@ async fn oid4vci_create_registry_offer_inner(
     let mut canonical_authorized_scopes = principal.scopes.clone();
     canonical_authorized_scopes.sort();
     canonical_authorized_scopes.dedup();
+    let canonical_authorization_details = canonical_registry_offer_authorization_details(details);
     let canonical_request_hash = match sha256_canonical_json(&json!({
         "schema": "registry.notary.registry-client-offer-request/v1",
         "request": request,
@@ -310,7 +311,7 @@ async fn oid4vci_create_registry_offer_inner(
         "initiating_client_id_hash": initiating_client_id_hash,
         "auth_profile_id": principal.auth_profile_id,
         "authorized_scopes": canonical_authorized_scopes,
-        "authorization_details": details,
+        "authorization_details": canonical_authorization_details,
     })) {
         Ok(hash) => hash,
         Err(error) => return evidence_error_response(error),
@@ -840,6 +841,21 @@ async fn oid4vci_create_registry_offer_inner(
         &profile.holder_binding.mode,
         target_ref,
     )
+}
+
+/// Match authorization's exact claim-set semantics: order carries no
+/// authority, while multiplicity and version do. Every other signed field
+/// remains unchanged in the request identity.
+fn canonical_registry_offer_authorization_details(
+    details: &registry_notary_core::EvidenceAuthorizationDetails,
+) -> registry_notary_core::EvidenceAuthorizationDetails {
+    let mut canonical = details.clone();
+    canonical.claims.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then_with(|| left.version.cmp(&right.version))
+    });
+    canonical
 }
 
 pub(in crate::api) fn same_target_ref(left: &TargetRefView, right: &TargetRefView) -> bool {
