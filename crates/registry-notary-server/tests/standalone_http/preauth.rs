@@ -1934,6 +1934,88 @@ pub(super) async fn representative_invalid_state_is_throttled_before_repeated_st
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
+pub(super) async fn representative_selection_rejects_a_valid_state_with_the_wrong_csrf_token() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(representative_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .await
+    .expect("representative standalone router builds");
+    let server = TestServer::builder().mock_transport().build(app);
+    let selection =
+        drive_representative_offer_to_selection(&server, &token_upstream, &idp, "representative-1")
+            .await;
+
+    server
+        .post("/oid4vci/offer/representative")
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .bytes(Bytes::from(format!(
+            "selection_state={}&csrf_token=wrong-csrf&target_id=SUBJECT-1",
+            urlencode(&selection.selection_state),
+        )))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+pub(super) async fn offer_callback_rejects_representative_selection_state_before_code_exchange() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(representative_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .await
+    .expect("representative standalone router builds");
+    let server = TestServer::builder().mock_transport().build(app);
+    let selection =
+        drive_representative_offer_to_selection(&server, &token_upstream, &idp, "representative-1")
+            .await;
+
+    server
+        .get(&format!(
+            "/oid4vci/offer/callback?code=second-code&state={}",
+            urlencode(&selection.selection_state),
+        ))
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    let token_requests = token_upstream
+        .wiremock_server()
+        .received_requests()
+        .await
+        .expect("token upstream records requests")
+        .into_iter()
+        .filter(|request| request.url.path() == "/token")
+        .count();
+    assert_eq!(
+        token_requests, 1,
+        "selection state must be rejected before another token exchange"
+    );
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn preauth_end_to_end_issuer_algorithms_match_metadata_and_client_verification() {
     set_preauth_env();
     std::env::set_var("TEST_ISSUER_ES256_JWK", TEST_ISSUER_ES256_JWK);
