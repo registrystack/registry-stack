@@ -4210,20 +4210,12 @@ fn runbook(
     let relay_public_verify = shell_command(&runtime.relay_public.verify_state.command);
     let relay_consultation_verify = shell_command(&runtime.relay_consultation.verify_state.command);
     let notary_verify = shell_command(&runtime.notary.verify_state.command);
-    let ordinary_secret_staging_commands = [
-        (RELAY_PUBLIC, &runtime.relay_public.serve),
-        (
-            RELAY_CONSULTATION,
-            &runtime.relay_consultation.serve,
-        ),
-        (NOTARY, &runtime.notary.serve),
-    ]
+    let secret_staging_commands = [RELAY_PUBLIC, RELAY_CONSULTATION, NOTARY, "postgresql"]
     .into_iter()
-    .filter(|(_, action)| !action.secret_files.is_empty())
-    .map(|(stage_id, _)| {
+    .map(|owner_id| {
         format!(
             "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps {}",
-            secret_staging_service_name(stage_id)
+            secret_staging_service_name(owner_id)
         )
     })
     .collect::<Vec<_>>()
@@ -4259,6 +4251,7 @@ The signed inventory is also recorded at `generated/operator-files.v1.json`. Bef
 ## First installation only\n\n\
 ```text\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml config --no-interpolate --no-env-resolution --quiet\n\
+{secret_staging_commands}\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-postgres-bootstrap\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-public-prepare-state\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-consultation-prepare-state\n\
@@ -4273,7 +4266,7 @@ Selecting `compose.initialize.yaml` is the only supported way to initialize an e
 ## Ordinary start and stop\n\n\
 ```text\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet\n\
-{ordinary_secret_staging_commands}\n\
+{secret_staging_commands}\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public {relay_public_verify}\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation {relay_consultation_verify}\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary {notary_verify}\n\

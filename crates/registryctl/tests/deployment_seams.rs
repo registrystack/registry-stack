@@ -1452,16 +1452,40 @@ fn runbook_covers_first_install_start_update_and_recovery_without_reset() {
         );
     }
     assert!(runbook.contains("'verify-state'"));
-    for stage in [
+    let stages = [
         "registry-relay-public-stage-secrets",
         "registry-relay-consultation-stage-secrets",
         "registry-notary-stage-secrets",
-    ] {
-        assert!(runbook.contains(&format!(
-            "generated/compose.yaml run --rm --no-deps {stage}"
-        )));
+        "registry-postgresql-stage-secrets",
+    ];
+    for stage in stages {
+        let command = format!("generated/compose.yaml run --rm --no-deps {stage}");
+        assert_eq!(
+            runbook.matches(&command).count(),
+            2,
+            "{stage} must run exactly once in each command block"
+        );
     }
+    let staging_sequence = stages
+        .map(|stage| {
+            format!(
+                "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps {stage}"
+            )
+        })
+        .join("\n");
+    let first_install_config = "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml config --no-interpolate --no-env-resolution --quiet";
+    assert!(runbook.contains(&format!(
+        "{first_install_config}\n{staging_sequence}\ndocker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-postgres-bootstrap"
+    )));
+    let ordinary_config = "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet";
+    assert!(runbook.contains(&format!(
+        "{ordinary_config}\n{staging_sequence}\ndocker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public"
+    )));
     assert!(!runbook.contains("registry-runtime-stage-secrets"));
+    assert!(!runbook.contains("registry-relay-public-serve-stage-secrets"));
+    assert!(!runbook.contains("registry-relay-consultation-serve-stage-secrets"));
+    assert!(!runbook.contains("registry-notary-serve-stage-secrets"));
+    assert!(!runbook.contains("registry-postgresql-serve-stage-secrets"));
     assert!(!runbook.contains("--force"));
 }
 
