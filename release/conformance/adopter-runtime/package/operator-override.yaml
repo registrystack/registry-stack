@@ -1,0 +1,4 @@
+services:
+  registry-relay-public:
+    labels:
+      io.registrystack.probe.operator-override: enabled

@@ -677,6 +677,12 @@ jobs:
           fetch-depth: 0
           submodules: false
 
+      - name: Test adopter Compose conformance checker
+        run: python3 -m unittest release/scripts/test_check_adopter_compose_contract.py
+
+      - name: Check adopter Compose models
+        run: bash release/scripts/check_adopter_compose_contract.sh
+
       - name: Test release helper
         run: python3 -m unittest release/scripts/test_registry_release.py
 

@@ -1,0 +1,7 @@
+include:
+  - ../package/generated/compose.yaml
+
+services:
+  parent-private-client:
+    image: example.invalid/registrystack/conformance-probe@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    network_mode: service:registry-private-namespace
