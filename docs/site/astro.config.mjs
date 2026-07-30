@@ -85,7 +85,6 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
 const docsetsManifest = loadDocsetsManifest();
 const {
   base,
-  isArchivedBuild,
   isHistoricalArchiveBuild,
   isSearchExcludedBuild,
   internalRedirect,
