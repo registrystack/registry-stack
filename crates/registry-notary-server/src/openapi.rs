@@ -320,7 +320,7 @@ fn build_openapi_document() -> Value {
                 "post": {
                     "summary": "Create a registrar-initiated pre-authorized offer",
                     "operationId": "createOid4vciRegistryOffer",
-                    "description": "Creates one short-lived pre-authorized OID4VCI offer from an existing fresh registry-backed evaluation owned by the authenticated machine client. The client supplies only the evaluation id and credential configuration id. Registry Notary reloads the exact stored values, target, purpose, compiler-pinned Relay provenance, credential profile, and configuration fingerprint. The caller must present an external API-key or OIDC machine credential with registry_notary:credential_offer_create, the selected configuration scope, and exact target-scoped authorization_details for create_credential_offer; a Notary-issued wallet access token is not accepted. Idempotency-Key is required. Reusing one key with the same request returns the exact stored response, while changing the request or attempting to create another offer from the consumed evaluation returns 409. The credential_offer_uri describes the required tx_code but never contains its numeric value. The registrar must deliver that value to the holder through a separate channel. Every response is non-storable.",
+                    "description": "Creates one short-lived pre-authorized OID4VCI offer from an existing fresh registry-backed evaluation owned by the authenticated machine client. Representative-enabled credential configurations are reserved for their authenticated browser ceremony and are rejected here. The client supplies only the evaluation id and credential configuration id. Registry Notary reloads the exact stored values, target, purpose, compiler-pinned Relay provenance, credential profile, and configuration fingerprint. The caller must present an external API-key or OIDC machine credential with registry_notary:credential_offer_create, the selected configuration scope, and exact target-scoped authorization_details for create_credential_offer; a Notary-issued wallet access token is not accepted. Idempotency-Key is required. Reusing one key with the same request returns the exact stored response, while changing the request or attempting to create another offer from the consumed evaluation returns 409. The credential_offer_uri describes the required tx_code but never contains its numeric value. The registrar must deliver that value to the holder through a separate channel. Every response is non-storable.",
                     "security": [
                         { "apiKeyAuth": [] },
                         { "bearerAuth": [] }
@@ -377,7 +377,7 @@ fn build_openapi_document() -> Value {
                             }
                         },
                         "403": {
-                            "description": "Caller lacks a required scope or exact target-scoped authorization",
+                            "description": "Caller lacks required authority or selected a representative-only credential configuration",
                             "content": {
                                 "application/problem+json": {
                                     "schema": { "$ref": "#/components/schemas/ProblemDetails" }
@@ -4829,6 +4829,7 @@ mod tests {
             .is_some_and(|description| {
                 description.contains("registry_notary:credential_offer_create")
                     && description.contains("Idempotency-Key")
+                    && description.contains("authenticated browser ceremony")
                     && description.contains("exact stored values")
                     && description.contains("exact target-scoped authorization_details")
                     && description.contains("never contains its numeric value")

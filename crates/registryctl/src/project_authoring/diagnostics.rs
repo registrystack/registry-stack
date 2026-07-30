@@ -1698,6 +1698,20 @@ fn representative_issuance_diagnostic(
 ) -> Option<ProjectAuthoringDiagnostic> {
     let binding = environment.oid4vci.as_ref()?;
     let representative = binding.representative_issuance.as_ref()?;
+    if !binding.registrar_clients.is_empty() {
+        return Some(cross_file_diagnostic(
+            "registryctl.authoring.environment.invalid",
+            file,
+            Some("oid4vci.representative_issuance"),
+            "Representative issuance and registrar-created offers select incompatible authorities in Registryctl's single-credential binding.",
+            "Remove registrar_clients, or use a separate environment and Notary deployment for the registrar-created credential.",
+            Some(ENVIRONMENT_SCHEMA_HINT),
+            vec![
+                diagnostic_address(file, &["oid4vci", "registrar_clients"]),
+                diagnostic_address(file, &["oid4vci", "representative_issuance"]),
+            ],
+        ));
+    }
     let service = project.services.get(&binding.credential.service)?;
     let credential = service
         .credential_profiles

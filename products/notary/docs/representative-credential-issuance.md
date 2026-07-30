@@ -98,6 +98,13 @@ credential, a different relationship policy, or a self-service variant
 requires a separate environment and therefore a separate generated Notary
 deployment and issuer endpoint.
 
+That single-credential binding also keeps representative issuance separate
+from `registrar_clients`. The representative flow authenticates a person and
+proves a relationship, while registrar-created offers use a machine authority
+and an existing machine-owned evaluation. Registryctl rejects both fields in
+one environment and points to each field. Use a separate environment and
+Notary deployment when both products are required.
+
 The credential claim root must be exclusive to the selected credential
 profile. Registryctl rejects a shared root because the generated Notary claim
 dependency is claim-wide and must not change another profile's behavior.

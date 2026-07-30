@@ -38,38 +38,38 @@
   },
   "coverage": {
     "schema_count": 7,
-    "path_count": 1803,
-    "reference_count": 500,
+    "path_count": 1812,
+    "reference_count": 505,
     "by_schema": {
       "project": 220,
-      "environment": 200,
+      "environment": 206,
       "integration": 166,
-      "fixture": 62,
+      "fixture": 63,
       "entity": 35,
       "relay": 584,
-      "notary": 536
+      "notary": 538
     },
     "by_path_kind": {
       "root": 7,
-      "property": 1435,
+      "property": 1445,
       "map_key": 26,
       "map_value": 49,
-      "array_item": 179,
+      "array_item": 178,
       "branch": 107
     },
     "by_sensitivity": {
       "public": 16,
-      "internal": 1168,
-      "sensitive": 401,
+      "internal": 1174,
+      "sensitive": 403,
       "secret_reference": 41,
-      "redacted_fixture": 50,
+      "redacted_fixture": 51,
       "structural": 127
     },
     "by_intent_source": {
-      "schema_description": 517,
-      "reviewed_override": 261,
+      "schema_description": 523,
+      "reviewed_override": 262,
       "structural_taxonomy": 127,
-      "reviewed_profile": 898
+      "reviewed_profile": 900
     },
     "by_intent_profile": {
       "notary_audit_internal": 4,
@@ -103,14 +103,14 @@
       "notary_instance_sensitive": 1,
       "notary_oid4vci_credential_configurations_open_map": 1,
       "notary_oid4vci_internal": 33,
-      "notary_oid4vci_sensitive": 48,
+      "notary_oid4vci_sensitive": 51,
       "notary_root_structural": 1,
       "notary_server_internal": 13,
       "notary_server_sensitive": 2,
       "notary_state_internal": 6,
       "notary_state_secret_reference": 2,
       "notary_state_sensitive": 1,
-      "notary_subject_access_sensitive": 67,
+      "notary_subject_access_sensitive": 66,
       "relay_audit_internal": 9,
       "relay_audit_secret_reference": 1,
       "relay_audit_sensitive": 1,
@@ -908,7 +908,7 @@
         "pointer": "/$defs/consultations/additionalProperties/properties/input/additionalProperties",
         "path_kind": "map_value"
       },
-      "purpose": "Closed target request binding. Attribute values are bounded typed caller-supplied context, not authenticated identifiers.",
+      "purpose": "Closed request binding. Ordinary consultations use the target; representative relationship proofs may additionally bind an authenticated requester identifier.",
       "purpose_source": "schema_description",
       "semantic_owner": "authoring_contract",
       "human_owner": "registry_maintainers",
@@ -917,7 +917,7 @@
         "schema_types": [
           "string"
         ],
-        "local_reference": "#/$defs/targetRequestMapping",
+        "local_reference": "#/$defs/requestMapping",
         "composed": false
       },
       "requiredness": "not_applicable",
@@ -990,7 +990,7 @@
         },
         {
           "keyword": "pattern",
-          "value": "^request\\.target\\.(?:id|identifiers\\.[A-Za-z][A-Za-z0-9._-]{0,95}|attributes\\.[a-z][a-z0-9_]{0,63})$"
+          "value": "^request\\.(?:target\\.(?:id|identifiers\\.[A-Za-z][A-Za-z0-9._-]{0,95}|attributes\\.[a-z][a-z0-9_]{0,63})|requester\\.identifiers\\.[A-Za-z][A-Za-z0-9._-]{0,95})$"
         },
         {
           "keyword": "type",
@@ -999,7 +999,7 @@
       ],
       "local_reference": {
         "schema": "project",
-        "pointer": "/$defs/targetRequestMapping"
+        "pointer": "/$defs/requestMapping"
       }
     },
     {
@@ -26438,6 +26438,493 @@
     {
       "address": {
         "schema": "environment",
+        "pointer": "/$defs/oid4vci/properties/representative_issuance",
+        "path_kind": "property"
+      },
+      "purpose": "One digitally authenticated representative ceremony bound to an exact relationship proof. Registryctl derives the credential dependency, status endpoint, and secure proof-freshness default.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "object"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "required",
+          "value": [
+            "relationship",
+            "proof_claim",
+            "target_id_type"
+          ]
+        },
+        {
+          "keyword": "type",
+          "value": "object"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/$defs/oid4vci/properties/representative_issuance/properties/max_proof_age_seconds",
+        "path_kind": "property"
+      },
+      "purpose": "Maximum age of the relationship proof. Omit for the secure 300-second default.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "integer"
+        ],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "schema_default",
+        "schema_value": 300
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "maximum",
+          "value": 600
+        },
+        {
+          "keyword": "minimum",
+          "value": 1
+        },
+        {
+          "keyword": "type",
+          "value": "integer"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/$defs/oid4vci/properties/representative_issuance/properties/proof_claim",
+        "path_kind": "property"
+      },
+      "purpose": "Lowercase stable identifier used in project references.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "local_reference": "#/$defs/stableId",
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "pattern",
+          "value": "^[a-z][a-z0-9._-]{0,95}$"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ],
+      "local_reference": {
+        "schema": "environment",
+        "pointer": "/$defs/stableId"
+      }
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/$defs/oid4vci/properties/representative_issuance/properties/relationship",
+        "path_kind": "property"
+      },
+      "purpose": "Lowercase stable identifier used in project references.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "local_reference": "#/$defs/stableId",
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "pattern",
+          "value": "^[a-z][a-z0-9._-]{0,95}$"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ],
+      "local_reference": {
+        "schema": "environment",
+        "pointer": "/$defs/stableId"
+      }
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/$defs/oid4vci/properties/representative_issuance/properties/target_id_type",
+        "path_kind": "property"
+      },
+      "purpose": "Bounded visible-ASCII protocol token.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "local_reference": "#/$defs/token256",
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": [
+        {
+          "keyword": "maxLength",
+          "value": 256
+        },
+        {
+          "keyword": "minLength",
+          "value": 1
+        },
+        {
+          "keyword": "pattern",
+          "value": "^[!-~]+$"
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ],
+      "local_reference": {
+        "schema": "environment",
+        "pointer": "/$defs/token256"
+      }
+    },
+    {
+      "address": {
+        "schema": "environment",
         "pointer": "/$defs/oid4vci/properties/sensitive_state_key",
         "path_kind": "property"
       },
@@ -34263,6 +34750,86 @@
         "schema": "environment",
         "pointer": "/$defs/httpsResource"
       }
+    },
+    {
+      "address": {
+        "schema": "environment",
+        "pointer": "/allOf/6/else/properties/oid4vci/properties/representative_issuance",
+        "path_kind": "property"
+      },
+      "purpose": "Applies non-local HTTPS constraints to representative issuance.",
+      "purpose_source": "reviewed_override",
+      "semantic_owner": "deployment_security",
+      "human_owner": "security_maintainers",
+      "scope": "Operator-owned deployment, trust, secret-reference, network, caller, state, and product availability bindings.",
+      "field_type": {
+        "schema_types": [],
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "internal",
+      "state": "environment_bound",
+      "products": [
+        "registryctl",
+        "relay",
+        "notary",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "cross_file_semantic",
+        "operator_preflight",
+        "product_build"
+      ],
+      "diagnostic": "registryctl.authoring.environment.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use non-routable example origins and opaque example secret-reference names, never working credentials or private infrastructure details.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate deployment and secret or trust rotation with the environment operator before activating a changed binding.",
+      "consumers": [
+        "registryctl_authoring",
+        "registry_relay",
+        "registry_notary",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "project_build",
+        "relay_config",
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "security",
+        "privacy",
+        "relay",
+        "notary",
+        "compatibility",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values"
+      ],
+      "constraints": []
     },
     {
       "address": {
@@ -57104,6 +57671,95 @@
           "value": "string"
         }
       ]
+    },
+    {
+      "address": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedRequest/properties/requester",
+        "path_kind": "property"
+      },
+      "purpose": "Supplies a synthetic authenticated requester when selected consultation mappings read requester identifiers.",
+      "purpose_source": "schema_description",
+      "semantic_owner": "fixture_harness",
+      "human_owner": "test_maintainers",
+      "scope": "An offline synthetic interaction and expected outcome used to verify one integration contract without source access.",
+      "field_type": {
+        "schema_types": [
+          "object"
+        ],
+        "local_reference": "#/$defs/governedTarget",
+        "composed": false
+      },
+      "requiredness": "optional",
+      "null_behavior": "rejected",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "environment_independent",
+      "sensitivity": "redacted_fixture",
+      "state": "authored",
+      "products": [
+        "registryctl",
+        "editor",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "fixture_execution"
+      ],
+      "diagnostic": "registryctl.authoring.fixture.invalid",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use unmistakably synthetic inputs, requests, responses, claims, and errors; fixtures must not contain copied personal or source data.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "update_fixtures",
+      "migration_note": "Update the fixture when the reviewed integration contract changes, while preserving synthetic and non-sensitive test data.",
+      "consumers": [
+        "registryctl_authoring",
+        "editor_tooling",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "editor_schemas",
+        "fixture_report",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "privacy",
+        "compatibility",
+        "documentation",
+        "testing"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "synthetic_fixture_value_redacted"
+      ],
+      "constraints": [
+        {
+          "keyword": "required",
+          "value": [
+            "type"
+          ]
+        },
+        {
+          "keyword": "type",
+          "value": "object"
+        }
+      ],
+      "local_reference": {
+        "schema": "fixture",
+        "pointer": "/$defs/governedTarget"
+      }
     },
     {
       "address": {
@@ -136251,6 +136907,96 @@
     {
       "address": {
         "schema": "notary",
+        "pointer": "/$defs/Oid4vciCredentialConfigurationConfig/properties/representative_issuance",
+        "key_path": "oid4vci.credential_configurations.*.representative_issuance",
+        "path_kind": "property"
+      },
+      "purpose": "Controls Notary OpenID4VCI issuer, client, grant, proof, nonce, and credential-configuration behavior.",
+      "purpose_source": "reviewed_profile",
+      "intent_profile": "notary_oid4vci_sensitive",
+      "semantic_owner": "notary_runtime",
+      "human_owner": "notary_maintainers",
+      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "null",
+          "object"
+        ],
+        "composed": true
+      },
+      "requiredness": "optional",
+      "null_behavior": "conditional",
+      "empty_behavior": "not_applicable",
+      "default": {
+        "behavior": "reviewed_runtime_default",
+        "reviewed_behavior": "When omitted, Rust deserialization preserves the product-owned absence state without materializing a configuration value."
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "sensitive",
+      "state": "runtime",
+      "products": [
+        "notary",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
+      "consumers": [
+        "registry_notary",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "notary",
+        "security",
+        "privacy",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "sensitive_operational_metadata",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "required",
+          "value": [
+            "ceremony",
+            "relationship"
+          ]
+        },
+        {
+          "keyword": "type",
+          "value": [
+            "null",
+            "object"
+          ]
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "notary",
         "pointer": "/$defs/Oid4vciCredentialConfigurationConfig/properties/scope",
         "key_path": "oid4vci.credential_configurations.*.scope",
         "path_kind": "property"
@@ -139794,6 +140540,173 @@
         {
           "keyword": "type",
           "value": "integer"
+        }
+      ]
+    },
+    {
+      "address": {
+        "schema": "notary",
+        "pointer": "/$defs/Oid4vciRepresentativeIssuanceConfig/properties/ceremony",
+        "key_path": "oid4vci.credential_configurations.*.representative_issuance.ceremony",
+        "path_kind": "property"
+      },
+      "purpose": "Controls Notary OpenID4VCI issuer, client, grant, proof, nonce, and credential-configuration behavior.",
+      "purpose_source": "reviewed_profile",
+      "intent_profile": "notary_oid4vci_sensitive",
+      "semantic_owner": "notary_runtime",
+      "human_owner": "notary_maintainers",
+      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "local_reference": "#/$defs/Oid4vciRepresentativeIssuanceCeremony",
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "rejected",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "sensitive",
+      "state": "runtime",
+      "products": [
+        "notary",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
+      "consumers": [
+        "registry_notary",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "notary",
+        "security",
+        "privacy",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "sensitive_operational_metadata",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "enum",
+          "value": [
+            "digitally_authenticated_representative"
+          ]
+        },
+        {
+          "keyword": "type",
+          "value": "string"
+        }
+      ],
+      "local_reference": {
+        "schema": "notary",
+        "pointer": "/$defs/Oid4vciRepresentativeIssuanceCeremony"
+      }
+    },
+    {
+      "address": {
+        "schema": "notary",
+        "pointer": "/$defs/Oid4vciRepresentativeIssuanceConfig/properties/relationship",
+        "key_path": "oid4vci.credential_configurations.*.representative_issuance.relationship",
+        "path_kind": "property"
+      },
+      "purpose": "Controls Notary OpenID4VCI issuer, client, grant, proof, nonce, and credential-configuration behavior.",
+      "purpose_source": "reviewed_profile",
+      "intent_profile": "notary_oid4vci_sensitive",
+      "semantic_owner": "notary_runtime",
+      "human_owner": "notary_maintainers",
+      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
+      "field_type": {
+        "schema_types": [
+          "string"
+        ],
+        "composed": false
+      },
+      "requiredness": "required",
+      "null_behavior": "rejected",
+      "empty_behavior": "allowed",
+      "default": {
+        "behavior": "no_schema_default"
+      },
+      "environment_behavior": "narrows_reviewed_authority",
+      "sensitivity": "sensitive",
+      "state": "runtime",
+      "products": [
+        "notary",
+        "docs"
+      ],
+      "availability": "published",
+      "stability": "experimental",
+      "validation_stages": [
+        "json_schema",
+        "rust_deserialization",
+        "operator_preflight"
+      ],
+      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
+      "history_status": "not_verified",
+      "introduced_in": null,
+      "version_history": [],
+      "example": {
+        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
+        "schema_examples_available": false,
+        "contains_country_values": false
+      },
+      "migration": "coordinate_deployment",
+      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
+      "consumers": [
+        "registry_notary",
+        "docs_generator"
+      ],
+      "generated_artifacts": [
+        "notary_config",
+        "field_reference"
+      ],
+      "review_classes": [
+        "contract",
+        "notary",
+        "security",
+        "privacy",
+        "documentation"
+      ],
+      "semantic_rules": [
+        "knowledge_only",
+        "generated_docs_never_load_country_values",
+        "sensitive_operational_metadata",
+        "array_items_share_element_contract"
+      ],
+      "constraints": [
+        {
+          "keyword": "type",
+          "value": "string"
         }
       ]
     },
@@ -150296,8 +151209,8 @@
     {
       "address": {
         "schema": "notary",
-        "pointer": "/$defs/SubjectAccessDelegatedRelationshipConfig/properties/credential_profiles",
-        "key_path": "subject_access.delegation.allowed_relationships[].credential_profiles",
+        "pointer": "/$defs/SubjectAccessDelegatedRelationshipConfig/properties/max_proof_age_seconds",
+        "key_path": "subject_access.delegation.allowed_relationships[].max_proof_age_seconds",
         "path_kind": "property"
       },
       "purpose": "Controls Notary subject and assisted-access policy, authorization details, and relationship proof behavior.",
@@ -150308,7 +151221,7 @@
       "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
       "field_type": {
         "schema_types": [
-          "array"
+          "integer"
         ],
         "composed": false
       },
@@ -150367,86 +151280,20 @@
       ],
       "constraints": [
         {
-          "keyword": "type",
-          "value": "array"
-        }
-      ]
-    },
-    {
-      "address": {
-        "schema": "notary",
-        "pointer": "/$defs/SubjectAccessDelegatedRelationshipConfig/properties/credential_profiles/items",
-        "key_path": "subject_access.delegation.allowed_relationships[].credential_profiles[]",
-        "path_kind": "array_item"
-      },
-      "purpose": "Controls Notary subject and assisted-access policy, authorization details, and relationship proof behavior.",
-      "purpose_source": "reviewed_profile",
-      "intent_profile": "notary_subject_access_sensitive",
-      "semantic_owner": "notary_runtime",
-      "human_owner": "notary_maintainers",
-      "scope": "The complete product-owned Notary runtime configuration accepted by schema validation, Rust deserialization, and operator preflight.",
-      "field_type": {
-        "schema_types": [
-          "string"
-        ],
-        "composed": false
-      },
-      "requiredness": "not_applicable",
-      "null_behavior": "rejected",
-      "empty_behavior": "allowed",
-      "default": {
-        "behavior": "not_applicable"
-      },
-      "environment_behavior": "narrows_reviewed_authority",
-      "sensitivity": "sensitive",
-      "state": "runtime",
-      "products": [
-        "notary",
-        "docs"
-      ],
-      "availability": "published",
-      "stability": "experimental",
-      "validation_stages": [
-        "json_schema",
-        "rust_deserialization",
-        "operator_preflight"
-      ],
-      "diagnostic": "Notary runtime configuration does not yet publish a closed general diagnostic code; doctor reports the generic failed status.",
-      "history_status": "not_verified",
-      "introduced_in": null,
-      "version_history": [],
-      "example": {
-        "guidance": "Use synthetic identifiers and non-routable placeholders; never copy credentials, environment values, deployment paths, or country configuration.",
-        "schema_examples_available": false,
-        "contains_country_values": false
-      },
-      "migration": "coordinate_deployment",
-      "migration_note": "Coordinate Notary deployment, key or trust rotation, and rollback review before activating runtime configuration changes.",
-      "consumers": [
-        "registry_notary",
-        "docs_generator"
-      ],
-      "generated_artifacts": [
-        "notary_config",
-        "field_reference"
-      ],
-      "review_classes": [
-        "contract",
-        "notary",
-        "security",
-        "privacy",
-        "documentation"
-      ],
-      "semantic_rules": [
-        "knowledge_only",
-        "generated_docs_never_load_country_values",
-        "sensitive_operational_metadata",
-        "array_items_share_element_contract"
-      ],
-      "constraints": [
+          "keyword": "format",
+          "value": "uint64"
+        },
+        {
+          "keyword": "maximum",
+          "value": 600
+        },
+        {
+          "keyword": "minimum",
+          "value": 1
+        },
         {
           "keyword": "type",
-          "value": "string"
+          "value": "integer"
         }
       ]
     },

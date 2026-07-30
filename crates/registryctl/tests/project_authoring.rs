@@ -5877,7 +5877,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "99930e933a393918279331327af8677578f363b7693b4a0fc3eeb19f6f3df3fc",
+        "ef5231ed6ad392a3f2eabac126e74115db68050387f44dbd04039578d18e875d",
         "project output, including its deterministic manifest, must match the cross-machine golden digest"
     );
 }
@@ -7288,6 +7288,64 @@ fn authored_representative_oid4vci_rejects_non_person_requester_fixtures() {
         format!("{error:#}").contains("request_to_consultation_binding_invalid"),
         "{error:#}"
     );
+}
+
+#[test]
+fn representative_oid4vci_rejects_registrar_clients_with_a_clear_fix() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    author_oid4vci_binding(
+        &project,
+        "household-eligibility",
+        "household-eligibility",
+        "representative_reference",
+    );
+    author_representative_oid4vci_binding(&project, "representative_reference");
+    merge_environment_yaml(
+        &project.join("environments/local.yaml"),
+        "oid4vci:\n  registrar_clients: [benefits-service]\n",
+    );
+
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("one Registryctl credential binding cannot use both authorities");
+    assert!(
+        format!("{error:#}").contains(
+            "Representative issuance and registrar-created offers select incompatible authorities"
+        ),
+        "{error:#}"
+    );
+
+    let report = authoring_diagnostics(&project);
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| {
+            diagnostic.cause
+                == "Representative issuance and registrar-created offers select incompatible authorities in Registryctl's single-credential binding."
+        })
+        .unwrap_or_else(|| panic!("missing authority diagnostic: {report:#?}"));
+    assert_eq!(
+        diagnostic.remediation,
+        "Remove registrar_clients, or use a separate environment and Notary deployment for the registrar-created credential."
+    );
+    for pointer in [
+        "/oid4vci/registrar_clients",
+        "/oid4vci/representative_issuance",
+    ] {
+        assert!(
+            diagnostic
+                .addresses
+                .iter()
+                .any(|address| address.file == "environments/local.yaml"
+                    && address.pointer == pointer)
+        );
+    }
 }
 
 #[test]

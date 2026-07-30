@@ -114,6 +114,12 @@ async fn oid4vci_create_registry_offer_inner(
             required: configuration.scope.clone(),
         });
     }
+    if configuration.representative_issuance.is_some() {
+        return registry_offer_problem(
+            StatusCode::FORBIDDEN,
+            "representative_offer_requires_authenticated_ceremony",
+        );
+    }
     let evaluation = match state
         .store
         .get(&request.evaluation_id, &principal.principal_id)
@@ -2381,7 +2387,12 @@ pub(in crate::api) async fn oid4vci_token(
     };
     let transaction_access_mode = live_transaction
         .as_ref()
-        .map(|live| issuance_authority_access_mode(&live.transaction.authority))
+        .map(|live| {
+            issuance_authority_access_mode(
+                &live.transaction.authority,
+                configuration.representative_issuance.is_some(),
+            )
+        })
         .unwrap_or(AccessMode::SubjectBound);
     // Enforce the signed code's PIN-attempt policy even when its transaction
     // binding is absent or invalid. This prevents a forged transaction ID from
@@ -2681,7 +2692,7 @@ pub(in crate::api) async fn oid4vci_token(
     let Some((access_token_iat, access_token_exp)) = capped_access_token_window(
         access_token_now,
         preauth.access_token_ttl_seconds(),
-        transaction_expires_at.unix_timestamp(),
+        Some(transaction_expires_at.unix_timestamp()),
     ) else {
         return token_error_with_audit(
             &preauth,
@@ -2727,7 +2738,7 @@ pub(in crate::api) async fn oid4vci_token(
             .await;
         }
     };
-    let mut audit = pre_auth_audit_event(
+    let audit = pre_auth_audit_event(
         "POST",
         path,
         StatusCode::OK.as_u16(),
@@ -2737,19 +2748,13 @@ pub(in crate::api) async fn oid4vci_token(
                 configuration_id,
             )
             .ok(),
-            access_mode: Some(if configuration.representative_issuance.is_some() {
-                AccessMode::DelegatedAttestation
-            } else {
-                AccessMode::SubjectBound
-            }),
+            access_mode: Some(issuance_authority_access_mode(
+                &transaction.authority,
+                configuration.representative_issuance.is_some(),
+            )),
             ..PreAuthAuditFields::default()
         },
     );
-    audit.access_mode = Some(if configuration.representative_issuance.is_some() {
-        AccessMode::DelegatedAttestation
-    } else {
-        issuance_authority_access_mode(&transaction.authority)
-    });
     if preauth.emit_audit(&audit).await.is_err() {
         return token_error_response(TokenWireError::ServerError);
     }
@@ -2778,8 +2783,12 @@ pub(in crate::api) async fn oid4vci_token(
 
 pub(in crate::api) const fn issuance_authority_access_mode(
     authority: &IssuanceAuthority,
+    representative_issuance: bool,
 ) -> AccessMode {
     match authority {
+        IssuanceAuthority::SubjectAccess if representative_issuance => {
+            AccessMode::DelegatedAttestation
+        }
         IssuanceAuthority::SubjectAccess => AccessMode::SubjectBound,
         IssuanceAuthority::RegistryClient { .. } => AccessMode::MachineClient,
     }
@@ -3490,7 +3499,7 @@ mod replay_scope_tests {
     }
 
     #[test]
-    fn access_token_window_preserves_ordinary_ttl_and_caps_representative_proof() {
+    fn access_token_window_uses_the_optional_transaction_expiry_cap() {
         assert_eq!(capped_access_token_window(100, 300, None), Some((100, 400)));
         assert_eq!(
             capped_access_token_window(100, 300, Some(120)),
