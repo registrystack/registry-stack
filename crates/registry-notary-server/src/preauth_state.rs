@@ -1158,8 +1158,13 @@ impl InMemoryPreauthorizationState {
         request_hash: &str,
         response: Value,
     ) -> Result<bool, PreauthorizationStateError> {
+        let now = OffsetDateTime::now_utc();
         let key = replay_identifier_hash(transaction_id);
         let mut records = self.lock_records()?;
+        // Match the PostgreSQL completion function: signer or status-store
+        // work that crosses the transaction expiry must not commit a
+        // wallet-visible credential response.
+        records.issuance.retain(|_, record| record.expires_at > now);
         let Some(record) = records.issuance.get_mut(&key) else {
             return Ok(false);
         };
@@ -2242,6 +2247,68 @@ mod tests {
             .redeem(&scope(), "offer-transaction", code_expires_at, false, None,)
             .await
             .unwrap());
+    }
+
+    #[tokio::test]
+    async fn issuance_materialization_cannot_complete_after_transaction_expiry() {
+        let state = memory_state();
+        let transaction = issuance_transaction();
+        state
+            .reserve_issuance_transaction(
+                &transaction.transaction_id,
+                transaction.clone(),
+                OffsetDateTime::now_utc() + Duration::minutes(5),
+            )
+            .await
+            .unwrap();
+        assert!(state
+            .bind_transaction_nonce(
+                &transaction.transaction_id,
+                &transaction.commitment,
+                "token-nonce".to_string(),
+            )
+            .await
+            .unwrap());
+        assert!(matches!(
+            state
+                .begin_credential_materialization(
+                    &transaction.transaction_id,
+                    &transaction.commitment,
+                    &transaction.credential_configuration_id,
+                    "token-nonce",
+                    "holder-one",
+                    "request-one",
+                )
+                .await
+                .unwrap(),
+            CredentialMaterialization::Acquired(_)
+        ));
+        let key = replay_identifier_hash(&transaction.transaction_id);
+        let PreauthorizationBackend::InMemory(memory) = &state.backend else {
+            panic!("test requires the in-memory backend");
+        };
+        memory
+            .lock_records()
+            .unwrap()
+            .issuance
+            .get_mut(&key)
+            .expect("issuance transaction exists")
+            .expires_at = OffsetDateTime::now_utc();
+
+        assert!(!state
+            .complete_credential_materialization(
+                &transaction.transaction_id,
+                "holder-one",
+                "request-one",
+                serde_json::json!({"credential": "must-not-be-cached"}),
+            )
+            .await
+            .unwrap());
+        assert!(state
+            .transaction(&transaction.transaction_id)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
