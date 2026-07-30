@@ -61,7 +61,7 @@
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-server/src/standalone/tests/auth.inc::evidence_service_discovery_is_not_auth_exempt",
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_registry_evaluation"
       ],
       "waiver": null
     },
@@ -170,7 +170,7 @@
       "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_registry_evaluation"
       ],
       "waiver": null
     },
@@ -193,7 +193,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_registry_evaluation"
       ],
       "waiver": null
     },
@@ -432,7 +432,7 @@
       "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_registry_evaluation"
       ],
       "waiver": null
     },
@@ -453,7 +453,7 @@
       "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_registry_evaluation"
       ],
       "waiver": null
     },
@@ -474,7 +474,7 @@
       "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_registry_evaluation"
       ],
       "waiver": null
     },
@@ -497,7 +497,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_registry_evaluation"
       ],
       "waiver": null
     },
@@ -520,7 +520,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_registry_evaluation"
       ],
       "waiver": null
     },
@@ -543,7 +543,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_registry_evaluation"
       ],
       "waiver": null
     },
@@ -566,7 +566,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_registry_evaluation"
       ],
       "waiver": null
     },
@@ -608,7 +608,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_registry_evaluation"
       ],
       "waiver": null
     },
@@ -655,7 +655,7 @@
       "notes": "Admin metrics route mounted on the admin listener in dedicated mode and handler-enforced by admin scope. Simple local shared mode keeps the same admin-scope gate.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_registry_evaluation"
       ],
       "waiver": null
     }
