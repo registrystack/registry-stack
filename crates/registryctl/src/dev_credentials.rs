@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use ed25519_dalek::{Signer as _, SigningKey};
 use registry_platform_authcommon::{fingerprint_api_key, validate_api_key_entropy};
 use registry_platform_config::ProductAcceptanceLaneV1;
 use registry_platform_crypto::PublicJwk;
@@ -22,6 +24,11 @@ const DEV_PUBLIC_ROOT: &str = "/run/registry/dev-public";
 const SYNTHETIC_SECRET_ROOT: &str = "/run/registry/synthetic-source-secrets";
 const DEV_WORKLOAD_ISSUER: &str = "http://registry-notary:8081";
 const DEV_WORKLOAD_JWKS_URL: &str = "http://registry-notary:8081/.well-known/evidence/jwks.json";
+const DEV_WORKLOAD_KID: &str = "registryctl-local-workload";
+const DEV_WORKLOAD_CLIENT: &str = "registryctl-local-notary";
+const DEV_WORKLOAD_AUDIENCE: &str = "registry-relay";
+const DEV_WORKLOAD_SCOPE: &str = "registry:consult:public-works-verification";
+const DEV_WORKLOAD_LIFETIME_SECONDS: u64 = 10 * 365 * 24 * 60 * 60;
 
 const RELAY_PUBLIC_AUDIT_ENV: &str = "REGISTRY_RELAY_AUDIT_HASH_SECRET";
 const RELAY_CONSULTATION_AUDIT_ENV: &str = "REGISTRY_RELAY_AUDIT_HASH_SECRET";
@@ -379,10 +386,9 @@ impl PreparedDevCredentialClosure {
             .map_err(|_| anyhow!("generated development caller credential failed validation"))?;
         let caller_fingerprint = fingerprint_api_key(&caller_token);
 
-        let (workload_private_jwk, workload_public_jwk) =
-            crate::generate_ed25519_jwk(crate::CANONICAL_RUNTIME_WORKLOAD_KID)
-                .context("failed to generate the development workload identity")?;
-        let workload_jwks = crate::workload_jwks_from_private(&workload_private_jwk)
+        let (workload_private_jwk, workload_public_jwk) = generate_ed25519_jwk(DEV_WORKLOAD_KID)
+            .context("failed to generate the development workload identity")?;
+        let workload_jwks = workload_jwks_from_private(&workload_private_jwk)
             .context("failed to project the development workload identity")?;
         let workload_token = sign_dev_workload_jwt(&workload_private_jwk)?;
 
@@ -433,12 +439,12 @@ impl PreparedDevCredentialClosure {
                 jwks_url: DEV_WORKLOAD_JWKS_URL.to_string(),
                 jwks_file: public_container_path(WORKLOAD_JWKS_FILE),
                 public_jwk: workload_public_jwk.clone(),
-                audience: crate::CANONICAL_RUNTIME_WORKLOAD_AUDIENCE.to_string(),
-                client_id: crate::CANONICAL_RUNTIME_WORKLOAD_CLIENT.to_string(),
+                audience: DEV_WORKLOAD_AUDIENCE.to_string(),
+                client_id: DEV_WORKLOAD_CLIENT.to_string(),
             },
             notary_relay: DevNotaryRelayProjection {
                 base_url: "http://registry-relay-consultation:8080".to_string(),
-                workload_client_id: crate::CANONICAL_RUNTIME_WORKLOAD_CLIENT.to_string(),
+                workload_client_id: DEV_WORKLOAD_CLIENT.to_string(),
                 token_file: secret_container_path(WORKLOAD_TOKEN_FILE),
             },
             databases: DevDatabaseCredentialProjection {
@@ -1007,7 +1013,7 @@ fn generate_lane_signer(
 ) -> Result<LaneSigningCredential> {
     let lane_name = lane_name(lane);
     let kid = format!("registryctl-dev-{project}-{environment}-{lane_name}");
-    let (private_jwk, public_jwk) = crate::generate_ed25519_jwk(&kid)
+    let (private_jwk, public_jwk) = generate_ed25519_jwk(&kid)
         .context("failed to generate a disposable development lane signer")?;
     let trust_kid = PublicJwk::parse(&public_jwk)
         .and_then(|jwk| jwk.jkt())
@@ -1034,7 +1040,7 @@ fn generate_lane_signer(
 fn generate_issuance_credential(
     requirement: &DevIssuanceCredentialRequirement,
 ) -> Result<IssuanceCredential> {
-    let (private_jwk, public_jwk) = crate::generate_ed25519_jwk(&requirement.signing_kid)
+    let (private_jwk, public_jwk) = generate_ed25519_jwk(&requirement.signing_kid)
         .context("failed to generate disposable development issuance material")?;
     Ok(IssuanceCredential {
         projection: DevIssuanceCredentialProjection {
@@ -1215,9 +1221,118 @@ fn action_projection() -> DevActionCredentialProjection {
 }
 
 fn secret_token(bytes: usize) -> Result<Zeroizing<String>> {
-    crate::random_token(bytes)
+    random_token(bytes)
         .map(Zeroizing::new)
         .map_err(|_| anyhow!("failed to generate a disposable development credential"))
+}
+
+fn random_token(bytes: usize) -> Result<String> {
+    let mut random = Zeroizing::new(vec![0_u8; bytes]);
+    getrandom::fill(random.as_mut_slice()).map_err(|_| anyhow!("random generation failed"))?;
+    Ok(URL_SAFE_NO_PAD.encode(random.as_slice()))
+}
+
+fn generate_ed25519_jwk(kid: &str) -> Result<(String, String)> {
+    let mut secret = Zeroizing::new([0_u8; 32]);
+    getrandom::fill(secret.as_mut_slice()).map_err(|_| anyhow!("random generation failed"))?;
+    let signing_key = SigningKey::from_bytes(&secret);
+    let x = URL_SAFE_NO_PAD.encode(signing_key.verifying_key().as_bytes());
+    let d = URL_SAFE_NO_PAD.encode(secret.as_slice());
+    let private = serde_json::json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "d": d,
+        "x": x.clone(),
+        "alg": "EdDSA",
+        "kid": kid,
+    });
+    let public = serde_json::json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": x,
+        "alg": "EdDSA",
+        "kid": kid,
+        "use": "sig",
+    });
+    Ok((
+        serde_json::to_string(&private).context("failed to render private signing JWK")?,
+        serde_json::to_string(&public).context("failed to render public signing JWK")?,
+    ))
+}
+
+fn workload_jwks_from_private(private_jwk: &str) -> Result<String> {
+    let private: serde_json::Value =
+        serde_json::from_str(private_jwk).context("failed to parse workload private JWK")?;
+    let x = private["x"]
+        .as_str()
+        .ok_or_else(|| anyhow!("workload private JWK is missing its public member"))?;
+    serde_json::to_string_pretty(&serde_json::json!({
+        "keys": [{
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": x,
+            "alg": "EdDSA",
+            "kid": DEV_WORKLOAD_KID,
+            "use": "sig",
+        }]
+    }))
+    .context("failed to render workload JWKS")
+}
+
+fn sign_ed25519_compact_jwt(
+    private_jwk: &str,
+    header: &serde_json::Value,
+    claims: &serde_json::Value,
+) -> Result<String> {
+    let private: serde_json::Value =
+        serde_json::from_str(private_jwk).context("failed to parse private signing JWK")?;
+    let encoded_secret = private["d"]
+        .as_str()
+        .ok_or_else(|| anyhow!("private signing JWK is missing its private member"))?;
+    let secret = Zeroizing::new(
+        URL_SAFE_NO_PAD
+            .decode(encoded_secret)
+            .context("private signing JWK contains an invalid private member")?,
+    );
+    let secret: [u8; 32] = secret
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow!("private signing JWK has the wrong private member length"))?;
+    let secret = Zeroizing::new(secret);
+    let signing_key = SigningKey::from_bytes(&secret);
+    let header =
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(header).context("failed to render JWT header")?);
+    let claims =
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).context("failed to render JWT claims")?);
+    let signing_input = format!("{header}.{claims}");
+    let signature = signing_key.sign(signing_input.as_bytes());
+    Ok(format!(
+        "{signing_input}.{}",
+        URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    ))
+}
+
+fn generate_self_signed_tls_identity(subject_alt_names: Vec<String>) -> Result<(String, String)> {
+    let rcgen::CertifiedKey { cert, key_pair } =
+        rcgen::generate_simple_self_signed(subject_alt_names)
+            .context("failed to generate the local TLS identity")?;
+    Ok((
+        pem_block("CERTIFICATE", cert.der().as_ref()),
+        pem_block("PRIVATE KEY", &key_pair.serialize_der()),
+    ))
+}
+
+fn pem_block(label: &str, der: &[u8]) -> String {
+    use base64::engine::general_purpose::STANDARD;
+
+    let encoded = STANDARD.encode(der);
+    let body = encoded
+        .as_bytes()
+        .chunks(64)
+        .map(|chunk| std::str::from_utf8(chunk).expect("base64 is ASCII"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
 }
 
 fn sign_dev_workload_jwt(private_jwk: &str) -> Result<String> {
@@ -1227,28 +1342,28 @@ fn sign_dev_workload_jwt(private_jwk: &str) -> Result<String> {
         .as_secs();
     let header = serde_json::json!({
         "alg": "EdDSA",
-        "kid": crate::CANONICAL_RUNTIME_WORKLOAD_KID,
+        "kid": DEV_WORKLOAD_KID,
         "typ": "at+jwt",
     });
     let claims = serde_json::json!({
         "iss": DEV_WORKLOAD_ISSUER,
-        "sub": crate::CANONICAL_RUNTIME_WORKLOAD_CLIENT,
-        "aud": crate::CANONICAL_RUNTIME_WORKLOAD_AUDIENCE,
-        "client_id": crate::CANONICAL_RUNTIME_WORKLOAD_CLIENT,
-        "azp": crate::CANONICAL_RUNTIME_WORKLOAD_CLIENT,
-        "scope": crate::CANONICAL_RUNTIME_WORKLOAD_SCOPE,
+        "sub": DEV_WORKLOAD_CLIENT,
+        "aud": DEV_WORKLOAD_AUDIENCE,
+        "client_id": DEV_WORKLOAD_CLIENT,
+        "azp": DEV_WORKLOAD_CLIENT,
+        "scope": DEV_WORKLOAD_SCOPE,
         "iat": now,
         "nbf": now.saturating_sub(1),
-        "exp": now + crate::CANONICAL_RUNTIME_WORKLOAD_LIFETIME_SECONDS,
+        "exp": now + DEV_WORKLOAD_LIFETIME_SECONDS,
         "jti": secret_token(16)?.as_str(),
     });
-    crate::sign_ed25519_compact_jwt(private_jwk, &header, &claims)
+    sign_ed25519_compact_jwt(private_jwk, &header, &claims)
         .context("failed to issue the development workload credential")
 }
 
 fn generate_tls_credential(service_name: &str) -> Result<TlsCredential> {
     let (certificate, private_key) =
-        crate::generate_self_signed_tls_identity(vec![service_name.to_string()])
+        generate_self_signed_tls_identity(vec![service_name.to_string()])
             .context("failed to generate a disposable development TLS identity")?;
     Ok(TlsCredential {
         certificate,
@@ -1360,6 +1475,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
     use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
     use registry_platform_crypto::{PrivateJwk, PublicJwk};
     use serde_json::Value;
@@ -1634,7 +1750,7 @@ mod tests {
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[0]).unwrap()).unwrap();
         let claims: Value =
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(segments[1]).unwrap()).unwrap();
-        assert_eq!(header["kid"], crate::CANONICAL_RUNTIME_WORKLOAD_KID);
+        assert_eq!(header["kid"], DEV_WORKLOAD_KID);
         assert_eq!(claims["iss"], closure.projection.relay_oidc.issuer);
         assert_eq!(claims["aud"], closure.projection.relay_oidc.audience);
         assert_eq!(claims["azp"], closure.projection.relay_oidc.client_id);
