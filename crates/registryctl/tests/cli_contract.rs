@@ -173,6 +173,10 @@ fn stable_flags_have_strict_values_and_documented_meanings() {
 
     let init_help = stdout(&["init", "--help"]);
     assert!(init_help.contains("<PROJECT_DIRECTORY>"));
+    assert!(
+        init_help.contains("Absent or empty real directory"),
+        "{init_help}"
+    );
     assert!(init_help.contains("--template <TEMPLATE>"));
     assert!(init_help.contains("possible values: http"));
     assert!(!init_help.contains("spreadsheet"), "{init_help}");

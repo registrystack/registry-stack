@@ -41,6 +41,8 @@ use crate::release_lock::{
 };
 
 pub const DEV_RUNTIME_STATE_SCHEMA_V1: &str = "registryctl.dev_runtime_state.v1";
+pub const DEV_STATUS_REPORT_SCHEMA_V1: &str = "registryctl.dev_status.v1";
+pub const DEV_LOGS_REPORT_SCHEMA_V1: &str = "registryctl.dev_logs.v1";
 pub const DEV_SMOKE_REPORT_SCHEMA_V1: &str = "registryctl.dev_smoke.v1";
 pub const DEV_SYNTHETIC_SOURCE_ORIGIN: &str = "https://10.89.0.3:8099";
 const DEV_PRIVATE_SUBNET: &str = "10.89.0.0/24";
@@ -497,6 +499,10 @@ impl VerifiedDevReleaseProjection {
     }
 
     #[cfg(test)]
+    #[cfg_attr(
+        test,
+        allow(dead_code, reason = "used by direct-module integration tests")
+    )]
     pub(crate) fn test_only(
         release_id: String,
         release_tag: String,
@@ -2629,11 +2635,19 @@ const fn private_ipv4_address(workload: DevWorkloadId) -> &'static str {
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by direct-module integration tests")
+)]
 fn relay_product_action(lane: &str, action: &str) -> DevRuntimeActionProjection {
     test_product_action("registry-relay", lane, action)
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by direct-module integration tests")
+)]
 fn test_postgresql_secret(file_id: &str, target: &str) -> DevSecretProjection {
     DevSecretProjection {
         file_id: file_id.to_string(),
@@ -2645,6 +2659,10 @@ fn test_postgresql_secret(file_id: &str, target: &str) -> DevSecretProjection {
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by direct-module integration tests")
+)]
 fn test_postgresql_operator_file(id: &str, required_keys: &[&str]) -> DevOperatorFileProjection {
     DevOperatorFileProjection {
         id: id.to_string(),
@@ -2675,11 +2693,19 @@ fn product_action(
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by direct-module integration tests")
+)]
 fn notary_product_action(action: &str) -> DevRuntimeActionProjection {
     test_product_action("registry-notary", "notary", action)
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by direct-module integration tests")
+)]
 fn test_product_action(binary: &str, lane: &str, action: &str) -> DevRuntimeActionProjection {
     let mut command = vec![binary.to_string(), "product-action".to_string()];
     if binary == "registry-relay" {
@@ -3015,6 +3041,7 @@ pub enum DevRuntimeHealthWire {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DevStatusReport {
+    pub schema_version: String,
     pub binding: DevProjectBindingV1,
     pub workloads: Vec<DevWorkloadStatus>,
     pub source_mode: DevSourceMode,
@@ -3033,6 +3060,7 @@ pub struct DevProductLogSummary {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DevLogsReport {
+    pub schema_version: String,
     pub binding: DevProjectBindingV1,
     pub products: Vec<DevProductLogSummary>,
 }
@@ -3870,6 +3898,7 @@ impl<B: DevRuntimeBackend> DevRuntimeController<B> {
         let workloads = self.backend.status(plan, &state)?;
         validate_workload_statuses(plan, &workloads)?;
         Ok(DevStatusReport {
+            schema_version: DEV_STATUS_REPORT_SCHEMA_V1.to_string(),
             binding: plan.binding.clone(),
             workloads,
             source_mode: plan.source_mode,
@@ -3882,6 +3911,7 @@ impl<B: DevRuntimeBackend> DevRuntimeController<B> {
         let products = self.backend.logs(plan, &state)?;
         validate_log_summaries(plan, &products)?;
         Ok(DevLogsReport {
+            schema_version: DEV_LOGS_REPORT_SCHEMA_V1.to_string(),
             binding: plan.binding.clone(),
             products,
         })
@@ -4501,6 +4531,10 @@ pub(crate) fn stable_runtime_id(binding: &DevProjectBindingV1) -> DevRuntimeResu
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by direct-module integration tests")
+)]
 fn validate_image_ref(value: &str, repository: &str) -> DevRuntimeResult<()> {
     let Some(digest) = value.strip_prefix(&format!("{repository}@sha256:")) else {
         return Err(DevRuntimeError::image_lock());
@@ -4516,6 +4550,10 @@ fn validate_image_ref(value: &str, repository: &str) -> DevRuntimeResult<()> {
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by direct-module integration tests")
+)]
 fn valid_release_tag(value: &str) -> bool {
     let Some(version) = value.strip_prefix('v') else {
         return false;

@@ -56,7 +56,8 @@ pub use dev_runtime::{
     diagnose_dev_runtime, load_bound_dev_runtime_plan, DevFailureCategory, DevLogsReport,
     DevRuntimeController, DevRuntimeError, DevRuntimePlan, DevRuntimeResult, DevSmokeReportV1,
     DevSmokeScenarioResult, DevSmokeStatus, DevStartupReport, DevStatusReport,
-    DockerComposeBackend, DEV_SMOKE_REPORT_SCHEMA_V1,
+    DockerComposeBackend, DEV_LOGS_REPORT_SCHEMA_V1, DEV_SMOKE_REPORT_SCHEMA_V1,
+    DEV_STATUS_REPORT_SCHEMA_V1,
 };
 
 mod dev_credentials;

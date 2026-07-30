@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// This boundary test includes the implementation directly so it can exercise strict parsing
+// without widening Registryctl's public API. Other production helpers are intentionally unused.
+#[allow(dead_code)]
 #[path = "../src/release_lock.rs"]
 mod release_lock;
 

@@ -110,7 +110,7 @@ struct Cli {
 enum Commands {
     /// Create a project from a tested local template.
     Init {
-        /// Absent directory to create.
+        /// Absent or empty real directory in which to create the project.
         #[arg(value_name = "PROJECT_DIRECTORY")]
         destination: PathBuf,
         /// Tested template embedded in this Registryctl release.

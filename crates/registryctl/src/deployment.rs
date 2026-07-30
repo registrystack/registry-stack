@@ -1176,6 +1176,10 @@ impl VerifiedDeploymentInputsV1 {
     }
 
     #[cfg(test)]
+    #[cfg_attr(
+        test,
+        allow(dead_code, reason = "used by direct-module integration tests")
+    )]
     pub(crate) fn from_test_components(
         approved_set_file: &Path,
         registry_release_lock_file: &Path,
@@ -1389,6 +1393,10 @@ pub fn generate_deployment_package(
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by direct-module integration tests")
+)]
 pub(crate) fn generate_deployment_package_with_test_inputs(
     request: DeploymentGenerateRequestV1,
     verified_inputs: VerifiedDeploymentInputsV1,
@@ -1961,6 +1969,10 @@ pub fn verify_deployment_package(
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by direct-module integration tests")
+)]
 pub(crate) fn verify_deployment_package_with_test_inputs(
     request: &DeploymentPackageVerificationRequestV1<'_>,
 ) -> Result<DeploymentOwnershipReportV1> {
@@ -2006,6 +2018,10 @@ fn verify_deployment_package_with_package_inputs(
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by direct-module integration tests")
+)]
 pub(crate) fn verify_deployment_package_with_models(
     request: &DeploymentPackageVerificationRequestV1<'_>,
     effective_models: &EffectiveComposeModelsV1,
@@ -3000,6 +3016,10 @@ fn normalize_managed_base_models(package_dir: &Path) -> Result<EffectiveComposeM
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by direct-module integration tests")
+)]
 fn stored_rendered_models(package_dir: &Path) -> Result<EffectiveComposeModelsV1> {
     let ordinary: Value = serde_norway::from_slice(&read_bounded(
         &package_dir.join("generated/compose.yaml"),
@@ -3498,6 +3518,10 @@ fn initialization_with_effective_ordinary(
 }
 
 #[cfg(test)]
+#[cfg_attr(
+    test,
+    allow(dead_code, reason = "used by direct-module integration tests")
+)]
 pub(crate) fn merge_compose_delta(base: &Value, delta: &Value) -> Result<Value> {
     fn merge(target: &mut Value, overlay: &Value) {
         match (target, overlay) {

@@ -157,14 +157,16 @@ pub(crate) fn compile_dev_runtime_authoring(
     let (request_encoding, oauth_profile, source_auth, oauth_request) =
         compile_development_auth(&integration_file, credential)?;
     let credential_requirements = development_credential_requirements(
-        &loaded,
-        environment_id,
-        &service_id,
-        default_integration,
-        source_mode,
-        credential,
-        &caller_id,
-        &caller_fingerprint_locator,
+        DevelopmentCredentialRequirementsInput {
+            loaded: &loaded,
+            environment_id,
+            service_id: &service_id,
+            integration_id: default_integration,
+            source_mode,
+            credential,
+            caller_id: &caller_id,
+            caller_fingerprint_env: &caller_fingerprint_locator,
+        },
     )?;
     let interaction = &fixture_document.interactions[0];
     let source_request = compile_synthetic_source_request(&fixture_relative, &interaction.expect)?;
@@ -251,16 +253,30 @@ fn operator_source_secret_env(
     .collect()
 }
 
-fn development_credential_requirements(
-    loaded: &LoadedRegistryProject,
-    environment_id: &str,
-    service_id: &str,
-    integration_id: &str,
+struct DevelopmentCredentialRequirementsInput<'a> {
+    loaded: &'a LoadedRegistryProject,
+    environment_id: &'a str,
+    service_id: &'a str,
+    integration_id: &'a str,
     source_mode: DevelopmentSourceMode,
-    credential: &CredentialInterface,
-    caller_id: &str,
-    caller_fingerprint_env: &str,
+    credential: &'a CredentialInterface,
+    caller_id: &'a str,
+    caller_fingerprint_env: &'a str,
+}
+
+fn development_credential_requirements(
+    input: DevelopmentCredentialRequirementsInput<'_>,
 ) -> Result<DevCredentialRequirements> {
+    let DevelopmentCredentialRequirementsInput {
+        loaded,
+        environment_id,
+        service_id,
+        integration_id,
+        source_mode,
+        credential,
+        caller_id,
+        caller_fingerprint_env,
+    } = input;
     let environment = loaded
         .environment
         .as_ref()
@@ -1441,14 +1457,16 @@ mod development_authoring_tests {
         .unwrap();
         let (_, credential) = development_provider_and_credential(integration);
         let requirements = development_credential_requirements(
-            &loaded,
-            "local",
-            &service_id,
-            "birth-event-search",
-            DevelopmentSourceMode::Synthetic,
-            credential,
-            &caller_id,
-            &caller_fingerprint_locator,
+            DevelopmentCredentialRequirementsInput {
+                loaded: &loaded,
+                environment_id: "local",
+                service_id: &service_id,
+                integration_id: "birth-event-search",
+                source_mode: DevelopmentSourceMode::Synthetic,
+                credential,
+                caller_id: &caller_id,
+                caller_fingerprint_env: &caller_fingerprint_locator,
+            },
         )
         .unwrap();
         assert_eq!(requirements.service_id, "birth-event-verification");

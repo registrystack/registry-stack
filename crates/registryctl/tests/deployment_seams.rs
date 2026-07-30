@@ -1,3 +1,5 @@
+// This seam test uses only the approved-set helpers needed to construct deployment inputs.
+#[allow(dead_code)]
 mod approved_set_support;
 pub use approved_set_support::approved_set;
 pub use approved_set_support::{project_authoring, trust, SIGNING_INPUT_MARKER_FILE};
@@ -5,6 +7,8 @@ pub use approved_set_support::{project_authoring, trust, SIGNING_INPUT_MARKER_FI
 #[path = "../src/release_lock.rs"]
 pub mod release_lock;
 
+// This seam includes deployment internals directly without widening Registryctl's public API.
+#[allow(dead_code)]
 #[path = "../src/deployment.rs"]
 mod deployment;
 

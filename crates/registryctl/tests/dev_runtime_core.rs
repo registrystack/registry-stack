@@ -1659,10 +1659,24 @@ fn lifecycle_is_project_bound_bounded_owner_only_and_value_free() {
     }
 
     let status = controller.status(&plan).unwrap();
+    assert_eq!(status.schema_version, DEV_STATUS_REPORT_SCHEMA_V1);
     assert_eq!(status.request_command, startup.request_command);
     assert_eq!(status.workloads.len(), plan.lifecycle.status_services.len());
+    let status_json = serde_json::to_value(&status).unwrap();
+    assert_eq!(status_json["schema_version"], DEV_STATUS_REPORT_SCHEMA_V1);
+    assert_eq!(status_json.as_object().unwrap().len(), 5);
+    let serialized_status = serde_json::to_string(&status).unwrap();
+    assert!(!serialized_status.contains(&caller_token));
+    assert!(!serialized_status.contains(RESPONSE_CANARY));
     let logs = controller.logs(&plan).unwrap();
+    assert_eq!(logs.schema_version, DEV_LOGS_REPORT_SCHEMA_V1);
     assert_eq!(logs.products.len(), plan.lifecycle.log_services.len());
+    let logs_json = serde_json::to_value(&logs).unwrap();
+    assert_eq!(logs_json["schema_version"], DEV_LOGS_REPORT_SCHEMA_V1);
+    assert_eq!(logs_json.as_object().unwrap().len(), 3);
+    let serialized_logs = serde_json::to_string(&logs).unwrap();
+    assert!(!serialized_logs.contains(&caller_token));
+    assert!(!serialized_logs.contains(RESPONSE_CANARY));
     let smoke = controller.smoke(&plan).unwrap();
     assert!(smoke.passed);
     assert_eq!(smoke.results[0].token_counter_delta, Some(0));
