@@ -364,7 +364,7 @@ class GateInventoryTest(unittest.TestCase):
         publish = self.module.yaml_job_block(workflow, "promote-images")
         self.assertIsNotNone(publish)
         for marker in (
-            "name: Reconcile complete draft before first public write",
+            "name: Reconcile exact staged draft before first public image write",
             "while IFS= read -r final_ref; do",
             "Final image destination ${final_ref} is no longer absent",
         ):

@@ -973,7 +973,7 @@ class RegistryReleaseTest(unittest.TestCase):
         assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
         scan_step = assemble.index("Verify and scan exact candidate images")
         package_step = assemble.index(
-            "Assemble public payload and run install and authoring smoke"
+            "Assemble public payload and validate version-appropriate install inputs"
         )
         self.assertLess(scan_step, package_step)
         scan_body = assemble[scan_step:package_step]

@@ -197,12 +197,17 @@ def parse_checksums(path: Path) -> dict[str, str]:
 
 
 def verify_asset_set(asset_dir: Path, tag: str) -> dict[str, Any]:
-    if TAG.fullmatch(tag) is None:
+    tag_match = TAG.fullmatch(tag)
+    if tag_match is None:
         raise ReleaseFormError("release tag must be canonical vMAJOR.MINOR.PATCH")
     installer_name = f"registryctl-{tag}-install.sh"
     binary_name = platform_asset(tag)
     lock_name = f"registryctl-{tag}-image-lock.json"
-    names = (installer_name, binary_name, lock_name)
+    release_lock_name = "registry-release-lock.v1.json"
+    requires_release_lock = int(tag_match.group(1)) >= 1
+    names = [installer_name, binary_name, lock_name]
+    if requires_release_lock:
+        names.append(release_lock_name)
     checksums = parse_checksums(asset_dir / "SHA256SUMS")
     assets: dict[str, str] = {}
     for name in names:
@@ -267,6 +272,7 @@ def verify_asset_set(asset_dir: Path, tag: str) -> dict[str, Any]:
         "installer_name": installer_name,
         "binary_name": binary_name,
         "lock_name": lock_name,
+        "release_lock_name": release_lock_name if requires_release_lock else None,
         "assets": assets,
         "lock": lock,
         "relay_image": relay_image,
@@ -825,7 +831,10 @@ def run_release_form(args: argparse.Namespace) -> Path:
                 )
             )
             require_regular(registryctl)
-            require_regular(install_dir / verified["lock_name"])
+            installed_lock_name = (
+                verified["release_lock_name"] or verified["lock_name"]
+            )
+            require_regular(install_dir / installed_lock_name)
             commands.append(
                 run_command(
                     "version",
@@ -1101,6 +1110,11 @@ def run_release_form(args: argparse.Namespace) -> Path:
             "platform_asset": verified["binary_name"],
             "asset_sha256": verified["assets"],
             "release_image_lock_sha256": verified["assets"][verified["lock_name"]],
+            "release_lock_sha256": (
+                verified["assets"][verified["release_lock_name"]]
+                if verified["release_lock_name"] is not None
+                else None
+            ),
             "relay_image": verified["relay_image"],
             "notary_image": verified["notary_image"],
             "postgresql_image": verified["postgresql_image"],
@@ -1212,6 +1226,7 @@ def verify_report(path: Path, asset_dir: Path, tag: str) -> None:
         "platform_asset",
         "asset_sha256",
         "release_image_lock_sha256",
+        "release_lock_sha256",
         "relay_image",
         "notary_image",
         "postgresql_image",
@@ -1253,6 +1268,12 @@ def verify_report(path: Path, asset_dir: Path, tag: str) -> None:
         or report["asset_sha256"] != verified["assets"]
         or report["release_image_lock_sha256"]
         != verified["assets"][verified["lock_name"]]
+        or report["release_lock_sha256"]
+        != (
+            verified["assets"][verified["release_lock_name"]]
+            if verified["release_lock_name"] is not None
+            else None
+        )
         or report["relay_image"] != verified["relay_image"]
         or report["notary_image"] != verified["notary_image"]
         or report["postgresql_image"] != verified["postgresql_image"]

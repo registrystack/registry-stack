@@ -173,7 +173,7 @@ jobs:
             --manifest "${manifest}" \
             --bundle "${bundle}" \
             --bundle-root promotion/extracted \
-            --source-sha "${{ steps.identity.outputs.source_sha }}" \
+            --source-sha "${workflow_revision}" \
             --workflow-revision "${workflow_revision}" \
             --version "${{ steps.identity.outputs.version }}" \
             --release-id "${release_id}" \
@@ -269,16 +269,13 @@ jobs:
           retention-days: 2
 
   stage-draft:
-    name: Create and sign fully staged draft release
+    name: Create exact resumable draft
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       actions: read
       contents: write
-      id-token: write
-    outputs:
-      provenance_subjects: ${{ steps.subjects.outputs.base64_subjects }}
     steps:
       - name: Checkout exact tag source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
@@ -294,7 +291,7 @@ jobs:
           name: release-promotion-input-${{ github.run_id }}-${{ github.run_attempt }}
           path: promotion
 
-      - name: Reverify and stage exact public payloads before OIDC
+      - name: Reverify and stage exact candidate payloads
         shell: bash
         run: |
           set -euo pipefail
@@ -308,7 +305,7 @@ jobs:
             --manifest "${manifest}" \
             --bundle "${bundle}" \
             --bundle-root extracted \
-            --source-sha "${{ needs.verify.outputs.source_sha }}" \
+            --source-sha "${{ needs.verify.outputs.workflow_revision }}" \
             --workflow-revision "${{ needs.verify.outputs.workflow_revision }}" \
             --version "${{ needs.verify.outputs.version }}" \
             --release-id "${{ needs.verify.outputs.release_id }}" \
@@ -317,53 +314,15 @@ jobs:
             --promotion \
             --trusted-run-metadata promotion/trusted-run.json
           while IFS= read -r name; do
+            if [[ "${name}" == *-image-lock.json ]]; then
+              continue
+            fi
             cp "extracted/${name}" "release-assets/${name}"
           done < <(jq -r '.payloads[].name' "${manifest}")
           public_manifest="registry-stack-${{ needs.verify.outputs.tag }}-release-manifest.json"
           cp "${manifest}" "release-assets/${public_manifest}"
-          python3 release/scripts/registry_release_lock.py create-payload \
-            --version "${{ needs.verify.outputs.version }}" \
-            --source-sha "${{ needs.verify.outputs.source_sha }}" \
-            --asset-dir release-assets \
-            --image-lock \
-              "release-assets/registryctl-${{ needs.verify.outputs.tag }}-image-lock.json" \
-            --output contract/registry-release-lock.payload.json
 
-      - name: Install cosign after candidate verification
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.1
-        with:
-          cosign-release: v3.0.4
-
-      - name: Sign release lock and checksum chain
-        id: subjects
-        shell: bash
-        run: |
-          set -euo pipefail
-          lock_bundle=contract/registry-release-lock.sigstore.json
-          cosign sign-blob --yes \
-            --bundle "${lock_bundle}" \
-            contract/registry-release-lock.payload.json
-          python3 release/scripts/registry_release_lock.py assemble \
-            --payload contract/registry-release-lock.payload.json \
-            --bundle "${lock_bundle}" \
-            --output release-assets/registry-release-lock.v1.json
-          python3 release/scripts/registry_release_lock.py check \
-            --input release-assets/registry-release-lock.v1.json
-          (
-            cd release-assets
-            find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
-              | sort -z | xargs -0 sha256sum | sed 's#  \\./#  #'
-          ) > release-assets/SHA256SUMS
-          cp release-assets/SHA256SUMS contract/provenance-subjects.sha256
-          echo "base64_subjects=$(base64 -w0 contract/provenance-subjects.sha256)" \
-            >> "${GITHUB_OUTPUT}"
-          bundle="release-assets/registry-stack-${{ needs.verify.outputs.tag }}-SHA256SUMS.sigstore.json"
-          cosign sign-blob --yes \
-            --bundle "${bundle}" \
-            release-assets/SHA256SUMS
-          test -s "${bundle}"
-
-      - name: Recreate resumable draft and upload exact pre-provenance inventory
+      - name: Recreate resumable draft and upload exact staged inventory
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -424,7 +383,7 @@ jobs:
               --argjson size "$(stat -c %s "${file}")" \
               '{name:$name,sha256:$sha256,size:$size}'
           done < <(find release-assets -maxdepth 1 -type f -print0 | sort -z) \
-            | jq -s 'sort_by(.name)' > contract/pre-provenance-assets.json
+            | jq -s 'sort_by(.name)' > contract/staged-assets.json
 
       - name: Upload draft reconciliation contract
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -434,28 +393,11 @@ jobs:
           if-no-files-found: error
           retention-days: 2
 
-  release-provenance:
-    name: Generate tag-bound release provenance
-    needs:
-      - verify
-      - stage-draft
-    permissions:
-      actions: read
-      contents: write
-      id-token: write
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
-    with:
-      base64-subjects: ${{ needs.stage-draft.outputs.provenance_subjects }}
-      upload-assets: true
-      upload-tag-name: ${{ needs.verify.outputs.tag }}
-      provenance-name: registry-stack-${{ needs.verify.outputs.tag }}-release-provenance.intoto.jsonl
-
   promote-images:
-    name: Reconcile draft, then promote exact image manifests
+    name: Reconcile staged draft, then promote exact image manifests
     needs:
       - verify
       - stage-draft
-      - release-provenance
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -475,7 +417,7 @@ jobs:
           name: release-draft-contract-${{ github.run_id }}-${{ github.run_attempt }}
           path: contract
 
-      - name: Install pinned verification tools
+      - name: Install pinned image inspector
         shell: bash
         run: |
           set -euo pipefail
@@ -487,35 +429,23 @@ jobs:
             | sha256sum --check --strict
           tar -xzf "${RUNNER_TEMP}/crane.tar.gz" \
             -C "${HOME}/.local/bin" crane
-          curl -sSfL \
-            "https://github.com/slsa-framework/slsa-verifier/releases/download/${SLSA_VERIFIER_VERSION}/slsa-verifier-linux-amd64" \
-            -o "${HOME}/.local/bin/slsa-verifier"
-          echo "${SLSA_VERIFIER_LINUX_AMD64_SHA256}  ${HOME}/.local/bin/slsa-verifier" \
-            | sha256sum --check --strict
-          chmod 0755 "${HOME}/.local/bin/slsa-verifier"
           echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
-      - name: Install cosign verifier
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.1
-
-      - name: Reconcile complete draft before first public write
+      - name: Reconcile exact staged draft before first public image write
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           tag="${{ needs.verify.outputs.tag }}"
-          provenance="registry-stack-${tag}-release-provenance.intoto.jsonl"
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
             > contract/draft-release.json
           jq -e \
             --arg tag "${tag}" \
             '.draft == true and .tag_name == $tag' \
             contract/draft-release.json >/dev/null
-          {
-            jq -r '.[].name' contract/pre-provenance-assets.json
-            printf '%s\n' "${provenance}"
-          } | sort > contract/expected-assets
+          jq -r '.[].name' contract/staged-assets.json \
+            | sort > contract/expected-assets
           jq -r '.assets[].name' contract/draft-release.json \
             | sort > contract/actual-assets
           diff -u contract/expected-assets contract/actual-assets
@@ -530,25 +460,8 @@ jobs:
               contract/draft-release.json)" = "sha256:${sha256}"
           done < <(
             jq -r '.[] | [.name,.sha256,.size] | @tsv' \
-              contract/pre-provenance-assets.json
+              contract/staged-assets.json
           )
-          (
-            cd draft
-            sha256sum --check --strict SHA256SUMS
-          )
-          cosign verify-blob draft/SHA256SUMS \
-            --bundle \
-              "draft/registry-stack-${tag}-SHA256SUMS.sigstore.json" \
-            --certificate-identity \
-              "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}" \
-            --certificate-oidc-issuer \
-              https://token.actions.githubusercontent.com
-          while read -r _subject_sha subject_name; do
-            slsa-verifier verify-artifact "draft/${subject_name}" \
-              --provenance-path "draft/${provenance}" \
-              --source-uri "github.com/${GITHUB_REPOSITORY}" \
-              --source-tag "${tag}"
-          done < contract/provenance-subjects.sha256
 
       - name: Reverify candidate expiry immediately before registry login
         shell: bash
@@ -563,7 +476,7 @@ jobs:
             --manifest "${manifest}" \
             --bundle "${bundle}" \
             --bundle-root candidate-extracted \
-            --source-sha "${{ needs.verify.outputs.source_sha }}" \
+            --source-sha "${{ needs.verify.outputs.workflow_revision }}" \
             --workflow-revision "${{ needs.verify.outputs.workflow_revision }}" \
             --version "${{ needs.verify.outputs.version }}" \
             --release-id "${{ needs.verify.outputs.release_id }}" \
@@ -599,16 +512,265 @@ jobs:
               [.candidate_ref,.digest,.final_ref] | @tsv' "${manifest}"
           )
 
+  finalize-assets:
+    name: Finalize signed assets and prove the released 1.x runtime
+    needs:
+      - verify
+      - stage-draft
+      - promote-images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      packages: read
+    outputs:
+      provenance_subjects: ${{ steps.subjects.outputs.base64_subjects }}
+    steps:
+      - name: Checkout exact tag source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.2.2
+        with:
+          ref: ${{ needs.verify.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Download exact candidate and staged draft contract
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: inputs
+
+      - name: Download exact staged draft contract
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-draft-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: contract
+
+      - name: Install tag-bound signer
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.1
+        with:
+          cosign-release: v3.0.4
+
+      - name: Download and reverify the exact draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.verify.outputs.tag }}"
+          mkdir -p release-assets
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            > contract/draft-release.json
+          jq -e \
+            --arg tag "${tag}" \
+            '.draft == true and .tag_name == $tag' \
+            contract/draft-release.json >/dev/null
+          jq -r '.[].name' contract/staged-assets.json \
+            | sort > contract/expected-assets
+          jq -r '.assets[].name' contract/draft-release.json \
+            | sort > contract/actual-assets
+          diff -u contract/expected-assets contract/actual-assets
+          gh release download "${tag}" \
+            --repo "${GITHUB_REPOSITORY}" --dir release-assets
+          while IFS=$'\t' read -r name sha256 size; do
+            test "$(stat -c %s "release-assets/${name}")" = "${size}"
+            test "$(sha256sum "release-assets/${name}" | awk '{print $1}')" = "${sha256}"
+            test "$(jq -er --arg name "${name}" \
+              '.assets[] | select(.name == $name) | .digest' \
+              contract/draft-release.json)" = "sha256:${sha256}"
+          done < <(
+            jq -r '.[] | [.name,.sha256,.size] | @tsv' \
+              contract/staged-assets.json
+          )
+
+      - name: Render the final P to T image lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          promotion="inputs/release-promotion-input-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          candidate="${promotion}/release-candidate-manifest.json"
+          release_manifest="$(
+            python3 - "${{ needs.verify.outputs.version }}" <<'PY'
+          import glob
+          import sys
+          import yaml
+
+          version = sys.argv[1]
+          matches = []
+          for path in sorted(glob.glob("release/manifests/registry-stack-*.yaml")):
+              with open(path, encoding="utf-8") as handle:
+                  stack = yaml.safe_load(handle).get("stack", {})
+              if str(stack.get("version", "")) == version:
+                  matches.append(path)
+          if len(matches) != 1:
+              raise SystemExit(f"expected one release manifest for {version}, found {matches}")
+          print(matches[0])
+          PY
+          )"
+          for name in registry-notary registry-relay; do
+            digest="$(jq -er --arg name "${name}" \
+              '.images[] | select(.name == $name) | .digest
+               | select(test("^sha256:[0-9a-f]{64}$"))' "${candidate}")"
+            printf '%s\n' "${REGISTRY}/${IMAGE_NAMESPACE}/${name}@${digest}" \
+              > "${RUNNER_TEMP}/${name}.release.digest"
+          done
+          release/scripts/registry-release render-registryctl-image-lock \
+            "${release_manifest}" \
+            --relay-digest "${RUNNER_TEMP}/registry-relay.release.digest" \
+            --notary-digest "${RUNNER_TEMP}/registry-notary.release.digest" \
+            --postgresql-ref-file release/registryctl-postgresql-image.ref \
+            --tag-target "${{ needs.verify.outputs.source_sha }}" \
+            --source-sha "${{ needs.verify.outputs.workflow_revision }}" \
+            --output \
+              "release-assets/registryctl-${{ needs.verify.outputs.tag }}-image-lock.json"
+
+      - name: Generate signed 1.x lock and run the clean released runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.verify.outputs.tag }}"
+          version="${{ needs.verify.outputs.version }}"
+          major="${version%%.*}"
+          mkdir -p evidence
+          if ((major >= 1)); then
+            python3 release/scripts/registry_release_lock.py create-payload \
+              --version "${version}" \
+              --source-sha "${{ needs.verify.outputs.workflow_revision }}" \
+              --asset-dir release-assets \
+              --image-lock \
+                "release-assets/registryctl-${tag}-image-lock.json" \
+              --output contract/registry-release-lock.payload.json
+            cosign sign-blob --yes \
+              --bundle contract/registry-release-lock.sigstore.json \
+              contract/registry-release-lock.payload.json
+            python3 release/scripts/registry_release_lock.py assemble \
+              --payload contract/registry-release-lock.payload.json \
+              --bundle contract/registry-release-lock.sigstore.json \
+              --output release-assets/registry-release-lock.v1.json
+            python3 release/scripts/registry_release_lock.py check \
+              --input release-assets/registry-release-lock.v1.json
+            (
+              cd release-assets
+              find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+                | sort -z | xargs -0 sha256sum | sed 's#  \./#  #'
+            ) > release-assets/SHA256SUMS
+            python3 release/scripts/first-country-release-form.py run \
+              --asset-dir release-assets \
+              --tag "${tag}" \
+              --evidence-dir evidence/first-country
+            python3 release/scripts/first-country-release-form.py verify \
+              --asset-dir release-assets \
+              --tag "${tag}" \
+              --report evidence/first-country/first-country-release-form.json
+            rm release-assets/SHA256SUMS
+            archive="release-assets/registry-stack-${tag}-first-country-release-form.tar.gz"
+            tar --sort=name --mtime="UTC 1970-01-01" --owner=0 --group=0 \
+              --numeric-owner -czf "${archive}" -C evidence first-country
+            cosign sign-blob --yes \
+              --bundle "${archive%.tar.gz}.sigstore.json" \
+              "${archive}"
+          fi
+
+      - name: Sign and upload the complete pre-provenance asset closure
+        id: subjects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.verify.outputs.tag }}"
+          (
+            cd release-assets
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+              | sort -z | xargs -0 sha256sum | sed 's#  \./#  #'
+          ) > release-assets/SHA256SUMS
+          version="${{ needs.verify.outputs.version }}"
+          major="${version%%.*}"
+          if ((major >= 1)); then
+            python3 release/scripts/first-country-release-form.py verify \
+              --asset-dir release-assets \
+              --tag "${tag}" \
+              --report evidence/first-country/first-country-release-form.json
+          fi
+          cp release-assets/SHA256SUMS contract/provenance-subjects.sha256
+          echo "base64_subjects=$(base64 -w0 contract/provenance-subjects.sha256)" \
+            >> "${GITHUB_OUTPUT}"
+          checksum_bundle="release-assets/registry-stack-${{ needs.verify.outputs.tag }}-SHA256SUMS.sigstore.json"
+          cosign sign-blob --yes \
+            --bundle "${checksum_bundle}" \
+            release-assets/SHA256SUMS
+          test -s "${checksum_bundle}"
+          mapfile -d '' -t staged < <(
+            jq -r '.[].name' contract/staged-assets.json \
+              | while IFS= read -r name; do
+                  printf '%s\0' "release-assets/${name}"
+                done
+          )
+          mapfile -d '' -t additions < <(
+            find release-assets -maxdepth 1 -type f -print0 \
+              | sort -z \
+              | while IFS= read -r -d '' file; do
+                  skip=0
+                  for original in "${staged[@]}"; do
+                    if [[ "${file}" == "${original}" ]]; then
+                      skip=1
+                      break
+                    fi
+                  done
+                  if ((skip == 0)); then
+                    printf '%s\0' "${file}"
+                  fi
+                done
+          )
+          gh release upload "${tag}" "${additions[@]}" \
+            --repo "${GITHUB_REPOSITORY}"
+          while IFS= read -r -d '' file; do
+            jq -n \
+              --arg name "$(basename "${file}")" \
+              --arg sha256 "$(sha256sum "${file}" | awk '{print $1}')" \
+              --argjson size "$(stat -c %s "${file}")" \
+              '{name:$name,sha256:$sha256,size:$size}'
+          done < <(find release-assets -maxdepth 1 -type f -print0 | sort -z) \
+            | jq -s 'sort_by(.name)' > contract/pre-provenance-assets.json
+
+      - name: Upload final reconciliation contract
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-final-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: contract
+          if-no-files-found: error
+          retention-days: 2
+
+  release-provenance:
+    name: Generate tag-bound release provenance
+    needs:
+      - verify
+      - finalize-assets
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
+    with:
+      base64-subjects: ${{ needs.finalize-assets.outputs.provenance_subjects }}
+      upload-assets: true
+      upload-tag-name: ${{ needs.verify.outputs.tag }}
+      provenance-name: registry-stack-${{ needs.verify.outputs.tag }}-release-provenance.intoto.jsonl
+
   publish:
     name: Publish reconciled draft and dispatch exact docs
     needs:
       - verify
       - stage-draft
-      - release-provenance
       - promote-images
+      - finalize-assets
+      - release-provenance
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
+      actions: read
       contents: write
     steps:
       - name: Download exact candidate manifest
@@ -617,13 +779,13 @@ jobs:
           name: release-promotion-input-${{ github.run_id }}-${{ github.run_attempt }}
           path: promotion
 
-      - name: Download exact draft contract
+      - name: Download exact final contract
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-draft-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-final-contract-${{ github.run_id }}-${{ github.run_attempt }}
           path: contract
 
-      - name: Install pinned image inspector
+      - name: Install pinned release verifiers
         shell: bash
         run: |
           set -euo pipefail
@@ -635,9 +797,20 @@ jobs:
             | sha256sum --check --strict
           tar -xzf "${RUNNER_TEMP}/crane.tar.gz" \
             -C "${HOME}/.local/bin" crane
+          curl -sSfL \
+            "https://github.com/slsa-framework/slsa-verifier/releases/download/${SLSA_VERIFIER_VERSION}/slsa-verifier-linux-amd64" \
+            -o "${HOME}/.local/bin/slsa-verifier"
+          echo "${SLSA_VERIFIER_LINUX_AMD64_SHA256}  ${HOME}/.local/bin/slsa-verifier" \
+            | sha256sum --check --strict
+          chmod 0755 "${HOME}/.local/bin/slsa-verifier"
           echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
-      - name: Recheck reconciled draft and exact public images
+      - name: Install cosign verifier
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.1
+        with:
+          cosign-release: v3.0.4
+
+      - name: Recheck complete signed draft and exact public images
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -658,6 +831,36 @@ jobs:
           } | sort > expected-assets
           jq -r '.assets[].name' draft-release.json | sort > actual-assets
           diff -u expected-assets actual-assets
+          mkdir -p draft
+          gh release download "${tag}" \
+            --repo "${GITHUB_REPOSITORY}" --dir draft
+          while IFS=$'\t' read -r name sha256 size; do
+            test "$(stat -c %s "draft/${name}")" = "${size}"
+            test "$(sha256sum "draft/${name}" | awk '{print $1}')" = "${sha256}"
+            test "$(jq -er --arg name "${name}" \
+              '.assets[] | select(.name == $name) | .digest' \
+              draft-release.json)" = "sha256:${sha256}"
+          done < <(
+            jq -r '.[] | [.name,.sha256,.size] | @tsv' \
+              contract/pre-provenance-assets.json
+          )
+          (
+            cd draft
+            sha256sum --check --strict SHA256SUMS
+          )
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/${tag}"
+          cosign verify-blob draft/SHA256SUMS \
+            --bundle \
+              "draft/registry-stack-${tag}-SHA256SUMS.sigstore.json" \
+            --certificate-identity "${identity}" \
+            --certificate-oidc-issuer \
+              https://token.actions.githubusercontent.com
+          while read -r _subject_sha subject_name; do
+            slsa-verifier verify-artifact "draft/${subject_name}" \
+              --provenance-path "draft/${provenance}" \
+              --source-uri "github.com/${GITHUB_REPOSITORY}" \
+              --source-tag "${tag}"
+          done < contract/provenance-subjects.sha256
           while IFS=$'\t' read -r digest final_ref; do
             test "$(crane digest "${final_ref}")" = "${digest}"
           done < <(jq -r '.images[] | [.digest,.final_ref] | @tsv' "${manifest}")
@@ -667,6 +870,22 @@ jobs:
             "registry-stack-${tag}-SHA256SUMS.sigstore.json"
             "registry-stack-${tag}-release-provenance.intoto.jsonl"
           )
+          version="${{ needs.verify.outputs.version }}"
+          major="${version%%.*}"
+          if ((major >= 1)); then
+            evidence="registry-stack-${tag}-first-country-release-form.tar.gz"
+            required+=(
+              registry-release-lock.v1.json
+              "registryctl-${tag}-image-lock.json"
+              "${evidence}"
+              "${evidence%.tar.gz}.sigstore.json"
+            )
+            cosign verify-blob "draft/${evidence}" \
+              --bundle "draft/${evidence%.tar.gz}.sigstore.json" \
+              --certificate-identity "${identity}" \
+              --certificate-oidc-issuer \
+                https://token.actions.githubusercontent.com
+          fi
           for name in "${required[@]}"; do
             jq -e --arg name "${name}" \
               '.assets[] | select(.name == $name)' \

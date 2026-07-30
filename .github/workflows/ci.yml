@@ -689,6 +689,9 @@ jobs:
       - name: Test first-country release-form runner
         run: python3 -m unittest release/scripts/test_first_country_release_form.py
 
+      - name: Test RegistryReleaseLockV1 tooling
+        run: python3 -m unittest release/scripts/test_registry_release_lock.py
+
       - name: Test release planning commands
         run: python3 -m unittest release/scripts/test_registry_release_plans.py
 

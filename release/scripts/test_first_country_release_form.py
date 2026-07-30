@@ -15,6 +15,7 @@ from unittest import TestCase, main, mock
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release" / "scripts" / "first-country-release-form.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "release-candidate.yml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
 
 
 def load_module():
@@ -37,6 +38,7 @@ class FirstCountryReleaseFormTest(TestCase):
         self.binary = f"registryctl-{self.tag}-linux-amd64"
         self.installer = f"registryctl-{self.tag}-install.sh"
         self.lock = f"registryctl-{self.tag}-image-lock.json"
+        self.release_lock = "registry-release-lock.v1.json"
         self.relay = "ghcr.io/registrystack/registry-relay@sha256:" + "a" * 64
         self.notary = "ghcr.io/registrystack/registry-notary@sha256:" + "b" * 64
         self.postgresql = "docker.io/library/postgres@sha256:" + "c" * 64
@@ -60,8 +62,11 @@ class FirstCountryReleaseFormTest(TestCase):
             + "\n",
             encoding="utf-8",
         )
+        (self.assets / self.release_lock).write_text(
+            '{"signed_payload":"fixture"}\n', encoding="utf-8"
+        )
         checksums = []
-        for name in (self.installer, self.binary, self.lock):
+        for name in (self.installer, self.binary, self.lock, self.release_lock):
             digest = hashlib.sha256((self.assets / name).read_bytes()).hexdigest()
             checksums.append(f"{digest}  {name}")
         (self.assets / "SHA256SUMS").write_text(
@@ -110,6 +115,7 @@ class FirstCountryReleaseFormTest(TestCase):
             "platform_asset": self.binary,
             "asset_sha256": verified["assets"],
             "release_image_lock_sha256": verified["assets"][self.lock],
+            "release_lock_sha256": verified["assets"][self.release_lock],
             "relay_image": self.relay,
             "notary_image": self.notary,
             "postgresql_image": self.postgresql,
@@ -233,6 +239,41 @@ class FirstCountryReleaseFormTest(TestCase):
         self.assertEqual(verified["relay_image"], self.relay)
         self.assertEqual(verified["notary_image"], self.notary)
         self.assertEqual(verified["postgresql_image"], self.postgresql)
+        self.assertEqual(verified["release_lock_name"], self.release_lock)
+
+    def test_v1_asset_set_requires_signed_release_lock(self) -> None:
+        (self.assets / self.release_lock).unlink()
+        with self.assertRaisesRegex(
+            self.module.ReleaseFormError, "required file is unavailable"
+        ):
+            self.verify_assets()
+
+    def test_v0_asset_set_keeps_legacy_image_lock_contract(self) -> None:
+        tag = "v0.15.2"
+        assets = self.root / "legacy-assets"
+        assets.mkdir()
+        binary = f"registryctl-{tag}-linux-amd64"
+        installer = f"registryctl-{tag}-install.sh"
+        lock_name = f"registryctl-{tag}-image-lock.json"
+        (assets / binary).write_text("legacy binary\n", encoding="utf-8")
+        (assets / installer).write_text("#!/bin/bash\n", encoding="utf-8")
+        lock = json.loads((self.assets / self.lock).read_text(encoding="utf-8"))
+        lock["release_tag"] = tag
+        (assets / lock_name).write_text(json.dumps(lock) + "\n", encoding="utf-8")
+        (assets / "SHA256SUMS").write_text(
+            "".join(
+                f"{hashlib.sha256((assets / name).read_bytes()).hexdigest()}  {name}\n"
+                for name in (installer, binary, lock_name)
+            ),
+            encoding="utf-8",
+        )
+        with (
+            mock.patch.object(platform, "system", return_value="Linux"),
+            mock.patch.object(platform, "machine", return_value="x86_64"),
+        ):
+            verified = self.module.verify_asset_set(assets, tag)
+        self.assertIsNone(verified["release_lock_name"])
+        self.assertNotIn(self.release_lock, verified["assets"])
 
     def test_command_order_proves_relay_then_notary_continuation(self) -> None:
         self.assertEqual(
@@ -830,6 +871,7 @@ class FirstCountryReleaseFormTest(TestCase):
             "platform_asset": self.binary,
             "asset_sha256": verified["assets"],
             "release_image_lock_sha256": verified["assets"][self.lock],
+            "release_lock_sha256": verified["assets"][self.release_lock],
             "relay_image": self.relay,
             "notary_image": self.notary,
             "postgresql_image": self.postgresql,
@@ -883,6 +925,7 @@ class FirstCountryReleaseFormTest(TestCase):
             "platform_asset": self.binary,
             "asset_sha256": verified["assets"],
             "release_image_lock_sha256": verified["assets"][self.lock],
+            "release_lock_sha256": verified["assets"][self.release_lock],
             "relay_image": self.relay,
             "notary_image": self.notary,
             "postgresql_image": self.postgresql,
@@ -928,21 +971,27 @@ class FirstCountryReleaseFormTest(TestCase):
         ):
             self.module.verify_report(path, self.assets, self.tag)
 
-    def test_workflow_runs_one_linux_install_and_authoring_smoke_after_assembly(
+    def test_workflows_keep_candidate_and_released_install_proofs_separate(
         self,
     ) -> None:
-        workflow = WORKFLOW.read_text(encoding="utf-8")
+        candidate = WORKFLOW.read_text(encoding="utf-8")
+        release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn(
-            "Assemble public payload and run install and authoring smoke", workflow
+            "validate version-appropriate install inputs", candidate
         )
-        self.assertIn("first-country-release-form.py run", workflow)
-        self.assertIn("first-country-release-form.py verify", workflow)
-        self.assertIn("> SHA256SUMS", workflow)
-        self.assertIn("rm candidate/bundle-root/SHA256SUMS", workflow)
+        self.assertIn("if ((major == 0)); then", candidate)
+        self.assertIn("first-country-release-form.py run", candidate)
+        self.assertIn("registry_release_lock.py create-payload", candidate)
+        self.assertNotIn("REGISTRYCTL_RELEASE_LOCK_BYPASS", candidate)
+        self.assertIn("if ((major >= 1)); then", release)
+        self.assertIn("first-country-release-form.py run", release)
+        self.assertIn("REGISTRYCTL_ASSET_DIR", SCRIPT.read_text(encoding="utf-8"))
+        self.assertNotIn("--relay-image-override", release)
+        self.assertNotIn("--notary-image-override", release)
         self.assertNotIn(
-            "Verify candidate beginner journey on ${{ matrix.asset }}", workflow
+            "Verify candidate beginner journey on ${{ matrix.asset }}", candidate
         )
-        self.assertNotIn("DOCKER_DEFAULT_PLATFORM=linux/amd64", workflow)
+        self.assertNotIn("DOCKER_DEFAULT_PLATFORM=linux/amd64", candidate)
 
 
 if __name__ == "__main__":

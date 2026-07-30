@@ -130,7 +130,7 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
 
 
 class PublicationWorkflowStructureTest(unittest.TestCase):
-    def test_has_four_release_phases_plus_permission_sliced_docs_dispatch(
+    def test_has_final_runtime_gate_before_provenance_and_publication(
         self,
     ) -> None:
         _, document = workflow("release.yml")
@@ -139,8 +139,9 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             [
                 "verify",
                 "stage-draft",
-                "release-provenance",
                 "promote-images",
+                "finalize-assets",
+                "release-provenance",
                 "publish",
                 "dispatch-docs",
             ],
@@ -148,7 +149,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertIn("uses", document["jobs"]["release-provenance"])
         self.assertEqual(
             document["jobs"]["publish"]["permissions"],
-            {"contents": "write"},
+            {"actions": "read", "contents": "write"},
         )
         self.assertEqual(
             document["jobs"]["dispatch-docs"]["permissions"],
@@ -157,11 +158,15 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
 
     def test_draft_is_reconciled_before_image_or_release_publication(self) -> None:
         text, _ = workflow("release.yml")
-        reconcile = text.index("Reconcile complete draft before first public write")
+        reconcile = text.index(
+            "Reconcile exact staged draft before first public image write"
+        )
         image_copy = text.index('crane copy "${candidate_ref}" "${final_ref}"')
+        runtime = text.index("Generate signed 1.x lock and run the clean released runtime")
         publish = text.index("Publish immutable release")
         self.assertLess(reconcile, image_copy)
-        self.assertLess(image_copy, publish)
+        self.assertLess(image_copy, runtime)
+        self.assertLess(runtime, publish)
 
     def test_uses_compact_tag_binding_and_delays_oidc(self) -> None:
         text, document = workflow("release.yml")
@@ -171,8 +176,9 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotEqual(
             document["jobs"]["verify"]["permissions"].get("id-token"), "write"
         )
+        self.assertNotIn("id-token", document["jobs"]["stage-draft"]["permissions"])
         self.assertEqual(
-            document["jobs"]["stage-draft"]["permissions"]["id-token"], "write"
+            document["jobs"]["finalize-assets"]["permissions"]["id-token"], "write"
         )
         provenance = document["jobs"]["release-provenance"]["uses"]
         self.assertRegex(provenance, r"@[0-9a-f]{40}$")
@@ -184,7 +190,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             text,
         )
         self.assertIn(
-            "Recreate resumable draft and upload exact pre-provenance inventory",
+            "Recreate resumable draft and upload exact staged inventory",
             text,
         )
         self.assertIn(".draft == true", text)
@@ -202,6 +208,8 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         text, _ = workflow("release.yml")
         self.assertIn("SHA256SUMS.sigstore.json", text)
         self.assertIn("cosign sign-blob --yes", text)
+        self.assertIn("first-country-release-form.tar.gz", text)
+        self.assertIn("registry-release-lock.v1.json", text)
         self.assertIn('released_tag=${{ needs.verify.outputs.tag }}', text)
         self.assertIn('docs_sha256=${{ needs.verify.outputs.docs_sha256 }}', text)
         self.assertNotIn(".sig\"", text)
@@ -217,6 +225,29 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         copy = text.index('crane copy "${candidate_ref}" "${final_ref}"')
         self.assertLess(expiry, login)
         self.assertLess(login, copy)
+
+    def test_candidate_is_bound_to_p_and_final_lock_to_p_and_t(self) -> None:
+        text, _ = workflow("release.yml")
+        self.assertNotIn(
+            '--source-sha "${{ needs.verify.outputs.source_sha }}"',
+            text,
+        )
+        self.assertIn(
+            '--source-sha "${{ needs.verify.outputs.workflow_revision }}"',
+            text,
+        )
+        self.assertIn(
+            '--tag-target "${{ needs.verify.outputs.source_sha }}"',
+            text,
+        )
+
+    def test_major_gate_never_adds_an_unsigned_installer_bypass(self) -> None:
+        release, _ = workflow("release.yml")
+        candidate, _ = workflow("release-candidate.yml")
+        self.assertIn("if ((major >= 1)); then", release)
+        self.assertIn("if ((major == 0)); then", candidate)
+        self.assertNotIn("REGISTRYCTL_RELEASE_LOCK_BYPASS", release)
+        self.assertNotIn("REGISTRYCTL_RELEASE_LOCK_BYPASS", candidate)
 
 
 class SupportingWorkflowStructureTest(unittest.TestCase):

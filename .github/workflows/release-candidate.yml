@@ -626,7 +626,7 @@ jobs:
             ]
           }' > candidate/security/advisory-verdict.json
 
-      - name: Assemble public payload and run install and authoring smoke
+      - name: Assemble public payload and validate version-appropriate install inputs
         shell: bash
         run: |
           set -euo pipefail
@@ -680,16 +680,30 @@ jobs:
               "registryctl-${{ needs.validate.outputs.tag }}-image-lock.json" \
               > SHA256SUMS
           )
-          python3 release/scripts/first-country-release-form.py run \
-            --asset-dir candidate/bundle-root \
-            --tag "${{ needs.validate.outputs.tag }}" \
-            --relay-image-override "${relay_candidate}" \
-            --notary-image-override "${notary_candidate}" \
-            --evidence-dir candidate/first-country
-          python3 release/scripts/first-country-release-form.py verify \
-            --asset-dir candidate/bundle-root \
-            --tag "${{ needs.validate.outputs.tag }}" \
-            --report candidate/first-country/first-country-release-form.json
+          major="${{ needs.validate.outputs.version }}"
+          major="${major%%.*}"
+          if ((major == 0)); then
+            python3 release/scripts/first-country-release-form.py run \
+              --asset-dir candidate/bundle-root \
+              --tag "${{ needs.validate.outputs.tag }}" \
+              --relay-image-override "${relay_candidate}" \
+              --notary-image-override "${notary_candidate}" \
+              --evidence-dir candidate/first-country
+            python3 release/scripts/first-country-release-form.py verify \
+              --asset-dir candidate/bundle-root \
+              --tag "${{ needs.validate.outputs.tag }}" \
+              --report candidate/first-country/first-country-release-form.json
+          else
+            python3 release/scripts/registry_release_lock.py create-payload \
+              --version "${{ needs.validate.outputs.version }}" \
+              --source-sha "${{ needs.validate.outputs.source_sha }}" \
+              --asset-dir candidate/bundle-root \
+              --image-lock \
+                "candidate/bundle-root/registryctl-${{ needs.validate.outputs.tag }}-image-lock.json" \
+              --output "${RUNNER_TEMP}/registry-release-lock.payload.json"
+            test -s "${RUNNER_TEMP}/registry-release-lock.payload.json"
+            rm "${RUNNER_TEMP}/registry-release-lock.payload.json"
+          fi
           rm candidate/bundle-root/SHA256SUMS
 
       - name: Seal compact candidate manifest and bundle

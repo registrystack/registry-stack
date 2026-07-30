@@ -944,13 +944,11 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
-        "Draft-first signed checksum publication",
+        "Draft-first exact staged publication",
         ".github/workflows/release.yml",
         (
-            "stage-draft:\n    name: Create and sign fully staged draft release",
-            "name: Reverify and stage exact public payloads before OIDC",
-            "name: Sign one checksum chain",
-            "SHA256SUMS.sigstore.json",
+            "stage-draft:\n    name: Create exact resumable draft",
+            "name: Reverify and stage exact candidate payloads",
             "gh release create",
             "--draft",
             "name: Upload draft reconciliation contract",
@@ -969,8 +967,8 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         "Draft reconciliation and exact image promotion",
         ".github/workflows/release.yml",
         (
-            "promote-images:\n    name: Reconcile draft, then promote exact image manifests",
-            "name: Reconcile complete draft before first public write",
+            "promote-images:\n    name: Reconcile staged draft, then promote exact image manifests",
+            "name: Reconcile exact staged draft before first public image write",
             "diff -u contract/expected-assets contract/actual-assets",
             "name: Reverify candidate expiry immediately before registry login",
             "name: Recheck all destinations before exact digest promotion",
@@ -979,10 +977,24 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
+        "Final signed runtime release closure",
+        ".github/workflows/release.yml",
+        (
+            "finalize-assets:\n    name: Finalize signed assets and prove the released 1.x runtime",
+            "if ((major >= 1)); then",
+            "registry_release_lock.py create-payload",
+            "registry-release-lock.v1.json",
+            "first-country-release-form.py run",
+            "first-country-release-form.tar.gz",
+            "cosign sign-blob --yes",
+            "name: Upload final reconciliation contract",
+        ),
+    ),
+    (
         "Release publication and authenticated docs dispatch",
         ".github/workflows/release.yml",
         (
-            "name: Recheck reconciled draft and exact public images",
+            "name: Recheck complete signed draft and exact public images",
             "name: Publish immutable release",
             "-F draft=false",
             "-F prerelease=false",
@@ -1140,26 +1152,26 @@ ORDERED_RELEASE_SECURITY_GATES = (
     (
         "Candidate verification before draft creation",
         ".github/workflows/release.yml",
-        "name: Reverify and stage exact public payloads before OIDC",
-        "name: Recreate resumable draft and upload exact pre-provenance inventory",
-    ),
-    (
-        "Draft before release provenance",
-        ".github/workflows/release.yml",
-        "stage-draft:\n    name: Create and sign fully staged draft release",
-        "release-provenance:",
-    ),
-    (
-        "Provenance before draft reconciliation",
-        ".github/workflows/release.yml",
-        "release-provenance:",
-        "name: Reconcile complete draft before first public write",
+        "name: Reverify and stage exact candidate payloads",
+        "name: Recreate resumable draft and upload exact staged inventory",
     ),
     (
         "Draft reconciliation before image promotion",
         ".github/workflows/release.yml",
-        "name: Reconcile complete draft before first public write",
+        "name: Reconcile exact staged draft before first public image write",
         "name: Recheck all destinations before exact digest promotion",
+    ),
+    (
+        "Exact image promotion before final runtime proof",
+        ".github/workflows/release.yml",
+        "name: Recheck all destinations before exact digest promotion",
+        "name: Generate signed 1.x lock and run the clean released runtime",
+    ),
+    (
+        "Final runtime proof before release provenance",
+        ".github/workflows/release.yml",
+        "name: Generate signed 1.x lock and run the clean released runtime",
+        "release-provenance:",
     ),
     (
         "Candidate expiry immediately before registry login",
@@ -1453,7 +1465,7 @@ def promotion_first_write_barrier_violations(
         "done < <(jq -r '.images[].final_ref' \"${manifest}\")",
     )
     publish_required = (
-        "name: Reconcile complete draft before first public write",
+        "name: Reconcile exact staged draft before first public image write",
         "name: Reverify candidate expiry immediately before registry login",
         'crane copy "${candidate_ref}" "${final_ref}"',
     )
