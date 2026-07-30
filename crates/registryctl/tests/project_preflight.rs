@@ -852,7 +852,7 @@ fn preflight_reads_only_declared_runtime_files_and_has_no_fixture_or_build_side_
 }
 
 #[test]
-fn project_workbook_is_validated_without_preflight_writes_and_digest_bound_on_build() {
+fn project_workbook_is_validated_read_only_and_digest_bound_when_runtime_is_not_ready() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let project = directory.path().join("spreadsheet-project");
     copy_tree(
@@ -876,19 +876,29 @@ fn project_workbook_is_validated_without_preflight_writes_and_digest_bound_on_bu
             environment: "local".to_string(),
         })
         .expect("valid workbook passes preflight");
-    assert_eq!(preflight.status, registryctl::PreflightStatus::Ready);
+    assert_eq!(preflight.status, registryctl::PreflightStatus::NotReady);
+    assert!(preflight.runtime_files.iter().any(|check| {
+        check.kind == registryctl::PreflightRuntimeFileKind::EntityXlsx
+            && check.state == registryctl::PreflightCheckState::Available
+    }));
     assert_eq!(
         directory_snapshot(&project),
         before,
         "preflight workbook validation must be read-only"
     );
 
-    registryctl::build_registry_project(&registryctl::ProjectBuildOptions {
-        project_directory: project.clone(),
-        environment: "local".to_string(),
-        against: None,
-        anchor: None,
-    })
+    let execution_context =
+        registryctl::ProjectExecutionContext::new(env!("CARGO_BIN_EXE_registryctl"))
+            .expect("Cargo provides the real registryctl executable");
+    registryctl::build_registry_project_with_context(
+        &registryctl::ProjectBuildOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+            against: None,
+            anchor: None,
+        },
+        &execution_context,
+    )
     .expect("valid workbook builds");
     let manifest: Value = serde_json::from_slice(
         &fs::read(project.join(".registry-stack/build/local/artifact-manifest.json"))
