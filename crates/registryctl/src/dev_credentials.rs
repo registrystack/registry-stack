@@ -25,6 +25,7 @@ const SYNTHETIC_SECRET_ROOT: &str = "/run/registry/synthetic-source-secrets";
 const DEV_WORKLOAD_ISSUER: &str = "http://registry-notary:8081";
 const DEV_WORKLOAD_JWKS_URL: &str = "http://registry-notary:8081/.well-known/evidence/jwks.json";
 const DEV_WORKLOAD_KID: &str = "registryctl-local-workload";
+const DEV_NOTARY_RUNTIME_SIGNING_KID: &str = "registryctl-local-notary-runtime-issuer";
 const DEV_WORKLOAD_CLIENT: &str = "registryctl-local-notary";
 const DEV_WORKLOAD_AUDIENCE: &str = "registry-relay";
 const DEV_WORKLOAD_LIFETIME_SECONDS: u64 = 10 * 365 * 24 * 60 * 60;
@@ -277,6 +278,14 @@ struct IssuanceCredential {
     public_jwk: String,
 }
 
+/// Runtime-only fallback signing material for a Notary configuration that does
+/// not declare issuance. It exists for one disposable dev runtime and is never
+/// reused as product-lane trust material or exported as a public trust input.
+struct NotaryRuntimeSigningCredential {
+    private_jwk: Zeroizing<String>,
+    public_jwk: String,
+}
+
 struct DatabaseCredentialSet {
     postgres_admin: Zeroizing<String>,
     relay_owner: Zeroizing<String>,
@@ -342,6 +351,7 @@ pub(crate) struct PreparedDevCredentialClosure {
     product_tls: ProductTlsCredentialSet,
     source: SourceCredential,
     issuance: Option<IssuanceCredential>,
+    notary_runtime_signing: Option<NotaryRuntimeSigningCredential>,
     lane_signers: [LaneSigningCredential; 3],
 }
 
@@ -431,6 +441,11 @@ impl PreparedDevCredentialClosure {
             .as_ref()
             .map(generate_issuance_credential)
             .transpose()?;
+        let notary_runtime_signing = if issuance.is_none() {
+            Some(generate_notary_runtime_signing_credential()?)
+        } else {
+            None
+        };
         let source = generate_source_credential(&requirements.source)?;
         let product_tls = ProductTlsCredentialSet {
             relay_public: generate_tls_credential("registry-relay-public")?,
@@ -520,9 +535,11 @@ impl PreparedDevCredentialClosure {
             product_tls,
             source,
             issuance,
+            notary_runtime_signing,
             lane_signers,
         };
         closure.validate_distinct_secrets(&caller_fingerprint)?;
+        closure.validate_notary_runtime_signing_separation()?;
         Ok(closure)
     }
 
@@ -702,12 +719,6 @@ impl PreparedDevCredentialClosure {
         )?;
 
         let postgres_bootstrap = [
-            ("POSTGRES_USER", POSTGRES_ADMIN_ROLE),
-            ("POSTGRES_PASSWORD", self.databases.postgres_admin.as_str()),
-            (
-                "REGISTRY_RELAY_OWNER_PASSWORD",
-                self.databases.relay_owner.as_str(),
-            ),
             (
                 "REGISTRY_RELAY_MIGRATOR_PASSWORD",
                 self.databases.relay_migrator.as_str(),
@@ -723,10 +734,6 @@ impl PreparedDevCredentialClosure {
             (
                 "REGISTRY_RELAY_READER_PASSWORD",
                 self.databases.relay_reader.as_str(),
-            ),
-            (
-                "REGISTRY_NOTARY_OWNER_PASSWORD",
-                self.databases.notary_owner.as_str(),
             ),
             (
                 "REGISTRY_NOTARY_MIGRATOR_PASSWORD",
@@ -753,12 +760,11 @@ impl PreparedDevCredentialClosure {
             &files.postgres_admin_password,
             self.databases.postgres_admin.as_bytes(),
         )?;
-        let notary_signing_key = self
-            .issuance
-            .as_ref()
-            .map_or(self.lane_signers[2].private_jwk.as_str(), |credential| {
-                credential.private_jwk.as_str()
-            });
+        let notary_signing_key = match (&self.issuance, &self.notary_runtime_signing) {
+            (Some(credential), None) => credential.private_jwk.as_str(),
+            (None, Some(credential)) => credential.private_jwk.as_str(),
+            _ => bail!("development Notary runtime signing authority is not closed"),
+        };
         write_new_owner_only(&files.notary_signing_key, notary_signing_key.as_bytes())?;
 
         write_tls_files(
@@ -818,6 +824,9 @@ impl PreparedDevCredentialClosure {
         if let Some(issuance) = &self.issuance {
             values.push(issuance.private_jwk.as_str());
         }
+        if let Some(runtime) = &self.notary_runtime_signing {
+            values.push(runtime.private_jwk.as_str());
+        }
         match &self.source {
             SourceCredential::OperatorBound => {}
             SourceCredential::SyntheticUnauthenticated { control_token, tls } => {
@@ -849,6 +858,25 @@ impl PreparedDevCredentialClosure {
             || values.iter().copied().collect::<BTreeSet<_>>().len() != values.len()
         {
             bail!("generated development credentials violated the closed separation invariant");
+        }
+        Ok(())
+    }
+
+    fn validate_notary_runtime_signing_separation(&self) -> Result<()> {
+        let Some(runtime) = &self.notary_runtime_signing else {
+            return Ok(());
+        };
+        let runtime_kid = PublicJwk::parse(&runtime.public_jwk)
+            .and_then(|jwk| jwk.jkt())
+            .context("failed to identify the development Notary runtime signing identity")?;
+        let lane_kids = self
+            .lane_signers
+            .iter()
+            .map(|lane| PublicJwk::parse(&lane.public_jwk).and_then(|jwk| jwk.jkt()))
+            .collect::<Result<Vec<_>, _>>()
+            .context("failed to identify the development lane signing identities")?;
+        if self.issuance.is_some() || lane_kids.contains(&runtime_kid) {
+            bail!("development Notary runtime signing identity is not isolated");
         }
         Ok(())
     }
@@ -1091,6 +1119,15 @@ fn generate_issuance_credential(
             public_jwk: public_jwk.clone(),
             public_jwk_file: public_container_path("issuance-public.jwk"),
         },
+        private_jwk: Zeroizing::new(private_jwk),
+        public_jwk,
+    })
+}
+
+fn generate_notary_runtime_signing_credential() -> Result<NotaryRuntimeSigningCredential> {
+    let (private_jwk, public_jwk) = generate_ed25519_jwk(DEV_NOTARY_RUNTIME_SIGNING_KID)
+        .context("failed to generate a disposable development Notary runtime signing identity")?;
+    Ok(NotaryRuntimeSigningCredential {
         private_jwk: Zeroizing::new(private_jwk),
         public_jwk,
     })
@@ -1875,7 +1912,7 @@ mod tests {
     }
 
     #[test]
-    fn action_files_hold_only_action_specific_authority() {
+    fn action_files_have_exact_action_and_lane_scoped_authority() {
         let parent = tempdir().unwrap();
         let closure = PreparedDevCredentialClosure::generate(requirements(oauth_profile(
             DevOAuthCredentialProfile::Oauth2Bearer,
@@ -1894,25 +1931,93 @@ mod tests {
                 })
                 .collect()
         };
+        let expected = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect::<BTreeSet<_>>()
+        };
+        let keys =
+            |values: &BTreeMap<String, String>| values.keys().cloned().collect::<BTreeSet<_>>();
+        let relay_public_prepare = parse(&files.relay_public_prepare.host_path);
+        let relay_public_initialize = parse(&files.relay_public_initialize.host_path);
+        let relay_public_serve = parse(&files.relay_public_serve.host_path);
+        assert_eq!(
+            keys(&relay_public_prepare),
+            expected(&[RELAY_PUBLIC_AUDIT_ENV])
+        );
+        assert_eq!(
+            keys(&relay_public_initialize),
+            expected(&[RELAY_PUBLIC_AUDIT_ENV])
+        );
+        assert_eq!(
+            keys(&relay_public_serve),
+            expected(&[RELAY_PUBLIC_AUDIT_ENV, "REGISTRY_DEV_CALLER_FINGERPRINT",])
+        );
+
         let relay_prepare = parse(&files.relay_consultation_prepare.host_path);
         let relay_initialize = parse(&files.relay_consultation_initialize.host_path);
         let relay_serve = parse(&files.relay_consultation_serve.host_path);
-        assert!(relay_prepare.contains_key(RELAY_MIGRATION_DATABASE_ENV));
-        assert!(!relay_prepare.contains_key(RELAY_MAINTENANCE_DATABASE_ENV));
-        assert!(!relay_prepare.contains_key("REGISTRY_SOURCE_OAUTH_CLIENT_SECRET"));
-        assert!(!relay_initialize.contains_key(RELAY_MIGRATION_DATABASE_ENV));
-        assert!(!relay_initialize.contains_key(RELAY_MAINTENANCE_DATABASE_ENV));
-        assert!(relay_serve.contains_key(RELAY_MAINTENANCE_DATABASE_ENV));
-        assert!(relay_serve.contains_key("REGISTRY_SOURCE_OAUTH_CLIENT_SECRET"));
+        assert_eq!(
+            keys(&relay_prepare),
+            expected(&[
+                RELAY_CONSULTATION_AUDIT_ENV,
+                RELAY_DATABASE_ENV,
+                RELAY_MIGRATION_DATABASE_ENV,
+            ])
+        );
+        assert_eq!(
+            keys(&relay_initialize),
+            expected(&[RELAY_CONSULTATION_AUDIT_ENV, RELAY_DATABASE_ENV])
+        );
+        assert_eq!(
+            keys(&relay_serve),
+            expected(&[
+                RELAY_CONSULTATION_AUDIT_ENV,
+                RELAY_PSEUDONYM_ENV,
+                RELAY_DATABASE_ENV,
+                RELAY_MAINTENANCE_DATABASE_ENV,
+                RELAY_READER_DATABASE_ENV,
+                "REGISTRY_SOURCE_OAUTH_CLIENT_ID",
+                "REGISTRY_SOURCE_OAUTH_CLIENT_SECRET",
+            ])
+        );
 
         let notary_prepare = parse(&files.notary_prepare.host_path);
         let notary_initialize = parse(&files.notary_initialize.host_path);
         let notary_serve = parse(&files.notary_serve.host_path);
-        assert!(notary_prepare.contains_key(NOTARY_MIGRATION_DATABASE_ENV));
-        assert!(!notary_prepare.contains_key("REGISTRY_NOTARY_ISSUER_JWK"));
-        assert!(!notary_initialize.contains_key(NOTARY_MIGRATION_DATABASE_ENV));
-        assert!(!notary_initialize.contains_key("REGISTRY_NOTARY_ISSUER_JWK"));
-        assert!(notary_serve.contains_key("REGISTRY_NOTARY_ISSUER_JWK"));
+        assert_eq!(
+            keys(&notary_prepare),
+            expected(&[NOTARY_AUDIT_ENV, NOTARY_MIGRATION_DATABASE_ENV])
+        );
+        assert_eq!(
+            keys(&notary_initialize),
+            expected(&[NOTARY_AUDIT_ENV, NOTARY_DATABASE_ENV])
+        );
+        assert_eq!(
+            keys(&notary_serve),
+            expected(&[
+                NOTARY_AUDIT_ENV,
+                NOTARY_DATABASE_ENV,
+                NOTARY_MAINTENANCE_DATABASE_ENV,
+                NOTARY_READER_DATABASE_ENV,
+                NOTARY_WORKLOAD_PUBLIC_JWK_ENV,
+                "REGISTRY_NOTARY_ISSUER_JWK",
+            ])
+        );
+        assert_eq!(
+            keys(&parse(&files.postgres_bootstrap.host_path)),
+            expected(&[
+                "REGISTRY_RELAY_MIGRATOR_PASSWORD",
+                "REGISTRY_RELAY_RUNTIME_PASSWORD",
+                "REGISTRY_RELAY_MAINTENANCE_PASSWORD",
+                "REGISTRY_RELAY_READER_PASSWORD",
+                "REGISTRY_NOTARY_MIGRATOR_PASSWORD",
+                "REGISTRY_NOTARY_RUNTIME_PASSWORD",
+                "REGISTRY_NOTARY_MAINTENANCE_PASSWORD",
+                "REGISTRY_NOTARY_READER_PASSWORD",
+            ])
+        );
     }
 
     #[test]
@@ -1956,6 +2061,79 @@ mod tests {
                 PublicJwk::parse(&signer.public_jwk).unwrap().jkt().unwrap()
             );
         }
+    }
+
+    #[test]
+    fn absent_issuance_gets_an_isolated_runtime_signer_for_one_credential_closure() {
+        let mut first_requirements = requirements(DevSourceCredentialProfile::OperatorBound);
+        first_requirements.issuance = None;
+        let closure = PreparedDevCredentialClosure::generate(first_requirements).unwrap();
+        assert!(closure.issuance.is_none());
+        let runtime = closure.notary_runtime_signing.as_ref().unwrap();
+        let runtime_private: Value = serde_json::from_str(&runtime.private_jwk).unwrap();
+        assert_eq!(runtime_private["kid"], DEV_NOTARY_RUNTIME_SIGNING_KID);
+        let runtime_kid = PublicJwk::parse(&runtime.public_jwk)
+            .unwrap()
+            .jkt()
+            .unwrap();
+        let mut lane_private_values = BTreeSet::new();
+        let mut lane_kids = BTreeSet::new();
+        for lane in [
+            ProductAcceptanceLaneV1::RelayPublic,
+            ProductAcceptanceLaneV1::RelayConsultation,
+            ProductAcceptanceLaneV1::Notary,
+        ] {
+            closure
+                .with_lane_private_jwk(lane, |text| {
+                    let private = PrivateJwk::parse(text)?;
+                    lane_private_values.insert(text.to_string());
+                    lane_kids.insert(private.public().jkt()?);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        assert!(!lane_private_values.contains(runtime.private_jwk.as_str()));
+        assert!(!lane_kids.contains(&runtime_kid));
+
+        let mut second_requirements = requirements(DevSourceCredentialProfile::OperatorBound);
+        second_requirements.issuance = None;
+        let second = PreparedDevCredentialClosure::generate(second_requirements).unwrap();
+        let second_runtime = second.notary_runtime_signing.as_ref().unwrap();
+        assert_ne!(
+            runtime_kid,
+            PublicJwk::parse(&second_runtime.public_jwk)
+                .unwrap()
+                .jkt()
+                .unwrap()
+        );
+
+        let parent = tempdir().unwrap();
+        let files = closure
+            .materialize_owner_only(&parent.path().join("credentials"))
+            .unwrap();
+        assert!(files.issuance_public_jwk.is_none());
+        assert!(
+            fs::read_to_string(&files.notary_signing_key).unwrap() == runtime.private_jwk.as_str()
+        );
+        let runtime_private_member = runtime_private["d"].as_str().unwrap();
+        for path in files
+            .lane_public_jwks
+            .iter()
+            .chain([&files.workload_public_jwk])
+        {
+            let text = fs::read_to_string(path).unwrap();
+            assert!(!text.contains(runtime_private_member));
+            assert_ne!(PublicJwk::parse(&text).unwrap().jkt().unwrap(), runtime_kid);
+        }
+        assert_eq!(
+            fs::read_dir(&files.root)
+                .unwrap()
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+                .filter(|text| text.contains(runtime_private_member))
+                .count(),
+            1
+        );
     }
 
     #[test]

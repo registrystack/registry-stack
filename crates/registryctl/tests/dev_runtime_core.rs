@@ -937,11 +937,72 @@ fn credential_mount_inventory_is_lane_and_action_specific() {
             .map(|mount| mount.container_path.clone())
             .collect::<BTreeSet<_>>()
     };
+    let environment_inputs = |mounts: &[DevWorkloadMount]| {
+        mounts
+            .iter()
+            .filter(|mount| {
+                mount
+                    .host_path
+                    .extension()
+                    .is_some_and(|extension| extension == "env")
+            })
+            .map(|mount| {
+                mount
+                    .host_path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<BTreeSet<_>>()
+    };
     let public = plan
         .workloads
         .iter()
         .find(|workload| workload.id == DevWorkloadId::RelayPublic)
         .unwrap();
+    assert_eq!(
+        environment_inputs(&public.prepare_state_store.as_ref().unwrap().mounts),
+        BTreeSet::from(["relay-public-prepare.env".to_string()])
+    );
+    assert_eq!(
+        environment_inputs(&public.initialize_state.as_ref().unwrap().mounts),
+        BTreeSet::from(["relay-public-initialize.env".to_string()])
+    );
+    assert_eq!(
+        environment_inputs(&public.mounts),
+        BTreeSet::from(["relay-public-serve.env".to_string()])
+    );
+    assert_eq!(
+        environment_inputs(
+            &relay_consultation
+                .prepare_state_store
+                .as_ref()
+                .unwrap()
+                .mounts
+        ),
+        BTreeSet::from(["relay-consultation-prepare.env".to_string()])
+    );
+    assert_eq!(
+        environment_inputs(&relay_consultation.initialize_state.as_ref().unwrap().mounts),
+        BTreeSet::from(["relay-consultation-initialize.env".to_string()])
+    );
+    assert_eq!(
+        environment_inputs(&relay_consultation.mounts),
+        BTreeSet::from(["relay-consultation-serve.env".to_string()])
+    );
+    assert_eq!(
+        environment_inputs(&notary.prepare_state_store.as_ref().unwrap().mounts),
+        BTreeSet::from(["notary-prepare.env".to_string()])
+    );
+    assert_eq!(
+        environment_inputs(&notary.initialize_state.as_ref().unwrap().mounts),
+        BTreeSet::from(["notary-initialize.env".to_string()])
+    );
+    assert_eq!(
+        environment_inputs(&notary.mounts),
+        BTreeSet::from(["notary-serve.env".to_string()])
+    );
     assert!(secret_targets(public.prepare_state_store.as_ref().unwrap()).is_empty());
     assert!(secret_targets(public.initialize_state.as_ref().unwrap()).is_empty());
     let database_ca = BTreeSet::from(["/run/secrets/postgresql-ca.pem".to_string()]);

@@ -616,9 +616,14 @@ impl VerifiedDevReleaseProjection {
                 test_postgresql_operator_file(
                     "postgresql-bootstrap-environment",
                     &[
-                        "POSTGRES_USER",
-                        "POSTGRES_PASSWORD",
-                        "REGISTRY_RELAY_OWNER_PASSWORD",
+                        "REGISTRY_RELAY_MIGRATOR_PASSWORD",
+                        "REGISTRY_RELAY_RUNTIME_PASSWORD",
+                        "REGISTRY_RELAY_MAINTENANCE_PASSWORD",
+                        "REGISTRY_RELAY_READER_PASSWORD",
+                        "REGISTRY_NOTARY_MIGRATOR_PASSWORD",
+                        "REGISTRY_NOTARY_RUNTIME_PASSWORD",
+                        "REGISTRY_NOTARY_MAINTENANCE_PASSWORD",
+                        "REGISTRY_NOTARY_READER_PASSWORD",
                     ],
                 ),
             ],
@@ -757,7 +762,10 @@ pub fn prepare_dev_runtime_plan(
             synthetic: authoring.development.source_mode == DevSourceMode::Synthetic,
             operator_source_secret_env: &authoring.operator_source_secret_env,
         },
-    );
+    )
+    .inspect_err(|_| {
+        let _ = remove_generated_dev_artifact(&canonical_root, &generated_root);
+    })?;
     if let Err(error) = render_closed_compose(&compose_file, &workloads) {
         let _ = remove_generated_dev_artifact(&canonical_root, &generated_root);
         return Err(error);
@@ -1322,7 +1330,7 @@ impl DevRuntimePlan {
                 synthetic: input.development.source_mode == DevSourceMode::Synthetic,
                 operator_source_secret_env: &input.operator_source_secret_env,
             },
-        );
+        )?;
         validate_development_trust_material(&input.artifacts, &workloads)?;
         let lifecycle = DevLifecycleBindings {
             compose_project: format!("registryctl-dev-{runtime_id}"),
@@ -1934,7 +1942,7 @@ fn build_workloads(
     paths: &DevRuntimePaths,
     credential_files: &PreparedDevCredentialFiles,
     options: DevWorkloadBuildOptions<'_>,
-) -> Vec<DevWorkloadPlan> {
+) -> DevRuntimeResult<Vec<DevWorkloadPlan>> {
     let DevWorkloadBuildOptions {
         relay_port,
         notary_port,
@@ -1967,7 +1975,7 @@ fn build_workloads(
                 artifacts,
                 paths,
                 credential_files,
-            )),
+            )?),
             initialize_state: Some(product_action(
                 DevWorkloadId::RelayPublic,
                 "initialize-state",
@@ -1975,7 +1983,7 @@ fn build_workloads(
                 artifacts,
                 paths,
                 credential_files,
-            )),
+            )?),
             command: release.relay_public_serve.command.clone(),
             health_probe: release.relay_public_health_probe.clone(),
             environment_passthrough: Vec::new(),
@@ -1985,7 +1993,7 @@ fn build_workloads(
                 artifacts,
                 paths,
                 credential_files,
-            ),
+            )?,
             hardening: None,
         },
         DevWorkloadPlan {
@@ -2004,7 +2012,7 @@ fn build_workloads(
                 artifacts,
                 paths,
                 credential_files,
-            )),
+            )?),
             initialize_state: Some(product_action(
                 DevWorkloadId::RelayConsultation,
                 "initialize-state",
@@ -2012,7 +2020,7 @@ fn build_workloads(
                 artifacts,
                 paths,
                 credential_files,
-            )),
+            )?),
             command: release.relay_consultation_serve.command.clone(),
             health_probe: release.relay_consultation_health_probe.clone(),
             environment_passthrough: operator_source_secret_env.to_vec(),
@@ -2022,7 +2030,7 @@ fn build_workloads(
                 artifacts,
                 paths,
                 credential_files,
-            ),
+            )?,
             hardening: None,
         },
         DevWorkloadPlan {
@@ -2044,7 +2052,7 @@ fn build_workloads(
                 artifacts,
                 paths,
                 credential_files,
-            )),
+            )?),
             initialize_state: Some(product_action(
                 DevWorkloadId::Notary,
                 "initialize-state",
@@ -2052,7 +2060,7 @@ fn build_workloads(
                 artifacts,
                 paths,
                 credential_files,
-            )),
+            )?),
             command: release.notary_serve.command.clone(),
             health_probe: release.notary_health_probe.clone(),
             environment_passthrough: Vec::new(),
@@ -2062,7 +2070,7 @@ fn build_workloads(
                 artifacts,
                 paths,
                 credential_files,
-            ),
+            )?,
             hardening: None,
         },
         DevWorkloadPlan {
@@ -2070,7 +2078,7 @@ fn build_workloads(
             image: release.postgresql_image.clone(),
             acceptance_identity: None,
             host_endpoint: None,
-            prepare_state_store: Some(postgresql_staging_action(release, paths, credential_files)),
+            prepare_state_store: Some(postgresql_staging_action(release, paths, credential_files)?),
             initialize_state: Some(postgresql_bootstrap_action(release, paths)),
             command: release.postgresql_serve.command.clone(),
             health_probe: release.postgresql_health_probe.clone(),
@@ -2080,15 +2088,14 @@ fn build_workloads(
         },
     ];
     if let Some(source) = &credential_files.source {
-        workloads
+        let consultation = workloads
             .iter_mut()
             .find(|workload| workload.id == DevWorkloadId::RelayConsultation)
-            .expect("closed workload set contains consultation Relay")
-            .mounts
-            .push(secret_file_mount(
-                &source.tls_certificate,
-                DEV_SYNTHETIC_SOURCE_CA_CONTAINER_PATH,
-            ));
+            .ok_or_else(DevRuntimeError::image_lock)?;
+        consultation.mounts.push(secret_file_mount(
+            &source.tls_certificate,
+            DEV_SYNTHETIC_SOURCE_CA_CONTAINER_PATH,
+        ));
     }
     if synthetic {
         workloads.push(DevWorkloadPlan {
@@ -2119,12 +2126,12 @@ fn build_workloads(
                 credential_files
                     .source
                     .as_ref()
-                    .expect("synthetic credential projection was validated"),
+                    .ok_or_else(DevRuntimeError::invalid_credentials)?,
             ),
             hardening: None,
         });
     }
-    workloads
+    Ok(workloads)
 }
 
 struct DevWorkloadBuildOptions<'a> {
@@ -2145,34 +2152,61 @@ fn postgresql_staged_path(root: &Path, file_id: &str) -> PathBuf {
 
 fn product_environment_file<'a>(
     files: &'a PreparedDevCredentialFiles,
-    file_id: &str,
-) -> &'a PreparedDevActionCredentialFile {
-    match file_id {
-        "relay-public-prepare-environment" => &files.relay_public_prepare,
-        "relay-public-initialize-environment" => &files.relay_public_initialize,
-        "relay-public-serve-environment" => &files.relay_public_serve,
-        "relay-consultation-prepare-environment" => &files.relay_consultation_prepare,
-        "relay-consultation-initialize-environment" => &files.relay_consultation_initialize,
-        "relay-consultation-serve-environment" => &files.relay_consultation_serve,
-        "notary-prepare-environment" => &files.notary_prepare,
-        "notary-initialize-environment" => &files.notary_initialize,
-        "notary-serve-environment" => &files.notary_serve,
-        _ => panic!("verified product recipe referenced an unknown environment file"),
+    workload: DevWorkloadId,
+    projection: &DevRuntimeActionProjection,
+) -> DevRuntimeResult<&'a PreparedDevActionCredentialFile> {
+    let expected_environment = match workload {
+        DevWorkloadId::RelayPublic => "relay-public-environment",
+        DevWorkloadId::RelayConsultation => "relay-consultation-environment",
+        DevWorkloadId::Notary => "notary-environment",
+        DevWorkloadId::Postgresql | DevWorkloadId::SyntheticSource => {
+            return Err(DevRuntimeError::image_lock());
+        }
+    };
+    if projection.environment_files.as_slice() != [expected_environment] {
+        return Err(DevRuntimeError::image_lock());
+    }
+    match (workload, projection.command.last().map(String::as_str)) {
+        (DevWorkloadId::RelayPublic, Some("prepare_state_store")) => {
+            Ok(&files.relay_public_prepare)
+        }
+        (DevWorkloadId::RelayPublic, Some("initialize_state")) => {
+            Ok(&files.relay_public_initialize)
+        }
+        (DevWorkloadId::RelayPublic, Some("serve" | "verify_state")) => {
+            Ok(&files.relay_public_serve)
+        }
+        (DevWorkloadId::RelayConsultation, Some("prepare_state_store")) => {
+            Ok(&files.relay_consultation_prepare)
+        }
+        (DevWorkloadId::RelayConsultation, Some("initialize_state")) => {
+            Ok(&files.relay_consultation_initialize)
+        }
+        (DevWorkloadId::RelayConsultation, Some("serve" | "verify_state")) => {
+            Ok(&files.relay_consultation_serve)
+        }
+        (DevWorkloadId::Notary, Some("prepare_state_store")) => Ok(&files.notary_prepare),
+        (DevWorkloadId::Notary, Some("initialize_state")) => Ok(&files.notary_initialize),
+        (DevWorkloadId::Notary, Some("serve" | "verify_state")) => Ok(&files.notary_serve),
+        _ => Err(DevRuntimeError::image_lock()),
     }
 }
 
-fn product_secret_path<'a>(files: &'a PreparedDevCredentialFiles, file_id: &str) -> &'a Path {
+fn product_secret_path<'a>(
+    files: &'a PreparedDevCredentialFiles,
+    file_id: &str,
+) -> DevRuntimeResult<&'a Path> {
     match file_id {
-        "postgresql-tls-certificate" => &files.postgres_tls_certificate,
-        "relay-public-tls-certificate" => &files.relay_public_tls_certificate,
-        "relay-public-tls-private-key" => &files.relay_public_tls_private_key,
-        "relay-consultation-tls-certificate" => &files.relay_consultation_tls_certificate,
-        "relay-consultation-tls-private-key" => &files.relay_consultation_tls_private_key,
-        "notary-relay-workload-credential" => &files.workload_token,
-        "notary-signing-key" => &files.notary_signing_key,
-        "notary-tls-certificate" => &files.notary_tls_certificate,
-        "notary-tls-private-key" => &files.notary_tls_private_key,
-        _ => panic!("verified product recipe referenced an unknown secret file"),
+        "postgresql-tls-certificate" => Ok(&files.postgres_tls_certificate),
+        "relay-public-tls-certificate" => Ok(&files.relay_public_tls_certificate),
+        "relay-public-tls-private-key" => Ok(&files.relay_public_tls_private_key),
+        "relay-consultation-tls-certificate" => Ok(&files.relay_consultation_tls_certificate),
+        "relay-consultation-tls-private-key" => Ok(&files.relay_consultation_tls_private_key),
+        "notary-relay-workload-credential" => Ok(&files.workload_token),
+        "notary-signing-key" => Ok(&files.notary_signing_key),
+        "notary-tls-certificate" => Ok(&files.notary_tls_certificate),
+        "notary-tls-private-key" => Ok(&files.notary_tls_private_key),
+        _ => Err(DevRuntimeError::image_lock()),
     }
 }
 
@@ -2181,26 +2215,30 @@ fn product_artifact_mount(
     source: DevRuntimeMountProjection,
     artifacts: &DevRuntimeArtifactInputs,
     paths: &DevRuntimePaths,
-) -> DevWorkloadMount {
-    match source {
-        DevRuntimeMountProjection::Bundle => read_only_mount(
-            match workload {
+) -> DevRuntimeResult<DevWorkloadMount> {
+    Ok(match source {
+        DevRuntimeMountProjection::Bundle => {
+            let path = match workload {
                 DevWorkloadId::RelayPublic => &artifacts.relay_public_bundle,
                 DevWorkloadId::RelayConsultation => &artifacts.relay_consultation_bundle,
                 DevWorkloadId::Notary => &artifacts.notary_bundle,
-                _ => panic!("supporting workload cannot consume a product bundle"),
-            },
-            "/run/registry/bundle",
-        ),
-        DevRuntimeMountProjection::Anchor => read_only_mount(
-            match workload {
+                DevWorkloadId::Postgresql | DevWorkloadId::SyntheticSource => {
+                    return Err(DevRuntimeError::image_lock());
+                }
+            };
+            read_only_mount(path, "/run/registry/bundle")
+        }
+        DevRuntimeMountProjection::Anchor => {
+            let path = match workload {
                 DevWorkloadId::RelayPublic => &artifacts.relay_public_anchor,
                 DevWorkloadId::RelayConsultation => &artifacts.relay_consultation_anchor,
                 DevWorkloadId::Notary => &artifacts.notary_anchor,
-                _ => panic!("supporting workload cannot consume a product anchor"),
-            },
-            "/run/registry/anchor",
-        ),
+                DevWorkloadId::Postgresql | DevWorkloadId::SyntheticSource => {
+                    return Err(DevRuntimeError::image_lock());
+                }
+            };
+            read_only_mount(path, "/run/registry/anchor")
+        }
         DevRuntimeMountProjection::AntiRollbackState => writable_state_mount(paths, workload),
         DevRuntimeMountProjection::Audit => DevWorkloadMount {
             host_path: paths.root.join("audit").join(workload.compose_service()),
@@ -2209,7 +2247,7 @@ fn product_artifact_mount(
             kind: DevWorkloadMountKind::Bind,
         },
         DevRuntimeMountProjection::PostgresqlData => writable_postgresql_state_mount(paths),
-    }
+    })
 }
 
 fn product_action_mounts(
@@ -2218,31 +2256,34 @@ fn product_action_mounts(
     artifacts: &DevRuntimeArtifactInputs,
     paths: &DevRuntimePaths,
     files: &PreparedDevCredentialFiles,
-) -> Vec<DevWorkloadMount> {
+) -> DevRuntimeResult<Vec<DevWorkloadMount>> {
     let mut mounts = projection
         .mounts
         .iter()
         .map(|source| product_artifact_mount(workload, *source, artifacts, paths))
-        .collect::<Vec<_>>();
-    mounts.extend(
-        projection
-            .environment_files
-            .iter()
-            .map(|file_id| action_credential_mount(product_environment_file(files, file_id))),
-    );
-    mounts.extend(projection.secret_files.iter().map(|secret| {
-        secret_file_mount(product_secret_path(files, &secret.file_id), &secret.target)
-    }));
-    mounts
+        .collect::<DevRuntimeResult<Vec<_>>>()?;
+    mounts.push(action_credential_mount(product_environment_file(
+        files, workload, projection,
+    )?));
+    for secret in &projection.secret_files {
+        mounts.push(secret_file_mount(
+            product_secret_path(files, &secret.file_id)?,
+            &secret.target,
+        ));
+    }
+    Ok(mounts)
 }
 
-fn postgresql_source_path<'a>(files: &'a PreparedDevCredentialFiles, file_id: &str) -> &'a Path {
+fn postgresql_source_path<'a>(
+    files: &'a PreparedDevCredentialFiles,
+    file_id: &str,
+) -> DevRuntimeResult<&'a Path> {
     match file_id {
-        "postgresql-admin-password" => &files.postgres_admin_password,
-        "postgresql-tls-certificate" => &files.postgres_tls_certificate,
-        "postgresql-tls-private-key" => &files.postgres_tls_private_key,
-        "postgresql-bootstrap-environment" => &files.postgres_bootstrap.host_path,
-        _ => panic!("verified PostgreSQL recipe referenced an unknown operator file"),
+        "postgresql-admin-password" => Ok(&files.postgres_admin_password),
+        "postgresql-tls-certificate" => Ok(&files.postgres_tls_certificate),
+        "postgresql-tls-private-key" => Ok(&files.postgres_tls_private_key),
+        "postgresql-bootstrap-environment" => Ok(&files.postgres_bootstrap.host_path),
+        _ => Err(DevRuntimeError::image_lock()),
     }
 }
 
@@ -2250,21 +2291,17 @@ fn postgresql_staging_action(
     release: &VerifiedDevReleaseProjection,
     paths: &DevRuntimePaths,
     files: &PreparedDevCredentialFiles,
-) -> DevProductActionPlan {
-    let mut projections = release
-        .postgresql_operator_files
-        .iter()
-        .map(|file| {
-            assert!(
-                file.allowed_owners.iter().any(|owner| owner == "999:999"),
-                "verified PostgreSQL operator file must allow the signed service owner"
-            );
-            (
-                file.id.clone(),
-                (file.mode.clone(), "999".to_string(), "999".to_string()),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+) -> DevRuntimeResult<DevProductActionPlan> {
+    let mut projections = BTreeMap::new();
+    for file in &release.postgresql_operator_files {
+        if !file.allowed_owners.iter().any(|owner| owner == "999:999") {
+            return Err(DevRuntimeError::image_lock());
+        }
+        projections.insert(
+            file.id.clone(),
+            (file.mode.clone(), "999".to_string(), "999".to_string()),
+        );
+    }
     for secret in release
         .postgresql_serve
         .secret_files
@@ -2276,11 +2313,9 @@ fn postgresql_staging_action(
             (secret.mode.clone(), secret.uid.clone(), secret.gid.clone()),
         );
     }
-    assert_eq!(
-        projections.len(),
-        4,
-        "verified PostgreSQL recipe must close over four staged operator files"
-    );
+    if projections.len() != 4 {
+        return Err(DevRuntimeError::image_lock());
+    }
 
     let mut mounts = Vec::with_capacity(projections.len() + 1);
     let mut script = String::from("set -eu\n");
@@ -2290,9 +2325,9 @@ fn postgresql_staging_action(
         let output_name = output_name
             .file_name()
             .and_then(|value| value.to_str())
-            .expect("verified operator file id is valid UTF-8");
+            .ok_or_else(DevRuntimeError::image_lock)?;
         mounts.push(read_only_mount(
-            postgresql_source_path(files, &file_id),
+            postgresql_source_path(files, &file_id)?,
             &source_target,
         ));
         script.push_str(&format!(
@@ -2306,7 +2341,7 @@ fn postgresql_staging_action(
         read_only: false,
         kind: DevWorkloadMountKind::Bind,
     });
-    DevProductActionPlan {
+    Ok(DevProductActionPlan {
         compose_service: "registry-postgres-stage-secrets".to_string(),
         command: vec!["/bin/sh".to_string(), "-ceu".to_string(), script],
         mounts,
@@ -2319,7 +2354,7 @@ fn postgresql_staging_action(
             security_opt: vec!["no-new-privileges:true".to_string()],
             tmpfs: vec!["/tmp".to_string()],
         }),
-    }
+    })
 }
 
 fn postgresql_action_mounts(
@@ -2682,14 +2717,14 @@ fn product_action(
     artifacts: &DevRuntimeArtifactInputs,
     paths: &DevRuntimePaths,
     credential_files: &PreparedDevCredentialFiles,
-) -> DevProductActionPlan {
-    DevProductActionPlan {
+) -> DevRuntimeResult<DevProductActionPlan> {
+    Ok(DevProductActionPlan {
         compose_service: format!("{}-{action}", workload.compose_service()),
         command: projection.command.clone(),
-        mounts: product_action_mounts(workload, projection, artifacts, paths, credential_files),
+        mounts: product_action_mounts(workload, projection, artifacts, paths, credential_files)?,
         private_network: true,
         hardening: None,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -2781,14 +2816,7 @@ fn test_product_action(binary: &str, lane: &str, action: &str) -> DevRuntimeActi
     DevRuntimeActionProjection {
         command,
         mounts,
-        environment_files: vec![format!(
-            "{lane}-{}-environment",
-            match action {
-                "prepare_state_store" => "prepare",
-                "initialize_state" => "initialize",
-                other => other,
-            }
-        )],
+        environment_files: vec![format!("{lane}-environment")],
         secret_files,
     }
 }
