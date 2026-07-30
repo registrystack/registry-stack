@@ -42,9 +42,8 @@ const SERVICE_RELAY_PUBLIC: &str = "registry-relay-public";
 const SERVICE_RELAY_CONSULTATION: &str = "registry-relay-consultation";
 const SERVICE_NOTARY: &str = "registry-notary";
 const SERVICE_POSTGRESQL: &str = "registry-postgres";
-const SERVICE_RUNTIME_SECRET_STAGER: &str = "registry-runtime-stage-secrets";
-const NETWORK_EDGE: &str = "registry-edge";
-const NETWORK_PRIVATE: &str = "registry-private";
+const SECRET_STAGER_SUFFIX: &str = "-stage-secrets";
+const NETWORK_RUNTIME: &str = "registry-runtime";
 const COMPOSE_MINIMUM_VERSION: [u16; 3] = [2, 35, 0];
 pub(crate) const OPERATOR_FILE_IDS: [&str; 15] = [
     "notary-environment",
@@ -358,7 +357,7 @@ impl DeploymentPlanV1 {
                     vec!["relay-public-tls"],
                     vec!["relay-public-anti-rollback", "relay-public-audit"],
                     vec![EndpointClassV1::PublicApplication, EndpointClassV1::Posture],
-                    vec!["edge"],
+                    vec!["runtime"],
                     vec![],
                     "relay-public-health",
                 ),
@@ -375,7 +374,7 @@ impl DeploymentPlanV1 {
                         EndpointClassV1::PrivateApplication,
                         EndpointClassV1::Posture,
                     ],
-                    vec!["private"],
+                    vec!["runtime"],
                     vec![POSTGRESQL],
                     "relay-consultation-health",
                 ),
@@ -397,7 +396,7 @@ impl DeploymentPlanV1 {
                         EndpointClassV1::Administration,
                         EndpointClassV1::Posture,
                     ],
-                    vec!["edge", "private"],
+                    vec!["runtime"],
                     vec![RELAY_CONSULTATION, POSTGRESQL],
                     "notary-health",
                 ),
@@ -408,7 +407,7 @@ impl DeploymentPlanV1 {
                     secret_consumers: strings(vec!["postgresql-tls", "postgresql-credentials"]),
                     state_roles: strings(vec!["postgresql-data"]),
                     endpoint_classes: vec![EndpointClassV1::PrivateApplication],
-                    network_relationships: strings(vec!["private"]),
+                    network_relationships: strings(vec!["runtime"]),
                     dependencies: Vec::new(),
                     health_semantics: "postgresql-health".to_string(),
                     restart_action: ExpectedRestartActionV1::Restart,
@@ -681,7 +680,6 @@ pub struct DeploymentBindingV1 {
     pub environment: String,
     pub loopback_address: String,
     pub ports: LoopbackPortsV1,
-    pub edge_network_name: Option<String>,
     pub secret_files: BTreeMap<String, String>,
     pub certificate_files: BTreeMap<String, String>,
     pub durable_volume_prefix: String,
@@ -701,7 +699,6 @@ impl DeploymentBindingV1 {
                 relay_public: 4242,
                 notary: 4255,
             },
-            edge_network_name: None,
             secret_files: OPERATOR_FILE_IDS
                 .into_iter()
                 .map(|id| (id.to_string(), format!("operator/secrets/{id}")))
@@ -752,9 +749,6 @@ impl DeploymentBindingV1 {
             if !locator.starts_with("operator/") {
                 bail!("secret and certificate locators must remain operator-owned");
             }
-        }
-        if let Some(network) = &self.edge_network_name {
-            validate_id("edge_network_name", network)?;
         }
         Ok(())
     }
@@ -965,10 +959,7 @@ fn operator_file_inventory(
     );
     let mut source_files = BTreeMap::<String, Vec<&LockedOperatorFileV1>>::new();
     for file in &runtime.operator_files {
-        source_files
-            .entry(deployment_operator_file_id(&file.id).to_string())
-            .or_default()
-            .push(file);
+        source_files.entry(file.id.clone()).or_default().push(file);
     }
     let files = source_files
         .into_iter()
@@ -1019,7 +1010,7 @@ fn add_action_consumers(
 ) {
     for file_id in &action.environment_files {
         consumers
-            .entry(deployment_operator_file_id(file_id).to_string())
+            .entry(file_id.clone())
             .or_default()
             .insert(format!("{action_name}:environment"));
     }
@@ -1029,20 +1020,6 @@ fn add_action_consumers(
             .or_default()
             .insert(format!("{action_name}:{}", projection.target));
     }
-}
-
-fn deployment_operator_file_id(release_file_id: &str) -> &str {
-    for lane in [RELAY_PUBLIC, RELAY_CONSULTATION, NOTARY] {
-        if release_file_id.starts_with(lane) && release_file_id.ends_with("-environment") {
-            return match lane {
-                RELAY_PUBLIC => "relay-public-environment",
-                RELAY_CONSULTATION => "relay-consultation-environment",
-                NOTARY => "notary-environment",
-                _ => unreachable!(),
-            };
-        }
-    }
-    release_file_id
 }
 
 pub fn render_compose_package(
@@ -2342,19 +2319,21 @@ fn render_ordinary_model(
     let postgresql = plan.supporting(SupportingWorkloadRecipeV1::PostgresqlStatePlane)?;
 
     let mut services = Map::new();
-    services.insert(
-        SERVICE_RUNTIME_SECRET_STAGER.to_string(),
-        secret_staging_service(&postgresql.image_identity, runtime, binding)?,
-    );
+    for (owner_id, actions) in secret_stage_groups(runtime) {
+        insert_secret_staging_service(
+            &mut services,
+            &postgresql.image_identity,
+            &actions,
+            binding,
+            owner_id,
+        )?;
+    }
     let mut postgres = hardened_service(
         &postgresql.image_identity,
         &runtime.postgresql_state_plane.serve.command,
         &runtime.postgresql_state_plane.health_probe,
-        json!({NETWORK_PRIVATE: {}}),
-        dependency_map(&[(
-            SERVICE_RUNTIME_SECRET_STAGER,
-            "service_completed_successfully",
-        )]),
+        json!({NETWORK_RUNTIME: {}}),
+        action_dependency_map(&[], &runtime.postgresql_state_plane.serve, "postgresql"),
         &binding.restart_policy,
     );
     apply_hardening(&mut postgres, &runtime.postgresql_state_plane.hardening);
@@ -2381,11 +2360,8 @@ fn render_ordinary_model(
             runtime.product(ProductLaneV1::RelayPublic),
             binding,
             bundle_source(lanes, ProductLaneV1::RelayPublic)?,
-            json!({NETWORK_EDGE: {}}),
-            dependency_map(&[(
-                SERVICE_RUNTIME_SECRET_STAGER,
-                "service_completed_successfully",
-            )]),
+            json!({NETWORK_RUNTIME: {}}),
+            action_dependency_map(&[], &runtime.relay_public.serve, RELAY_PUBLIC),
         )?,
     );
     services.insert(
@@ -2395,14 +2371,12 @@ fn render_ordinary_model(
             runtime.product(ProductLaneV1::RelayConsultation),
             binding,
             bundle_source(lanes, ProductLaneV1::RelayConsultation)?,
-            json!({NETWORK_PRIVATE: {}}),
-            dependency_map(&[
-                (SERVICE_POSTGRESQL, "service_healthy"),
-                (
-                    SERVICE_RUNTIME_SECRET_STAGER,
-                    "service_completed_successfully",
-                ),
-            ]),
+            json!({NETWORK_RUNTIME: {}}),
+            action_dependency_map(
+                &[(SERVICE_POSTGRESQL, "service_healthy")],
+                &runtime.relay_consultation.serve,
+                RELAY_CONSULTATION,
+            ),
         )?,
     );
     services.insert(
@@ -2412,22 +2386,18 @@ fn render_ordinary_model(
             runtime.product(ProductLaneV1::Notary),
             binding,
             bundle_source(lanes, ProductLaneV1::Notary)?,
-            json!({NETWORK_EDGE: {}, NETWORK_PRIVATE: {}}),
-            dependency_map(&[
-                (SERVICE_POSTGRESQL, "service_healthy"),
-                (SERVICE_RELAY_CONSULTATION, "service_healthy"),
-                (
-                    SERVICE_RUNTIME_SECRET_STAGER,
-                    "service_completed_successfully",
-                ),
-            ]),
+            json!({NETWORK_RUNTIME: {}}),
+            action_dependency_map(
+                &[
+                    (SERVICE_POSTGRESQL, "service_healthy"),
+                    (SERVICE_RELAY_CONSULTATION, "service_healthy"),
+                ],
+                &runtime.notary.serve,
+                NOTARY,
+            ),
         )?,
     );
 
-    let edge = binding
-        .edge_network_name
-        .as_ref()
-        .map_or_else(|| json!({}), |name| json!({"external": true, "name": name}));
     let mut volumes = Map::from_iter([
         (
             format!("{}-postgresql-data", binding.durable_volume_prefix),
@@ -2458,13 +2428,12 @@ fn render_ordinary_model(
             json!({}),
         ),
     ]);
-    volumes.extend(secret_stage_volumes(runtime, binding));
+    volumes.extend(secret_stage_volumes(secret_stage_groups(runtime), binding));
     Ok(json!({
         "name": binding.package_id,
         "services": services,
         "networks": {
-            NETWORK_EDGE: edge,
-            NETWORK_PRIVATE: {"internal": true}
+            NETWORK_RUNTIME: {}
         },
         "volumes": volumes,
         "secrets": render_secrets(binding)
@@ -2495,14 +2464,12 @@ fn render_initialization_model(
                 &postgresql.image_identity,
                 &recipe.bootstrap.command,
                 &recipe.health_probe,
-                json!({NETWORK_PRIVATE: {}}),
-                dependency_map(&[
-                    (SERVICE_POSTGRESQL, "service_healthy"),
-                    (
-                        SERVICE_RUNTIME_SECRET_STAGER,
-                        "service_completed_successfully",
-                    ),
-                ]),
+                json!({NETWORK_RUNTIME: {}}),
+                action_dependency_map(
+                    &[(SERVICE_POSTGRESQL, "service_healthy")],
+                    &recipe.bootstrap,
+                    "postgresql",
+                ),
                 "no",
             );
             apply_hardening(&mut service, &recipe.hardening);
@@ -2549,31 +2516,24 @@ fn render_initialization_model(
         };
         let (networks, dependencies) = match lane {
             ProductLaneV1::RelayPublic => (
-                json!({NETWORK_EDGE: {}}),
-                dependency_map(&[(
-                    SERVICE_RUNTIME_SECRET_STAGER,
-                    "service_completed_successfully",
-                )]),
+                json!({NETWORK_RUNTIME: {}}),
+                action_dependency_map(&[], command, lane.id()),
             ),
             ProductLaneV1::RelayConsultation => (
-                json!({NETWORK_PRIVATE: {}}),
-                dependency_map(&[
-                    (SERVICE_POSTGRESQL, "service_healthy"),
-                    (
-                        SERVICE_RUNTIME_SECRET_STAGER,
-                        "service_completed_successfully",
-                    ),
-                ]),
+                json!({NETWORK_RUNTIME: {}}),
+                action_dependency_map(
+                    &[(SERVICE_POSTGRESQL, "service_healthy")],
+                    command,
+                    lane.id(),
+                ),
             ),
             ProductLaneV1::Notary => (
-                json!({NETWORK_EDGE: {}, NETWORK_PRIVATE: {}}),
-                dependency_map(&[
-                    (SERVICE_POSTGRESQL, "service_healthy"),
-                    (
-                        SERVICE_RUNTIME_SECRET_STAGER,
-                        "service_completed_successfully",
-                    ),
-                ]),
+                json!({NETWORK_RUNTIME: {}}),
+                action_dependency_map(
+                    &[(SERVICE_POSTGRESQL, "service_healthy")],
+                    command,
+                    lane.id(),
+                ),
             ),
         };
         let mut service = hardened_service(
@@ -2664,16 +2624,35 @@ fn apply_hardening(service: &mut Value, hardening: &LockedServiceHardeningV1) {
     service["tmpfs"] = json!(hardening.tmpfs);
 }
 
+fn insert_secret_staging_service(
+    services: &mut Map<String, Value>,
+    image: &ImageIdentityV1,
+    actions: &[(&str, &LockedRuntimeActionV1)],
+    binding: &DeploymentBindingV1,
+    owner_id: &str,
+) -> Result<()> {
+    if actions
+        .iter()
+        .all(|(_, action)| action.secret_files.is_empty())
+    {
+        return Ok(());
+    }
+    services.insert(
+        secret_staging_service_name(owner_id),
+        secret_staging_service(image, actions, binding)?,
+    );
+    Ok(())
+}
+
 fn secret_staging_service(
     image: &ImageIdentityV1,
-    runtime: &LockedRuntimeMappingV1,
+    actions: &[(&str, &LockedRuntimeActionV1)],
     binding: &DeploymentBindingV1,
 ) -> Result<Value> {
-    let stages = secret_stage_actions(runtime);
     let mut script = String::from("umask 077\n");
     let mut mounts = Vec::new();
     let mut source_files = BTreeSet::new();
-    for (stage_id, action) in stages {
+    for (stage_id, action) in actions {
         if action.secret_files.is_empty() {
             continue;
         }
@@ -2681,6 +2660,9 @@ fn secret_staging_service(
         mounts.push(named_volume(
             staged_secret_volume_name(binding, stage_id),
             &output,
+        ));
+        script.push_str(&format!(
+            "/usr/bin/find {output} -mindepth 1 -maxdepth 1 -delete\n"
         ));
         for projection in &action.secret_files {
             let target = projection
@@ -2722,40 +2704,66 @@ fn secret_staging_service(
     }))
 }
 
-fn secret_stage_actions(
+type SecretStageAction<'a> = (&'static str, &'a LockedRuntimeActionV1);
+
+fn secret_stage_groups(
     runtime: &LockedRuntimeMappingV1,
-) -> Vec<(&'static str, &LockedRuntimeActionV1)> {
+) -> Vec<(&'static str, Vec<SecretStageAction<'_>>)> {
     vec![
-        ("relay-public-serve", &runtime.relay_public.serve),
         (
-            "relay-public-prepare",
-            &runtime.relay_public.prepare_state_store,
+            RELAY_PUBLIC,
+            vec![
+                ("relay-public-serve", &runtime.relay_public.serve),
+                (
+                    "relay-public-prepare",
+                    &runtime.relay_public.prepare_state_store,
+                ),
+                (
+                    "relay-public-initialize",
+                    &runtime.relay_public.initialize_state,
+                ),
+            ],
         ),
         (
-            "relay-public-initialize",
-            &runtime.relay_public.initialize_state,
+            RELAY_CONSULTATION,
+            vec![
+                (
+                    "relay-consultation-serve",
+                    &runtime.relay_consultation.serve,
+                ),
+                (
+                    "relay-consultation-prepare",
+                    &runtime.relay_consultation.prepare_state_store,
+                ),
+                (
+                    "relay-consultation-initialize",
+                    &runtime.relay_consultation.initialize_state,
+                ),
+            ],
         ),
         (
-            "relay-consultation-serve",
-            &runtime.relay_consultation.serve,
+            NOTARY,
+            vec![
+                ("notary-serve", &runtime.notary.serve),
+                ("notary-prepare", &runtime.notary.prepare_state_store),
+                ("notary-initialize", &runtime.notary.initialize_state),
+            ],
         ),
         (
-            "relay-consultation-prepare",
-            &runtime.relay_consultation.prepare_state_store,
-        ),
-        (
-            "relay-consultation-initialize",
-            &runtime.relay_consultation.initialize_state,
-        ),
-        ("notary-serve", &runtime.notary.serve),
-        ("notary-prepare", &runtime.notary.prepare_state_store),
-        ("notary-initialize", &runtime.notary.initialize_state),
-        ("postgresql-serve", &runtime.postgresql_state_plane.serve),
-        (
-            "postgresql-bootstrap",
-            &runtime.postgresql_state_plane.bootstrap,
+            "postgresql",
+            vec![
+                ("postgresql-serve", &runtime.postgresql_state_plane.serve),
+                (
+                    "postgresql-bootstrap",
+                    &runtime.postgresql_state_plane.bootstrap,
+                ),
+            ],
         ),
     ]
+}
+
+fn secret_staging_service_name(owner_id: &str) -> String {
+    format!("registry-{owner_id}{SECRET_STAGER_SUFFIX}")
 }
 
 fn staged_secret_volume_name(binding: &DeploymentBindingV1, stage_id: &str) -> String {
@@ -2766,11 +2774,12 @@ fn staged_secret_volume_name(binding: &DeploymentBindingV1, stage_id: &str) -> S
 }
 
 fn secret_stage_volumes(
-    runtime: &LockedRuntimeMappingV1,
+    groups: Vec<(&str, Vec<SecretStageAction<'_>>)>,
     binding: &DeploymentBindingV1,
 ) -> Map<String, Value> {
-    secret_stage_actions(runtime)
+    groups
         .into_iter()
+        .flat_map(|(_, actions)| actions)
         .filter(|(_, action)| !action.secret_files.is_empty())
         .map(|(stage_id, _)| (staged_secret_volume_name(binding, stage_id), json!({})))
         .collect()
@@ -2859,7 +2868,6 @@ fn runtime_mount(
 }
 
 fn operator_file_path(binding: &DeploymentBindingV1, id: &str) -> Result<String> {
-    let id = deployment_operator_file_id(id);
     binding
         .secret_files
         .get(id)
@@ -2952,6 +2960,24 @@ fn dependency_map(items: &[(&str, &str)]) -> Value {
         );
     }
     Value::Object(dependencies)
+}
+
+fn action_dependency_map(
+    items: &[(&str, &str)],
+    action: &LockedRuntimeActionV1,
+    stage_id: &str,
+) -> Value {
+    let mut dependencies = dependency_map(items);
+    if !action.secret_files.is_empty() {
+        dependencies
+            .as_object_mut()
+            .expect("dependency map is an object")
+            .insert(
+                secret_staging_service_name(stage_id),
+                json!({"condition": "service_completed_successfully", "required": true}),
+            );
+    }
+    dependencies
 }
 
 pub(crate) fn normalize_rendered_models(
@@ -3339,29 +3365,46 @@ fn validate_hard_effective_model(
             violations,
         );
     }
-    match (
-        expected_services.get(SERVICE_RUNTIME_SECRET_STAGER),
-        actual_services.get(SERVICE_RUNTIME_SECRET_STAGER),
-    ) {
-        (Some(expected_stage), Some(actual_stage)) => {
-            check_security_owned_projection(
-                Some(expected_stage),
-                actual_stage,
-                SERVICE_RUNTIME_SECRET_STAGER,
-                violations,
-            );
-            if actual_stage.get("network_mode") != Some(&json!("none"))
-                || actual_stage.get("cap_add") != Some(&json!(["CHOWN"]))
-            {
-                violations.push(
-                    "runtime secret stager lost its isolated narrow CHOWN contract".to_string(),
-                );
-            }
+    let mut found_secret_stager = false;
+    for (service_name, expected_stage) in expected_services
+        .iter()
+        .filter(|(name, _)| name.ends_with(SECRET_STAGER_SUFFIX))
+    {
+        found_secret_stager = true;
+        let Some(actual_stage) = actual_services.get(service_name) else {
+            violations.push(format!(
+                "ordinary effective model omits runtime secret stager {service_name}"
+            ));
+            continue;
+        };
+        check_security_owned_projection(
+            Some(expected_stage),
+            actual_stage,
+            service_name,
+            violations,
+        );
+        let output_mounts = actual_stage
+            .get("volumes")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        if actual_stage.get("network_mode") != Some(&json!("none"))
+            || actual_stage.get("cap_add") != Some(&json!(["CHOWN"]))
+            || output_mounts.is_empty()
+            || output_mounts
+                .iter()
+                .any(|mount| mount.get("read_only") != Some(&json!(false)))
+        {
+            violations.push(format!(
+                "{service_name} lost its isolated lane-output CHOWN contract"
+            ));
         }
-        _ => violations.push("ordinary effective model omits runtime secret staging".to_string()),
+    }
+    if !found_secret_stager {
+        violations.push("ordinary effective model omits runtime secret staging".to_string());
     }
     for (service_name, service) in actual_services {
-        if service_name != SERVICE_RUNTIME_SECRET_STAGER
+        if !service_name.ends_with(SECRET_STAGER_SUFFIX)
             && service
                 .get("cap_add")
                 .and_then(Value::as_array)
@@ -3427,13 +3470,10 @@ fn validate_hard_effective_model(
         );
     }
     for (service_name, expected_networks) in [
-        (SERVICE_RELAY_PUBLIC, json!({NETWORK_EDGE: {}})),
-        (SERVICE_RELAY_CONSULTATION, json!({NETWORK_PRIVATE: {}})),
-        (
-            SERVICE_NOTARY,
-            json!({NETWORK_EDGE: {}, NETWORK_PRIVATE: {}}),
-        ),
-        (SERVICE_POSTGRESQL, json!({NETWORK_PRIVATE: {}})),
+        (SERVICE_RELAY_PUBLIC, json!({NETWORK_RUNTIME: {}})),
+        (SERVICE_RELAY_CONSULTATION, json!({NETWORK_RUNTIME: {}})),
+        (SERVICE_NOTARY, json!({NETWORK_RUNTIME: {}})),
+        (SERVICE_POSTGRESQL, json!({NETWORK_RUNTIME: {}})),
     ] {
         if let Some(service) = actual_services.get(service_name) {
             if service.get("network_mode").is_some()
@@ -4170,6 +4210,24 @@ fn runbook(
     let relay_public_verify = shell_command(&runtime.relay_public.verify_state.command);
     let relay_consultation_verify = shell_command(&runtime.relay_consultation.verify_state.command);
     let notary_verify = shell_command(&runtime.notary.verify_state.command);
+    let ordinary_secret_staging_commands = [
+        (RELAY_PUBLIC, &runtime.relay_public.serve),
+        (
+            RELAY_CONSULTATION,
+            &runtime.relay_consultation.serve,
+        ),
+        (NOTARY, &runtime.notary.serve),
+    ]
+    .into_iter()
+    .filter(|(_, action)| !action.secret_files.is_empty())
+    .map(|(stage_id, _)| {
+        format!(
+            "docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps {}",
+            secret_staging_service_name(stage_id)
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("\n");
     let operator_files = inventory
         .files
         .iter()
@@ -4201,7 +4259,6 @@ The signed inventory is also recorded at `generated/operator-files.v1.json`. Bef
 ## First installation only\n\n\
 ```text\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml config --no-interpolate --no-env-resolution --quiet\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-runtime-stage-secrets\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-postgres-bootstrap\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-public-prepare-state\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml -f generated/compose.initialize.yaml run --rm registry-relay-consultation-prepare-state\n\
@@ -4212,11 +4269,11 @@ docker compose --env-file generated/compose.empty.env -f generated/compose.yaml 
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml up --detach --wait --wait-timeout 120\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml ps\n\
 ```\n\n\
-Selecting `compose.initialize.yaml` is the only supported way to initialize an empty PostgreSQL data directory. The ordinary PostgreSQL service fails closed when `PGDATA` has no `PG_VERSION`. Never run an initialize service for an existing instance. Ordinary product startup fails closed when anti-rollback state is missing.\n\n\
+Selecting `compose.initialize.yaml` is the only supported way to initialize an empty PostgreSQL data directory. Each initialization action depends on its lane-isolated secret stager, which receives only that lane's source files and writable output volumes; PostgreSQL has a separate stager. The ordinary PostgreSQL service fails closed when `PGDATA` has no `PG_VERSION`. Never run an initialize service for an existing instance. Ordinary product startup fails closed when anti-rollback state is missing.\n\n\
 ## Ordinary start and stop\n\n\
 ```text\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml config --no-interpolate --no-env-resolution --quiet\n\
-docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-runtime-stage-secrets\n\
+{ordinary_secret_staging_commands}\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-public {relay_public_verify}\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-relay-consultation {relay_consultation_verify}\n\
 docker compose --env-file generated/compose.empty.env -f generated/compose.yaml run --rm --no-deps registry-notary {notary_verify}\n\
