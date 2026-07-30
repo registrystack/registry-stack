@@ -291,6 +291,41 @@ jobs:
             --output "${DOCS_ARCHIVE_OUTPUT}" \
             --verify-lock
 
+      - name: Run exact candidate Registryctl against archived authoring journeys
+        shell: bash
+        env:
+          CANDIDATE_TAG: ${{ needs.validate.outputs.tag }}
+          REGISTRYCTL_BIN: ${{ github.workspace }}/dist/bin/registryctl-${{ needs.validate.outputs.tag }}-linux-amd64
+          REGISTRYCTL_RELEASED_DOCS_ARCHIVE: ${{ runner.temp }}/registry-docs-${{ needs.validate.outputs.tag }}.tar.gz
+          REGISTRYCTL_RELEASED_DOCS_ROOT: ${{ runner.temp }}/candidate-released-docs/version
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import runpy
+          from pathlib import Path
+
+          expected_root = Path(os.environ["REGISTRYCTL_RELEASED_DOCS_ROOT"])
+          extraction_root = expected_root.parent
+          if extraction_root.exists():
+              raise SystemExit(
+                  f"candidate docs extraction destination already exists: {extraction_root}"
+              )
+          release_form = runpy.run_path(
+              "release/scripts/first-country-release-form.py"
+          )
+          observed_root = release_form["extract_released_docs_archive"](
+              Path(os.environ["REGISTRYCTL_RELEASED_DOCS_ARCHIVE"]),
+              extraction_root,
+              tag=os.environ["CANDIDATE_TAG"],
+          )
+          if observed_root != expected_root:
+              raise SystemExit(
+                  f"candidate docs extracted to {observed_root}, expected {expected_root}"
+              )
+          PY
+          bash docs/site/scripts/check-registryctl-tutorials.sh
+
       - name: Stage canonical build products
         shell: bash
         run: |

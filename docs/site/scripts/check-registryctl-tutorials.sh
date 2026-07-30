@@ -2,10 +2,11 @@
 #
 # Execute the current Registryctl authoring tutorials from fresh reader directories.
 #
-# This pull-request gate builds Registryctl from the checked-out source and
-# proves the offline init, test, check, and build contract. It does not stand in
-# for the release workflow, which separately exercises the sealed installer,
-# released image lock, doctor, and disposable development runtime.
+# This gate builds Registryctl from the checked-out source unless
+# REGISTRYCTL_BIN selects exact candidate or released bytes. It proves the
+# offline init, test, check, and build contract. The tag-triggered release
+# workflow separately exercises the exact installer, signed release lock,
+# doctor, disposable development runtime, and governed deployment.
 
 set -euo pipefail
 
