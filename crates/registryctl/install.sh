@@ -26,10 +26,12 @@ usage() {
 Install registryctl.
 
 The installer verifies downloaded release assets against SHA256SUMS only.
-Releases before v0.9.0 install the binary. Releases v0.9.0 and later install
-the binary and matching release image lock. The installer does not verify
-release authenticity. Evidence availability varies by release, and v0.8.0 is
-unsigned. Follow the canonical release verification guide:
+Releases before v0.9.0 install the binary. Releases from v0.9.0 through the
+0.x line also install the matching release image lock. Releases from v1.0.0
+install the signed RegistryReleaseLockV1 beside the binary for offline startup
+verification. The installer does not verify release authenticity. Evidence
+availability varies by release, and v0.8.0 is unsigned. Follow the canonical
+release verification guide:
   $verify_url
 
 Environment:
@@ -39,8 +41,8 @@ Environment:
   REGISTRYCTL_INSTALL_DIR  Install directory. Defaults to ~/.local/bin.
   REGISTRYCTL_ASSET_DIR    Read already-downloaded release assets from this
                            directory instead of downloading them. Verify the
-                           installer, registryctl, image lock, and checksums
-                           before using this higher-assurance installation mode.
+                           installer, registryctl, applicable release evidence, and
+                           checksums before using this higher-assurance mode.
 EOF
 }
 
@@ -67,8 +69,11 @@ version_major="${version_numbers%%.*}"
 version_remainder="${version_numbers#*.}"
 version_minor="${version_remainder%%.*}"
 requires_image_lock=0
-if ((version_major > 0 || version_minor >= 9)); then
+requires_release_lock=0
+if ((version_major == 0 && version_minor >= 9)); then
 	requires_image_lock=1
+elif ((version_major >= 1)); then
+	requires_release_lock=1
 fi
 
 need uname
@@ -102,6 +107,7 @@ esac
 
 asset="registryctl-${version}-${os_label}-${arch_label}"
 lock_asset="registryctl-${version}-image-lock.json"
+release_lock_asset="registry-release-lock.v1.json"
 base_url="https://github.com/${repo}/releases/download/${version}"
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t registryctl)"
 
@@ -141,6 +147,13 @@ if ((requires_image_lock)); then
 	if ! download "$base_url/$lock_asset" "$tmpdir/$lock_asset"; then
 		printf 'Could not download the matching registryctl image lock %s.\n' "$lock_asset" >&2
 		printf 'The installer will not install a v0.9.0+ binary without its release image lock.\n' >&2
+		exit 1
+	fi
+fi
+if ((requires_release_lock)); then
+	if ! download "$base_url/$release_lock_asset" "$tmpdir/$release_lock_asset"; then
+		printf 'Could not download the signed RegistryReleaseLockV1 asset %s.\n' "$release_lock_asset" >&2
+		printf 'The installer will not install a v1.0.0+ binary without its signed release lock.\n' >&2
 		exit 1
 	fi
 fi
@@ -185,9 +198,14 @@ verify_asset "$asset"
 if ((requires_image_lock)); then
 	verify_asset "$lock_asset"
 fi
+if ((requires_release_lock)); then
+	verify_asset "$release_lock_asset"
+fi
 
 if ((requires_image_lock)); then
 	printf 'Integrity checks passed: %s and %s matched SHA256SUMS.\n' "$asset" "$lock_asset"
+elif ((requires_release_lock)); then
+	printf 'Integrity checks passed: %s and %s matched SHA256SUMS.\n' "$asset" "$release_lock_asset"
 else
 	printf 'Integrity check passed: %s matched SHA256SUMS.\n' "$asset"
 fi
@@ -195,7 +213,7 @@ cat <<EOF
 Authenticity check not performed by this installer.
 Evidence availability varies by release, and v0.8.0 is unsigned.
 For a higher-assurance installation, follow the tag-frozen release verification
-guide to authenticate the installer, registryctl, and image lock first, then
+guide to authenticate the installer, registryctl, and applicable release evidence first, then
 rerun this installer with REGISTRYCTL_ASSET_DIR set to that verified directory:
   $verify_url
 
@@ -205,10 +223,13 @@ mkdir -p "$install_dir"
 stage_dir="$(mktemp -d "$install_dir/.registryctl-install.XXXXXX")"
 staged_binary="$stage_dir/registryctl"
 staged_lock="$stage_dir/$lock_asset"
+staged_release_lock="$stage_dir/$release_lock_asset"
 binary_path="$install_dir/registryctl"
 lock_path="$install_dir/$lock_asset"
+release_lock_path="$install_dir/$release_lock_asset"
 had_binary=0
 had_lock=0
+had_release_lock=0
 install_started=0
 install_complete=0
 rollback_install() {
@@ -226,6 +247,13 @@ rollback_install() {
 				rm -f "$lock_path"
 			fi
 		fi
+		if ((requires_release_lock)); then
+			if [ "$had_release_lock" -eq 1 ]; then
+				cp -p "$tmpdir/release-lock.previous" "$release_lock_path"
+			else
+				rm -f "$release_lock_path"
+			fi
+		fi
 	fi
 	rm -rf "$stage_dir"
 }
@@ -239,6 +267,10 @@ if ((requires_image_lock)); then
 	cp "$tmpdir/$lock_asset" "$staged_lock"
 	chmod 0644 "$staged_lock"
 fi
+if ((requires_release_lock)); then
+	cp "$tmpdir/$release_lock_asset" "$staged_release_lock"
+	chmod 0644 "$staged_release_lock"
+fi
 
 if [ -e "$binary_path" ]; then
 	cp -p "$binary_path" "$tmpdir/registryctl.previous"
@@ -248,6 +280,10 @@ if ((requires_image_lock)) && [ -e "$lock_path" ]; then
 	cp -p "$lock_path" "$tmpdir/image-lock.previous"
 	had_lock=1
 fi
+if ((requires_release_lock)) && [ -e "$release_lock_path" ]; then
+	cp -p "$release_lock_path" "$tmpdir/release-lock.previous"
+	had_release_lock=1
+fi
 
 # Install a required lock first so an interrupted update never exposes a new
 # binary without the exact release evidence it needs for project generation.
@@ -255,12 +291,18 @@ install_started=1
 if ((requires_image_lock)); then
 	mv -f "$staged_lock" "$lock_path"
 fi
+if ((requires_release_lock)); then
+	mv -f "$staged_release_lock" "$release_lock_path"
+fi
 mv -f "$staged_binary" "$binary_path"
 install_complete=1
 
 printf 'registryctl installed to %s\n' "$binary_path"
 if ((requires_image_lock)); then
 	printf 'release image lock installed to %s\n' "$lock_path"
+fi
+if ((requires_release_lock)); then
+	printf 'signed release lock installed to %s\n' "$release_lock_path"
 fi
 cat <<EOF
 

@@ -295,7 +295,6 @@ jobs:
           path: promotion
 
       - name: Reverify and stage exact public payloads before OIDC
-        id: subjects
         shell: bash
         run: |
           set -euo pipefail
@@ -322,6 +321,34 @@ jobs:
           done < <(jq -r '.payloads[].name' "${manifest}")
           public_manifest="registry-stack-${{ needs.verify.outputs.tag }}-release-manifest.json"
           cp "${manifest}" "release-assets/${public_manifest}"
+          python3 release/scripts/registry_release_lock.py create-payload \
+            --version "${{ needs.verify.outputs.version }}" \
+            --source-sha "${{ needs.verify.outputs.source_sha }}" \
+            --asset-dir release-assets \
+            --image-lock \
+              "release-assets/registryctl-${{ needs.verify.outputs.tag }}-image-lock.json" \
+            --output contract/registry-release-lock.payload.json
+
+      - name: Install cosign after candidate verification
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.1
+        with:
+          cosign-release: v3.0.4
+
+      - name: Sign release lock and checksum chain
+        id: subjects
+        shell: bash
+        run: |
+          set -euo pipefail
+          lock_bundle=contract/registry-release-lock.sigstore.json
+          cosign sign-blob --yes \
+            --bundle "${lock_bundle}" \
+            contract/registry-release-lock.payload.json
+          python3 release/scripts/registry_release_lock.py assemble \
+            --payload contract/registry-release-lock.payload.json \
+            --bundle "${lock_bundle}" \
+            --output release-assets/registry-release-lock.v1.json
+          python3 release/scripts/registry_release_lock.py check \
+            --input release-assets/registry-release-lock.v1.json
           (
             cd release-assets
             find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
@@ -330,14 +357,6 @@ jobs:
           cp release-assets/SHA256SUMS contract/provenance-subjects.sha256
           echo "base64_subjects=$(base64 -w0 contract/provenance-subjects.sha256)" \
             >> "${GITHUB_OUTPUT}"
-
-      - name: Install cosign after candidate verification
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.10.1
-
-      - name: Sign one checksum chain
-        shell: bash
-        run: |
-          set -euo pipefail
           bundle="release-assets/registry-stack-${{ needs.verify.outputs.tag }}-SHA256SUMS.sigstore.json"
           cosign sign-blob --yes \
             --bundle "${bundle}" \
