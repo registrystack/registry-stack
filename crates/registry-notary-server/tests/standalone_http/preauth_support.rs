@@ -271,6 +271,12 @@ pub(super) struct PreauthOfferPage {
     pub(super) html: String,
 }
 
+#[cfg(feature = "registry-notary-cel")]
+pub(super) struct RepresentativeSelectionPage {
+    pub(super) selection_state: String,
+    pub(super) csrf_token: String,
+}
+
 /// Drive offer/start + offer/callback, returning the rendered offer details.
 pub(super) async fn drive_offer_to_page(
     server: &TestServer,
@@ -331,15 +337,15 @@ pub(super) async fn drive_offer_to_page(
     }
 }
 
-/// Drive the authenticated representative ceremony through target selection.
+/// Drive the authenticated representative ceremony through authentication,
+/// returning the single-use target-selection state.
 #[cfg(feature = "registry-notary-cel")]
-pub(super) async fn drive_representative_offer_to_page(
+pub(super) async fn drive_representative_offer_to_selection(
     server: &TestServer,
     token_upstream: &MockHttpUpstream,
     idp: &MockIdp,
     representative_id: &str,
-    target_id: &str,
-) -> PreauthOfferPage {
+) -> RepresentativeSelectionPage {
     let start = server
         .get("/oid4vci/offer/start?credential_configuration_id=represented_person_is_alive_sd_jwt")
         .await;
@@ -390,13 +396,31 @@ pub(super) async fn drive_representative_offer_to_page(
         "the callback must not mint an offer before target selection and proof"
     );
 
+    RepresentativeSelectionPage {
+        selection_state,
+        csrf_token,
+    }
+}
+
+/// Drive the authenticated representative ceremony through target selection.
+#[cfg(feature = "registry-notary-cel")]
+pub(super) async fn drive_representative_offer_to_page(
+    server: &TestServer,
+    token_upstream: &MockHttpUpstream,
+    idp: &MockIdp,
+    representative_id: &str,
+    target_id: &str,
+) -> PreauthOfferPage {
+    let selection =
+        drive_representative_offer_to_selection(server, token_upstream, idp, representative_id)
+            .await;
     let selected = server
         .post("/oid4vci/offer/representative")
         .add_header("content-type", "application/x-www-form-urlencoded")
         .bytes(Bytes::from(format!(
             "selection_state={}&csrf_token={}&target_id={}",
-            urlencode(&selection_state),
-            urlencode(&csrf_token),
+            urlencode(&selection.selection_state),
+            urlencode(&selection.csrf_token),
             urlencode(target_id),
         )))
         .await;

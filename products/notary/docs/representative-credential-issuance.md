@@ -92,13 +92,25 @@ this relationship uses a shorter window:
     max_proof_age_seconds: 180
 ```
 
-One Registryctl OID4VCI binding supports one relationship. Use a separate
-project binding when the same credential needs a different relationship or
-proof policy.
+Registryctl v1 supports one OID4VCI binding per environment, selecting one
+credential profile and at most one representative relationship. A second
+credential, a different relationship policy, or a self-service variant
+requires a separate environment and therefore a separate generated Notary
+deployment and issuer endpoint.
 
 The credential claim root must be exclusive to the selected credential
 profile. Registryctl rejects a shared root because the generated Notary claim
 dependency is claim-wide and must not change another profile's behavior.
+Offering the same real-world payload through both self-service and
+representative paths therefore requires distinct claim roots and dependency
+closures. Keep their shared business logic in the registry implementation,
+and test both profiles so their payloads do not drift.
+
+A hand-authored Notary configuration may combine ordinary subject access and
+delegated access for different claim roots. It must not place a representative
+credential root in the global `subject_access.allowed_claims` list. Production
+validation rejects that configuration because representative roots are
+authorized only by the selected relationship.
 
 Registryctl generates:
 
@@ -107,6 +119,9 @@ Registryctl generates:
 - The exact delegated claim closure
 - A delegation-only root policy, separate from the ordinary subject-bound
   claim allow-list
+- `subject_access.allowed_operations.evaluate`, which is required to evaluate
+  the relationship proof and credential closure before the offer is minted.
+  It does not make the representative root subject-bound.
 - Credential status at `<public_base_url>/v1/credentials`
 - A production-valid Registry Notary configuration
 
@@ -208,13 +223,16 @@ status alone does not connect a source relationship change to revocation.
 ## Subject pseudonym key epochs
 
 The represented subject becomes the credential `sub` as a keyed pseudonym over
-the configured target identifier type and value. The wallet proof key remains
-the holder binding.
+the target entity reference. Its identity-forming input includes the role,
+configured claim `subject_type`, target ID, identifiers, and attributes. The
+wallet proof key remains the holder binding.
 
 The pseudonym is stable only while the Registry Notary audit pseudonym key
-stays unchanged. Rotating `audit.hash_secret_env` changes newly computed
-subject pseudonyms. Credentials issued before and after that rotation will not
-have equal `sub` values for the same represented subject.
+and those identity-forming inputs stay unchanged. Rotating
+`audit.hash_secret_env`, or changing the credential claim's `subject_type`,
+changes newly computed subject pseudonyms. Credentials issued before and after
+either change will not have equal `sub` values for the same represented
+subject.
 
 Treat audit pseudonym key rotation as a subject-identifier epoch change.
 Before rotation, identify relying parties that compare `sub` across

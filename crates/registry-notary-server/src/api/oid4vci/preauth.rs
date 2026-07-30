@@ -1546,6 +1546,25 @@ pub(in crate::api) async fn oid4vci_offer_callback(
             .await;
         }
     };
+    // Login and representative-selection records share the encrypted,
+    // single-use store. Reject the selection shape before attempting any
+    // authorization-code exchange so the two state capabilities cannot be
+    // substituted for one another.
+    if stored.pkce_verifier.is_empty()
+        || stored.nonce.is_empty()
+        || stored.representative.is_some()
+        || stored.csrf_token.is_some()
+    {
+        return preauth_denied(
+            &preauth,
+            path,
+            "GET",
+            Some(&stored.credential_configuration_id),
+            SubjectAccessDenialCode::InvalidToken,
+            Oid4vciWireError::InvalidRequest,
+        )
+        .await;
+    }
     let subject_binding_claim = state.subject_access.subject_binding.token_claim.clone();
     let subject = match preauth
         .exchange_code_for_subject(
